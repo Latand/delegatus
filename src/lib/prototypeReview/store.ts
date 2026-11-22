@@ -8,6 +8,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { canonicalProject } from "@/lib/projects/aliases";
 import { expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS } from "./input";
 import { copyMedia, mediaFilename } from "./copy";
 export { mediaFilename, sniffPrototype } from "./copy";
@@ -112,6 +113,7 @@ async function publishRound(input: PublishPrototypeInput, taskId: string | null,
   const id = prototypePublicationId(publicationKey);
   const replay = () => {
     const existing = [...loadTasksForList().flatMap(t => t.prototypeReviews ?? []), ...loadSeatRounds()].find(r => r.publicationKey === publicationKey);
+    if (existing && seatProject && canonicalProject(existing.project) !== canonicalProject(seatProject)) throw new PrototypeError("publication key already belongs to another project",409);
     if (existing && (existing.inputDigest !== inputDigest || existing.taskId !== taskId)) throw new PrototypeError("publication key already belongs to another payload",409);
     return existing ? structuredClone(existing) : undefined;
   };

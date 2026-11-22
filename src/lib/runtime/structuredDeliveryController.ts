@@ -319,9 +319,10 @@ function hostProjectionKey(state: HostState): string {
 export async function publishStructuredHostProjection(
   client: RuntimeHostClient,
   event: RuntimeEventInput,
+  invalidateFiles = true,
 ): Promise<void> {
   await client.append(event);
-  await publishFilesRevision(client);
+  if (invalidateFiles) await publishFilesRevision(client);
 }
 
 function hostResolver(

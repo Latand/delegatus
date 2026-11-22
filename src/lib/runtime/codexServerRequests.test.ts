@@ -13,7 +13,7 @@ const questions = { ...identity, isBlocking: true, questions: [
   { id: "second", header: "Second", question: "Why?", isOther: true, isSecret: false, options: null },
 ] };
 
-test.each(["0.167.0", "0.168.0", "0.169.0"])("%s human command approvals retain the offered decisions across decoding and answering", version => {
+test.each(["0.168.0", "0.169.0", "0.170.0"])("%s human command approvals retain the offered decisions across decoding and answering", version => {
   const protocol = new CodexPinnedProtocol(version);
   const params = { ...approval, kind: "humanCommand", availableDecisions: ["decline", "cancel"] };
   const decoded = decodeCodexServerRequest(protocol, "human-approval", command, params);
@@ -26,7 +26,7 @@ test.each(["0.167.0", "0.168.0", "0.169.0"])("%s human command approvals retain 
   expect(() => decodeCodexServerRequest(protocol, 1, command, { ...params, kind: "unknownCommand" })).toThrow("server-params.kind");
 });
 
-describe.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0"])("Codex %s request boundary", version => {
+describe.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0"])("Codex %s request boundary", version => {
   const protocol = new CodexPinnedProtocol(version);
   test("decodes the complete request and refuses missing identity or malformed ingress", () => {
     expect(decodeCodexServerRequest(protocol, 7, command, approval)).toMatchObject({ id: 7, params: identity });

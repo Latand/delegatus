@@ -1,4 +1,4 @@
-import { installTaskTimes, prepareTaskTimes, taskTimesReady } from "./taskTimes";
+import { installTaskTimes, prepareTaskTimes, taskTimePendingCursor, taskTimesReady } from "./taskTimes";
 import { observeRegistryWriter } from "@/lib/agent/registryWriter";
 import { assertOperationLease, awaitLeasedOperation } from "@/lib/operationLease";
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
@@ -647,6 +647,10 @@ const stateSchema = [
     END`,
   `CREATE INDEX IF NOT EXISTS pipeline_integration_format
     ON state_rows(collection,row_key) WHERE ${PIPELINE_INTEGRATION_FORMAT}`,
+  `CREATE TABLE IF NOT EXISTS pipeline_control_ownership (
+    control_key TEXT PRIMARY KEY,
+    binding_json TEXT NOT NULL CHECK(json_valid(binding_json))
+  )`,
   `CREATE TABLE IF NOT EXISTS pipeline_request_receipts (
     collection TEXT NOT NULL,
     row_key TEXT NOT NULL,
@@ -879,7 +883,7 @@ function openRawDatabase(filename: string): Database {
         }
         if ([...stateSchemaNames,
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
-          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
+          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete", "pipeline_tick_priority_cursor"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
           && pipelineControllerReferencesReady(db, names)
           && pipelineControllerReferenceIndexesCurrent(db)
@@ -958,21 +962,16 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
   noteWriterAdmitted();
   const holdStart = performance.now();
   try {
-    const pendingExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_time_pending'");
-    let pendingBefore = 0;
-    try {
-      if (pendingExists.get()) {
-        const pendingCursor = db.prepare<{ rowid: number }, []>("SELECT COALESCE(MAX(rowid), 0) AS rowid FROM task_time_pending");
-        try { pendingBefore = pendingCursor.get()!.rowid; }
-        finally { pendingCursor.finalize(); }
-      }
-    } finally { pendingExists.finalize(); }
+    const pendingBefore = taskTimePendingCursor(db);
     const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     const result = operation();
     if (result instanceof Promise) throw new Error("state SQL transactions must be synchronous");
     // Publish only task rows changed in this transaction. Older projection
     // backlog is prepared by readers in bounded, independently committed pages.
-    prepareTaskTimes(db, Number.MAX_SAFE_INTEGER, pendingBefore);
+    const cursor = pendingBefore ?? 0;
+    if (db.query<{ pending: number }, [number]>("SELECT 1 AS pending FROM task_time_pending WHERE rowid > ? LIMIT 1").get(cursor)) {
+      prepareTaskTimes(db, Number.MAX_SAFE_INTEGER, cursor);
+    }
     const after = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     injectWriteFault("commit", collection);
     assertOperationLease();
@@ -1702,17 +1701,23 @@ export function readStateCollectionRows(filename: string, collection: string): u
 }
 
 /** Return project membership without decoding or materializing persisted rows. */
-export function readStateProjectKeys(filename: string): string[] {
+export function readStateProjectKeys(
+  filename: string,
+  collections: readonly string[] = ["tasks", "pipelines", "pipelines_archive", "flows"],
+): string[] {
   if (!fs.existsSync(filename)) return [];
+  if (collections.length === 0) return [];
   const db = connectReadonlyDatabase(filename);
   try {
-    return db.query<{ project: string | null }, []>(`
+    const placeholders = collections.map(() => "?").join(", ");
+    const bindings = [...collections] as [string, ...string[]];
+    return db.query<{ project: string | null }, [string, ...string[]]>(`
       SELECT DISTINCT json_extract(value_json, '$.project') AS project
       FROM state_rows
-      WHERE collection IN ('tasks', 'pipelines', 'flows')
+      WHERE collection IN (${placeholders})
         AND json_valid(value_json)
         AND json_type(value_json, '$.project') = 'text'
-    `).all().flatMap(row => row.project ? [row.project] : []);
+    `).all(...bindings).flatMap(row => row.project ? [row.project] : []);
   } catch (error) {
     if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return [];
     throw error;
@@ -2317,6 +2322,35 @@ export class SqliteStateCollection<T> {
     return `${databaseFileIdentity(this.filename)}:${row?.row_revision ?? "missing"}:${row?.generation ?? "missing"}`;
   }
 
+  private pendingCpuStageRevision(db: Database, key: string, stage: string, attempt: number): string | null {
+    const row = db.query<{ row_revision: number; generation: number }, [string, string, string, number]>(`
+      SELECT r.row_revision,t.generation FROM pipeline_controller_work w
+      JOIN state_rows r ON r.collection='pipelines' AND r.row_key=w.row_key
+      JOIN pipeline_tick_work t ON t.row_key=w.row_key
+      WHERE w.kind='pending-stage' AND w.row_key=? AND json_extract(r.value_json, '$.cursor.stageId')=?
+      AND (SELECT n FROM pipeline_attempt_refs WHERE row_key=w.row_key AND stageId=? AND historical=0
+        ORDER BY position DESC LIMIT 1)=?`).get(key, stage, stage, attempt);
+    // The scheduling generation also changes for raw writers that leave the
+    // row revision intact. Include both in the evidence bound to a probe.
+    return row ? `${databaseFileIdentity(this.filename)}:${row.row_revision}:${row.generation}` : null;
+  }
+
+  pipelinePendingCpuStageRevision(key: string, stage: string, attempt: number): string | null {
+    return this.pendingCpuStageRevision(sharedStateReadonlyDatabase(this.filename), key, stage, attempt);
+  }
+
+  async wakePipelineCpuStage(key: string, stage: string, attempt: number, revision: string, expiresAt: number): Promise<string | null> {
+    return stateTransactionAsync(this.filename, "pipelines.controller-cpu-wake", db => {
+      if (Date.now() > expiresAt || this.pendingCpuStageRevision(db, key, stage, attempt) !== revision) return null;
+      // Acknowledge-on-generation protects this wake from a pass already in
+      // flight. Return the exact generation we advanced for the same stage.
+      db.exec("UPDATE pipeline_tick_clock SET revision=revision+1 WHERE id=1");
+      db.query(`UPDATE pipeline_tick_work SET dirty=1,due_at=0,
+        generation=(SELECT revision FROM pipeline_tick_clock WHERE id=1) WHERE row_key=?`).run(key);
+      return this.pendingCpuStageRevision(db, key, stage, attempt);
+    });
+  }
+
   pipelineControllerCandidate(key: string): T | null {
     const row = sharedStateReadonlyDatabase(this.filename).query<{ row_revision: number }, [string, string]>(
       "SELECT row_revision FROM state_rows WHERE collection=? AND row_key=?").get(this.options.collection, key);
@@ -2377,6 +2411,56 @@ export class SqliteStateCollection<T> {
       .get(now, JSON.stringify(excluded)));
   }
 
+  pipelineControlOwnership(key: string): string | null {
+    return sharedStateReadonlyDatabase(this.filename).query<{ binding_json: string }, [string]>(
+      "SELECT binding_json FROM pipeline_control_ownership WHERE control_key=?",
+    ).get(key)?.binding_json ?? null;
+  }
+
+  async claimPipelineControlOwnership(key: string, binding: string, ownerKey = key, replaces?: string,
+    settledKey?: string): Promise<{ acquired: boolean; binding: string }> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db => {
+      const read = db.query<{ binding_json: string }, [string]>(
+        "SELECT binding_json FROM pipeline_control_ownership WHERE control_key=?",
+      );
+      const previous = read.get(key);
+      if (previous && (previous.binding_json !== replaces || settledKey && read.get(settledKey))) {
+        return { acquired: false, binding: previous.binding_json };
+      }
+      const insert = db.query("INSERT OR IGNORE INTO pipeline_control_ownership VALUES(?,?)");
+      const { changes } = insert.run(ownerKey, binding);
+      const owner = read.get(ownerKey);
+      if (!owner) throw new Error("pipeline control ownership was not recorded");
+      if (previous) db.query("UPDATE pipeline_control_ownership SET binding_json=? WHERE control_key=?").run(owner.binding_json, key);
+      else if (ownerKey !== key) insert.run(key, owner.binding_json);
+      return { acquired: changes === 1, binding: owner.binding_json };
+    });
+  }
+
+  async consumePipelineControlOwnership(key: string, binding: string): Promise<boolean> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db =>
+      db.query("DELETE FROM pipeline_control_ownership WHERE control_key=? AND binding_json=?").run(key, binding).changes === 1);
+  }
+
+  async settlePipelineControlOwnership(key: string, binding: string, markerKey: string, marker: string): Promise<boolean> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db => {
+      const owned = db.query("SELECT 1 FROM pipeline_control_ownership WHERE control_key=? AND binding_json=?").get(key, binding);
+      if (!owned) return false;
+      db.query("INSERT OR IGNORE INTO pipeline_control_ownership VALUES(?,?)").run(markerKey, marker);
+      return true;
+    });
+  }
+
+  async recordPipelineTickSelection(work: PipelineTickWork, now: number): Promise<void> {
+    await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
+      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
+      if (work.dirty === 1 || work.due_at <= now) {
+        db.query("UPDATE pipeline_tick_priority_cursor SET due_at=?,row_order=?,row_key=? WHERE kind=?")
+          .run(work.due_at, work.row_order, work.row_key, work.dirty === 1 ? "dirty" : "due");
+      }
+    });
+  }
+
   async acknowledgePipelineTick(work: PipelineTickWork, cursor: number, dueAt: number): Promise<void> {
     await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
       db.query("UPDATE pipeline_tick_work SET attempt_cursor=? WHERE row_key=?").run(cursor, work.row_key);
@@ -2386,7 +2470,6 @@ export class SqliteStateCollection<T> {
         (SELECT 1 FROM state_rows WHERE collection='pipelines' AND row_key=? AND controller_active=1)
         AND NOT EXISTS (SELECT 1 FROM pipeline_controller_work WHERE row_key=?)`)
         .run(work.row_key, work.generation, work.row_key, work.row_key);
-      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
     });
   }
 
@@ -2394,7 +2477,6 @@ export class SqliteStateCollection<T> {
     await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
       db.query("UPDATE pipeline_tick_work SET dirty=1,due_at=0 WHERE row_key=? AND generation=?")
         .run(work.row_key, work.generation);
-      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
     });
   }
 

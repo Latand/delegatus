@@ -5296,11 +5296,13 @@ test("central Claude session completion releases the local queue reference and a
   } finally { await host.release(); }
 });
 
-test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+test.each(["memory", "file"])("a settled host releases idle events, replays to subscribers and refills on its next turn (%s)", async kind => {
+  const eventStore = kind === "file"
+    ? new FileRuntimeEventStore(fs.mkdtempSync(path.join(os.tmpdir(), "host-refill-"))) : new MemoryEventStore();
   const ledger = new RecordingDeliveryLedger();
   const child = new FakeClaude(ledger);
   const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId: "idle-window-session", env: { NODE_ENV: "test" },
-    eventStore: new MemoryEventStore(), deliveryLedger: ledger, readTranscript: () => [],
+    eventStore, deliveryLedger: ledger, readTranscript: () => [],
     readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
     spawnProcess: fakeSpawn(child, {}) });
   const idle = idleWindowFixture(host);
@@ -5312,8 +5314,8 @@ test("a settled host releases idle events, replays to subscribers and refills on
     expect(host.heapAttribution().events).toBe(0);
     const stream = host.attach(0)[Symbol.asyncIterator]();
     try {
-      expect(host.heapAttribution().events).toBeGreaterThan(0);
       for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
     } finally { await stream.return?.(); }
     expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
     const sent = host.send({ id: "next-idle-turn", text: "continue" });
@@ -5413,7 +5415,11 @@ describe("native evidence with admission contained", () => {
       const entry = { id: "incumbent", text: "fixture incumbent" };
       const reached = barrier(), hold = barrier(), expired = barrier(), bufferedExpired = barrier();
       let outputDeadlines = 0;
-      const internals = host as unknown as { nativeWork: Promise<void>; noteNativeFailure(phase: string, error: unknown, observation?: ClaudeDeliveryState): void };
+      const internals = host as unknown as {
+        nativeWork: Promise<void>;
+        requestTimeoutMs: number;
+        noteNativeFailure(phase: string, error: unknown, observation?: ClaudeDeliveryState): void;
+      };
       const failure = internals.noteNativeFailure.bind(host);
       const onFailure = spyOn(internals, "noteNativeFailure").mockImplementation((phase, error, observation) => {
         failure(phase, error, observation);
@@ -5469,6 +5475,17 @@ describe("native evidence with admission contained", () => {
       const consuming = spyOn(ledger, "recordNativeConsumed").mockImplementation(async (...args) => {
         await pause("lookup"); const value = await consume(...args); await pause("return"); return value;
       });
+      const sendFollower = (entry: QueueEntry) => {
+        const written = barrier();
+        const receipt = host.send(entry, undefined, undefined, mark => {
+          if (mark === "claude-write-end") written.release();
+        });
+        const dispatched = Promise.race([written.held, receipt.then(value => {
+          throw new Error(`Claude settled ${entry.id} before writing: ${JSON.stringify(value)}`);
+        })]);
+        void dispatched.catch(() => {});
+        return { dispatched, receipt };
+      };
       try {
         if (seam.startsWith("load-")) {
           const native = { version: 1 as const, sessionId, writerId: resultUuid(60), process: { pid: 5150, startIdentity: "5150:fixture" },
@@ -5502,18 +5519,25 @@ describe("native evidence with admission contained", () => {
         }
         expect(store.load(sessionId).filter(event => event.kind === "item" && event.deliveryEcho)).toHaveLength(
           seam === "hook" || seam.startsWith("publication-") && publicationKind === "native-admission-restored" ? 1 : 0);
-        const follow = host.send({ id: "follow", text: "fixture follow" }); void follow.catch(() => {});
+        // The reducer and buffered output have already acknowledged their
+        // real 500 ms deadlines. Give subsequent dispatch and result I/O
+        // room to finish on a contended filesystem.
+        internals.requestTimeoutMs = 30_000;
+        const follow = sendFollower({ id: "follow", text: "fixture follow" });
+        expect(users(child)).toHaveLength(1);
         hold.release(); await internals.nativeWork;
         const confirmed = await readConfirmedSendEvidence(evidenceOwner(entry), entry.id);
         if (seam === "write-error") expect(confirmed).toBeNull();
         else expect(confirmed).toMatchObject({ source: "claude-native-input", turnId: entry.id });
         expect(host.supportsQueuedSend).toBe(true); expect(host.acceptsInputDuringTurn).toBe(true);
-        await until(() => users(child).length === 2);
-        const after = host.send({ id: "after", text: "fixture after release" }); void after.catch(() => {});
-        await until(() => users(child).length === 3);
+        await follow.dispatched;
+        expect(users(child)).toHaveLength(2);
+        const after = sendFollower({ id: "after", text: "fixture after release" });
+        await after.dispatched;
+        expect(users(child)).toHaveLength(3);
         result(child, users(child).map(input => input.uuid), 71);
-        expect(await follow).toMatchObject({ turnId: entry.id });
-        expect(await after).toMatchObject({ turnId: entry.id });
+        expect(await follow.receipt).toMatchObject({ turnId: entry.id });
+        expect(await after.receipt).toMatchObject({ turnId: entry.id });
         expect(users(child)).toHaveLength(3);
       } finally {
         hold.release(); armed = false;

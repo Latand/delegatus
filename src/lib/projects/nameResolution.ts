@@ -48,6 +48,11 @@ export interface NamedProjectDirectory {
   active: Set<string>;
   suggestions: Set<string>;
   canonical(project: string): string;
+  /** Every retained source key whose spelling the resolver accepts for
+   * `named`, before alias or parent canonicalization. The resolver's own
+   * indexing records these, so a proof built from them covers every source
+   * the resolver reads, including ones added later. */
+  sources(named: string): string[];
 }
 
 /** Read retained membership only. A name lookup never starts a scanner or
@@ -111,21 +116,30 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
   const identities = new Map<string, Set<string>>();
   const encodedDirectories = new Map<string, Set<string>>();
   const labels = new Map<string, string>();
-  const index = (name: string | undefined | null, key: string) => {
+  // Accepted spelling -> the source keys that contributed it. Every name the
+  // resolver can match is written here by the same call that indexes it.
+  const origins = new Map<string, Set<string>>();
+  const record = (spelling: string, origin: string) => {
+    const keys = origins.get(spelling) ?? new Set<string>();
+    keys.add(origin); origins.set(spelling, keys);
+  };
+  const index = (name: string | undefined | null, key: string, origin = key) => {
     if (sources.canonicalOnly && !isCanonicalProjectId(canonical(key))) return;
     const folded = name?.trim().toLowerCase();
     // Presentation placeholders do not name any one project.
     if (!folded || folded === "unnamed project" || folded === "unresolved project") return;
     const projects = names.get(folded) ?? new Set<string>();
     projects.add(canonical(key)); names.set(folded, projects);
+    record(folded, origin);
   };
   const added = new Set<string>();
-  const identify = (name: string | undefined | null, key: string) => {
+  const identify = (name: string | undefined | null, key: string, origin = key) => {
     if (sources.canonicalOnly && !isCanonicalProjectId(canonical(key))) return;
     const folded = name?.trim().toLowerCase();
     if (!folded) return;
     const projects = identities.get(folded) ?? new Set<string>();
     projects.add(canonical(key)); identities.set(folded, projects);
+    record(folded, origin);
   };
   const add = (key: string, name?: string) => {
     if (sources.canonicalOnly && !isCanonicalProjectId(canonical(key))) return;
@@ -135,12 +149,12 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     const project = canonical(key);
     const label = presentationName(presentation[project], projectDisplayName(project, aliases.displayNames[project] ?? (name && !["Unnamed project", "Unresolved project"].includes(name) ? name : undefined) ?? labels.get(project)), projectRoots.get(project));
     labels.set(project, label);
-    identify(key, project); identify(shortId(key), project);
-    index(key, project); index(project, project); index(name, project); index(label, project);
-    index(reportHeaderName(project), project);
+    identify(key, project, key); identify(shortId(key), project, key);
+    index(key, project, key); index(project, project, key); index(name, project, key); index(label, project, key);
+    index(reportHeaderName(project), project, key);
   };
   for (const row of members) add(row.project, row.displayName ?? row.projectName);
-  for (const [source, target] of Object.entries(aliases.aliases)) { add(target); identify(source, target); index(source, target); }
+  for (const [source, target] of Object.entries(aliases.aliases)) { add(target); identify(source, target, source); index(source, target, source); }
   for (const [key, name] of Object.entries(aliases.displayNames)) add(key, name);
   for (const row of manualProjects) {
     add(row.project, row.displayName);
@@ -159,6 +173,7 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     const projects = encodedDirectories.get(encoded) ?? new Set<string>();
     projects.add(canonical(row.project));
     encodedDirectories.set(encoded, projects);
+    record(encoded, row.project);
   }
   for (const [key, remote] of Object.entries(recordedProjectRemotes())) {
     if (!labels.has(canonical(key))) continue;
@@ -175,7 +190,23 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     identities.set(normalized, keys);
   }
   const suggestions = new Set([...active, ...Object.keys(aliases.displayNames).map(canonical), ...Object.values(aliases.aliases).map(canonical)]);
-  return { names, identities, encodedDirectories, labels, active, suggestions, canonical };
+  // The same lookups resolveProjectName performs: exact folded names and
+  // identities, normalized spellings, short identity prefixes and encoded
+  // directories. Over-inclusion only adds alias edges to a proof.
+  const accepted = (named: string) => {
+    const folded = named.trim().toLowerCase();
+    const normalized = normalizeProjectName(folded);
+    const prefix = /^(repo|dir)-[a-f0-9]{7,31}$/i.test(folded);
+    const keys = new Set<string>();
+    if (!folded) return [];
+    for (const [spelling, from] of origins) {
+      if (spelling !== folded && !(normalized && normalizeProjectName(spelling) === normalized)
+        && !(prefix && matchesShortId(spelling, folded))) continue;
+      for (const key of from) keys.add(key);
+    }
+    return [...keys].sort();
+  };
+  return { names, identities, encodedDirectories, labels, active, suggestions, canonical, sources: accepted };
 }
 
 function normalizeProjectName(value: string): string {

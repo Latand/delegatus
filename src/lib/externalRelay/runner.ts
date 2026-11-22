@@ -20,12 +20,12 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline, remainingMs } from "./deadline";
-import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
+import { ownerRelayAuthorized, liveOwnerRelayRequest, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
 import { ownerRequestTimeoutText } from "./requestTimeout";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
-import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, prepareOwnerPrompt, ownerAnswer, ownerFailureAnswer, ownerFailureCustody, type OwnerRunPorts } from "./ownerRun";
+import { runOwnerAgent, ownerContinuationPrompt, prepareOwnerPrompt, ownerAnswer, ownerFailureAnswer, ownerFailureCustody, type OwnerRunPorts } from "./ownerRun";
 import { ownerTurnDiagnostic, type OwnerTurnDiagnostic } from "./diagnostic";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
@@ -56,6 +56,7 @@ import {
   roundSchema,
   type ExternalRelayDecision,
   handoffAnswerSchema,
+  INVALID_REQUESTER_DETAIL,
   offersHandoff,
   requestSchema,
   type ExternalRelayCompletion,
@@ -72,6 +73,7 @@ import { answerRecorder, countMemberAnswers, readAnswerRecord, type RelayAnswerD
 import {
   answerProfileFor,
   ownerTierFor,
+  ownerBindingRefusal,
   exemptFromMemberLimit,
   memberLimitFor,
   RELAY_MEMBER_LIMIT_WINDOW_MS,
@@ -203,7 +205,10 @@ export async function runClaimedRequest(
     return sent.body;
   }
   const parsed = requestSchema.safeParse(raw);
-  const request = parsed.success ? parsed.data : null;
+  const refusalDetail = parsed.success
+    ? ownerBindingRefusal(relay, parsed.data)
+    : parsed.error.issues.find(issue => issue.message === INVALID_REQUESTER_DETAIL)?.message ?? null;
+  const request = parsed.success && !refusalDetail ? parsed.data : null;
   const caps = request ? answerCapabilities(request, relay.targets.find(t => t.id === request.target_id)?.engine ?? "") : null;
   const rawId =
     raw && typeof raw === "object"
@@ -256,7 +261,7 @@ export async function runClaimedRequest(
     claimedAt: rawRequest.claimed_at,
     chatKey: request?.chat?.key ?? null,
     requester: request?.input.requester ?? null,
-    input: rawRequest.input,
+    input: refusalDetail ? null : rawRequest.input,
     ...(request?.features ? { features: request.features } : {}),
   });
   inflight.add(requestId);
@@ -550,6 +555,8 @@ export async function runClaimedRequest(
           (raw as Record<string, unknown>).kind !== "answer"
           ? "unsupported_kind"
           : "invalid_request",
+        null,
+        refusalDetail,
       ),
     );
   if (deadline.fallback === "past") return finish(declined(leaseId, "busy"));
@@ -721,14 +728,14 @@ export async function runClaimedRequest(
     const profile = answerProfileFor(requester);
     // Third-party context stays in the closed, request-local answer profile.
     // Owner authority must never launch a general session for guest delivery.
-    const ownerMessage = request.delivery === "guest" ? null : ownerTierFor({ ownerTier: true }, request);
+    const ownerMessage = ownerTierFor({ ownerTier: true }, request);
     const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
     const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
       && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
     const trigger = request.input.conversation.find(message => message.id === ownerMessage?.messageId);
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
-    owner = request.delivery === "guest" ? null : prototype ? ownerMessage : ownerTierFor(target, request);
+    owner = prototype || target.ownerTier === true ? ownerMessage : null;
     if (owner || request.delivery === "guest") delete profile.pageRead;
     boundedOwnerTurn = !!owner && !prototype;
     ownerExecution = boundedOwnerTurn;
@@ -756,7 +763,7 @@ export async function runClaimedRequest(
         preResolvedConversation = await lookupChainConversationAsync(relay, target, request, authority!);
       }
     }
-    const selectAccount = () => prototype || usingCloud ? null : accountManager.resolveHeadlessSpawn(target.engine!,
+    const selectAccount = () => prototype || usingCloud || owner && (conversation ?? preResolvedConversation)?.conversationId ? null : accountManager.resolveHeadlessSpawn(target.engine!,
       conversation?.accountId ?? preResolvedConversation?.accountId ?? null,
       [], target.project, target.model);
     let selection = selectAccount();
@@ -955,7 +962,6 @@ export async function runClaimedRequest(
             answer: { action: "reply", text: notice.slice(0, request.answer.max_chars), reply_to: request.input.respond_to, format: "plain" } });
         }
       }
-      // A refused continuation retries round one with the same registrations and budgets.
       if (rounds === 1 && !toolMedia) {
         toolMedia = createToolResultMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at),
           authorize: () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); } }, inbound ?? undefined);
@@ -996,7 +1002,8 @@ export async function runClaimedRequest(
         if (owner && !cloud) executionDeadline = Date.now() + target.hardCapMinutes * 60_000;
         const inboundRefs = new Set(inbound?.files.map(file => file.ref));
         const mediaMessageIds = request.input.conversation.filter(message => message.media?.some(media => inboundRefs.has(media.ref))).map(message => message.id);
-        const ownerAdditions = { mediaMessageIds, mandatory: [inbound?.prompt,
+        // The Cloud JSON tool loop cannot look up a catalogue through local MCP.
+        const ownerAdditions = { mediaMessageIds, requireToolTable: usingCloud, mandatory: [inbound?.prompt,
           ...(usingCloud ? [rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : "", frame] : []),
         ].filter(Boolean).join("\n") };
         // Prepare only the mode that will be sent. Cloud has no native cursor.
@@ -1053,6 +1060,7 @@ export async function runClaimedRequest(
               : prepareOwnerPrompt(request, owner, ownerTarget.hardCapMinutes, fallbackAdditions);
             turn = preparedOwner;
           }
+          const continuing = !!conversation?.conversationId;
           return prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
             if (leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked");
           }, { telegramUserId: relay.owner.namespace === "telegram" ? relay.owner.id : undefined }) : owner ? runOwnerAgent({
@@ -1064,7 +1072,7 @@ export async function runClaimedRequest(
             preparedPrompt: preparedOwner!,
             contextDirectory: localRunDir,
             onPromptBytes: bytes => { if (chain) chain = { ...chain, promptBytes: chain.promptBytes + bytes - Buffer.byteLength(persistentPrompt) }; },
-            request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: selectedAccount().accountId,
+            request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: conversation?.conversationId ? null : selectedAccount().accountId,
             hardCapMs: Math.min(cloud ? Math.max(0, executionDeadline - Date.now()) : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
             onConversation: async (conversationId, initialPrompt) => {
               localOwnerConversationId = conversationId;
@@ -1078,7 +1086,7 @@ export async function runClaimedRequest(
                 await releaseConversationAsync(conversation.id, patch, ownerRelayStoreDeadline(), requestId);
                 if (cursor) Object.assign(conversation, patch);
               }
-              ownerTools?.bindConversation(conversationId);
+              ownerTools?.bindConversation(conversationId, continuing ? () => liveOwnerRelayRequest(conversationId)?.requestId === requestId : undefined);
               recorder?.bindConversation(conversationId);
             },
             ...(steps ? { onProgress: steps.observe } : {}),
@@ -1216,30 +1224,6 @@ export async function runClaimedRequest(
           requestTimer.unref();
         }) : null;
       try { result = await (expired ? Promise.race([launchedRun.done, expired]) : launchedRun.done); }
-      catch (error) {
-        if (!(error instanceof OwnerContinuationRefused) || !conversation || !owner) throw error;
-        run = null;
-        if (error.reason === "unavailable") {
-          if (conversation.conversationId) ownerTools?.unbindConversation(conversation.conversationId);
-          Object.assign(conversation, { conversationId: null, seen: [], staticDigest: null });
-          await releaseConversationAsync(conversation.id, { conversationId: null, seen: [], staticDigest: null, state: "running", runningRequestId: requestId }, ownerRelayStoreDeadline(), requestId);
-          await changeRunAsync(requestId, current => ({ ...current, conversationId: undefined,
-            ownerTurn: { ...current.ownerTurn!, continuation: undefined, admissionComplete: false } }), ownerRelayStoreDeadline());
-        } else {
-          admissionHeld = true;
-          await releaseAdmission();
-          enterRelayHold({ requestId, relayId: relay.id, targetId: target.id, cause: "chat", deadline,
-            release: () => { releaseRequested = true; wakeHold?.(); return released; } });
-          await new Promise<void>(resolve => {
-            const timer = setTimeout(resolve, Math.max(0, Math.min(1000, deadline.declineAt - Date.now())));
-            wakeHold = () => { clearTimeout(timer); resolve(); };
-          });
-          wakeHold = null;
-          if (Date.now() >= deadline.declineAt) return await finish(declined(leaseId, "busy", null, "chat busy"));
-          if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
-        }
-        rounds--; continue;
-      }
       finally { if (requestTimer) clearTimeout(requestTimer); }
       if (owner && !prototype && (cloud || result.status === "timeout") && Date.now() >= executionDeadline) return await finishOwnerTimeout(started);
       if (!usingCloud || cloudFailed || result.status !== "done") ownerParts?.close();

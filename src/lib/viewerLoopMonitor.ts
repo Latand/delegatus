@@ -45,7 +45,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "codex.protocol-admission" | "codex.cli-update" | "mcp.page-cursors"
   | "worktrees.discovery" | "worktrees.candidate" | "worktrees.accounting"
   | "pipelines.controller-job" | "pipelines.provisioning" | "pipelines.controller-lane" | "pipelines.controller-schedule" | "pipelines.publication-recovery"
-  | "pipelines.controller-artifacts"
+  | "pipelines.controller-artifacts" | "pipelines.operator-stop-evidence"
   | "telegram.membership-check" | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
   | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention"
   | "turbo.sweep" | "turbo.sweep.read" | "turbo.sweep.apply" | "turbo.sweep.settle";
@@ -261,7 +261,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       lastSummary = at;
     }
     readAttribution.clear();
-    spans.clear();
+    spans.clearSpans();
     activeDropped = completedDropped = 0;
     last = at;
   };

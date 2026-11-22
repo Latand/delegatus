@@ -189,6 +189,14 @@ export function controllerPipelineVersionNow(id: string): string {
 export async function controllerPipelineVersion(id: string): Promise<string> {
   return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-version", () => stateLockAttempt("pipelines.controller-version", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineControllerVersion(id)))));
 }
+export function pendingCpuStageRevision(id: string, stage: string, attempt: number): string | null {
+  return pipelineStore().pipelinePendingCpuStageRevision(id, stage, attempt);
+}
+export async function wakePipelineCpuStage(id: string, stage: string, attempt: number, revision: string, expiresAt: number): Promise<string | null> {
+  return waitForStateLock("pipelines.controller-cpu-wake", () => pipelineStore().wakePipelineCpuStage(id, stage, attempt, revision, expiresAt),
+    { waitMs: Math.max(0, expiresAt - Date.now()), subject: "pending-stage" });
+}
+
 export async function findControllerPipeline(id: string): Promise<Pipeline | null> {
   return waitForStateLock("pipelines.controller-candidate", () => stateLockAttempt("pipelines.controller-candidate", () => pipelineStore().pipelineControllerCandidate(id)));
 }
@@ -220,6 +228,28 @@ export async function pipelineRecoveryWindow(after: { row_order: number; row_key
 
 export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
   return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
+}
+export async function pipelineControlOwnership(key: string) {
+  return waitForStateLock("pipelines.control-ownership", () => stateLockAttempt("pipelines.control-ownership", () =>
+    pipelineStore().pipelineControlOwnership(key)));
+}
+
+export async function claimPipelineControlOwnership(key: string, binding: string, ownerKey?: string, replaces?: string, settledKey?: string) {
+  return (await waitForStateLock("pipelines.control-ownership", pipelineStore))
+    .claimPipelineControlOwnership(key, binding, ownerKey, replaces, settledKey);
+}
+
+export async function consumePipelineControlOwnership(key: string, binding: string) {
+  return (await waitForStateLock("pipelines.control-ownership", pipelineStore)).consumePipelineControlOwnership(key, binding);
+}
+
+export async function settlePipelineControlOwnership(key: string, binding: string, markerKey: string, marker: string) {
+  return (await waitForStateLock("pipelines.control-ownership", pipelineStore))
+    .settlePipelineControlOwnership(key, binding, markerKey, marker);
+}
+
+export async function recordPipelineControllerSelection(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork, now: number) {
+  return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).recordPipelineTickSelection(work, now);
 }
 export async function deferPipelineControllerWork(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork) {
   return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).deferPipelineTick(work);
@@ -521,7 +551,8 @@ export function planPipelineStateMigration(): {
 
 /** Normalize defaults and project identity on decoded records. Nested config
     can retain input references; shared records need cloneLoadedPipeline. */
-function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
+function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject, ownsNestedValues = false): Pipeline {
+  const copyNested = <T>(value: T): T => ownsNestedValues ? value : structuredClone(value);
   const settledAttempts = pipeline.terminalReap?.settledAttempts
     ?? (pipeline.terminalReap?.settledAt
       ? pipeline.runs.flatMap((run) => run.attempts
@@ -532,15 +563,15 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
   const revived: Pipeline = {
     ...pipeline,
     conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
-    closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
-    closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
+    closeTeardown: pipeline.closeTeardown ? copyNested(pipeline.closeTeardown) : undefined,
+    closeReport: pipeline.closeReport ? copyNested(pipeline.closeReport) : undefined,
     project: resolveProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
     ...(pipeline.taskClass ? { taskClass: { ...pipeline.taskClass } } : {}),
     proactiveTaskIds: pipeline.proactiveTaskIds ? [...pipeline.proactiveTaskIds] : undefined,
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
-    ...(pipeline.inputContext ? { inputContext: structuredClone(pipeline.inputContext) } : {}),
+    ...(pipeline.inputContext ? { inputContext: copyNested(pipeline.inputContext) } : {}),
     baseBranch: pipeline.baseBranch ?? "",
     baseRef: pipeline.baseRef ?? "",
     lastPassedCommit: pipeline.lastPassedCommit ?? "",
@@ -576,14 +607,14 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
-            ...(attempt.accounting ? { accounting: structuredClone(attempt.accounting) } : {}),
+            ...(attempt.accounting ? { accounting: copyNested(attempt.accounting) } : {}),
             ...(attempt.setup ? { setup: { ...attempt.setup, command: [...attempt.setup.command] } } : {}),
             ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
             ...(attempt.roleMemoryDispatchWait ? { roleMemoryDispatchWait: { ...attempt.roleMemoryDispatchWait } } : {}),
             ...(attempt.roleMemoryDelivery ? { roleMemoryDelivery: { ...attempt.roleMemoryDelivery } } : {}),
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
-            ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
+            ...(attempt.runtimeSwitches ? { runtimeSwitches: copyNested(attempt.runtimeSwitches) } : {}),
             launchId: attempt.launchId ?? null,
             conversationId: attempt.conversationId ?? null,
             sessionId: attempt.sessionId ?? null,
@@ -641,7 +672,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
 /** Detach every nested field before a mutable reader or session sees a shared
     decoded record, including configuration and historical attempt evidence. */
 function cloneLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
-  return performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(structuredClone(pipeline), resolveProject), 1);
+  return performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(structuredClone(pipeline), resolveProject, true), 1);
 }
 
 /** Array slots detach on access. Length, direct lookup and append stay bounded;

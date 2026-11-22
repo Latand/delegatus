@@ -68,6 +68,12 @@ accountManager.resolveHeadlessSpawn = (() => ({
 afterAll(() => {
   accountManager.resolveHeadlessSpawn = original;
 });
+/** The service's requester is the trigger's author: a substituted requester also writes the trigger. */
+function askedBy<I extends { respond_to: string | null; conversation: readonly { id: string; author: { key: string } }[] }>(
+  input: I, requester: Record<string, unknown> | null) {
+  return { ...input, requester, conversation: !requester ? input.conversation : input.conversation.map(message =>
+    message.id === input.respond_to ? { ...message, author: { ...message.author, key: String(requester.key) } } : message) };
+}
 function relay(api_base: string): PairedRelay {
   return {
     id: "relay_1",
@@ -250,7 +256,7 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
-test.each(["enabled", "disabled", "long-reservation"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
+test.each(["enabled", "disabled", "long-reservation", "numbered-prose"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
   const ownerTier = kind === "enabled";
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const completions: unknown[] = [];
@@ -264,7 +270,9 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
   const previous = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
   const copy = prototypeCopyLine(round);
-  const text = kind === "long-reservation" ? `${copy}, ${"я".repeat(20_000 - copy.length - 2)}` : `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
+  const prose = "Show 2  GIF previews.\nKeep  the captions.";
+  const text = kind === "long-reservation" ? `${copy}, ${"я".repeat(20_000 - copy.length - 2)}`
+    : kind === "numbered-prose" ? `${prototypeReference(round)} · ${prose}` : `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
   const request = { ...contextRequest, request_id: `prototype-owner-${kind}`, answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
     ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
     conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
@@ -277,13 +285,14 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
     if (duplicate !== null) expect(duplicate).toMatchObject({ outcome: "answered" });
     expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
     const task = loadTasks()[0]!, decision = task.prototypeReviews![0]!.decision!;
-    expect(decision).toMatchObject({ chosen: kind === "long-reservation" ? [] : [2], originalReply: text,
-      answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })) });
+    expect(decision).toMatchObject({ chosen: kind === "long-reservation" || kind === "numbered-prose" ? [] : [2], originalReply: text,
+      answers: round.questions!.map(q => kind === "numbered-prose"
+        ? { questionId: q.id, options: [], other: true } : { questionId: q.id, options: [0] }) });
     if (kind === "long-reservation") {
       expect(decision.recommendedWithReservation).toBe(true);
       expect(decision.comment).toBe(text.slice(copy.length));
       if (result?.outcome === "answered") expect(result.answer.text).toContain("рекомендовані з застереженням");
-    } else expect(decision.comment).toBe("Keep these controls.");
+    } else expect(decision.comment).toBe(kind === "numbered-prose" ? prose : "Keep these controls.");
     expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${round.id}`);
     if (kind === "long-reservation") {
       expect(Buffer.byteLength(decision.delivery.text)).toBeLessThanOrEqual(32_000);
@@ -1587,7 +1596,7 @@ test("the member limit declines a member past it, per chat, and never counts the
     paired.targets[0] = { ...paired.targets[0]!, id: "target_limit", memberLimitPerHour: 2, ...target };
     return runClaimedRequest(paired, {
       ...sampleRequest, request_id: `rq_limit_${n}`, target_id: paired.targets[0]!.id, chat: { key: chat },
-      input: { ...sampleRequest.input, requester },
+      input: askedBy(sampleRequest.input, requester),
     }, undefined, { command: script });
   };
   const member = { key: "u_m", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false };
@@ -1631,7 +1640,7 @@ test("pre-launch capacity and drain declines leave the member's allowance availa
   paired.id = "relay_admission";
   paired.targets[0]!.memberLimitPerHour = 2;
   const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
-  const request = (id: string) => ({ ...sampleRequest, request_id: id, chat: { key: "chat_key_admissionaa" }, input: { ...sampleRequest.input, requester } });
+  const request = (id: string) => ({ ...sampleRequest, request_id: id, chat: { key: "chat_key_admissionaa" }, input: askedBy(sampleRequest.input, requester) });
   const command = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
   const previous = accountManager.resolveHeadlessSpawn;
   try {
@@ -1664,7 +1673,7 @@ test("launched hand-offs, failed agents and running agents each consume the memb
   paired.id = "relay_count_launched";
   paired.targets[0] = { ...paired.targets[0]!, concurrency: 2, memberLimitPerHour: 1 };
   const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
-  const request = (id: string, chatKey: string) => ({ ...contextRequest, request_id: id, chat: { key: chatKey }, input: { ...contextRequest.input, requester } });
+  const request = (id: string, chatKey: string) => ({ ...contextRequest, request_id: id, chat: { key: chatKey }, input: askedBy(contextRequest.input, requester) });
   const handoff = handoffStub(path.join(root, "admission-handoff"));
   const failure = stub("process.exit(1)");
   const release = path.join(root, "admission-release");
@@ -1734,7 +1743,7 @@ test("service-built roles answer and the real runner and poller emit cross-check
     expect(limited?.outcome === "declined" && [...limited.detail!].length).toBeLessThanOrEqual(200);
     // These fixtures use the same key as the counted member; the role flags exempt them.
     for (const role of ["admin", "owner"])
-      expect(await runClaimedRequest(paired, { ...fixture(role), request_id: `rq_wire_exempt_${role}`, input: { ...fixture(role).input, requester: { ...fixture(role).input.requester, key: member.input.requester.key } } }, undefined, { command })).toMatchObject({ outcome: "answered" });
+      expect(await runClaimedRequest(paired, { ...fixture(role), request_id: `rq_wire_exempt_${role}`, input: askedBy(fixture(role).input, { ...fixture(role).input.requester, key: member.input.requester.key }) }, undefined, { command })).toMatchObject({ outcome: "answered" });
 
     updateRelayStore((store) => ({ ...store, relays: [paired] }));
     ensureExternalRelayPollers();
@@ -3019,7 +3028,7 @@ for (const engine of ["codex", "claude"] as const)
       request.input.request_text = task === "react" ? "React with 👍 to message m_b40b71a0a9d43622ee0e2e6a." : "When is the meetup?";
       request.input.short_term_memory = null;
       request.input.documents = [];
-      request.input.conversation = [];
+      request.input.conversation = request.input.conversation.filter(message => message.id === request.input.respond_to);
       const run = await runLoopCase({ request, live: { engine, home: accountHome }, response: (body) => {
         if ("tool" in body && body.tool === "react_to_message") return actionResponse("action_ok", body);
         return { body: { ...x1Results.ok, call_id: body.call_id, output: "The meetup is Friday." } };
@@ -4596,7 +4605,7 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
   const make = (n: number, parent: string | null, includeRoot = true) => {
     const message = (id: string, reply_to: string | null, self = false) => ({ ...contextRequest.input.conversation[0]!, id, reply_to,
       author: { key: self ? "fixture-bot" : contextRequest.input.requester.key, name: self ? "Assistant" : "Owner", self }, text: `Fixture turn ${id}` });
-    return { ...contextRequest, ...(rich ? { features: ["relay_tool_calls", "relay_rich_messages"] } : {}), request_id: `chain-owner-${n}`, chat: { key: "fixture-owner-chain" }, answer: { max_chars: rich ? 32000 : 1000, progress: "none" as const }, input: {
+    return { ...contextRequest, ...(rich ? { features: ["relay_tool_calls", "relay_rich_messages"] } : {}), request_id: `chain-owner-${rich ? "rich" : "plain"}-${n}`, chat: { key: "fixture-owner-chain" }, answer: { max_chars: rich ? 32000 : 1000, progress: "none" as const }, input: {
       ...contextRequest.input, ...(rich ? { format: formatGuide } : {}), tools: ownerRequest().input.tools, instructions: "Static fixture instructions. ".repeat(600), requester: { ...contextRequest.input.requester, is_owner: true },
       respond_to: `turn-${n}`, conversation: [ ...(includeRoot && n > 1 ? [message("turn-1", null), message("bot-1", "turn-1", true)] : []), message(`turn-${n}`, parent) ] } };
   };
@@ -4606,6 +4615,11 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
     continue: async (turn, prompt) => {
       prompts.push(prompt);
       expect(turn.clientAttemptId).toBe(`relay-owner-${current}`);
+      expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(false);
+      expect(await relayServiceToolsOp("conversation_chain_fixture", { op: "list" })).toBeNull();
+      const registry = (await import("@/lib/agent/registry")).agentRegistry();
+      const held = registry.holdDelivery("conversation_chain_fixture", prompt, turn.clientAttemptId, "text", [], null, { operationId: turn.clientAttemptId });
+      registry.recordDeliveryOutcome(held.id, "delivered");
       expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(true);
       expect(ownerRelayPayload("context", "conversation_chain_fixture")?.text).toContain(current.endsWith("2") ? "Fixture turn turn-2" : "Fixture turn turn-3");
       return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId };
@@ -4634,100 +4648,27 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
     }
     expect(launches).toBe(1); expect(readConversations()).toHaveLength(1);
     expect(prompts[1]).not.toContain("<service_instructions>");
-    expect(prompts[1]).not.toContain('"id":"turn-1"');
-    expect(Buffer.byteLength(prompts[1]!)).toBeLessThan(Buffer.byteLength(prompts[0]!) / 10);
+    const rows = JSON.parse(prompts[1]!.match(/<conversation>\n([^]*?)\n<\/conversation>/)![1]!) as { id: string }[];
+    expect(rows.map(row => row.id)).toEqual(["turn-1", "bot-1", "turn-2"]);
+    expect(prompts[1]).toContain("<short_term_memory>");
+    expect(Buffer.byteLength(prompts[1]!)).toBeLessThan(Buffer.byteLength(prompts[0]!) / 4);
     expect(readAnswerRecord(paired.id, "target_1", current)?.chain).toMatchObject({ continued: true, promptBytes: Buffer.byteLength(prompts[2]!) });
   } finally { await server.close(); }
 });
 
-test("owner continuation refusal revokes the old service-tool binding before fallback", async () => {
-  const { productionDomainDependencies, viewerMcpBindings } = await import("@/lib/mcp/bindings");
-  const posts: unknown[] = [];
-  const server = await startTestRelay((req, body) => {
-    if (req.url?.endsWith("/tool-calls")) {
-      const call = body as { call_id: string; tool: string };
-      if ("describe" in (body as object)) {
-        const lookupResults = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "fixtures/service-wire/lookup_results.json"), "utf8"));
-        return { body: { ...lookupResults.truncated, call_id: call.call_id } };
-      }
-      posts.push(body);
-      return { body: { ...x1Results.action_ok, call_id: call.call_id, tool: call.tool } };
-    }
-    return { body: { status: "ok" } };
-  });
-  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
-  updateRelayStore(store => ({ ...store, relays: [paired] })); setRelaySwitch("chain_conversations", true);
-  let callerConversationId = "";
-  const bindings = viewerMcpBindings(undefined, { get: async () => ({}), post: async () => ({}) }, {
-    ...productionDomainDependencies,
-    callerAttribution: () => ({ kind: "agent", conversationId: callerConversationId, role: null }),
-  });
-  const conversations = (turn: number) => {
-    const message = (id: string, reply_to: string | null, self = false) => ({ ...contextRequest.input.conversation[0]!, id, reply_to,
-      author: { key: self ? "fixture-bot" : contextRequest.input.requester.key, name: self ? "Assistant" : "Owner", self }, text: `Fixture turn ${id}` });
-    const prior = turn > 1 ? [message("turn-1", null), message("bot-1", "turn-1", true)] : [];
-    const beforeCurrent = turn > 2 ? [message("turn-2", "bot-1"), message("bot-2", "turn-2", true)] : [];
-    return [...prior, ...beforeCurrent, message(`turn-${turn}`, turn === 1 ? null : `bot-${turn - 1}`)];
-  };
-  const make = (turn: number) => ({ ...contextRequest, request_id: `owner-binding-turn-${turn}`, chat: { key: "fixture-owner-binding-chain" },
-    answer: { max_chars: 1000, progress: "none" as const }, input: { ...contextRequest.input, tools: ownerRequest().input.tools,
-      requester: { ...contextRequest.input.requester, is_owner: true }, respond_to: `turn-${turn}`, conversation: conversations(turn) } });
-  let launches = 0, continuationAttempts = 0, observeTurn = 0, staleRefused = false, staleWireCalls = 0;
-  const accessMedia = async (id: string) => {
-    callerConversationId = id;
-    await bindings.relay_service_tools({ op: "describe", names: ["get_media"] });
-    await bindings.relay_service_tools({ op: "call", calls: [{ tool: "get_media", arguments: {} }] });
-  };
-  const ports: import("./ownerRun").OwnerRunPorts = {
-    launch: async () => ({ status: 202, body: { conversationId: `conversation_binding_${++launches}` } }),
-    continue: async turn => {
-      continuationAttempts++;
-      if (continuationAttempts === 1) return { ok: false, structured: true, outcome: "failed", status: 409, admission: "refused",
-        error: "the conversation cannot be resumed" };
-      expect(turn.conversationId).toBe("conversation_binding_2");
-      return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId };
-    },
-    observe: async () => {
-      observeTurn++;
-      if (observeTurn === 2) {
-        callerConversationId = "conversation_binding_1";
-        const postsBeforeStaleCall = posts.length;
-        try {
-          await bindings.relay_service_tools({ op: "describe", names: ["get_media"] });
-          await bindings.relay_service_tools({ op: "call", calls: [{ tool: "get_media", arguments: {} }] });
-        }
-        catch (error) { staleRefused = (error as { details?: { code?: string } }).details?.code === "relay_tools_unavailable"; }
-        staleWireCalls = posts.length - postsBeforeStaleCall;
-        await accessMedia("conversation_binding_2");
-      } else if (observeTurn === 3) {
-        await accessMedia("conversation_binding_2");
-      }
-      return { state: "ended", finalText: "Done" };
-    },
-    stop: async () => {}, pollMs: 1,
-  };
-  try {
-    expect((await runClaimedRequest(paired, make(1), undefined, { ownerPorts: ports }))?.outcome).toBe("answered");
-    expect((await runClaimedRequest(paired, make(2), undefined, { ownerPorts: ports }))?.outcome).toBe("answered");
-    expect(staleWireCalls).toBe(0); expect(staleRefused).toBe(true);
-    expect((await runClaimedRequest(paired, make(3), undefined, { ownerPorts: ports }))?.outcome).toBe("answered");
-    expect(launches).toBe(2); expect(continuationAttempts).toBe(2); expect(posts).toHaveLength(2);
-  } finally { await server.close(); }
-});
-
-for (const refusal of ["busy", "unavailable", "accepted-failure"] as const) test(`owner chain continuation ${refusal} has no duplicate execution`, async () => {
+for (const refusal of ["history", "account", "accepted-failure"] as const) test(`owner chain continuation ${refusal} has no duplicate execution`, async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
   updateRelayStore(store => ({ ...store, relays: [paired] })); setRelaySwitch("chain_conversations", true);
   let launches = 0, sends = 0;
-  const first = { ...contextRequest, request_id: `chain-${refusal}-first`, chat: { key: "fixture-refusal-chain" },
+  const first = { ...contextRequest, request_id: `chain-${refusal}-first`, chat: { key: "fixture-refusal-chain" }, answer: { ...contextRequest.answer, max_chars: 400 },
     input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
   const ports: import("./ownerRun").OwnerRunPorts = {
     launch: async () => { launches++; return { status: 202, body: { conversationId: `conversation_${refusal}` } }; },
     continue: async turn => { sends++;
       if (refusal === "accepted-failure") return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId };
       return { ok: false, structured: true, outcome: "failed", status: 409, admission: "refused",
-        error: refusal === "busy" ? "recipient is not ready for an idle continuation" : "the conversation cannot be resumed" };
+        error: refusal === "history" ? "Conversation history is unavailable" : "The conversation account is unavailable" };
     },
     observe: async turn => turn.continuation && refusal === "accepted-failure" ? { state: "failed" } : { state: "ended", finalText: "Done" },
     stop: async () => {}, pollMs: 1,
@@ -4737,12 +4678,16 @@ for (const refusal of ["busy", "unavailable", "accepted-failure"] as const) test
     const next = { ...first, request_id: `chain-${refusal}-next`, claimed_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 10200).toISOString(),
       input: { ...first.input, respond_to: "next", conversation: [{ ...first.input.conversation[0]!, id: "next", reply_to: first.input.respond_to }] } };
     const result = await runClaimedRequest(paired, next, undefined, { ownerPorts: ports });
-    expect(result?.outcome).toBe(refusal === "busy" ? "declined" : "answered");
-    if (refusal === "busy") expect(result).toMatchObject({ reason: "busy", detail: "chat busy" });
+    expect(result?.outcome).toBe("answered");
+    if (refusal !== "accepted-failure") {
+      expect(result).toMatchObject({ answer: { text: expect.stringContaining(refusal === "history" ? "history" : "account") } });
+      expect(readAnswerRecord(paired.id, "target_1", next.request_id)).toMatchObject({ outcome: "failure_notice",
+        diagnostic: { source: "launch", deliveryFailure: true } });
+    }
     if (refusal === "accepted-failure") expect(readAnswerRecord(paired.id, "target_1", next.request_id)).toMatchObject({
       diagnostic: { source: "observation", message: "Owner turn observation failed without further details" },
     });
-    expect(launches).toBe(refusal === "unavailable" ? 2 : 1); expect(sends).toBe(1);
+    expect(launches).toBe(1); expect(sends).toBe(1);
   } finally { await server.close(); }
 });
 
@@ -4755,7 +4700,9 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
   const trigger = fixture.input.conversation.find(m => m.id === fixture.input.respond_to)!;
   const samples: { mode: string; promptBytes: number; deliveredMs: number; answerMs: number }[] = [];
   let promptBytes = 0, deliveredAt = 0, launches = 0, sends = 0;
+  let deliveredPrompt = "";
   const engine = (prompt: string) => {
+    deliveredPrompt = prompt;
     promptBytes = Buffer.byteLength(prompt);
     // Same CPU work per prompt byte on both paths; no network/model or sleep.
     for (let i = 0; i < passes; i++) createHash("sha256").update(prompt).digest();
@@ -4780,6 +4727,12 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
         const completion = await runClaimedRequest(paired, { ...first, request_id: `latency-${pair}-${mode}`, input }, undefined, { ownerPorts: ports });
         const answerMs = performance.now() - started;
         expect(completion?.outcome).toBe("answered");
+        if (mode === "continued") {
+          const rows = JSON.parse(deliveredPrompt.match(/<conversation>\n([^]*?)\n<\/conversation>/)![1]!) as { id: string }[];
+          expect(rows.slice(-11).map(row => row.id)).toEqual(input.conversation.slice(-11).map(row => row.id));
+          expect(deliveredPrompt).toContain("<short_term_memory>");
+          expect(deliveredPrompt).not.toContain("<service_instructions>");
+        }
         samples.push({ mode, promptBytes, deliveredMs: deliveredAt - started, answerMs });
       }
     }
@@ -4788,7 +4741,7 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
     const variability = (values: number[]) => ({ rangeMs: Math.max(...values) - Math.min(...values),
       medianAbsoluteDeviationMs: median(values.map(value => Math.abs(value - median(values)))) });
     const fresh = samples.filter(s => s.mode === "fresh"), continued = samples.filter(s => s.mode === "continued");
-    expect(median(continued.map(s => s.promptBytes))).toBeLessThan(median(fresh.map(s => s.promptBytes)) / 10);
+    expect(median(continued.map(s => s.promptBytes))).toBeLessThan(median(fresh.map(s => s.promptBytes)));
     const measurement = { engine: `SHA256 ${passes} passes per prompt; alternating pair order`, load: os.loadavg(), samples,
       medians: { freshMs: median(fresh.map(s => s.answerMs)), continuedMs: median(continued.map(s => s.answerMs)) },
       variability: { fresh: variability(fresh.map(s => s.answerMs)), continued: variability(continued.map(s => s.answerMs)) } };

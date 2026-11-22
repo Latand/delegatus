@@ -9,7 +9,7 @@ import { assertRetentionTestPath, retentionUnderTest } from "./retentionTestSafe
 const exec = promisify(execFile);
 export const DOCKER_CACHE_PRUNE_COMMANDS = [
   ["builder", "prune", "-f", "--filter", "until=336h"],
-  ["image", "prune", "-a", "-f", "--filter", "until=336h"],
+  ["image", "prune", "-f", "--filter", "until=336h"],
 ] as const;
 
 /** The attempt is durable before either command: a restart or missing Docker
@@ -23,6 +23,8 @@ export async function pruneDockerCache(options: {
     throw new Error("retention test refused the real Docker runner; inject a fixture runner");
   const file = options.file ?? statePath("docker-cache-retention.json"), now = options.now ?? Date.now;
   assertRetentionTestPath(file);
+  if (process.env.LLV_VIEWER_DEPLOY_TARGET || fs.existsSync(statePath("viewer-release.json")))
+    return { state: "managed-release", commands: 0, errors: 0 };
   return withFileTransactionAsync(file, "daily Docker cache retention", async () => {
     assertRetentionTestPath(file);
     if (options.mode === "dry-run")

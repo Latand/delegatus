@@ -125,6 +125,26 @@ const requesterSchema = z.object({
   is_anonymous_admin: z.boolean(),
   is_owner: z.boolean(),
 });
+type RequesterAnchor = {
+  requester?: z.infer<typeof requesterSchema> | null;
+  respond_to: string | null;
+  conversation: readonly z.infer<typeof messageSchema>[];
+};
+
+/** A requester identifies the unique, human-authored trigger in this claim. */
+export function requesterTrigger(input: RequesterAnchor) {
+  if (!input.requester || input.respond_to === null) return null;
+  const matches = input.conversation.filter(message => message.id === input.respond_to);
+  const trigger = matches[0];
+  return matches.length === 1 && trigger && !trigger.author.self && trigger.author.key === input.requester.key
+    ? trigger : null;
+}
+
+export function ownerRequesterTrigger(input: RequesterAnchor) {
+  return input.requester?.is_owner === true && !input.requester.is_anonymous_admin ? requesterTrigger(input) : null;
+}
+
+export const INVALID_REQUESTER_DETAIL = "Requester does not match the triggering author or the owner delivery context.";
 const toolSchema = z.object({
   name: boundedString(64).refine((value) => value.length > 0),
   summary: boundedString(240),
@@ -183,9 +203,9 @@ export const inputSchema = z.object({
     )
     .optional(),
 }).superRefine((input, context) => {
+  const ownerTrigger = ownerRequesterTrigger(input);
   for (const [index, message] of input.conversation.entries()) {
-    const prototypeReply = input.requester?.is_owner === true && input.requester.is_anonymous_admin === false
-      && message.id === input.respond_to && message.author.key === input.requester.key && !message.author.self
+    const prototypeReply = message === ownerTrigger
       && /#proto-[a-f0-9]{8}\b/i.test(message.text.replace(/\\([#-])/g, "$1"));
     if ([...message.text].length > 16000 && !prototypeReply) context.addIssue({ code: "custom",
       path: ["conversation", index, "text"], message: "expected at most 16000 Unicode code points" });
@@ -284,9 +304,16 @@ export const requestSchema = z.preprocess(raw => {
     }) } : {}),
   } };
 }, answerRequestSchema.superRefine((request, context) => {
+  const { input } = request;
+  const invalidRequester = request.delivery === "guest" ? !ownerRequesterTrigger(input)
+    : input.requester && (!requesterTrigger(input) ||
+        input.requester.is_owner && input.requester.is_anonymous_admin ||
+        request.owner_delivery && !input.requester.is_owner);
+  if (invalidRequester)
+    context.addIssue({ code: "custom", path: ["input", "requester"], message: INVALID_REQUESTER_DETAIL });
   if (request.delivery === "guest") {
     if (request.answer.progress !== "none" || request.owner_delivery || request.input.format || request.answer.attachments
-      || request.input.requester?.is_owner !== true || request.input.tools?.some(tool => tool.mode !== "handoff")
+      || request.input.tools?.some(tool => tool.mode !== "handoff")
       || !hasInboundMedia(request) && (request.input.conversation.some(message => message.media?.length)
         || request.input.documents.some(document => document.media_ref !== undefined)))
       context.addIssue({ code: "custom", message: "invalid guest delivery contract" });
@@ -297,6 +324,17 @@ export const requestSchema = z.preprocess(raw => {
 }));
 export type ExternalRelayRequest = z.infer<typeof requestSchema>;
 export type ExternalRelayTool = z.infer<typeof toolSchema>;
+export function relayToolAudience(request: ExternalRelayRequest) {
+  const requester = request.input.requester;
+  const matched = requesterTrigger(request.input) !== null;
+  const owner = matched && requester?.is_owner === true && !requester.is_anonymous_admin && request.delivery !== "guest";
+  const admin = matched && requester?.is_admin === true;
+  return (audience?: string) => audience === undefined || (audience === "admin" && admin) || (audience === "owner" && owner);
+}
+export function visibleRelayTools(request: ExternalRelayRequest) {
+  const mayQuote = relayToolAudience(request);
+  return (request.input.tools ?? []).filter(tool => mayQuote(tool.audience));
+}
 export const RELAY_TOOLS_ON_DEMAND = "relay_tools_on_demand";
 export const RELAY_OWNER_TOOLS = "relay_owner_tools";
 /** I9 uses the offered audience; operation names and schemas stay service-owned. */
@@ -394,7 +432,7 @@ export const replyAnswerSchema = {
 } as const;
 /** Guest delivery can return to the hosted assistant even without a tool index. */
 export const offersHandoff = (request: ExternalRelayRequest) =>
-  request.delivery === "guest" || (request.input.tools?.length ?? 0) > 0;
+  request.delivery === "guest" || visibleRelayTools(request).length > 0;
 export type RelayMention = { author_key: string; offset: number; length: number };
 export type RelayUrlButton = { text: string; url: string };
 export type RelayAttachment = { attachment_id: string; kind: RelayMediaKind; caption?: string };

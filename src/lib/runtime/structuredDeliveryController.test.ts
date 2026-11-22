@@ -28,7 +28,7 @@ import {
 
 for (const revoked of [false, true]) test(`an addressed startup host retains its dispatch proof when recovery publishes before returning (${revoked})`, async () => {
   const f = migrationDeliveryFixture();
-  const operationId = `startup-original-${revoked ? "revoked" : "current"}`;
+  const operationId = `startup-original-${revoked}`;
   const startup = await import("./startup");
   const { StructuredRecoveryHeldForUpdateError } = await import("./structuredRecovery");
   let current = true;
