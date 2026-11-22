@@ -46,6 +46,7 @@ import { cpuPriorityEnv } from "./cpuPriority";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { CodexAppServerHost } from "./codexAppServerHost";
+import { codexReconnectAccess } from "./codexLaunchAccess";
 
 export const DEAD_STAGE_HOST_REASON = "stage host is gone; retry the stage, then send the message again";
 
@@ -572,12 +573,16 @@ async function recoverCandidate(
                 () => registry.releaseStructuredHostClaim(current!.key, claim.claimOwner!, claim.claimEpoch));
             };
             try {
-              if (!registry.ownsStructuredHostClaim(current.key, claim.claimOwner, claim.claimEpoch)) {
-                throw new StructuredRecoverySupersededError();
-              }
+              const assertClaim = () => {
+                if (!registry.ownsStructuredHostClaim(current!.key, claim.claimOwner!, claim.claimEpoch)) {
+                  throw new StructuredRecoverySupersededError();
+                }
+              };
+              assertClaim();
               request.acceptSuccessorClaim?.(current.key);
               request.admissionGuard?.(current.key);
               authorize();
+              const reconnectAccess = codexReconnectAccess(registry, claim);
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
                 omitSkillsInstructions: current.spec.launchProfile?.omitSkillsInstructions === true
@@ -587,11 +592,14 @@ async function recoverCandidate(
                 plugins: current.spec.launchProfile?.plugins ?? [],
                 env: { ...withoutUnsupportedApiCredentials(account.env),
                   ...await stageGitEnvironment(registry, current.conversationId, entry.structuredHostOperationId, current.spec.cwd) }, socketOwner,
-                assertCurrent: authorize,
+                reconnectAccess,
+                assertCurrent: () => { assertClaim(); authorize(); },
                 initialEventCursor: claim.structuredHost.eventCursor,
                 readProtocolVersion: () => retainedProtocolVersion ?? "unknown",
                 memoryCell: structuredHostCell(registry, "codex", sessionKeyId(current.key), current.conversationId),
               });
+              assertClaim();
+              authorize();
               await bindCodexHostPersistence(registry, current.key, host, claim.claimOwner, claim.claimEpoch);
               const owns = async () => {
                 authorize();

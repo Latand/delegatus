@@ -918,6 +918,7 @@ class FakeAppServer extends EventEmitter {
         features: this.features,
       },
     });
+    if (method === "thread/loaded/list") return this.respond(message.id, { data: [this.resumedThreadId] });
     if (method === "thread/start" || method === "thread/resume") {
       const id = method === "thread/resume" ? this.resumedThreadId : this.threadId;
       const excludeTurns = Boolean((message.params as { excludeTurns?: boolean } | undefined)?.excludeTurns);
@@ -1243,11 +1244,13 @@ for (const stdioViewer of [false, true])
 test.each([false, true])(`socket resume restores the delegated skills decision (stdio=${stdioViewer}, omitted=%s)`, async (omitSkillsInstructions) => {
   const server = new FakeAppServer();
   server.mcpServers = stdioViewer ? { viewer: { command: "fixture-viewer" } } : {};
+  server.threadResponseExtra = { sandbox: { type: "dangerFullAccess" }, approvalPolicy: "never" };
   const reconnect = spyOn(CodexSocketTransport, "reconnect").mockResolvedValue(server as unknown as CodexSocketTransport);
   let host: CodexAppServerHost | undefined;
   try {
     host = await CodexAppServerHost.adopt("thread-149", { cwd: "/repo", omitSkillsInstructions,
       socketOwner: { endpoint: "codex-unix:/fixture/rpc.sock", process: { pid: 4242, startIdentity: "fixture" } },
+      reconnectAccess: { cwd: "/repo", sandbox: "danger-full-access", approvalPolicy: "never" },
       readProtocolVersion: () => "0.162.1", spawnProcess: fakeSpawn(server), eventStore: new MemoryEventStore() });
     const params = server.requests.find(request => request.method === "thread/resume")!.params as Record<string, unknown>;
     const config = params.config as Record<string, unknown> | undefined;

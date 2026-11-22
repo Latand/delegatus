@@ -51,6 +51,7 @@ import {
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { deadStageHostReason, recoverDeadStructuredConversation, StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
+import { CodexReconnectPolicyError } from "./codexLaunchAccess";
 import { STAGE_ATTEMPT_SETTLED_CODE, StageAttemptSettledError } from "./stageGitEnvironment";
 import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
@@ -963,7 +964,7 @@ async function recoverReclaimedMessage(
   } catch (error) {
     if (error instanceof StageAttemptSettledError) return refuseSettledStageSend(registry, progress, reservation, error);
     const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`;
-    if (error instanceof StructuredResumeUnpublishedError) {
+    if (error instanceof StructuredResumeUnpublishedError || error instanceof CodexReconnectPolicyError) {
       const settled = await endReservationForRequest(registry, progress, reservation, failure);
       if (!settled.ended) return acceptedHeld(admitted.operationId);
       return {
@@ -1276,13 +1277,15 @@ async function deliverHeldAttempt(
       /* The host this send was waiting for can never come back. Only an
          operation the runtime journal never admitted is proven unsent; one it
          holds may have reached an earlier host. */
-      if (error instanceof StageAttemptSettledError && !request.reconcileUncertain && !operationId.startsWith("spawn_message_")) {
+      if ((error instanceof StageAttemptSettledError || error instanceof CodexReconnectPolicyError)
+        && !request.reconcileUncertain && !operationId.startsWith("spawn_message_")) {
+        const cause = error instanceof StageAttemptSettledError ? error.refusal : error.message;
         let journal: RuntimeOperationResult | null;
         try { journal = await client.operationStatus(operationId); }
-        catch { return heldForRetry(error.refusal); }
+        catch { return heldForRetry(cause); }
         const authority = await authorityFence();
         if (authority !== undefined) return authority;
-        return journal ? "delivery-uncertain" : { outcome: "rejected", cause: error.refusal };
+        return journal ? "delivery-uncertain" : { outcome: "rejected", cause };
       }
       return heldForRetry(`${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1929,7 +1932,7 @@ export async function enqueueStructuredMessage(
         return { ok: false, structured: true, outcome: "failed", error: error.refusal, status: 409, code: STAGE_ATTEMPT_SETTLED_CODE };
       }
       const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`;
-      if (recoveryReservation && error instanceof StructuredResumeUnpublishedError) {
+      if (recoveryReservation && (error instanceof StructuredResumeUnpublishedError || error instanceof CodexReconnectPolicyError)) {
         const settled = await endReservationForRequest(registry, progress, recoveryReservation, failure);
         if (!settled.ended) return acceptedHeld(recoveryReservation.command.operationId);
         return {

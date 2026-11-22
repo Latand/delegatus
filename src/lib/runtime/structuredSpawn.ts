@@ -27,7 +27,9 @@ import { launchServiceTier } from "./codexTurnProfile";
 import { accountManager } from "@/lib/accounts/manager";
 import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
-import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { launchProfileEngineReadOnly, type LaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { codexSandboxSelection, structuredHostAccessPolicy, type StructuredHostAccessPolicy } from "./codexLaunchAccess";
+export { READ_ONLY_STAGE_PERMISSION_PROFILE, structuredHostAccessPolicy } from "./codexLaunchAccess";
 import { learnedRulesForLaunchProfile, memoryStartIdentity } from "@/lib/memory/roleLaunch";
 import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
@@ -110,7 +112,6 @@ const ADMISSION_RETRY_MAX_BACKOFF_MS = 2_000;
  */
 export const STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS = 5 * 60_000;
 const SETUP_WRITER_RETRY_MS = 2_000;
-export const READ_ONLY_STAGE_PERMISSION_PROFILE = "llv-read-only-stage";
 const PINNED_SPAWN_HEALTH_TIMEOUT_MS = 600;
 
 export function queuedPinnedSpawnTitle(locale: "en" | "uk", retryAt: string): string {
@@ -152,24 +153,6 @@ export interface StructuredHostAccessMaterialization {
   cleanup(): void;
 }
 
-export type StructuredHostAccessPolicy = boolean | {
-  /** Carried with the sandbox so pipeline callers must name both axes. The
-      repository policy is enforced by pipeline settlement. */
-  readOnly: boolean;
-  sandbox: "full" | "restricted";
-};
-
-type DurableStructuredHostAccess = Pick<LaunchProfile, "readOnly" | "sandbox"> | null | undefined;
-
-/** New pipeline profiles persist both axes. Profiles created before that split
-    retain their legacy readOnly-to-sandbox behavior on adoption. */
-export function structuredHostAccessPolicy(profile: DurableStructuredHostAccess): StructuredHostAccessPolicy {
-  const sandbox = explicitLaunchProfileSandbox(profile);
-  return sandbox
-    ? { readOnly: profile?.readOnly === true, sandbox }
-    : profile?.readOnly === true;
-}
-
 function githubConfigDirectory(sourceEnv: NodeJS.ProcessEnv): string {
   if (sourceEnv.GH_CONFIG_DIR) return sourceEnv.GH_CONFIG_DIR;
   const home = sourceEnv.HOME || os.homedir();
@@ -201,8 +184,8 @@ export function materializeStructuredHostAccess(
     ...sourceEnv,
     ...(capability ? { LLV_SPAWN_CAPABILITY: capability } : {}),
   };
-  const explicitAxes = typeof policy !== "boolean";
-  const restricted = explicitAxes ? policy.sandbox === "restricted" : policy;
+  const { parent, ...selection } = codexSandboxSelection(policy);
+  const restricted = "permissionProfile" in selection;
 
   const resolvedScratchParent = scratchParent ?? statePath("scratch");
   fs.mkdirSync(resolvedScratchParent, { recursive: true, mode: 0o700 });
@@ -246,7 +229,7 @@ export function materializeStructuredHostAccess(
           TMPDIR: temporaryDirectory,
           CLAUDE_CODE_TMPDIR: sourceEnv.CLAUDE_CODE_TMPDIR || sourceEnv.TMPDIR || os.tmpdir(),
         },
-        codex: { sandbox: "danger-full-access" },
+        codex: selection,
         host: {
           forwardGitHubConfig: true,
           releaseCleanup: cleanup,
@@ -255,20 +238,16 @@ export function materializeStructuredHostAccess(
         cleanup,
       };
     }
-    const codex = explicitAxes
-      ? { sandbox: "workspace-write", permissionProfile: "llv-stage",
-          permissionProfileConfig: `permissions.llv-stage={extends=":workspace",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
-      : {
-          permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
-          permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}`,
-        };
     return {
       env: {
         ...baseEnv,
         TMPDIR: temporaryDirectory,
         GH_CONFIG_DIR: githubConfigDirectory(sourceEnv),
       },
-      codex,
+      codex: {
+        ...selection,
+        permissionProfileConfig: `permissions.${selection.permissionProfile}={extends="${parent}",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}`,
+      },
       host: {
         forwardGitHubConfig: true,
         releaseCleanup: cleanup,

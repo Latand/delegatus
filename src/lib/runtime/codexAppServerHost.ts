@@ -8,6 +8,7 @@ import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } 
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { CodexSocketTransport, type CodexTransport, type CodexSocketOwner } from "./codexSocketTransport";
+import { assertResumedCodexAccess, CodexReconnectPolicyError, retainedCodexLaunchAccess, type CodexReconnectAccess } from "./codexLaunchAccess";
 import { codexOperatorQuestionPolicy } from "@/lib/agent/operatorQuestionPolicy";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
@@ -222,6 +223,8 @@ export interface CodexAppServerHostOptions {
   assertCurrent?: () => void;
   /** Exact surviving owner admitted under the registry writer claim. */
   socketOwner?: CodexSocketOwner;
+  /** Durable authorization for the retained native generation. */
+  reconnectAccess?: CodexReconnectAccess;
   /** Test seam; production uses the reviewed native socket on current Codex. */
   persistentCallbacks?: boolean;
   serviceTier?: string;
@@ -1636,6 +1639,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     let questionPolicy: ReturnType<typeof codexOperatorQuestionPolicy> | undefined;
     try {
       options.assertCurrent?.();
+      if (options.socketOwner && (!threadId || !options.reconnectAccess))
+        throw new CodexReconnectPolicyError("Codex reconnect launch access authorization is unavailable");
       features = options.socketOwner || options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env);
       cleanupArgs = options.socketOwner ? [] : codexProcessCleanupArgs(options.codexHome);
       if (!options.socketOwner && options.operatorDecisionForms) {
@@ -1760,8 +1765,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       }
       options.assertCurrent?.();
       if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier, provisional.tierAccountHome);
-      const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
+      const reconnectAccess = options.socketOwner ? options.reconnectAccess : undefined;
+      const configRead = await provisional.rpc("config/read", {
+        cwd: options.cwd,
+        includeLayers: !!reconnectAccess && "permissionProfile" in reconnectAccess,
+      }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
       options.assertCurrent?.();
+      if (reconnectAccess && !record(record(configRead)?.config)) throw new CodexReconnectPolicyError();
       const config = headlessCodexThreadConfig(
         configRead,
         options.allowSubagents === true,
@@ -1824,8 +1834,24 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         ...(typeof record(registeredViewer)?.command === "string" && viewer ? { mcp_servers: { viewer } } : {}),
         ...(options.omitSkillsInstructions ? { skills: config.skills } : {}),
       };
+      const retainedAccess = reconnectAccess
+        ? retainedCodexLaunchAccess(reconnectAccess, configRead, provisional.gateCheckRoot?.root)
+        : undefined;
+      // An already-loaded thread can be running tools or awaiting approvals.
+      // Some Codex pins restart an idle loaded thread on an override. Rejoin
+      // with the existing settings and check the authoritative resume reply.
+      const loaded = retainedAccess && threadId ? await provisional.isThreadLoaded(threadId) : false;
+      options.assertCurrent?.();
+      const reconnectPolicy = retainedAccess && !loaded ? {
+        cwd: retainedAccess.cwd,
+        approvalPolicy: retainedAccess.approvalPolicy,
+        ...(retainedAccess.approvalsReviewer ? { approvalsReviewer: retainedAccess.approvalsReviewer } : {}),
+        ...("permissions" in retainedAccess ? { permissions: retainedAccess.permissions } : { sandbox: retainedAccess.sandbox }),
+      } : {};
       const result = threadId
-        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(Object.keys(reconnectConfig).length ? { config: reconnectConfig } : {}) } : {
+        ? await provisional.resumeThreadTolerantly(options.socketOwner ? {
+          threadId, ...reconnectPolicy, ...(Object.keys(reconnectConfig).length ? { config: reconnectConfig } : {}),
+        } : {
           threadId,
           ...(options.cleanerDiskWorkspace ? { cwd: options.cwd } : {}),
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
@@ -1842,6 +1868,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           ...runInstructions,
           config,
         });
+      options.assertCurrent?.();
+      if (retainedAccess) assertResumedCodexAccess(retainedAccess, result);
       const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");
       if (threadId && options.cleanerDiskWorkspace) {
         const returnedCwd = stringField(record(record(result)?.thread), "cwd");
@@ -1903,6 +1931,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       } catch (cleanupError) {
         throw new StructuredHostAdoptionCleanupError(safeError(error), provisional, { cause: cleanupError });
       }
+      if (error instanceof CodexReconnectPolicyError) throw error;
       throw new Error(safeError(error));
     }
   }
@@ -2481,6 +2510,33 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const turns = rolloutTurnsFromDisk(stringField(thread, "path") ?? this.identity.path);
       return { ...outer, thread: { ...thread, turns } };
     }
+  }
+
+  private async isThreadLoaded(threadId: string): Promise<boolean> {
+    const method = "thread/loaded/list";
+    const unavailable = () => new CodexReconnectPolicyError("Codex reconnect thread load state could not be verified");
+    if (!this.protocol.hasMethod("ClientRequest", method)) throw unavailable();
+    const deadline = Date.now() + this.requestTimeoutMs;
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    for (let page = 0; page < 32; page++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      let reply: ReturnType<typeof record>;
+      try {
+        reply = record(await this.rpc(method, { limit: 100, ...(cursor ? { cursor } : {}) }, remaining));
+      } catch (error) {
+        if (error instanceof NativeQueueProtocolRefusal && error.code === -32601) throw unavailable();
+        throw error;
+      }
+      if (!Array.isArray(reply?.data) || reply.data.some(id => typeof id !== "string")) break;
+      if (reply.data.includes(threadId)) return true;
+      if (reply.nextCursor == null) return false;
+      if (typeof reply.nextCursor !== "string" || !reply.nextCursor || seen.has(reply.nextCursor)) break;
+      cursor = reply.nextCursor;
+      seen.add(cursor);
+    }
+    throw unavailable();
   }
 
   /** Delivery-scoped native evidence, with the established legacy hydration

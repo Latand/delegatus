@@ -34,6 +34,7 @@ import {
 } from "@/lib/processIdentity";
 
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
+import { codexReconnectAccess } from "./codexLaunchAccess";
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
 import type { CopilotAcpHost } from "./copilotAcpHost";
 import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost";
@@ -1462,6 +1463,7 @@ export async function adoptCodexRegistryHosts(
           return;
         }
         let custody: Awaited<ReturnType<typeof memberAdoptionCustody>> = null;
+        let connected: CodexAppServerHost | undefined;
         try {
           const memberCurrent = memberAdoptionGuard(registry, claimed);
           memberCurrent?.();
@@ -1469,10 +1471,22 @@ export async function adoptCodexRegistryHosts(
           const options = {
             ...await optionsFor(claimed),
             initialEventCursor: claimed.structuredHost.eventCursor,
-            ...(socketOwner ? { socketOwner, readProtocolVersion: () => retainedProtocolVersion ?? "unknown" } : {}),
+            ...(socketOwner ? {
+              socketOwner,
+              reconnectAccess: codexReconnectAccess(registry, claimed),
+              readProtocolVersion: () => retainedProtocolVersion ?? "unknown",
+            } : {}),
           };
           const previousGuard = options.assertCurrent;
-          if (memberCurrent) options.assertCurrent = () => { previousGuard?.(); memberCurrent(); };
+          if (socketOwner || memberCurrent) options.assertCurrent = () => {
+            previousGuard?.();
+            memberCurrent?.();
+            if (socketOwner) {
+              dependencies.assertActive?.();
+              if (!registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch))
+                throw new Error("Codex reconnect writer claim changed");
+            }
+          };
           // Preparing memory can wait for state admission. Recheck both the
           // writer claim and admission before opening a new engine generation.
           const fresh = startupHostSnapshot(registry, entry.key, true);
@@ -1489,12 +1503,14 @@ export async function adoptCodexRegistryHosts(
           const host = await withStructuredSetupCustody(custody, () => dependencies.adoptHost
             ? dependencies.adoptHost(entry.key.sessionId, options)
             : CodexAppServerHost.adopt(entry.key.sessionId, options));
-          memberCurrent?.();
+          connected = host;
+          options.assertCurrent?.();
           await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
             "unhosted", { onCheckpoint: custody?.checkpoint });
           adopted.push({ key: entry.key, host });
           dependencies.onAdopted?.({ key: entry.key, host });
         } catch (error) {
+          if (socketOwner) connected?.detachForViewerRestart();
           try { await custody?.cleanup(); } catch { /* live setup remains durably owned for reconciliation */ }
           if (error instanceof StructuredHostAdoptionCleanupError
             && error.host instanceof CodexAppServerHost) {

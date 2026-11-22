@@ -12,6 +12,7 @@ import { CodexAppServerHost } from "../codexAppServerHost";
 import { FileRuntimeEventStore } from "../eventStore";
 import { projectEngineHostEvent } from "../engineHostEvents";
 import { applyEvent, installSnapshot, openAttentions, type RuntimeSession } from "@/components/runtime/runtimeModel";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 const [mode, directory, writeLog, descriptor, delivery] = process.argv.slice(2);
 if (!directory || !writeLog) throw new Error("callback fixture needs isolated paths");
@@ -56,12 +57,21 @@ if (mode === "engine-socket") {
           if (connection === 2 && config.reconnectFailure) {
             if (config.reconnectFailure === "disconnect") socket.terminate();
             else send({ id: message.id, error: { code: -32000, message: "fixture transient config failure" } });
-          } else reply({ config: { mcp_servers: { viewer: { command: "bun", args: ["fixture-viewer"] } } } });
+          } else if (config.policy?.drift === "missing-config") {
+            reply(null);
+          } else reply({ ...config.policy?.configRead, config: {
+            mcp_servers: { viewer: { command: "bun", args: ["fixture-viewer"] } }, ...config.policy?.configRead.config,
+          } });
           break;
         case "model/list": reply({ data: [] }); break;
         case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
         case "thread/read":
           reply({ thread: { id: thread, path: config.transcriptPath ?? null, turns: [] } }); break;
+        case "thread/loaded/list":
+          if (config.policy?.drift === "unsupported-load-state") {
+            send({ id: message.id, error: { code: -32601, message: "fixture method unavailable" } });
+          } else reply({ data: config.policy?.loaded === false ? [] : [thread] });
+          break;
         case "turn/start": {
           if (!config.recipient) { send({ id: message.id, error: { code: -32601, message: "fixture method unavailable" } }); break; }
           fs.appendFileSync(config.transcriptPath, JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T00:00:00Z",
@@ -76,6 +86,18 @@ if (mode === "engine-socket") {
           break;
         }
         case "thread/resume": {
+          if (config.policy) {
+            const { policy } = config;
+            fs.appendFileSync(writeLog, JSON.stringify(message.params) + "\n");
+            if (policy.paginated && !message.params.excludeTurns) {
+              send({ id: message.id, error: { code: -32000, message: "list_turns is not supported yet" } });
+              break;
+            }
+            const selected = policy.loaded || Object.entries(policy.selection).every(([key, value]) => message.params[key] === value);
+            const active = selected ? policy.effective : policy.defaults;
+            reply({ ...active, ...policy.responseDrift, thread: { id: thread, path: config.transcriptPath, turns: [], status: { type: "idle" } } });
+            break;
+          }
           if (Object.keys(message.params).some(key => key !== "threadId" && key !== "config")) throw new Error("reconnect changed the existing thread policy");
           const restored = message.params.config?.mcp_servers?.viewer;
           if (!restored?.env?.LLV_STATE_DIR || !restored.env_vars?.includes("LLV_SPAWN_CAPABILITY")) throw new Error("reconnect lost Viewer MCP installation or caller binding");
@@ -87,7 +109,8 @@ if (mode === "engine-socket") {
             send(request); send(request); // Native reconnect can replay more than once.
           };
           if (config.replayFirst) replay();
-          reply({ thread: { id: thread, path: null, turns: [], status: { type: "idle" } } });
+          reply({ sandbox: { type: "dangerFullAccess" }, approvalPolicy: "never", approvalsReviewer: "user",
+            thread: { id: thread, path: null, turns: [], status: { type: "idle" } } });
           if (!config.replayFirst) replay();
           break;
         }
@@ -204,7 +227,8 @@ if (mode === "engine-socket") {
   const store = new FileRuntimeEventStore(directory);
   const config = mode.startsWith("socket-") ? JSON.parse(fs.readFileSync(descriptor, "utf8")) : {};
   const options = {
-    ...(mode.startsWith("socket-") ? { socketOwner: config.owner } : {}),
+    ...(mode.startsWith("socket-") ? { socketOwner: config.owner,
+      reconnectAccess: { sandbox: "danger-full-access" as const, cwd: process.cwd(), approvalPolicy: "never" } } : {}),
     cwd: process.cwd(), mcpServers: [], eventStore: {
       load: (id: string) => store.load(id),
       append: (id: string, event: import("../engineHost").RuntimeEvent) => {
@@ -233,7 +257,11 @@ if (mode === "engine-socket") {
   } else {
     host = mode === "dispatch" || mode === "mcp-produce" ? await CodexAppServerHost.start(options) : await CodexAppServerHost.adopt(thread, options);
     if (registry) {
+      const launchProfile = emptyLaunchProfile({ cwd: process.cwd(), readOnly: false, title: "Callback socket recovery fixture" });
+      const launchReceipt = registry.beginSpawn("codex", process.cwd(), launchProfile);
       registry.upsert({ key, artifactPath: path.join(directory, "thread.jsonl"), cwd: process.cwd(), accountId: "default", status: "idle", host: null,
+        launchProfile,
+        structuredHostOperationId: launchReceipt.launchId,
         claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: { ...codexHostColumns(await host.health(), 0), process: null } });
       const claimed = registry.claimStructuredHost(key, captureProcessIdentity(process.pid), { allowUnhosted: true });
       if (!claimed?.claimOwner) throw new Error("fixture writer claim unavailable");

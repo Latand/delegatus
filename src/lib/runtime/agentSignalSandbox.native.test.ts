@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { CodexAppServerHost } from "./codexAppServerHost";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "./claudeStreamBrokerHost";
 import { prepareCodexIntegrationTestHome } from "./integrationTestHome";
 import { FileRuntimeEventStore } from "./eventStore";
@@ -217,6 +218,7 @@ test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY)("real Codex socket adopti
     const options = { binary, cwd: home.directory, codexHome: home.codexHome, env: home.env,
       mcpServers: [], fileAuthCredentials: true, approvalPolicy: "never" as const,
       eventStore: new FileRuntimeEventStore(path.join(home.directory, "events")) };
+    const launchProfile = emptyLaunchProfile({ cwd: home.directory, readOnly: true });
     host = await CodexAppServerHost.start(options);
     await (host as unknown as { rpc(method: string, params: unknown): Promise<unknown> }).rpc("thread/name/set", {
       threadId: host.identity.threadId, name: "Signal socket adoption fixture" });
@@ -226,7 +228,7 @@ test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY)("real Codex socket adopti
     expect(domain.native.pid).toBe(state.pid!);
     const key = { engine: "codex" as const, sessionId: host.identity.threadId };
     registry.upsert({ key, artifactPath: path.join(home.directory, "session.jsonl"), cwd: home.directory,
-      accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+      accountId: null, launchProfile, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
       structuredHost: codexHostColumns(state, 0) });
     const writer = captureProcessIdentity(process.pid);
     expect(registry.claimStructuredHost(key, writer, { allowUnhosted: true })).toBeNull();
@@ -251,7 +253,7 @@ test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY)("real Codex socket adopti
     }, false, false);
     const missingKey = { engine: "codex" as const, sessionId: key.sessionId.replace(/.$/, digit => digit === "0" ? "1" : "0") };
     registry.upsert({ key: missingKey, artifactPath: path.join(home.directory, "missing.jsonl"), cwd: home.directory,
-      accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+      accountId: null, launchProfile, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
       structuredHost: codexHostColumns(await host.health(), 0) });
     let refusals = 0;
     const adoptMissing = () => adoptCodexRegistryHosts(registry, () => options, { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
