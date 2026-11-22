@@ -492,6 +492,9 @@ export function submittedContinuationOutcome(
     as a severed turn — and must still owe one continuation. */
 function coversSameCut(existing: InterruptionObligation, input: InterruptionObligationInput): boolean {
   if (existing.conversationId !== input.conversationId || existing.hostKey !== input.hostKey) return false;
+  // A checkout census proves a more specific boundary for a standalone
+  // assignment. Its reader reconciles any ordinary pre-stop release record.
+  if (input.boundary.startsWith("checkout-merger:") && existing.reason === "viewer-release" && !existing.seat && !existing.stage) return false;
   /* Between two restart records of a conversation that is no seat, the id is
      the whole identity: each names its cut by the turn that was cut. */
   if (restartRecordOfNoSeat(existing) && restartRecordOfNoSeat(input)) return false;
@@ -1205,7 +1208,16 @@ export function interruptionObligationDirectory(registryFilename: string): strin
  * more than the Viewer knows: background or external work may have survived
  * the handover, so it asks for inspection before anything is re-run.
  */
-export function interruptionContinuationText(obligation: InterruptionObligation): string {
+export function interruptionContinuationText(obligation: InterruptionObligation, checkoutBatchDirectory?: string): string {
+  if (obligation.boundary.startsWith("checkout-merger:")) {
+    return [
+      "Checkout handover interrupted your standalone merger assignment. Reconcile the original batch under your existing assignment.",
+      checkoutBatchDirectory ? `The original batch uses TMPDIR ${JSON.stringify(checkoutBatchDirectory)}.` : "Locate the original batch directory from your previous turn.",
+      "Read merge-batch.json, its lock, recorder ownership and terminal receipts, then verify the worktree, current main and exact forge state.",
+      "An interrupted gate or a missing receipt grants no pass. Leave live operations with their owners and hold uncertain operations for reconciliation. Use terminal results only for their exact batch tuple.",
+      "Before continuing, establish exclusive batch custody and prove the next action is still owed. Preserve the original batch and report any outcome you cannot establish to the project seat.",
+    ].join(" ");
+  }
   const at = obligation.checkpoint.lastEventAt === null
     ? "an unrecorded time"
     : new Date(obligation.checkpoint.lastEventAt).toISOString();
