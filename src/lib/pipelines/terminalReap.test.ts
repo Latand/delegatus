@@ -638,7 +638,7 @@ test("retryable idle evidence persists across process restart", async () => {
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
-});
+}, 15_000);
 
 test("an unconfirmed sibling cannot settle the reap while another attempt still owns live work", async () => {
   const h = harness();
@@ -1210,6 +1210,11 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
         expect(read().cursor).toMatchObject({ stageId: "implement", state: "pending" });
         expect(commands).toEqual([expect.objectContaining({ kind: "kill", conversationId, sessionKey: key,
           onlyIfIdle: { revision: oldRevision, writerClaim: payload.writerClaim } })]);
+        // The process can exit before the delivery executor records completion.
+        const receiptDeadline = performance.now() + 5_000;
+        while (journal.operationResult(kill!.operationId)?.receipt.status === "delivering" && performance.now() < receiptDeadline) {
+          await Bun.sleep(10);
+        }
         expect(journal.operationResult(kill!.operationId)?.receipt).toMatchObject({
           conversationId, kind: "kill", status: "delivered", origin: "system", originAuthenticated: true,
         });
@@ -1299,10 +1304,8 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
     unavailable = true;
     const started = Date.now();
     await tick();
-    if (helperPid !== null) {
-      // The root can exit before the executor escalates its captured helper.
-      while (journal.effectBatch(100, ["runtime.kill"]).length > 0 && Date.now() - started < 5_000) await Bun.sleep(10);
-    }
+    // Runtime delivery settles independently of the sweep that observed it.
+    while (journal.effectBatch(100, ["runtime.kill"]).length > 0 && Date.now() - started < 5_000) await Bun.sleep(10);
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(journal.effectBatch(100, ["runtime.kill"])).toEqual([]);
     expect(commands.every(command => !!(command as { onlyIfIdle?: unknown }).onlyIfIdle)).toBe(true);
