@@ -12201,8 +12201,13 @@ async function deliveredAttemptPath(pipeline: Pipeline, attempt: PipelineStageAt
   return (await attemptTurnTranscript(pipeline, currentStage(pipeline)!.id, attempt, ports))?.pathname ?? null;
 }
 
+function stagedDeliveryPathPending(receipt: PipelineSpawnReceipt | null, pathname: string): boolean {
+  return receipt?.staged === true && receipt.currentGeneration === true
+    && pathname === receipt.stagedTranscript && absentStagedTranscriptAllowed(pathname);
+}
+
 /** The attempt's own transcript, once it holds a native turn this attempt
-    started. Its launch receipt names it before the receipt completes. */
+    started or the journal confirms its first send. */
 async function attemptTurnTranscript(
   pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt, ports: PipelinePorts, claimedRetryClaimId?: string,
   checkNonExecution = !!attempt.roleMemoryDispatchWait,
@@ -12218,12 +12223,15 @@ async function attemptTurnTranscript(
     ?? receipt?.transcript ?? receipt?.stagedTranscript;
   if (!pathname) return null;
   if (receipt?.currentGeneration !== undefined && pathname !== receipt.stagedTranscript && pathname !== receipt.transcript) return null;
+  const deliveryPark = deliveryUnverifiedAttempt(pipeline, attempt);
+  const pathAllowed = ports.sourcePathAllowed(pathname);
+  const deliveryPathPending = !pathAllowed && deliveryPark && stagedDeliveryPathPending(receipt, pathname);
   const beforeRead = checkNonExecution ? stageArtifactStamp(pathname) : null;
   const ownAbsentArtifact = checkNonExecution && beforeRead === null
     && receipt?.state === "failed" && receipt.staged === true && receipt.generationMatches === true
     && pathname === receipt.stagedTranscript;
-  if (!ports.sourcePathAllowed(pathname) && !(ownAbsentArtifact && absentStagedTranscriptAllowed(pathname))) return null;
-  const evidence = await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname);
+  if (!pathAllowed && !deliveryPathPending && !(ownAbsentArtifact && absentStagedTranscriptAllowed(pathname))) return null;
+  const evidence = deliveryPathPending ? null : await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname);
   // An unstarted host may never create its staged transcript. Only its own
   // artifact, proven absent across the read, can supply that missing no-turn
   // proof; unreadable or partial artifacts keep the original launch fenced.
@@ -12241,7 +12249,6 @@ async function attemptTurnTranscript(
   const nativeWorkAt = Math.max(evidence?.turnStartedAt ?? 0, evidence?.lastAgentEventAt ?? 0);
   const nativeTurn = !!evidence && !evidence.launchOnly && evidence.turn !== "unknown"
     && nativeWorkAt >= unixMs(attemptEvidenceFloor(attempt));
-  const deliveryPark = deliveryUnverifiedAttempt(pipeline, attempt);
   if (!nativeTurn && !deliveryPark) return null;
   if (!nativeTurn && (!receipt || pathname !== receipt.transcript && pathname !== receipt.stagedTranscript)) return null;
   const stillCurrent = () => {
@@ -12263,6 +12270,7 @@ async function attemptTurnTranscript(
   if (receipt && (!sameSpawnReceiptFence(current, receipt) || !current
     || current.currentGeneration === false && !claimedGenerationMatches(current)
     || current.stagedTranscript !== receipt.stagedTranscript || current.state !== receipt.state || current.error !== receipt.error)) return null;
+  if (deliveryPathPending && !ports.sourcePathAllowed(pathname) && !stagedDeliveryPathPending(current, pathname)) return null;
   return { pathname, operationConflict: false };
 }
 
@@ -19397,7 +19405,8 @@ async function resolveStageCompletionTarget(
         && stageId === recoveryEvidence.stageId && attempt.n === recoveryEvidence.attempt
         && stageCompletionRuntimeFence(attempt) === recoveryEvidence.runtimeFence);
       if (target?.attempt.launchId === recoveryEvidence.launchId
-        && sameSpawnReceiptFence(ports.spawnReceipt(target.attempt.launchId), recoveryEvidence.receipt)) {
+        && sameSpawnReceiptFence(ports.spawnReceipt(target.attempt.launchId), recoveryEvidence.receipt)
+        && (ports.sourcePathAllowed(recoveryEvidence.path) || stagedDeliveryPathPending(recoveryEvidence.receipt, recoveryEvidence.path))) {
         recoverable.set(target, recoveryEvidence.path);
       }
     }
@@ -19547,7 +19556,8 @@ export async function reportStageCompletion(
       path: previewed.recoveryPath, receipt: recoveryReceipt }
     : null;
   const heldWork = await backgroundWorkRefusal(previewed.recoveryPath
-    ? { ...preview, attempt: { ...preview.attempt, agentPath: previewed.recoveryPath } }
+    ? { ...preview, attempt: { ...preview.attempt,
+      agentPath: ports.sourcePathAllowed(previewed.recoveryPath) ? previewed.recoveryPath : null } }
     : preview, ports);
   if (heldWork) return heldWork;
   return withPipelineMutation(async (pipelines, persist) => {

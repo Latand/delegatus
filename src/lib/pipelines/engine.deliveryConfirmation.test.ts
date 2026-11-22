@@ -2,15 +2,19 @@ import { expect, test, fs, path, harness, create, tickPipelines, loadPipelines, 
   defaultPipelinePorts, engineModule, failedReceipt, durableStageTurnEvidence } from "./engine.fixture";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeOperationResult } from "@/lib/runtime/contracts";
+import { sharedClaudeProjectsRoot } from "@/lib/accounts/claude";
 
 const TIMEOUT = "delivery was started and the structured host did not answer; whether it reached the recipient is unverified: Claude delivery confirmation timed out; outcome is uncertain";
 const NOW = "2026-11-17T12:00:00.000Z";
 
-async function confirmationPark() {
+async function confirmationPark(withTranscript = true) {
   const h = harness();
   h.ports.now = () => NOW;
-  const pathname = path.join(process.env.LLV_STATE_DIR!, "confirmation.jsonl");
-  fs.writeFileSync(pathname, "");
+  const pathname = path.join(sharedClaudeProjectsRoot(), "confirmation-project", "confirmation.jsonl");
+  if (withTranscript) {
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    fs.writeFileSync(pathname, "");
+  }
   const receipt = { ...failedReceipt("launch-1", "conversation_stage_1", TIMEOUT),
     staged: true, currentGeneration: true, stagedTranscript: pathname };
   let message: RuntimeOperationResult = { operationId: "spawn_message_launch-1", replayed: false,
@@ -26,7 +30,8 @@ async function confirmationPark() {
   h.ports.spawnAgent = async (input, reserved) => { await spawn(input, reserved); throw new Error(TIMEOUT); };
   h.ports.spawnReceipt = () => structuredClone(receipt);
   h.ports.pathForConversation = () => pathname;
-  h.ports.sourcePathAllowed = file => file === pathname || file.startsWith("/codex/");
+  const sourcePathAllowed = defaultPipelinePorts().sourcePathAllowed;
+  h.ports.sourcePathAllowed = file => sourcePathAllowed(file) || file.startsWith("/codex/");
   h.ports.transcriptPresent = file => fs.existsSync(file);
   h.ports.durableTurnEvidence = (engine, file, since, floor) => durableStageTurnEvidence(engine, file, since, floor);
   await create(h.ports, [{ id: "build", kind: "run", engine: "claude", role: { roleId: "architect" },
@@ -56,6 +61,18 @@ test.each(["native", "receipt"] as const)("#4068: controller reconciliation reop
   const f = await confirmationPark();
   if (proof === "native") f.nativeTurn(); else f.delivered();
   await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", error: null });
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
+test.each(["tick", "report"] as const)("#4068: %s trusts the delivered receipt before the transcript materializes", async entry => {
+  const f = await confirmationPark(false);
+  expect(await f.report()).toMatchObject({ code: "STAGE_REPORT_SETTLED" });
+  f.delivered();
+  if (entry === "tick") await tickPipelines([], f.h.ports);
+  else expect((await f.report()).report?.verdict.status).toBe("pass");
+  expect(fs.existsSync(f.pathname)).toBe(false);
   expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", error: null });
   expect(f.h.spawnInputs).toHaveLength(1);
