@@ -1036,11 +1036,19 @@ test("the default worker-ask source preserves archived merged-task acceptance ac
       prNumber: null, policyChangedAt: closedAt, reviewedHead: "", chain: [], updates: [], seenChecks: [], head: null, headSeenAt: null, lastChecks: null,
       readAt: null, nextReadAt: null, requestedAt: closedAt, mergedHead: null, mergeCommit: null, method: null, mergedAt: closedAt,
       attempts: 0, reason: null, blockedAt: null, updatedAt: closedAt } };
-  const recentHidden = { ...merged, id: "recent-hidden-merge", task: activeTask.text, taskIds: [activeTask.id],
+  const recentHidden = { ...merged, ...buildPipeline({ id: "recent-hidden-merge", task: merged.task, project: PROJECT,
+    repoDir: merged.repoDir, stages: merged.stages, srcPath: null, srcConversationId: null,
+    now: new Date(NOW - 60 * 60_000).toISOString(), state: "draft" }),
+    state: "completed" as const, cursor: null, taskIds: [activeTask.id],
     closedAt: new Date(NOW - 60 * 60_000).toISOString(), hiddenAt: new Date(NOW - 30 * 60_000).toISOString(),
     merge: { ...merged.merge, mergedAt: new Date(NOW - 60 * 60_000).toISOString(), updatedAt: new Date(NOW - 60 * 60_000).toISOString() } };
-  const active = lane({ id: "active-build-lane", task: activeTask.text, taskIds: [activeTask.id], project: PROJECT, state: "running" });
+  const active = buildPipeline({ id: "active-build-lane", task: activeTask.text, project: PROJECT, repoDir: merged.repoDir,
+    stages: merged.stages, srcPath: null, srcConversationId: null, now: new Date(NOW).toISOString(), state: "provisioning" });
+  active.state = "running";
+  active.taskIds = [activeTask.id];
   expect(isPipeline(merged)).toBe(true);
+  expect(isPipeline(recentHidden)).toBe(true);
+  expect(isPipeline(active)).toBe(true);
   saveTasks([task, activeTask, unrelatedTask]);
   savePipelines([merged, recentHidden, active] as never);
   expect(await archiveSettledPipelines(NOW)).toBe(1);
