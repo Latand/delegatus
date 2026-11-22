@@ -54,10 +54,21 @@ test("a transcript that changed since the scan, vanished or is too large is unre
 test("a transcript that did not move is read once, and one that grew is read again", async () => {
   const entry = transcript("e.jsonl", [user(0), done(5)]);
   const first = await transcriptWork(entry);
-  fs.rmSync(entry.path);
   expect(await transcriptWork(entry)).toBe(first);
   const grown = transcript("e.jsonl", [user(0), done(5), user(50), done(60)]);
   expect((await transcriptWork(grown)).windows).toHaveLength(2);
+});
+
+test("a transcript that grew after the scan is read to the size it has now, and cached under that size", async () => {
+  const entry = transcript("f.jsonl", [user(0), done(5)]);
+  fs.appendFileSync(entry.path, [user(50), tool(52), done(60)].join("\n") + "\n");
+  const ms = (minutes: number) => Date.parse(at(minutes));
+  const grown = await transcriptWork(entry);
+  expect(grown).toEqual({ windows: [[ms(0), ms(5)], [ms(50), ms(60)]], lastRecordAt: ms(60), complete: true });
+  // The same stale scan entry asked again finds the cached read of the observed size, not a new one.
+  expect(await transcriptWork(entry)).toBe(grown);
+  fs.appendFileSync(entry.path, [user(90), done(95)].join("\n") + "\n");
+  expect((await transcriptWork(entry)).windows).toHaveLength(3);
 });
 
 test("identities resolve to the transcripts the caller may see; anything else answers null like a missing one", async () => {

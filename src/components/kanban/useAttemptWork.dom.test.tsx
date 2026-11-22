@@ -72,6 +72,45 @@ test("a failed read keeps what was known, answers unknown when nothing was, and 
   expect(asked.filter(id => id === "b")).toHaveLength(2);
 });
 
+test("an unread answer never replaces a known value, and a settled attempt that got one is asked again", async () => {
+  const unread: TranscriptWork = { windows: [], lastRecordAt: null, complete: false };
+  const answers: TranscriptWork[] = [evidence(BASE), unread, unread, evidence(BASE + 5_000)];
+  const asked: string[] = [];
+  const view = mount(async identity => { asked.push(identity); return answers.shift() ?? null; });
+  const wanted = [{ identity: "a", settled: true }, { identity: "b", settled: true }];
+  // "a" gets a complete answer first, so it is never asked again; "b" gets an unread one and nothing known before it.
+  view.render([wanted[0]!], BASE);
+  await view.settle();
+  const known = view.reads().get("a")!.work;
+  expect(known?.complete).toBe(true);
+  view.render(wanted, BASE + WORK_REFRESH_MS);
+  await view.settle();
+  expect(view.reads().get("b")?.work).toEqual(unread);
+  expect(view.reads().get("a")?.work).toBe(known);
+  // The next step asks "b" again though its attempt settled; the complete answer then replaces the unread one.
+  view.render(wanted, BASE + 2 * WORK_REFRESH_MS);
+  await view.settle();
+  expect(asked.filter(id => id === "b")).toHaveLength(2);
+  expect(view.reads().get("b")?.work?.complete).toBe(false);
+  view.render(wanted, BASE + 3 * WORK_REFRESH_MS);
+  await view.settle();
+  expect(view.reads().get("b")?.work?.complete).toBe(true);
+  expect(asked.filter(id => id === "a")).toHaveLength(1);
+});
+
+test("a running attempt's unread answer keeps its known value", async () => {
+  const unread: TranscriptWork = { windows: [], lastRecordAt: null, complete: false };
+  const answers: TranscriptWork[] = [evidence(BASE), unread];
+  const view = mount(async () => answers.shift() ?? null);
+  const wanted = [{ identity: "live", settled: false }];
+  view.render(wanted, BASE);
+  await view.settle();
+  const known = view.reads().get("live")!.work;
+  view.render(wanted, BASE + WORK_REFRESH_MS);
+  await view.settle();
+  expect(view.reads().get("live")?.work).toBe(known);
+});
+
 test("unmounting abandons the reads in flight", async () => {
   let release: (work: TranscriptWork | null) => void = () => {};
   let signal: AbortSignal | null = null;

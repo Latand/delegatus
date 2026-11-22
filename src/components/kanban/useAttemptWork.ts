@@ -28,7 +28,7 @@ export const loadAttemptWork: WorkLoader = async (identity, signal) => {
 /**
  * The turn windows of the transcripts behind the chart's open stage rows. A
  * settled attempt is read once; a running one again every 30 s of the board's
- * clock. A failed read keeps what was known and is retried on the same
+ * clock. A failed or unread answer keeps what was known and is retried on the same
  * schedule, so a refusing server is asked twice a minute, not on every render.
  * `reads` has no entry for an identity until its first answer arrives.
  */
@@ -53,7 +53,15 @@ export function useAttemptWork(wanted: readonly WantedWork[], nowMs: number, loa
       if (askedAt !== undefined && (settled || at - askedAt < WORK_REFRESH_MS)) continue;
       asked.current.set(identity, at);
       load(identity, signal).then(work => {
-        if (!signal.aborted) setReads(current => new Map(current).set(identity, { at, work }));
+        if (signal.aborted) return;
+        // An unread answer (the file moved, was too large or could not be read through) is no evidence: it never replaces a value
+        // that was known, and the identity is asked again at the next step even when its attempt has settled.
+        const unread = !!work && !work.complete;
+        if (unread) asked.current.delete(identity);
+        setReads(current => {
+          const known = current.get(identity)?.work;
+          return new Map(current).set(identity, { at, work: unread && known?.complete ? known : work });
+        });
       }, () => {
         // A failed read keeps what was known and is asked again at the next step, settled or not.
         if (signal.aborted) return;

@@ -24,32 +24,36 @@ function boundaryRecord(line: string): Record<string, unknown> | null {
 
 /**
  * Every turn window of one conversation transcript, from its first byte to the
- * size it had when the read began. Records stream through the same window rules
- * as the scanner's last-turn read; no chunk waits on the event loop for more
- * than one megabyte of parsing. Cached by file identity, so a transcript that
- * did not move is read once.
+ * size the file has when the read begins. The scan's size is a lower bound: the
+ * scan snapshot is minutes old and a live agent appends every few seconds, so a
+ * file that grew since the scan is read to its present size; only one smaller
+ * than the scan proves nothing. Records stream through the same window rules as
+ * the scanner's last-turn read; no chunk waits on the event loop for more than
+ * one megabyte of parsing. Cached by the size and mtime observed at the read,
+ * so a transcript that did not move is read once.
  */
 export async function transcriptWork(entry: Pick<FileEntry, "path" | "root" | "size" | "mtime">): Promise<TranscriptWork> {
   const unread: TranscriptWork = { windows: [], lastRecordAt: null, complete: false };
   const conversationRoot = entry.root === "claude-projects" || entry.root === "codex-sessions";
   if (!conversationRoot || !entry.path.endsWith(".jsonl") || entry.size > TRANSCRIPT_WORK_MAX_BYTES) return unread;
-  const mtimeMs = entry.mtime * 1000;
-  const cached = cache.get(entry.path);
-  if (cached?.[0] === entry.size && cached[1] === mtimeMs) return cached[2];
   const tracker = new TurnWindowTracker(entry.root === "codex-sessions");
   let handle: fs.promises.FileHandle | null = null;
   try {
     handle = await fs.promises.open(entry.path, "r");
     const before = await handle.stat();
-    if (!before.isFile() || before.size !== entry.size) return unread;
+    // The scan's size is a lower bound: a file that shrank or was replaced is unread, one that grew is read to its size now.
+    if (!before.isFile() || before.size < entry.size || before.size > TRANSCRIPT_WORK_MAX_BYTES) return unread;
+    const size = before.size;
+    const cached = cache.get(entry.path);
+    if (cached?.[0] === size && cached[1] === before.mtimeMs) return cached[2];
     const buffer = Buffer.alloc(CHUNK_BYTES);
     const decoder = new TextDecoder("utf-8");
     let position = 0, rest = "", skipping = false;
-    while (position < entry.size) {
-      const { bytesRead } = await handle.read(buffer, 0, Math.min(CHUNK_BYTES, entry.size - position), position);
+    while (position < size) {
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(CHUNK_BYTES, size - position), position);
       if (bytesRead === 0) return unread;
       position += bytesRead;
-      rest += decoder.decode(buffer.subarray(0, bytesRead), { stream: position < entry.size });
+      rest += decoder.decode(buffer.subarray(0, bytesRead), { stream: position < size });
       let from = 0, newline = rest.indexOf("\n");
       while (newline >= 0) {
         const line = rest.slice(from, newline);
@@ -70,13 +74,13 @@ export async function transcriptWork(entry: Pick<FileEntry, "path" | "root" | "s
     }
     const after = await handle.stat();
     // A file that shrank or was replaced mid-read proves nothing; one that only grew is the same transcript up to the size read.
-    if (after.size < entry.size) return unread;
+    if (after.size < size) return unread;
     const result: TranscriptWork = {
       windows: tracker.finish().map(window => [window.startedAt, window.endedAt] as const),
       lastRecordAt: tracker.latestTimestamp,
       complete: true,
     };
-    cache.set(entry.path, [entry.size, mtimeMs, result]);
+    cache.set(entry.path, [size, before.mtimeMs, result]);
     return result;
   } catch {
     return unread;

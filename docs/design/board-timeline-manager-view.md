@@ -480,7 +480,7 @@ its order and fields; the component orders within groups.
 
 | Key | uk | en |
 | --- | --- | --- |
-| `timeline.legend` (rewritten) | Лінія — задача відкрита; відрізки — працювали етапи; колір знизу — останній відомий хід; ⚑ — строк. | Line: task open. Blocks: stages ran. Colour underneath: last observed turn. ⚑: due date. |
+| `timeline.legend` (rewritten) | Лінія — задача відкрита; контур — календарний проміжок етапу; заливка — час роботи агента (його ходи); ⚑ — строк. | Line: task open. Outline: calendar span of a stage. Fill: agent working time (its turns). ⚑: due date. |
 | `timeline.since` | з {start} · {duration} | since {start} · {duration} |
 | `timeline.due` | до {date} | due {date} |
 | `timeline.overdueBy` | прострочено на {duration} | overdue by {duration} |

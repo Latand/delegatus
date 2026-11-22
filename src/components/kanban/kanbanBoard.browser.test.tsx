@@ -2077,7 +2077,18 @@ describe("board timeline attempt rows: open the conversation, show real working 
             check(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
             const scroller = page.locator("[data-timeline-scroll]");
             await page.screenshot({ path: path.join(evidence, `${tag}-rows.png`) });
-            readings.push({ name: tag, rows, failures: geometry.failures });
+            // The legend names the outline as the stage's calendar span and the fill as the agent's working time, whole at this width.
+            const legend = page.locator(".bt-legend");
+            await legend.scrollIntoViewIfNeeded();
+            const legendRead = await legend.evaluate(node => {
+              const range = document.createRange(); range.selectNodeContents(node);
+              const box = range.getBoundingClientRect(), host = node.getBoundingClientRect();
+              return { text: node.textContent ?? "", whole: box.left >= host.left - 0.5 && box.right <= host.right + 0.5 && box.right <= window.innerWidth && box.bottom <= window.innerHeight + 0.5 };
+            });
+            check(legendRead.text === t("timeline.legend"), `${tag}: legend «${legendRead.text}»`);
+            check(legendRead.whole, `${tag}: legend cut by an edge`);
+            await legend.screenshot({ path: path.join(evidence, `${tag}-legend.png`) });
+            readings.push({ name: tag, rows, legend: legendRead, failures: geometry.failures });
             // A tap on a bar opens the conversation the attempt recorded (no card holds it, so the board addresses it by its link).
             await scroller.locator(`[data-timeline-attempt*="8]"] [data-timeline-bar]`).click();
             await page.waitForFunction(id => decodeURIComponent(location.hash).includes(id), conversationOf(8));

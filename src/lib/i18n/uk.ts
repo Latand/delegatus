@@ -5196,7 +5196,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "timeline.openAttempt": "Відкрити розмову: {stage}",
   "timeline.idle": "зараз не працює",
   "timeline.activityUnknown": "активність не підтверджена",
-  "timeline.legend": "Лінія — задача відкрита; відрізки — працювали етапи; колір знизу — останній відомий хід; ⚑ — строк.",
+  "timeline.legend": "Лінія — задача відкрита; контур — календарний проміжок етапу; заливка — час роботи агента (його ходи); ⚑ — строк.",
   "timeline.since": "з {start} · {duration}",
   "timeline.due": "до {date}",
   "timeline.overdueBy": "прострочено на {duration}",
