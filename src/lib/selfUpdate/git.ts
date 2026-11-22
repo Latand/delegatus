@@ -12,7 +12,6 @@ import { shortSha, type CheckFailureCode, type CommitLine, type GreenTip, type R
 import type { GreenVerdict } from "./green";
 
 export const TIP_REF = "refs/self-update/tip";
-const GREEN_LOOKBACK = 8;
 export const CANONICAL_REMOTE = "https://github.com/Latand/delegatus.git";
 
 export interface GitResult { code: number; stdout: string; stderr: string }
@@ -154,7 +153,7 @@ export async function checkForUpdate({ repo, remote, branch, installed: installe
     let greenTip: GreenTip | undefined;
     if (readGreen) {
       // First parents are revisions the tracked branch actually served as its tip.
-      const candidates = (await git(repo, "rev-list", "--first-parent", `--max-count=${GREEN_LOOKBACK}`, `${base}..${tip}`)).trim().split("\n");
+      const candidates = (await git(repo, "rev-list", "--first-parent", `${base}..${tip}`)).trim().split("\n");
       target = "";
       for (const sha of candidates) {
         // A checkout can be on a PR parent already included in main. Never
@@ -163,6 +162,9 @@ export async function checkForUpdate({ repo, remote, branch, installed: installe
         const verdict = await readGreen(sha);
         if (sha === tip) greenTip = { revision: await readRevision(repo, tip), verdict };
         if (verdict.state === "green") { target = sha; break; }
+        // A failed forge read stops this scan. The next poll can reuse the
+        // recent verdicts and retry from the tip.
+        if (verdict.state === "unknown") break;
       }
       if (!target) return { ok: true, installed, available: null, relation, ahead, behind: behindAll, delta: null, greenTip };
     }

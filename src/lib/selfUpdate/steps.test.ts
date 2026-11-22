@@ -125,7 +125,6 @@ test.each(["foreign-root", "foreign-nested", "changed-output", "missing-record",
     state: "failed",
     exitCode: null,
     failure: { kind: "error", text: "Existing release has ignored contents that cannot be proven generated; checkout was refused" },
-    tail: ["Existing release has ignored contents that cannot be proven generated; checkout was refused"],
   });
   expect(refused.calls).toEqual([]);
   expect(readFileSync(join(h.root, "logs", "checkout.log"), "utf8")).toContain("cannot be proven generated");
@@ -1030,6 +1029,19 @@ describe("UpdateRunner", () => {
     expect(build.failure).toEqual({ kind: "exit", code: 1 });
     expect(build.tail).toEqual(["Type error: nope"]);
     expect(calls).toHaveLength(4);
+  });
+
+  test("a checkout command exit keeps its code and output on the checkout step", async () => {
+    const { runner, calls, published } = harness({ checkout: { lines: ["error: checkout failed"], exit: 1 } });
+    await runner.start(TARGET);
+    expect(runner.state.state).toBe("failed");
+    expect(runner.state.steps[0]).toMatchObject({ name: "fetch", state: "done" });
+    expect(runner.state.steps[1]).toMatchObject({
+      name: "checkout", state: "failed", exitCode: 1,
+      failure: { kind: "exit", code: 1 }, tail: ["error: checkout failed"],
+    });
+    expect(calls.map(stepOf)).toEqual(["fetch", "checkout"]);
+    expect(published).toEqual([]);
   });
 
   test("keeps the last 40 lines in the tail and every line in the log file", async () => {

@@ -729,6 +729,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
   test.each([
     ["red", "operator"],
     ["pending", "operator"],
+    ["nine-red", "operator"],
     ["red", "auto"],
     ["pending", "auto"],
     ["all-red", "auto"],
@@ -737,7 +738,9 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     const fixture = mkdtempSync(join(root, "green-selection-"));
     const source = join(fixture, "source"), local = join(fixture, "checkout");
     await git(fixture, "clone", remote, source);
-    await git(source, "commit", "--allow-empty", "-m", "Unchecked tip");
+    for (let i = 0; i < (headState === "nine-red" ? 9 : 1); i++) {
+      await git(source, "commit", "--allow-empty", "--date=2026-11-21T00:00:00Z", "-m", `Unchecked revision ${i + 1}`);
+    }
     const head = await git(source, "rev-parse", "HEAD");
     await git(fixture, "clone", source, local);
     await git(local, "checkout", "--detach", firstSha);
@@ -756,7 +759,8 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
         const [, , , , , sha, part] = url.pathname.split("/");
         if (part === "pulls") return Response.json([{ merged_at: "2026-11-21", merge_commit_sha: sha, base: { ref: "main" }, head: { sha } }]);
         if (part === "check-runs") {
-          const state = headState === "all-red" ? "red" : sha === head ? headState : "green";
+          const state = headState === "all-red" || (sha !== tipSha && headState === "nine-red")
+            ? "red" : sha === head ? headState : "green";
           return Response.json({ check_runs: [{ name: "runtime-gate", status: state === "pending" ? "queued" : "completed",
             conclusion: state === "green" ? "success" : state === "red" ? "failure" : null, app: { id: 15368 } }] });
         }
@@ -768,13 +772,20 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       }) as typeof fetch,
     });
     mkdirSync(h.deps.dir, { recursive: true });
-    writeAuto(join(h.deps.dir, "auto.json"), { ...initialAuto(), enabled: trigger === "auto" });
+    const since = new Date(h.deps.now()).toISOString();
+    const drain = trigger === "auto" ? {
+      id: "prior-drain", target: await readRevision(source, head), since, overranAt: null, blockers: null,
+    } : null;
+    writeAuto(join(h.deps.dir, "auto.json"), {
+      ...initialAuto(), enabled: trigger === "auto", drain,
+      waitingSince: drain ? since : null, waitingTarget: drain?.target.sha ?? null,
+    });
     h.service.stop();
     h.service = new SelfUpdateService(h.deps);
     setSelfUpdateServiceForTests(h.service);
     try {
       await h.service.check();
-      const checked = await snapshot();
+      const checked = headState === "all-red" ? await until(s => s.check.state === "no-green" && !s.auto?.drain) : await snapshot();
       expect(checked.check.greenTip).toMatchObject({ revision: { sha: head }, verdict: { state: headState === "pending" ? "pending" : "red" } });
       if (headState === "all-red") {
         expect(checked.check.state).toBe("no-green");

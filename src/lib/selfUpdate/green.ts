@@ -243,8 +243,7 @@ export class GreenReader {
         return requiredOnly ? { state: "pending", done: 0, total: required.length, checks: required.map(check => check.name).sort() }
           : finish({ state: "no-checks", checks: required.map(check => check.name).sort() });
       }
-      // Exact deployment follows the tracked branch's required checks on the
-      // requested commit. Automatic updates retain their merged-PR policy.
+      // Check the tracked branch's required contexts for an exact revision.
       const relevant = requiredOnly ? checks.filter(check => required.some(({ name, appId }) => check.name === name
         && (appId === null || (check.kind === "run" && check.appId === appId)))) : checks;
       const red = relevant.find((check) => check.verdict === "red");

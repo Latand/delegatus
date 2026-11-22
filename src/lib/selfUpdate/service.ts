@@ -526,7 +526,6 @@ export class SelfUpdateService {
     if (this.auto.managedPending && this.managed && !managedActive(this.managed)) this.finishManagedAuto();
     if (!this.autoEnabled && !this.hasAutoCustody()) return;
     const decision = await this.decide();
-    if (!this.hasAutoCustody() && this.checking) return;
     // Older releases could admit a cohort without ever filing an operation.
     // Release that orphan only when no durable work still owns its custody.
     if (this.unsafeLegacyAuto(decision) && this.auto.drain?.admitted && !this.auto.pending
@@ -640,8 +639,8 @@ export class SelfUpdateService {
       if (snapshot.busy || this.checking || snapshot.check.state === "checking" || needsMemory()) return;
       green = await this.refreshGreen(target.sha, record.checkout!, green);
       const admissionSnapshot = await this.snapshot();
-      if (this.stopped || green.state !== "green" || (!this.autoEnabled && !this.hasAutoCustody()) || this.auto.pending
-        || ((!this.draining() || this.slice.check.greenTip) && this.slice.available?.sha !== target.sha)
+      if (green.state !== "green" || (!this.autoEnabled && !this.hasAutoCustody()) || this.auto.pending
+        || !this.autoBuildTargetIsCurrent(target.sha)
         || this.active() || admissionSnapshot.busy || this.checking || admissionSnapshot.check.state === "checking" || needsMemory()) return;
       const runner = this.runnerFor(record);
       if (!this.auto.rollbackCaptured) {
@@ -770,6 +769,14 @@ export class SelfUpdateService {
       this.saveAuto();
       this.refreshDrain();
     }
+  }
+
+  private autoBuildTargetIsCurrent(target: string): boolean {
+    if (this.stopped || this.checking) return false;
+    const drain = this.auto.drain;
+    if (drain && drain.target.sha !== target) return false;
+    return !!(drain && (!this.slice.check.greenTip || this.hasAutoCustody()))
+      || (this.slice.check.state === "update-available" && this.slice.available?.sha === target);
   }
 
   /** A failed revision that never acquired deployment custody may yield to
@@ -1008,7 +1015,7 @@ export class SelfUpdateService {
       // If the switch is off, retain the uncertain identity for observation
       // and do not admit a request. Re-enabling will re-check current policy.
       if (!this.autoEnabled) return;
-      if ((this.slice.check.state === "update-available" || this.slice.check.state === "up-to-date")
+      if (["update-available", "up-to-date", "no-green"].includes(this.slice.check.state)
         && this.slice.available?.sha !== pending.target.sha) {
         // The host does not know this key and a successful check moved past
         // its target. No accepted transaction remains to own launch custody.
@@ -1042,7 +1049,7 @@ export class SelfUpdateService {
     const finalSnapshot = await this.snapshot();
     const finalProbe = this.deps.quiet ? await probeQuiet(finalSnapshot, this.deps.quiet, this.deps.now(), this.draining(), "live") : null;
     this.autoBlockers = finalProbe?.blockers ?? null;
-    if (!this.quietAdmits(finalProbe) || (!this.draining() && finalSnapshot.available?.sha !== target.sha) || finalSnapshot.installed.sha === target.sha
+    if (!this.quietAdmits(finalProbe) || !this.autoBuildTargetIsCurrent(target.sha) || finalSnapshot.installed.sha === target.sha
       || this.checking || finalSnapshot.check.state === "checking" || !this.autoEnabled) {
       this.auto = { ...this.auto, quietSince: null, lastBlockers: finalProbe?.blockers ?? this.auto.lastBlockers };
       this.saveAuto();
@@ -1058,7 +1065,7 @@ export class SelfUpdateService {
       const current = await this.decide();
       if (current.mode !== "managed" || (await this.autoAvailability(current)) !== "available" || !this.autoEnabled
         || managedActive(this.managed) || this.checking || this.slice.check.state !== "update-available"
-        || (!this.draining() && this.slice.available?.sha !== target.sha)) return;
+        || !this.autoBuildTargetIsCurrent(target.sha)) return;
       green = await this.refreshGreen(target.sha, repo, green);
       // Historical green checks do not establish that a frozen target is still
       // on main. Fetch afresh inside the admission gate, then re-read quiet.
@@ -1068,7 +1075,7 @@ export class SelfUpdateService {
       this.autoBlockers = admissionProbe?.blockers ?? null;
       if (activeRestartGate(gateFile, this.deps.now()) !== gateId || !reachable || green.state !== "green" || !this.quietAdmits(admissionProbe) || !this.autoEnabled || this.checking || this.active()
         || admissionSnapshot.check.state === "checking" || admissionSnapshot.installed.sha === target.sha
-        || (!this.draining() && (admissionSnapshot.available?.sha !== target.sha || this.slice.available?.sha !== target.sha))) {
+        || !this.autoBuildTargetIsCurrent(target.sha)) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: admissionProbe?.blockers ?? this.auto.lastBlockers };
         this.saveAuto();
         return;
@@ -1621,16 +1628,18 @@ export class SelfUpdateService {
       return refuse(409, "no-update", this.slice.check.state === "no-green"
         ? "No newer green revision was found on the tracked branch" : "No update is available; run a check first");
     if (!/^[a-f0-9]{40}$/.test(available.sha)) return refuse(409, "cannot-update", "The published package names no revision; update it with the package manager it came from");
-    if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
-      const refusal = !rebuild && this.slice.check.greenTip ? null : await this.operatorRevisionAdmission(decision.record, available.sha);
+    if ((decision.mode === "checkout" || decision.mode === "package") && decision.record && (rebuild || !this.slice.check.greenTip)) {
+      const refusal = await this.operatorRevisionAdmission(decision.record, available.sha);
       if (refusal) return refusal;
-      const fresh = await this.snapshot();
-      if (fresh.busy) return busy(fresh.busy);
-      if (this.stopped || (!rebuild && (this.slice.check.state !== "update-available" || this.slice.available?.sha !== available.sha)))
-        return refuse(409, "no-update", "The checked update changed; run a check first");
+    }
+    const fresh = await this.snapshot();
+    if (fresh.busy) return busy(fresh.busy);
+    if (this.stopped || (!rebuild && (this.slice.check.state !== "update-available" || this.slice.available?.sha !== available.sha)))
+      return refuse(409, "no-update", "The checked update changed; run a check first");
+    if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
       return this.startCheckout(decision.record, available);
     }
-    if (decision.mode === "managed" && !this.stopped) return this.deploy(available, clientKey);
+    if (decision.mode === "managed") return this.deploy(available, clientKey);
     return refuse(409, "cannot-update", "This install cannot update itself");
   }
 

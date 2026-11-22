@@ -45,9 +45,9 @@ notice, separate manual restarts, and deferred drain policy are superseded.
   finish. The hold covers new pipeline stages, automatic flow rounds, seat
   sends and structured delivery; queued work remains durable.
 - The cohort records its target, identity and start time. A later check may
-  replace a waiting target before its build or deployment begins. Restart recovery restores the same cohort
-  and hold from durable records. An unreadable custody record remains held
-  for repair.
+  replace a waiting target before its build or deployment begins. Restart
+  recovery restores the same cohort and hold from durable records. An unreadable
+  custody record remains held for repair.
 - The Update surface shows the actual blockers: running turns and stages,
   operator activity, another update or restart, insufficient memory, and
   unreadable activity. Normal admission still requires the quiet probes,
@@ -177,12 +177,12 @@ under the state directory, `/proc`, and anonymous GitHub reads.
 
 For a GitHub-tracked checkout or managed install, the Update button and
 automatic updates use the same check. It walks back from the fetched branch
-tip in first-parent order, looking at up to eight revisions newer than the
-installation. It offers the first revision with green required checks. A red,
-pending or unreadable tip can be skipped. If the search finds no eligible
-revision, the dialog says so and automatic updates stay enabled. Selection
-does not start a drain by itself. Checkout fetch verifies that the chosen
-commit is still on the remote branch before creating a release worktree.
+tip in first-parent order through revisions newer than the installation. It
+offers the first revision with green required checks. Red and pending commits
+are skipped. If the search finds no eligible revision or a GitHub read fails,
+the dialog shows the wait and automatic updates stay enabled. Checkout fetch
+verifies that the chosen commit is still on the remote branch before creating
+a release worktree.
 Automatic updates still leave `diverged` and `ahead` installs alone (§8).
 
 ### Exact post-merge runtime evidence
@@ -952,10 +952,10 @@ reload row, evidence).
 ## Validation against the requirement
 
 "Make Delegatus update itself after green merges": with the switch on, a
-checkout install notices a new commit on its branch within 15 minutes. It
-installs the commit only when the merged pull request that produced it passed
-every check on the same code, builds it without touching what runs, and moves
-web and then the runtime host onto it at the next moment when no agent turn,
+checkout install checks its tracked branch every 15 minutes. It selects the
+latest revision ahead of the installation with passing required checks,
+builds it in its own release worktree, and moves web and then the runtime host
+onto it at the next moment when no agent turn,
 pipeline stage, person or update is in flight. It records what it did as the
 manual path records it, marked automatic. A failure falls back as a manual
 restart does, puts the pointer back, and turns the switch off with the reason.
