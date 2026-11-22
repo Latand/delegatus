@@ -26,16 +26,22 @@ nativeTest("a first cold native publication completes one check phase before one
       disposition: "owner", publish: "enabled", active: true, ownerId: subject.id, epoch: 1, journal: [] };
     savePipelines([subject]);
     let pushes = 0;
+    const publicationCommands: string[] = [];
     const exec: ExecPort = (command, args, cwd, overrides, options) => {
+      if ((command === "bun" || command === process.execPath) && args[0] === "scripts/local-gate.ts" && args.includes("--publication-prepare")) publicationCommands.push("prepare");
       if (command === "git" && args[0] === "push") {
         pushes++;
+        publicationCommands.push("push");
         expect(readPublicationCheckReceipt(overrides!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(overrides!)).inputs).toMatch(/^[a-f0-9]{64}$/);
+        expect(readPublicationCheckReceipt(overrides!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(overrides!)).checksMs).toEqual(expect.any(Number));
         expect(touchedChecks(f)).toHaveLength(1);
       }
       return realExec(command, args, cwd, { ...f.env, ...overrides }, options);
     };
     expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, sha: f.head, remote: "published" });
+    expect(publicationCommands).toEqual(["prepare", "push"]);
     expect(pushes).toBe(1); expect(http.rpc()).toBe(1); expect(http.rejected()).toBe(0);
+    expect(findPipelineRecord(subject.id)!.delivery!.journal.at(-1)!.reason).toMatch(/phases preparation=\d+ms checks=\d+ms transport=\d+ms/);
     expect(f.calls().filter(call => call.args[0] === "native-install").map(call => call.args[2]))
       .toEqual(SUPPORTED_CODEX_VERSIONS.map(version => `@openai/codex@${version}`));
     expect(touchedChecks(f)).toHaveLength(1);

@@ -1107,7 +1107,9 @@ export type PipelinePublicationResult = (
   | { ok: true; sha: string; remote: "published" | "unavailable"; detail?: string; uncertain?: boolean }
   | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
   | { ok: false; error: string }
-) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded" };
+) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded";
+  /** Monotonic wall-clock observations from the guarded publication path. */
+  phaseTimings?: { preparationMs: number; checksMs: number; transportMs: number } };
 
 export type PipelineDelivery = {
   target: PipelineDeliveryTarget;

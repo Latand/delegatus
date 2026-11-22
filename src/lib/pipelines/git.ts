@@ -2282,7 +2282,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (matches(current) && (current.stateDetail === "publication accepted; remote verification pending" || awaitingPass)) current.stateDetail = result.ok
         ? result.remote === "published" ? null : "publication checked; remote is unavailable"
         : result.error;
-      deliveryJournal(current, "recovery", result.ok ? `publication verified: ${result.remote}` : `publication refused: ${result.error}`);
+      const timing = result.phaseTimings
+        ? `; phases preparation=${result.phaseTimings.preparationMs}ms checks=${result.phaseTimings.checksMs}ms transport=${result.phaseTimings.transportMs}ms` : "";
+      deliveryJournal(current, "recovery", `${result.ok ? `publication verified: ${result.remote}` : `publication refused: ${result.error}`}${timing}`);
       if (result.ok && result.remote === "published") current.publishedCommit = result.sha;
       tx.put(current);
       return result;
@@ -2494,6 +2496,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     ? publicationPreparationVersion(pipeline.worktreeDir) : undefined;
   let transportBudgetMs = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
   const receiptFile = preparation ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
+  let phaseTimings = { preparationMs: 0, checksMs: 0, transportMs: 0 };
   let push: ExecResult;
   try {
     if (receiptFile) {
@@ -2511,36 +2514,41 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
       // fingerprint the same Bun, Git and environment before minting.
       const runtime = preparation === 2 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
       const checked = await exec(runtime, ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
-      if (checked.code !== 0) return failure("checking the publication before transport", checked);
+      if (checked.code !== 0) return { ...failure("checking the publication before transport", checked), phaseTimings: { ...phaseTimings, preparationMs: Math.max(0, Math.round(performance.now() - checkStarted)) } };
       // Preparation includes privacy: its elapsed time is a conservative
       // observation even with older hooks that report no per-step timings.
       // Allow a second scan under load, capped by this publication's budget,
       // and retain the pack margin outside the hook's verdict deadline.
+      const preparationElapsed = Math.max(0, Math.round(performance.now() - checkStarted));
+      const checkReceipt = readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
+      phaseTimings = { preparationMs: Math.max(0, preparationElapsed - (checkReceipt.checksMs ?? preparationElapsed)),
+        checksMs: checkReceipt.checksMs ?? preparationElapsed, transportMs: 0 };
       transportBudgetMs = Math.min(budget.ms, Math.max(PUBLICATION_TRANSPORT_MS,
-        Math.ceil(2 * (performance.now() - checkStarted))) + PUBLICATION_PACK_MARGIN_MS);
+        Math.ceil(2 * preparationElapsed)) + PUBLICATION_PACK_MARGIN_MS);
       // An older or failed gate cannot turn an exit code into a check receipt.
-      readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
       const current = await currentPipelineBranchHead(pipeline, exec);
       if (!current.ok) return current;
       if (current.sha !== acceptedSha) return { ok: false, error: "the accepted revision changed after publication checks; nothing was published" };
       pushEnv.LLV_GATE_PUSH_DEADLINE = String(publicationHookDeadline(transportBudgetMs, Date.now()));
     }
+    const transportStarted = performance.now();
     push = await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: receiptFile ? transportBudgetMs : budget.ms });
+    phaseTimings.transportMs = Math.max(0, Math.round(performance.now() - transportStarted));
   } finally {
     if (receiptFile) {
       fs.rmSync(receiptFile, { force: true });
       fs.rmSync(`${receiptFile}.consuming`, { force: true });
     }
   }
-  if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
-  if (push.code !== 0) return failure("publishing the pipeline branch", push);
+  if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome", phaseTimings };
+  if (push.code !== 0) return { ...failure("publishing the pipeline branch", push), phaseTimings };
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));
-  if (!confirm.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: confirm.error, uncertain: true };
+  if (!confirm.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: confirm.error, uncertain: true, phaseTimings };
   const publishedHead = confirm.sha;
   if (publishedHead !== acceptedSha) {
-    return { ok: false, error: `publishing the pipeline branch did not land: origin/${pipeline.branch} is ${shortId(publishedHead || "absent")}, expected ${shortId(acceptedSha)}` };
+    return { ok: false, error: `publishing the pipeline branch did not land: origin/${pipeline.branch} is ${shortId(publishedHead || "absent")}, expected ${shortId(acceptedSha)}`, phaseTimings };
   }
-  return { ok: true, sha: acceptedSha, remote: "published" };
+  return { ok: true, sha: acceptedSha, remote: "published", phaseTimings };
 }
 
 /**

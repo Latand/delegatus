@@ -1242,6 +1242,8 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
     const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error) : undefined;
     const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
+    let checksMs: number | undefined;
+    const checksStarted = performance.now();
     if (selected) {
       // The normal runner owns cleanup and records exactly this step's pass.
       // A later push still runs privacy and validates every step in the plan.
@@ -1308,11 +1310,14 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
         } else await runPushPair(privacy, checks);
       } else await privacy();
     } else {
+      const checksStarted = performance.now();
       await runSteps(mode, admitted ? steps.filter(step => step.name !== "privacy") : steps, options);
+      if (publicationPrepare) checksMs = Math.max(0, Math.round(performance.now() - checksStarted));
     }
     if (publicationPrepare) {
+      checksMs ??= Math.max(0, Math.round(performance.now() - checksStarted));
       assertPublicationInputs("checks");
-      writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents);
+      writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents, checksMs);
     }
   } catch (error) {
     if (error instanceof UnconfirmedStepExit) {

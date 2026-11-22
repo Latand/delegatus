@@ -69,6 +69,18 @@ test("receipt component hashes round trip and malformed component records refuse
   expect(fs.existsSync(refused)).toBeFalse();
 });
 
+test("publication receipt records check duration and rejects invalid timing values", () => {
+  const f = fixture();
+  const binding = publicationCheckBinding(f.env);
+  writePublicationCheckReceipt(f.receipt, binding, "a".repeat(64), undefined, 0);
+  expect(readPublicationCheckReceipt(f.receipt, binding).checksMs).toBe(0);
+  fs.rmSync(f.receipt);
+  expect(() => writePublicationCheckReceipt(f.receipt, binding, "a".repeat(64), undefined, -1))
+    .toThrow("publication check receipt timing is invalid");
+  fs.writeFileSync(f.receipt, JSON.stringify({ version: 1, binding, inputs: "a".repeat(64), completedAt: Date.now(), checksMs: -1 }), { mode: 0o600 });
+  expect(() => readPublicationCheckReceipt(f.receipt, binding)).toThrow("stale or belongs to another operation");
+});
+
 test("transport input validation retains a named deadline refusal", () => {
   const f = fixture();
   expect(f.run(true).status).toBe(0);
