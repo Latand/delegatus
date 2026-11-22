@@ -358,7 +358,8 @@ function responseAuthorityResult(tool: string, args: McpToolArgs, authority: Mcp
   catch (error) {
     if (BOARD_READ_TOOLS.has(tool)) return boardReadFailure(tool, args, error);
     const code = error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "caller_unidentified";
-    return failure(tool, clientRequestId(args), code, code === "workspace_forbidden" ? "workspace access denied" : "caller authority changed before response", false, false, { code });
+    return failure(tool, clientRequestId(args), code, error instanceof McpToolRefusal ? error.message : "caller authority changed before response", false, false,
+      error instanceof McpToolRefusal ? error.details : { code });
   }
 }
 
@@ -394,6 +395,8 @@ export interface McpToolCallContext {
   priorAcceptedDeployment?: { deploymentId: string; revision: string };
   /** Numeric transport subphases, supplied by the service, never tool arguments. */
   recordTiming?: (phase: "http", milliseconds: number) => void;
+  /** Encoded HTTP-validated prototype identity; the effect endpoint rechecks it. */
+  prototypeReceiptScope?: string;
   /** #1490: the durable binding this call's dispatch must use. Present only on
       a recoverable mutation's single dispatch; the binding reads its downstream
       idempotency key from here rather than deriving one of its own. */
@@ -505,6 +508,10 @@ export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) 
       caller's clientRequestId never answers another's. A refusal burns nothing.
       Must not mutate state. */
   receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string | null>;
+  /** Optional identity-only scope for a settled receipt read before workspace
+   * admission. Must prove current caller ownership without consulting workspace
+   * grants or dispatching. Null requires the ordinary admission path. */
+  replayReceiptScope?: (args: McpToolArgs) => string | null;
   /** Resolve guarded references to their retained full identity before hashing a receipt. */
   canonicalizeReceiptArgs?: (args: McpToolArgs) => McpToolArgs;
 };
@@ -2502,6 +2509,8 @@ function failure(
 
 export interface McpToolService {
   callTool(toolName: string, args: McpToolArgs, context?: McpToolCallContext): Promise<McpToolResult>;
+  /** Read an already settled, caller-owned receipt; never claim or dispatch. */
+  replayTool?(toolName: string, args: McpToolArgs): Promise<McpToolResult | null>;
 }
 
 type McpTimingOutcome = "success" | "failure" | "replay" | "conflict" | "pending" | "deadline" | "cancelled";
@@ -2870,6 +2879,35 @@ export function createMcpToolService(
   const pendingLocalReleases = new Map<string, { digest: string; binding: McpRequestBinding; store: McpRecoveryReceiptStore }>();
   bindings = witnessStoreWriters(bindings);
   const service: McpToolService = {
+    async replayTool(toolName, args) {
+      if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName) || !supportsMcpRecovery(receipts)) return null;
+      const tool = toolName as McpToolName;
+      const scopeOf = bindings[tool].replayReceiptScope;
+      if (!scopeOf) return null;
+      const effective = (await normalizeShortIdArgs(normalizeBoundedMcpNumerics(tool, args).args));
+      const requestId = clientRequestId(effective);
+      const scope = scopeOf(effective);
+      if (!requestId || !scope) return null;
+      const permit = () => policy?.permit(tool, effective);
+      const verdict = permit();
+      if (verdict && !verdict.allowed) return failure(tool, requestId, verdict.code, verdict.error, false);
+      let record: McpReceiptRecord | null;
+      try { record = await receipts.lookup(receiptKey(tool, requestId, scope)); }
+      catch { return failure(tool, requestId, "receipt_unavailable", "the caller's receipt could not be read", true, false, { check: "receipt-store" }); }
+      // Storage may yield across a caller switch or a seat replacement. A
+      // receipt read cannot acquire the departed caller's authority.
+      if (scopeOf(effective) !== scope) return null;
+      const current = permit();
+      if (current && !current.allowed) return failure(tool, requestId, current.code, current.error, false);
+      if (!record?.result) return null;
+      const digest = requestDigest(tool, bindings[tool].canonicalizeReceiptArgs?.(effective) ?? effective);
+      if (record.digest !== digest) return failure(tool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
+      // A retryable publication still needs the Viewer's claim recovery path.
+      if (!record.result.ok && record.result.retryable) return null;
+      let result = withoutPrototypeTaskFields({ ...record.result, replayed: true });
+      if (effective.full !== true) result = shortIdsInAnswer(result);
+      return result;
+    },
     callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
         if ((RETIRED_FLOW_TOOL_NAMES as readonly string[]).includes(toolName)) {
@@ -3034,6 +3072,12 @@ export function createMcpToolService(
       } catch (error) {
         if (BOARD_READ_TOOLS.has(typedTool)) return finish(boardReadFailure(typedTool, args, error), "failure");
         // Nothing is claimed yet, so the same key may be tried again as it is.
+        if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") {
+          return finish(failure(typedTool, requestId, "workspace_forbidden", error.message, false, false, error.details), "failure");
+        }
+        if (error instanceof McpToolRefusal && error.details.code === "prototype_project_unavailable") {
+          return finish(failure(typedTool, requestId, "prototype_project_unavailable", error.message, true, false, error.details), "failure");
+        }
         if (error instanceof McpToolRefusal && error.details.code === "short_id_ambiguous") {
           return finish(failure(typedTool, requestId, "short_id_ambiguous", error.message, false, false, error.details), "failure");
         }
@@ -3808,10 +3852,10 @@ export function createMcpToolService(
           const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
-          /* Named issue, cross-project and orchestrator refusals preserve the
+          /* Named issue, workspace, cross-project and orchestrator refusals preserve the
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (error instanceof McpUnadmittedRefusal || BOARD_READ_TOOLS.has(typedTool) || typedTool === "issue_report" || typedTool === "github_app_connect" || typedTool === "message_receipt" || typedTool === "leave_lesson" || typedTool === "pipeline_action" || error.details.code === "cross_project_refused"
+            && (error instanceof McpUnadmittedRefusal || BOARD_READ_TOOLS.has(typedTool) || typedTool === "issue_report" || typedTool === "github_app_connect" || typedTool === "message_receipt" || typedTool === "leave_lesson" || typedTool === "pipeline_action" || error.details.code === "cross_project_refused" || error.details.code === "workspace_forbidden"
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel", "deploy_exact_sha"].includes(typedTool)
               || error.details.code === "CONVERSATION_NOT_FOUND" && error.details.retryable === false)
             ? { code: error.details.code, retryable: error.details.retryable } : null;
@@ -3935,7 +3979,7 @@ export function createMcpToolService(
       return await runWithMcpCallerResolution(() => service.callTool(tool, args, context));
     } finally { finish(); }
   } });
-  return { callTool: async function callTool(tool: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
+  return { replayTool: (tool, args) => service.replayTool!(tool, args), callTool: async function callTool(tool: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
     const board = BOARD_READ_TOOLS.has(tool);
     // Establish native proof and the canonical board before cursor filter matching.
     if (board && "nativeCallerProof" in args) {

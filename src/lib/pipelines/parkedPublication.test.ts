@@ -1581,10 +1581,15 @@ async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z"
     const crashLog = ${JSON.stringify(crashLog ?? null)};
     const timedOutLink = ${JSON.stringify(timedOutLink ?? null)};
     if (timedOutLink) {
+      const realNow = Date.now;
+      let elapsed = 0;
+      Date.now = () => realNow() + elapsed;
       const realpath = fs.promises.realpath;
       fs.promises.realpath = async (filename, ...options) => {
-        if (filename === timedOutLink) throw new Error("dependency preparation deadline exceeded");
-        return realpath(filename, ...options);
+        const resolved = await realpath(filename, ...options);
+        // Let dependency preparation throw its own deadline after each link read.
+        if (filename === timedOutLink) elapsed += 180_001;
+        return resolved;
       };
     }
     const fixtureExec = ${publicationFixtureExec.toString()};
@@ -1605,6 +1610,7 @@ async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z"
     }`;
   const result = await realExec(process.execPath, ["-e", script], process.cwd(), process.env, { timeoutMs: 30_000 });
   expect(result.code, result.stderr).toBe(0);
+  if (timedOutLink) expect(result.stderr.match(/deadline exceeded \[validation: existing link and seal,[^\n]+retrying validation in 100 ms/g)).toHaveLength(1);
 }
 
 test.each(["recovers", "exhausts"] as const)("existing dependency validation timeout %s across controller restarts", async outcome => {
@@ -1620,7 +1626,7 @@ test.each(["recovers", "exhausts"] as const)("existing dependency validation tim
     // real preparation code without asking the installer to rewrite its inputs.
     expect(await prepareLockedDependencies(h.repo, { exec: (command, ...args) => command === "bun" && args[0][0] === "install"
       ? Promise.resolve({ code: 0, stdout: "", stderr: "" }) : realExec(command, ...args) })).toBe(true);
-    const link = path.join(h.repo, "node_modules");
+    const link = path.join(fs.realpathSync(h.repo), "node_modules");
     const installed = fs.readlinkSync(link);
     const marker = path.join(h.root, "hook-runs");
     fs.writeFileSync(h.hook, `#!/bin/sh\nset -eu\ntest -d node_modules\nprintf ran >> '${marker}'\n`, { mode: 0o700 });

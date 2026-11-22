@@ -4,7 +4,7 @@ import { contextRequest } from "./request.fixture";
 import serviceClaim from "./fixtures/relay_v1/claimed_tools_admin.json";
 import { ownerTierFor } from "./profile";
 import { resolveOwnerReplyContext } from "./ownerBridgeContext";
-import { ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt } from "./ownerRun";
+import { ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt, prepareOwnerPrompt } from "./ownerRun";
 
 // Service text projection recorded on 2026-10-21; invented caption and filename.
 const marker = "[Document attached; filename=notes.md; mime_type=text/markdown; byte_size=42]";
@@ -48,18 +48,20 @@ function withDocument(request: ExternalRelayRequest, extraction: "complete" | "t
   } });
 }
 
-test("required attachment extraction and access survive optional overload in fresh and resumed prompts", () => {
+test("required attachment extraction and oversized memory survive in fresh and resumed context files", () => {
   const request = withDocument(attachmentRequest(), "complete");
   request.input.short_term_memory = "я".repeat(15000);
   const owner = ownerTierFor({ ownerTier: true }, request)!;
-  for (const prompt of [ownerRunPrompt(request, owner, 3, "optional suffix ".repeat(4000)),
-    ownerContinuationPrompt(request, owner, 3, { seen: [], staticDigest: null }, "optional suffix ".repeat(4000)).prompt]) {
-    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(32000);
-    const documents = JSON.parse(prompt.match(/<documents>\n([^]*?)\n<\/documents>/)![1]!);
+  for (const prepared of [prepareOwnerPrompt(request, owner, 3, "optional suffix ".repeat(4000)),
+    ownerContinuationPrompt(request, owner, 3, { seen: [], staticDigest: null }, "optional suffix ".repeat(4000))]) {
+    expect(Buffer.byteLength(prepared.prompt)).toBeLessThanOrEqual(32000);
+    const context = prepared.context!;
+    const documents = JSON.parse(context.match(/<documents>\n([^]*?)\n<\/documents>/)![1]!);
     expect(documents).toEqual(request.input.documents);
-    expect(prompt).toContain("document-ref");
-    expect(prompt).toContain(marker);
-    expect(prompt).not.toContain("optional suffix");
+    expect(context).toContain("document-ref");
+    expect(context).toContain(marker);
+    expect(context).toContain(request.input.short_term_memory!);
+    expect(context).not.toContain("optional suffix");
   }
 });
 

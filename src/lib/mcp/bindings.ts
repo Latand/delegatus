@@ -1,3 +1,4 @@
+import { prototypeStageForConversation, prototypeProjectReceiptScope, PROTOTYPE_RECEIPT_SCOPE_HEADER } from "@/lib/prototypeReview/world";
 import { existingTeamStore } from "@/lib/team/store";
 import { workspaceDirectory } from "@/lib/team/workspaces";
 import { protectNativeMediaContext } from "@/lib/externalRelay/nativeMediaContext";
@@ -578,6 +579,7 @@ async function getViewerControl(
       error,
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
+      ...(text(result.check) ? { check: text(result.check) } : {}),
       ...(requestHealth ? { runtimeHostRequests: requestHealth } : {}),
     });
   }
@@ -674,6 +676,9 @@ async function postViewerControl(
       code: "short_id_ambiguous", retryable: false, status: response.status,
       field: text(result.field) || "reviewId",
       ...(Array.isArray(result.candidates) ? { candidates: result.candidates.filter(value => typeof value === "string").slice(0, 8) } : {}),
+    });
+    if (result.code === "workspace_forbidden") throw new McpToolRefusal(message, {
+      code: "workspace_forbidden", retryable: false, status: response.status, check: text(result.check) || "route-target",
     });
     if (pathname === "/api/forge/app-connect") throw new McpToolRefusal(message, {
       code: text(result.code) || "app_connection_unavailable", status: response.status, retryable: response.status >= 500,
@@ -990,7 +995,7 @@ export interface ViewerMcpDomainDependencies {
   registrySnapshot(): RegistrySnapshot;
   /** Fresh seat and delivered-wake admission for curator reads and writes. */
   curatorSnapshot?(conversationId: string): RegistrySnapshot;
-  curatorAdmission?(conversationId: string | null): Promise<void | (() => void)>;
+  curatorAdmission?(conversationId: string | null): Promise<void | (() => void | ReturnType<typeof curatorCallerOf>)>;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
@@ -2029,7 +2034,11 @@ async function sendMessage(
        over the operation id is where the end of the story lives. */
     settled: settledOutcome === "delivered",
     deliveryConfirmed: settledOutcome === "delivered",
-    ...(settledOutcome !== "delivered" ? { notice: "Accepted for delivery; arrival is unconfirmed." } : {}),
+    ...(settledOutcome !== "delivered" ? {
+      notice: typeof outcome.detail === "string" ? outcome.detail : "Accepted for delivery; arrival is unconfirmed.",
+      ...(typeof outcome.waitReason === "string" ? { waitReason: outcome.waitReason } : {}),
+      ...(typeof outcome.deadlineAt === "string" ? { deadlineAt: outcome.deadlineAt } : {}),
+    } : {}),
   };
 }
 
@@ -9022,7 +9031,39 @@ async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: M
     { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }), ...(args.reviewId === undefined ? {} : { reviewId: args.reviewId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
   /* A seat asking without a task is scoped to its own questions (docs/design/operator-decision-forms.md §2.1). */
   if (typeof scope.conversationId !== "string" || (typeof scope.taskId !== "string" && scope.taskId !== null)) throw new Error("the Viewer did not name the caller and task of this prototype call");
+  if (mode !== "resend") {
+    if (typeof scope.project !== "string" || !scope.project) throw new McpToolRefusal("the Viewer did not prove the project of this prototype call", {
+      code: "prototype_project_unavailable", retryable: true, check: "prototype-project",
+    });
+    const identity = prototypeProjectReceiptScope(scope.conversationId, scope.taskId, scope.project);
+    if (context) context.prototypeReceiptScope = encodeURIComponent(identity);
+    return identity;
+  }
   return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
+}
+
+/** A current seat may recover its own settled form without asking a workspace
+ * grant again. Fresh calls still use prototypeReceiptScope and the HTTP fence.
+ * Workers keep the Viewer-validated scope, including implicit task selection. */
+function prototypeSeatReceiptScope(mode: "publish" | "read", args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): string | null {
+  const caller = dependencies.attentionAuthority();
+  if ((caller.kind !== "root" && caller.kind !== "worker") || !caller.conversationId) return null;
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const projects = new Set<string>();
+  for (const seat of seats) {
+    if (seat.conversationId !== caller.conversationId) continue;
+    if (!seat.project) return null;
+    projects.add(canonicalProject(seat.project));
+  }
+  if (projects.size !== 1) return null;
+  const project = [...projects][0];
+  if (!project) return null;
+  if (args.taskId !== undefined && (typeof args.taskId !== "string" || !args.taskId)) return null;
+  const stage = prototypeStageForConversation(caller.conversationId,
+    dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines);
+  if (stage && stage.taskIds.length !== 1 && (mode === "publish" || args.taskId === undefined)) return null;
+  if (mode === "publish" && stage && args.taskId !== undefined && args.taskId !== stage.taskIds[0]) return null;
+  return prototypeProjectReceiptScope(caller.conversationId, (args.taskId as string | undefined) ?? stage?.taskIds[0] ?? null, project);
 }
 
 /**
@@ -9115,13 +9156,13 @@ async function curatorApplyAuthority(args: McpToolArgs, dependencies: ViewerMcpD
     const admission = await dependencies.curatorAdmission?.(conversationId);
     const assertCurrent = AsyncResource.bind(() => {
       try {
-        if (typeof admission === "function") admission();
         const current = dependencies.attentionAuthority();
+        const admittedPass = typeof admission === "function" ? admission() : undefined;
         if (!conversationId || current.kind === "unidentified" || current.conversationId !== initial.conversationId
           || current.conversationId !== conversationId || current.nativeProof !== initial.nativeProof) {
           throw new RoleMemoryRefusal("CURATE_CALLER", "curator caller changed during this operation");
         }
-        const owner = curatorCallerOf(conversationId, snapshot());
+        const owner = admittedPass ?? curatorCallerOf(conversationId, snapshot());
         if (owner.id !== pass.id || owner.conversationId !== conversationId || canonicalProject(owner.project) !== project) {
           throw new RoleMemoryRefusal("CURATE_CALLER", "the original curator pass no longer authorizes this operation");
         }
@@ -9273,7 +9314,7 @@ export function viewerMcpBindings(
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
         const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
-        if (typeof assertAdmission === "function") assertAdmission();
+        if (typeof assertAdmission === "function" && assertAdmission()) return;
         curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
@@ -9336,8 +9377,10 @@ export function viewerMcpBindings(
     publish_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype publication requires an identified caller");
-      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context) }),
+      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability,
+        ...(context?.prototypeReceiptScope ? { [PROTOTYPE_RECEIPT_SCOPE_HEADER]: context.prototypeReceiptScope } : {}) });
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context),
+      replayReceiptScope: (args: McpToolArgs) => prototypeSeatReceiptScope("publish", args, domainDependencies) }),
     resend_prototype_review_telegram: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype resend requires an identified caller");
@@ -9346,8 +9389,10 @@ export function viewerMcpBindings(
     read_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype reads require an identified caller");
-      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context) }),
+      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability,
+        ...(context?.prototypeReceiptScope ? { [PROTOTYPE_RECEIPT_SCOPE_HEADER]: context.prototypeReceiptScope } : {}) });
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context),
+      replayReceiptScope: (args: McpToolArgs) => prototypeSeatReceiptScope("read", args, domainDependencies) }),
     dismiss_attention: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => dismissAttentionTool(args, domainDependencies, controlDependencies, context), {
       authorizeReceipt: (args: McpToolArgs) => prototypeDismissalAuthority(args, domainDependencies),
     }),
