@@ -8,6 +8,160 @@ compatibility raises the major version.
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-11-22
+
+### Added
+- **Codex CLI 0.170.0 is supported.** The app-server protocol schemas that
+  0.170.0 generates are pinned, and the reviewed native window now covers
+  0.168.0 through 0.170.0. A change to the agent message display in 0.170.0 had
+  made the 0.169.0 fallback refuse it at admission, so Codex launches stopped
+  when the CLI updated ([#4243]).
+- **`list_tasks` and `list_pipelines` accept a project by name.** The project
+  can be given as its key, display name or folder name, in any letter case. The
+  selection is resolved once, with the caller's authority and the whole alias
+  chain behind the spelling, and is checked again at every later step. If an
+  alias is redirected or the caller's access is revoked while a page is being
+  read, the call ends with a non-retryable refusal, no rows and no cursor
+  ([#3795]).
+
+### Changed
+- **Voice Delegatus calls use GPT-Live 1.1.** New calls made through the API
+  backend request `gpt-live-1.1`; the per-minute rates the provider lists are
+  the same as before ([#4245]).
+- **The board timeline is easier to read.** An attempt that is open but idle is
+  drawn as the thin line with a start tick, and thick spans appear only while an
+  agent is working. Overdue items use one ink, durations are floored to whole
+  minutes with `<1 min` below that, and a live row whose start is unknown says
+  so. The return control moved onto the time axis, which keeps a constant
+  height, and the flag at the right edge stays inside its lane ([#4234]).
+- **A stage's agent is retired as soon as the stage has a verdict.** It no
+  longer waits an hour idle once the turn is closed and no delivery, attention
+  request or continuation still needs it. The reason is recorded and the
+  transcripts and stage records stay ([#4276]).
+- **Pipelines start sooner when several lanes share a repository.** A new lane
+  releases the shared Git turn as soon as its checkout is verified instead of
+  waiting for another lane's dependency setup ([#4223]). An already linked
+  worktree dependency set is admitted without waiting for the writer, and a
+  reused set is trusted only while its recorded seal still matches. A damaged
+  receipt is recreated, and a restore no longer invalidates the seal because
+  inode numbers changed. Permission repair resumes within the stage deadline
+  ([#4196], [#4341], [#4342], [#4351]). In the authors' fixtures a warm link
+  went from about eight seconds to under 80 ms with 331 linked worktrees.
+- **Resource statistics are collected inside the Viewer on macOS and Windows.**
+  The separate collector worker cannot verify kernel containment there. Linux
+  keeps the worker by default ([#4346]).
+- **Managed releases keep bounded Docker storage.** The current and the
+  rollback image are retained, unreadable checkout holds are reported, and the
+  disk report accounts for allocated scratch space and Docker usage.
+- **A checkout install switches through the launcher's in-place relaunch.**
+  Live agent hosts and helpers keep running instead of being stopped with the
+  service's scopes. Claude hosts that talk over stdio still end when the
+  Viewer is replaced ([#4260]). Evidence sampling during such a switch has a
+  per-sample deadline, and a restart needs a fresh healthy serving witness
+  ([#4193]).
+
+### Fixed
+- **Relay owner replies.** A relay conversation's reply is queued on that
+  conversation and survives the retirement of its host, and the relay chats
+  panel shows a diagnostic line when a continuation could not be delivered.
+  The chat now names the cause, such as missing history, an unavailable
+  account or project folder, or a conversation on another engine. A turn keeps
+  the trigger, the ten preceding messages, the reply chain and short-term
+  memory within its prompt budget: tool details are compacted first and cuts
+  are counted, and an oversized turn points to a file with the whole
+  conversation ([#4347]).
+- **A refused clone move is explained.** When another install holds a clone and
+  the relay answers 409 `answered_elsewhere` to a confirmed move, the target
+  route now answers 409 as well. The settings keep the confirmation open and
+  show release-first guidance instead of closing it while the row still
+  promised the move ([#4233]).
+- **Numbers survive in custom Telegram form replies.** A word of several
+  letters after a numeric separator stays in the custom text instead of being
+  read as a choice ([#4249]).
+- **Typing and dictation stay responsive on large boards.** Dictation is
+  captured in an AudioWorklet, so a long page stall no longer repeats part of
+  the recording, and the orchestrator seat is sent to the client in the
+  portions its panel reads ([#4269]). A board clock tick no longer re-reads
+  the width of every pipeline card's stage strip; it measures when the fold or
+  the width changes ([#4272]). The composer field sizes itself with the
+  browser's intrinsic sizing where supported, which removed 184 forced geometry
+  reads when typing 37 characters in Chromium ([#4277]). Scanner frames of
+  several megabytes are split by searching each new chunk once ([#4294]).
+- **The Viewer does less work per update.** Fewer registry and state reads
+  and less copying on hot paths: path projections in the file scanner
+  ([#4250]), the Update dialog's work inventory ([#4254]), transcript
+  locations without credential discovery ([#4324]), delivery history for a
+  targeted agent ([#4325]), one dismissal index per Decisions response
+  ([#4318]), reconciliation checks, board invalidation and revoked-seat
+  deliveries ([#4333], [#4334], [#4344]), curator and seat permission checks
+  ([#4343]), MCP caller lookup ([#4199]), checkout health reads ([#4252],
+  [#4332]), interruption lists, state-write statements and cache accounting
+  ([#4301], [#4302], [#4304]), and the admission queue, sweep worker and rules
+  view ([#4248]).
+- **Delivery and registry.** Every delivery wait has a deadline and ends in a
+  terminal state when its target dies, is replaced or is mid-turn, and queued
+  instructions whose attempt was replaced keep a notice for the sender
+  ([#4144]). The registry no longer opens a nested SQLite transaction, so seat
+  alarms survive a transient store error ([#4156]). The first read after the
+  database is replaced sees the new database ([#4180]). Spawn attempt identity
+  is exact on SQLite 3.39 ([#4219]). A delivery reservation is refused after
+  the writer deadline instead of landing late ([#4255]). The Linux sweep stops
+  Claude and Codex processes that Delegatus launched but that have no live
+  registry entry, after checking launch, identity and custody, and settles the
+  operations of a retired seat ([#4256]). MCP lessons and bridge reports retry
+  under the same key after a proven pre-write refusal ([#4201]).
+- **Pipelines and checks.** A stop that is still settling no longer blocks
+  another ready pipeline from starting ([#4211]). An urgent stage wakes as soon
+  as its CPU measurement ends ([#4210]). A heavy check waits at most ten
+  minutes for CPU pressure to ease before the usual queue order applies
+  ([#4174]). A recorded check keeps its verdict under Codex shell policies and
+  when two waits share a turn, and a log path that is a dangling symlink is
+  refused before a ticket is created ([#4200], [#4022], [#4350]). Publication
+  checks refuse when the Cloud catalogue answers 404 ([#4221]). The Mac
+  launcher's first-run check is described accurately ([#4298]).
+
+### Security
+- **The relay checks who is asking before it offers tools.** A requester that
+  was not the author of the trigger message, a request that claimed to be both
+  owner and anonymous admin, an owner delivery without an owner and a guest
+  claim not made by the owner are now declined as invalid. Before this, a forged
+  owner flag on a member's message exposed the owner's tools and the owner
+  session ([#4328]).
+- **Seat tool permissions follow the current seat.** A caller that is not the
+  project's designated seat, including a superseded or revoked seat, is
+  refused with `workspace_forbidden` when it reads, scopes or publishes a
+  prototype form. A stored receipt is checked against the caller's scope again
+  before it is replayed ([#4158]).
+
+### Maintainer notes
+- **Privacy checks.** The trusted publication scan still runs on every pull
+  request, and the self-tests run when the privacy tools, catalogs, workflows
+  or their dependencies change, with a nightly run of the complete suite
+  ([#4236], [#4237]). Media metadata is inspected without OCR or FFmpeg, and a
+  main push is checked with the GitHub-signed committer of a squash merge
+  ([#4240]). The behaviour is documented in [#4238].
+- **Local gate.** Exact verification results and green test checkpoints are
+  reused, expensive tests are scoped to what changed, and gate harness suites
+  use fewer workers ([#4251], [#4265]). Ordinary pre-push service parents get
+  first-in-first-out admission again ([#4214]).
+- **Cleaner.** A run controller with disk-pressure and daily triggers is
+  present, but startup supplies no launcher yet, so nothing starts it
+  automatically ([#4262]).
+- **Diagnostics.** The stall profiler names the callers behind instrumentation
+  wrappers ([#4182]). Performance request drops are counted as expired or
+  overflow ([#4216]), serving workload is counted by route, tool and process
+  age ([#4326]), and urgent-stage CPU capacity probes record bounded evidence
+  ([#4305]). Seat ticks keep settled report keys out of new debt and skip the
+  release check where releases are off ([#4247], [#4183]).
+- **Builds and images.** The Docker image check includes the check worker
+  client ([#4218]), and the macOS DMG build bounds its Swift fixture waits
+  ([#4226]).
+- **Cleanup.** Dead scanner code is removed ([#4297]). Attempt cleanup resumes
+  and removes eligible roots within each bounded pass.
+- **Test stability.** [#3934], [#4217], [#4227], [#4235], [#4257], [#4259],
+  [#4299], [#4308], [#4309] and several relay fixtures repair or tighten
+  fixtures and assertions without changing product behaviour.
+
 ## [2.2.0] — 2026-11-18
 
 ### Added
@@ -5461,7 +5615,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/Latand/delegatus/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/Latand/delegatus/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/Latand/delegatus/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Latand/delegatus/compare/v1.16.0...v2.0.0
@@ -7011,3 +7166,82 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4185]: https://github.com/Latand/delegatus/pull/4185
 [#4188]: https://github.com/Latand/delegatus/pull/4188
 [#4189]: https://github.com/Latand/delegatus/pull/4189
+[#3795]: https://github.com/Latand/delegatus/pull/3795
+[#3934]: https://github.com/Latand/delegatus/pull/3934
+[#4022]: https://github.com/Latand/delegatus/pull/4022
+[#4144]: https://github.com/Latand/delegatus/pull/4144
+[#4156]: https://github.com/Latand/delegatus/pull/4156
+[#4158]: https://github.com/Latand/delegatus/pull/4158
+[#4174]: https://github.com/Latand/delegatus/pull/4174
+[#4180]: https://github.com/Latand/delegatus/pull/4180
+[#4182]: https://github.com/Latand/delegatus/pull/4182
+[#4183]: https://github.com/Latand/delegatus/pull/4183
+[#4193]: https://github.com/Latand/delegatus/pull/4193
+[#4196]: https://github.com/Latand/delegatus/pull/4196
+[#4199]: https://github.com/Latand/delegatus/pull/4199
+[#4200]: https://github.com/Latand/delegatus/pull/4200
+[#4201]: https://github.com/Latand/delegatus/pull/4201
+[#4210]: https://github.com/Latand/delegatus/pull/4210
+[#4211]: https://github.com/Latand/delegatus/pull/4211
+[#4214]: https://github.com/Latand/delegatus/pull/4214
+[#4216]: https://github.com/Latand/delegatus/pull/4216
+[#4217]: https://github.com/Latand/delegatus/pull/4217
+[#4218]: https://github.com/Latand/delegatus/pull/4218
+[#4219]: https://github.com/Latand/delegatus/pull/4219
+[#4221]: https://github.com/Latand/delegatus/pull/4221
+[#4223]: https://github.com/Latand/delegatus/pull/4223
+[#4226]: https://github.com/Latand/delegatus/pull/4226
+[#4227]: https://github.com/Latand/delegatus/pull/4227
+[#4233]: https://github.com/Latand/delegatus/pull/4233
+[#4234]: https://github.com/Latand/delegatus/pull/4234
+[#4235]: https://github.com/Latand/delegatus/pull/4235
+[#4236]: https://github.com/Latand/delegatus/pull/4236
+[#4237]: https://github.com/Latand/delegatus/pull/4237
+[#4238]: https://github.com/Latand/delegatus/pull/4238
+[#4240]: https://github.com/Latand/delegatus/pull/4240
+[#4243]: https://github.com/Latand/delegatus/pull/4243
+[#4245]: https://github.com/Latand/delegatus/pull/4245
+[#4247]: https://github.com/Latand/delegatus/pull/4247
+[#4248]: https://github.com/Latand/delegatus/pull/4248
+[#4249]: https://github.com/Latand/delegatus/pull/4249
+[#4250]: https://github.com/Latand/delegatus/pull/4250
+[#4251]: https://github.com/Latand/delegatus/pull/4251
+[#4252]: https://github.com/Latand/delegatus/pull/4252
+[#4254]: https://github.com/Latand/delegatus/pull/4254
+[#4255]: https://github.com/Latand/delegatus/pull/4255
+[#4256]: https://github.com/Latand/delegatus/pull/4256
+[#4257]: https://github.com/Latand/delegatus/pull/4257
+[#4259]: https://github.com/Latand/delegatus/pull/4259
+[#4260]: https://github.com/Latand/delegatus/pull/4260
+[#4262]: https://github.com/Latand/delegatus/pull/4262
+[#4265]: https://github.com/Latand/delegatus/pull/4265
+[#4269]: https://github.com/Latand/delegatus/pull/4269
+[#4272]: https://github.com/Latand/delegatus/pull/4272
+[#4276]: https://github.com/Latand/delegatus/pull/4276
+[#4277]: https://github.com/Latand/delegatus/pull/4277
+[#4294]: https://github.com/Latand/delegatus/pull/4294
+[#4297]: https://github.com/Latand/delegatus/pull/4297
+[#4298]: https://github.com/Latand/delegatus/pull/4298
+[#4299]: https://github.com/Latand/delegatus/pull/4299
+[#4301]: https://github.com/Latand/delegatus/pull/4301
+[#4302]: https://github.com/Latand/delegatus/pull/4302
+[#4304]: https://github.com/Latand/delegatus/pull/4304
+[#4305]: https://github.com/Latand/delegatus/pull/4305
+[#4308]: https://github.com/Latand/delegatus/pull/4308
+[#4309]: https://github.com/Latand/delegatus/pull/4309
+[#4318]: https://github.com/Latand/delegatus/pull/4318
+[#4324]: https://github.com/Latand/delegatus/pull/4324
+[#4325]: https://github.com/Latand/delegatus/pull/4325
+[#4326]: https://github.com/Latand/delegatus/pull/4326
+[#4328]: https://github.com/Latand/delegatus/pull/4328
+[#4332]: https://github.com/Latand/delegatus/pull/4332
+[#4333]: https://github.com/Latand/delegatus/pull/4333
+[#4334]: https://github.com/Latand/delegatus/pull/4334
+[#4341]: https://github.com/Latand/delegatus/pull/4341
+[#4342]: https://github.com/Latand/delegatus/pull/4342
+[#4343]: https://github.com/Latand/delegatus/pull/4343
+[#4344]: https://github.com/Latand/delegatus/pull/4344
+[#4346]: https://github.com/Latand/delegatus/pull/4346
+[#4347]: https://github.com/Latand/delegatus/pull/4347
+[#4350]: https://github.com/Latand/delegatus/pull/4350
+[#4351]: https://github.com/Latand/delegatus/pull/4351
