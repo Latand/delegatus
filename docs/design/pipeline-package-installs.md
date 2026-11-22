@@ -34,10 +34,16 @@ metadata for every entry, including nested package files. The fingerprint
 also binds the dependency inputs, completion receipt and required manifest and
 CLI anchors. A linked worktree can verify a matching fingerprint without the
 writer. A new worktree scans after staging its link and while holding the
-writer. A missing or stale fingerprint requires the writer to verify payload
-bytes and file identities. Permission repair invalidates only the validation
-fingerprint before changing modes. A deleted or replaced entry in a previously
-recorded payload refuses preparation. A missing CLI link refuses
+writer. A missing or stale fingerprint requires the writer to verify the
+portable digest of paths, file types, bytes and link targets. Device and inode
+numbers remain part of the metadata check. A byte-identical restore refreshes
+that check. A local-only payload digest from an earlier version must match
+before the writer adds the portable digest. The old digest remains readable
+for release rollback. Missing or unreadable digests can be recreated under
+the writer fence after verification, and temporary records are synced before
+rename. Permission repair invalidates the validation fingerprint before
+changing modes. Deletion or a replacement with changed bytes in a recorded
+payload refuses preparation. A missing CLI link refuses
 setup with an `ENOENT` stage-environment cause, preserving the shared payload
 and previous worktree link. An ordinary frozen reinstall can restore the links.
 Update dependency inputs with `bun install --lockfile-only --ignore-scripts`,

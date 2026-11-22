@@ -10,6 +10,7 @@ export const dependencyPayloadScan = String.raw`
   const [root, content] = process.argv.slice(1);
   const metadata = createHash("sha256");
   const payload = content === "content" && createHash("sha256");
+  const portable = payload && createHash("sha256");
   const buffer = payload && Buffer.allocUnsafe(256 * 1024);
   const executables = [], cliLinks = [];
   let reseal = false;
@@ -21,6 +22,7 @@ export const dependencyPayloadScan = String.raw`
     metadata.update(JSON.stringify([relative, stamp]));
     if (entry.isSymbolicLink()) {
       const target = readlinkSync(file);
+      portable && portable.update(JSON.stringify(["link", relative, target]));
       if (path.basename(path.dirname(file)) === ".bin") {
         cliLinks.push({ file: relative, target });
         // Frozen reinstalls recreate these symlinks with the same target.
@@ -35,7 +37,11 @@ export const dependencyPayloadScan = String.raw`
       && path.basename(path.dirname(file)) === "node_modules";
     reseal ||= (mode & (bin ? 0o022 : 0o222)) !== 0;
     if (entry.isDirectory()) {
-      payload && payload.update(JSON.stringify(["directory", relative]));
+      if (payload) {
+        const row = JSON.stringify(["directory", relative]);
+        payload.update(row);
+        portable.update(row);
+      }
       for (const name of readdirSync(file).sort()) {
         scan(path.join(file, name), relative ? path.join(relative, name) : name);
       }
@@ -46,11 +52,16 @@ export const dependencyPayloadScan = String.raw`
     if (mode & 0o111) executables.push(relative);
     if (!payload) return;
     payload.update(JSON.stringify(["file", relative, String(entry.dev), String(entry.ino), String(entry.size)]));
+    portable.update(JSON.stringify(["file", relative, String(entry.size)]));
     const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       if (identity(fstatSync(fd, { bigint: true })) !== stamp) throw new Error("dependency file changed before scan");
       let count;
-      while ((count = readSync(fd, buffer, 0, buffer.length, null)) !== 0) payload.update(buffer.subarray(0, count));
+      while ((count = readSync(fd, buffer, 0, buffer.length, null)) !== 0) {
+        const chunk = buffer.subarray(0, count);
+        payload.update(chunk);
+        portable.update(chunk);
+      }
       if (identity(fstatSync(fd, { bigint: true })) !== stamp) throw new Error("dependency file changed during scan");
     } finally { closeSync(fd); }
   }
@@ -58,5 +69,5 @@ export const dependencyPayloadScan = String.raw`
   if (!lstatSync(root).isDirectory()) throw new Error("invalid dependency root");
   scan(root, "");
   process.stdout.write(JSON.stringify({ metadata: metadata.digest("hex"), payload: payload && payload.digest("hex"),
-    reseal, executables, cliLinks }));
+    portable: portable && portable.digest("hex"), reseal, executables, cliLinks }));
 `;

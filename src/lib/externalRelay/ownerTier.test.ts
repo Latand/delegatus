@@ -68,7 +68,7 @@ test("owner prompt isolates the single request and escapes every data section", 
   expect(ownerRunPrompt(r, instruction(), 30)).not.toContain("[handoff]");
 });
 
-test("owner continuation sends each unseen service and recovered message once", async () => {
+test("owner continuation sends each recent service and recovered message once", async () => {
   const { ownerContinuationPrompt } = await import("./ownerRun");
   const r = request();
   r.input.conversation = [
@@ -76,7 +76,7 @@ test("owner continuation sends each unseen service and recovered message once", 
     { ...r.input.conversation[0]!, id: "new-message" },
   ];
   r.input.respond_to = "new-message";
-  const owner = { ...instruction(), localContext: { resolution: "history" as const, questionIds: [], origins: {},
+  const owner = { ...instruction(), messageId: "new-message", localContext: { resolution: "history" as const, questionIds: [], origins: {},
     conversation: [
       { ...r.input.conversation[0]!, id: "seen-message" },
       { ...r.input.conversation[0]!, id: "new-message" },
@@ -84,8 +84,8 @@ test("owner continuation sends each unseen service and recovered message once", 
     ] } };
   const turn = ownerContinuationPrompt(r, owner, 1, { seen: ["seen-message"], staticDigest: null });
   const sections = [...turn.prompt.matchAll(/<conversation>\n([^]*?)\n<\/conversation>/g)].map(match => JSON.parse(match[1]!));
-  expect(sections.flat().map((message: { id: string }) => message.id)).toEqual(["new-message", "recovered-message"]);
-  expect(turn.seen).toEqual(["seen-message", "new-message", "recovered-message", "m1"]);
+  expect(sections.flat().map((message: { id: string }) => message.id)).toEqual(["seen-message", "recovered-message", "new-message"]);
+  expect(turn.seen).toEqual(["seen-message", "recovered-message", "new-message"]);
 });
 
 test("final answer redacts before truncation, keeps sentinels and counts Unicode code points", () => {
