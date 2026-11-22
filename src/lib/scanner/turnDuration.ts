@@ -112,6 +112,18 @@ export class TurnWindowTracker {
     }
   }
 
+  /** An independent tracker holding the same state, so a read can resume from it or look ahead without disturbing it.
+      Windows are never mutated once pushed, so the copy shares them and only owns its own list. */
+  clone(): TurnWindowTracker {
+    const copy = new TurnWindowTracker(this.codex);
+    for (const window of this.windows) copy.windows.push(window);
+    copy.startedAt = this.startedAt;
+    copy.open = this.open;
+    copy.failedWindow = this.failedWindow;
+    copy.latestTimestamp = this.latestTimestamp;
+    return copy;
+  }
+
   finish(): TurnBoundary[] {
     const windows = this.windows.slice();
     if (this.open && this.startedAt !== null) windows.push({ startedAt: this.startedAt, endedAt: null });
