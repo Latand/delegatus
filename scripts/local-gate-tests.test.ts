@@ -1,7 +1,7 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding, comparisonFileWorkers } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding } from "./local-gate-tests";
 
 test("only an exhausted comparator budget returns no verdict", () => {
   const message = "head: test run exceeded its 15 minute budget; 8 of 12 files completed";
@@ -356,14 +356,24 @@ test("between-test errors match across private roots without hiding a changed pa
   expect(compareTests(old, run("GHIJKL", "different")).introduced).toHaveLength(1);
 });
 
-test("gate harness selections limit nested workers while ordinary head and baseline files retain their parallelism", () => {
-  const regular = Array.from({ length: 12 }, (_, n) => "src/example" + n + ".test.ts");
-  expect(comparisonFileWorkers(regular, 8)).toBe(8);
-  expect(comparisonFileWorkers(regular, 3)).toBe(3);
-  for (const nested of ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"]) {
-    expect(comparisonFileWorkers([...regular, nested], 8)).toBe(2);
-    expect(comparisonFileWorkers([nested], 8)).toBe(1);
-    expect(comparisonFileWorkers([...regular, nested], 8, true)).toBe(1);
-    expect(comparisonFileWorkers([...regular, nested], 1)).toBe(1);
+test("mixed selections finish their ordinary files before starting the bounded harness group", async () => {
+  const f = fixture(source(true));
+  const ordinary = ["example.test.ts", "ordinary-a.test.ts", "ordinary-b.test.ts", "ordinary-c.test.ts"];
+  const nested = ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"];
+  mkdirSync(path.join(f.dir, "scripts"));
+  for (const file of [...ordinary.slice(1), ...nested]) writeFileSync(path.join(f.dir, file), source(true));
+
+  const comparison = await f.run([...nested, ...ordinary]);
+  expect(comparison.introduced).toEqual([]);
+  const sharedPortable = process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0;
+  const selectionLog = (files: string[], workers: number) =>
+    `touched-tests: head selected ${files.length} files with ${sharedPortable ? 1 : workers} file workers`;
+  expect(f.logs.filter(line => line.startsWith("touched-tests: head selected"))).toEqual([
+    selectionLog(ordinary, 4), selectionLog(nested, 2),
+  ]);
+  const split = f.logs.indexOf(selectionLog(nested, 2));
+  for (const [files, logs] of [[ordinary, f.logs.slice(0, split)], [nested, f.logs.slice(split)]] as const) {
+    for (const file of files) expect(logs.some(line => line.startsWith(`touched-tests: head file ${file}:`)
+      && line.includes("0 failures; complete"))).toBe(true);
   }
 });
