@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
@@ -275,6 +275,50 @@ for (const attributeState of ["dirty removal", "later committed removal"] as con
     f.git("rm", ".gitattributes"); f.commit();
   }
   refuses(await f.scan(), "known_value");
+});
+
+test("Git without check-attr --source scans historical attributes with its own index", async () => {
+  const f = fixture();
+  const git = Bun.which("git", { PATH: f.env.PATH });
+  if (!git) throw new Error("fixture requires Git");
+  const bin = join(f.root, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+check_attr=
+for arg do
+  case "$arg" in
+    check-attr) check_attr=yes ;;
+    -h)
+      if [ "$check_attr" = yes ]; then
+        echo 'usage: git check-attr [--cached] [--stdin] [-z] <attr>'
+        exit 129
+      fi ;;
+    --source|--source=*) if [ "$check_attr" = yes ]; then exit 129; fi ;;
+  esac
+done
+exec "$FIXTURE_GIT" "$@"
+`, { mode: 0o700 });
+  f.env.FIXTURE_GIT = git;
+  f.env.PATH = `${bin}:${f.env.PATH}`;
+  const marker = join(f.root, "index-hook-ran");
+  f.env.FIXTURE_INDEX_HOOK_MARKER = marker;
+  writeFileSync(join(f.repo, ".git", "hooks", "post-index-change"),
+    '#!/bin/sh\n: > "$FIXTURE_INDEX_HOOK_MARKER"\n', { mode: 0o700 });
+
+  f.write(".gitattributes", "*.txt -diff\n");
+  f.write("content.txt", `synthetic catalog\n${"\n".repeat(10)}safe text\n${"\n".repeat(10)}end\n`);
+  f.commit();
+  passes(await f.scan());
+  f.rebase();
+  f.write("content.txt", `synthetic catalog\n${"\n".repeat(20)}phrase\n`);
+  f.commit();
+  f.write(".gitattributes", "*.txt diff\n");
+  f.git("add", ".gitattributes");
+  const index = f.git("ls-files", "--stage");
+
+  refuses(await f.scan(), "known_value");
+  expect(f.git("ls-files", "--stage")).toBe(index);
+  expect(existsSync(marker)).toBe(false);
 });
 
 test("new symbolic links are refused even when removed before HEAD", async () => {
