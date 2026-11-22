@@ -27,10 +27,23 @@ replaces correct CLI symlinks during a frozen reinstall. This applies to both
 root and nested dependency binaries. The v4 cache leaves earlier cache
 generations untouched and rebuilds their graphs with this permission policy.
 Bun also changes executable file permissions during a matching reinstall.
-The completion receipt lists executable paths so the next preparation restores
-their read-only modes without scanning the whole graph again.
-It also records root and nested CLI symlinks. Preparation checks those links
-under the cache lock before admitting any worktree. A missing link refuses
+The completion receipt lists executable paths and root and nested CLI symlinks.
+After a full inventory check, the cache writer records a payload digest and a
+validation fingerprint beside the completion receipt. A bounded child scans
+metadata for every entry, including nested package files. The fingerprint
+also binds the dependency inputs, completion receipt and required manifest and
+CLI anchors. A linked worktree can verify a matching fingerprint without the
+writer. A new worktree scans after staging its link and while holding the
+writer. A missing or stale fingerprint requires the writer to verify the
+portable digest of paths, file types, bytes and link targets. Device and inode
+numbers remain part of the metadata check. A byte-identical restore refreshes
+that check. A local-only payload digest from an earlier version must match
+before the writer adds the portable digest. The old digest remains readable
+for release rollback. Missing or unreadable digests can be recreated under
+the writer fence after verification, and temporary records are synced before
+rename. Permission repair invalidates the validation fingerprint before
+changing modes. Deletion or a replacement with changed bytes in a recorded
+payload refuses preparation. A missing CLI link refuses
 setup with an `ENOENT` stage-environment cause, preserving the shared payload
 and previous worktree link. An ordinary frozen reinstall can restore the links.
 Update dependency inputs with `bun install --lockfile-only --ignore-scripts`,
@@ -42,8 +55,9 @@ lock independently of its controller's lock, so ownership survives until the
 last installer exits. A fresh process then discards the recorded unfinished
 build and retries. Windows uses a separate locking handle; an interrupted
 build is preserved and reported for inspection there.
-Queueing, installation and linking share a three-minute deadline;
-cancelled or failed setup refuses with `stage environment: dependency
+Queueing, installation and linking share a three-minute deadline per attempt.
+A validation timeout releases the writer and retries once after 100 ms.
+Cancelled or failed setup refuses with `stage environment: dependency
 preparation failed` before checks or agent launch. The previous dependency
 link remains intact until a replacement install succeeds. An older real
 dependency directory is preserved under `preserved-*` in the cache rather

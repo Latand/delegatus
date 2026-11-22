@@ -1065,6 +1065,8 @@ export function seatWorkspaceFromMessage(seat: Pick<OrchestratorSeat, "workspace
 export interface SeatWorkspaceBinding {
   workspace: OrchestratorSeat["workspace"];
   fromMessage: boolean;
+  /** Shared durable evidence for the current-seat authority resolver. */
+  authority: Pick<import("./authority").ManagerAuthoritySources, "activeSeats" | "revocations">;
 }
 
 // One map per process, keyed by the seat store's committed revision: peer
@@ -1078,9 +1080,11 @@ export function orchestratorWorkspacePrincipalsOrUnknown(): ReadonlyMap<string |
   const signature = orchestratorSeatStoreSignature();
   if (signature === null) { workspacePrincipalsCache = undefined; return null; }
   if (workspacePrincipalsCache?.signature === signature) return workspacePrincipalsCache.principals;
-  const read = readOrchestratorSeatStore(["slots"]);
-  const principals = read.file === null ? null : new Map(Object.values(read.file.seats).map(seat => [seat.conversationId,
-    { workspace: seat.workspace ? { ...seat.workspace } : undefined, fromMessage: seatWorkspaceFromMessage(seat) }]));
+  const read = readOrchestratorSeatStore(["slots", "revocations"]);
+  const records = Object.values(read.file?.seats ?? {});
+  const authority = { activeSeats: () => records, revocations: () => read.file?.revocations ?? [] };
+  const principals = read.file === null ? null : new Map(records.map(seat => [seat.conversationId,
+    { workspace: seat.workspace ? { ...seat.workspace } : undefined, fromMessage: seatWorkspaceFromMessage(seat), authority }]));
   workspacePrincipalsCache = principals === null || read.signature === null ? undefined : { signature: read.signature, principals };
   return principals;
 }

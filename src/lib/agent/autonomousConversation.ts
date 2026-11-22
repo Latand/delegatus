@@ -36,6 +36,10 @@ export type SpawnedTurnObservation = {
   path?: string | null;
   finalText?: string | null;
   turnError?: string | null;
+  /** Time of terminal evidence from the durable liveness record. */
+  completedAt?: string | null;
+  /** A failed receipt can coexist with a retained live host or descendants. */
+  quiescent?: boolean;
 };
 /** A completed receipt alone proves admission; host liveness and a fresh transcript prove the turn ended. */
 export async function observeSpawnedTurn(
@@ -45,14 +49,18 @@ export async function observeSpawnedTurn(
   const registry = sources.registry();
   const receipt = registry.spawnReceiptForClientAttempt(run.clientAttemptId);
   const bound = receipt ? { conversationId: receipt.conversationId, launchId: receipt.launchId, path: receipt.artifactPath } : {};
-  if (receipt && (receipt.rejection || receipt.state === "failed" || receipt.state === "conflicted")) return { ...bound, state: "failed", failure: { kind: "launch-failed", detail: receipt.error ?? "launch refused" } };
   const id = receipt?.conversationId ?? run.conversationId;
   const record = id ? (await sources.liveness({ conversationId: id, stallAfterMs: 30 * 60_000, limit: 1 }))[0] : null;
+  if (receipt && (receipt.rejection || receipt.state === "failed" || receipt.state === "conflicted")) return {
+    ...bound, state: "failed", quiescent: !!receipt.rejection || record?.reason === "host_gone_turn_settled",
+    failure: { kind: "launch-failed", detail: receipt.error ?? "launch refused" },
+  };
   if (record?.reason === "host_gone_turn_open") return { ...bound, state: "failed", failure: { kind: "host-died", detail: "host exited over an open turn" } };
   if (record?.reason === "launch_unproven_expired" || (!record || record.reason === "launch_unproven") && sources.now() - Date.parse(run.claimedAt) > launchGraceMs) return { ...bound, state: "failed", failure: { kind: "launch-failed", detail: "no host proved the launch" } };
   if (receipt?.state === "completed" && record && ["host_alive_turn_idle", "host_gone_turn_settled"].includes(record.reason) && record.lastRecordAt && Date.parse(record.lastRecordAt) >= Date.parse(run.launchedAt ?? run.claimedAt)) {
     const final = finalMessage(id!);
-    return { ...bound, state: "ended", finalText: final.text, turnError: final.error };
+    return { ...bound, state: "ended", finalText: final.text, turnError: final.error,
+      completedAt: record.lastRecordAt, quiescent: true };
   }
   return { ...bound, state: "running" };
 }

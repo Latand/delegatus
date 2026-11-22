@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, afterEach, expect, setSystemTime, test } from "bun:test";
+import { afterAll, afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 
 import { ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -19,7 +20,7 @@ import {
   type StructuredDeliveryQueuePort,
   type StructuredHostRecovery,
 } from "./structuredDeliveryQueue";
-import { recoverDeadStructuredConversation } from "./structuredRecovery";
+import { recoverDeadStructuredConversation, StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredRecoveryHeldForUpdateError } from "./structuredRecovery";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import type { spawnStructuredConversation } from "./structuredSpawn";
 
@@ -231,12 +232,14 @@ function trackedQueue(options: {
   effect: StructuredDeliveryEffect;
   recover: StructuredHostRecovery;
   host?: () => FakeEngineHost | null;
+  progress?: StructuredDeliveryQueuePort["progress"];
 }) {
   const transitions: Array<[string, string, string | null | undefined]> = [];
   const admittedAt = new Date().toISOString();
   let status = "queued";
   let wakes = 0;
   const queue = new StructuredDeliveryQueue({
+    progress: options.progress,
     effects: async () => (status === "queued" ? [options.effect] : []),
     status: async () => ({ status, admittedAt }),
     transition: async (operationId, next, details) => {
@@ -643,4 +646,115 @@ test("a compaction waiting on contended recovery holds inside the spacing and tr
   await tracked.queue.drain();
   expect(attempts).toBe(2);
   expect(tracked.status()).toBe("queued");
+});
+
+
+test("recovery exhausts its durable attempt budget when each executor exits inside the callback", async () => {
+  const directory = fs.mkdtempSync(path.join(sandbox, "restarting-budget-"));
+  const journalFile = path.join(directory, "runtime.sqlite");
+  const progressFile = path.join(directory, "progress.sqlite");
+  const operationId = "restarting-recovery";
+  const journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+  journal.append({ scope: { type: "session", id: "conversation_recovery_budget" }, kind: "session-status", payload: {
+    conversationId: "conversation_recovery_budget", sessionKey: { engine: "codex", sessionId: "recovery-budget" },
+    hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured", capabilities: { steer: true, structuredAttention: true },
+  } });
+  journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId, conversationId: "conversation_recovery_budget", text: TEXT, policy: "queue" });
+  journal.close();
+  const source = `
+    const { RuntimeJournal } = await import(${JSON.stringify(new URL("../../runtime-host/journal.ts", import.meta.url).pathname)});
+    const { StructuredDeliveryQueue } = await import(${JSON.stringify(new URL("./structuredDeliveryQueue.ts", import.meta.url).pathname)});
+    const { DeliveryProgressStore } = await import(${JSON.stringify(new URL("./deliveryProgress.ts", import.meta.url).pathname)});
+    const journal = new RuntimeJournal(${JSON.stringify(journalFile)}, { structuredHosts: true });
+    const progress = new DeliveryProgressStore(${JSON.stringify(progressFile)});
+    const queue = new StructuredDeliveryQueue({
+      effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+      status: async id => journal.operationResult(id)?.receipt ?? null,
+      transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); }, progress,
+    }, () => null, undefined, () => {}, async () => {
+      console.log(JSON.stringify({ receipt: journal.operationResult(${JSON.stringify(operationId)})?.receipt, attempt: progress.get(${JSON.stringify(operationId)})?.attempt }));
+      process.exit(0);
+    });
+    await queue.drain();
+    progress.flush();
+    console.log(JSON.stringify({ receipt: journal.operationResult(${JSON.stringify(operationId)})?.receipt, attempt: progress.get(${JSON.stringify(operationId)})?.attempt }));
+    progress.close(); journal.close();
+  `;
+  let last: { receipt: { status: string; reason: string }; attempt: number } | undefined;
+  for (let restart = 0; restart < 13; restart++) {
+    const child = spawnSync(process.execPath, ["-e", source], { env: process.env, encoding: "utf8", timeout: 10000 });
+    expect(child.status).toBe(0);
+    last = JSON.parse(child.stdout.trim().split("\n").at(-1)!);
+  }
+  expect(last).toMatchObject({ receipt: { status: "queued" }, attempt: 12 });
+});
+
+
+test.each(["note missing", "flush refused"] as const)("host recovery waits for a durable attempt record (%s)", async refusal => {
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(path.join(sandbox, `attempt-write-${refusal.replaceAll(" ", "-")}.sqlite`));
+  const refused = refusal === "note missing"
+    ? spyOn(progress, "note").mockImplementation(() => {})
+    : spyOn(progress, "flush").mockReturnValue(false);
+  let calls = 0;
+  const tracked = trackedQueue({ effect: sendEffect(`attempt-write-${refusal}`), progress,
+    recover: async () => { calls++; return false; } });
+  try {
+    await tracked.queue.drain();
+    expect(calls).toBe(0);
+    expect(tracked.status()).toBe("queued");
+    refused.mockRestore();
+    await tracked.queue.drain();
+    expect(calls).toBe(1);
+    expect(tracked.status()).toBe("failed");
+  } finally { refused.mockRestore(); progress.close(); }
+});
+
+
+test.each(["orphan grace", "orphan stop hold", "release hold"] as const)("a classified %s can outlast twelve polls and still recover", async wait => {
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const filename = path.join(sandbox, `recovery-wait-${wait.replaceAll(" ", "-")}.sqlite`);
+  const progress = new DeliveryProgressStore(filename);
+  let calls = 0;
+  const tracked = trackedQueue({ effect: sendEffect(`recovery-wait-${wait}`), progress, recover: async () => {
+    calls++;
+    if (calls > 16) return false;
+    if (wait === "orphan grace") throw new StructuredOrphanGraceError("native work is within its bounded grace");
+    if (wait === "orphan stop hold") throw new StructuredOrphanStopRefusedError("stop is within its bounded hold", Date.now() + 120_000, true);
+    throw new StructuredRecoveryHeldForUpdateError("release admission is held");
+  } });
+  try {
+    for (let poll = 0; poll < 16; poll++) {
+      await tracked.queue.drain();
+      expect(tracked.status()).toBe("queued");
+    }
+    // The wait is durable but did not actuate a successor. A reader after
+    // executor replacement must see the same remaining recovery budget.
+    expect(progress.flush()).toBe(true);
+    const reopened = new DeliveryProgressStore(filename);
+    try { expect(reopened.get(`recovery-wait-${wait}`)?.attempt).toBe(0); }
+    finally { reopened.close(); }
+    await tracked.queue.drain();
+    expect(calls).toBe(17);
+    expect(tracked.status()).toBe("failed");
+    expect(progress.get(`recovery-wait-${wait}`)?.attempt).toBe(1);
+  } finally { progress.close(); }
+});
+
+
+test.each(["executor", "attempt", "terminal"] as const)("an admission answer preserves a changed %s after the recovery await", async changed => {
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(path.join(sandbox, `recovery-race-${changed}.sqlite`));
+  const operationId = `recovery-race-${changed}`;
+  const tracked = trackedQueue({ effect: sendEffect(operationId), progress, recover: async () => {
+    if (changed === "terminal") progress.settle(operationId, "delivered", "replacement completed the message");
+    else progress.note(operationId, "conversation-contended", { waitReason: "recovering-host",
+      ...(changed === "executor" ? { executorId: "replacement-executor" } : { attempted: true }) });
+    throw new StructuredRecoveryHeldForUpdateError("release admission is held");
+  } });
+  try {
+    await tracked.queue.drain();
+    expect(progress.get(operationId)?.attempt).toBe(changed === "attempt" ? 2 : 1);
+    if (changed === "terminal") expect(progress.get(operationId)?.terminal?.state).toBe("delivered");
+  } finally { progress.close(); }
 });

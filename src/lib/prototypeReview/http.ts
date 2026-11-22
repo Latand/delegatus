@@ -13,7 +13,7 @@ import { operatorDecisions, readPrototypeReviews, readSeatRounds } from "./read"
 import { findSeatRound, loadSeatRounds } from "./seatRounds";
 import { loadTasksForList } from "@/lib/tasks/store";
 import { decidePrototype, refreshPrototypeDelivery, prototypeDelivery, type PrototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
-import { prototypeWorld, taskForPrototype, type PrototypeCaller, type PrototypeWorld } from "./world";
+import { prototypeWorld, taskForPrototype, prototypeProjectReceiptScope, PROTOTYPE_RECEIPT_SCOPE_HEADER, type PrototypeCaller, type PrototypeWorld } from "./world";
 import { deliverPrototypeDecision } from "./deliveryWorker";
 import { runsElsewhere } from "@/lib/links/linked";
 import type { DecidePrototypeInput } from "./types";
@@ -23,7 +23,28 @@ import { postPrototypeReviewToTelegram } from "./telegramPost";
 import { isTelegramDestinationConfigurationReason } from "./telegramPostSignals";
 import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
 
+class PrototypeSeatAuthorityError extends PrototypeError {
+  constructor() { super("taskless forms require the current authorized seat", 403); }
+}
+
+class PrototypeReceiptScopeError extends PrototypeError {
+  constructor() { super("prototype receipt identity changed", 403); }
+}
+
+/** Bind the actual target to the identity that admitted its MCP receipt. */
+function assertPrototypeReceiptScope(request: NextRequest, caller: PrototypeCaller, taskId: string | null): void {
+  const expected = request.headers.get(PROTOTYPE_RECEIPT_SCOPE_HEADER);
+  if (expected !== null && (!caller.conversationId || !caller.project
+    || expected !== encodeURIComponent(prototypeProjectReceiptScope(caller.conversationId, taskId, caller.project)))) throw new PrototypeReceiptScopeError();
+}
+
 export function prototypeFailure(error: unknown, route = "prototype review"): NextResponse {
+  if (error instanceof PrototypeReceiptScopeError) return NextResponse.json({
+    error: error.message, code: "workspace_forbidden", check: "prototype-receipt-scope",
+  }, { status: error.status });
+  if (error instanceof PrototypeSeatAuthorityError) return NextResponse.json({
+    error: error.message, code: "workspace_forbidden", check: "prototype-seat-authority",
+  }, { status: error.status });
   const ambiguous = error instanceof PrototypeError && (error as { code?: string }).code === "short_id_ambiguous";
   if (!(error instanceof PrototypeError)) console.error(`[prototype review] ${route}`, error);
   return NextResponse.json({
@@ -70,7 +91,9 @@ export async function resendTelegramPOST(request: NextRequest, world: PrototypeW
 /** The project whose designated orchestrator is calling, or null. Only that
     seat may ask without a task (docs/design/operator-decision-forms.md §2.1). */
 function seatProject(caller: PrototypeCaller,world: PrototypeWorld): string | null {
-  return caller.conversationId && caller.project && world.orchestrator(caller.project) === caller.conversationId ? caller.project : null;
+  if (!caller.conversationId) return null;
+  if (!caller.project || world.orchestrator(caller.project) !== caller.conversationId) throw new PrototypeSeatAuthorityError();
+  return caller.project;
 }
 /** The task a review read is about: the one named, or the caller's pipeline's
     own. A seat that names none reads its own questions (`taskId: null`). */
@@ -79,9 +102,10 @@ function readTarget(request: NextRequest,named: unknown,world: PrototypeWorld): 
   const stage = caller.conversationId ? world.stage(caller.conversationId) : null;
   const taskId = named ?? (stage?.taskIds.length === 1 ? stage.taskIds[0] : null);
   const seat = !stage && named === undefined ? seatProject(caller,world) : null;
-  if (seat) return { caller, taskId: null, seat };
+  if (seat) { assertPrototypeReceiptScope(request, caller, null); return { caller, taskId: null, seat }; }
   if (typeof taskId !== "string" || !taskId) throw new PrototypeError("taskId is required outside a pipeline bound to one task; a project's orchestrator may omit it to read its own questions");
   taskForPrototype(taskId,caller);
+  assertPrototypeReceiptScope(request, caller, taskId);
   return { caller, taskId };
 }
 /** The task a publication lands on, with every fence a publication passes.
@@ -90,12 +114,13 @@ function publicationTarget(request: NextRequest,named: string | undefined,world:
   const caller = world.caller(request);
   const stage = caller.conversationId ? world.stage(caller.conversationId) : null;
   const seat = !stage && !named ? seatProject(caller,world) : null;
-  if (seat) return { caller, stage, taskId: null, seat };
+  if (seat) { assertPrototypeReceiptScope(request, caller, null); return { caller, stage, taskId: null, seat }; }
   const taskId = stage ? stage.taskIds[0] : named;
   if (!taskId || (stage && stage.taskIds.length !== 1)) throw new PrototypeError("publication needs exactly one task; a pipeline caller inherits its pipeline's task, and only a project's orchestrator may ask without one");
   if (stage && named && named !== taskId) throw new PrototypeError("pipeline publication is bound to its own task",403);
   const task = taskForPrototype(taskId,caller,true);
   if (stage && canonicalProject(stage.project) !== canonicalProject(task.project)) throw new PrototypeError("pipeline and task projects differ",403);
+  assertPrototypeReceiptScope(request, caller, taskId);
   return { caller, stage, taskId };
 }
 /** Who is asking and about which task, decided exactly as the publication or
@@ -116,7 +141,8 @@ export async function reviewScopePOST(request: NextRequest,world: PrototypeWorld
     }
     const target = await withPrototypeState(() => body.mode === "publish" ? publicationTarget(request,body.taskId,world) : readTarget(request,body.taskId,world));
     if (!target.caller.conversationId) throw new PrototypeError("caller could not be identified",403);
-    return NextResponse.json({ conversationId: target.caller.conversationId, taskId: target.taskId },{ headers: { "cache-control": "private, no-store" } });
+    return NextResponse.json({ conversationId: target.caller.conversationId, taskId: target.taskId,
+      project: target.caller.project ? canonicalProject(target.caller.project) : null },{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error, "POST /api/prototype-reviews/scope"); }
 }
 /** A seat's answered rounds whose message is not yet known delivered take the

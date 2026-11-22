@@ -11,7 +11,7 @@ import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } f
 import { procBackend } from "@/lib/proc";
 import { statePath } from "@/lib/configDir";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
-import { stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { determined } from "./determinable";
 import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
 import type { HandoffRow } from "./handoffQueue";
@@ -50,7 +50,8 @@ afterEach(async () => {
           const childPid = Number(child);
           if (!Number.isSafeInteger(childPid) || childPid <= 0 || visited.has(childPid)) continue;
           const identity = captureProcessIdentity(childPid);
-          if (procBackend.readPpid(childPid) !== pid || processIdentityStatus(parent) !== "alive") continue;
+          if (procBackend.readPpid(childPid) !== pid || processIdentityStatus(parent) !== "alive"
+            || processIdentityStatus(identity) !== "alive") continue;
           owned.set(identityKey(identity), identity);
           pending.push(identity);
         }
@@ -73,7 +74,7 @@ afterEach(async () => {
 });
 
 function start(args: string[], detached = false): ChildProcess {
-  const child = spawn(process.execPath, args, { detached, stdio: ["ignore", "pipe", "pipe"] });
+  const child = ownFixtureTree(spawn(process.execPath, args, { detached, stdio: ["ignore", "pipe", "pipe"] }));
   children.set(child, captureProcessIdentity(child.pid!));
   return child;
 }

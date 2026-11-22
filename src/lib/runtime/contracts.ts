@@ -292,6 +292,8 @@ export interface RuntimeOperationReceipt {
   /** A send may already have reached the engine. Retained across requeues;
       the current reason only describes the latest wait or transition. */
   deliveryUnverified?: boolean;
+  /** Pending sends captured by the first kill admission, retained on replay. */
+  pendingSendIds?: string[];
   imageCount?: number;
   /** The per-turn runtime settings snapshot a send/steer was admitted with
       (issue #499): the durable audit record that the selected model/effort/fast
@@ -464,6 +466,8 @@ export interface RuntimeInterruptCommand extends RuntimeCommandBase {
 export interface RuntimeIdleKillFence {
   revision: number;
   writerClaim: string;
+  /** Explicitly fences the dead/unhosted registry fallback projection. */
+  releasedSession?: true;
 }
 
 /** Engine recovery authority for one provider-cut attempt. Requires an idle fence. */
@@ -480,15 +484,19 @@ export function runtimeIdleKillMatches(
   key: RuntimeKillCommand["sessionKey"],
   fence: RuntimeIdleKillFence,
 ): boolean {
-  return !!session && session.host === "hosted" && session.turn === "idle"
-    && session.activeTurnId === null && session.attentionIds.length === 0
-    && session.sessionKey.engine === key.engine && session.sessionKey.sessionId === key.sessionId
-    && session.revision === fence.revision && session.writerClaim === fence.writerClaim
-    && session.retirementBlocked !== true;
+  if (!session || session.activeTurnId !== null || session.attentionIds.length !== 0
+    || session.sessionKey.engine !== key.engine || session.sessionKey.sessionId !== key.sessionId
+    || session.revision !== fence.revision || session.retirementBlocked === true) return false;
+  return fence.releasedSession === true
+    ? fence.writerClaim === "released-session" && session.writerClaim === null
+      && (session.host === "dead" || session.host === "unhosted") && session.turn === "unknown"
+    : session.host === "hosted" && session.turn === "idle" && session.writerClaim === fence.writerClaim;
 }
 
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
+  /** Viewer-derived cohort; the first admission owns it across retries. */
+  pendingSendIds?: string[];
   /** Authenticated control authorship; an automatic recovery is system custody. */
   origin?: MessageOrigin;
   onlyIfIdle?: RuntimeIdleKillFence;

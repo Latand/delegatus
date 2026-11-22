@@ -60,7 +60,8 @@ const started = performance.now();
 try {
   const result = await runClaimedRequest(relay, { ...contextRequest, request_id: `budget_${outcome}`,
     deadline_at: new Date(Date.now() + (outcome === "owner-answer" || !owner ? 1000 : 20000)).toISOString(),
-    owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 },
+    // The service attaches a delivery context only to the verified owner; a member claim with one is refused.
+    ...(owner ? { owner_delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 } } : {}),
     input: { ...contextRequest.input, tools: outcome === "tool-rounds" || outcome === "tool-cap" ? [
       { name: "lookup_notes", summary: "Find notes", mode: "direct", effect: "read", parameters: { type: "object", properties: {} } },
     ] : [], requester: { ...contextRequest.input.requester, is_owner: owner } },
