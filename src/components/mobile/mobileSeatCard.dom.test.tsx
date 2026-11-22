@@ -861,7 +861,7 @@ test("an unreadable seat offers a re-read that recovers the row without a page r
 });
 
 
-test("missing-catalog board card offers Re-bind after 10s and clears only when the catalog read delivers its file", async () => {
+test("a missing seat transcript keeps the path, board link, rotation and Re-bind in the sheet", async () => {
   seatAnswer = { seat: seat(), pending: null, exists: true };
   incumbentAnswer = { project: "atlas", designated: true, conversationId: "conv_orchestrator", engine: "claude", model: "opus", liveness: { hostState: "alive", lifecycle: "running" } };
   // The board-card host, without mounting a conversation screen behind it.
@@ -874,18 +874,16 @@ test("missing-catalog board card offers Re-bind after 10s and clears only when t
   roots.add(root);
   flushSync(() => root.render(cardView([])));
   await settle(root, cardView([]));
-  const rerender = async (files: FileEntry[]) => {
-    flushSync(() => root.render(cardView(files)));
-    await settle(root, cardView(files));
-  };
   flushSync(() => openButton(host).click());
   await settle(root, cardView([]));
   const rebind = () => host.querySelector<HTMLButtonElement>("[data-orchestrator-rebind]");
   expect(sheet(host)).not.toBeNull();
-  expect(rebind()).toBeNull();
-  await new Promise((resolve) => setTimeout(resolve, 10_050));
-  await settle(root, cardView([]));
   expect(host.querySelector('[data-orchestrator-bind-failure="catalog"]')).not.toBeNull();
+  expect(sheet(host)!.textContent).toContain("Transcript not found");
+  expect(sheet(host)!.textContent).toContain(orchestrator.path);
+  expect(sheet(host)!.textContent).not.toContain("Opening the conversation");
+  expect(host.querySelector("[data-orchestrator-open-board]")?.getAttribute("href")).toBe("#c=conv_orchestrator");
+  expect(host.querySelector("[data-orchestrator-rotate]")).not.toBeNull();
   expect(rebind()!.className).toContain("min-h-11");
   const storageBefore = dom.localStorage.length;
   const before = requests.length;
@@ -893,7 +891,7 @@ test("missing-catalog board card offers Re-bind after 10s and clears only when t
   let deliver = false;
   const refreshCatalog = () => {
     catalogReads += 1;
-    if (deliver) void rerender([orchestrator]);
+    if (deliver) root.render(cardView([orchestrator]));
   };
   dom.addEventListener(FILES_CHANGED_EVENT, refreshCatalog);
   try {
@@ -911,6 +909,7 @@ test("missing-catalog board card offers Re-bind after 10s and clears only when t
     const reads = requests.slice(before);
     expect(reads.filter((r) => r.url.startsWith("/api/orchestrator/seat/status")).length).toBeGreaterThanOrEqual(2);
     expect(reads.filter((r) => r.url.startsWith("/api/orchestrator/seat?")).length).toBeGreaterThanOrEqual(2);
+    expect(reads.some((r) => r.url.startsWith("/api/orchestrator/seat/transcript?"))).toBe(true);
     expect(reads.every((r) => r.method === "GET")).toBe(true);
     expect(dom.localStorage.length).toBe(storageBefore);
   } finally {

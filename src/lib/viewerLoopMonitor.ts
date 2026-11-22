@@ -37,7 +37,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "attention.finished-cleanup" | "attention.finished-cleanup.archive" | "attention.reconcile" | "temp.sweep" | "forge.auto-merge" | "forge.sweep" | "forge.app-connect" | "asks.sweep"
   | "agents.reconcile"
   | "hosts.retirement" | "self-update.retention" | "spawn-notice.prune" | "delivery-progress.restore" | "delivery-progress.prune"
-  | "resources.read" | "seat.panel" | "attention.read" | "pipelines.revalidate" | "runtime-journal.receipt-sweep"
+  | "resources.read" | "seat.panel" | "seat.transcript" | "attention.read" | "pipelines.revalidate" | "runtime-journal.receipt-sweep"
   | "done.sweep" | "done.media" | "done.frame-source"
   | "seat-tick.prepare" | "seat-tick.liveness" | "seat-tick.children" | "seat-tick.reports" | "seat-tick.worker-asks" | "seat-tick.rule-reports" | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
   | "state.document" | "tasks.proactive.admission"

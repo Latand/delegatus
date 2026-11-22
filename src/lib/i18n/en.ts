@@ -4079,7 +4079,7 @@ export const en = {
   "orchPanel.resolvingHint": "The orchestrator is designated; its transcript hasn't reached this view yet.",
   "orchPanel.openOnBoard": "Open it on the board",
   "orchPanel.bindStalled": "Still can't open this conversation",
-  "orchPanel.bindStalledCatalog": "The seat's recorded transcript isn't in this view's file catalog. Its host is alive, so the conversation is most likely running under a transcript that replaced the recorded one.",
+  "orchPanel.transcriptNotFound": "Transcript not found",
   "orchPanel.bindStalledSurface": "This transcript is in view, but the runtime plane hasn't resolved a host for it yet.",
   "orchPanel.rebind": "Re-bind",
   "orchPanel.rebindTitle": "Look this seat's conversation up again by its own id. Nothing is designated, rotated or spawned.",

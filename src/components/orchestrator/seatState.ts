@@ -647,6 +647,8 @@ export function deriveOrchestratorPanelState(input: {
   /** How long the dock has been unable to bind this seat's conversation, or
       null while it is bound (issue #1182). */
   unboundForMs?: number | null;
+  /** The direct seat transcript read reached a terminal outcome without a file. */
+  transcriptMissing?: boolean;
   /** Epoch SECONDS, for the one reading that ages: the attention queue's
       stalled tier. Defaults to the wall clock, exactly as `attentionId` does. */
   now?: number;
@@ -673,7 +675,7 @@ export function deriveOrchestratorPanelState(input: {
       conversationId: active.conversationId,
       liveness,
       attention: input.file ? attentionId(input.file, input.now) : null,
-      bindFailure: bindFailureOf({
+      bindFailure: !input.file && input.transcriptMissing ? "catalog" : bindFailureOf({
         liveness,
         hostLive: input.hostLive === true,
         file: input.file,

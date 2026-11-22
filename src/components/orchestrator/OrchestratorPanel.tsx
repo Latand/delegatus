@@ -45,7 +45,6 @@ import {
   deriveRotateDraftState,
   mandateSummaryOf,
   orchestratorQuietBannerEligible,
-  resolveSeatFile,
   rotateMandateBase,
   rotateMandateLine,
   rotateMandateView,
@@ -67,6 +66,7 @@ import {
 import { useOrchestratorIncumbent } from "./useOrchestratorIncumbent";
 import { useOrchestratorSeat, type OrchestratorSeatRead } from "./useOrchestratorSeat";
 import { useSeatConfirm, type SeatConfirmFlow } from "./useSeatConfirm";
+import { useSeatFile } from "./useSeatFile";
 import { useSeatSurface } from "./useSeatSurface";
 import { DecisionColumn, DecisionStripLine, defaultDecisionTab, useOpenDecisionCount, type DecisionTab } from "@/components/decisions/DecisionColumn";
 import { useDecisionSurface } from "@/components/decisions/decisionSurface";
@@ -272,10 +272,9 @@ export function OrchestratorPanel({
      recorded path stays a hint, tried last. */
   const seatPath = status?.seat?.path ?? null;
   const currentPath = incumbent?.transcriptPath ?? null;
-  const file = useMemo(
-    () => resolveSeatFile({ files, conversationId: seatConversationId, seatPath, currentPath }),
-    [files, seatConversationId, seatPath, currentPath],
-  );
+  const { file, transcriptMissing, retryTranscript } = useSeatFile({
+    project, files, conversationId: seatConversationId, seatPath, currentPath, enabled: seated && !collapsed,
+  });
   const surface = useSeatSurface(file);
 
   /* The report log (#2146): a column right of the chat while the seat sits on
@@ -374,32 +373,15 @@ export function OrchestratorPanel({
     const timer = setInterval(() => void refreshIncumbent(), UNBOUND_STATUS_RETRY_MS);
     return () => clearInterval(timer);
   }, [unboundWithoutFreshReading, refreshIncumbent]);
-  /* Liveness is only evidence while someone is still answering for it. The
-     header may keep a cached reading — an engine and a context percent from a
-     minute ago beat a row of dashes — but a cached «alive» carried across the
-     very restart this panel is waiting out, with every refresh since failing, is
-     a MEMORY. Accusing the seat of failing to bind on it would report a fault
-     the server was never asked to confirm, so the bound stays silent and
-     «opening…» stands until a status read answers again (issue #1182). */
+  /* Runtime binding needs fresh host evidence. Transcript lookup has its own deadline. */
   const hostLive = !readStale && incumbentHostLive(incumbent);
   /**
-   * Re-bind: re-run EVERY read resolution is composed of.
-   *
-   * The two orchestrator endpoints say which conversation the seat holds and
-   * where its current generation lives; neither one is what a bounded wait is
-   * missing. `catalog` is missing the file catalog — the board's own read, which
-   * `requestFilesRefresh()` re-runs through the seam `useFiles` listens on — and
-   * `surface` is missing the runtime plane's host for a transcript already in
-   * hand, which is `refreshRuntime()`. Re-reading only the seat and the status
-   * would leave whichever half was actually absent exactly as absent, so the
-   * button would spin and change nothing (issue #1182).
-   *
-   * It designates, rotates and spawns nothing: recovering from a restart must
-   * never cost the operator a seat.
+   * Re-bind refreshes the seat, transcript, board and runtime observations.
    */
   const rebind = () => {
     void refresh();
     void refreshIncumbent();
+    retryTranscript();
     requestFilesRefresh();
     void refreshRuntime();
   };
@@ -420,6 +402,7 @@ export function OrchestratorPanel({
     incumbent,
     hostLive,
     unboundForMs,
+    transcriptMissing,
   });
   /**
    * A rotation whose outcome is not yet settled KEEPS the panel, even after the
@@ -845,7 +828,7 @@ export function OrchestratorPanel({
           ) : (
             <Centered>
               {state.bindFailure ? (
-                <BindFailure reason={state.bindFailure} onRebind={rebind} />
+                <BindFailure reason={state.bindFailure} seatPath={state.seat.path} onRebind={rebind} />
               ) : (
                 <>
                   <LoaderCircle className="h-5 w-5 animate-spin text-muted" aria-hidden />
@@ -1501,9 +1484,7 @@ function OpenOnBoardLink({ conversationId }: { conversationId: string }) {
   );
 }
 
-/** Re-run resolution — all four of its reads, including the two a bounded wait
-    is actually missing (see `rebind`). It re-reads and nothing else: recovering
-    from a restart must never cost the operator a rotation (issue #1182). */
+/** Retry the reads used for binding (issue #1182). */
 function RebindButton({ onRebind }: { onRebind: () => void }) {
   const { t } = useLocale();
   return (
@@ -1514,18 +1495,15 @@ function RebindButton({ onRebind }: { onRebind: () => void }) {
   );
 }
 
-/** «Opening the conversation…» has run past its bound and the status read says
-    the host is alive: what the panel owes the operator now is the reason, not a
-    longer spin (issue #1182). */
-function BindFailure({ reason, onRebind }: { reason: SeatBindFailure; onRebind: () => void }) {
+function BindFailure({ reason, seatPath, onRebind }: { reason: SeatBindFailure; seatPath: string | null; onRebind: () => void }) {
   const { t } = useLocale();
   return (
     <div data-orchestrator-bind={reason} className="flex flex-col items-center gap-2">
       <TriangleAlert className="h-6 w-6 text-warning" aria-hidden />
-      <p className="max-w-[300px] text-body font-semibold text-primary" role="status">{t("orchPanel.bindStalled")}</p>
-      <p className="max-w-[300px] text-ui text-muted">
-        {t(reason === "surface" ? "orchPanel.bindStalledSurface" : "orchPanel.bindStalledCatalog")}
+      <p className="max-w-[300px] text-body font-semibold text-primary" role="status">
+        {t(reason === "catalog" ? "orchPanel.transcriptNotFound" : "orchPanel.bindStalled")}
       </p>
+      {reason === "catalog" && seatPath ? <p className="max-w-full break-all font-mono text-ui text-muted">{seatPath}</p> : null}
       <RebindButton onRebind={onRebind} />
     </div>
   );

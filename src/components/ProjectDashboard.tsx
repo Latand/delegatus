@@ -544,6 +544,7 @@ function ProjectDashboardView({
      provisional file with its durable conversation id): the screen follows
      the agent when the scan replaces the window with its transcript. */
   const [launchedConversations, setLaunchedConversations] = useState<ReadonlyMap<string, FileEntry>>(EMPTY_LAUNCHED);
+  const [openedSeatTranscript, setOpenedSeatTranscript] = useState<{ project: string; file: FileEntry } | null>(null);
   useEffect(() => {
     /* Keep the last scanned launch window: the confirm's local preview may
        predate the server's composed mandate and rotation handoff. */
@@ -1647,6 +1648,19 @@ function ProjectDashboardView({
     openSwitchboardFile(file);
     showMobileConversation(file.path);
   };
+  const openSeatConversation = (file: FileEntry, openFromWindow: (file: FileEntry) => void) => {
+    const inWindow = files.find((entry) => entry.path === file.path);
+    if (inWindow) {
+      openFromWindow(inWindow);
+      return;
+    }
+    // Carry the addressed row into the phone's conversation screen.
+    onUserNavigate?.();
+    setOpenedSeatTranscript({ project, file });
+    recordFocusNavigation(file, project);
+    markConversationSeen(file);
+    showMobileConversation(file.path);
+  };
 
   /* A stage row on the pipeline screen, and an agent on a task screen, open
      the conversation the way a board row does: one entry, over the screen the
@@ -1774,6 +1788,10 @@ function ProjectDashboardView({
   const mobilePendingLaunch = mobileConversationKey && !mobileLaunchSuccessor
     && !files.some((file) => file.path === mobileConversationKey)
     ? launchedConversations.get(mobileConversationKey) ?? null : null;
+  const mobileSeatTranscript = openedSeatTranscript?.project === project && openedSeatTranscript.file.path === mobileConversationKey
+    ? files.find((file) => file.path === mobileConversationKey) ?? openedSeatTranscript.file
+    : null;
+  const mobileExtraFile = mobilePendingLaunch ?? mobileSeatTranscript;
   useEffect(() => {
     if (!mobileLaunchSuccessor) return;
     mobileNav.replace({ kind: "chat", id: mobileLaunchSuccessor.path });
@@ -2451,7 +2469,7 @@ function ProjectDashboardView({
                         /* The board's own clock, so the card's badge ticks with
                            the cards beside it rather than on a second one. */
                         now={nowSeconds}
-                        onOpenConversation={openBoardRow}
+                        onOpenConversation={(file) => openSeatConversation(file, openBoardRow)}
                       />
                     </div>
                   )}
@@ -2464,13 +2482,13 @@ function ProjectDashboardView({
                   onShown={reportMobileKanbanShown}
                   onHiddenCount={setMobileHiddenCount}
                 />
-              ) : projectView === "scheme" && schemeAvailable ? (
+              ) : mobileSeatTranscript || (projectView === "scheme" && schemeAvailable) ? (
                 <MobileFocusView
                   project={project}
                   projectName={projectName}
                   groups={layoutGroups}
-                  manual={mobilePendingLaunch ? [...layoutManual, mobilePendingLaunch] : layoutManual}
-                  files={mobilePendingLaunch ? [...files, mobilePendingLaunch] : files}
+                  manual={mobileExtraFile && !layoutManual.some((file) => file.path === mobileExtraFile.path) ? [...layoutManual, mobileExtraFile] : layoutManual}
+                  files={mobileExtraFile && !files.some((file) => file.path === mobileExtraFile.path) ? [...files, mobileExtraFile] : files}
                   flows={flows}
                   reviewGroups={directReviewGroups}
                   pipelines={pipelines}
@@ -2520,7 +2538,7 @@ function ProjectDashboardView({
                       projectName={projectName}
                       files={files}
                       now={nowSeconds}
-                      onOpenConversation={openFullCatalogFile}
+                      onOpenConversation={(file) => openSeatConversation(file, openFullCatalogFile)}
                     />
                   </div>
                   {listAvailable ? (

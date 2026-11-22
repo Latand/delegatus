@@ -4037,7 +4037,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "orchPanel.resolvingHint": "Оркестратора призначено; його транскрипт ще не дійшов до цього вигляду.",
   "orchPanel.openOnBoard": "Відкрити на дошці",
   "orchPanel.bindStalled": "Досі не вдається відкрити цю розмову",
-  "orchPanel.bindStalledCatalog": "Транскрипта, записаного в місці, немає в каталозі файлів цього вигляду. Хост живий, тож розмова майже напевно триває в транскрипті, який замінив записаний.",
+  "orchPanel.transcriptNotFound": "Транскрипт не знайдено",
   "orchPanel.bindStalledSurface": "Транскрипт видно, але рантайм ще не визначив для нього хост.",
   "orchPanel.rebind": "Прив'язати знову",
   "orchPanel.rebindTitle": "Знайти розмову цього місця знову за її власним id. Нічого не призначається, не ротується і не запускається.",

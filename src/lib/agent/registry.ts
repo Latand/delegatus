@@ -10666,11 +10666,11 @@ export class AgentRegistry {
     });
   }
 
-  conversationForPath(artifactPath: string): RegistryConversation | null {
+  conversationForPath(artifactPath: string, options?: { skipColdKeyInitialization?: boolean }): RegistryConversation | null {
     return this.readKeyed(file => {
       const conversation = registryConversationsForPath(file, artifactPath)[0];
       return conversation ? conversationAsStopped(file, conversation) : null;
-    });
+    }, options);
   }
 
   /** One request's aliases, conversation and staged-path receipts, under the
@@ -10758,11 +10758,11 @@ export class AgentRegistry {
 
   /** The conversation as it stands, a stop that has not reached it yet
       included ({@link conversationAsStopped}). */
-  conversation(id: ViewerConversationId): RegistryConversation | null {
+  conversation(id: ViewerConversationId, options?: { skipColdKeyInitialization?: boolean }): RegistryConversation | null {
     return this.readKeyed(file => {
       const conversation = file.conversations[resolveConversationAlias(file, id)];
       return conversation ? conversationAsStopped(file, conversation) : null;
-    });
+    }, options);
   }
 
   /** Album sources need only the addressed conversation and its aliases.
@@ -10787,7 +10787,7 @@ export class AgentRegistry {
     }));
   }
 
-  launchProfileForPath(artifactPath: string): LaunchProfile | null {
+  launchProfileForPath(artifactPath: string, options?: { skipColdKeyInitialization?: boolean }): LaunchProfile | null {
     return this.readKeyed(snapshot => {
       for (const conversation of registryConversationsForPath(snapshot, artifactPath)) {
         const generation = conversation.generations.find((item) => item.path === artifactPath);
@@ -10799,7 +10799,7 @@ export class AgentRegistry {
       }
       const receipt = registryRowsMatching(snapshot, "receipts", "artifactPath", artifactPath)[0];
       return receipt ? clone(receipt.launchProfile) : null;
-    });
+    }, options);
   }
 
   /** Durable account ownership for a transcript path (issue #891, phase 0).

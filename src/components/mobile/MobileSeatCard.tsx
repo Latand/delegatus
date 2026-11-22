@@ -22,7 +22,6 @@ import { useOpenDecisionCount } from "@/components/decisions/DecisionColumn";
 import {
   classifySeatFailure,
   deriveOrchestratorPanelState,
-  resolveSeatFile,
   newSeatRequestId,
   seatBindPending,
   seatRequestSettled,
@@ -35,6 +34,7 @@ import { useOrchestratorSeat, type OrchestratorSeatRead } from "../orchestrator/
 import { seatMandateDelivery, useSeatConfirm } from "../orchestrator/useSeatConfirm";
 import { incumbentHostLive } from "../orchestrator/incumbent";
 import { useSeatBindingFeedback } from "../orchestrator/useSeatBindingFeedback";
+import { useSeatFile } from "../orchestrator/useSeatFile";
 import { useSeatSurface } from "../orchestrator/useSeatSurface";
 import { MobileMeter } from "./MobileMeter";
 import { MobileOrchestratorSheet, SeatBadge, seatBadgeReading, type SeatConfirmPayload, type SeatRotateFlow, type SeatTickFlow } from "./MobileOrchestratorSheet";
@@ -222,10 +222,9 @@ export function MobileSeatCard({
   const incumbent = read && read.project === project && read.conversationId === seatConversationId ? read : null;
   const currentPath = incumbent?.transcriptPath ?? null;
   const seatPath = status?.seat?.path ?? null;
-  const file = useMemo(
-    () => resolveSeatFile({ files, conversationId: seatConversationId, currentPath, seatPath }),
-    [files, seatConversationId, currentPath, seatPath],
-  );
+  const { file, transcriptMissing, retryTranscript } = useSeatFile({
+    project, files, conversationId: seatConversationId, seatPath, currentPath, enabled: seated && sheetOpen,
+  });
   const surface = useSeatSurface(file);
   const unboundForMs = useSeatBindingFeedback({
     project,
@@ -255,6 +254,7 @@ export function MobileSeatCard({
     incumbent,
     hostLive: !readStale && incumbentHostLive(incumbent),
     unboundForMs,
+    transcriptMissing,
   });
   const view = seatCardView(state, { conversationReady: Boolean(file) });
 
@@ -528,6 +528,7 @@ export function MobileSeatCard({
       onRecheck={() => {
         void refresh();
         void refreshIncumbent();
+        retryTranscript();
         requestFilesRefresh();
         void refreshRuntime();
       }}
