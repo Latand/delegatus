@@ -44,13 +44,16 @@ compatibility raises the major version.
   releases the shared Git turn as soon as its checkout is verified instead of
   waiting for another lane's dependency setup ([#4223]). An already linked
   worktree dependency set is admitted without waiting for the writer, and a
-  reused set is trusted only while its recorded seal still matches. A damaged
-  receipt is recreated, and a graph whose receipt already records the portable
-  digest survives a byte-identical restore even though inode numbers changed;
-  a copy that has only the older inode-bound digest is still refused when that
-  digest changes. A permission repair that times out is retried once with a
-  fresh preparation budget ([#4196], [#4341], [#4342], [#4351]). In the authors' fixtures a warm link
-  went from about eight seconds to under 80 ms with 331 linked worktrees.
+  reused set is trusted only while its recorded seal still matches.
+  Missing or unreadable payload digest records are recreated under the writer
+  after the graph validates, and a digest that is available and disproves a
+  match still refuses the set. A graph whose receipt already records the
+  portable digest survives a byte-identical restore even though inode numbers
+  changed; a copy that has only the older inode-bound digest is still refused
+  when that digest changes. A permission repair that times out is retried
+  once with a fresh preparation budget ([#4196], [#4341], [#4342], [#4351]).
+  In the authors' fixtures a warm link went from about eight seconds to under
+  80 ms with 331 linked worktrees.
 - **Resource statistics are collected inside the Viewer on macOS and Windows.**
   The separate collector worker cannot verify kernel containment there. Linux
   keeps the worker by default ([#4346]).
@@ -75,8 +78,9 @@ compatibility raises the major version.
   account or project folder, or a conversation on another engine. A turn keeps
   the trigger, the ten preceding messages, the reply chain and short-term
   memory within its prompt budget: tool details are compacted first and cuts
-  are counted, and an oversized turn points to a file with the whole
-  conversation ([#4347]).
+  are counted. When the current owner instruction can stay inline, an oversized
+  turn points to a file with the whole conversation; an instruction too large
+  to stay inline is refused ([#4347]).
 - **A refused clone move is explained.** When another install holds a clone and
   the relay answers 409 `answered_elsewhere` to a confirmed move, the target
   route now answers 409 as well. The settings keep the confirmation open and
@@ -86,13 +90,14 @@ compatibility raises the major version.
   letters after a numeric separator stays in the custom text instead of being
   read as a choice ([#4249]).
 - **Typing and dictation stay responsive on large boards.** In browsers with
-  AudioWorklet, dictation is captured there, so a long page stall no longer
-  repeats part of the recording; other browsers keep capturing on the main
-  thread. The orchestrator seat is sent to the client in the portions its panel
-  reads ([#4269]). In browsers with ResizeObserver, a board clock tick no
-  longer re-reads the width of every pipeline card's stage strip; it measures
-  when the fold or the width changes, and browsers without it still measure on
-  each commit ([#4272]). The composer field sizes itself with the
+  AudioWorklet whose capture worklet initializes, dictation is captured there,
+  so a long page stall no longer repeats part of the recording; other browsers
+  and a failed worklet setup keep capturing on the main thread. The
+  orchestrator seat is sent to the client in the portions its panel reads
+  ([#4269]). In browsers with ResizeObserver, a board clock tick no longer
+  re-reads the width of every pipeline card's stage strip; it measures when the
+  fold or the width changes, and browsers without it still measure on each
+  commit ([#4272]). The composer field sizes itself with the
   browser's intrinsic sizing where supported, which removed 184 forced geometry
   reads when typing 37 characters in Chromium ([#4277]). Scanner frames of
   several megabytes are split by searching each new chunk once ([#4294]).
@@ -109,9 +114,13 @@ compatibility raises the major version.
   view ([#4248]).
 - **Delivery and registry.** Every delivery wait has a deadline and ends in a
   terminal state when its target dies or is replaced. A send to a Codex agent
-  that is mid-turn waits for the turn boundary within a bounded deadline, which
-  verified work renews, and answers `switch-after-turn` with a plain
-  explanation and the deadline while the pending account switch is preserved.
+  whose conversation has a pending account switch is held under a bounded
+  deadline that verified work renews, and the immediate answer carries a plain
+  explanation and the deadline while the switch is preserved. The wait code
+  follows the switch phase: `switch-after-turn` while the switch waits for the
+  running turn to end, `switching-accounts` while it is requested or
+  preparing, and `switch-failed` after a recoverable failure. Injected context
+  is refused instead of held across the switch.
   Queued instructions whose attempt was replaced keep a notice for the sender
   ([#4144]). The registry no longer opens a nested SQLite transaction, so seat
   alarms survive a transient store error ([#4156]). The first read after the
@@ -171,13 +180,17 @@ compatibility raises the major version.
   ([#4226]).
 - **Cleanup.** Dead scanner code is removed ([#4297]). Attempt cleanup resumes
   and removes eligible roots within each bounded pass.
-- **Batch landing proof.** A batch carrier counts as landed only when the
-  reviewed patch is present both at the carrier's landing and at the current
-  default-branch tip, including for work merged with a merge commit ([#4257]).
-- **Stage evidence retention.** When a stage's evidence is preserved, files
-  that the repository already tracks are recognized through a Git lookup and
-  skipped instead of being copied, and the selection is reported alongside the
-  pressure outcomes ([#4259]).
+- **Batch landing proof.** In cold issue delivery and for a recovered carrier,
+  a batch carrier counts as landed only when the reviewed patch is present
+  both at the carrier's landing and at the current default-branch tip,
+  including for work merged with a merge commit ([#4257]).
+- **Stage evidence retention.** When a stage's evidence is preserved, a media
+  file whose exact bytes the lane repository's verified object store already
+  holds as a Git blob is matched by content, so a renamed copy matches too, and
+  is skipped instead of being copied. Files under `.artifacts` and media named
+  in the report are always copied, and when the repository or the lookup
+  cannot be verified every selected file is copied. The selection is reported
+  alongside the pressure outcomes ([#4259]).
 - **Test stability.** [#3934], [#4217], [#4227], [#4235], [#4299], [#4308],
   [#4309] and several relay fixtures repair or tighten fixtures and assertions
   without changing product behaviour.
