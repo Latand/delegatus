@@ -5,6 +5,7 @@ import { isMainThread, SHARE_ENV, Worker } from "node:worker_threads";
 import { attachReadAttributionWorker } from "@/lib/readAttribution";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 
+import type { SeatTickJournalAppendOptions } from "./journalStore";
 import type { SeatTickRunRecord } from "./types";
 
 /*
@@ -42,7 +43,7 @@ interface Held {
   detach(): void;
 }
 
-type Done = { type: "seat-tick-journal-done"; id: number; ok: boolean; error?: { message: string; busy: boolean } };
+type Done = { type: "seat-tick-journal-done"; id: number; ok: boolean; error?: { name: string; message: string; busy: boolean } };
 
 let held: Held | null = null;
 let consecutiveFailures = 0;
@@ -78,8 +79,15 @@ function settle(state: Held, message: Done): void {
   clearTimeout(pending.timer);
   if (state.pending.size === 0) state.worker.unref();
   consecutiveFailures = 0;
-  if (message.ok) pending.resolve();
-  else pending.reject(message.error?.busy ? new FileTransactionBusyError(message.error.message) : new Error(message.error?.message ?? "seat tick journal append failed"));
+  if (message.ok) {
+    pending.resolve();
+    return;
+  }
+  const error = message.error?.busy
+    ? new FileTransactionBusyError(message.error.message)
+    : new Error(message.error?.message ?? "seat tick journal append failed");
+  if (message.error) error.name = message.error.name;
+  pending.reject(error);
 }
 
 function worker(): Held | null {
@@ -120,7 +128,9 @@ function worker(): Held | null {
  * Hand one record to the journal worker. Null when no worker runs here: the
  * caller appends on its own thread.
  */
-export function appendThroughSeatTickJournalWorker(record: SeatTickRunRecord, filePath: string, replayId?: string): Promise<void> | null {
+export function appendThroughSeatTickJournalWorker(
+  record: SeatTickRunRecord, filePath: string, options: SeatTickJournalAppendOptions,
+): Promise<void> | null {
   const state = worker();
   if (!state) return null;
   const id = ++state.next;
@@ -140,7 +150,7 @@ export function appendThroughSeatTickJournalWorker(record: SeatTickRunRecord, fi
     if (state.pending.size === 0) state.worker.ref();
     state.pending.set(id, { resolve, reject, timer });
     try {
-      state.worker.postMessage({ type: "seat-tick-journal-append", id, record, filePath, replayId });
+      state.worker.postMessage({ type: "seat-tick-journal-append", id, record, filePath, options });
     } catch (error) {
       state.pending.delete(id);
       clearTimeout(timer);

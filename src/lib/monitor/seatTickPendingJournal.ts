@@ -2,18 +2,20 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import { stateDatabaseBusy } from "@/lib/state/lockWait";
 import { appendSeatTickRecordAsync, sanitizeSeatTickRecord, seatTickJournalPath } from "./journalStore";
 import type { SeatTickRunRecord } from "./types";
 
 type PendingRecord = { id: string; record: SeatTickRunRecord };
 
-type RecoveryState = { promise: Promise<boolean> | null; retryAt: number; retryMs: number; warned: boolean };
+type RecoveryState = { promise: Promise<void> | null; retryAt: number; retryMs: number; deferred: boolean };
 const recoveries = new Map<string, RecoveryState>();
 
 function recoveryState(file: string): RecoveryState {
   let state = recoveries.get(file);
   if (!state) {
-    state = { promise: null, retryAt: 0, retryMs: 1_000, warned: false };
+    state = { promise: null, retryAt: 0, retryMs: 1_000, deferred: false };
     recoveries.set(file, state);
   }
   return state;
@@ -38,12 +40,10 @@ function decodePendingRecords(text: string): PendingRecord[] | null {
   return pending;
 }
 
-/** One sweep shares one admission budget after the first journal refusal.
- * The completed check survives a Viewer restart in the adjacent pending
- * directory, independent of the legacy file lock and SQLite writer. */
+/** A completed check survives a Viewer restart in the adjacent pending
+ * directory, independent of the legacy file lock and SQLite writer.
+ * Once an append fails, new results queue until a sweep can replay them. */
 export class SeatTickPendingJournal {
-  private blocked = false;
-  private readonly pending: PendingRecord[] = [];
   private readonly file: string;
   private readonly directory: string;
   private readonly recovery: RecoveryState;
@@ -54,63 +54,50 @@ export class SeatTickPendingJournal {
     this.recovery = recoveryState(this.file);
   }
 
-  isBlocked(): boolean { return this.blocked; }
-
-  async ready(): Promise<boolean> {
-    if (this.blocked) return false;
-    if (this.recovery.promise) {
-      const ready = await this.recovery.promise;
-      this.blocked = !ready;
-      return ready;
-    }
-    if (this.recovery.retryAt > performance.now()) {
-      this.blocked = true;
-      return false;
-    }
-    const admission = Promise.resolve().then(() => this.recoverPendingBatch());
-    this.recovery.promise = admission;
+  async ready(): Promise<void> {
+    const state = this.recovery;
+    if (state.promise) return state.promise;
+    if (state.retryAt > performance.now()) return;
+    const admission = this.recoverPendingBatches().then(() => {
+      state.retryAt = 0;
+      state.retryMs = 1_000;
+      state.deferred = false;
+    }, error => {
+      // A missing reply may follow a successful commit. Keep the batch and
+      // its receipt ids so the next attempt can safely replay it.
+      deferRecovery(state);
+      this.recordDeferral(error);
+    });
+    state.promise = admission;
     try {
-      const ready = await admission;
-      this.blocked = !ready;
-      if (ready) {
-        this.recovery.retryAt = 0;
-        this.recovery.retryMs = 1_000;
-        this.recovery.warned = false;
-      }
-      return ready;
+      await admission;
     } finally {
-      if (this.recovery.promise === admission) this.recovery.promise = null;
+      state.promise = null;
     }
   }
 
-  private async recoverPendingBatch(): Promise<boolean> {
+  private async recoverPendingBatches(): Promise<void> {
     let entries: string[];
     try { entries = await fs.readdir(this.directory); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
     // A temporary file belongs to an active publisher. Only the atomic rename
     // creates a visible, recoverable intent; a sweep must never inspect it.
-    const [first, next] = entries.filter(name => /^\d{16}-[a-f0-9]{32}\.json$/.test(name)).sort();
-    if (!first) return true;
-    const filename = path.join(this.directory, first);
-    // Another release may have already finished this batch.
-    const text = await fs.readFile(filename, "utf8").catch(error => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    });
-    if (text !== null) {
+    const batches = entries.filter(name => /^\d{16}-[a-f0-9]{32}\.json$/.test(name)).sort();
+    for (const batch of batches) {
+      const filename = path.join(this.directory, batch);
+      // Another release may have already finished this batch.
+      const text = await fs.readFile(filename, "utf8").catch(error => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
+      });
+      if (text === null) continue;
       const pending = decodePendingRecords(text);
       if (pending) {
-        try {
-          for (const row of pending) await appendSeatTickRecordAsync(row.record, this.file, row.id);
-        } catch {
-          // A missing worker reply may follow a successful commit. Keep the
-          // batch and its receipt ids; a later pass can safely replay it.
-          deferRecovery(this.recovery);
-          this.blocked = true;
-          return false;
+        for (const { id, record } of pending) {
+          await appendSeatTickRecordAsync(record, this.file, { replayId: id, waitMs: 0 });
         }
         // All receipts and their runs committed before this batch is removed.
         await fs.rm(filename, { force: true });
@@ -119,13 +106,12 @@ export class SeatTickPendingJournal {
         console.warn("[seat tick] an unreadable pending journal batch was set aside");
       }
     }
-    this.blocked = !!next;
-    return !this.blocked;
   }
 
-  async append(row: SeatTickRunRecord): Promise<void> {
+  /** True when the line is already available to journal readers. */
+  async append(row: SeatTickRunRecord): Promise<boolean> {
     const record = sanitizeSeatTickRecord(row);
-    if (!record) return;
+    if (!record) return false;
     // The receipt identity precedes the first attempt. A worker can commit and
     // lose its reply, so every retry must use the same idempotency key.
     const pending = { id: randomUUID().replaceAll("-", ""), record };
@@ -137,24 +123,24 @@ export class SeatTickPendingJournal {
     await fs.writeFile(temp, JSON.stringify([pending]), { flag: "wx", mode: 0o600 });
     try { await fs.rename(temp, filename); }
     finally { await fs.rm(temp, { force: true }); }
-    if (!this.pending.length) {
-      try {
-        await appendSeatTickRecordAsync(record, this.file, pending.id);
-        await fs.rm(filename, { force: true });
-        return;
-      } catch { /* Any failed reply is ambiguous: retain the durable intent. */ }
+    await this.recovery.promise;
+    if (this.recovery.deferred) return false;
+    try {
+      await appendSeatTickRecordAsync(record, this.file, { replayId: pending.id, waitMs: 1_000 });
+      await fs.rm(filename, { force: true });
+      return true;
+    } catch (error) {
+      this.recordDeferral(error);
+      return false;
     }
-    this.pending.push(pending);
   }
 
-  async finish(): Promise<boolean> {
-    if (!this.pending.length) return true;
-    this.pending.length = 0;
-    this.blocked = true;
-    if (!this.recovery.warned) {
-      this.recovery.warned = true;
-      console.warn("[seat tick] the journal is busy. The check result was saved for retry on the next sweep.");
-    }
-    return false;
+  private recordDeferral(error: unknown): void {
+    if (this.recovery.deferred) return;
+    this.recovery.deferred = true;
+    const busy = error instanceof FileTransactionBusyError || stateDatabaseBusy(error);
+    const kind = error instanceof Error ? error.name : "UnknownError";
+    const detail = busy ? "the journal is busy" : "the journal write failed";
+    console.warn(`[seat tick] ${detail} (${kind}). Pending check results are saved for retry on a later sweep.`);
   }
 }

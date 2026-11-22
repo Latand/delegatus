@@ -109,7 +109,7 @@ test("the next sweep records a check once after a legacy journal writer releases
   });
 });
 
-test("a persistently busy SQLite journal yields, warns once and saves the result across a restart", async () => {
+test("every sweep checks the full roster while SQLite is busy and a successor records every result once", async () => {
   const { Database } = await import("bun:sqlite");
   const { statePath } = await import("@/lib/configDir");
   const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
@@ -118,9 +118,17 @@ test("a persistently busy SQLite journal yields, warns once and saves the result
     const database = new Database(statePath("state.sqlite"));
     const rig = harness({ state: RECENT });
     delete rig.deps.appendRecord;
-    let checks = 0;
-    rig.deps.workStarted = () => { checks++; };
+    const projects = ["second-project", "third-project", PROJECT];
+    rig.deps.sources!.activeSeats = () => projects;
+    const started: string[] = [];
+    rig.deps.workStarted = work => { started.push(work.project); };
+    let choices = 0;
+    rig.deps.curation = {
+      reconcile: async () => null,
+      launchIfDue: async () => { choices++; return null; },
+    };
     const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const checkIds: (string | undefined)[] = [];
     let pending = "";
     let temporary = "";
     let bytes = new Uint8Array();
@@ -131,27 +139,33 @@ test("a persistently busy SQLite journal yields, warns once and saves the result
       `], { stdout: "pipe", stderr: "pipe" });
       const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
       const journalWarnings = stderr.split("\n")
-        .filter(line => /^\[seat tick\].*(journal is busy|could not be journaled)/.test(line));
+        .filter(line => /^\[seat tick\].*(warn|journal)/.test(line));
       expect({ exit, journalWarnings }).toEqual({ exit: 0, journalWarnings: [] });
     };
     try {
       database.exec("BEGIN IMMEDIATE");
-      await reconcileSeatTick(rig.deps, [PROJECT]);
-      await Promise.all(Array.from({ length: 32 }, (_, index) => reconcileSeatTick(rig.deps, [`resume-${index}`])));
-      await recoverInNewProcess();
-      expect(checks).toBe(1);
-      expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
+      for (let sweep = 0; sweep < 4; sweep++) {
+        const records = await reconcileSeatTick(rig.deps);
+        expect(started.splice(0)).toEqual(projects);
+        expect(choices).toBe(sweep + 1);
+        expect(records.map(record => record.project)).toEqual(projects);
+        checkIds.push(...records.map(record => record.timing?.checkId));
+      }
+      checkIds.push((await runSeatTickCheck(PROJECT, rig.deps))?.timing?.checkId);
+      expect(started).toEqual([PROJECT]);
+      expect(checkIds.every(Boolean)).toBe(true);
+      expect(new Set(checkIds).size).toBe(checkIds.length);
+      expect(readSeatTickRecords(50, file)).toEqual([]);
       const pendingDir = `${file}.pending-checks`;
-      const [batch] = fs.readdirSync(pendingDir);
-      expect(batch).toBeDefined();
+      const batches = fs.readdirSync(pendingDir).sort();
+      expect(batches).toHaveLength(checkIds.length);
+      const [batch] = batches;
       pending = path.join(pendingDir, batch!);
       bytes = fs.readFileSync(pending);
       temporary = `${pending}.tmp`;
       fs.renameSync(pending, temporary);
-      await recoverInNewProcess();
-      expect(fs.existsSync(temporary)).toBe(true);
-      expect(warn.mock.calls.filter(([message]) => String(message).includes("journal is busy"))).toEqual([
-        [expect.stringContaining("retry on the next sweep")],
+      expect(warn.mock.calls).toEqual([
+        [expect.stringMatching(/journal is busy \(FileTransactionBusyError\).*saved for retry/)],
       ]);
     } finally {
       database.close();
@@ -161,16 +175,106 @@ test("a persistently busy SQLite journal yields, warns once and saves the result
     // A temporary name is still owned by its publisher and is never replayed.
     expect(fs.existsSync(temporary)).toBe(true);
     fs.rmSync(temporary, { force: true });
+    fs.writeFileSync(pending, bytes, { flag: "wx", mode: 0o600 });
+    await recoverInNewProcess();
     // Replay the same bytes as if the previous process stopped after commit
     // and before it could remove the batch.
     fs.writeFileSync(pending, bytes, { flag: "wx", mode: 0o600 });
     await recoverInNewProcess();
     expect(fs.existsSync(pending)).toBe(false);
-    expect(readSeatTickRecords(10, file, PROJECT)).toEqual([expect.objectContaining({
-      project: PROJECT, at: new Date(NOW).toISOString(),
-    })]);
+    expect(fs.readdirSync(`${file}.pending-checks`)).toEqual([]);
+    expect(readSeatTickRecords(50, file).map(record => record.timing?.checkId).sort()).toEqual(checkIds.sort());
   });
 }, 15_000);
+
+function writePendingCheck(file: string, order: number) {
+  const id = order.toString(16).padStart(32, "0");
+  const record = { schemaVersion: 1, at: new Date(NOW).toISOString(), project: PROJECT, seatEpoch: null,
+    verdict: "quiet", reasons: [], items: order, deferred: 0, eventsThrough: 0, delivery: null };
+  const directory = `${file}.pending-checks`;
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, `${String(order).padStart(16, "0")}-${id}.json`), JSON.stringify([{ id, record }]));
+}
+
+test("one healthy sweep drains all visible batches in order before journaling its own check", async () => {
+  const { readSeatTickRecords } = await import("./journalStore");
+  await withCheckJournal("healthy-journal-backlog", false, async file => {
+    for (const order of [3, 1, 2]) writePendingCheck(file, order);
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    const records = await reconcileSeatTick(rig.deps, [PROJECT]);
+    expect(records).toHaveLength(1);
+    expect(readSeatTickRecords(10, file, PROJECT)).toEqual([
+      ...[1, 2, 3].map(items => expect.objectContaining({ items })),
+      records[0],
+    ]);
+    expect(fs.readdirSync(`${file}.pending-checks`)).toEqual([]);
+  });
+});
+
+test("a check journals directly when the SQLite writer releases after 150 ms", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { readSeatTickRecords } = await import("./journalStore");
+  await withCheckJournal("short-sqlite-hold", true, async file => {
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    // Warm the real worker and create the directory before watching publication.
+    await runSeatTickCheck(PROJECT, rig.deps);
+    const directory = `${file}.pending-checks`;
+    const database = new Database(statePath("state.sqlite"));
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let release: ReturnType<typeof setTimeout> | undefined;
+    const watcher = fs.watch(directory, () => {
+      if (release || !fs.readdirSync(directory).some(name => name.endsWith(".json"))) return;
+      release = setTimeout(() => database.exec("ROLLBACK"), 150);
+    });
+    rig.deps.workStarted = () => { database.exec("BEGIN IMMEDIATE"); };
+    try {
+      const record = await runSeatTickCheck(PROJECT, rig.deps);
+      expect(record).not.toBeNull();
+      expect(release).toBeDefined();
+      expect(database.inTransaction).toBe(false);
+      expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(2);
+      expect(readSeatTickRecords(10, file, PROJECT).at(-1)).toEqual(record);
+      expect(fs.readdirSync(directory)).toEqual([]);
+      expect(warn.mock.calls).toEqual([]);
+    } finally {
+      clearTimeout(release);
+      watcher.close();
+      database.close();
+      warn.mockRestore();
+    }
+  });
+});
+
+test.each(["append", "replay"] as const)("a non-busy %s failure names the SQLite error class once and keeps the result for retry", async mode => {
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
+  await withCheckJournal(`rejected-journal-${mode}`, true, async file => {
+    importLegacySeatTickJournal(file);
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    const database = new Database(statePath("state.sqlite"));
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      database.exec(`CREATE TRIGGER reject_journal_insert BEFORE INSERT ON state_rows
+        WHEN NEW.row_key LIKE 'r:%' BEGIN SELECT RAISE(ABORT, 'fixture refusal'); END`);
+      if (mode === "replay") writePendingCheck(file, 1);
+      await reconcileSeatTick(rig.deps, mode === "append" ? [PROJECT] : []);
+      await reconcileSeatTick(rig.deps, []);
+      expect(warn.mock.calls).toEqual([[expect.stringContaining("SQLiteError")]]);
+      expect(String(warn.mock.calls[0]![0])).not.toMatch(/busy/i);
+      expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
+      expect(fs.readdirSync(`${file}.pending-checks`)).toHaveLength(1);
+    } finally {
+      database.exec("DROP TRIGGER IF EXISTS reject_journal_insert");
+      database.close();
+      warn.mockRestore();
+    }
+  });
+});
 
 test("a wall-clock rollback cannot extend the bounded pending-journal cooldown", async () => {
   const { Database } = await import("bun:sqlite");
@@ -179,25 +283,22 @@ test("a wall-clock rollback cannot extend the bounded pending-journal cooldown",
   const { SeatTickPendingJournal } = await import("./seatTickPendingJournal");
   await withCheckJournal("monotonic-journal-cooldown", false, async file => {
     importLegacySeatTickJournal(file);
-    const id = "0123456789abcdef0123456789abcdef";
-    const record = { schemaVersion: 1, at: new Date(NOW).toISOString(), project: PROJECT, seatEpoch: null,
-      verdict: "quiet", reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null };
-    const dir = `${file}.pending-checks`;
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `0000000000000001-${id}.json`), JSON.stringify([{ id, record }]));
+    writePendingCheck(file, 1);
     const wall = spyOn(Date, "now").mockReturnValue(1_000);
     let monotonic = 10;
     const clock = spyOn(performance, "now").mockImplementation(() => monotonic);
     const database = new Database(statePath("state.sqlite"));
+    const journal = new SeatTickPendingJournal(file);
     try {
       database.exec("BEGIN IMMEDIATE");
-      expect(await new SeatTickPendingJournal(file).ready()).toBe(false);
+      await journal.ready();
+      expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
       database.close();
       wall.mockReturnValue(-3_599_000);
       monotonic += 60_001;
-      expect(await new SeatTickPendingJournal(file).ready()).toBe(true);
+      await journal.ready();
       expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
-      expect(await new SeatTickPendingJournal(file).ready()).toBe(true);
+      await journal.ready();
       expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
     } finally {
       database.close();
@@ -225,7 +326,7 @@ test("a process exit after a busy append reply leaves its result for one success
         process.exit(0);
       `], { stdout: "pipe", stderr: "pipe" });
       const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-      expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+      expect({ exit, stderr }).toEqual({ exit: 0, stderr: expect.stringContaining("FileTransactionBusyError") });
       expect(fs.readdirSync(`${file}.pending-checks`).filter(name => name.endsWith(".json"))).toHaveLength(1);
       expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
     } finally { database.close(); }
@@ -275,7 +376,7 @@ test("a worker reply lost after commit replays its preassigned receipt exactly o
     importLegacySeatTickJournal(busyFile);
     const database = new Database(statePath("state.sqlite"));
     let databaseOpen = true;
-    const restoreBusyReply = configureSeatTickJournalWorkerForTests({ timeoutMs: 1_000, dropReplies: 1 });
+    const restoreBusyReply = configureSeatTickJournalWorkerForTests({ timeoutMs: 1_500, dropReplies: 1 });
     try {
       database.exec("BEGIN IMMEDIATE");
       const busyRig = harness({ state: RECENT });

@@ -1475,7 +1475,7 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
   const policy = dependencies.policy === undefined ? seatTickPolicy() : dependencies.policy;
   if (!policy) return null;
   const journal = dependencies.appendRecord ? null : new SeatTickPendingJournal();
-  if (journal && !await journal.ready()) return null;
+  if (journal) await journal.ready();
   return runSeatTickCheckWithJournal(project, { ...dependencies, policy }, journal);
 }
 
@@ -1490,7 +1490,10 @@ async function runSeatTickCheckWithJournal(
   const work = new SeatTickWork(project, Math.min(dependencies.workBudgetMs ?? policy.checkIntervalMs / 4, policy.checkIntervalMs / 4),
     dependencies.workClock, dependencies.workScheduler);
   dependencies.workStarted?.(work);
-  const writeRecord = dependencies.appendRecord ?? ((row: SeatTickRunRecord) => journal!.append(row));
+  let journaled = true;
+  const writeRecord = dependencies.appendRecord ?? (async (row: SeatTickRunRecord) => {
+    if (!await journal!.append(row)) journaled = false;
+  });
   let journalWrites = Promise.resolve();
   let pendingRecord: SeatTickRunRecord | undefined;
   const flushRecord = () => {
@@ -1571,8 +1574,9 @@ async function runSeatTickCheckWithJournal(
     console.error(`[seat tick] ${record.detail}`);
     append(record);
   } finally { work.close(); flushRecord(); await journalWrites; }
-  if (journal && !await journal.finish()) return null;
-  if (record) {
+  // An alarm needs the check's complete journal history, which may still be
+  // queued. The check result itself is already in the pending journal.
+  if (record && journaled) {
     // This notice must survive the deadline that ended the failed check. It
     // gets one separate, bounded admission and carries no delivery authority.
     try {
@@ -3086,7 +3090,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   // The audit backlog can outlive the last seat in the roster. Give it the
   // first attempt before the sweep opens other stores or starts new checks.
   const journal = dependencies.appendRecord ? null : new SeatTickPendingJournal();
-  if (journal && !await journal.ready()) return [];
+  if (journal) await journal.ready();
   if (generation !== tickHost.__llvSeatTickGeneration) return [];
   followProjectSuccessions(dependencies.recordSuccessions);
   const records: SeatTickRunRecord[] = [];
@@ -3097,7 +3101,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   const curator = dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation;
   let curationAllowed = true;
   const curation = curator ? curationForSweep(curator, [...projects].sort(),
-    () => curationAllowed && !journal?.isBlocked() && generation === tickHost.__llvSeatTickGeneration, true) : null;
+    () => curationAllowed && generation === tickHost.__llvSeatTickGeneration, true) : null;
   // Enqueue the whole roster before any owed callbacks. A waiting project has
   // no SeatTickWork and spends no budget; every project gets a turn this pass.
   const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {
@@ -3110,7 +3114,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   // Curation chooses from refreshed wake stamps after the roster. Waiting for
   // that barrier inside a queued check would expire every earlier project.
   const policy = dependencies.policy === undefined ? seatTickPolicy() : dependencies.policy;
-  if (curation && policy && !journal?.isBlocked() && generation === tickHost.__llvSeatTickGeneration) {
+  if (curation && policy && generation === tickHost.__llvSeatTickGeneration) {
     const work = new SeatTickWork("sweep.curation", Math.min(dependencies.workBudgetMs ?? policy.checkIntervalMs / 4, policy.checkIntervalMs / 4),
       dependencies.workClock, dependencies.workScheduler);
     const sweeps = tickHost.__llvSeatTickSweepWork ??= new Set();
@@ -3162,8 +3166,6 @@ function checkSeatTickProject(
   entry.promise = queue[slot]!.then(async () => {
     try {
       await yieldToRuntime();
-      if (generation !== tickHost.__llvSeatTickGeneration) return null;
-      if (journal && !await journal.ready()) return null;
       if (generation !== tickHost.__llvSeatTickGeneration) return null;
       kickTurboWork(project, dependencies.turbo);
       return await runSeatTickCheckWithJournal(project, { ...dependencies, workStarted: work => {

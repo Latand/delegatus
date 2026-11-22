@@ -463,27 +463,33 @@ export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatT
   });
 }
 
+export type SeatTickJournalAppendOptions = { replayId?: string; waitMs?: number };
+
 /** The check awaits the append. In the Viewer it runs on the seat tick
  * journal's worker thread (`seatTickJournalWorker.ts`), so the transaction
  * never blocks the Viewer thread; elsewhere it runs here. */
-export async function appendSeatTickRecordAsync(record: SeatTickRunRecord, filePath = seatTickJournalPath(), replayId?: string): Promise<void> {
-  const offThread = appendThroughSeatTickJournalWorker(record, filePath, replayId);
+export async function appendSeatTickRecordAsync(
+  record: SeatTickRunRecord, filePath = seatTickJournalPath(), options: SeatTickJournalAppendOptions = {},
+): Promise<void> {
+  const offThread = appendThroughSeatTickJournalWorker(record, filePath, options);
   if (offThread) return offThread;
-  return appendSeatTickRecordOnThisThread(record, filePath, replayId);
+  return appendSeatTickRecordOnThisThread(record, filePath, options);
 }
 
 /** The append on the calling thread. The database and lazy legacy import
- * share one second of admission wait, yielding between attempts. A replay
+ * share the caller's admission wait, yielding between attempts. A replay
  * makes one attempt this sweep. The commit survives the process and does not
  * wait for the disk: the legacy rings were appended and trimmed without an fsync. */
-export async function appendSeatTickRecordOnThisThread(record: SeatTickRunRecord, filePath = seatTickJournalPath(), replayId?: string): Promise<void> {
+export async function appendSeatTickRecordOnThisThread(
+  record: SeatTickRunRecord, filePath = seatTickJournalPath(), { replayId, waitMs = 1_000 }: SeatTickJournalAppendOptions = {},
+): Promise<void> {
   const stored = storedSeatTickRun(record);
   if (!stored) return;
   const location = seatTickLocation(filePath, true);
   await waitForStateLock("seat-tick.audit", () => {
     const collection = writableJournal(location);
     collection.patchSync(() => seatTickAppendPatch(location, collection, stored, replayId), { durability: "process" });
-  }, { waitMs: replayId === undefined ? 1_000 : 0, subject: location.collection });
+  }, { waitMs, subject: location.collection });
 }
 
 function seatTickProjectJournalPath(project: string, filePath: string): string {
