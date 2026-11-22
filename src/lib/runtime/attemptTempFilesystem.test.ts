@@ -270,6 +270,7 @@ test.each([
   fs.writeFileSync(docker, `#!/bin/sh
 case "$1" in
   ps|rm) exit 0 ;;
+  image) printf 'fixture-image\\n' ;;
   run)
     for arg do
       case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
@@ -323,6 +324,46 @@ esac
     else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
     if (previousMarker === undefined) delete process.env.DOCKER_DISPATCH_MARKER;
     else process.env.DOCKER_DISPATCH_MARKER = previousMarker;
+  }
+});
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("native permission failure falls back against the inode claim", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-native-fallback"), bin = path.join(parent, "bin");
+  fs.mkdirSync(directory); fs.mkdirSync(bin);
+  const locked = path.join(directory, "locked"); fs.mkdirSync(locked); fs.writeFileSync(path.join(locked, "payload"), "remove me"); fs.chmodSync(locked, 0o500);
+  const sourceFile = path.join(parent, "docker-source");
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh
+case "$1" in
+  ps|rm) exit 0 ;;
+  run)
+    for arg do
+      case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
+    done
+    test -n "$source" || exit 2
+    printf '%s\\n' "$source" >> "$DOCKER_SOURCE_LOG"
+    find "$source" -type d -exec chmod u+rwx {} +
+    find "$source" -depth -mindepth 1 -delete || exit
+    printf 'DELEGATUS_RM_CPU:0.125\\n'
+    ;;
+  *) exit 2 ;;
+esac
+`, { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, image: process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE,
+    source: process.env.DOCKER_SOURCE_LOG, state: process.env.LLV_STATE_DIR };
+  process.env.PATH = `${bin}${path.delimiter}${previous.PATH ?? ""}`;
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  process.env.DOCKER_SOURCE_LOG = sourceFile;
+  process.env.LLV_STATE_DIR = path.join(parent, "state");
+  try {
+    await removeAttemptTree(directory, directory, async () => true, false, () => true, () => true);
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(fs.readFileSync(sourceFile, "utf8").trim()).toMatch(/\.delegatus-trash-claim-/);
+    expect(fs.readFileSync(sourceFile, "utf8").trim()).not.toBe(directory);
+  } finally {
+    if (previous.PATH === undefined) delete process.env.PATH; else process.env.PATH = previous.PATH;
+    if (previous.image === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previous.image;
+    if (previous.source === undefined) delete process.env.DOCKER_SOURCE_LOG; else process.env.DOCKER_SOURCE_LOG = previous.source;
+    if (previous.state === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous.state;
   }
 });
 

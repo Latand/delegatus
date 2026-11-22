@@ -34,7 +34,10 @@ export class AttemptTrashRecovery {
     db.exec(`CREATE TABLE IF NOT EXISTS trash_recovery (
       directory TEXT PRIMARY KEY, identity TEXT NOT NULL, cursor TEXT NOT NULL DEFAULT '',
       binding TEXT, conflict INTEGER NOT NULL DEFAULT 0, matches TEXT NOT NULL DEFAULT '[]',
-      restored INTEGER NOT NULL DEFAULT 0, checkedAt REAL NOT NULL DEFAULT 0, turn INTEGER NOT NULL DEFAULT 0)`);
+      restored INTEGER NOT NULL DEFAULT 0, checkedAt REAL NOT NULL DEFAULT 0, turn INTEGER NOT NULL DEFAULT 0,
+      ownerBound INTEGER NOT NULL DEFAULT 0)`);
+    if (!db.query<{ name: string }, []>("PRAGMA table_info(trash_recovery)").all().some(column => column.name === "ownerBound"))
+      db.exec("ALTER TABLE trash_recovery ADD COLUMN ownerBound INTEGER NOT NULL DEFAULT 0");
     db.exec("CREATE TABLE IF NOT EXISTS trash_recovery_scan(id INTEGER PRIMARY KEY CHECK(id=1),cursor TEXT NOT NULL,turn INTEGER NOT NULL)");
     db.exec("INSERT OR IGNORE INTO trash_recovery_scan VALUES(1,'',0)");
     db.transaction(() => {
@@ -49,8 +52,12 @@ export class AttemptTrashRecovery {
     })();
   }
   restored(directory: string) { return !!this.db.query("SELECT 1 FROM trash_recovery WHERE directory=?").get(directory); }
+  ownerWasBound(directory: string) {
+    return !!this.db.query("SELECT 1 FROM trash_recovery WHERE directory=? AND ownerBound=1").get(directory);
+  }
   queueIntent(directory: string, identity: string) {
-    this.db.query("INSERT OR IGNORE INTO trash_recovery(directory,identity) VALUES(?,?)").run(directory, identity);
+    const ownerBound = this.db.query("SELECT 1 FROM roots WHERE directory=?").get(directory) ? 1 : 0;
+    this.db.query("INSERT OR IGNORE INTO trash_recovery(directory,identity,ownerBound) VALUES(?,?,?)").run(directory, identity, ownerBound);
   }
   refresh(directory: string) {
     this.db.transaction(() => {
@@ -248,11 +255,14 @@ export class AttemptTrashRecovery {
       const existing = this.db.query<{ pipelineId: string | null; launchId: string; identity: string }, [string]>(
         "SELECT pipelineId,launchId,identity FROM roots WHERE directory=?").get(journal.directory);
       if (existing && (existing.identity !== journal.identity || existing.pipelineId !== agreed.pipelineId || existing.launchId !== agreed.launchId)) return hold();
+      const previouslyBound = this.db.query<{ ownerBound: number }, [string]>(
+        "SELECT ownerBound FROM trash_recovery WHERE directory=?").get(journal.directory)?.ownerBound;
+      const ownerBound = existing ? (previouslyBound ?? 1) : 0;
       this.db.transaction(() => {
         const inserted = this.db.query(`INSERT OR IGNORE INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt)
           VALUES(?,?,?,1,?,?,0)`).run(journal.directory, agreed.pipelineId, agreed.launchId, now(), journal.identity);
-        this.db.query("UPDATE trash_recovery SET restored=1,cursor=?,binding=?,matches=? WHERE directory=?")
-          .run(cursor, JSON.stringify(agreed), JSON.stringify(matches), journal.directory);
+        this.db.query("UPDATE trash_recovery SET restored=1,cursor=?,binding=?,matches=?,ownerBound=? WHERE directory=?")
+          .run(cursor, JSON.stringify(agreed), JSON.stringify(matches), ownerBound, journal.directory);
         if (inserted.changes) result.restored++;
       })();
       result.recoveredDirectory = journal.directory;

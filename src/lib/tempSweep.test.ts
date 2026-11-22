@@ -29,6 +29,7 @@ import {
   writableRoots,
   attemptTempJournalPath,
   finishTreeTrash,
+  removeTreeViaTrash,
   readAttemptTempTrash,
   type ProcessScan,
 } from "./tempSweep";

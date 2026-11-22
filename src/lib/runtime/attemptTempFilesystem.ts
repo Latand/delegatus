@@ -1255,9 +1255,11 @@ export async function removeAttemptTree(directory: string, original = directory,
       if (error instanceof AttemptTempBudgetDeferred) throw error;
       if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
       try {
-        const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection,
+        const claimedDirectory = typeof (error as { claimedDirectory?: unknown }).claimedDirectory === "string"
+          ? (error as { claimedDirectory: string }).claimedDirectory : directory;
+        const { identity } = await containerCommand(claimedDirectory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection,
           () => { mutationStarted = true; settings.mutationStarted?.(); });
-        removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+        removeEmptyNamespaceRoot(claimedDirectory, identity, postDeleteGuard);
       } catch (fallbackError) {
         if (fallbackError instanceof AttemptTempBudgetDeferred) throw fallbackError;
         throw new Error(`${attemptTempFailureDetail(error)}; cleanup fallback: ${attemptTempFailureDetail(fallbackError)}`, { cause: fallbackError });

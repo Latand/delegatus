@@ -60,7 +60,7 @@ export async function removeTreeWithinAttemptBudget(directory: string, mutationS
       throw new AttemptTempBudgetDeferred("tick deadline exhausted during recursive removal");
     }
     const code = /DELEGATUS_RM_CODE:([A-Z0-9_]+)/.exec(String((error as { stderr?: unknown }).stderr ?? ""))?.[1];
-    if (code) Object.assign(error as object, { code });
+    if (code) Object.assign(error as object, { code, claimedDirectory: tombstone });
     throw error;
   }
 }

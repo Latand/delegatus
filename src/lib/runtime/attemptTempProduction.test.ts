@@ -75,8 +75,10 @@ test("a restarted scheduled sweep restores a quarantined root before expiry and 
       const reopened = structuredClone(pipeline); reopened.state = "running"; reopened.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
       expect(() => savePipelines([reopened])).not.toThrow();
       const terminal = structuredClone(reopened); terminal.state = "completed"; terminal.cursor = null;
-      terminal.runs[0]!.attempts[0]!.state = "passed";
-      terminal.runs[0]!.attempts[0]!.completedAt = new Date(now).toISOString();
+      terminal.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "crash-launch",
+        effectiveRole: terminal.stages[0]!.effectiveRole, conversationId: "fixture", sessionId: null,
+        agentPath: null, paneId: null, flowId: null, startedAt: new Date(now - 60_000).toISOString(),
+        completedAt: new Date(now).toISOString(), input: null, activatedBy: null, output: "passed", verdict: { status: "pass" }, error: null }] }];
       savePipelines([terminal]);
       const { recordingAttemptTempState } = await import("./attemptTempProduction");
       await recordingAttemptTempState(restarted)(restarted.owner(directory)!);
@@ -956,20 +958,18 @@ test.skipIf(process.platform !== "linux").each(["live child", "mount", "linked e
         fs.writeFileSync(path.join(directory, "checkout", ".git", "config"), "local-only repository data");
       }
       else if (protection === "last handoff swap") {
-        const statfs = fs.statfsSync.bind(fs);
-        const replace = spyOn(fs, "statfsSync").mockImplementation(((...args: Parameters<typeof fs.statfsSync>) => {
-          const value = statfs(...args);
-          if (!swapped) {
+        const remove = attemptRemoval.removeTreeWithinAttemptBudget;
+        const replace = spyOn(attemptRemoval, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started, ...args) =>
+          remove(target, () => {
+            started();
             const claim = fs.readdirSync(path.dirname(directory)).map(name => path.join(path.dirname(directory), name))
               .find(name => path.basename(name).startsWith(".delegatus-trash-claim-"));
-            if (claim) {
+            if (claim && !swapped) {
               const saved = path.join(root, "claimed-original"); fs.renameSync(claim, saved);
               fs.mkdirSync(claim); fs.writeFileSync(path.join(claim, "replacement"), "new owner");
               preserved = path.join(saved, "frame.png"); swapped = true;
             }
-          }
-          return value;
-        }) as typeof fs.statfsSync);
+          }, ...args));
         restore.push(() => replace.mockRestore());
       } else {
         const rename = fs.renameSync.bind(fs);
@@ -989,6 +989,7 @@ test.skipIf(process.platform !== "linux").each(["live child", "mount", "linked e
         expect(swapped).toBeTrue();
         const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8"));
         expect(fs.readFileSync(path.join(journal.trash, "replacement"), "utf8")).toBe("new owner");
+        expect(fs.readFileSync(preserved, "utf8")).toBe("protected data");
       }
     } finally {
       for (const stop of restore.reverse()) stop();

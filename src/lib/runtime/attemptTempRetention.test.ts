@@ -243,15 +243,60 @@ test("reporting reads remain bounded with a large copy and root backlog", () => 
   } finally { db.close(); f.store.close(); }
 });
 
-test("an incomplete allocation refresh preserves bytes and advances to another due root", () => {
-  const f = fixture(), first = f.make("allocation-first", 0), second = f.make("allocation-second", 0);
+test("an unreadable production allocation keeps recorded bytes and rotates to another due root", async () => {
+  const { runAttemptTempSweep } = await import("./attemptTempProduction");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-allocation-refresh-")); roots.push(root);
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const clock = spyOn(Date, "now").mockReturnValue(NOW);
+  const first = statePath("scratch", "llv-stage-allocation-first"), second = statePath("scratch", "llv-stage-allocation-second");
+  fs.mkdirSync(first, { recursive: true }); fs.mkdirSync(second, { recursive: true });
+  const store = new AttemptTempStore();
+  store.register({ directory: first, pipelineId: null, launchId: "allocation-first", retainUntilClose: false, createdAt: NOW - 120_000 });
+  store.register({ directory: second, pipelineId: null, launchId: "allocation-second", retainUntilClose: false, createdAt: NOW - 120_000 });
+  store.measure(first, 8 * 1024 ** 3, NOW - 120_000);
+  store.measure(second, 2 * 1024 ** 3, NOW);
+  const measured: string[] = [];
+  const allocation = spyOn(filesystem, "measureAttemptAllocation").mockImplementation(async directory => {
+    measured.push(directory);
+    return directory === first ? { bytes: 0, unreadable: true } : { bytes: 3 * 1024 ** 3, unreadable: false };
+  });
   try {
-    f.store.measure(first, 8 * 1024 ** 3, NOW - 120_000);
-    f.store.measure(second, 2 * 1024 ** 3, NOW - 120_000);
-    f.store.measurementFailed(first, NOW);
-    expect(f.store.owner(first)?.bytes).toBe(8 * 1024 ** 3);
-    expect(f.store.allocationDue(NOW + 60_000, 1).map(owner => owner.directory)).toEqual([second]);
-  } finally { f.store.close(); }
+    const ports = { scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
+    expect(await runAttemptTempSweep(ports, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" })).not.toBeNull();
+    expect(store.owner(first)?.bytes).toBe(8 * 1024 ** 3);
+    expect(measured).toEqual([first]);
+    store.measure(second, 2 * 1024 ** 3, NOW - 120_000);
+    expect(await runAttemptTempSweep(ports, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" })).not.toBeNull();
+    expect(measured).toEqual([first, second]);
+    expect(store.owner(first)?.bytes).toBe(8 * 1024 ** 3);
+    expect(store.owner(second)?.bytes).toBe(3 * 1024 ** 3);
+  } finally {
+    allocation.mockRestore(); store.close(); clock.mockRestore();
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousStateDir;
+  }
+});
+
+test("trash recovery adds owner-binding provenance to an existing ledger in place", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-trash-ledger-upgrade-")); roots.push(root);
+  const filename = path.join(root, "owners.sqlite"), directory = path.join(root, "llv-stage-prior");
+  const prior = new Database(filename);
+  prior.exec(`CREATE TABLE trash_recovery (
+    directory TEXT PRIMARY KEY, identity TEXT NOT NULL, cursor TEXT NOT NULL DEFAULT '', binding TEXT,
+    conflict INTEGER NOT NULL DEFAULT 0, matches TEXT NOT NULL DEFAULT '[]', restored INTEGER NOT NULL DEFAULT 0,
+    checkedAt REAL NOT NULL DEFAULT 0, turn INTEGER NOT NULL DEFAULT 0)`);
+  prior.query("INSERT INTO trash_recovery(directory,identity) VALUES(?,?)").run(directory, "1:2");
+  prior.close();
+  const store = new AttemptTempStore(filename);
+  try {
+    expect(store.trashRecoveryOwnerWasBound(directory)).toBeFalse();
+    const migrated = new Database(filename);
+    try {
+      expect(migrated.query<{ ownerBound: number }, [string]>("SELECT ownerBound FROM trash_recovery WHERE directory=?").get(directory))
+        .toEqual({ ownerBound: 0 });
+      expect(migrated.query<{ name: string }, []>("PRAGMA table_info(trash_recovery)").all()).toContainEqual(expect.objectContaining({ name: "ownerBound" }));
+    } finally { migrated.close(); }
+  } finally { store.close(); }
 });
 
 test("legacy reporting advances bounded pages across real helper restarts and skips an exhausted deadline", async () => {

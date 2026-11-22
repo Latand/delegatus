@@ -230,6 +230,7 @@ export class AttemptTempStore {
   trashRecoveryWatches(directory: string) { return this.recovery.watches(directory); }
   recoveredTrashCurrent(directory: string) { return this.recovery.current(directory); }
   recoveredTrash(directory: string) { return this.recovery.restored(directory); }
+  trashRecoveryOwnerWasBound(directory: string) { return this.recovery.ownerWasBound(directory); }
   has(directory: string) { return !!this.db.query("SELECT 1 FROM roots WHERE directory=?").get(directory); }
   owner(directory: string): Row | null { return this.db.query<Row, [string]>("SELECT * FROM roots WHERE directory=?").get(directory); }
   release(directory: string) {
@@ -702,7 +703,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           // A crashed quarantine has no removal authority. Restore it while
           // the current owner is live or the retention clock has not elapsed,
           // then clear only its recovery proof so reopening can proceed.
-          if (authority.isCurrent() && authority.state !== "expired" && !stat) {
+          if ((!recoveredTrash || store.trashRecoveryOwnerWasBound(owner.directory))
+            && authority.isCurrent() && authority.state !== "expired" && !stat) {
             restoreRefusedAttemptTrash(owner.directory, owner.identity);
             store.clearTrashRecovery(owner.directory);
             outcome(owner.directory, authorityDisposition(authority.state), bytes, "interrupted quarantine restored before expiry");
