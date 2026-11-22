@@ -4886,6 +4886,14 @@ test("list_pipelines names the successor carrying an automatic refresh", async (
   expect(answer.pipelines).toMatchObject([{ id: "refresh-parent", merge: { state: "refreshing", refresh: "refresh-successor" } }]);
 });
 
+test("send_message immediately explains a hold behind a running Codex turn", async () => {
+  const notice = "Delivery waits until the current turn ends and the account switch completes.";
+  const bindings = viewerMcpBindings(undefined, { post: async () => ({ ok: true, outcome: "held", operationId: "busy-codex-send",
+    waitReason: "switch-after-turn", detail: notice, deadlineAt: "2026-11-17T12:10:00.000Z" }) });
+  expect(await bindings.send_message({ clientRequestId: "busy-codex-send", conversationId: "conversation_busy_codex", text: "new requirement" }))
+    .toMatchObject({ outcome: "held", settled: false, notice, waitReason: "switch-after-turn", deadlineAt: "2026-11-17T12:10:00.000Z" });
+});
+
 test("board reads keep main's exact-key selection only for a domain without a catalog source", async () => {
   const tasks = [{ id: "task_unlisted", project: "unlisted-key", status: "inbox", placement: "unplaced", text: "Unlisted" }];
   const pipelines = [{ id: "pipeline_unlisted", project: "unlisted-key", state: "running" }];

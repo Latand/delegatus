@@ -452,6 +452,7 @@ async function dispatchRuntimeCommand(
             send = null;
           }
           return NextResponse.json({ held: true, operationId: admitted.operationId,
+            ...(admitted.waitReason ? { waitReason: admitted.waitReason, detail: admitted.detail, deadlineAt: admitted.deadlineAt } : {}),
             ...(send ? { receipt: runtimeReceiptForSend(send) } : {}),
           }, { status: 202 });
         }

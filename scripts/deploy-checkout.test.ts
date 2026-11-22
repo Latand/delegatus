@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-test("checkout switch, sample deadline, census and isolated ownership contracts", () => {
+test("checkout relaunch and relocation, sample deadline, census and isolated ownership contracts", () => {
   const result = spawnSync("python3", [fileURLToPath(new URL("./deploy_checkout_test.py", import.meta.url))], {
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", CENSUS_TEST_BUN: process.execPath },
     encoding: "utf8",
