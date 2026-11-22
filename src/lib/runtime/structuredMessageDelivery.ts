@@ -90,6 +90,9 @@ export interface StructuredMessageRequest {
   admissionGuardAsync?: () => Promise<void>;
   /** The autonomous caller's authority fence during replacement host publication. */
   recoveryAuthorityGuard?: () => void;
+  /** A persisted checkout cut carries a unique, one-time admission proof for
+      its deterministic recovery key, including on legacy conversation rows. */
+  freshCheckoutCutAdmission?: true;
   path: string;
   conversationId?: string | null;
   clientMessageId?: string | null;
@@ -1546,7 +1549,8 @@ export async function enqueueStructuredMessage(
         return continuationRefused("runtime session is not the conversation's current generation");
       }
       const key = request.clientMessageId?.trim();
-      if (key && registry.deliveryAdmissionForKey(owner.conversation.id, key).outcome !== "not-executed") {
+      if (key && registry.deliveryAdmissionForKey(owner.conversation.id, key).outcome !== "not-executed"
+        && !(request.freshCheckoutCutAdmission && request.operationId?.startsWith("checkout_merger_"))) {
         return continuationRefused("an earlier continuation admission must be reconciled before host recovery");
       }
       const overlong = key ? refusedIdempotencyKey(key) : null;

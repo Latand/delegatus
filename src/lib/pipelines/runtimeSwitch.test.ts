@@ -1949,6 +1949,27 @@ test("compacted historical operator kills do not block a later switch-owned tear
   } finally { journal.close(); }
 });
 
+test("an authenticated operator stop queued before a merger cut still fences recovery", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { hasRuntimeSwitchKill } = await import("./runtimeSwitch");
+  const since = "2026-11-20T10:00:00.000Z";
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, "queued-pre-cut-stop.sqlite"), {
+    structuredHosts: true, now: () => Date.parse(since) - 1_000,
+  });
+  const operationId = "authenticated-stop-before-cut";
+  journal.executeOperation({ kind: "kill", operationId, idempotencyKey: operationId,
+    conversationId: STAGE_CONVERSATION, sessionKey: { engine: "claude", sessionId: "stage-session" },
+    origin: { kind: "operator" } });
+  const client = { effectBatch: async (kinds: string[], cursor: number) => journal.effectBatch(100, kinds, cursor),
+    operationStatus: async (id: string) => journal.operationResult(id) };
+  try {
+    expect(await hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, since, [], true)).toBe(false);
+    expect(await hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, since, [], true, true)).toBe(true);
+    journal.transitionOperation(operationId, "failed");
+    expect(await hasRuntimeSwitchKill(client as never, STAGE_CONVERSATION, since, [], true, true)).toBe(false);
+  } finally { journal.close(); }
+});
+
 test("an early continuation verdict survives a delayed send acknowledgement", async () => {
   const h = switchHarness(); await requestSwitch(h); const started = h.wallClock();
   h.ports.resumeSeveredTurn = async input => {
