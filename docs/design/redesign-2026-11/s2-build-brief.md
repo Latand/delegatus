@@ -192,16 +192,23 @@ source with no column of its own (`docs/design/pipeline-graph-loops.md` §3.1–
 
 ### 3.4 Rule lines (the prototype's neutral loop line)
 
-There is one line per fail edge **not** carried by a conditional tab, under the
-tabs, in muted label text with a leading `↺`. Its words are the existing
-sentences:
+There is one line per fail edge **not** carried by a conditional tab, and one
+for a carried edge whose budget is spent (no dot says in words where the lane
+went), under the tabs, in muted label text with a leading `↺`. Every state
+reads in one grammar, «Якщо Review не пройде → Fix api · 1 з 2» (`ruleRest`,
+`ruleOn`, `ruleRetry`). The technical sentence of the graph strip's tooltip
+(`kanban.loopTitle`, «Ребро невдачі: …») never reaches a rule line, and who is
+running now is said by the waits-on line and the pane, not repeated here.
 
 | Edge state | Line |
 |---|---|
-| At rest | `kanban.loopRest` («Якщо Verify не проходить, робота повертається до Build ui · до 2 раундів»), reworded to the prototype's «Якщо Verify не пройде → назад до Build ui · 0 з 2» |
-| Fired | `kanban.loopTitle` («Використано 1 з 2») |
-| Spent | the mode's sentence (`spentEdgeSentence`: advance / stop-after-fix / park) |
-| Parked on this edge | leads with `kanban.loopParkedHere` |
+| At rest, fired | the grammar above, with fired and max |
+| Spent | the grammar, then a short clause for what the budget did (`ruleEnd`: the lane goes on, waits for you after the fix, one more failure stops it, or stopped here) |
+
+The failing stage's own tab wears the card's `↺ n/max` once its edge has fired
+(`ReturnSuffix`). A tab that carries a fix's rounds draws them as marks of four
+shapes (✕ fired, ✓ the source passed, ● under way, ○ left) followed by the
+count in digits, so a round reads without its colour.
 
 When the source stage's pane shows such a line, the pane drops the
 `kanban.stages.onFail` clause from its sub-line, so the fact is said once. A

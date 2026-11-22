@@ -428,6 +428,15 @@ export interface GraphLayout {
   height: number;
 }
 
+/** The units of one column in the order a person reads a lane: the stages the lane runs, from the one it starts on along `next`, then the stages only a failure reaches or nothing reaches. `graphOrder` sorts by graph layer, and a fail-only stage that no pass wire enters has layer 0, so it would stand between the first steps. */
+function columnOrder(pipeline: Pick<Pipeline, "stages">, units: PipelineStage[]): PipelineStage[] {
+  const byId = new Map(pipeline.stages.map((stage) => [stage.id, stage] as const));
+  const chain: string[] = [];
+  for (let current: PipelineStage | undefined = pipeline.stages[0]; current && !chain.includes(current.id); current = current.next ? byId.get(current.next) : undefined) chain.push(current.id);
+  const rank = (id: string) => { const at = chain.indexOf(id); return at < 0 ? chain.length : at; };
+  return units.map((stage, at) => ({ stage, at })).sort((a, b) => rank(a.stage.id) - rank(b.stage.id) || a.at - b.at).map((entry) => entry.stage);
+}
+
 /** Choose a layout for the width available. Text never shrinks: when
     left-to-right does not fit, the graph turns top-to-bottom, one column of
     units never wider than the width it has. */
@@ -439,12 +448,14 @@ export function layoutGraph(
 ): GraphLayout {
   const topology = graphTopology(pipeline);
   const stripH = options.coarse ? STRIP_H.coarse : STRIP_H.fine;
-  const units = graphOrder(pipeline, topology).filter((stage) => !topology.docked.has(stage.id));
-  const striped = new Set(units.filter((stage) => drawsStrip(pipeline, topology.loops.get(stage.id))).map((stage) => stage.id));
+  const ordered = graphOrder(pipeline, topology).filter((stage) => !topology.docked.has(stage.id));
+  const striped = new Set(ordered.filter((stage) => drawsStrip(pipeline, topology.loops.get(stage.id))).map((stage) => stage.id));
   const unitH = (id: string) => NODE_H + (striped.has(id) ? stripH : 0);
+  /* The left-to-right layout places by layer; only the one column reads in sequence, so only it reorders. */
   const backWires = topology.wires.filter((edge) => topology.back.has(edge.id));
   const lrWidth = LR.pad * 2 + topology.layers * LR.W + (topology.layers - 1) * LR.gx + (backWires.length ? 16 : 0);
   const dir = force ?? (lrWidth <= available ? "LR" : "TB");
+  const units = dir === "TB" ? columnOrder(pipeline, ordered) : ordered;
   const nodes = new Map<string, GraphBox>();
   const strips = new Map<string, GraphStrip>();
   let width: number;

@@ -429,7 +429,7 @@ test("Stages opens the sheet on the live stage: its waits-on line, the stages as
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify2));
   expect(pane(host, "verify")!.querySelector("[data-kanban-reader]")?.getAttribute("data-in-sheet")).toBe("1");
   /* The fail edge is one rule line under the tabs, said once: not again in the pane's sub-line. */
-  expect([...view.querySelectorAll(".gs-rule")].map((rule) => rule.textContent)).toEqual(["↺ Fail edge: when Verify fails, Implement runs again. Used 1 of 2."]);
+  expect([...view.querySelectorAll(".gs-rule")].map((rule) => rule.textContent)).toEqual(["↺ If Verify fails → back to Implement · 1 of 2"]);
   expect(pane(host, "verify")!.querySelector(".pane-sub")?.textContent).toBe("started by Review · pass");
 
   const implement = pick(host, "implement");
@@ -1712,4 +1712,93 @@ test("the stage a lane stopped on shows what it stopped on in its pane, and its 
     ["Retry this stage", true, "The pipeline waits on another stage"],
     ["Skip this stage", true, "The pipeline waits on another stage"],
   ]);
+});
+
+const sharedFixLane = (runs: Record<string, unknown[]>, state = "running", cursor: string | null = "review") => shapeLane([
+  stage("brief", "architect", "build"),
+  stage("fix", "builder", "review"),
+  stage("build", "builder", "review"),
+  stage("review", "reviewer", "visual", { onFail: { to: "fix", maxRounds: 2 } }),
+  stage("visual", "visual-critic", null, { onFail: { to: "fix", maxRounds: 1, onExhausted: "park" } }),
+  stage("rate", "builder", null),
+], runs, state, cursor);
+
+test("a fired edge keeps the rule line's grammar, and the failing tab wears the return mark with its count", async () => {
+  const record = shapeLane([
+    stage("build", "builder", "verify"),
+    stage("verify", "verifier", null, { onFail: { to: "build", maxRounds: 2 } }),
+  ], { build: [attempt(1, "passed", implement1, 3000), attempt(2, "running", implement2, 100, { activatedBy: { stageId: "verify", attempt: 1, edge: "fail" } })], verify: [attempt(1, "failed", review1, 600)] }, "running", "build");
+  const { host } = mount(record, { files: [implement1, implement2, review1] });
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  const lines = [...sheet(host)!.querySelectorAll(".gs-rule")].map((rule) => rule.textContent ?? "");
+  expect(lines).toEqual(["↺ If Verify fails → back to Build · 1 of 2"]);
+  for (const line of lines) expect(line).not.toMatch(/Fail edge|runs again|Used \d/);
+  expect(tabOf(host, "verify")!.querySelector(".pret")?.textContent).toBe("↺1/2");
+});
+
+test("a tab that carries a fix's rounds says how many ran of how many, and a spent budget adds its line", async () => {
+  const open = reviewFix("running", { build: [attempt(1, "passed", implement1, 5000)], review: [attempt(1, "failed", review1, 3000)], fix: [attempt(1, "running", implement2, 100, { activatedBy: { stageId: "review", attempt: 1, edge: "fail" } })] }, "fix");
+  const first = mount(open, { files: [implement1, implement2, review1] });
+  await tick();
+  click(card(first.host).querySelector("[data-open-stages]"));
+  await tick();
+  expect(tabOf(first.host, "fix")!.querySelector("[data-dots-count]")?.textContent).toBe("1/2");
+  expect(sheet(first.host)!.querySelectorAll(".gs-rule")).toHaveLength(0);
+  const spent = reviewFix("completed", {
+    build: [attempt(1, "passed", implement1, 5000)],
+    review: [attempt(1, "failed", review1, 3000), attempt(2, "failed", review1, 1200)],
+    fix: [attempt(1, "passed", implement2, 2500, { activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }), attempt(2, "passed", implement2, 900, { activatedBy: { stageId: "review", attempt: 2, edge: "fail", budgetSpent: true } })],
+  }, null);
+  const second = mount(spent, { files: [implement1, implement2, review1] });
+  await tick();
+  click(card(second.host).querySelector("[data-open-stages]"));
+  await tick();
+  expect([...sheet(second.host)!.querySelectorAll(".gs-rule")].map((rule) => rule.textContent)).toEqual([`↺ If Review fails → Fix · 2 of 2 · ${translate("en", "kanban.stages.ruleEnd.advance")}`]);
+});
+
+test("a pane says what starts its stage: every source of a shared fix, and that nothing starts a detached one", async () => {
+  const record = sharedFixLane({ brief: [attempt(1, "passed", implement1, 4000)], build: [attempt(1, "passed", implement2, 3000)], review: [attempt(1, "running", review1, 600)] });
+  const { host } = mount(record, { files: [implement1, implement2, review1] });
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  click(tabOf(host, "fix"));
+  await tick();
+  const sub = sheet(host)!.querySelector(".pane .draft-feed")?.textContent ?? "";
+  expect(sub).toContain("Starts if Review or Visual fails");
+  click(tabOf(host, "rate"));
+  await tick();
+  const rate = sheet(host)!.querySelector(".pane")!.textContent ?? "";
+  expect(rate).toContain("No stage starts it");
+  expect(rate).not.toMatch(/Starts first|last stage/);
+});
+
+test("a skipped stage's pane says it was skipped and draws no empty box in place of a conversation", async () => {
+  const record = shapeLane([stage("build", "builder", "review"), stage("review", "reviewer", "deliver"), stage("deliver", "cleaner", null)],
+    { build: [attempt(1, "passed", implement1, 3000)], review: [attempt(1, "passed", review1, 600)], deliver: [attempt(1, "skipped", null, 300, { activatedBy: { stageId: "review", attempt: 1, edge: "pass" } })] }, "completed", null);
+  const { host } = mount(record, { files: [implement1, review1] });
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  click(tabOf(host, "deliver"));
+  await tick();
+  const view = pane(host, "deliver")!;
+  expect(view.querySelector(".pane-sub")?.textContent).toBe(translate("en", "kanban.stages.skippedSub"));
+  expect(view.textContent).not.toContain("started by");
+  expect(view.querySelector(".pane-conv")).toBeNull();
+});
+
+test("a stage the lane stopped on after it passed says the stop's reason in its pane, and where to answer", async () => {
+  const record = shapeLane([stage("fix", "builder", null)], { fix: [attempt(1, "passed", implement1, 600)] }, "needs_decision", "fix");
+  record.stateDetail = "publishing the passed stage failed: the push was refused";
+  const { host } = mount(record, { files: [implement1] });
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  const stop = pane(host, "fix")!.querySelector<HTMLElement>("[data-pane-stop]");
+  expect(stop?.querySelector("[data-lane-stop]")?.textContent).toBe("the branch could not be published");
+  expect(stop?.textContent).not.toContain("needs a decision");
+  expect(stop?.querySelector("[data-answer-hint]")?.textContent).toBe(translate("en", "kanban.stages.answerHint"));
 });

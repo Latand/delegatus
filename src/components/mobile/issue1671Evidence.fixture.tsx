@@ -802,13 +802,22 @@ if (KANBAN && MANY_CARDS > 0) {
     kanbanTasks.push(kanbanTask(id, "assigned", title, { assignments: [kanbanAssign(worker)], updatedAt: iso(600 + index * 60) }));
   }
 }
+/* The conversations of the stage-shape lanes, which the transcript route answers with a short feed: the stage's brief, then two replies (invented). */
+const shapePaths = new Set<string>();
+const shapeLang = localStorage.getItem("llv_lang") === "uk" ? "uk" : "en";
+const shapeFeed = (): string => `${[
+  JSON.stringify({ type: "user", uuid: "shape-u-1", timestamp: iso(1_200), sessionId: "conversation_shape", message: { role: "user", content: shapeLang === "uk" ? "Візьми зауваження з попереднього етапу й виправ їх." : "Pick up the findings of the stage before and fix them." } }),
+  JSON.stringify({ type: "assistant", uuid: "shape-a-1", timestamp: iso(1_140), sessionId: "conversation_shape", message: { role: "assistant", model: "claude-fable-5-1", content: [{ type: "text", text: shapeLang === "uk" ? "Починаю: спершу читаю зауваження й відкриваю потрібні файли." : "Starting on it: reading the findings and opening the files they name." }] } }),
+  JSON.stringify({ type: "assistant", uuid: "shape-a-2", timestamp: iso(900), sessionId: "conversation_shape", message: { role: "assistant", model: "claude-fable-5-1", content: [{ type: "text", text: shapeLang === "uk" ? "Перший пункт виправлено, переходжу до наступного." : "The first point is fixed; moving on to the next one." }] } }),
+].join("\n")}\n`;
 if (KANBAN && new URLSearchParams(location.search).has("stageshapes")) {
   /* Redesign S2: the lanes of every graph shape the Stages window draws (`stageShapes.fixture.ts`), on a task each. */
   const uk = localStorage.getItem("llv_lang") === "uk";
   for (const entry of buildStageShapes({
     project: PROJECT, iso, L: (en, ukText) => (uk ? ukText : en),
-    file: (_id, title, live) => {
-      const path = kanbanConversation(title, live ? "working" : "settled", live ? 400 : 3_600);
+    file: (_id, title, state) => {
+      const path = kanbanConversation(title, state, state === "working" ? 400 : state === "asking" ? 540 : 3_600);
+      shapePaths.add(path);
       return { path, conversationId: idOf(path) };
     },
   })) {
@@ -1929,7 +1938,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = request.path.startsWith(RELAY_CHAT_ROOT) ? RELAY_CHAT_FEED : FAST_TTS ? FAST_TTS_FEED : FIRST_MESSAGE !== null ? (fmTarget && request.path === (fmTarget as { path: string }).path && !request.path.startsWith("spawn:") ? fmTranscript() : "") : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : voiceFeed(SEAT_FEED)) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
+      const body = shapePaths.has(request.path) ? shapeFeed() : request.path.startsWith(RELAY_CHAT_ROOT) ? RELAY_CHAT_FEED : FAST_TTS ? FAST_TTS_FEED : FIRST_MESSAGE !== null ? (fmTarget && request.path === (fmTarget as { path: string }).path && !request.path.startsWith("spawn:") ? fmTranscript() : "") : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : voiceFeed(SEAT_FEED)) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });

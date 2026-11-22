@@ -392,3 +392,28 @@ test("a lineage-adopted helper attempt is evidence: it spends no retry, is not t
   expect(past.filter((row) => row.stageId === "implement").map((row) => [row.kind, row.n])).toEqual([["helper", 1], ["attempt", 1]]);
   expect(past.find((row) => row.kind === "helper")!.conversation).toEqual({ path: "/fixture/helper.jsonl", conversationId: "conversation_helper" });
 });
+
+/* A fix two reviewers share has no pass wire into it, so graph order puts it first; one column must read the lane in order. */
+const sharedStages = [
+  stage("brief", "architect", "build"),
+  stage("fix", "builder", "review"),
+  stage("build", "builder", "review"),
+  stage("review", "reviewer", "visual", { onFail: { to: "fix", maxRounds: 2 } }),
+  stage("visual", "visual-critic", null, { onFail: { to: "fix", maxRounds: 1 } }),
+];
+
+test("one column lists the stages the lane runs in order, then the stage only a failure reaches", () => {
+  const record = pipeline(sharedStages, [], null);
+  const column = layoutGraph(record, 340, "TB");
+  const top = (id: string) => column.nodes.get(id)!.y;
+  expect(["brief", "build", "review", "visual", "fix"].map(top)).toEqual(["brief", "build", "review", "visual", "fix"].map(top).sort((a, b) => a - b));
+  expect(top("fix")).toBeGreaterThan(top("visual"));
+});
+
+test("a graph too wide for the sheet turns into one column that fits, never a cut left-to-right row", () => {
+  const eight = pipeline(["a", "b", "c", "d", "e", "f", "g", "h"].map((id, at, all) => stage(id, "builder", all[at + 1] ?? null)), [], null);
+  expect(layoutGraph(eight, 2000).dir).toBe("LR");
+  const narrow = layoutGraph(eight, 780);
+  expect(narrow.dir).toBe("TB");
+  expect(narrow.width).toBeLessThanOrEqual(780);
+});

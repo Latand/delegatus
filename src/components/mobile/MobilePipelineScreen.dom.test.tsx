@@ -193,7 +193,7 @@ test("the bar names the lane whole; the body opens on whom the lane waits on, th
   /* The first line says the stop, as the card's state line does, with the dot in the owner's tone. */
   const waits = q(body, ".gs-waits")!;
   expect(waits.getAttribute("data-waits-on")).toBe("you");
-  expect(q(waits, ".gs-waits-words")!.textContent).toBe(translate("en", "cardState.you.lane", { why: translate("en", "cardState.why.other", { stage: "review" }) }));
+  expect(q(waits, ".gs-waits-words")!.textContent).toBe(translate("en", "cardState.you.lane", { why: translate("en", "cardState.why.other", { stage: "Review" }) }));
   /* Five stages, in the order the lane runs them, the stopped one selected; one panel, one pane. */
   expect(tabIds(host)).toEqual(["design", "implement", "review", "fix", "merge"]);
   expect(selectedTab(host)).toBe("review");
@@ -633,7 +633,7 @@ test("in Ukrainian the stage names stay the pipeline's and every word is the des
   setLocale("uk");
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
   expect(qa(host, '[role="tab"] .slbl').map((el) => el.textContent)).toEqual(["Design", "Implement", "Review", "Fix", "Merge"]);
-  expect(q(host, ".gs-waits-words")!.textContent).toBe(translate("uk", "cardState.you.lane", { why: translate("uk", "cardState.why.other", { stage: "review" }) }));
+  expect(q(host, ".gs-waits-words")!.textContent).toBe(translate("uk", "cardState.you.lane", { why: translate("uk", "cardState.why.other", { stage: "Review" }) }));
   expect(qa(host, ".gs-rule").map((rule) => rule.textContent)).toEqual([`↺ ${translate("uk", "kanban.stages.ruleRest", { from: "Review", to: "Implement", fired: 0, max: 3 })}`]);
   expect(qa(host, "[data-answer-action]")).toEqual([]);
   expect(q(host, "[data-open-conversation]")!.textContent).toBe(translate("uk", "pipelineStage.openAgent"));

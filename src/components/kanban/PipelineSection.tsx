@@ -282,12 +282,12 @@ export function useCoarsePointer(): boolean {
 const MAX_DOTS = 6;
 
 /**
- * The rounds of a loop, one position per round of its budget: a filled danger
- * dot for each round it fired, a success dot once the source passed, an
- * accent ring on the round under way, and a hollow dot for each round left.
- * No hollow dot left is a spent budget.
+ * The rounds of a loop, one position per round of its budget: a ✕ for each
+ * round it fired, a ✓ once the source passed, a filled dot on the round under
+ * way, and a hollow dot for each round left. The marks differ in shape, so a
+ * round reads without its colour. No hollow dot left is a spent budget.
  */
-export function RoundDots({ fired, max, passed, running }: { fired: number; max: number; passed: boolean; running: boolean }) {
+export function RoundDots({ fired, max, passed, running, count = false }: { fired: number; max: number; passed: boolean; running: boolean; /** The count in digits after the marks: a tab, which has no strip title, says how many rounds ran of how many. */ count?: boolean }) {
   if (max > MAX_DOTS) return <span className="sdots text" data-dots={`${fired}/${max}`}>{`${fired}/${max}`}</span>;
   /* The ring marks a round of the budget under way; past a spent budget there is none. */
   const ring = running && !passed && fired < max;
@@ -300,6 +300,7 @@ export function RoundDots({ fired, max, passed, running }: { fired: number; max:
   return (
     <span className="sdots" data-dots={dots.join(" ")} aria-hidden="true">
       {dots.map((kind, index) => <i key={index} className={`sdot ${kind}`} />)}
+      {count ? <span className="sdots-n" data-dots-count="">{`${fired}/${max}`}</span> : null}
     </span>
   );
 }

@@ -1843,8 +1843,11 @@ const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-plac
 const STAGE_SHAPES = SCENARIO === "stageshapes";
 const stageShapeLanes = STAGE_SHAPES ? buildStageShapes({
   project: PROJECT, iso, L,
-  file: (id, title, live) => {
-    const made = add(conversation(`shape-${id}`, title, live ? working({ plan: { current: "Reading the findings" } }) : { mtime: now - 300 * MIN }));
+  file: (id, title, state) => {
+    const made = add(conversation(`shape-${id}`, title, state === "working" ? working({ plan: { current: "Reading the findings" } }) : state === "asking" ? {
+      mtime: now - 9 * MIN, lastTurn: { startedAt: (now - 14 * MIN) * 1_000, endedAt: (now - 10 * MIN) * 1_000 },
+      pendingQuestion: { kind: "question", toolUseId: `tool-shape-${id}`, transcriptPath: `/repo/shape-${id}.jsonl`, pid: 1, askedAt: iso(9 * MIN), questions: [{ question: L("Should the report keep the header row when it is exported as CSV?", "Чи лишати рядок заголовків у звіті, коли його експортують у CSV?"), header: "Export", multiSelect: false, options: [] }] },
+    } : { mtime: now - 300 * MIN }));
     return { path: made.path, conversationId: made.conversationId! };
   },
 }) : [];

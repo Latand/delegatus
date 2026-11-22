@@ -14997,7 +14997,12 @@ describe("redesign S2 the Stages window on the phone", () => {
    *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
    *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "redesign S2"
    *
-   * Gated, from text ranges: every tab name whole in the four-column grid; the
+   * Gated, from text ranges: every tab name whole in the four-column grid, one
+   * skip mark on a skipped tab; the step buttons and the graph toggle on the
+   * waits-on line's own row; the selected stage's conversation read in its pane
+   * (never the empty-file note); a parked stage's reason, question and where to
+   * answer; a skipped stage's pane without an empty box; the graph's steps in
+   * order down its column, with no fail-only stage between them; the
    * title in the bar whole (it wraps, never ends in an ellipsis); the waits-on
    * line whole on the first screen; every rule line whole; one panel; the
    * selected pane's composer, when it has a conversation, whole above the
@@ -15032,6 +15037,9 @@ describe("redesign S2 the Stages window on the phone", () => {
     const title = screen.querySelector<HTMLElement>("[data-mobile2-title-text]");
     const waits = screen.querySelector<HTMLElement>(".gs-waits");
     const composer = screen.querySelector<HTMLElement>("[data-kanban-reader] textarea, [data-kanban-reader] [contenteditable='true']");
+    const tools = screen.querySelector<HTMLElement>(".gs-tools");
+    const pane = screen.querySelector<HTMLElement>(".pane");
+    const away = pane?.querySelector<HTMLElement>(".pane-conv.away");
     const composerBox = composer?.getBoundingClientRect();
     return {
       tabs: tabs.map((tab) => {
@@ -15043,8 +15051,21 @@ describe("redesign S2 the Stages window on the phone", () => {
           height: Math.round(tab.getBoundingClientRect().height),
           top: Math.round(tab.getBoundingClientRect().top * 10) / 10,
           unitTop: Math.round((tab.closest(".gs-unit")?.getBoundingClientRect().top ?? 0) * 10) / 10,
+          skipMarks: ((tab as HTMLElement).innerText.match(/↷/g) ?? []).length,
         };
       }),
+      lead: waits && tools ? { waitsTop: Math.round(waits.getBoundingClientRect().top), waitsBottom: Math.round(waits.getBoundingClientRect().bottom), toolsTop: Math.round(tools.getBoundingClientRect().top), toolsBottom: Math.round(tools.getBoundingClientRect().bottom) } : null,
+      pane: {
+        stage: pane?.dataset.stage ?? "",
+        text: pane?.innerText ?? "",
+        sub: pane?.querySelector(".pane-sub")?.textContent ?? "",
+        reader: Boolean(pane?.querySelector("[data-kanban-reader]")),
+        messages: pane?.querySelectorAll("[data-kanban-reader] .msg").length ?? 0,
+        stop: pane?.querySelector("[data-lane-stop]")?.textContent ?? null,
+        hint: pane?.querySelector("[data-answer-hint]")?.textContent ?? null,
+        question: pane?.querySelector("[data-stage-question]")?.textContent ?? null,
+        boxedEmpty: Boolean(away && getComputedStyle(away).borderTopStyle === "dashed"),
+      },
       columns: strip ? getComputedStyle(strip).gridTemplateColumns.split(" ").length : 0,
       title: { text: title?.textContent ?? "", cut: !title || title.scrollWidth > title.clientWidth + 1 || outside(title, box) || getComputedStyle(title).textOverflow === "ellipsis" && title.scrollWidth > title.clientWidth },
       waits: waits ? { text: waits.textContent ?? "", cut: outside(waits, box) } : null,
@@ -15096,7 +15117,34 @@ describe("redesign S2 the Stages window on the phone", () => {
                 if (read.rules.some((rule) => rule.cut)) fail("a rule line is cut");
                 if (read.panels !== (strip ? 1 : 0)) fail(`${read.panels} tab panels`);
                 if (read.readers > 1) fail(`${read.readers} readers mounted`);
-                if (read.composer && !read.composer.whole) fail(`the composer is cut: ${JSON.stringify(read.composer)}`);
+                if (read.composer) {
+                  /* The conversation's composer is reached by scrolling the screen to its end, and is whole there; the pane's feed scrolls inside its own bounded height. */
+                  const reached = await page.evaluate(() => {
+                    const body = document.querySelector<HTMLElement>("[data-mobile2-pipeline-body]");
+                    const screen = document.querySelector<HTMLElement>('[data-mobile2-screen="pipeline"]');
+                    const field = document.querySelector<HTMLElement>("[data-kanban-reader] textarea, [data-kanban-reader] [contenteditable='true']");
+                    if (!body || !screen || !field) return null;
+                    body.scrollTop = body.scrollHeight;
+                    const box = field.getBoundingClientRect();
+                    const within = screen.getBoundingClientRect();
+                    const result = { top: Math.round(box.top), bottom: Math.round(box.bottom), screenBottom: Math.round(within.bottom), whole: box.bottom <= within.bottom + 0.5 && box.top >= within.top };
+                    body.scrollTop = 0;
+                    return result;
+                  });
+                  if (reached && !reached.whole) fail(`the composer is cut at the end of the screen: ${JSON.stringify(reached)}`);
+                }
+                /* The step buttons and the graph toggle ride the waits-on line's row, not a row of their own under it. */
+                if (read.lead && read.lead.toolsTop >= read.lead.waitsBottom - 1) fail(`the step buttons take a row under the waits-on line: ${JSON.stringify(read.lead)}`);
+                for (const tab of read.tabs) if (tab.skipMarks > 1) fail(`tab ${tab.stage} draws its skip mark ${tab.skipMarks} times`);
+                /* The selected stage's conversation is read in its pane as on the desktop; a truly empty one never says «file». */
+                if (/файл поки|порожній|file is empty/i.test(read.pane.text)) fail(`the pane uses file wording: ${read.pane.text.slice(0, 120)}`);
+                if (read.pane.reader && read.pane.messages === 0 && /Ще без виводу|No output yet/.test(read.pane.text)) fail("the pane's conversation shows no message");
+                if (slug === "parked-publication" || slug === "parked-question") {
+                  if (!read.pane.stop) fail("the parked stage's pane gives no stop reason");
+                  if (!read.pane.hint) fail("the parked stage's pane does not say where to answer");
+                  if (/(працює…|working…)/.test(read.pane.text)) fail("the parked stage's pane shows a working footer");
+                }
+                if (slug === "parked-question" && !read.pane.question) fail("the parked stage's pane does not show its question");
                 if (read.overflowX > 0) fail(`the page scrolls sideways by ${read.overflowX}px`);
                 const sheetFile = `${key}-screen.png`;
                 await page.screenshot({ path: path.join(S2_OUT, sheetFile) });
@@ -15111,10 +15159,31 @@ describe("redesign S2 the Stages window on the phone", () => {
                     const pane = await page.evaluate(() => ({ state: document.querySelector(".pane .pstate")?.textContent ?? "", menu: Boolean(document.querySelector(".pane [data-pane-menu]")), stage: document.querySelector<HTMLElement>(".pane")?.dataset.stage ?? "" }));
                     if (pane.stage !== detached.stage) fail(`the detached tab's pane is ${pane.stage}`);
                     if (!pane.menu) fail("the detached tab's pane has no ⋯");
+                    const detachedText = await page.evaluate(() => document.querySelector<HTMLElement>(".pane")?.innerText ?? "");
+                    if (/Starts first|Стартує першим|first stage|перший етап|last stage|останній етап/.test(detachedText)) fail(`the detached tab's pane says it starts first or ends last: ${detachedText.slice(0, 160)}`);
                     if (detached.word && !pane.state.includes(lang === "en" ? (detached.word === "notRun" ? "never ran" : "off the chain") : (detached.word === "notRun" ? "не запускався" : "поза ланцюжком"))) fail(`the detached tab's pane says «${pane.state}»`);
                     const file = `${key}-detached-tab.png`;
                     await page.screenshot({ path: path.join(S2_OUT, file) });
                     frames.push({ file, lane: slug, lang, scheme, state: "detached-tab" });
+                    await page.tap(`[role="tab"][data-tab-stage="${initial}"]`);
+                    await pause(page, 300);
+                  }
+                  if (slug === "skipped" && initial) {
+                    /* The skipped stage's pane says so and draws no empty box in place of a conversation. */
+                    await page.tap('[role="tab"][data-tab-stage="deliver"]');
+                    await pause(page, 300);
+                    const skipped = await readScreen(page);
+                    const word = lang === "en" ? "skipped" : "пропущено";
+                    if (!skipped || skipped.pane.stage !== "deliver") fail("the skipped tab did not select");
+                    else {
+                      if (!skipped.pane.sub.toLowerCase().includes(word)) fail(`the skipped pane's sub-line says «${skipped.pane.sub}»`);
+                      if (/started by|запустив/.test(skipped.pane.text)) fail("the skipped pane names a starter");
+                      if (skipped.pane.boxedEmpty) fail("the skipped pane draws an empty dashed box");
+                      if (/No conversation recorded|Розмову не записано/.test(skipped.pane.text)) fail("the skipped pane says no conversation was recorded");
+                    }
+                    const file = `${key}-skipped-stage.png`;
+                    await page.screenshot({ path: path.join(S2_OUT, file) });
+                    frames.push({ file, lane: slug, lang, scheme, state: "skipped-stage" });
                     await page.tap(`[role="tab"][data-tab-stage="${initial}"]`);
                     await pause(page, 300);
                   }
@@ -15196,6 +15265,28 @@ describe("redesign S2 the Stages window on the phone", () => {
                   /* A conditional fix on a fail edge is drawn as a strip on its source node, which has no node of its own to select. */
                   if (graph.selectedKind === "conditional" ? graph.selectedNodes > 1 : graph.selectedNodes !== 1) fail(`${graph.selectedNodes} graph nodes are selected (tab ${graph.selectedTab}; nodes ${graph.nodeStages.join(" ")})`);
                   if (graph.overflowX > 0) fail(`the graph scrolls the page sideways by ${graph.overflowX}px`);
+                  /* The steps read in order down the column, and a stage only a failure reaches does not stand between them. */
+                  const column = await page.evaluate(() => ({
+                    cut: (() => {
+                      const canvas = document.querySelector<HTMLElement>(".gs-graph");
+                      if (!canvas) return true;
+                      const within = canvas.getBoundingClientRect();
+                      const walker = document.createTreeWalker(canvas, NodeFilter.SHOW_TEXT);
+                      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                        if (!node.textContent?.trim()) continue;
+                        const range = document.createRange();
+                        range.selectNodeContents(node);
+                        for (const rect of range.getClientRects()) if (rect.width > 0 && (rect.right > within.right + 0.5 || rect.left < within.left - 0.5)) return true;
+                      }
+                      return canvas.scrollWidth > canvas.clientWidth + 1;
+                    })(),
+                    nodes: [...document.querySelectorAll<HTMLElement>(".gs-graph .pnode[data-stage]")].map((node) => ({ stage: node.dataset.stage ?? "", top: Math.round(node.getBoundingClientRect().top) })),
+                  }));
+                  if (column.cut) fail("the graph is cut at the canvas's side");
+                  const stepNodes = read.tabs.filter((tab) => tab.kind === "step").map((tab) => column.nodes.find((node) => node.stage === tab.stage)).filter(Boolean) as Array<{ stage: string; top: number }>;
+                  for (let index = 1; index < stepNodes.length; index += 1) if (stepNodes[index]!.top < stepNodes[index - 1]!.top) fail(`step ${stepNodes[index]!.stage} stands before ${stepNodes[index - 1]!.stage} in the graph`);
+                  const lastStepTop = Math.max(0, ...stepNodes.map((node) => node.top));
+                  for (const node of column.nodes.filter((entry) => !stepNodes.some((step) => step.stage === entry.stage))) if (node.top < lastStepTop) fail(`${node.stage}, which only a failure reaches, stands between the steps of the lane`);
                   await shot("graph");
                   await page.tap("[data-sheet-graph]");
                   await pause(page, 200);

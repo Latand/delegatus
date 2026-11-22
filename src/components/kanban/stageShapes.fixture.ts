@@ -18,8 +18,8 @@ export interface ShapeDeps {
   iso: (secondsAgo: number) => string;
   /** The text in the page's language. */
   L: (en: string, uk: string) => string;
-  /** A conversation for one attempt, `live` when its agent is at work; null for none. */
-  file: (id: string, title: string, live: boolean) => { path: string; conversationId: string } | null;
+  /** A conversation for one attempt: `working` while its agent is at work, `asking` while it waits on an answer, `settled` once its turn ended. */
+  file: (id: string, title: string, state: "working" | "asking" | "settled") => { path: string; conversationId: string } | null;
 }
 
 export interface ShapeLane {
@@ -36,6 +36,12 @@ const fail = (to: string, maxRounds: number, onExhausted?: string) => ({ onFail:
 const failVia = (stageId: string, attempt: number, extra: Record<string, unknown> = {}) => ({ activatedBy: { stageId, attempt, edge: "fail", ...extra } });
 const passVia = (stageId: string, attempt: number, extra: Record<string, unknown> = {}) => ({ activatedBy: { stageId, attempt, edge: "pass", ...extra } });
 
+/** The report a stage files when it stops to ask the operator: its summary is the question the pane shows. */
+const stageQuestion = (summary: string) => ({
+  seq: 1, at: new Date(0).toISOString(), actor: { kind: "agent" }, verdict: { status: "needs_decision", findings: [] }, summary,
+  provenance: { state: "complete", outputs: [] }, calls: 1,
+});
+
 type Spec = Record<string, Array<[string, Record<string, unknown>?]>>;
 
 export function buildStageShapes(deps: ShapeDeps): ShapeLane[] {
@@ -47,7 +53,9 @@ export function buildStageShapes(deps: ShapeDeps): ShapeLane[] {
       attempts: attempts.map(([attemptState, extra], index) => {
         count += 1;
         const live = attemptState === "running" || attemptState === "needs_decision";
-        const file = attemptState === "skipped" ? null : deps.file(`${slug}-${stageId}-${index + 1}`, `${title}: ${stageId} ${index + 1}`, live);
+        /* A stage that stopped for the operator's answer has no agent at work: its conversation waits on the question. */
+        const conversation = attemptState === "running" ? "working" : attemptState === "needs_decision" && slug === "parked-question" ? "asking" : "settled";
+        const file = attemptState === "skipped" ? null : deps.file(`${slug}-${stageId}-${index + 1}`, `${title}: ${stageId} ${index + 1}`, conversation);
         return {
           n: index + 1, state: attemptState, effectiveRole: role("builder"), launchId: file ? `launch-${slug}-${count}` : null, conversationId: file?.conversationId ?? null, sessionId: null,
           agentPath: file?.path ?? null, paneId: null, flowId: null, startedAt: iso((600 - count * 20) * MIN), completedAt: live ? null : iso((590 - count * 20) * MIN),
@@ -101,7 +109,7 @@ export function buildStageShapes(deps: ShapeDeps): ShapeLane[] {
       [stage("fix", "builder", null)], { fix: [["passed"]] }, "fix", { stateDetail: "publishing the passed stage failed: the push was refused" }),
     lane("parked-question", L("Pick the export format", "Обрати формат експорту"), "needs_decision",
       [stage("design", "architect", "build"), stage("build", "builder", "review"), stage("review", "reviewer", null)],
-      { design: [["passed"]], build: [["needs_decision", passVia("design", 1)]] }, "build"),
+      { design: [["passed"]], build: [["needs_decision", { ...passVia("design", 1), report: stageQuestion(L("Should the report keep the header row when it is exported as CSV?", "Чи лишати рядок заголовків у звіті, коли його експортують у CSV?")) }]] }, "build"),
     lane("single", L("Integrate the cache warm-up", "Інтегрувати прогрів кешу"), "running",
       [stage("integrate", "builder", null)], { integrate: [["failed"], ["running"]] }, "integrate"),
     lane("eight", L("Rebuild the import pipeline", "Перебудувати конвеєр імпорту"), "running",

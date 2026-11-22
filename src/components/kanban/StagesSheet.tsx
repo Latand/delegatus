@@ -18,7 +18,8 @@ import { stageAgentRowModel, stageCloudTaskUrl, type StageChipState } from "@/co
 import type { KanbanPipeline } from "./kanbanModel";
 import { ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import { cssEscape } from "./kanbanFocus";
-import { arcTitle, GraphGlyph, graphStateWord, loopArcs, PipelineGraph, ROLE_GLYPH, RoundDots, stageNames, stageRoleId, useCoarsePointer, type LoopArc } from "./PipelineSection";
+import { arcTitle, GraphGlyph, graphStateWord, loopArcs, PipelineGraph, ROLE_GLYPH, ReturnSuffix, RoundDots, stageNames, stageRoleId, useCoarsePointer, type LoopArc } from "./PipelineSection";
+import { laneState, laneStopWhy } from "./cardState";
 import { attemptPlace, stageIdentity, valuesOf } from "./stageIdentity";
 import { modelGlyphKind } from "./modelGlyph";
 import { StageGlyph } from "./StageGlyph";
@@ -62,6 +63,8 @@ export interface SheetPane {
 
 export type SheetZoom = "fit" | number;
 
+/** The smallest scale «fit» draws a graph at: below it the graph turns into one column instead. */
+const FIT_FLOOR = 0.8;
 const ZOOM_MIN = 0.7;
 const ZOOM_MAX = 1.4;
 
@@ -165,7 +168,7 @@ export function StagesSheet(props: {
   const [canvasWidth, setCanvasWidth] = useState<number | null>(null);
   const selectedId = model.tabs.some((tab) => tab.stage.id === props.selected) ? props.selected : model.tabs[0]?.stage.id ?? null;
 
-  /* The graph fits the width the sheet has: left to right from 640 px. */
+  /* The graph is measured at the width the sheet has. */
   useLayoutEffect(() => {
     const element = canvas.current;
     if (!element || !graph) return;
@@ -195,10 +198,11 @@ export function StagesSheet(props: {
   };
 
   const available = canvasWidth === null ? null : Math.max(0, canvasWidth - 24);
-  const dir = canvasWidth !== null && canvasWidth >= 640 ? "LR" : "TB";
   const coarse = useCoarsePointer();
+  /* Left to right when the graph's layers fit the width the sheet has at no less than FIT_FLOOR of their size, else one column: a wider graph is never cut at the right edge. */
+  const dir = available === null ? "TB" : layoutGraph(pipeline, available / FIT_FLOOR, undefined, { coarse }).dir;
   const layout = available === null ? null : layoutGraph(pipeline, available, dir, { coarse });
-  const scale = layout ? (zoom === "fit" ? Math.max(0.9, Math.min(1, available! / Math.max(1, layout.width))) : zoom) : 1;
+  const scale = layout ? (zoom === "fit" ? Math.max(FIT_FLOOR, Math.min(1, available! / Math.max(1, layout.width))) : zoom) : 1;
   const changeZoom = (kind: "-" | "+" | "fit") => setZoom((current) => {
     if (kind === "fit") return "fit";
     const base = current === "fit" ? 1 : current;
@@ -265,9 +269,9 @@ export function StagesSheet(props: {
       ) : null}
       {/* A draft made from a conversation takes one more stage after its last. */}
       {conversationDraftLane(pipeline) ? <AddStageControl pipeline={pipeline} ports={props.ports} variant={props.addStageVariant ?? "board"} /> : null}
-      {model.rules.some((rule) => !rule.carried) ? (
+      {model.rules.some((rule) => rule.line) ? (
         <ul className="gs-rules" aria-label={t("kanban.stages.rules")}>
-          {model.rules.filter((rule) => !rule.carried).map((rule) => (
+          {model.rules.filter((rule) => rule.line).map((rule) => (
             <li key={rule.id} className="gs-rule" data-rule={rule.id} data-rule-shape={rule.shape} data-rule-back={rule.back ? "1" : undefined} data-arc-state={arcs.get(rule.id)?.state ?? "rest"}>
               <span aria-hidden="true">↺ </span>{ruleText(t, rule, arcs.get(rule.id), names)}
             </li>
@@ -309,7 +313,7 @@ export function StagesSheet(props: {
                 pane={pane}
                 tab={tab}
                 note={tabNote(tab, summary)}
-                ruleLine={model.rules.some((rule) => rule.from === tab.stage.id && !rule.carried)}
+                ruleLine={model.rules.some((rule) => rule.from === tab.stage.id && rule.line)}
                 index={index}
                 total={model.tabs.length}
                 names={names}
@@ -324,13 +328,15 @@ export function StagesSheet(props: {
   if (screen) {
     return (
       <section ref={sheet} className="gsheet screen" data-stages-sheet={pipeline.id} data-presentation="screen">
-        <WaitsOnButton waits={waits} open={waitsOpen} onToggle={() => setWaitsOpen((open) => !open)} buttonRef={waitsButton} />
-        {waitsOpen ? <WaitsOnPopover waits={waits} /> : null}
-        <div className="gs-tools">
-          {stepButtons}
-          <span className="grow" />
-          {graphControls}
+        {/* The step buttons and the graph toggle ride the waits-on line's own row, not a row of their own. */}
+        <div className="gs-lead">
+          <WaitsOnButton waits={waits} open={waitsOpen} onToggle={() => setWaitsOpen((open) => !open)} buttonRef={waitsButton} />
+          <div className="gs-tools">
+            {stepButtons}
+            {graphControls}
+          </div>
         </div>
+        {waitsOpen ? <WaitsOnPopover waits={waits} /> : null}
         {body}
       </section>
     );
@@ -382,13 +388,15 @@ export function StagesSheet(props: {
 const tabId = (pipelineId: string, stageId: string) => `gs-tab-${pipelineId}-${stageId}`;
 const panelId = (pipelineId: string) => `gs-panel-${pipelineId}`;
 
-/** A rule line's sentence: at rest what a failure does, then the arc's own words once the edge has fired. */
+/** A rule line's sentence, one grammar in every state: «If Review fails → Fix · 1 of 2». A spent budget adds what that cost, in a short clause; the fired round's own wording lives in the waits-on line and the pane. */
 function ruleText(t: ReturnType<typeof useLocale>["t"], rule: StageRule, arc: LoopArc | undefined, names: ReadonlyMap<string, string>): string {
   const from = names.get(rule.from) ?? rule.from;
   const to = names.get(rule.to) ?? rule.to;
-  if (arc && arc.state !== "rest") return arcTitle(t, arc, from, to);
   const key = rule.shape === "self" ? "kanban.stages.ruleRetry" : rule.back ? "kanban.stages.ruleRest" : "kanban.stages.ruleOn";
-  return t(key, { from, to, fired: rule.fired, max: rule.max });
+  const line = t(key, { from, to, fired: rule.fired, max: rule.max });
+  if (!arc || arc.state !== "exhausted") return line;
+  const end = arc.parked ? "here" : rule.mode === "stop-after-fix" ? "wait" : rule.mode === "park" ? "park" : "advance";
+  return `${line} · ${t(`kanban.stages.ruleEnd.${end}`)}`;
 }
 
 /** One tab: a step, or the stage that only runs when another fails, as a subordinate tab in its source's cell. */
@@ -413,6 +421,9 @@ function StageTabButton({ tab, tabs, summary, names, arcs, selected, onSelect }:
   const sources = tab.sources.map((id) => names.get(id) ?? id).join(t("kanban.stages.tab.or"));
   const next = stage.next ? names.get(stage.next) ?? stage.next : null;
   const arc = tab.carried ? arcs.get(tab.carried.id) : undefined;
+  /* A stage whose own fail edge has fired, and which no dots on another tab carry, wears the card's return mark and count. */
+  const outgoing = tabs.rules.find((rule) => rule.from === stage.id && rule.line && rule.fired > 0);
+  const returned = outgoing ? arcs.get(outgoing.id) : undefined;
   const why = tab.kind === "conditional" && sources
     ? [
       t("kanban.stages.tab.onlyIf", { sources }),
@@ -445,7 +456,8 @@ function StageTabButton({ tab, tabs, summary, names, arcs, selected, onSelect }:
       <span className="smark" aria-hidden="true">{NARROW_MARK[state]}</span>
       <StageGlyph state={state} model={identity} motion={view?.motion} fallback="dot" className="sglyph" />
       <span className="slbl">{name}</span>
-      {tab.carried ? <RoundDots fired={tab.carried.fired} max={tab.carried.max} passed={arc ? arcPassed(arc, summary) : false} running={arc?.live ?? false} /> : null}
+      {returned && outgoing ? <ReturnSuffix arc={returned} title={arcTitle(t, returned, name, names.get(outgoing.to) ?? outgoing.to)} /> : null}
+      {tab.carried ? <RoundDots fired={tab.carried.fired} max={tab.carried.max} passed={arc ? arcPassed(arc, summary) : false} running={arc?.live ?? false} count /> : null}
     </button>
   );
 }
@@ -502,13 +514,22 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   /* What the lane stopped on is said in the stage it stopped on, in place of the bare question. */
   const answers = pipelineAnswers(pipeline, (entry) => nameOf(entry.id));
   const stopped = answers && answers.kind !== "merge" && (answers.stage?.id ?? parkedStage(pipeline)?.id) === stage.id ? answers : null;
+  const laneStop = stopped ? laneState(pipeline).stop : null;
+  const stopWhy = stopped && laneStop && laneStop.kind !== "other" && stopped.kind === "decision" && !stopped.stop ? laneStopWhy(t, pipeline, laneStop, false, (id) => names.get(id) ?? null) : null;
 
   const facts = paneFacts(pipeline, stage, shown, view);
   const after = pipeline.stages.find((candidate) => candidate.next === stage.id);
-  const bits = [
-    facts.startedBy
-      ? t("kanban.stages.startedBy", { stage: nameOf(facts.startedBy.stageId), edge: t(`kanban.graph.${facts.startedBy.edge}`) })
-      : after ? t("kanban.stages.runsAfter", { stage: nameOf(after.id) }) : t("kanban.stages.firstStage"),
+  /* A skipped attempt ran nothing: it says so, not who started it. */
+  const skippedHere = shown?.state === "skipped";
+  /* What starts the stage, in the words its tab uses: a stage nothing passes into says what does reach it, or that nothing does. */
+  const sources = tab.sources.map(nameOf).join(t("kanban.stages.tab.or"));
+  const origin = facts.startedBy
+    ? t("kanban.stages.startedBy", { stage: nameOf(facts.startedBy.stageId), edge: t(`kanban.graph.${facts.startedBy.edge}`) })
+    : after ? t("kanban.stages.runsAfter", { stage: nameOf(after.id) })
+      : pipeline.stages[0]?.id === stage.id ? t("kanban.stages.firstStage")
+        : sources ? t("kanban.stages.tab.onlyIf", { sources }) : t("kanban.stages.noStarter");
+  const bits = skippedHere ? t("kanban.stages.skippedSub") : [
+    origin,
     facts.nextAttempt ? t("kanban.graph.lastWas", { state: graphStateWord(t, facts.nextAttempt) }) : null,
     facts.onFail && !ruleLine ? t("kanban.stages.onFail", { stage: nameOf(facts.onFail.to), fired: facts.onFail.fired, max: facts.onFail.max }) : null,
   ].filter(Boolean).join(" · ");
@@ -517,7 +538,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
 
   /* A pipeline that ended before this stage launched leaves at most an attempt
      that never ran: the pane still shows the first message it never sent. */
-  const neverRan = !shown || (pipelineEnded(pipeline) && attempts.every(neverLaunched));
+  const neverRan = !skippedHere && (!shown || (pipelineEnded(pipeline) && attempts.every(neverLaunched)));
   const outcome = draft && draft.phase !== "saving" ? draftOutcome(pipeline, stage.id, draft) : null;
   let body: React.ReactNode;
   if (neverRan && props.windowDraft === stage.id) {
@@ -554,6 +575,9 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         <ReaderSlot placement={props.placement} readerKey={pane.readerKey} />
       </div>
     );
+  } else if (skippedHere && !recorded) {
+    /* Nothing ran, so there is no conversation to be missing: the sub-line says it, and no empty box stands for it. */
+    body = null;
   } else if (recorded) {
     body = (
       <div className="pane-conv away">
@@ -597,7 +621,12 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       {agent.question ? <p className="m-0 max-h-40 shrink-0 overflow-y-auto whitespace-pre-wrap break-words text-ui text-primary" tabIndex={0} data-stage-question={stage.id}>{agent.question}</p> : null}
       {stopped ? (
         <div className="pblock pane-stop" data-pane-stop={stage.id}>
-          <div className="pb-answer"><AnswerReport pipeline={pipeline} answers={stopped} names={names} nameOf={(entry) => nameOf(entry.id)} /></div>
+          <div className="pb-answer">
+            {/* The stop's own reason leads, in the words the waits-on line uses: a stage that passed and whose branch was refused reads that, not «needs a decision». */}
+            {stopWhy ? <p className="stage-report" data-lane-stop={laneStop?.kind}>{stopWhy}</p> : null}
+            <AnswerReport pipeline={pipeline} answers={stopped} names={names} nameOf={(entry) => nameOf(entry.id)} reason={!stopWhy} />
+            {stopped.kind === "decision" ? <p className="pane-note" data-answer-hint={stage.id}>{t("kanban.stages.answerHint")}</p> : null}
+          </div>
         </div>
       ) : null}
       {agent.target ? (

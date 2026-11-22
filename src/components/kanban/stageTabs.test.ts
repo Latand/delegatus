@@ -65,7 +65,7 @@ test("a docked fix that never ran is a conditional tab under its review, with no
   const fix = model.tabs[2]!;
   expect([fix.kind, fix.number, fix.anchor]).toEqual(["conditional", null, "review"]);
   expect(fix.carried).toMatchObject({ fired: 0, max: 2, shape: "dock" });
-  expect(model.rules.filter((rule) => !rule.carried)).toEqual([]);
+  expect(model.rules.filter((rule) => rule.line)).toEqual([]);
   expect(tabNote(fix, summary)).toEqual({ skipped: false, word: "notNeeded" });
   /* The same lane while it can still reach the fix. */
   const open = summarizePipeline(lane(reviewed(), { build: [attempt(1, "passed")], review: [attempt(1, "running")] }, "running", "review"));
@@ -84,7 +84,7 @@ test("a docked fix that ran carries its state and one fired round", () => {
   expect(tabNote(fix, summary).word).toBeNull();
   expect(fix.carried).toMatchObject({ fired: 1, max: 2 });
   expect(summary.views.get("fix")?.state).toBe("running");
-  expect(model.rules.every((rule) => rule.carried)).toBe(true);
+  expect(model.rules.every((rule) => rule.carried && !rule.line)).toBe(true);
 });
 
 test("a fix that docks to the end or onward stays in its review's unit", () => {
@@ -314,5 +314,26 @@ test("a completed lane says it is done and a single-stage lane drops the positio
   const done = threeStages("completed", "review", { brief: [attempt(1, "passed")], build: [attempt(1, "passed")], review: [attempt(1, "passed")] });
   expect(waits(done)).toMatchObject({ owner: "done", words: "Done", stageId: null });
   const single = lane([stage("integrate", "builder", null)], { integrate: [attempt(1, "running")] }, "running", "integrate");
-  expect(waits(single).words).toBe("waiting on the Builder (integrate)");
+  expect(waits(single).words).toBe("Waiting on the Builder (integrate)");
+});
+
+test("a carried edge whose budget is spent draws a rule line too, so the words say where the lane went", () => {
+  const spent = lane(reviewed(), {
+    build: [attempt(1, "passed")],
+    review: [attempt(1, "failed"), attempt(2, "failed")],
+    fix: [attempt(1, "passed", failVia("review", 1)), attempt(2, "passed", failVia("review", 2))],
+  }, "running", "review");
+  const rule = stageTabs(summarizePipeline(spent)).rules[0]!;
+  expect(rule).toMatchObject({ carried: true, fired: 2, max: 2, line: true });
+});
+
+test("the stop's stage is named as its tab names it, not by its id and attempt", () => {
+  const record = lane([stage("build", "builder", "review"), stage("review", "reviewer", null)], { build: [attempt(1, "passed")], review: [attempt(1, "failed"), attempt(2, "needs_decision")] }, "needs_decision", "review", {
+    stateDetail: "review rounds used up",
+  });
+  const summary = summarizePipeline(record);
+  const model = stageTabs(summary);
+  const named = laneWaitsOn(en, summary, model, NOW, { nameOf: (entry) => (entry.id === "review" ? "Code review" : entry.id), clock });
+  expect(named.words).not.toMatch(/review · \d/);
+  expect(named.words.charAt(0)).toBe(named.words.charAt(0).toUpperCase());
 });

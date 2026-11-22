@@ -35,8 +35,10 @@ export interface StageRule {
   fired: number;
   max: number;
   mode: PipelineFailEdgeExhaustion;
-  /** The target's own tab carries this edge as round dots, so no rule line is drawn for it. */
+  /** The target's own tab carries this edge as round dots and their count. */
   carried: boolean;
+  /** A rule line draws it: an edge no tab carries, and a carried edge whose budget is spent, which no dot says in words. */
+  line: boolean;
   /** The target is a step that reads earlier than the stage whose failure reaches it: the lane goes back. A conditional or detached target is forward. */
   back: boolean;
 }
@@ -109,15 +111,19 @@ export function stageTabs(summary: KanbanPipeline): StageTabModel {
     if (!stage.onFail || !to || !byId.has(to)) return [];
     const id = `${stage.id}:fail:${to}`;
     const shape = shapes.get(id) ?? "other";
+    const fired = stageFailEdgeRoundsUsed(pipeline, stage);
+    const max = failEdgeMaxRounds(pipeline, stage);
+    const carried = shape === "dock" && anchorOf.has(to) && sourcesOf(to).length === 1;
     return [{
       id,
       from: stage.id,
       to,
       shape,
-      fired: stageFailEdgeRoundsUsed(pipeline, stage),
-      max: failEdgeMaxRounds(pipeline, stage),
+      fired,
+      max,
       mode: failEdgeExhaustion(stage.onFail),
-      carried: shape === "dock" && anchorOf.has(to) && sourcesOf(to).length === 1,
+      carried,
+      line: !carried || (max > 0 && fired >= max),
       back: stepIds.has(to) && order(to) <= order(stage.id),
     }];
   });
@@ -219,12 +225,17 @@ export function laneWaitsOn(t: TFunction, summary: KanbanPipeline, model: StageT
   const since = lane.sinceMs === null ? "" : humanizeDuration(Math.max(0, (nowMs - lane.sinceMs) / 1000));
   const state: CardState = { owner: lane.owner, subject: { kind: "lane", lane }, lanes: [lane], sinceMs: lane.sinceMs };
   const popover = cardStatePopover(t, state, since).replace(/\s+$/, "");
-  const lead = (words: string): string => [position, words].filter(Boolean).join(" · ");
+  /* The line starts with a capital whether a position leads it or not. */
+  const lead = (words: string): string => [position, position ? words : words.charAt(0).toLocaleUpperCase() + words.slice(1)].filter(Boolean).join(" · ");
+  const stopName = (id: string): string | null => {
+    const found = pipeline.stages.find((candidate) => candidate.id === id);
+    return found ? nameOf(found) : null;
+  };
   const said = (words: string, detail = popover): WaitsOn => ({ owner: lane.owner, words, detail, stageId });
 
   /* A stop someone owes an answer to: the stop's own reason, not the stage chips', which read a passed stage as done. */
   if ((lane.owner === "you" || lane.owner === "seat") && lane.stop) {
-    return said(t(lane.owner === "you" ? "cardState.you.lane" : "cardState.seat.lane", { why: laneStopWhy(t, pipeline, lane.stop) }));
+    return said(t(lane.owner === "you" ? "cardState.you.lane" : "cardState.seat.lane", { why: laneStopWhy(t, pipeline, lane.stop, false, stopName) }));
   }
   if (lane.owner === "you" || lane.owner === "seat") return said(cardStateText(t, state, options.clock) ?? t(lane.owner === "you" ? "cardState.you.plain" : "cardState.seat.plain"));
   const provider = currentProviderWait(pipeline);
