@@ -2,7 +2,7 @@ import { ExternalRelayError } from "./errors";
 
 export type InputMedia = { ref: string; kind: "photo" | "document"; availability: "ready" | "too_large" | "unsupported_type" | "missing" | "protected";
   mime_type?: string; filename?: string; byte_size?: number; expires_at?: string };
-export type MediaRequest = { request_id: string; lease_id: string; delivery?: "guest"; features?: string[]; input: {
+export type MediaRequest = { request_id: string; lease_id: string; delivery?: "guest" | "business"; features?: string[]; input: {
   respond_to: string | null; conversation: { id: string; reply_to: string | null; sent_at?: string; media?: InputMedia[] }[];
   documents: { text: string; message_id?: string; media_ref?: string; extraction?: "complete" | "truncated" | "unavailable" }[] } };
 const MiB = 1024 * 1024;
@@ -15,11 +15,13 @@ export const RELAY_HISTORY_MEDIA = "relay_history_media";
 export const RELAY_MEDIA_ANY_DOCUMENT = "relay_media_any_document";
 export const inputMediaExtensions: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md", "text/csv": ".csv", "application/json": ".json" };
 export const isInboundImage = (mime: string | undefined) => mime === "image/jpeg" || mime === "image/png";
+export const isolatedDelivery = (request: { delivery?: unknown } | null | undefined) =>
+  request?.delivery === "guest" || request?.delivery === "business";
 const fail = (code: string, status: number): never => { throw new ExternalRelayError(code, status); };
 const validId = (id: unknown): id is string => typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id);
 export const hasInboundMedia = (request: Pick<MediaRequest, "features">) => request.features?.includes("relay_media_in") === true;
 export const hasHistoryMedia = (request: Pick<MediaRequest, "features" | "delivery">) =>
-  hasInboundMedia(request) && (request.delivery === "guest" || request.features?.includes(RELAY_HISTORY_MEDIA) === true);
+  hasInboundMedia(request) && (isolatedDelivery(request) || request.features?.includes(RELAY_HISTORY_MEDIA) === true);
 /** Descriptor checks shared by history normalization and final admission. */
 export function validateInputMediaDescriptor(media: InputMedia, features?: string[]): void {
   if (!validId(media.ref) || !["photo", "document"].includes(media.kind)

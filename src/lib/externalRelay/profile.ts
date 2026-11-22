@@ -1,4 +1,4 @@
-import { ownerRequesterTrigger, type ExternalRelayRequest, type ExternalRelayRequester } from "./protocol";
+import { isolatedDelivery, ownerRequesterTrigger, type ExternalRelayRequest, type ExternalRelayRequester } from "./protocol";
 import type { PairedRelay, RelayTargetSettings } from "./store";
 import type { OwnerBridgeContext } from "./ownerBridgeContext";
 
@@ -21,7 +21,7 @@ export function ownerBindingRefusal(relay: Pick<PairedRelay, "owner">, request: 
 
 /** Only a verified ordinary owner trigger grants host access. */
 export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, request: ExternalRelayRequest): OwnerInstruction | null {
-  if (target.ownerTier !== true || request.delivery === "guest") return null;
+  if (target.ownerTier !== true || isolatedDelivery(request)) return null;
   const message = ownerRequesterTrigger(request.input);
   if (!message) return null;
   return { messageId: message.id, text: message.text, requestText: request.input.request_text };

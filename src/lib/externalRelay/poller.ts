@@ -21,7 +21,7 @@ import { noteRelayOutcome, relayActivity, relayOutcomeLabel } from "./activity";
 import { pruneAnswerRecords, recordAnswerCompletionRefusal, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { recordCompletionRefusal } from "./completionRefusal";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
-import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
+import { requestSchema, RELAY_BUSINESS_ANSWERS, RELAY_ISOLATED_REQUESTERS, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
 import { RELAY_HISTORY_MEDIA, RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
 import {
   advertisedSlots,
@@ -456,7 +456,8 @@ export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
     ...(relay?.features?.includes("relay_media_in") ? ["relay_media_in"] : []),
     ...(relay?.features?.includes("relay_media_in") && relay.features.includes(RELAY_HISTORY_MEDIA) ? [RELAY_HISTORY_MEDIA] : []),
     ...(relay?.features?.includes("relay_media_in") && relay.features.includes(RELAY_MEDIA_ANY_DOCUMENT) ? [RELAY_MEDIA_ANY_DOCUMENT] : []),
-    ...(rich ? ["relay_rich_messages", ...(relay?.features?.includes("relay_media_out") ? ["relay_media_out"] : [])] : [])];
+    ...(rich ? ["relay_rich_messages", ...(relay?.features?.includes("relay_media_out") ? ["relay_media_out"] : [])] : []),
+    ...(switches.business_answers ? [RELAY_ISOLATED_REQUESTERS, RELAY_BUSINESS_ANSWERS] : [])];
   return { kinds: switches.compact ? ["answer", "compact"] : ["answer"],
     features: switches.owner_tools && relay?.features?.includes(RELAY_OWNER_TOOLS)
       ? [...features, RELAY_OWNER_TOOLS] : features };
@@ -536,11 +537,12 @@ async function poll(
     let observed = false;
     const timeoutMs = (Math.min(25, relay.limits.max_wait_s) + 15) * 1000;
     try {
+      const claimBody = relayClaimBody(relay);
       const result = await withViewerOperation("telegram.review-polls", () => relayCall<{ request?: unknown }>(
         relay.api_base,
         "/requests/claim",
         "POST",
-        relayClaimBody(relay),
+        claimBody,
         relay.credential,
         {
           timeoutMs,
@@ -561,7 +563,8 @@ async function poll(
         const firstHeartbeat = new Promise<void>(resolve => { leaseReady = resolve; });
         const run = runClaimedRequest(current && controller.armed ? current : { ...relay, paused: true }, result.body.request, () =>
           wakeExternalRelayPoller(relay.id),
-          { onUnknownFeature: () => refreshRelayDescriptorFeatures(relay.id, 0, { force: true }), onLeaseReady: leaseReady },
+          { onUnknownFeature: () => refreshRelayDescriptorFeatures(relay.id, 0, { force: true }),
+            onLeaseReady: leaseReady, advertisedFeatures: claimBody.features },
         );
         void run.then(leaseReady, leaseReady);
         const trackedRun = run

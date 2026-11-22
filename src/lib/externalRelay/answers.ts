@@ -72,7 +72,7 @@ export type RelayAnswerRecord = {
   answer: (Omit<ExternalRelayAnswer, "action"> & { action: string }) | null;
   /** Whether the service acknowledged the completion; null when none was sent. */
   delivery: RelayAnswerDelivery | null;
-  /** `Request.input` exactly as received, unknown fields included. */
+  /** Wire input for ordinary claims and the validated input for isolated delivery. */
   input: unknown;
 };
 export type RelayAnswerSummary = Pick<

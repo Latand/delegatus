@@ -1,14 +1,14 @@
 import { ExternalRelayError } from "./client";
 import { checkedMentions, photoReferenceSource } from "./composition";
 import net from "node:net";
-import { checkedAnswer, checkedRound, type ExternalRelayRequest, type ExternalRelayDecision, type RelayUrlButton, type RelayMediaKind } from "./protocol";
+import { isolatedDelivery, checkedAnswer, checkedRound, type ExternalRelayRequest, type ExternalRelayDecision, type RelayUrlButton, type RelayMediaKind } from "./protocol";
 
 export type AnswerDrop = { part: string; index?: number; reason: string };
 export type LocalAttachment = { path: string; kind: RelayMediaKind; caption?: string; filename?: string };
 const localFiles = new WeakMap<object, LocalAttachment[]>();
 export const answerFiles = (answer: object) => localFiles.get(answer) ?? [];
 export function answerCapabilities(request: ExternalRelayRequest, engine: string) {
-  const offered = request.delivery !== "guest" && request.features?.includes("relay_rich_messages") === true;
+  const offered = !isolatedDelivery(request) && request.features?.includes("relay_rich_messages") === true;
   const guide = request.input.format;
   const rich = offered && !!guide;
   const media = rich && request.features?.includes("relay_media_out") === true && !!request.answer.attachments;

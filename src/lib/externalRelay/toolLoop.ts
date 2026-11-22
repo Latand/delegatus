@@ -2,7 +2,7 @@ import { pageReader, type PageReader, type PageReadResult } from "./pageReader";
 import { admittedSeedMedia } from "./mediaInputValidation";
 import { createHash } from "node:crypto";
 import { ExternalRelayError, isUnknownFeatureRefusal, relayCall } from "./client";
-import { isOwnerTool, ownerRateLimitSchema, relayToolAudience, RELAY_OWNER_TOOLS, toolCallResultSchema, visibleRelayTools, type ExternalRelayRequest, type RoundCall, type ToolCallResult } from "./protocol";
+import { isolatedDelivery, isOwnerTool, ownerRateLimitSchema, relayToolAudience, RELAY_OWNER_TOOLS, toolCallResultSchema, visibleRelayTools, type ExternalRelayRequest, type RoundCall, type ToolCallResult } from "./protocol";
 import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
@@ -13,11 +13,11 @@ export const RELAY_TOOL_ROUNDS = 8;
 export const UNKNOWN_OUTCOME_READS = 3;
 
 export const callableReads = (request: ExternalRelayRequest) =>
-  request.delivery === "guest" ? [] : visibleRelayTools(request).filter(tool =>
+  isolatedDelivery(request) ? [] : visibleRelayTools(request).filter(tool =>
     tool.mode === "direct" && tool.effect === "read" && tool.parameters);
 
 export const callableTools = (request: ExternalRelayRequest) =>
-  request.delivery === "guest" ? [] : visibleRelayTools(request).filter(tool =>
+  isolatedDelivery(request) ? [] : visibleRelayTools(request).filter(tool =>
     tool.name !== "read_page" && tool.mode === "direct" && tool.parameters &&
     (tool.effect === "read" || tool.effect === "action" && !!request.input.requester));
 
@@ -27,7 +27,7 @@ export const PAGE_READ_TOOL: import("./protocol").ExternalRelayTool = {
     properties: { url: { type: "string" } } },
 };
 export const roundTools = (request: ExternalRelayRequest, pageRead = false) =>
-  [...callableTools(request), ...(pageRead && request.delivery !== "guest" ? [PAGE_READ_TOOL] : [])];
+  [...callableTools(request), ...(pageRead && !isolatedDelivery(request) ? [PAGE_READ_TOOL] : [])];
 type LoopResolution = ActionResolution & { page?: PageReadResult };
 
 /** Sort at every depth without interpreting JSON keys as object prototypes. */

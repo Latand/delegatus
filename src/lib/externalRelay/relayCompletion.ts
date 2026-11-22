@@ -15,6 +15,7 @@ export async function completeRelayRequest(
   plainMax = 4000,
   onRefusal?: (refusal: CompletionRefusal) => void,
   onHttpRefusal?: (record: RelayHttpRefusal) => void,
+  plainOnly = false,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery; refusalCode?: string; tooLong?: true }> {
   let wait = 1000;
   let attempted = false;
@@ -88,6 +89,8 @@ export async function completeRelayRequest(
         }
         if (v2 && [415, 422].includes(error.status)) return refused();
         if (error.status === 413 && body.outcome === "answered") {
+          // Isolated leases carry one text answer with no format downgrade.
+          if (plainOnly) return refused();
           const answer = body.answer;
           if ([...answer.text].length <= plainMax && (answer.format !== "plain"
             || answer.buttons?.length || answer.mentions?.length || answer.attachments?.length)) {
@@ -103,7 +106,7 @@ export async function completeRelayRequest(
         }
         if ([400, 401, 404, 409, 413, 426].includes(error.status)) return refused();
       }
-      unresolved = !!allowOwnerReply;
+      unresolved = !!allowOwnerReply || plainOnly;
       if (Date.now() >= until()) return result("unconfirmed");
       if (body.outcome === "answered" && (body.answer.format !== undefined || tooLong) && error instanceof ExternalRelayError && error.status === 429 && error.retryAfterSeconds !== null) wait = Math.max(1, error.retryAfterSeconds * 1000);
       await new Promise(resolve => setTimeout(resolve, Math.min(wait, Math.max(0, until() - Date.now()))));
