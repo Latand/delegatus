@@ -6,7 +6,7 @@ import type { StagedAttachment } from "./attachments";
 import type { RelayAnswerDelivery } from "./answers";
 import { relayRequestInFlight } from "./activity";
 import { readAnswerRecord, recordLateAnswerExpired } from "./answers";
-import { ownerTierFor } from "./profile";
+import { ownerBindingRefusal, ownerTierFor } from "./profile";
 import { ownerFailureAnswer } from "./ownerRun";
 import { isDeepStrictEqual } from "node:util";
 import { answerCapabilities } from "./answerV2";
@@ -15,7 +15,13 @@ import { isOwnerRequestTimeoutReply } from "./requestTimeout";
 /** Older custody rows retained the input in the answer record. Reconstruct only
  * from that record and the already verified owner request, never from chat text. */
 export function ownerRecoveryRequest(run: RunRecord, relay: PairedRelay): unknown | null {
-  if (run.ownerTurn?.rawRequest) return run.ownerTurn.rawRequest;
+  if (run.ownerTurn?.rawRequest) {
+    const raw = run.ownerTurn.rawRequest;
+    const parsed = requestSchema.safeParse(raw);
+    return parsed.success && parsed.data.request_id === run.requestId && parsed.data.lease_id === run.leaseId
+      && parsed.data.target_id === run.targetId && !ownerBindingRefusal(relay, parsed.data)
+      && ownerTierFor({ ownerTier: true }, parsed.data, { guestHandoff: true }) ? raw : null;
+  }
   const record = readAnswerRecord(run.relayId, run.targetId, run.requestId);
   if (!record?.profile?.owner || !run.ownerTurn?.request) return null;
   const parsed = requestSchema.safeParse({ request_id: run.requestId, lease_id: run.leaseId,

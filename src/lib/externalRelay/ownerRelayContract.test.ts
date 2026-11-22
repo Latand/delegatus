@@ -39,6 +39,11 @@ const request = requestSchema.parse({ ...contextRequest, answer: { ...contextReq
 });
 const owner = ownerTierFor({ ownerTier: true }, request)!;
 
+test("ordinary plain owner replies keep multiple lines before a handoff", () => {
+  const text = "The first result.\nThe second result.";
+  expect(ownerAnswer(text, request, owner)).toMatchObject({ action: "reply", text, reply_to: owner.messageId });
+});
+
 test("owner run delivers the refusal outcome and queued board destination to the chat", async () => {
   const reply = "Передачу відхилено. Задача «Виконати зміну» чекає на дошці project-b. Увімкніть перевірки місця оркестратора, щоб він її отримав.";
   const result = await runOwnerAgent({ request, owner, accountId: "fixture",

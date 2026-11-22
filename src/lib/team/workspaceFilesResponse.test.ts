@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { gunzipSync } from "node:zlib";
 
 import type { FilesResponse } from "@/lib/types";
 import type { workspaceScope } from "./workspaceAccess";
@@ -23,7 +22,7 @@ const board: FilesResponse = {
 };
 const after = () => undefined;
 
-test("scoped validators avoid decoding unchanged operator JSON and support gzip", async () => {
+test("scoped validators avoid decoding unchanged operator JSON and leave the encoding to Next", async () => {
   let parses = 0;
   let sourceEtag = '"source-one"';
   const validators: (string | null)[] = [];
@@ -47,8 +46,8 @@ test("scoped validators avoid decoding unchanged operator JSON and support gzip"
   } });
   const first = await respond(request(), scope, after);
   expect(first.status).toBe(200);
-  expect(first.headers.get("content-encoding")).toBe("gzip");
-  const text = gunzipSync(await first.arrayBuffer()).toString();
+  expect(first.headers.get("content-encoding")).toBeNull();
+  const text = await first.text();
   expect(text).not.toContain("foreign");
   expect(JSON.parse(text).projectDisplayNames.alpha).toHaveLength(2048);
   expect(JSON.parse(text).archivedProjects).toEqual(["alpha"]);

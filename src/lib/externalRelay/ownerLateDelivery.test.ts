@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { expect, spyOn, test } from "bun:test";
 import { startTestRelay } from "./testRelay";
 import { clonePairing, cloneReceipt } from "./clone.fixture";
-import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
+import { deliverOwnerLateAnswer, ownerRecoveryRequest } from "./ownerLateDelivery";
 import { changeRun, dropRun, readRunLedger, reserveRun } from "./store";
 import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
@@ -10,6 +10,24 @@ import { contextRequest } from "./request.fixture";
 const context = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 };
 const body = { lease_id: "fixture", outcome: "answered" as const,
   answer: { action: "reply" as const, text: "Answer <with> & text", reply_to: "opaque_trigger" }, duration_ms: 121000 };
+
+for (const delivery of [undefined, "guest"] as const)
+test(`owner recovery requires the saved claim to identify the same owner trigger (${delivery ?? "ordinary"})`, () => {
+  const raw = requestSchema.parse({ ...contextRequest, delivery,
+    answer: { ...contextRequest.answer, progress: "none" },
+    input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } },
+  });
+  const relay = clonePairing("http://127.0.0.1:1");
+  const run = {
+    requestId: raw.request_id, leaseId: raw.lease_id, targetId: raw.target_id, relayId: relay.id,
+    ownerPid: process.pid, ownerIdentity: null, childPid: null, childIdentity: null,
+    startedAt: raw.claimed_at, runDir: "", ownerTurn: { clientAttemptId: "relay-owner-recovery", rawRequest: raw },
+  };
+  expect(ownerRecoveryRequest(run, relay)).toEqual(raw);
+  raw.input.conversation[0]!.author.key = "different_author";
+  expect(ownerRecoveryRequest(run, relay)).toBeNull();
+});
+
 async function fixture(id: string, delivery: unknown = context, owner = true,
   handler: Parameters<typeof startTestRelay>[0] = () => ({ body: cloneReceipt() })) {
   const server = await startTestRelay(handler);

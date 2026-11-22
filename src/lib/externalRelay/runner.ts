@@ -56,6 +56,7 @@ import {
   roundSchema,
   type ExternalRelayDecision,
   handoffAnswerSchema,
+  INVALID_REQUESTER_DETAIL,
   offersHandoff,
   requestSchema,
   type ExternalRelayCompletion,
@@ -72,6 +73,8 @@ import { answerRecorder, countMemberAnswers, readAnswerRecord, type RelayAnswerD
 import {
   answerProfileFor,
   ownerTierFor,
+  ownerRelayHandoffRequested,
+  ownerBindingRefusal,
   exemptFromMemberLimit,
   memberLimitFor,
   RELAY_MEMBER_LIMIT_WINDOW_MS,
@@ -121,9 +124,6 @@ export function externalRelayTempRoot(): string {
 }
 const countKey = (relayId: string, targetId: string) =>
   `${relayId}:${targetId}`;
-function ownerRelayHandoffRequested(owner: NonNullable<ReturnType<typeof ownerTierFor>>): boolean {
-  return /\b(?:pass|forward|send|hand\s+off|process|fix|delegate)\b|переда|оброб|виправ|делег/u.test(`${owner.text}\n${owner.requestText ?? ""}`);
-}
 /** Keep only the explicit reply chain needed to interpret this owner request. */
 function retainOwnerReplyChain(request: ExternalRelayRequest, ownerMessageId: string): void {
   const byId = new Map(request.input.conversation.map(message => [message.id, message]));
@@ -221,7 +221,10 @@ export async function runClaimedRequest(
     return sent.body;
   }
   const parsed = requestSchema.safeParse(raw);
-  const request = parsed.success ? parsed.data : null;
+  const refusalDetail = parsed.success
+    ? ownerBindingRefusal(relay, parsed.data)
+    : parsed.error.issues.find(issue => issue.message === INVALID_REQUESTER_DETAIL)?.message ?? null;
+  const request = parsed.success && !refusalDetail ? parsed.data : null;
   const caps = request ? answerCapabilities(request, relay.targets.find(t => t.id === request.target_id)?.engine ?? "") : null;
   const rawId =
     raw && typeof raw === "object"
@@ -274,7 +277,7 @@ export async function runClaimedRequest(
     claimedAt: rawRequest.claimed_at,
     chatKey: request?.chat?.key ?? null,
     requester: request?.input.requester ?? null,
-    input: rawRequest.input,
+    input: refusalDetail ? null : rawRequest.input,
     ...(request?.features ? { features: request.features } : {}),
   });
   inflight.add(requestId);
@@ -568,6 +571,8 @@ export async function runClaimedRequest(
           (raw as Record<string, unknown>).kind !== "answer"
           ? "unsupported_kind"
           : "invalid_request",
+        null,
+        refusalDetail,
       ),
     );
   if (deadline.fallback === "past") return finish(declined(leaseId, "busy"));
@@ -746,7 +751,8 @@ export async function runClaimedRequest(
     const trigger = request.input.conversation.find(message => message.id === ownerMessage?.messageId);
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
-    owner = prototype ? ownerMessage : ownerTierFor(target, request);
+    owner = request.delivery === "guest" ? ownerTierFor(target, request, { guestHandoff: true })
+      : prototype || target.ownerTier === true ? ownerMessage : null;
     if (owner || request.delivery === "guest") delete profile.pageRead;
     boundedOwnerTurn = !!owner && !prototype;
     ownerExecution = boundedOwnerTurn;
@@ -765,13 +771,10 @@ export async function runClaimedRequest(
     if (owner) allowOwnerReply = () => ownerStatusReply
       ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
       : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
-    // Owner turns need the authenticated Viewer handoff. Codex Cloud cannot
-    // bind Viewer MCP calls to this live owner conversation, so execute those
-    // turns through the local owner runner.
-    // Owner turns need authenticated Viewer handoff regardless of phrasing or
-    // Cloud configuration; guest delivery is restricted at the spawn boundary.
+    // The local runner binds Viewer calls to the live owner conversation,
+    // including when the paired target is configured for Cloud.
     const handoffOnly = !!owner && (request.delivery === "guest" || ownerRelayHandoffRequested(owner));
-    const usingCloud = cloud && !owner && !!cloudEnvironment(configuredTarget!, false);
+    const usingCloud = cloud && !owner;
     const authority = conversationAuthority(request.input.requester, !!owner);
     const usesConversation = request.delivery !== "guest" && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
@@ -1022,7 +1025,8 @@ export async function runClaimedRequest(
         if (owner && !cloud) executionDeadline = Date.now() + target.hardCapMinutes * 60_000;
         const inboundRefs = new Set(inbound?.files.map(file => file.ref));
         const mediaMessageIds = request.input.conversation.filter(message => message.media?.some(media => inboundRefs.has(media.ref))).map(message => message.id);
-        const ownerAdditions = { mediaMessageIds, mandatory: [inbound?.prompt,
+        // The Cloud JSON tool loop cannot look up a catalogue through local MCP.
+        const ownerAdditions = { mediaMessageIds, requireToolTable: usingCloud, mandatory: [inbound?.prompt,
           ...(usingCloud ? [rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : "", frame] : []),
         ].filter(Boolean).join("\n") };
         // Prepare only the mode that will be sent. Cloud has no native cursor.

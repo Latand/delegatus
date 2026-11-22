@@ -12,6 +12,8 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests, type RegistryFile } from "@/lib/agent/registry";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
+import { buildPipeline, savePipelines, loadPipelinesForRetirement } from "@/lib/pipelines/store";
+import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import { systemBootEpoch } from "@/lib/processIdentity";
@@ -53,6 +55,7 @@ const TRANSCRIPT = `/home/user/.claude/projects/-repo/${SESSION}.jsonl`;
 const HOST_PID = 4_100;
 const HOST_IDENTITY = "4100:118820";
 const BOOT_EPOCH = systemBootEpoch();
+const originalStateDirectory = process.env.LLV_STATE_DIR;
 
 function entry(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -121,6 +124,7 @@ function snapshot(over: {
     memberships: over.memberships ?? {},
     receipts: over.receipts ?? {},
     heldDeliveries: over.heldDeliveries ?? {},
+    deliveryOperationOwners: {},
   } as unknown as RegistryFile;
 }
 
@@ -164,6 +168,198 @@ async function sweep(over: StructuredHostRetirementDependencies = {}): Promise<S
   });
   return { terminated, report };
 }
+
+function finishedStage(file = snapshot()) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-retirement-"));
+  scratchDirs.push(root);
+  process.env.LLV_STATE_DIR = root;
+  const lane = buildPipeline({ id: "finished-stage", task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
+    now: new Date(NOW - 60_000).toISOString(), stages: [{ id: "review", kind: "run", prompt: "Review", next: null,
+      effectiveRole: { roleId: null, engine: "claude", model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+  lane.state = "running";
+  lane.runs[0]!.attempts = Object.values(file.conversations).map((value, index) => ({
+    n: index + 1, state: "passed", effectiveRole: lane.stages[0]!.effectiveRole, launchId: null,
+    conversationId: value.id, sessionId: value.generations[0]!.id, agentPath: value.generations[0]!.path, paneId: null,
+    flowId: null, startedAt: lane.createdAt, completedAt: new Date(NOW).toISOString(), input: null, activatedBy: null,
+    output: null, error: null, verdict: { status: "pass", findings: [] },
+  } satisfies PipelineStageAttempt));
+  return lane;
+}
+
+test("an unrelated pipeline write during measurement keeps ordinary idle retirement eligible", async () => {
+  const unrelated = finishedStage(snapshot(manyCandidates(1)));
+  const attempt = unrelated.runs[0]!.attempts[0]!;
+  attempt.sessionId = "unrelated-session";
+  attempt.agentPath = "/fixture/unrelated.jsonl";
+  savePipelines([unrelated]);
+  const probe = await sweep({
+    treePss: async () => {
+      await Promise.resolve();
+      unrelated.stateDetail = "Unrelated update";
+      savePipelines([unrelated]);
+      return { bytes: null, measuredProcesses: 0 };
+    },
+  });
+  expect(probe.terminated.map(ref => ref.sessionId)).toEqual([SESSION]);
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.retired).toHaveLength(1);
+  expect(probe.report.retired[0]!.reason).toBeUndefined();
+});
+
+test("a passed review retires on the next sweep with its reason and records intact", async () => {
+  const lane = finishedStage();
+  savePipelines([lane]);
+  const probe = await sweep({ transcriptStat: () => determined({ mtimeMs: NOW }) });
+  expect(probe.terminated).toHaveLength(1);
+  expect(probe.report.retired[0]).toMatchObject({ reason: "stage verdict", idleMs: 0 });
+  expect(structuredHostRetirementJournalRecord(probe.report).retired[0]).toMatchObject({ reason: "stage verdict" });
+  expect(lane.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  expect(loadPipelinesForRetirement()[0]!.runs[0]!.attempts[0]!.verdict).toEqual(lane.runs[0]!.attempts[0]!.verdict);
+});
+
+test("an unavailable pipeline projection leaves ordinary idle retirement eligible", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-retirement-"));
+  scratchDirs.push(root);
+  process.env.LLV_STATE_DIR = root;
+  fs.writeFileSync(path.join(root, "pipelines.json"), "[]");
+
+  const probe = await sweep();
+  expect(probe.terminated.map(ref => ref.sessionId)).toEqual([SESSION]);
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.retired).toHaveLength(1);
+  expect(probe.report.retired[0]!.reason).toBeUndefined();
+});
+
+test("an unavailable pipeline projection withholds prompt retirement from a recent stage host", async () => {
+  const lane = finishedStage();
+  fs.writeFileSync(statePath("pipelines.json"), JSON.stringify([lane]));
+
+  const probe = await sweep({ transcriptStat: () => determined({ mtimeMs: NOW }) });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.retired).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "transcript-idle", reason: "the transcript was written 0s ago" }]);
+});
+
+test("a recently merged lane releases all its stage hosts on the next sweep", async () => {
+  const file = snapshot(manyCandidates(2));
+  const lane = finishedStage(file);
+  // A merge can settle the lane long after its stages wrote their verdicts.
+  lane.createdAt = new Date(NOW - 24 * IDLE_MS).toISOString();
+  for (const attempt of lane.runs[0]!.attempts) {
+    attempt.startedAt = attempt.completedAt = lane.createdAt;
+  }
+  const head = "a".repeat(40);
+  lane.merge = {
+    state: "merged", by: "outside", repository: "fixture/project", prNumber: 1,
+    policyChangedAt: lane.createdAt, reviewedHead: head, chain: [head], updates: [],
+    seenChecks: [], head, headSeenAt: lane.createdAt, lastChecks: null, readAt: null, nextReadAt: null,
+    requestedAt: lane.createdAt,
+    mergedHead: head, mergeCommit: head, method: "squash", mergedAt: new Date(NOW).toISOString(),
+    attempts: 0, reason: null, blockedAt: null, updatedAt: new Date(NOW).toISOString(),
+  };
+  savePipelines([lane]);
+
+  const probe = await sweep({ snapshot: () => file, transcriptStat: () => determined({ mtimeMs: NOW }) });
+  expect(probe.terminated.map(ref => ref.sessionId).sort()).toEqual(Object.values(file.entries).map(row => row.key.sessionId).sort());
+  expect(probe.report.retired.map(row => row.reason)).toEqual(["terminal lane", "terminal lane"]);
+});
+
+test.each(["commit-repair", "runtime-switch", "undelivered", "assigned-to-runtime", "in-flight",
+  "attention", "busy", "no-verdict", "different-generation", "reopened-during-measurement"] as const)(
+  "a stage host is kept for %s", async kind => {
+    const lane = finishedStage();
+    const attempt = lane.runs[0]!.attempts[0]!;
+    if (kind === "commit-repair") attempt.commitRepair = { refusedAt: lane.createdAt, detail: "Repair required", paths: [], messageTs: NOW };
+    if (kind === "runtime-switch") attempt.runtimeSwitches = [{ id: "switch-fixture", seq: 1, requestedAt: lane.createdAt, actor: { kind: "operator" }, mode: "fork",
+      from: { engine: "claude", model: null, effort: null, serviceTier: null, accountId: null, conversationId: CONVERSATION, launchId: null, sessionId: SESSION, agentPath: TRANSCRIPT },
+      to: { engine: "claude", model: null, effort: null, serviceTier: null, accountId: "fixture-account", accountPinned: false }, phase: "continuing" }];
+    if (kind === "no-verdict") { attempt.verdict = null; attempt.completedAt = null; }
+    if (kind === "different-generation") { attempt.sessionId = "previous-session"; attempt.agentPath = "/fixture/previous.jsonl"; }
+    savePipelines([lane]);
+    const file = snapshot();
+    const runtimeConversationId = CONVERSATION as RegistryFile["heldDeliveries"][string]["runtimeConversationId"];
+    const command = { operationId: "operation-1", kind: "send", policy: "queue" } as const;
+    if (kind === "undelivered" || kind === "assigned-to-runtime") {
+      const assigned = kind === "assigned-to-runtime";
+      file.heldDeliveries["delivery-1"] = {
+        id: "delivery-1", conversationId: assigned ? "conversation_previous" : runtimeConversationId, runtimeConversationId,
+        text: "Fixture message", createdAt: lane.createdAt, clientMessageId: null, payloadKind: "text", runtimeImages: [],
+        contentDigest: null, artifactPaths: [], command, requestDigest: null, state: assigned ? "assigned" : "held",
+        generationId: assigned ? SESSION : null, attempts: 0, assignedAt: assigned ? lane.createdAt : null,
+        deliveredAt: null, error: null,
+      };
+    }
+    if (kind === "in-flight") file.deliveryOperationOwners["operation-1"] = {
+      conversationId: runtimeConversationId, runtimeConversationId, clientMessageId: null, deliveryId: "delivery-1",
+      command, requestDigest: "fixture-request", contentDigest: null, targetGenerationId: SESSION, createdAt: lane.createdAt,
+      retryOfOperationId: null, terminalState: null, terminalDisposition: null, terminalReason: null, settledAt: null,
+    };
+    if (kind === "attention") file.entries[`claude:${SESSION}`]!.structuredHost!.pendingAttention = ["pending-question"];
+    if (kind === "busy") file.conversations[CONVERSATION]!.turn.state = "busy";
+    const continuing = ["commit-repair", "runtime-switch"].includes(kind);
+    const probe = await sweep({ snapshot: () => file, transcriptStat: () => determined({ mtimeMs: continuing ? NOW - 2 * IDLE_MS : NOW }),
+      treePss: async () => {
+        await Promise.resolve();
+        if (kind === "reopened-during-measurement") { attempt.state = "running"; savePipelines([lane]); }
+        return { bytes: null, measuredProcesses: 0 };
+      } });
+    expect(probe.terminated).toEqual([]);
+    expect(probe.report.retired).toEqual([]);
+    if (kind === "reopened-during-measurement") expect(probe.report.refused).toMatchObject([
+      { clause: "transcript-idle", reason: "the pipeline no longer releases this host for prompt retirement", changed: true },
+    ]);
+  });
+
+test.each(["needs_decision", "running"] as const)("a %s stage uses the ordinary idle interval", async state => {
+  const lane = finishedStage();
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.state = state;
+  if (state === "needs_decision") {
+    lane.state = state;
+    attempt.verdict = { status: "needs_decision", findings: [] };
+  }
+  savePipelines([lane]);
+  const probe = (idleMs: number) => sweep({ owned: () => false, transcriptStat: () => determined({ mtimeMs: NOW - idleMs }) });
+  const recent = await probe(IDLE_MS - 1000);
+  expect(recent.terminated).toEqual([]);
+  expect(recent.report.refused).toMatchObject([{ clause: "transcript-idle", reason: "the transcript was written 3599s ago" }]);
+  const idle = await probe(IDLE_MS + 1000);
+  expect(idle.terminated).toHaveLength(1);
+  expect(idle.report.retired).toHaveLength(1);
+  expect(idle.report.retired[0]!.reason).toBeUndefined();
+});
+
+test.each(["completed", "closed", "merged"] as const)("a %s lane releases all three recent idle hosts", async state => {
+  const file = snapshot(manyCandidates(3));
+  const lane = finishedStage(file);
+  if (state === "merged") lane.merge = { state: "merged", by: "outside", repository: "fixture/project", prNumber: 1,
+    policyChangedAt: lane.createdAt, reviewedHead: "a".repeat(40), chain: [], updates: [], seenChecks: [],
+    head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null, requestedAt: lane.createdAt,
+    mergedHead: null, mergeCommit: null, method: "squash", mergedAt: lane.createdAt, attempts: 0, reason: null, blockedAt: null, updatedAt: lane.createdAt };
+  else lane.state = state;
+  const attempts = lane.runs[0]!.attempts;
+  lane.stages = attempts.map((_, index) => ({ ...lane.stages[0]!, id: `stage-${index}` }));
+  lane.runs = attempts.map((attempt, index) => ({ ...lane.runs[0]!, stageId: `stage-${index}`, attempts: [{ ...attempt, n: 1 }] }));
+  lane.cursor = null;
+  // Terminal lane ownership releases hosts even before old attempt stamps reconcile.
+  for (const run of lane.runs) for (const attempt of run.attempts) { attempt.state = "running"; attempt.verdict = null; attempt.completedAt = null; }
+  const unrelated = buildPipeline({ id: "unrelated-lane", task: "Unrelated", project: lane.project, repoDir: lane.repoDir,
+    srcPath: null, srcConversationId: null, now: lane.createdAt, stages: [], state: "draft" });
+  savePipelines([lane, unrelated]);
+  const stopped: string[] = [];
+  const probe = await sweep({
+    snapshot: () => file, transcriptStat: () => determined({ mtimeMs: NOW }),
+    terminate: async ref => {
+      stopped.push(ref.sessionId!);
+      unrelated.stateDetail = `Unrelated update ${stopped.length}`;
+      savePipelines([lane, unrelated]);
+      return { ok: true, via: "runtime", pids: [ref.pid] };
+    },
+  });
+  expect(stopped.sort()).toEqual(lane.runs.map(run => run.attempts[0]!.sessionId!).sort());
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.retired.map(row => row.reason)).toEqual(Array(3).fill("terminal lane"));
+});
 
 /** N qualifying candidates, so a batch bound can be observed deferring. Ids are
     assembled from parts for the same reason the single fixture's are. */
@@ -263,6 +459,8 @@ function processGroupId(pid: number): number | null {
 }
 
 afterEach(async () => {
+  if (originalStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = originalStateDirectory;
   for (const identity of fixtureIdentities.splice(0).reverse()) await stopFixtureIdentity(identity);
   for (const directory of scratchDirs.splice(0)) {
     try { fs.rmSync(directory, { recursive: true, force: true }); } catch { /* scratch only */ }
@@ -904,6 +1102,21 @@ test("a revoked seat is retired however recently it wrote — the self-tick stop
      seconds after a rotation reads as the rotation finishing rather than as
      the idle threshold having been quietly ignored. */
   expect(retired.seatRevoked).toBe(true);
+});
+
+test("a revoked seat retains the abandoned-receipt escape for its operation stamp", async () => {
+  const abandoned = new Date(NOW - RETIREMENT_ABANDONED_RECEIPT_MS - 60_000).toISOString();
+  const probe = await sweep({
+    ...rotatedAway,
+    snapshot: () => snapshot({
+      entries: { [`claude:${SESSION}`]: entry({ structuredHostOperationId: "launch-1" }) },
+      receipts: { "launch-1": { launchId: "launch-1", conversationId: CONVERSATION, key: null,
+        state: "path-pending", engine: "claude", createdAt: abandoned } },
+    }),
+  });
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.retired[0]!.passed).toContain("no-open-operation");
+  expect(probe.terminated).toHaveLength(1);
 });
 
 test("a retirement under the ordinary threshold never claims the revoked-seat rule", async () => {

@@ -1,5 +1,5 @@
-import type { ExternalRelayRequest, ExternalRelayRequester } from "./protocol";
-import type { RelayTargetSettings } from "./store";
+import { ownerRequesterTrigger, type ExternalRelayRequest, type ExternalRelayRequester } from "./protocol";
+import type { PairedRelay, RelayTargetSettings } from "./store";
 import type { OwnerBridgeContext } from "./ownerBridgeContext";
 
 /**
@@ -10,14 +10,26 @@ import type { OwnerBridgeContext } from "./ownerBridgeContext";
 export type RelayAnswerProfile = { webSearch: boolean; pageRead?: boolean; owner?: true; prototype?: string };
 
 export type OwnerInstruction = { localContext?: import("./ownerOutboundContext").OwnerOutboundContext | null; messageId: string; text: string; requestText: string | null; bridgeReport?: OwnerBridgeContext | null };
-/** Only the triggering message authored by the service-identified owner grants host access. */
-export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, request: ExternalRelayRequest): OwnerInstruction | null {
-  if (target.ownerTier !== true) return null;
-  const requester = request.input.requester;
-  if (!requester || requester.is_owner !== true || requester.is_anonymous_admin !== false) return null;
-  const message = request.input.respond_to ? request.input.conversation.find(m => m.id === request.input.respond_to) : undefined;
-  if (!message || message.author.self || message.author.key !== requester.key) return null;
+/** A verified Telegram private owner destination must match the paired user.
+ * Group destinations and opaque requester keys carry no comparable user ID. */
+export function ownerBindingRefusal(relay: Pick<PairedRelay, "owner">, request: ExternalRelayRequest): string | null {
+  const chatId = request.owner_delivery?.chat_id;
+  if (chatId !== undefined && chatId > 0 && relay.owner.namespace === "telegram" && String(chatId) !== relay.owner.id)
+    return "Owner delivery does not match this relay's paired owner.";
+  return null;
+}
+
+/** Guest owner authority is available only to the restricted handoff path. */
+export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, request: ExternalRelayRequest,
+  options?: { guestHandoff: true }): OwnerInstruction | null {
+  if (target.ownerTier !== true || request.delivery === "guest" && !options?.guestHandoff) return null;
+  const message = ownerRequesterTrigger(request.input);
+  if (!message) return null;
   return { messageId: message.id, text: message.text, requestText: request.input.request_text };
+}
+
+export function ownerRelayHandoffRequested(owner: OwnerInstruction): boolean {
+  return /\b(?:pass|forward|send|hand\s+off|process|fix|delegate)\b|переда|оброб|виправ|делег/u.test(`${owner.text}\n${owner.requestText ?? ""}`);
 }
 export function answerProfileFor(
   _requester: ExternalRelayRequester | null | undefined,

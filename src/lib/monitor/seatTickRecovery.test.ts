@@ -337,7 +337,7 @@ test.each(["in-flight", "unverified"] as const)("reconciliation preserves arriva
   f.seed(OVERDUE);
   const pipelines = [{ ...OPEN_LANE[0]!, id: "arrival-lane", project: f.project, state: "completed", src: f.seat.conversationId }];
   const first = childRig(f, { pipelines, delivery: { ok: true, target: null, outcome: "queued", operationId: "arrival-operation" } });
-  first.deps.sources!.reports = { log: () => [], enabled: () => true, operatorLocale: () => "uk" };
+  first.deps.sources!.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "uk" };
   expect(await runSeatTickCheck(f.project, first.deps)).toMatchObject({ verdict: "wake", delivery: { outcome: "queued" } });
   const wake = f.row().outstandingWake!;
   expect(wake.commit.announcedLanes).toHaveLength(1);
