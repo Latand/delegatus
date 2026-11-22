@@ -145,16 +145,20 @@ test("member counts include every admission and exclude runs made as admin or ow
     { id: "running", outcome: null },
     { id: "admin", outcome: "answered", requester: { ...requester, is_admin: true } },
     { id: "owner", outcome: "answered", requester: { ...requester, is_owner: true } },
+    { id: "private_forged_owner", outcome: "answered", requester: { ...requester, is_owner: true }, delivery: "private" as const },
     { id: "unadmitted", outcome: "declined:member_limit", admitted: false },
     { id: "other_key", outcome: "answered", requester: { ...requester, key: "u_other" } },
     { id: "other_chat", outcome: "answered", chatKey: "chat_key_bbbbbbbbbbbb" },
   ]) {
-    const record = answerRecorder({ requestId: row.id, relayId: "relay", targetId: "counts", targetName: null, claimedAt: null, requester: row.requester ?? requester, chatKey: row.chatKey ?? chatKey, input: {} })!;
+    const subject = row.requester ?? requester;
+    const record = answerRecorder({ requestId: row.id, relayId: "relay", targetId: "counts", targetName: null, claimedAt: null,
+      requester: subject, requestDelivery: row.delivery, chatKey: row.chatKey ?? chatKey,
+      input: { requester: subject, respond_to: "trigger", conversation: [{ id: "trigger", author: { key: subject.key, self: false } }] } })!;
     if (row.admitted !== false) record.begin("codex", "test", { webSearch: true });
     if (row.outcome) record.finish({ outcome: row.outcome, answer: null, delivery: "accepted" });
   }
   const scope = { relayId: "relay", targetId: "counts", chatKey, requesterKey: requester.key, sinceMs: Date.now() - 3600000 };
-  expect(countMemberAnswers(scope).count).toBe(4);
+  expect(countMemberAnswers(scope).count).toBe(5);
   expect(countMemberAnswers(scope).oldestMs).not.toBeNull();
   expect(countMemberAnswers({ ...scope, requesterKey: "u_other" }).count).toBe(1);
   expect(countMemberAnswers({ ...scope, chatKey: "chat_key_bbbbbbbbbbbb" }).count).toBe(1);

@@ -268,6 +268,7 @@ export async function runClaimedRequest(
     targetName: relay.targets.find((item) => item.id === targetId)?.name ?? null,
     claimedAt: rawRequest.claimed_at,
     chatKey: request?.chat?.key ?? null,
+    requestDelivery: request?.delivery,
     requester: request?.input.requester ?? null,
     input: isolatedDelivery({ delivery: rawRequest.delivery }) ? request?.input ?? null : refusalDetail ? null : rawRequest.input,
     ...(request?.features ? { features: request.features } : {}),
@@ -727,7 +728,7 @@ export async function runClaimedRequest(
     const requester = request.input.requester;
     const limit = memberLimitFor(target);
     const memberDecline = (): ExternalRelayCompletion | null => {
-      if (!requester || limit === null || exemptFromMemberLimit(requester)) return null;
+      if (!requester || limit === null || exemptFromMemberLimit(requester, request.input, request.delivery)) return null;
       const now = Date.now();
       const used = countMemberAnswers({ relayId: relay.id, targetId: target.id, chatKey: request.chat?.key ?? null,
         requesterKey: requester.key, sinceMs: now - RELAY_MEMBER_LIMIT_WINDOW_MS });

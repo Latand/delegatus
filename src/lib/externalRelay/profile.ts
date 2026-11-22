@@ -1,4 +1,4 @@
-import { isolatedDelivery, ownerRequesterTrigger, type ExternalRelayRequest, type ExternalRelayRequester } from "./protocol";
+import { isolatedDelivery, ownerRequesterTrigger, requesterTrigger, type ExternalRelayRequest, type ExternalRelayRequester } from "./protocol";
 import type { PairedRelay, RelayTargetSettings } from "./store";
 import type { OwnerBridgeContext } from "./ownerBridgeContext";
 
@@ -41,5 +41,8 @@ export function memberLimitFor(target: Pick<RelayTargetSettings, "memberLimitPer
   return value && value > 0 ? value : null;
 }
 /** The owner and chat admins, as the service's requester block says, are not counted. */
-export const exemptFromMemberLimit = (requester: ExternalRelayRequester) =>
-  requester.is_owner || requester.is_admin;
+export function exemptFromMemberLimit(requester: ExternalRelayRequester, input: ExternalRelayRequest["input"] | null | undefined,
+  delivery?: ExternalRelayRequest["delivery"]) {
+  if (!input || delivery === "private" || input.requester?.key !== requester.key || !requesterTrigger(input)) return false;
+  return requester.is_admin || requester.is_owner && ownerRequesterTrigger(input) !== null;
+}

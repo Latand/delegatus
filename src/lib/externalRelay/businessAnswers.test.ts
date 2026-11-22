@@ -70,20 +70,11 @@ test("Business history photos are retained with the production media advertiseme
     .safeParse(pair.request).success).toBe(false);
 });
 
-test("withdrawing history media refuses the claim before any media download", async () => {
+test("Business history photo claim matches descriptor without the optional history media feature", () => {
   const pair = answerPair("business_contact", 1, false);
-  const endpoints: string[] = [];
-  const server = await startTestRelay(req => {
-    endpoints.push(req.url!.split("/").at(-1)!);
-    return { body: { status: "accepted", duplicate: false } };
-  });
-  const relay = paired(server.origin);
-  try {
-    expect(claimedRequestSchema(pair.advertised).safeParse(pair.request).success).toBe(false);
-    expect(await runClaimedRequest(relay, pair.request, undefined, { advertisedFeatures: pair.advertised, leaseWorker: false }))
-      .toMatchObject({ outcome: "declined", reason: "invalid_request" });
-    expect(endpoints).toEqual(["complete"]);
-  } finally { await server.close(); }
+  const parsed = claimedRequestSchema(pair.advertised).parse(pair.request);
+  expect(pair.advertised).not.toContain("relay_history_media");
+  expect(validateMediaInput(parsed, true, false)).toEqual(pair.request.input.conversation[0]!.media!);
 });
 
 test("an oversized Business history photo remains visible as unavailable context", () => {
@@ -103,6 +94,19 @@ const requesterAttacks: HostileCase[] = [
   ["duplicate trigger", req => { req.input.conversation.push({ ...req.input.conversation.at(-1)! }); return req; }],
   ["self trigger", req => { req.input.conversation.at(-1)!.author = { ...req.input.conversation.at(-1)!.author, self: true }; return req; }],
 ];
+test("private owner flag is rejected before selecting an account", async () => {
+  const privateOwnerFlag = answerPair("private_non_owner");
+  privateOwnerFlag.request.input.requester!.is_owner = true;
+  const server = await startTestRelay(() => ({ body: { status: "accepted", duplicate: false } }));
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn");
+  try {
+    expect(claimedRequestSchema(privateOwnerFlag.advertised).safeParse(privateOwnerFlag.request).success).toBe(false);
+    expect(await runClaimedRequest(paired(server.origin), privateOwnerFlag.request, undefined,
+      { advertisedFeatures: privateOwnerFlag.advertised, leaseWorker: false }))
+      .toMatchObject({ outcome: "declined", reason: "invalid_request" });
+    expect(selection).not.toHaveBeenCalled();
+  } finally { selection.mockRestore(); await server.close(); }
+});
 const businessAttacks: HostileCase[] = [
   ["missing requester", req => { delete req.input.requester; return req; }],
   ["owner destination", req => ({ ...req, owner_delivery: { chat_id: 51, reply_to_message_id: 17, message_thread_id: null } })],
@@ -114,6 +118,11 @@ const businessAttacks: HostileCase[] = [
   ["unnegotiated media", req => { req.features = ["requester_context", businessFeature]; return req; }],
   ["unadvertised arbitrary document", req => { req.features = ["relay_media_any_document"]; return req; }],
   ["history document", req => { req.input.conversation[0]!.media![0]!.kind = "document"; return req; }],
+  ["out-of-scope media ref", req => {
+    req.input.documents.push({ title: "Detached media", text: "", message_id: req.input.respond_to!,
+      media_ref: `media_${"1".repeat(32)}`, extraction: "complete" });
+    return req;
+  }],
   ["conflicting ref", req => {
     req.input.conversation.at(-1)!.media = [{ ...req.input.conversation[0]!.media![0]!, byte_size: 2 }];
     return req;
@@ -348,6 +357,56 @@ test("the real poller keeps the lease's advertisement after the switch is withdr
     stopExternalRelayPollers();
     await waitForExternalRelayRuns();
     selection.mockRestore();
+    await server.close();
+  }
+}, 15_000);
+
+test("default-off real poller admits and downloads a legacy guest owner's history photo", async () => {
+  const photo = await sharp({ create: { width: 2, height: 2, channels: 3, background: "green" } }).png().toBuffer();
+  const pair = answerPair("guest_non_owner", photo.length);
+  const request = pair.request;
+  request.request_id = "legacy_guest_history_photo";
+  request.input.requester!.is_owner = true;
+  request.features = ["requester_context", "relay_media_in"];
+  request.input.conversation[0]!.media = [{ ref: photoRef, kind: "photo", availability: "ready",
+    mime_type: "image/png", byte_size: photo.length, expires_at: "2099-01-01T00:00:00Z" }];
+  const seen: string[] = [];
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/targets")) return { body: { targets: [{ target_id: "target_1", name: "Garden", answered_by: "install", fallback: "service" }] } };
+    if (req.url === "/.well-known/delegatus-relay.json") return { body: { protocol: "delegatus-relay", versions: [1],
+      name: "Fixture relay", description: "", api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: request.liveness,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 240 },
+      features: ["requester_context", "relay_media_in"] } };
+    if (req.url?.endsWith("/claim")) return { body: { request } };
+    if (req.url?.endsWith(`/media/${photoRef}`)) {
+      seen.push(req.url);
+      return { raw: photo, headers: { "content-type": "image/png", "content-length": String(photo.length) } };
+    }
+    if (req.url?.endsWith("/complete")) { completions.push(body); stopExternalRelayPollers(); }
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const relay = paired(server.origin, "codex");
+  relay.features = ["relay_media_in"];
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available",
+    account: { engine: "codex", accountId: "fixture", kind: "managed", home: root, transcriptRoot: root, env: { ...process.env } } });
+  try {
+    setRelaySwitch(switchName, false);
+    expect(readRelaySwitches().business_answers).toBe(false);
+    ensureExternalRelayPollers();
+    const deadline = Date.now() + 8_000;
+    while (!completions.length && Date.now() < deadline) await Bun.sleep(10);
+    await waitForExternalRelayRuns();
+    expect(completions).toHaveLength(1);
+    expect(seen).toEqual([`/v1/requests/${request.request_id}/media/${photoRef}`]);
+    expect(completions[0]).toBeDefined();
+    expect(relayClaimBody(relay).features).not.toContain("relay_history_media");
+  } finally {
+    stopExternalRelayPollers();
+    await waitForExternalRelayRuns();
+    selection.mockRestore();
+    updateRelayStore(store => ({ ...store, relays: [] }));
     await server.close();
   }
 }, 15_000);

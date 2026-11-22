@@ -334,6 +334,7 @@ export function claimedRequestSchema(advertised: readonly string[]) {
     const invalidRequester = isolated
       ? !requester || !requesterTrigger(input) || requester.is_anonymous_admin
         || rejectRoleFlags && (requester.is_admin || requester.can_restrict_members || requester.can_delete_messages)
+        || request.delivery === "private" && requester.is_owner
         || request.delivery === "guest" && !requester.is_owner && !isolatedRequesters
       : requester && (!requesterTrigger(input) || requester.is_owner && requester.is_anonymous_admin
         || request.owner_delivery && !requester.is_owner);

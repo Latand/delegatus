@@ -21,7 +21,7 @@ const fail = (code: string, status: number): never => { throw new ExternalRelayE
 const validId = (id: unknown): id is string => typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id);
 export const hasInboundMedia = (request: Pick<MediaRequest, "features">) => request.features?.includes("relay_media_in") === true;
 export const hasHistoryMedia = (request: Pick<MediaRequest, "features" | "delivery">) =>
-  hasInboundMedia(request) && (request.delivery === "guest" || request.features?.includes(RELAY_HISTORY_MEDIA) === true);
+  hasInboundMedia(request) && (isolatedDelivery(request) || request.features?.includes(RELAY_HISTORY_MEDIA) === true);
 /** Descriptor checks shared by history normalization and final admission. */
 export function validateInputMediaDescriptor(media: InputMedia, features?: string[]): void {
   if (!validId(media.ref) || !["photo", "document"].includes(media.kind)
@@ -62,7 +62,10 @@ export function normalizeInputMediaDescriptor(media: InputMedia, features?: stri
 export function validateMediaInput(request: MediaRequest, requesterContextNegotiated?: boolean, historyMediaNegotiated?: boolean): InputMedia[] {
   if (!hasInboundMedia(request)) return [];
   if (!(requesterContextNegotiated ?? request.features?.includes("requester_context"))) fail("malformed", 400);
-  const allowHistory = historyMediaNegotiated ?? hasHistoryMedia(request);
+  // The service supplies history photos for every isolated surface with
+  // relay_media_in. relay_history_media remains an opt-in for legacy owner
+  // claims only; the descriptor does not gate the isolated surface contract.
+  const allowHistory = isolatedDelivery(request) || (historyMediaNegotiated ?? hasHistoryMedia(request));
   const trigger = request.input.conversation.find(message => message.id === request.input.respond_to);
   const allowed = new Set([trigger?.id, trigger?.reply_to].filter((id): id is string => !!id));
   const refs = new Map<string, InputMedia>(); let count = 0, bytes = 0;

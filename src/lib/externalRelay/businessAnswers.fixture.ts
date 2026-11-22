@@ -22,18 +22,18 @@ export const cases = [
  * answer_pair_guest_non_owner.json, answer_pair_private_non_owner.json,
  * answer_pair_group_non_owner.json, answer_pair_legacy_no_business.json.
  * All wire data is synthetic; private includes the pinned contract's discriminator. */
-export function answerPair(kind: typeof cases[number], imageBytes = 1, historyFeature = true) {
+export function answerPair(kind: typeof cases[number], imageBytes = 1, historyFeature = false) {
   const isBusiness = kind === "business_contact" || kind === "business_owner";
   const isGuest = kind === "guest_non_owner";
   const isPrivate = kind === "private_non_owner";
   const isolated = isBusiness || isGuest || isPrivate;
   const isLegacy = kind === "legacy_no_business";
   const isOwner = kind === "business_owner";
-  const hasPhoto = kind === "business_contact";
+  const hasPhoto = kind === "business_contact" || isPrivate;
   const author = isOwner ? owner : contact;
   const advertised = isLegacy ? [] : [context,
     ...(isBusiness ? [businessFeature] : []),
-    ...(hasPhoto ? [inbound, ...(historyFeature ? [history] : [])] : []),
+    ...(hasPhoto ? [inbound] : []),
     ...(isGuest ? ["relay_guest_answers"] : []),
     ...(!isBusiness && (isGuest || isPrivate) ? [isolatedRequesterFeature] : [])];
   const earlier: ExternalRelayRequest["input"]["conversation"][number] = {
@@ -43,8 +43,8 @@ export function answerPair(kind: typeof cases[number], imageBytes = 1, historyFe
   };
   const request: ExternalRelayRequest = {
     ...sampleRequest, request_id: `request_${kind}`, claimed_at: "2026-01-01T12:00:02Z",
-    ...(isBusiness ? { delivery: "business", ...(hasPhoto ? { features: [inbound, ...(historyFeature ? [history] : [])] } : {}) }
-      : isGuest ? { delivery: "guest" } : isPrivate ? { delivery: "private" } : {}),
+    ...(isBusiness ? { delivery: "business" } : isGuest ? { delivery: "guest" } : isPrivate ? { delivery: "private" } : {}),
+    ...(hasPhoto ? { features: [inbound, ...(isBusiness && historyFeature ? [history] : [])] } : {}),
     chat: { key: "chat_fixture_garden" },
     input: {
       instructions: "Answer about the garden.",
