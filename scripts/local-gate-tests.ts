@@ -44,15 +44,17 @@ const FILE_BUDGET_MS = 5 * 60 * 1000;
 // confirmations after a slow full-file baseline. Bound head work to eight owned
 // runners in the shared CPU work slice; baseline and retries retain three.
 const HEAD_FILE_WORKERS = 8;
+const NESTED_FILE_WORKERS = 2;
 
-/** Gate fixtures start their own suites and supervisors. Eight such files in
- * one real publication exhausted the 768-task service limit before any verdict.
- * Source-only selections keep their head parallelism and confirmation budget. */
+const nestedComparisonFile = (file: string): boolean =>
+  /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/"));
+
+/** Multiple gate fixtures can exhaust a service's task limit. Limit that
+ * class while letting ordinary source tests use the remaining file workers. */
 export function comparisonFileWorkers(files: readonly string[], ceiling: number, sharedPortable = false): number {
-  const nested = files.some(file => /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/")));
-  const nestedLimit = sharedPortable ? 1 : 2;
-  const workers = nested ? Math.min(nestedLimit, ceiling) : ceiling;
-  return Math.min(files.length, workers);
+  const nested = files.filter(nestedComparisonFile).length;
+  if (nested && sharedPortable) return 1;
+  return Math.min(ceiling, files.length - nested + Math.min(nested, NESTED_FILE_WORKERS));
 }
 
 export const FLAKY_RERUNS = 3;
@@ -323,12 +325,8 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   const now = options.now ?? (() => performance.now());
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const results: TestRun[] = new Array(files.length);
-  let next = 0;
-  const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharesPortableRunner());
-  if (files.length) options.log?.(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
-  const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
-  while (next < files.length) {
-    const index = next++, file = files[index]!;
+  const runFile = async (index: number) => {
+    const file = files[index]!;
     const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
@@ -409,7 +407,23 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     results[index] = { failures, passed, completed, elapsedMs: 0 };
     options.onFile?.(results[index]!, cleanupConfirmed);
     options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
-  }
+  };
+  const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharesPortableRunner());
+  const ordinary: number[] = [], nested: number[] = [];
+  files.forEach((file, index) => (nestedComparisonFile(file) ? nested : ordinary).push(index));
+  let nextOrdinary = 0, nextNested = 0, nestedRunning = 0;
+  if (files.length) options.log?.(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
+  const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
+    for (;;) {
+      const ordinaryIndex = ordinary[nextOrdinary];
+      const nestedIndex = nestedRunning < NESTED_FILE_WORKERS ? nested[nextNested] : undefined;
+      if (ordinaryIndex === undefined && nestedIndex === undefined) return;
+      const useNested = nestedIndex !== undefined && (ordinaryIndex === undefined || nestedIndex < ordinaryIndex);
+      const index = useNested ? nested[nextNested++]! : ordinary[nextOrdinary++]!;
+      if (useNested) nestedRunning++;
+      try { await runFile(index); }
+      finally { if (useNested) nestedRunning--; }
+    }
   }));
   // All owned runners have settled. Completed file diagnostics and filtered
   // worker rejections must both veto a capacity retry after budget expiry.
