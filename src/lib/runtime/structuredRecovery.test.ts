@@ -48,6 +48,7 @@ const reconnectPolicies = [
   { name: "explicit full", sandboxMode: "full", approval: "on-request", generationProfile: true },
   { name: "legacy workspace-write", sandboxMode: "restricted", raw: true, approval: "untrusted" },
   { name: "legacy read-only", readOnly: true, raw: true, approval: "on-request" },
+  { name: "scan-only observed profile", scanOnly: true, generationProfile: true, refusal: "launch access authorization is unavailable" },
   { name: "named read-only with one legacy root", readOnly: true, oneRoot: true },
   { name: "named workspace-write with paginated replay", sandboxMode: "restricted", paginated: true, approval: "on-request" },
   { name: "already-loaded named profile", sandboxMode: "restricted", loaded: true },
@@ -63,7 +64,8 @@ const reconnectPolicies = [
   { name: "merged named profile override", sandboxMode: "restricted", drift: "config", refusal: "effective launch policy could not be verified" },
 ] satisfies Array<{
   name: string; sandboxMode?: "full" | "restricted"; readOnly?: boolean; raw?: boolean; approval?: string;
-  oneRoot?: boolean; paginated?: boolean; loaded?: boolean; missing?: boolean; generationProfile?: boolean; drift?: string; refusal?: string;
+  oneRoot?: boolean; paginated?: boolean; loaded?: boolean; missing?: boolean; scanOnly?: boolean;
+  generationProfile?: boolean; drift?: string; refusal?: string;
 }>;
 
 for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process.platform === "win32")(`queued send verifies retained Codex access (${scenario.name})`, async () => {
@@ -78,8 +80,9 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
   const descriptor = path.join(cwd, "engine.json");
   fs.writeFileSync(artifactPath, "");
   fs.writeFileSync(writeLog, "");
-  const profile = emptyLaunchProfile({ cwd, sandbox: scenario.sandboxMode ?? null, readOnly: scenario.readOnly ?? null,
-    permissionMode: scenario.approval ?? null });
+  const profile = scenario.scanOnly ? emptyLaunchProfile({ cwd, title: "Observed Codex thread" }) : emptyLaunchProfile({ cwd,
+    title: "Authorized Codex recovery fixture",
+    sandbox: scenario.sandboxMode ?? null, readOnly: scenario.readOnly ?? null, permissionMode: scenario.approval ?? null });
   const approvalPolicy = scenario.approval ?? "never";
   const access = materializeStructuredHostAccess(structuredHostAccessPolicy(profile), { NODE_ENV: "test" }, null, cwd);
   const permission = scenario.raw ? undefined : access.codex.permissionProfile;
@@ -87,11 +90,13 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
     ? Bun.TOML.parse(access.codex.permissionProfileConfig) as Record<string, unknown> : {};
   const named = permission ? flags.permissions as Record<string, { extends: string; filesystem: Record<string, string> }> : {};
   if (permission && scenario.oneRoot) delete named[permission]!.filesystem[access.env.LLV_EVIDENCE_DIR!];
+  const nativeNamed = permission && named[permission] ? { ...named[permission]!,
+    filesystem: { ...named[permission]!.filesystem, glob_scan_max_depth: null } } : null;
   const parent = permission ? named[permission]!.extends : undefined;
   const roots = permission ? Object.keys(named[permission]!.filesystem).sort() : [];
   const sandboxMode = scenario.raw && scenario.readOnly ? "read-only" : access.codex.sandbox;
   const projectedSandbox = permission || sandboxMode === "workspace-write"
-    ? { type: "workspaceWrite", networkAccess: false, writableRoots: roots, excludeTmpdirEnvVar: parent === ":read-only", excludeSlashTmp: parent === ":read-only" }
+    ? { type: "workspaceWrite", networkAccess: false, writableRoots: roots, excludeTmpdirEnvVar: false, excludeSlashTmp: parent === ":read-only" }
     : sandboxMode === "read-only" ? { type: "readOnly", networkAccess: false } : { type: "dangerFullAccess" };
   const selection = permission ? { permissions: permission, approvalPolicy } : { sandbox: sandboxMode, approvalPolicy };
   const effective = { approvalPolicy, approvalsReviewer: "user", sandbox: projectedSandbox, cwd, runtimeWorkspaceRoots: [cwd],
@@ -105,16 +110,21 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
     profile: { activePermissionProfile: { id: "other", extends: parent } },
   };
   const responseDrift = driftByScenario[scenario.drift ?? ""];
-  const defaultSandbox = projectedSandbox.type === "dangerFullAccess" ? { type: "readOnly", networkAccess: false } : { type: "dangerFullAccess" };
+  const defaultSandbox = scenario.scanOnly ? { type: "dangerFullAccess" }
+    : projectedSandbox.type === "dangerFullAccess" ? { type: "readOnly", networkAccess: false } : { type: "dangerFullAccess" };
   fs.writeFileSync(descriptor, JSON.stringify({
     socket, threadId: sessionId, transcriptPath: artifactPath, recipient: true,
     policy: { ...scenario, loaded: scenario.loaded ?? false, selection, effective, responseDrift,
       defaults: { ...effective, approvalPolicy: approvalPolicy === "never" ? "on-request" : "never", sandbox: defaultSandbox },
-      configRead: { layers: [{ name: { type: "sessionFlags" }, config: { ...flags, ...(permission ? { default_permissions: permission } : {}) } }],
-        config: { permissions: scenario.drift === "config" ? { [permission!]: { ...named[permission!], network: { enabled: true } } } : named } },
+      configRead: { layers: [{ name: { type: "sessionFlags" }, config: { ...flags,
+        ...(nativeNamed ? { permissions: { ...named, [permission!]: nativeNamed } } : {}),
+        ...(permission ? { default_permissions: permission } : {}) } }],
+        config: { permissions: scenario.drift === "config" ? { [permission!]: { ...named[permission!], network: { enabled: true } } }
+          : nativeNamed ? { [permission!]: nativeNamed } : named } },
     },
   }));
   const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const launchReceipt = scenario.missing || scenario.scanOnly ? null : registry.beginSpawn("codex", cwd, profile);
   const conversation = scenario.generationProfile
     ? registry.ensureForkedConversation("codex", artifactPath, "default", profile)
     : registry.ensureConversation("codex", artifactPath, "default");
@@ -136,6 +146,7 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
     });
     registry.upsert({ key, artifactPath, cwd, accountId: "default", status: "idle", host: null, claimEpoch: 2,
       ...(scenario.missing || scenario.generationProfile ? {} : { launchProfile: profile }),
+      structuredHostOperationId: launchReceipt?.launchId ?? null,
       claimOwner: null, pendingAction: null, structuredHost: { kind: "codex-app-server", ...owner, eventCursor: 0,
         protocolVersion: "0.162.1", writerClaimEpoch: 2, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
     projectHostedRestart(journal, "codex", conversation.id, sessionId, cwd, artifactPath, "idle", "dead");
@@ -171,7 +182,8 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
       await kickStructuredDeliveryQueue();
       expect(journal.operationResult(outcome.operationId ?? request.operationId)).toBeNull();
       expect(fs.readFileSync(artifactPath, "utf8")).toBe("");
-      const blockedBeforeResume = scenario.missing || ["config", "missing-config", "unsupported-load-state"].includes(scenario.drift ?? "");
+      const blockedBeforeResume = scenario.missing || scenario.scanOnly
+        || ["config", "missing-config", "unsupported-load-state"].includes(scenario.drift ?? "");
       expect(resumes).toHaveLength(blockedBeforeResume ? 0 : 1);
     } else {
       expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true });
@@ -219,9 +231,13 @@ for (const scenario of ["released", "delegated", "stale-owner", "foreign-owner",
   const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   const conversation = registry.ensureConversation("codex", artifactPath, "default");
   const key = { engine: "codex" as const, sessionId };
+  const launchProfile = emptyLaunchProfile({ cwd, title: "Retained Codex recovery fixture",
+    omitSkillsInstructions: scenario === "delegated" });
+  const launchReceipt = registry.beginSpawn("codex", cwd, launchProfile);
   const identity = captureProcessIdentity(process.pid);
   const endpoint = `codex-unix:${socketPath}`;
-  registry.upsert({ key, artifactPath, cwd, accountId: "default", launchProfile: emptyLaunchProfile({ cwd, omitSkillsInstructions: scenario === "delegated" }),
+  registry.upsert({ key, artifactPath, cwd, accountId: "default", launchProfile,
+    structuredHostOperationId: launchReceipt.launchId,
     status: "idle", host: null, claimEpoch: 2, claimOwner: null, pendingAction: null,
     structuredHost: { kind: "codex-app-server", endpoint, process: identity, eventCursor: 73,
       protocolVersion: "fixture", writerClaimEpoch: 2, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
@@ -235,6 +251,7 @@ for (const scenario of ["released", "delegated", "stale-owner", "foreign-owner",
   const originalClaim = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.claimOwner;
   if (scenario === "stale-owner" && foreign) await stopFixtureTree(foreign);
   const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const retainedReceiptCount = Object.keys(registry.readOnlySnapshot().receipts).length;
   const client = {
     append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
     producerCursor: async () => 0,
@@ -344,7 +361,7 @@ for (const scenario of ["released", "delegated", "stale-owner", "foreign-owner",
     expect(await adopt.mock.calls[0]?.[1].readProtocolVersion?.("unused", { NODE_ENV: "test" })).toBe("fixture");
     expect(hasStructuredDeliveryHost(key)).toBeTrue();
     expect(spawned).toBe(0);
-    expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+    expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(retainedReceiptCount);
     journal.executeOperation({ kind: "send", operationId: "native-live-send", idempotencyKey: "native-live-send",
       conversationId: conversation.id, text: "reach the live native listener", policy: "queue" });
     await kickStructuredDeliveryQueue();

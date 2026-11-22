@@ -257,8 +257,11 @@ if (mode === "engine-socket") {
   } else {
     host = mode === "dispatch" || mode === "mcp-produce" ? await CodexAppServerHost.start(options) : await CodexAppServerHost.adopt(thread, options);
     if (registry) {
+      const launchProfile = emptyLaunchProfile({ cwd: process.cwd(), readOnly: false, title: "Callback socket recovery fixture" });
+      const launchReceipt = registry.beginSpawn("codex", process.cwd(), launchProfile);
       registry.upsert({ key, artifactPath: path.join(directory, "thread.jsonl"), cwd: process.cwd(), accountId: "default", status: "idle", host: null,
-        launchProfile: emptyLaunchProfile({ cwd: process.cwd(), readOnly: false }),
+        launchProfile,
+        structuredHostOperationId: launchReceipt.launchId,
         claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: { ...codexHostColumns(await host.health(), 0), process: null } });
       const claimed = registry.claimStructuredHost(key, captureProcessIdentity(process.pid), { allowUnhosted: true });
       if (!claimed?.claimOwner) throw new Error("fixture writer claim unavailable");

@@ -33,12 +33,12 @@ export type CodexReconnectAccess = {
 );
 
 export function codexReconnectAccess(registry: AgentRegistry, entry: AgentRegistryEntry): CodexReconnectAccess {
-  const profile = entry.launchProfile
-    ?? registry.conversationForPath(entry.artifactPath)?.generations
-      .find(generation => generation.id === entry.key.sessionId && generation.path === entry.artifactPath)?.launchProfile;
-  // A discovered transcript carries an empty generation profile. Its cwd from
-  // the registry entry or the account defaults cannot authorize a sandbox.
-  if (!profile || !path.isAbsolute(profile.cwd) || profile.cwd !== entry.cwd
+  // The transcript inventory can materialize a generation profile from its
+  // observed cwd while leaving every access field empty. Only the retained
+  // launch receipt records policy that was actually authorized at launch.
+  const receipt = registry.spawnReceiptForHost(entry.key);
+  const profile = receipt?.launchProfile;
+  if (!receipt || !profile || !path.isAbsolute(profile.cwd) || profile.cwd !== entry.cwd
     || (profile.sandbox != null && explicitLaunchProfileSandbox(profile) === null)
     || (profile.readOnly != null && typeof profile.readOnly !== "boolean")
     || (profile.permissionMode != null && !["never", "on-request", "untrusted"].includes(profile.permissionMode))) {
@@ -110,18 +110,23 @@ export function retainedCodexLaunchAccess(access: CodexReconnectAccess, configRe
   const launchProfile = object(object(cli.permissions)?.[id]);
   const effectiveProfile = object(object(object(reply.config)?.permissions)?.[id]);
   const filesystem = object(launchProfile?.filesystem);
-  const roots = Object.keys(filesystem ?? {}).sort();
   // A profile with the expected name can still receive extra filesystem or
-  // network rules through Codex's recursive config merge.
-  const withoutNulls = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value)
-    .filter(([, item]) => item != null));
+  // network rules through Codex's recursive config merge. Codex also adds
+  // nullable filesystem metadata such as glob_scan_max_depth; null means the
+  // setting is absent and must not be interpreted as a writable root.
+  const withoutNullFilesystemMetadata = (value: unknown) => Object.fromEntries(
+    Object.entries(object(value) ?? {}).filter(([, item]) => item != null),
+  );
+  const launchFilesystem = withoutNullFilesystemMetadata(filesystem);
   const effectiveFilesystem = object(effectiveProfile?.filesystem);
+  const effectiveFilesystemWithoutNulls = withoutNullFilesystemMetadata(effectiveFilesystem);
+  const roots = Object.keys(launchFilesystem).sort();
   if (!launchProfile || !effectiveProfile || !filesystem || !effectiveFilesystem
     || !roots.length || roots.length > 2
-    || roots.some(root => !path.isAbsolute(root) || filesystem[root] !== "write")
-    || !isDeepStrictEqual(launchProfile, { extends: access.parent, filesystem })
-    || !isDeepStrictEqual(withoutNulls(effectiveProfile), { extends: access.parent, filesystem: withoutNulls(effectiveFilesystem) })
-    || !isDeepStrictEqual(withoutNulls(effectiveFilesystem), filesystem)) throw new CodexReconnectPolicyError();
+    || roots.some(root => !path.isAbsolute(root) || launchFilesystem[root] !== "write")
+    || !isDeepStrictEqual({ ...launchProfile, filesystem: launchFilesystem }, { extends: access.parent, filesystem: launchFilesystem })
+    || !isDeepStrictEqual({ ...effectiveProfile, filesystem: effectiveFilesystemWithoutNulls }, { extends: access.parent, filesystem: effectiveFilesystemWithoutNulls })
+    || !isDeepStrictEqual(effectiveFilesystemWithoutNulls, launchFilesystem)) throw new CodexReconnectPolicyError();
   return { ...base, permissions: id, parent: access.parent, roots };
 }
 
@@ -134,13 +139,13 @@ export function assertResumedCodexAccess(access: RetainedAccess, result: unknown
   const named = "permissions" in access;
   const workspace = named || access.sandbox === "workspace-write";
   const unrestricted = !named && access.sandbox === "danger-full-access";
-  const excludeTemp = named && access.parent === ":read-only";
+  const excludeSlashTmp = named && access.parent === ":read-only";
   if (!response || !sandbox || response.approvalPolicy !== access.approvalPolicy
     || (access.approvalsReviewer && response.approvalsReviewer !== access.approvalsReviewer)
     || (named ? !profile || profile.id !== access.permissions || profile.extends !== access.parent : response.activePermissionProfile != null)
     || sandbox.type !== (unrestricted ? "dangerFullAccess" : workspace ? "workspaceWrite" : "readOnly")
     || (!unrestricted && sandbox.networkAccess !== false)
-    || (workspace && (sandbox.excludeTmpdirEnvVar !== excludeTemp || sandbox.excludeSlashTmp !== excludeTemp
+    || (workspace && (sandbox.excludeTmpdirEnvVar !== false || sandbox.excludeSlashTmp !== excludeSlashTmp
       || !Array.isArray(sandbox.writableRoots) || sandbox.writableRoots.some(root => typeof root !== "string")
       || !isDeepStrictEqual([...sandbox.writableRoots].sort(), named ? access.roots : [])))
     || ((!unrestricted || access.cleaner) && (response.cwd !== access.cwd || !isDeepStrictEqual(response.runtimeWorkspaceRoots, [access.cwd])))) {
