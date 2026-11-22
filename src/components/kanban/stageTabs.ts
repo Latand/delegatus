@@ -9,7 +9,7 @@ import { ordinal, parseCpuQueueDetail } from "@/lib/runtime/cpuQueueText";
 
 import { cardStatePopover, cardStateText, laneState, laneStopWhy, type CardOwner, type CardState } from "./cardState";
 import type { KanbanPipeline } from "./kanbanModel";
-import { loopShapes, type LoopShape } from "./pipelineGraph";
+import { loopShapes, passChain, type LoopShape } from "./pipelineGraph";
 
 /*
  * The Stages window's tab model (#2 redesign S2, docs/design/redesign-2026-11/
@@ -75,12 +75,8 @@ export function stageTabs(summary: KanbanPipeline): StageTabModel {
   const shapes = loopShapes(pipeline);
 
   /* 1. The steps: from the stage the engine starts the lane on, along `next`. */
-  const steps: PipelineStage[] = [];
-  const stepIds = new Set<string>();
-  for (let current: PipelineStage | undefined = pipeline.stages[0]; current && !stepIds.has(current.id); current = current.next ? byId.get(current.next) : undefined) {
-    steps.push(current);
-    stepIds.add(current.id);
-  }
+  const steps = passChain(pipeline).map((id) => byId.get(id)!);
+  const stepIds = new Set(steps.map((step) => step.id));
 
   /* 2. The conditional stages: reached from a step through a fail edge, then
      along their own edges while those stay off the steps. Each hangs under the
@@ -113,7 +109,8 @@ export function stageTabs(summary: KanbanPipeline): StageTabModel {
     const shape = shapes.get(id) ?? "other";
     const fired = stageFailEdgeRoundsUsed(pipeline, stage);
     const max = failEdgeMaxRounds(pipeline, stage);
-    const carried = shape === "dock" && anchorOf.has(to) && sourcesOf(to).length === 1;
+    /* A fix with one source draws that edge's rounds on its own tab: a docked fix, and a fix the lane goes on to that re-enters the chain somewhere else. */
+    const carried = (shape === "dock" || (shape === "return" && !stepIds.has(to))) && anchorOf.has(to) && sourcesOf(to).length === 1;
     return [{
       id,
       from: stage.id,
@@ -210,6 +207,9 @@ function stageNumber(model: StageTabModel, stageId: string | null): number | nul
   return null;
 }
 
+/** The popover's age: whole minutes from a minute on, so one moment reads alike in both languages and the line does not tick. */
+const coarseAge = (seconds: number): string => humanizeDuration(seconds >= 60 ? Math.floor(seconds / 60) * 60 : seconds);
+
 export function laneWaitsOn(t: TFunction, summary: KanbanPipeline, model: StageTabModel, nowMs: number, options: {
   nameOf: (stage: PipelineStage) => string;
   clock: (ms: number) => string;
@@ -222,7 +222,7 @@ export function laneWaitsOn(t: TFunction, summary: KanbanPipeline, model: StageT
   const stage = stageId ? pipeline.stages.find((candidate) => candidate.id === stageId) ?? null : null;
   const number = stageNumber(model, stageId);
   const position = model.showStrip && number !== null ? t("kanban.stages.position", { k: number, n: model.steps }) : null;
-  const since = lane.sinceMs === null ? "" : humanizeDuration(Math.max(0, (nowMs - lane.sinceMs) / 1000));
+  const since = lane.sinceMs === null ? "" : coarseAge(Math.max(0, (nowMs - lane.sinceMs) / 1000));
   const state: CardState = { owner: lane.owner, subject: { kind: "lane", lane }, lanes: [lane], sinceMs: lane.sinceMs };
   const popover = cardStatePopover(t, state, since).replace(/\s+$/, "");
   /* The line starts with a capital whether a position leads it or not. */

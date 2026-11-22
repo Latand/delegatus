@@ -218,8 +218,8 @@ test("the opened graph shows each stage's state, the pass edges, the fail edge b
   const strip = section.querySelector<HTMLElement>('[data-strip="verify:fail:implement"]')!;
   expect([strip.dataset.stripShape, strip.dataset.stripFired, strip.dataset.stripMax]).toEqual(["return", "1", "2"]);
   expect(strip.querySelector(".sname")?.textContent).toBe("back to Implement");
-  /* One round fired, the next under way while Verify runs, none left after it. */
-  expect(strip.querySelector(".sdots")?.getAttribute("data-dots")).toBe("bad next");
+  /* One round fired and its rework passed; the other round of the budget is left. */
+  expect(strip.querySelector(".sdots")?.getAttribute("data-dots")).toBe("ok left");
   expect(strip.className).not.toContain("spent");
   expect(nodes[2]!.className).toContain("has-strip");
 });
@@ -309,10 +309,10 @@ test("an edge is marked live only when the stage's own new attempt arrives throu
   /* The fail edge folds into Verify's strip, which takes the live mark. */
   const liveStrip = graphView(host).querySelector<HTMLElement>(".pstrip.live")!;
   expect(liveStrip.dataset.strip).toBe("verify:fail:implement");
-  /* The second return spends the budget: no hollow dot is left. */
+  /* The second return spends the budget: its rework is at work and no hollow dot is left. */
   expect(liveStrip.dataset.stripFired).toBe("2");
   expect(liveStrip.className).toContain("spent");
-  expect(liveStrip.querySelector(".sdots")?.getAttribute("data-dots")).toBe("bad bad");
+  expect(liveStrip.querySelector(".sdots")?.getAttribute("data-dots")).toBe("ok next");
 
   /* Within the window the record changes again with nothing attributed. */
   await tick(400);

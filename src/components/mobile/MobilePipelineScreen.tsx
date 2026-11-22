@@ -32,6 +32,7 @@ import {
   patchPipeline,
   pipelineLinkedTasks,
   resolveStageNavFile,
+  stageAsksOperator,
   stageAttempts,
   stageConfigurable,
   stageNames,
@@ -524,7 +525,11 @@ export function MobilePipelineScreen({
   const parkRef = useCallback((park: HTMLDivElement | null) => placement.setPark(park), [placement]);
   const chosenPane = panes.find((pane) => pane.readerKey && pane.file);
   const readers = useMemo<ReaderView[]>(() => (chosenPane?.file && chosenPane.readerKey
-    ? [{ readerKey: chosenPane.readerKey, file: chosenPane.file, inSheet: true, owner: { cardId: pipeline.id, cardTitle: pipelineTitle(t, pipeline), stage: { pipeline, stage: chosenPane.stage } } }]
+    ? [{
+      readerKey: chosenPane.readerKey, file: chosenPane.file, inSheet: true, owner: { cardId: pipeline.id, cardTitle: pipelineTitle(t, pipeline), stage: { pipeline, stage: chosenPane.stage } },
+      /* A stage that asked a question has its answer typed here: the composer says so. */
+      ...(stageAsksOperator(pipeline, chosenPane.stage.id) ? { composerPlaceholder: t("kanban.stages.answerPlaceholder") } : {}),
+    }]
     : []), [chosenPane, pipeline, t]);
 
   const configStage = navState.sheet === "stage" && configuring
@@ -813,6 +818,8 @@ export function MobilePipelineScreen({
           fromConversation={fromConversation}
           onChooseAttempt={(stageId, n) => setPicks((current) => new Map(current).set(stageId, n))}
           onStageMenu={(stage) => configureStage(stage)}
+          onAnswer={lane.answer}
+          acting={Boolean(acting)}
           onOpenRecorded={(target) => openAttempt({ conversationId: target.conversationId, agentPath: target.path })}
           onLeaveWindow={() => {}}
           onClose={() => {}}

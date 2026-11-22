@@ -206,6 +206,36 @@ export function stageViews(pipeline: Pipeline, flowsById: ReadonlyMap<string, Fl
   return views;
 }
 
+/** The stages the lane runs in order: from the stage the engine starts on, along `next`. */
+export function passChain(pipeline: Pick<Pipeline, "stages">): string[] {
+  const byId = new Map(pipeline.stages.map((stage) => [stage.id, stage] as const));
+  const chain: string[] = [];
+  for (let current: PipelineStage | undefined = pipeline.stages[0]; current && !chain.includes(current.id); current = current.next ? byId.get(current.next) : undefined) chain.push(current.id);
+  return chain;
+}
+
+/** One mark per round of a fail edge's budget, in the shapes the tab and the graph both draw: ✓ a round whose fix passed, ✕ one whose fix failed, ● a fix at work, ○ a round left. */
+export type RoundMark = "ok" | "bad" | "next" | "left";
+
+/**
+ * The rounds a fail edge has spent, read from the fix's own attempts: each
+ * source attempt that sent the lane to the fix is one round, and the round's
+ * mark is where the fix's latest attempt for it stands. A tab and a graph row
+ * draw the same marks, so they cannot disagree.
+ */
+export function fixRoundMarks(pipeline: Pipeline, edge: { from: string; to: string }, max: number): RoundMark[] {
+  const rounds = new Map<number, StageChipState>();
+  for (const attempt of operationalAttempts(pipeline, edge.to)) {
+    const by = attempt.activatedBy;
+    if (!by || by.edge !== "fail" || by.stageId !== edge.from) continue;
+    rounds.set(by.attempt, attemptRoundState(attempt.state));
+  }
+  const spent: RoundMark[] = [...rounds.values()].map((state) => (state === "passed" ? "ok" : state === "failed" ? "bad" : state === "skipped" ? "left" : "next"));
+  return [...spent.slice(0, max), ...Array.from({ length: Math.max(0, max - spent.length) }, () => "left" as const)];
+}
+
+const attemptRoundState = (state: PipelineStageAttempt["state"]): StageChipState => (state === "spawning" ? "running" : state);
+
 /* ── Loops: a fail edge folds into its source (docs/design/pipeline-graph-loops.md §3.1) ─ */
 
 /**
@@ -260,6 +290,8 @@ export function loopShapes(pipeline: Pick<Pipeline, "stages">): Map<string, Loop
 export interface GraphLoop {
   edge: GraphEdge;
   shape: Exclude<LoopShape, "other">;
+  /** The target is not a stage of the pass chain: the lane goes on to it and does not go back. */
+  forward: boolean;
 }
 
 export interface GraphTopology {
@@ -276,6 +308,8 @@ export interface GraphTopology {
   shapes: Map<string, LoopShape>;
   /** A docked fix stage, by id, and the source it docks on. */
   docked: Map<string, string>;
+  /** The stages only a failure reaches and nothing passes into, outside the pass chain: they stand on the layer before what they re-enter. */
+  conditional: Set<string>;
   /** The loop each source folds, by source id. */
   loops: Map<string, GraphLoop>;
 }
@@ -285,10 +319,11 @@ export function graphTopology(pipeline: Pick<Pipeline, "stages">): GraphTopology
   const shapes = loopShapes(pipeline);
   const docked = new Map<string, string>();
   const loops = new Map<string, GraphLoop>();
+  const chain = new Set(passChain(pipeline));
   for (const edge of edges) {
     const shape = shapes.get(edge.id);
     if (edge.kind !== "fail" || !shape || shape === "other") continue;
-    loops.set(edge.from, { edge, shape });
+    loops.set(edge.from, { edge, shape, forward: shape !== "self" && !chain.has(edge.to) });
     if (shape === "dock") docked.set(edge.to, edge.from);
   }
   /* A docked stage's own pass joins its source's unit: back into it, or on to
@@ -314,7 +349,19 @@ export function graphTopology(pipeline: Pick<Pipeline, "stages">): GraphTopology
   for (const root of roots.length ? roots : ids.slice(0, 1)) if (!color.has(root)) visit(root);
   for (const id of ids) if (!color.has(id)) visit(id);
 
-  const forward = wires.filter((edge) => !back.has(edge.id) && out.has(edge.to));
+  /* The stages only a failure leads to: from a fail edge's target, along their own `next` and fail edges while those stay off the pass chain.
+     They are placed after the chain's layers are known. */
+  const byId = new Map(pipeline.stages.map((stage) => [stage.id, stage] as const));
+  const conditional = new Set<string>();
+  const reach = edges.filter((edge) => edge.kind === "fail" && edge.from !== edge.to).map((edge) => edge.to);
+  for (let id = reach.shift(); id !== undefined; id = reach.shift()) {
+    if (chain.has(id) || docked.has(id) || conditional.has(id) || !byId.has(id)) continue;
+    conditional.add(id);
+    const stage = byId.get(id)!;
+    if (stage.next) reach.push(stage.next);
+    if (stage.onFail?.to) reach.push(stage.onFail.to);
+  }
+  const forward = wires.filter((edge) => !back.has(edge.id) && out.has(edge.to) && !conditional.has(edge.from) && !conditional.has(edge.to));
   const layer = new Map<string, number>(ids.map((id) => [id, 0]));
   const indegree = new Map<string, number>(ids.map((id) => [id, 0]));
   for (const edge of forward) indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
@@ -327,9 +374,34 @@ export function graphTopology(pipeline: Pick<Pipeline, "stages">): GraphTopology
       if (indegree.get(edge.to) === 0) queue.push(edge.to);
     }
   }
+  /* A conditional stage that goes back into the pass chain stands that many layers before the stage it re-enters, so its wire into that stage is short
+     and reads as going there. One that does not stands after the stages that lead to it. */
+  const placed = new Map<string, number>();
+  const place = (id: string, trail: ReadonlySet<string>): number => {
+    const known = placed.get(id);
+    if (known !== undefined) return known;
+    const through = new Set([...trail, id]);
+    let distance = 1;
+    let entry = byId.get(id)?.next ?? null;
+    while (entry && conditional.has(entry) && !through.has(entry)) {
+      through.add(entry);
+      entry = byId.get(entry)?.next ?? null;
+      distance += 1;
+    }
+    let at: number;
+    if (entry && layer.has(entry) && !conditional.has(entry)) at = layer.get(entry)! - distance;
+    else {
+      const leads = pipeline.stages.filter((candidate) => candidate.id !== id && (candidate.next === id || candidate.onFail?.to === id) && !trail.has(candidate.id));
+      at = Math.max(-1, ...leads.map((candidate) => (conditional.has(candidate.id) ? place(candidate.id, new Set([...trail, id])) : layer.get(docked.get(candidate.id) ?? candidate.id) ?? 0))) + 1;
+    }
+    placed.set(id, at);
+    return at;
+  };
+  for (const id of conditional) layer.set(id, place(id, new Set()));
+  const shift = Math.max(0, -Math.min(0, ...[...conditional].map((id) => layer.get(id) ?? 0)));
+  if (shift) for (const id of ids) layer.set(id, (layer.get(id) ?? 0) + shift);
   /* The main pass path keeps row 0; anything reached another way steps aside. */
   const main = new Set<string>();
-  const byId = new Map(pipeline.stages.map((stage) => [stage.id, stage] as const));
   let current: string | null = roots[0] ?? ids[0] ?? null;
   while (current && !main.has(current) && byId.has(current) && !docked.has(current)) {
     main.add(current);
@@ -364,6 +436,7 @@ export function graphTopology(pipeline: Pick<Pipeline, "stages">): GraphTopology
     rows: Math.max(0, ...ids.map((id) => row.get(id) ?? 0)) + 1,
     shapes,
     docked,
+    conditional,
     loops,
   };
 }
@@ -430,9 +503,7 @@ export interface GraphLayout {
 
 /** The units of one column in the order a person reads a lane: the stages the lane runs, from the one it starts on along `next`, then the stages only a failure reaches or nothing reaches. `graphOrder` sorts by graph layer, and a fail-only stage that no pass wire enters has layer 0, so it would stand between the first steps. */
 function columnOrder(pipeline: Pick<Pipeline, "stages">, units: PipelineStage[]): PipelineStage[] {
-  const byId = new Map(pipeline.stages.map((stage) => [stage.id, stage] as const));
-  const chain: string[] = [];
-  for (let current: PipelineStage | undefined = pipeline.stages[0]; current && !chain.includes(current.id); current = current.next ? byId.get(current.next) : undefined) chain.push(current.id);
+  const chain = passChain(pipeline);
   const rank = (id: string) => { const at = chain.indexOf(id); return at < 0 ? chain.length : at; };
   return units.map((stage, at) => ({ stage, at })).sort((a, b) => rank(a.stage.id) - rank(b.stage.id) || a.at - b.at).map((entry) => entry.stage);
 }

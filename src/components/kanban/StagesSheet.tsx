@@ -8,9 +8,9 @@ import { openReviewHistory } from "@/components/flows/ReviewHistory";
 import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import { browserZone, clockText } from "@/components/activity/format";
 import { AnswerReport } from "@/components/pipelines/PipelineBlock";
-import { parkedStage, pipelineAnswers } from "@/components/pipelines/pipelineBlockModel";
+import { answerLabel, parkedStage, pipelineAnswers, type PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
 import { useLocale } from "@/lib/i18n";
-import type { PipelineAttemptState, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
+import type { Pipeline, PipelineAttemptState, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { roleNameById } from "@/components/builderCopy";
 import { stageAgentRowModel, stageCloudTaskUrl, type StageChipState } from "@/components/pipelines/pipelineModel";
@@ -24,7 +24,7 @@ import { attemptPlace, stageIdentity, valuesOf } from "./stageIdentity";
 import { modelGlyphKind } from "./modelGlyph";
 import { StageGlyph } from "./StageGlyph";
 import { engineWord, identityTitle, StageIdentity, StagePlaceLine } from "./identityMarks";
-import { layoutGraph, roundsOf, STAGE_TONE } from "./pipelineGraph";
+import { fixRoundMarks, layoutGraph, roundsOf, STAGE_TONE } from "./pipelineGraph";
 import { laneWaitsOn, recheckAttempts, stageTabs, tabNote, type StageRule, type StageTab, type StageTabModel, type TabNote, type WaitsOn } from "./stageTabs";
 import type { PipelinePorts } from "./pipelinePorts";
 import { StageAccountChip } from "./AccountPicker";
@@ -147,17 +147,26 @@ export function StagesSheet(props: {
   onChooseAttempt: (stageId: string, n: number) => void;
   onStageMenu: (stage: PipelineStage, anchor: HTMLElement) => void;
   onOpenRecorded: (conversation: { path: string | null; conversationId: string | null }) => void;
+  /** The one answer a parked stage's pane offers as a button: the board's own retry, sent the way its ⋯ menu sends it. */
+  onAnswer: (pipeline: Pipeline, answer: PipelineAnswer) => void;
+  /** A lane action is in flight: the answer waits for it. */
+  acting?: boolean;
   /** Close the agent window, which puts its conversation back in its pane. */
   onLeaveWindow: () => void;
   onClose: () => void;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const { summary, panes } = props;
   const screen = props.presentation === "screen";
   const { pipeline } = summary;
   const names = useMemo(() => stageNames(t, pipeline), [t, pipeline]);
   const { model, waits } = useLaneTabs(summary, props.nowMs);
   const arcs = useMemo(() => new Map(loopArcs(summary).map((arc) => [arc.id, arc] as const)), [summary]);
+  /* A stage that has not run says in the graph what its tab says: «if needed» for a fix, not «waiting». */
+  const optionalWords = useMemo(() => new Map(model.tabs.flatMap((tab) => {
+    const note = tabNote(tab, summary);
+    return note.word ? [[tab.stage.id, t(`kanban.stages.tab.${note.word}`)] as const] : [];
+  })), [model, summary, t]);
   const [graph, setGraph] = useState(() => props.initialGraph === true);
   const [zoom, setZoom] = useState<SheetZoom>("fit");
   const [waitsOpen, setWaitsOpen] = useState(false);
@@ -166,7 +175,26 @@ export function StagesSheet(props: {
   const waitsButton = useRef<HTMLButtonElement>(null);
   const tablist = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState<number | null>(null);
+  /* The tabs stand on one line while that line fits the sheet; only a line that would overflow becomes the grid (a phone is always the grid, by its media rule). */
+  const [gridded, setGridded] = useState(false);
   const selectedId = model.tabs.some((tab) => tab.stage.id === props.selected) ? props.selected : model.tabs[0]?.stage.id ?? null;
+
+  useLayoutEffect(() => {
+    const list = tablist.current;
+    if (!list) return;
+    const measure = () => {
+      const applied = list.dataset.layout;
+      list.dataset.layout = "row";
+      const overflows = list.scrollWidth > list.clientWidth + 1;
+      if (applied) list.dataset.layout = applied;
+      setGridded(overflows);
+    };
+    measure();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [model, summary, locale]);
 
   /* The graph is measured at the width the sheet has. */
   useLayoutEffect(() => {
@@ -237,6 +265,7 @@ export function StagesSheet(props: {
         <div
           ref={tablist}
           className="gs-tabs"
+          data-layout={gridded ? "grid" : "row"}
           role="tablist"
           aria-label={t("kanban.stages.navAria")}
           data-stage-tabs={model.tabs.length}
@@ -293,6 +322,7 @@ export function StagesSheet(props: {
                     selected={new Set(selectedId ? [selectedId] : [])}
                     inView={new Set(selectedId ? [selectedId] : [])}
                     scale={scale}
+                    optional={optionalWords}
                     navigate
                     onOpenStage={(_pipeline, stage) => props.onSelect(stage.id)}
                   />
@@ -421,8 +451,8 @@ function StageTabButton({ tab, tabs, summary, names, arcs, selected, onSelect }:
   const sources = tab.sources.map((id) => names.get(id) ?? id).join(t("kanban.stages.tab.or"));
   const next = stage.next ? names.get(stage.next) ?? stage.next : null;
   const arc = tab.carried ? arcs.get(tab.carried.id) : undefined;
-  /* A stage whose own fail edge has fired, and which no dots on another tab carry, wears the card's return mark and count. */
-  const outgoing = tabs.rules.find((rule) => rule.from === stage.id && rule.line && rule.fired > 0);
+  /* The stage whose fail edge has fired wears the card's return mark and count, in every lane: the fix's tab shows only the fix's own rounds. */
+  const outgoing = tabs.rules.find((rule) => rule.from === stage.id && rule.fired > 0);
   const returned = outgoing ? arcs.get(outgoing.id) : undefined;
   const why = tab.kind === "conditional" && sources
     ? [
@@ -457,14 +487,9 @@ function StageTabButton({ tab, tabs, summary, names, arcs, selected, onSelect }:
       <StageGlyph state={state} model={identity} motion={view?.motion} fallback="dot" className="sglyph" />
       <span className="slbl">{name}</span>
       {returned && outgoing ? <ReturnSuffix arc={returned} title={arcTitle(t, returned, name, names.get(outgoing.to) ?? outgoing.to)} /> : null}
-      {tab.carried ? <RoundDots fired={tab.carried.fired} max={tab.carried.max} passed={arc ? arcPassed(arc, summary) : false} running={arc?.live ?? false} count /> : null}
+      {tab.carried ? <RoundDots marks={fixRoundMarks(pipeline, tab.carried, tab.carried.max)} count /> : null}
     </button>
   );
-}
-
-/** The source passed after the fix ran: the dots end in a success dot. */
-function arcPassed(arc: LoopArc, summary: KanbanPipeline): boolean {
-  return arc.loop.fired > 0 && summary.views.get(arc.loop.from.id)?.state === "passed";
 }
 
 function StagePane(props: Parameters<typeof StagesSheet>[0] & {
@@ -515,6 +540,8 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const answers = pipelineAnswers(pipeline, (entry) => nameOf(entry.id));
   const stopped = answers && answers.kind !== "merge" && (answers.stage?.id ?? parkedStage(pipeline)?.id) === stage.id ? answers : null;
   const laneStop = stopped ? laneState(pipeline).stop : null;
+  /* The answer the pane offers as a button: the last of the choices, which is the active one. */
+  const primary = stopped ? stopped.choices[stopped.choices.length - 1]! : null;
   const stopWhy = stopped && laneStop && laneStop.kind !== "other" && stopped.kind === "decision" && !stopped.stop ? laneStopWhy(t, pipeline, laneStop, false, (id) => names.get(id) ?? null) : null;
 
   const facts = paneFacts(pipeline, stage, shown, view);
@@ -593,7 +620,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const setupFills = !neverRan && !pane.readerKey && !recorded;
 
   return (
-    <section className={className} data-stage={stage.id} tabIndex={-1} role="region" aria-label={aria}>
+    <section className={`${className}${body === null ? " lean" : ""}`} data-stage={stage.id} tabIndex={-1} role="region" aria-label={aria}>
       <div className="pane-head">
         {glyph}
         <span className="pane-title">
@@ -604,7 +631,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
               identity row; the words stay in the row's title (#1743). */}
           <span className="prole" title={identityTitle(t, identity)}>
             <span className="prole-role">{roleNameById(t, roleId)}</span>
-            {stage.kind === "review-loop" ? <span className="prole-kind">{t("kanban.stages.reviewLoop")}</span> : null}
+            {stage.kind === "review-loop" ? <><span className="prole-sep" aria-hidden="true">·</span><span className="prole-kind">{t("kanban.stages.reviewLoop")}</span></> : null}
           </span>
         </span>
         {/* A drawn glyph already names the model and the state, so the word
@@ -625,7 +652,19 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
             {/* The stop's own reason leads, in the words the waits-on line uses: a stage that passed and whose branch was refused reads that, not «needs a decision». */}
             {stopWhy ? <p className="stage-report" data-lane-stop={laneStop?.kind}>{stopWhy}</p> : null}
             <AnswerReport pipeline={pipeline} answers={stopped} names={names} nameOf={(entry) => nameOf(entry.id)} reason={!stopWhy} />
-            {stopped.kind === "decision" ? <p className="pane-note" data-answer-hint={stage.id}>{t("kanban.stages.answerHint")}</p> : null}
+            {/* One primary action. A stage that asked a question is answered in the conversation's own composer, below; any other stop is retried from here. Skip stays in the ⋯. */}
+            {stopped.kind === "decision" && agent.question ? <p className="pane-note" data-answer-hint={stage.id} data-answer-kind="question">{t("kanban.stages.answerBelow")}</p> : null}
+            {stopped.kind === "decision" && !agent.question ? (
+              <>
+                {primary ? (
+                  <button type="button" className="btn primary pane-primary" data-pane-answer={primary.action} disabled={props.acting} onClick={() => props.onAnswer(pipeline, primary)}>
+                    {answerLabel(t, stopped, primary, false)}
+                  </button>
+                ) : null}
+                {/* Skip is the quiet answer, in the ⋯, and only where the lane allows it. */}
+                {stopped.choices.length > 1 ? <p className="pane-note" data-answer-hint={stage.id} data-answer-kind="retry">{t("kanban.stages.answerHint")}</p> : null}
+              </>
+            ) : null}
           </div>
         </div>
       ) : null}

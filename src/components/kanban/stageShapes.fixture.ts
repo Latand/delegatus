@@ -48,6 +48,8 @@ export function buildStageShapes(deps: ShapeDeps): ShapeLane[] {
   const { project, iso, L } = deps;
   const lane = (slug: string, title: string, state: string, stages: unknown[], spec: Spec, cursorStage: string | null, over: Record<string, unknown> = {}): ShapeLane => {
     let count = 0;
+    /* An attempt at work started when its conversation's turn did, and a stage waiting on an answer has waited since the conversation asked, so the head's age and the conversation's own clock read one time. */
+    const startedAgo = (attemptState: string, n: number): number => (attemptState === "running" ? 400 : attemptState === "needs_decision" && slug === "parked-question" ? 9 * MIN : (600 - n * 20) * MIN);
     const runs = Object.entries(spec).map(([stageId, attempts]) => ({
       stageId,
       attempts: attempts.map(([attemptState, extra], index) => {
@@ -58,7 +60,7 @@ export function buildStageShapes(deps: ShapeDeps): ShapeLane[] {
         const file = attemptState === "skipped" ? null : deps.file(`${slug}-${stageId}-${index + 1}`, `${title}: ${stageId} ${index + 1}`, conversation);
         return {
           n: index + 1, state: attemptState, effectiveRole: role("builder"), launchId: file ? `launch-${slug}-${count}` : null, conversationId: file?.conversationId ?? null, sessionId: null,
-          agentPath: file?.path ?? null, paneId: null, flowId: null, startedAt: iso((600 - count * 20) * MIN), completedAt: live ? null : iso((590 - count * 20) * MIN),
+          agentPath: file?.path ?? null, paneId: null, flowId: null, startedAt: iso(startedAgo(attemptState, count)), completedAt: live ? null : iso((590 - count * 20) * MIN),
           input: null, activatedBy: null, output: null, verdict: attemptState === "needs_decision" ? { status: "needs_decision", findings: [] } : null, error: null, ...extra,
         };
       }),
@@ -93,8 +95,9 @@ export function buildStageShapes(deps: ShapeDeps): ShapeLane[] {
     lane("returning-fix", L("Tighten the card spacing", "Підтягнути відступи картки"), "needs_decision",
       [stage("brief", "architect", "build"), stage("build", "builder", "review"), stage("review", "reviewer", "visual", fail("fix", 2)), stage("fix", "builder", "review"),
         stage("visual", "visual-critic", null, fail("visual-fix", 2, "park")), stage("visual-fix", "builder", "review")],
-      { brief: [["passed"]], build: [["passed", passVia("brief", 1)]], review: [["passed", passVia("build", 1)]], visual: [["failed", passVia("review", 1)], ["needs_decision", passVia("review", 2)]],
-        "visual-fix": [["passed", failVia("visual", 1)]] }, "visual", { stateDetail: "fail-edge budget exhausted: visual failed again" }),
+      { brief: [["passed"]], build: [["passed", passVia("brief", 1)]], review: [["passed", passVia("build", 1)], ["passed", passVia("visual-fix", 1)], ["passed", passVia("visual-fix", 2)]],
+        visual: [["failed", passVia("review", 1)], ["failed", passVia("review", 2)], ["needs_decision", passVia("review", 3)]],
+        "visual-fix": [["passed", failVia("visual", 1)], ["passed", failVia("visual", 2)]] }, "visual", { stateDetail: "fail-edge budget exhausted: visual failed again" }),
     lane("prototype", L("Draft the settings window", "Накидати вікно налаштувань"), "completed",
       [stage("prototype", "builder", "critic"), stage("critic", "visual-critic", "publish", fail("proto-fix", 2)), stage("proto-fix", "builder", "critic"), stage("publish", "builder", null)],
       { prototype: [["passed"]], critic: [["failed", passVia("prototype", 1)], ["failed", passVia("proto-fix", 1)]],

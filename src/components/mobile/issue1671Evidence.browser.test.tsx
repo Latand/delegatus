@@ -15046,7 +15046,10 @@ describe("redesign S2 the Stages window on the phone", () => {
         const name = tab.querySelector<HTMLElement>(".slbl")!;
         const stripBox = strip?.getBoundingClientRect();
         return {
-          stage: tab.dataset.tabStage ?? "", kind: tab.dataset.tabKind ?? "", word: tab.dataset.tabWord ?? null, selected: tab.getAttribute("aria-selected") === "true",
+          stage: tab.dataset.tabStage ?? "", kind: tab.dataset.tabKind ?? "", state: tab.dataset.tabState ?? "", word: tab.dataset.tabWord ?? null, selected: tab.getAttribute("aria-selected") === "true",
+          dots: tab.querySelector<HTMLElement>(".sdots")?.dataset.dots ?? null,
+          count: tab.querySelector("[data-dots-count]")?.textContent ?? null,
+          returned: tab.querySelector(".pret")?.textContent ?? null,
           cut: name.scrollWidth > name.clientWidth + 1 || ranges(name).some((rect) => stripBox ? rect.right > stripBox.right + 0.5 || rect.left < stripBox.left - 0.5 : false),
           height: Math.round(tab.getBoundingClientRect().height),
           top: Math.round(tab.getBoundingClientRect().top * 10) / 10,
@@ -15063,6 +15066,16 @@ describe("redesign S2 the Stages window on the phone", () => {
         messages: pane?.querySelectorAll("[data-kanban-reader] .msg").length ?? 0,
         stop: pane?.querySelector("[data-lane-stop]")?.textContent ?? null,
         hint: pane?.querySelector("[data-answer-hint]")?.textContent ?? null,
+        hintKind: pane?.querySelector<HTMLElement>("[data-answer-hint]")?.dataset.answerKind ?? null,
+        prole: pane?.querySelector(".prole")?.textContent ?? "",
+        height: Math.round(pane?.getBoundingClientRect().height ?? 0),
+        placeholder: pane?.querySelector("textarea")?.getAttribute("placeholder") ?? null,
+        /* A parked pane's one primary control, enabled and on the first screen without scrolling. */
+        answers: [...(pane?.querySelectorAll<HTMLButtonElement>("[data-pane-answer]") ?? [])].map((button) => {
+          const rect = button.getBoundingClientRect();
+          return { action: button.dataset.paneAnswer ?? "", text: button.textContent ?? "", disabled: button.disabled, whole: rect.width > 0 && rect.left >= box.left && rect.right <= box.right && rect.top >= box.top && rect.bottom <= box.bottom };
+        }),
+        innerRing: Boolean(pane && [...pane.querySelectorAll<HTMLElement>(".pane-attention-ring")].some((ring) => getComputedStyle(ring).display !== "none")),
         question: pane?.querySelector("[data-stage-question]")?.textContent ?? null,
         boxedEmpty: Boolean(away && getComputedStyle(away).borderTopStyle === "dashed"),
       },
@@ -15139,10 +15152,35 @@ describe("redesign S2 the Stages window on the phone", () => {
                 /* The selected stage's conversation is read in its pane as on the desktop; a truly empty one never says «file». */
                 if (/файл поки|порожній|file is empty/i.test(read.pane.text)) fail(`the pane uses file wording: ${read.pane.text.slice(0, 120)}`);
                 if (read.pane.reader && read.pane.messages === 0 && /Ще без виводу|No output yet/.test(read.pane.text)) fail("the pane's conversation shows no message");
-                if (slug === "parked-publication" || slug === "parked-question") {
-                  if (!read.pane.stop) fail("the parked stage's pane gives no stop reason");
+                if (slug === "parked-publication" || slug === "parked-question" || slug === "returning-fix") {
+                  if (!read.pane.stop && slug !== "returning-fix") fail("the parked stage's pane gives no stop reason");
                   if (!read.pane.hint) fail("the parked stage's pane does not say where to answer");
                   if (/(працює…|working…)/.test(read.pane.text)) fail("the parked stage's pane shows a working footer");
+                  if (read.pane.innerRing) fail("the parked pane's conversation draws a second ring inside the pane's frame");
+                  if (slug === "parked-question") {
+                    if (read.pane.answers.length) fail("a question's pane offers a retry button beside its composer");
+                    if (read.pane.hintKind !== "question") fail(`a question's pane does not point to the composer: ${read.pane.hint}`);
+                    if (!read.pane.placeholder || /agent will start|агент запуститься/.test(read.pane.placeholder) || !(lang === "en" ? /answer/i : /відповід/i).test(read.pane.placeholder)) fail(`the composer's placeholder is not an answer's: ${read.pane.placeholder}`);
+                  } else {
+                    const [answer, ...extra] = read.pane.answers;
+                    if (!answer || extra.length) fail(`the parked pane offers ${read.pane.answers.length} primary buttons, not one`);
+                    else if (answer.disabled || !answer.whole || !(lang === "en" ? /Retry|Review again/ : /Повторити|Ще одне ревʼю/).test(answer.text)) fail(`the parked pane's primary button is not a whole, enabled Retry on the first screen: ${JSON.stringify(answer)}`);
+                  }
+                }
+                if (/(review loop|цикл рев.ю)/.test(read.pane.prole) && !/·/.test(read.pane.prole)) fail(`the role and the loop name run together: ${read.pane.prole}`);
+                for (const rule of read.rules) if (/, тоді|, then /.test(rule.text) || !/→/.test(rule.text)) fail(`a rule line leaves the one grammar: ${rule.text}`);
+                /* A tab that carries its fix's rounds draws one mark per round of the budget, and no ✕ sits on a stage at work. */
+                for (const tab of read.tabs) {
+                  if (!tab.dots || /^\d+\/\d+$/.test(tab.dots)) continue;
+                  const marks = tab.dots.split(" ");
+                  const used = marks.filter((kind) => kind !== "left").length;
+                  if (tab.count !== `${used}/${marks.length}`) fail(`tab ${tab.stage} carries rounds "${tab.dots}" and says "${tab.count}"`);
+                  if (["running", "reviewing", "committing"].includes(tab.state) && marks[0] === "bad") fail(`tab ${tab.stage} is at work and starts with a ✕: ${tab.dots}`);
+                }
+                if (slug === "returning-fix") {
+                  const visual = read.tabs.find((tab) => tab.stage === "visual");
+                  if (visual?.returned?.replace("↺", "") !== "2/2") fail(`Visual's tab says "${visual?.returned}" while its rounds are spent`);
+                  if (!read.rules.some((rule) => /Visual/.test(rule.text) && /(2 of 2|2 з 2)/.test(rule.text))) fail("Visual's rule line does not say 2 of 2");
                 }
                 if (slug === "parked-question" && !read.pane.question) fail("the parked stage's pane does not show its question");
                 if (read.overflowX > 0) fail(`the page scrolls sideways by ${read.overflowX}px`);
@@ -15176,7 +15214,10 @@ describe("redesign S2 the Stages window on the phone", () => {
                     const word = lang === "en" ? "skipped" : "пропущено";
                     if (!skipped || skipped.pane.stage !== "deliver") fail("the skipped tab did not select");
                     else {
-                      if (!skipped.pane.sub.toLowerCase().includes(word)) fail(`the skipped pane's sub-line says «${skipped.pane.sub}»`);
+                      const said = skipped.pane.text.toLowerCase().split(word).length - 1;
+                      if (said !== 1) fail(`the skipped pane says «${word}» ${said} times: ${skipped.pane.text.slice(0, 160)}`);
+                      if (!skipped.pane.sub) fail("the skipped pane's sub-line is empty");
+                      if (skipped.pane.height > 320) fail(`the skipped pane is ${skipped.pane.height}px high, an empty box`);
                       if (/started by|запустив/.test(skipped.pane.text)) fail("the skipped pane names a starter");
                       if (skipped.pane.boxedEmpty) fail("the skipped pane draws an empty dashed box");
                       if (/No conversation recorded|Розмову не записано/.test(skipped.pane.text)) fail("the skipped pane says no conversation was recorded");
@@ -15283,6 +15324,16 @@ describe("redesign S2 the Stages window on the phone", () => {
                     nodes: [...document.querySelectorAll<HTMLElement>(".gs-graph .pnode[data-stage]")].map((node) => ({ stage: node.dataset.stage ?? "", top: Math.round(node.getBoundingClientRect().top) })),
                   }));
                   if (column.cut) fail("the graph is cut at the canvas's side");
+                  /* No node or row text of the graph is cut with an ellipsis, and a fix the lane goes on to is never «back». */
+                  const graphText = await page.evaluate(() => ({
+                    truncated: [...document.querySelectorAll<HTMLElement>(".gs-graph .pnode *, .gs-graph .pstrip *")].filter((element) => element.children.length === 0 && (element.textContent ?? "").trim() && element.scrollWidth > element.clientWidth + 1).map((element) => element.textContent ?? ""),
+                    strips: [...document.querySelectorAll<HTMLElement>(".gs-graph .pstrip[data-strip]")].map((strip) => ({ id: strip.dataset.strip ?? "", text: strip.textContent ?? "" })),
+                  }));
+                  for (const text of graphText.truncated) fail(`a graph text is cut: ${text}`);
+                  for (const strip of graphText.strips) {
+                    const target = read.tabs.find((tab) => tab.stage === strip.id.split(":")[2]);
+                    if (target && target.kind !== "step" && /back to|назад до/.test(strip.text)) fail(`the row for ${target.stage} reads «back»: ${strip.text}`);
+                  }
                   const stepNodes = read.tabs.filter((tab) => tab.kind === "step").map((tab) => column.nodes.find((node) => node.stage === tab.stage)).filter(Boolean) as Array<{ stage: string; top: number }>;
                   for (let index = 1; index < stepNodes.length; index += 1) if (stepNodes[index]!.top < stepNodes[index - 1]!.top) fail(`step ${stepNodes[index]!.stage} stands before ${stepNodes[index - 1]!.stage} in the graph`);
                   const lastStepTop = Math.max(0, ...stepNodes.map((node) => node.top));

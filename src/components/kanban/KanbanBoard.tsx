@@ -15,7 +15,7 @@ import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
-import { latestAttempt, pipelineStateLabel, stagePromptExtra } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, pipelineStateLabel, stageAsksOperator, stagePromptExtra } from "@/components/pipelines/pipelineModel";
 import { conversationSourceFile, ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
 import { conversationRefusalText, useConversationPreview } from "@/components/pipelines/useConversationDraft";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
@@ -686,6 +686,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         inSheet: sheetSlots.has(reader.key),
         owner: owner && card ? stableOwner(reader.key, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage }) : null,
         ...(isCurrentSeatConversation(seatRefs, file) ? { seat: true, ...(seatPlaceholder?.key === reader.key ? { composerPlaceholder: seatPlaceholder.text } : {}) } : {}),
+        ...(owner?.stage && stageAsksOperator(owner.stage.pipeline, owner.stage.stage.id) ? { composerPlaceholder: t("kanban.stages.answerPlaceholder") } : {}),
         /* The window is the operator's conversation window: the agent in its
            reader takes the one composer from any other place of the same
            conversation, the seat's included. */
@@ -703,6 +704,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           file: pane.file,
           inSheet: shownState !== pane.readerKey,
           owner: stableOwner(pane.readerKey, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: { pipeline: summary.pipeline, stage: pane.stage } }),
+          ...(stageAsksOperator(summary.pipeline, pane.stage.id) ? { composerPlaceholder: t("kanban.stages.answerPlaceholder") } : {}),
         });
       }
     }
@@ -2384,7 +2386,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     menu.setOpen({ anchor, value: { kind: "pipeline", cardId, pipelineId: pipeline.id } });
   }, [menu]);
   /* Skip or Retry pressed as a link on the stop's entry: the menu row's request, with Skip held for its receipt. */
-  const answerLane = useCallback((cardId: string, pipeline: Pipeline, answer: LaneAnswerItem) => {
+  const answerLane = useCallback((cardId: string, pipeline: Pipeline, answer: Pick<LaneAnswerItem, "action" | "stageId" | "stageName" | "expectedAttempt">) => {
     /* Read through the ref: a handler that follows the card list would re-render every card on each catalog answer. */
     const card = cardsByIdRef.current.get(cardId);
     startPipelineAction(
@@ -3061,6 +3063,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       ports={pipelinePorts}
       onChooseAttempt={(stageId, n) => setPaneAttempts((current) => withEntry(current, stageDraftKey(sheet.pipelineId, stageId), n))}
       onStageMenu={(stage, anchor) => menu.setOpen({ anchor, value: { kind: "stage", cardId: sheetSummary.card.id, pipelineId: sheet.pipelineId, stageId: stage.id, from: "sheet" } })}
+      onAnswer={(pipeline, answer) => answerLane(sheetSummary.card.id, pipeline, answer)}
+      acting={acting.has(sheet.pipelineId)}
       onOpenRecorded={openRecorded}
       onLeaveWindow={leaveWindow}
       onClose={closeSheet}

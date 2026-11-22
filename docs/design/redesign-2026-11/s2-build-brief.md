@@ -169,11 +169,12 @@ A conditional stage is a **subordinate tab inside its source's unit**. It is
 the same rule the graph already applies to a docked fix: a strip under its
 source with no column of its own (`docs/design/pipeline-graph-loops.md` §3.1–3.2).
 
-- **Desktop (≥ 1100 px):** right after its step tab, in the same row:
+- **One line (while it fits):** right after its step tab, in the same row:
   `↺ Fix` in caption size, weight 500, muted ink, no number, followed by the
-  graph strip's own `RoundDots` (`PipelineSection.tsx:320`). Selected, it takes
-  the accent underline like any tab.
-- **Grid (< 1100 px, and the phone):** a grid cell is a unit, not a stage. The
+  fix's own `RoundDots` (`PipelineSection.tsx`). Selected, it takes the accent
+  underline like any tab. The sheet measures the one line and turns it into the
+  grid below only when it would overflow, at any width from 700 px up.
+- **Grid (a line that would overflow, and every phone):** a grid cell is a unit, not a stage. The
   step tab is the cell's first line; each conditional tab is a second line in
   the same cell (min 28 px, or 44 px under `pointer: coarse`). A lane with
   build, review + fix, visual + vfix therefore takes one row of four cells, not
@@ -205,10 +206,14 @@ running now is said by the waits-on line and the pane, not repeated here.
 | At rest, fired | the grammar above, with fired and max |
 | Spent | the grammar, then a short clause for what the budget did (`ruleEnd`: the lane goes on, waits for you after the fix, one more failure stops it, or stopped here) |
 
-The failing stage's own tab wears the card's `↺ n/max` once its edge has fired
-(`ReturnSuffix`). A tab that carries a fix's rounds draws them as marks of four
-shapes (✕ fired, ✓ the source passed, ● under way, ○ left) followed by the
-count in digits, so a round reads without its colour.
+One rule for the rounds of a fail edge, on every surface. The failing stage's
+own tab wears the card's `↺ n/max` once its edge has fired (`ReturnSuffix`), in
+every lane. The fix's tab, and the graph row under its source, draw only the
+fix's own rounds (`fixRoundMarks`): one mark for each round of the budget, ✓ a
+round whose fix passed, ✕ one whose fix failed, ● the fix at work, ○ a round
+left; the tab adds the count in digits, so a round reads without its colour. A
+tab and a graph row of one edge therefore show the same marks, and no ✕ stands on
+the name of a stage at work.
 
 When the source stage's pane shows such a line, the pane drops the
 `kanban.stages.onFail` clause from its sub-line, so the fact is said once. A
@@ -228,9 +233,9 @@ as `stageNames` renders them. «n/max» below are fired/max of the fail edge.
   publishing).
 
 Tabs: `1 Build  2 Review ↺ Fix ○○`. In 2b3e7241 the subordinate tab reads
-«Fix · не знадобився» and its dots stay hollow. In 151999a6 it reads
-«Fix · пройдено» with one filled danger dot and one hollow (1 of 2 fired;
-Review has not passed since). No rule
+«Fix · не знадобився» and its marks stay hollow. In 151999a6 it reads
+«Fix · пройдено» with one ✓ and one ○ (1 of 2 rounds used; Review has not passed
+since) and Review's tab wears `↺ 1/2`. No rule
 line, because the tab carries the edge. The default selection follows
 `currentStageId`: the live or decision stage, else the last started.
 
@@ -244,10 +249,11 @@ line, because the tab carries the edge. The default selection follows
 - 375adbfb: stop-after-fix; the lane waited in `needs_review` (2026-10-22).
 
 The step tab's glyph badge shows the source's latest state, and `stageViews`
-already folds a failed source the lane will re-run into pending-again. The
-subordinate fix tab carries `RoundDots`: filled danger per fired round, a
-success dot once the source passed, a ring on the round under way, hollow for
-rounds left. No hollow dot left means the budget is spent. Above six rounds it
+already folds a failed source the lane will re-run into pending-again; the
+source's tab wears `↺ n/max` from its first failure. The subordinate fix tab
+carries `RoundDots` of its own rounds: ✓ for a round whose fix passed, ✕ for a
+failed one, ● for the fix at work, ○ for rounds left, one mark per round of the
+budget. No hollow mark left means the budget is spent. Above six rounds it
 shows `n/max` as text, as the graph strip does. The attempts row in each pane
 keeps every attempt («Спроба 1 · не пройдено» …).
 
@@ -326,7 +332,11 @@ which the phone shows today in `PipelineBlock`'s current-stage row) in place of
 the bare question paragraph. Retry and Skip stay in the pane's ⋯ for that stage
 (`KanbanBoard.tsx:1743`). Answers that apply to the whole lane (accept as is,
 retry merge, leave open) stay in the card's ⋯ on the desktop and in the bar's ⋯
-on the phone. The sheet adds no answer button.
+on the phone. A parked pane offers its one primary action as a visible control
+and nothing more: a Retry button for a stop that needs a retry (the same
+`retry-stage` request its ⋯ sends, in the stop's own words for a review stop), and
+for a stage that asked a question a pointer to the conversation's composer, whose
+placeholder reads as an answer's. Skip stays in the pane's ⋯.
 
 ### 4.8 Single-stage successor lanes
 
@@ -599,7 +609,7 @@ today's code** marks the branch that fails if the sheet keeps `graphOrder`,
 | Prototype lane, terminal re-check, skipped, parked, single stage, 8+ stages | §4.4–§4.9 with lane ids |
 | Whom the lane waits on | §5, from `laneState` and the existing stop words |
 | Every current function reachable | §6 |
-| Dot with a short popover; no new chrome; one primary action | §5 reuses the card's dot; the phone ⋯ is the bar's existing ⋯; the sheet adds no answer button |
+| Dot with a short popover; no new chrome; one primary action | §5 reuses the card's dot; the phone ⋯ is the bar's existing ⋯; a parked pane's one primary action is a visible Retry (or the composer, for a question) and Skip stays in the ⋯ (§4.7) |
 | Real components, real data; evidence from existing drivers only | §2, §9.3 |
 
 ## 12. Decisions
@@ -609,3 +619,23 @@ three things: removing the fold controls, selecting a tab without opening the
 agent window, and giving the phone the same sheet. The only path that would
 need a new decision is the phone fallback in §8, and only if the inline reader
 fails its driver gate.
+
+## 13. What the second visual-critic round changed
+
+The critic read the rendered frames of every lane shape (desktop 1440 to 700 px,
+the phone at 390 px, both languages and themes) and the build changed the
+following. Each item has a gate in the two evidence drivers.
+
+| Finding | Change |
+|---|---|
+| A graph node's status line was cut mid-word in Ukrainian | `kanban.graph.lastWas` reads «було не пройдено» in Ukrainian; the drivers fail on any ellipsized node or row text |
+| A shared or returning fix was drawn behind another stage and called «back» | `graphTopology` places a stage only a failure reaches (`conditional`) on the layer before the stage it re-enters, so its wire is short and ends there; a fix off the pass chain is drawn as a docked fix, not as «back to»; an unreached conditional node says «if needed» as its tab does; the drivers fail on a wire behind a foreign node |
+| Round marks disagreed between tab, graph and phone | one rule, §3.4: the failing source wears `↺ n/max`, the fix shows its own rounds from `fixRoundMarks`, one mark per round of the budget |
+| A returning fix stated two contradicting facts | the fixture spends both rounds of the return the park reason names; tab, rule line and graph row read 2 of 2 |
+| A parked pane had no obvious primary action | Retry is a button in the pane; a question points to the composer, whose placeholder is an answer's; skip stays in the ⋯ and the hint says which ⋯ |
+| A parked pane was framed three times | the pane's rule carries the attention colour; the conversation's orbiting ring and the pane's focus ring are not drawn inside it |
+| A skipped pane was an empty full-height box that said «skipped» twice | the status says it once, the sub-line says what the lane did, the pane is as tall as its content |
+| Role and loop name ran together | a «·» separates them |
+| Two Ukrainian grammars for a rule line | `ruleOn` reads «Якщо X не пройде → Y» like English |
+| One stage's time shown twice with different values | the popover's age is whole minutes; the evidence fixture starts a running attempt when its conversation's turn started |
+| The 1099 px tab row became the phone's grid although one line fit | the sheet measures the one line and turns it into the grid only where it would overflow (a phone is always the grid) |

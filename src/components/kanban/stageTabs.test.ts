@@ -106,7 +106,7 @@ test("a return to an earlier step adds no tab, only a rule line that counts its 
   expect(model.rules[0]).toMatchObject({ from: "verify", to: "build", shape: "return", fired: 1, max: 2, carried: false });
 });
 
-test("a fix two reviewers share comes after the first reviewer that reaches it, which graph order does not give", () => {
+test("a fix two reviewers share comes after the first reviewer that reaches it, though it stands before the stage it re-enters in the graph", () => {
   const stages = [
     stage("brief", "architect", "build"),
     stage("fix", "builder", "review"),
@@ -115,14 +115,15 @@ test("a fix two reviewers share comes after the first reviewer that reaches it, 
     stage("visual", "visual-critic", null, failTo("fix", 1, "park")),
   ];
   const record = lane(stages);
-  expect(graphOrder(record).map((entry) => entry.id)).toEqual(["brief", "fix", "build", "review", "visual"]);
+  /* The graph stands it on the layer before Review, beside Build: a drawing's order, not a sequence. */
+  expect(graphOrder(record).map((entry) => entry.id)).toEqual(["brief", "build", "fix", "review", "visual"]);
   expect(ids(record)).toEqual(["brief", "build", "review", "fix", "visual"]);
   const model = tabsOf(record);
   expect(model.tabs.find((tab) => tab.stage.id === "fix")).toMatchObject({ kind: "conditional", anchor: "review", sources: ["review", "visual"], carried: null });
   expect(model.rules.map((rule) => [rule.id, rule.carried])).toEqual([["review:fail:fix", false], ["visual:fail:fix", false]]);
 });
 
-test("a visual fix that returns to review sits after the visual critic, with a rule line for its budget", () => {
+test("a visual fix that returns to review sits after the visual critic and carries its own rounds, as a docked fix does", () => {
   const stages = [
     stage("brief", "architect", "build"),
     stage("visual-fix", "builder", "review"),
@@ -132,11 +133,11 @@ test("a visual fix that returns to review sits after the visual critic, with a r
     stage("visual", "visual-critic", null, failTo("visual-fix", 2, "park")),
   ];
   const record = lane(stages);
-  expect(graphOrder(record).findIndex((entry) => entry.id === "visual-fix")).toBeLessThan(graphOrder(record).findIndex((entry) => entry.id === "build"));
+  expect(graphOrder(record).findIndex((entry) => entry.id === "visual-fix")).toBeLessThan(graphOrder(record).findIndex((entry) => entry.id === "review"));
   expect(ids(record)).toEqual(["brief", "build", "review", "fix", "visual", "visual-fix"]);
   const model = tabsOf(record);
-  expect(model.tabs.at(-1)).toMatchObject({ kind: "conditional", anchor: "visual", carried: null });
-  expect(model.rules.find((rule) => rule.to === "visual-fix")).toMatchObject({ carried: false, mode: "park", max: 2 });
+  expect(model.tabs.at(-1)).toMatchObject({ kind: "conditional", anchor: "visual", carried: { to: "visual-fix", max: 2 } });
+  expect(model.rules.find((rule) => rule.to === "visual-fix")).toMatchObject({ carried: true, line: false, mode: "park", max: 2 });
 });
 
 test("a fix chain hangs in order under the review that reaches it", () => {
@@ -276,6 +277,15 @@ test("a working builder is named by role and stage, in both languages", () => {
   expect(english.detail).toContain("The Builder works on build");
   expect(english.detail).toContain("next — review");
   expect(waits(record, uk).words).toBe("Етап 2 з 3 · чекає на Білдера (build)");
+});
+
+test("the popover's age is whole minutes from a minute on, and a second later reads alike", () => {
+  const since = (seconds: number) => threeStages("running", "build", { brief: [attempt(1, "passed", { startedAt: iso(90), completedAt: iso(80) })], build: [attempt(1, "running", { startedAt: new Date(NOW - seconds * 1000).toISOString() })] });
+  expect(waits(since(372), en).detail).toContain("works on build for 6m;");
+  /* A second later reads alike. */
+  expect(waits(since(373), en).detail).toBe(waits(since(372), en).detail);
+  /* Under a minute it keeps the seconds. */
+  expect(waits(since(45), en).detail).toContain("for 45s;");
 });
 
 test("a reviewer is named in its own case", () => {

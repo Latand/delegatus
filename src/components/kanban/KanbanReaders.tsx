@@ -342,6 +342,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
         tasks={[]}
         isRoot={false}
         onSpawnRetry={retryLaunch}
+        composerPlaceholder={composerPlaceholder}
         chrome={{
           header: (
             <div className="conv-head">

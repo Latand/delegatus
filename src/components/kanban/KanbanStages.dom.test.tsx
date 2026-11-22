@@ -1622,7 +1622,11 @@ test("while the lane can still reach it, a conditional fix reads «if needed», 
   await tick();
   const fix = tabOf(second.host, "fix")!;
   expect(fix.dataset.tabWord).toBeUndefined();
-  expect(fix.querySelector(".sdots")?.getAttribute("data-dots")).toBe("bad next");
+  /* The fix's tab shows its own two rounds: the one at work and the one left, not the source's failure. */
+  expect(fix.querySelector(".sdots")?.getAttribute("data-dots")).toBe("next left");
+  expect(fix.querySelector("[data-dots-count]")?.textContent).toBe("1/2");
+  /* The source that failed wears the return mark with the count, in this lane as in every other. */
+  expect(tabOf(second.host, "review")!.querySelector(".pret")?.textContent).toBe("↺1/2");
   expect(selectedTab(second.host)).toBe("fix");
 });
 
@@ -1801,4 +1805,22 @@ test("a stage the lane stopped on after it passed says the stop's reason in its 
   expect(stop?.querySelector("[data-lane-stop]")?.textContent).toBe("the branch could not be published");
   expect(stop?.textContent).not.toContain("needs a decision");
   expect(stop?.querySelector("[data-answer-hint]")?.textContent).toBe(translate("en", "kanban.stages.answerHint"));
+  /* One primary action, a visible Retry; skip stays in the ⋯. */
+  const answers = [...pane(host, "fix")!.querySelectorAll<HTMLButtonElement>("[data-pane-answer]")];
+  expect(answers.map((button) => [button.dataset.paneAnswer, button.textContent, button.disabled])).toEqual([["retry-stage", translate("en", "kanban.pipelineAct.label.retry-stage", { stage: "Fix" }), false]]);
+});
+
+test("a stage that asked a question points to the composer under its conversation and offers no retry button", async () => {
+  const question = { seq: 1, at: new Date(0).toISOString(), actor: { kind: "agent" }, verdict: { status: "needs_decision", findings: [] }, summary: "Keep the header row in the CSV?", provenance: { state: "complete", outputs: [] }, calls: 1 };
+  const record = shapeLane([stage("design", "architect", "build"), stage("build", "builder", null)],
+    { design: [attempt(1, "passed", implement1, 3000)], build: [attempt(1, "needs_decision", implement2, 600, { report: question })] }, "needs_decision", "build");
+  const { host } = mount(record, { files: [implement1, implement2] });
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  const view = pane(host, "build")!;
+  expect(view.querySelector("[data-stage-question]")?.textContent).toBe("Keep the header row in the CSV?");
+  expect(view.querySelector("[data-answer-hint]")?.textContent).toBe(translate("en", "kanban.stages.answerBelow"));
+  expect(view.querySelector("[data-answer-hint]")?.getAttribute("data-answer-kind")).toBe("question");
+  expect(view.querySelectorAll("[data-pane-answer]")).toHaveLength(0);
 });
