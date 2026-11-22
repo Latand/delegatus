@@ -13,7 +13,7 @@ import { readSqliteMemory, SQLITE_MEMORY_MESSAGE_PREFIX } from "@/lib/sqliteMemo
 import { createOwnerRunDirectory, removeOwnerRunDirectory, resolveOwnerRunDirectory } from "./runDirectory";
 // Owner documents reject hidden ancestors, including a stage's TMPDIR.
 // Keep the fixture's dedicated root independent of that runner environment.
-const root = fs.mkdtempSync(path.join("/tmp", "relay-attachments-"));
+const root = fs.realpathSync(fs.mkdtempSync(path.join("/tmp", "relay-attachments-")));
 const MiB=1024*1024;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const caps = answerCapabilities(richRequest(true), "codex");
@@ -292,6 +292,24 @@ test("owner output is confined to this run and retains the document checks", asy
   await expect(send([output, "..", "context.txt"].join(path.sep))).rejects.toMatchObject({ code: "document_outside_roots" });
   await expect(send(outside)).rejects.toMatchObject({ code: "document_outside_roots" });
   await expect(send(disguised)).rejects.toMatchObject({ code: "document_type" });
+
+  const unconfigured = path.join(root, "unconfigured");
+  fs.mkdirSync(unconfigured);
+  const externalReport = path.join(unconfigured, "report.md");
+  fs.writeFileSync(externalReport, "Outside report");
+  await expect(send(externalReport)).rejects.toMatchObject({ code: "document_outside_roots" });
+  fs.renameSync(output, path.join(runDir, "old-output"));
+  fs.symlinkSync(unconfigured, output, "dir");
+  const beforeRefusal = fs.readdirSync(runDir).sort();
+  await expect(send(externalReport)).rejects.toMatchObject({ code: "document_outside_roots" });
+  await expect(send(report)).rejects.toMatchObject({ code: "document_forbidden_path" });
+  expect(fs.readdirSync(runDir).sort()).toEqual(beforeRefusal);
+
+  fs.unlinkSync(output);
+  fs.renameSync(path.join(runDir, "old-output"), output);
+  const linkedInside = path.join(output, "linked-inside.md");
+  fs.symlinkSync(report, linkedInside);
+  await expect(send(linkedInside)).rejects.toMatchObject({ code: "document_forbidden_path" });
 });
 
 test("owner run output remains usable when the cache ancestor is a symlink", async () => {
@@ -346,6 +364,24 @@ test("owner run output remains usable when the cache ancestor is a symlink", asy
   } finally { await recoveredServer.close(); }
   removeOwnerRunDirectory(legacyRun, legacyRoot);
   expect(fs.existsSync(legacyRun)).toBe(false);
+});
+
+test("owner run recovery refuses a linked run entry and keeps the sibling intact", async () => {
+  const runRoot = path.join(root, "run-recovery");
+  const sibling = path.join(runRoot, "llv-external-relay-sibling");
+  const entry = path.join(runRoot, "llv-external-relay-retained");
+  fs.mkdirSync(sibling, { recursive: true });
+  fs.mkdirSync(entry);
+  const report = path.join(sibling, "report.md");
+  fs.writeFileSync(report, "Sibling report");
+  expect(await resolveOwnerRunDirectory(entry, runRoot)).toBe(fs.realpathSync(entry));
+
+  fs.rmdirSync(entry);
+  fs.symlinkSync(sibling, entry, "dir");
+  await expect(resolveOwnerRunDirectory(entry, runRoot)).rejects.toThrow("external relay owner run directory is outside its root");
+  removeOwnerRunDirectory(entry, runRoot);
+  expect(fs.lstatSync(entry).isSymbolicLink()).toBe(true);
+  expect(fs.readFileSync(report, "utf8")).toBe("Sibling report");
 });
 
 test("owner staging reads configured document roots and keeps malformed settings failures private", async () => {

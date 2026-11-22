@@ -428,35 +428,33 @@ export function readExactFile(requested: string, maxBytes: number): { real: stri
   return readOpenedFile(requested, real, maxBytes, () => {});
 }
 
-/** A relay's private output directory may have hidden ancestors. Forbid
- * hidden descendants and traversal, and require an exact, link-free path. */
-export function readRunDocument(requested: string, outputDir: string, environment: DocumentEnvironment, maxBytes: number) {
-  const realOutput = fs.realpathSync.native(outputDir);
-  const realParent = fs.realpathSync.native(path.dirname(requested));
-  const real = fs.realpathSync.native(requested);
-  if (path.dirname(real) !== realParent || !within(real, realOutput)) {
-    throw new DocumentRefusal("document_outside_roots", "File is outside this run's output directory");
+/** Read a private relay output anchored at the canonical run. Only ancestors
+ * above the run may be aliases in the requested path.
+ * Return null for paths outside this outbox so configured roots can be checked. */
+export function readRunDocument<Admitted>(requested: string, outputDir: string, environment: DocumentEnvironment,
+  maxBytes: number, admit: (real: string) => Admitted): { real: string; bytes: Buffer; admitted: Admitted } | null {
+  const runDir = path.dirname(outputDir);
+  const runName = path.basename(runDir);
+  const outputName = path.basename(outputDir);
+  const runRoot = path.dirname(runDir);
+  for (let candidate = requested; candidate !== path.dirname(candidate); candidate = path.dirname(candidate)) {
+    if (path.basename(candidate) !== outputName) continue;
+    const candidateRun = path.dirname(candidate);
+    if (path.basename(candidateRun) !== runName) continue;
+    const candidateRoot = path.dirname(candidateRun);
+    if (candidateRoot !== runRoot && realOrSelf(candidateRoot) !== runRoot) continue;
+    const relative = path.relative(candidate, requested);
+    if (!relative || !within(requested, candidate) || segments(requested).includes("..")) {
+      throw new DocumentRefusal("document_outside_roots", "File is outside this run's output directory");
+    }
+    const expected = path.join(outputDir, relative);
+    if (dotSegment(relative) !== null || forbiddenDirectories(environment).some(directory => within(expected, directory))) {
+      throw new DocumentRefusal("document_forbidden_path", "File is hidden or inside the Delegatus state directory");
+    }
+    const admitted = admit(expected);
+    return { ...readExactFile(expected, maxBytes), admitted };
   }
-  const relative = path.relative(realOutput, real);
-  if (segments(requested).includes("..") || dotSegment(relative) !== null
-    || forbiddenDirectories(environment).some(directory => within(real, directory))) {
-    throw new DocumentRefusal("document_forbidden_path", "File is hidden or inside the Delegatus state directory");
-  }
-  return readExactFile(real, maxBytes);
-}
-
-/** Recognize a run output spelling through a symlinked cache ancestor. */
-export function isRunDocumentPath(requested: string, outputDir: string): boolean {
-  try {
-    const realOutput = fs.realpathSync.native(outputDir);
-    const realRun = path.dirname(realOutput);
-    const realParent = fs.realpathSync.native(path.dirname(requested));
-    const real = fs.realpathSync.native(requested);
-    return path.dirname(real) === realParent && within(real, realRun)
-      && (within(real, realOutput) || segments(requested).includes("outbox"));
-  } catch {
-    return false;
-  }
+  return null;
 }
 
 function readOpenedFile(requested: string, real: string, maxBytes: number, recheck: (opened: string) => void): { real: string; bytes: Buffer } {
