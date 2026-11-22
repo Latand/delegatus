@@ -203,7 +203,7 @@ import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments
 import { statePath } from "@/lib/configDir";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
-import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
+import { isCurrentOperatorSeat, productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
@@ -1625,15 +1625,11 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   adoptRootSession: () => { adoptLiveRootSession(rootSessionSource()); },
   raiseAttentionRequest,
   attentionAuthority: () => attentionCallerAuthority(attentionCallerSources()),
-  callerAttribution: () => {
-    let seats: ReturnType<typeof authorizedManagerSeats> | null = null;
-    const managers = () => (seats ??= authorizedManagerSeats(productionManagerAuthoritySources()));
-    return callerAttributionFrom(
-      authorityOf(productionDomainDependencies),
-      (conversationId) => managers().some((seat) => seat.conversationId === conversationId),
-      (conversationId) => productionDeputyPrincipal(conversationId)?.seatConversationId ?? null,
-    );
-  },
+  callerAttribution: () => callerAttributionFrom(
+    authorityOf(productionDomainDependencies),
+    conversationId => isCurrentOperatorSeat(conversationId, agentRegistry()),
+    conversationId => productionDeputyPrincipal(conversationId)?.seatConversationId ?? null,
+  ),
   findDeploymentByIdempotencyKey: async idempotencyKey => {
     const checkout = checkoutDeploymentByIdempotencyKey(statePath("self-update"), idempotencyKey);
     if (checkout) return checkout;
