@@ -121,6 +121,13 @@ export function prepareGateCheckTool(args: unknown, binding: GateCheckRoot | nul
   try {
     parent = fs.realpathSync(path.dirname(requestedLog));
   } catch (error) {
+    const log = path.resolve(requestedLog);
+    const relative = path.relative(ownerRoot, log);
+    const ownedPath = Boolean(relative) && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && ownedPath && binding.evidence) {
+      const record = lookupGateRunByLog(ownerRoot, binding.rootDirectoryIdentity, log, binding.evidence);
+      return { log: record.log, reason, runId: digest({ log: record.log, ticket: record }), record, timeoutMs, binding };
+    }
     throw new Error(`gate paths cannot be resolved (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}): ${error instanceof Error ? error.message : String(error)}`);
   }
   const log = path.join(parent, path.basename(requestedLog));
@@ -128,9 +135,15 @@ export function prepareGateCheckTool(args: unknown, binding: GateCheckRoot | nul
   if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
     throw new Error(`gate log is outside this stage's temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}, resolvedRoot=${JSON.stringify(ownerRoot)}, resolvedLog=${JSON.stringify(log)})`);
   validateGateCheckRoot(binding);
-  if (binding.evidence && !fs.existsSync(path.join(`${log}.gate`, "completion.json"))) {
-    const record = lookupGateRunByLog(ownerRoot, binding.rootDirectoryIdentity, log, binding.evidence);
-    return { log: record.log, reason, runId: digest({ log: record.log, ticket: record }), record, timeoutMs, binding };
+  if (binding.evidence) {
+    const completionExists = fs.existsSync(path.join(`${log}.gate`, "completion.json"));
+    try {
+      const record = lookupGateRunByLog(ownerRoot, binding.rootDirectoryIdentity, log, binding.evidence);
+      return { log: record.log, reason, runId: digest({ log: record.log, ticket: record }), record, timeoutMs, binding };
+    } catch (error) {
+      // Older absolute-log runs may have a ticket but predate retained indexes.
+      if (!completionExists || !(error instanceof Error) || !error.message.includes("unknown retained gate log")) throw error;
+    }
   }
   return { log, reason, runId: gateCompletionIdentity(log).runId, record: null, timeoutMs, binding };
 }

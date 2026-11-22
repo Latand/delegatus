@@ -259,31 +259,34 @@ test("an unregistered gate cannot supply a completion result", async () => {
 });
 
 test.skipIf(process.platform !== "linux")("a real recorder's run id survives wrong and omitted paths in fresh readers", async () => {
-  const f = fixture(), env = portableEnvironment(f);
+  const f = fixture(), env = portableEnvironment(f), evidence = fixture().root;
+  env.LLV_GATE_CHECK_EVIDENCE = JSON.stringify({ directory: evidence, identity: physical(evidence), rootDirectoryIdentity: physical(f.root) });
   const recording = background(["--record", f.log, "/bin/bash", "-c", "exit 37"], env);
   await recording.ticketReady;
   const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
   expect(runId).toHaveLength(64);
   expect(await recording.closed).toBe(37);
-  const exitFile = path.join(f.dir, "exit");
-  let hiddenExitReads = 2;
+  const exitFile = path.join(f.dir, "exit"), binding = bindGateCheckRoot(f.root, evidence)!;
   const realExistsSync = fs.existsSync;
-  const existsSync = spyOn(fs, "existsSync").mockImplementation((file: fs.PathLike) => {
-    if (String(file) === exitFile && hiddenExitReads > 0) { hiddenExitReads--; return false; }
-    return realExistsSync(file);
-  });
-  try {
-    const raced = await runGateCheckTool({ runId, reason: "exit publication race" }, bindGateCheckRoot(f.root), new AbortController().signal);
-    expect(raced.success, raced.contentItems[0].text).toBe(true);
-    expect(JSON.parse(raced.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
-    expect(hiddenExitReads).toBe(0);
-  } finally { existsSync.mockRestore(); }
+  for (const input of [{ runId, reason: "exit publication race by id" }, { log: f.log, reason: "exit publication race by log" }]) {
+    let hiddenExitReads = 2;
+    const existsSync = spyOn(fs, "existsSync").mockImplementation((file: fs.PathLike) => {
+      if (String(file) === exitFile && hiddenExitReads > 0) { hiddenExitReads--; return false; }
+      return realExistsSync(file);
+    });
+    try {
+      const raced = await runGateCheckTool(input, binding, new AbortController().signal);
+      expect(raced.success, raced.contentItems[0].text).toBe(true);
+      expect(JSON.parse(raced.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
+      expect(hiddenExitReads).toBe(0);
+    } finally { existsSync.mockRestore(); }
+  }
   const reader = path.join(f.root, "reader.ts");
-  fs.writeFileSync(reader, `import { bindGateCheckRoot, runGateCheckTool } from ${JSON.stringify(path.join(import.meta.dir, "../src/lib/runtime/gateCheckTool.ts"))};
-const [root, runId, log] = process.argv.slice(2);
-console.log(JSON.stringify(await runGateCheckTool({ runId, ...(log ? { log } : {}), reason: "persisted check" }, bindGateCheckRoot(root), new AbortController().signal)));`);
+  fs.writeFileSync(reader, `import { runGateCheckTool } from ${JSON.stringify(path.join(import.meta.dir, "../src/lib/runtime/gateCheckTool.ts"))};
+const [binding, args] = process.argv.slice(2).map(JSON.parse);
+console.log(JSON.stringify(await runGateCheckTool(args, binding, new AbortController().signal)));`);
   for (const log of [f.log, path.join(f.root, "missing/check.log"), undefined]) {
-    const result = spawnSync(process.execPath, [reader, f.root, runId!, ...(log ? [log] : [])], { env, encoding: "utf8", timeout: 10_000 });
+    const result = spawnSync(process.execPath, [reader, JSON.stringify(binding), JSON.stringify({ runId, ...(log ? { log } : {}), reason: "persisted check" })], { env, encoding: "utf8", timeout: 10_000 });
     expect(result.status).toBe(0);
     const answer = JSON.parse(result.stdout);
     expect(answer.success).toBe(true);
@@ -359,6 +362,49 @@ console.log(JSON.stringify(await runGateCheckTool(args, binding, new AbortContro
     const refusal = read({ ...args, runId: id });
     expect(refusal.success).toBe(false);
     expect(refusal.contentItems[0].text).toContain(`${cause} gate run id`);
+  }
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("absolute-log recovery filters shared evidence across real stage recorders", async () => {
+  const evidence = fixture().root;
+  const stages = [fixture(), fixture()];
+  const completed: Array<{ f: ReturnType<typeof fixture>; runId: string; binding: ReturnType<typeof bindGateCheckRoot> }> = [];
+  for (const f of stages) {
+    const env = portableEnvironment(f);
+    env.LLV_GATE_CHECK_EVIDENCE = JSON.stringify({ directory: evidence, identity: physical(evidence), rootDirectoryIdentity: physical(f.root) });
+    const recording = background(["--record", f.log, "/bin/bash", "-c", "exit 0"], env);
+    await recording.ticketReady;
+    const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
+    expect(runId).toHaveLength(64);
+    expect(await recording.closed).toBe(0);
+    completed.push({ f, runId: runId!, binding: bindGateCheckRoot(f.root, evidence) });
+  }
+
+  const target = completed[1];
+  fs.rmSync(target.f.root, { recursive: true });
+  const byLog = await runGateCheckTool({ log: target.f.log, reason: "shared retained log" }, target.binding, new AbortController().signal);
+  expect(byLog.success, byLog.contentItems[0].text).toBe(true);
+  expect(JSON.parse(byLog.contentItems[0].text)).toMatchObject({ runId: target.runId, terminal: true, state: "lost", code: null });
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("absolute-log recovery finds retained runs when a nested log parent is gone", async () => {
+  const f = fixture(), env = portableEnvironment(f), evidence = fixture().root;
+  const nested = path.join(f.root, "nested"); fs.mkdirSync(nested);
+  const log = path.join(nested, "check.log");
+  env.TMPDIR = nested;
+  env.LLV_GATE_CHECK_EVIDENCE = JSON.stringify({ directory: evidence, identity: physical(evidence), rootDirectoryIdentity: physical(f.root) });
+  const recording = background(["--record", log, "/bin/bash", "-c", "exit 0"], env);
+  await recording.ticketReady;
+  const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
+  expect(runId).toHaveLength(64);
+  expect(await recording.closed).toBe(0);
+  fs.rmSync(nested, { recursive: true });
+
+  const binding = bindGateCheckRoot(f.root, evidence)!;
+  for (const args of [{ log, reason: "missing nested log parent" }, { runId, reason: "missing nested log by id" }]) {
+    const answer = await runGateCheckTool(args, binding, new AbortController().signal);
+    expect(answer.success, answer.contentItems[0].text).toBe(true);
+    expect(JSON.parse(answer.contentItems[0].text)).toMatchObject({ runId, terminal: true, state: "lost", code: null });
   }
 }, 30_000);
 

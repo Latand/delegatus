@@ -142,9 +142,18 @@ export function lookupGateRun(root: string, rootIdentity: string, runId: string,
     throw new Error("gate run record copies disagree");
   const record = local === undefined ? retained : local;
   if (!record || record.runId !== runId || typeof record.log !== "string" || !path.isAbsolute(record.log)
-    || !isWithin(root, record.log) || path.resolve(record.log) !== record.log || typeof record.directoryIdentity !== "string"
-    || record.rootDirectoryIdentity !== rootIdentity || !identitySchema.safeParse(record.recorder).success
-    || !Number.isFinite(record.deadlineUptimeMs)) throw new Error("invalid gate run record");
+    || path.resolve(record.log) !== record.log || typeof record.directoryIdentity !== "string"
+    || !identitySchema.safeParse(record.recorder).success || !Number.isFinite(record.deadlineUptimeMs))
+    throw new Error("invalid gate run record");
+  if (record.rootDirectoryIdentity !== rootIdentity) {
+    // A shared retained index can resolve a run launched by another stage.
+    // Permit that only after the caller's scratch is gone; the exact indexed
+    // run id and its retained ticket remain the authority for recovery.
+    if (scratchPresent || retained === undefined) throw new Error("invalid gate run record");
+    validateRetainedLogRecord(record, runId, root, rootIdentity);
+    return record;
+  }
+  if (!isWithin(root, record.log)) throw new Error("invalid gate run record");
   return record;
 }
 
@@ -159,11 +168,31 @@ export function lookupGateRunByLog(root: string, rootIdentity: string, log: stri
   const matches: GateRunRecord[] = [];
   for (const entry of entries) {
     if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name)) continue;
-    const record = lookupGateRun(root, rootIdentity, entry.name.slice(0, -5), false, evidence);
-    if (record.log === log) matches.push(record);
+    // Evidence is shared by every stage in a pipeline. Read and filter first:
+    // another stage's valid record has a different scratch identity and must
+    // not prevent this caller from finding its own absolute log.
+    const runId = entry.name.slice(0, -5);
+    const record = readRunIndex(root, runId, evidence);
+    if (record?.log !== log) continue;
+    validateRetainedLogRecord(record, runId, root, rootIdentity);
+    matches.push(record);
   }
   if (matches.length !== 1) throw new Error(matches.length ? "ambiguous retained gate log" : "unknown retained gate log");
   return matches[0];
+}
+
+function validateRetainedLogRecord(record: GateRunRecord, runId: string, root: string, rootIdentity: string): void {
+  if (record.runId !== runId || typeof record.log !== "string" || !path.isAbsolute(record.log)
+    || path.resolve(record.log) !== record.log || typeof record.rootDirectoryIdentity !== "string"
+    || !/^\d+:\d+$/.test(record.rootDirectoryIdentity) || typeof record.directoryIdentity !== "string"
+    || !/^\d+:\d+$/.test(record.directoryIdentity) || !identitySchema.safeParse(record.recorder).success
+    || !Number.isFinite(record.deadlineUptimeMs)) throw new Error("invalid gate run record");
+
+  // When this is the caller's launch, preserve the full containment and inode
+  // checks. A retained record from a different stage is scoped by its exact
+  // canonical log and the listener-owned evidence index.
+  if (record.rootDirectoryIdentity === rootIdentity && isWithin(root, record.log)) return;
+  if (record.rootDirectoryIdentity === rootIdentity) throw new Error("invalid gate run record");
 }
 
 export function verifyGateRunTicket(record: GateRunRecord): void {
