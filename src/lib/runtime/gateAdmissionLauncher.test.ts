@@ -139,7 +139,7 @@ test.skipIf(process.platform !== "linux")("a fixture gate started under a routed
   setEnv("LLV_GATE_BUN", routed.LLV_GATE_BUN);
   const f = fixture();
   try {
-    expect(f.env.LLV_GATE_BUN).toBe(process.execPath);
+    expect((f.env as NodeJS.ProcessEnv).LLV_GATE_BUN).toBe(process.execPath);
     const result = await realExec("bash", f.command("own").slice(1), repository, quiet(f.env), { signal: AbortSignal.timeout(20_000) });
     expect(result.code, result.stderr).toBe(0);
     expect(result.stderr).not.toContain("installed helper answered");
@@ -147,8 +147,8 @@ test.skipIf(process.platform !== "linux")("a fixture gate started under a routed
   } finally { f.close(); }
   // A launcher that recorded no interpreter leaves the fixture on PATH's Bun;
   // any other value is the caller's own choice and stays.
-  expect(withoutInheritedGate({ LLV_GATE_BUN: unrouted.LLV_GATE_BUN }).LLV_GATE_BUN).toBeUndefined();
-  expect(withoutInheritedGate({ LLV_GATE_BUN: "/opt/bun-1.4.0" }).LLV_GATE_BUN).toBe("/opt/bun-1.4.0");
+  expect(withoutInheritedGate({ LLV_GATE_BUN: unrouted.LLV_GATE_BUN } as NodeJS.ProcessEnv).LLV_GATE_BUN).toBeUndefined();
+  expect(withoutInheritedGate({ LLV_GATE_BUN: "/opt/bun-1.4.0" } as NodeJS.ProcessEnv).LLV_GATE_BUN).toBe("/opt/bun-1.4.0");
 }, 60_000);
 
 test("only an admission launcher with its recorded interpreter is normalised", () => {
