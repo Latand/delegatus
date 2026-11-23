@@ -919,10 +919,10 @@ if (script.includes("-delete")) {
   const nativeRm = removal.removeTreeWithinAttemptBudget;
   const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
     if (kind === "permission-fallback" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)).startsWith(".delegatus-trash-"))
-      return nativeRm(target, started, async () => {
+      return nativeRm(target, started, (async () => {
         const error = Object.assign(new Error("fixture denied"), { stderr: `DELEGATUS_RM_CODE:${process.env.DELEGATUS_RM_CODE ?? "unknown"}` });
         throw error;
-      });
+      }) as unknown as Parameters<typeof removal.removeTreeWithinAttemptBudget>[2]);
     return nativeRm(target, started);
   });
   try {
