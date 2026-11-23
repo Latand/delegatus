@@ -758,7 +758,7 @@ export interface StructuredHostRetirementRecord {
   /** Set when the host retired with events its dead owner never flushed. */
   unflushedEvents?: StructuredHostUnflushedEvents;
   key: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   sessionId: string;
   conversationId: string | null;
   title: string | null;
@@ -1185,7 +1185,7 @@ function undeliveredHandoffIndex(
     for (const row of readable) {
       const replayed = new Set(row.replayedDeliveryIds ?? []);
       if (!(row.pendingDeliveries ?? []).some((delivery) => !replayed.has(delivery.deliveryId))) continue;
-      if (row.engine === "claude" || row.engine === "codex" || row.engine === "copilot") index.addKey(`${row.engine}:${row.engineSessionId}`);
+      if (row.engine === "claude" || row.engine === "codex" || row.engine === "copilot" || row.engine === "antigravity") index.addKey(`${row.engine}:${row.engineSessionId}`);
       else index.addConversation(row.conversationId);
     }
     for (const delivery of registryRowsMatching(file, "heldDeliveries", "state", OPEN_RETIREMENT_DELIVERIES)) {
@@ -1297,7 +1297,7 @@ function deadRecordedOwner(entry: RegistryFile["entries"][string], readers: Reti
 function retirementCandidates(file: RegistryFile) {
   return registryLivenessRows(file).entries
     .filter((entry) => Boolean(recordedScopeProcess(entry.structuredHost))
-      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot"))
+      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot" || entry.key.engine === "antigravity"))
     .sort((left, right) => {
       const a = sessionKeyId(left.key), b = sessionKeyId(right.key);
       return a < b ? -1 : a > b ? 1 : 0;

@@ -315,13 +315,13 @@ function copilotEventKind(record: RecordLike): TranscriptEventKind {
 
 const COPILOT_AGENT_EVENTS = new Set([
   "user.message", "assistant.message", "assistant.turn_start", "assistant.turn_end",
-  "tool.execution_start", "tool.execution_complete", "abort",
+  "tool.execution_start", "tool.execution_complete", "abort", "session.error", "session.quota_exhausted",
 ]);
 
 /** The newest agent event's clock and kind, and the turn axis its tail leaves. */
 export function transcriptEvidenceFromRecords(
   records: RecordLike[],
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   lastWriteAt: number | null,
 ): TranscriptLivenessEvidence {
   const turn = turnStateFromRecords(records, engine).state;
@@ -329,14 +329,14 @@ export function transcriptEvidenceFromRecords(
   // Resume bookkeeping (mode, last-prompt, turn_context) is not an agent event.
   const last = records.findLast((record) => engine === "claude"
     ? record.type === "user" || record.type === "assistant" || record.type === "result"
-    : engine === "copilot"
+    : engine === "copilot" || engine === "antigravity"
       ? COPILOT_AGENT_EVENTS.has(String(record.type))
       : typeof recordValue(record.payload)?.type === "string") ?? null;
   if (!last) return { lastEventAt: null, kind: null, lastWriteAt, turn: axis };
   const stamped = Date.parse(String(last.timestamp ?? ""));
   return {
     lastEventAt: Number.isFinite(stamped) ? stamped : null,
-    kind: engine === "codex" ? codexEventKind(last) : engine === "copilot" ? copilotEventKind(last) : claudeEventKind(last),
+    kind: engine === "codex" ? codexEventKind(last) : engine === "copilot" || engine === "antigravity" ? copilotEventKind(last) : claudeEventKind(last),
     lastWriteAt,
     turn: axis,
   };
@@ -351,7 +351,7 @@ function transcriptMtimeMs(transcriptPath: string): number | null {
 }
 
 export async function readTranscriptEvidence(
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   transcriptPath: string,
   read: typeof readStableTailRecords = readStableTailRecords,
 ): Promise<TranscriptLivenessEvidence> {

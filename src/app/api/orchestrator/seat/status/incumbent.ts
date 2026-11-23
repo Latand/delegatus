@@ -151,8 +151,8 @@ export async function readOrchestratorIncumbent(
   const conversation = dependencies.conversation(active.conversationId as ViewerConversationId);
   const generation = conversation?.generations.at(-1);
   const transcriptPath = generation?.path ?? active.path;
-  /* A Copilot conversation cannot hold the seat (design slice 4). */
-  const engine = conversation?.engine === "copilot" ? null : conversation?.engine ?? null;
+  /* Copilot and Antigravity conversations cannot hold the orchestrator seat yet. */
+  const engine = conversation?.engine === "copilot" || conversation?.engine === "antigravity" ? null : conversation?.engine ?? null;
   const model = generation?.launchProfile?.model ?? null;
   const counts = transcriptPath && engine ? dependencies.sessionCounts(transcriptPath, engine) : null;
   const facts = readOrchestratorTranscriptFacts(transcriptPath, counts);

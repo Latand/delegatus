@@ -53,7 +53,7 @@ function carriers(): CarrierConversation[] {
     hotRegistryRows(snapshot, "conversations").flatMap(([, conversation]) => {
       const generation = conversation.generations.at(-1);
       /* Project account bindings cover Claude and Codex. */
-      if (!generation || conversation.engine === "copilot") return [];
+      if (!generation || conversation.engine === "copilot" || conversation.engine === "antigravity") return [];
       return [{
         engine: conversation.engine,
         busy: conversation.turn.state === "busy",
