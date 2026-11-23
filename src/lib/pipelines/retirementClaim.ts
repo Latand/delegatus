@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { statePath } from "@/lib/configDir";
-import { attemptTempJournalPath } from "@/lib/tempSweep";
+import { attemptTempJournalPath, readAttemptTempTrash } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 
@@ -22,8 +22,10 @@ export function restoreRefusedAttemptTrash(directory: string, expectedIdentity?:
     || !path.basename(row.trash).startsWith(`.delegatus-trash-${path.basename(directory)}-`)
     || expectedIdentity !== undefined && row.identity !== expectedIdentity)
     throw new Error("refused attempt quarantine binding changed");
+  const resolved = readAttemptTempTrash(journal, path.dirname(directory));
+  const trashPath = resolved?.trash ?? row.trash;
   const current = fs.lstatSync(directory, { throwIfNoEntry: false });
-  const trash = fs.lstatSync(row.trash, { throwIfNoEntry: false });
+  const trash = fs.lstatSync(trashPath, { throwIfNoEntry: false });
   const owned = (stat: fs.Stats | undefined) => stat?.isDirectory() && !stat.isSymbolicLink()
     && `${stat.dev}:${stat.ino}` === row.identity && stat.uid === row.uid
     && (!process.getuid || stat.uid === process.getuid())
@@ -32,7 +34,7 @@ export function restoreRefusedAttemptTrash(directory: string, expectedIdentity?:
   // in place. Complete that cancellation without touching a replacement.
   if (owned(current) && !trash) { fs.unlinkSync(journal); return; }
   if (current || !owned(trash)) throw new Error("refused attempt quarantine identity changed");
-  fs.renameSync(row.trash, directory);
+  fs.renameSync(trashPath, directory);
   fs.unlinkSync(journal);
 }
 
