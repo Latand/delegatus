@@ -141,6 +141,9 @@ export function composeSpawnNotice(input: {
   const lines = [`Agent finished: ${input.title} (${input.child})`];
   const verdict = detectedVerdict(input.final.text);
   if (verdict) lines.push(`Verdict: ${verdict}`);
+  if (newest.outcome === "completed" && verdict === "needs_decision") {
+    lines.push("If this worker still owns the assignment, send the decision and next action to the conversation above with send_message. Check its delivery receipt before any replacement.");
+  }
   const started = newest.startedAt ? Date.parse(newest.startedAt) : Number.NaN;
   const ended = Date.parse(newest.endedAt);
   const ran = Number.isFinite(started) && Number.isFinite(ended) ? ` · ran ${formatRunTime(ended - started)}` : "";
