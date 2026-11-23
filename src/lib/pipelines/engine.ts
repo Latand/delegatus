@@ -77,6 +77,7 @@ import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
 import { tryConversationActuation, withConversationActuation } from "@/lib/deliveryActuation";
 import { codexServiceTierRefusal, hiddenAccountsTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { codexSessionRoots, listCodexAccounts } from "@/lib/accounts/codex";
+import { listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
 import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot";
 import { sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
@@ -835,10 +836,11 @@ async function spawnPipelineAgent(
        list is read again here, after every await, because it can be removed
        between the stage's creation, its start and its selection. */
     if (workspace && input.requestedAccountId && !input.accountChosenAutomatically
+      && input.role.engine !== "antigravity"
       && memberAccountChoice(input.project, input.role.engine, input.requestedAccountId).kind === "no_account_list") {
       throw new MemberAccountRefusedError({ kind: "no_account_list" }, input.role.engine, input.requestedAccountId, input.project);
     }
-    if (workspace && workspaceAccountId) {
+    if (workspace && workspaceAccountId && input.role.engine !== "antigravity") {
       const allowed = allowedAccountIdsForProject(input.project, input.role.engine);
       if (allowed && !allowed.includes(workspaceAccountId)) throw new Error("workspace account access denied");
     }
@@ -862,7 +864,7 @@ async function spawnPipelineAgent(
   const desiredTier = input.role.serviceTier ?? automaticTierPreference;
   let serviceTier = desiredTier ?? null;
   const accounts = input.role.engine === "codex" ? listCodexAccounts() : [];
-  const pool = allowedAccountIdsForProject(input.project, input.role.engine);
+  const pool = input.role.engine === "antigravity" ? null : allowedAccountIdsForProject(input.project, input.role.engine);
   const candidates = accounts.filter(account => (pool === null || pool.includes(account.id))
     && (!input.requestedAccountId || account.id === input.requestedAccountId));
   let offers = desiredTier ? tierOffers(candidates, input.role.model!, desiredTier) : null;
@@ -911,7 +913,7 @@ async function spawnPipelineAgent(
   if (resolution.kind !== "available") {
     /* A member's lane on a project with no account list chose among accounts
        they are not shown: the refusal names none of them, nor a limit window. */
-    const concealed = !!workspace && resolution.kind !== "not_allowed" && (pool === null || accountsHiddenFromMember(input.project, input.role.engine));
+    const concealed = !!workspace && resolution.kind !== "not_allowed" && (pool === null || (input.role.engine !== "antigravity" && accountsHiddenFromMember(input.project, input.role.engine)));
     throw new ProjectAccountRefusedError(resolution, input.role.engine, input.project,
       serviceTier ? `serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : undefined,
       concealed);
@@ -2068,20 +2070,24 @@ export function defaultPipelinePorts(
     claudeCloudClient: claudeCloudStageClient,
     preflightRepo: preparePipelineRepository,
     roleLookup: pipelineRoleLookup,
-    allowedAccountIds: (project, engine) => allowedAccountIdsForProject(project, engine),
+    allowedAccountIds: (project, engine) => engine === "antigravity" ? null : allowedAccountIdsForProject(project, engine),
     engineReadiness: (engine, project) => engineReadiness(engine, project),
     resolveProjectSpawn: (engine, request) => accountManager.resolveProjectSpawn(engine, request),
-    accountExhausted: (engine, accountId, model) => selectHeadlessAccount([{ id: accountId, authPresent: true }],
-      registry.quotaObservations(engine), accountId, [], Date.now(), model).kind === "exhausted",
-    accountQuota: (engine, accountId, model) => accountQuotaVerdict(registry.quotaObservations(engine), accountId, Date.now(), model),
+    accountExhausted: (engine, accountId, model) => engine === "antigravity"
+      ? false
+      : selectHeadlessAccount([{ id: accountId, authPresent: true }],
+          registry.quotaObservations(engine), accountId, [], Date.now(), model).kind === "exhausted",
+    accountQuota: (engine, accountId, model) => engine === "antigravity"
+      ? { capacity: "unknown", resetsAt: null, observedAt: null }
+      : accountQuotaVerdict(registry.quotaObservations(engine), accountId, Date.now(), model),
     accountForTranscript: (engine, transcriptPath) => {
       const owner = accountManager.resolveTranscriptOwner(engine, transcriptPath);
       if (!owner) return null;
-      const account = (engine === "claude" ? listClaudeAccounts() : listCodexAccounts())
+      const account = (engine === "claude" ? listClaudeAccounts() : engine === "antigravity" ? listAntigravityAccounts() : listCodexAccounts())
         .find((candidate) => candidate.id === owner.accountId);
       return { accountId: owner.accountId, label: account?.label ?? owner.accountId };
     },
-    accountLabel: (engine, accountId) => (engine === "claude" ? listClaudeAccounts() : listCodexAccounts())
+    accountLabel: (engine, accountId) => (engine === "claude" ? listClaudeAccounts() : engine === "antigravity" ? listAntigravityAccounts() : listCodexAccounts())
       .find((candidate) => candidate.id === accountId)?.label ?? accountId,
     spawnAgent: async (input, onReserved, preparePrompt, admissionPhase) => {
       /* Invalidated on BOTH paths (#1750): a spawn that throws is exactly when
@@ -18608,7 +18614,7 @@ async function applyPipelinePatch(
          fallback, so a raw `model: 123` / `effort: false` would 200 with the old
          config instead of the required 400 (issue #118 Finding 3). */
       if (req.runtime !== undefined && req.runtime !== "local" && !isCloudRuntime(req.runtime)) return { error: "runtime must be local, codex-cloud or claude-cloud", status: 400 };
-      if (req.engine !== undefined && req.engine !== "claude" && req.engine !== "codex") return { error: "engine must be claude or codex", status: 400 };
+      if (req.engine !== undefined && req.engine !== "claude" && req.engine !== "codex" && req.engine !== "antigravity") return { error: "engine must be claude, codex or antigravity", status: 400 };
       if (req.model !== undefined && req.model !== null && typeof req.model !== "string") return { error: "model must be a string or null", status: 400 };
       if (req.effort !== undefined && req.effort !== null && typeof req.effort !== "string") return { error: "effort must be a string or null", status: 400 };
       if (!validAgentMemoryMax(req.agentMemoryMaxBytes)) return { error: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB", status: 400 };
@@ -18645,7 +18651,7 @@ async function applyPipelinePatch(
         /* A preferred or role-default Codex tier does not apply to Claude, so
            moving the stage to Claude drops it and the answer names it. An
            explicit tier, sent or stored, still needs serviceTier:null. */
-        const leavesCodex = req.engine === "claude" && target.effectiveRole.engine === "codex";
+        const leavesCodex = req.engine !== undefined && req.engine !== "codex" && target.effectiveRole.engine === "codex";
         droppedCodexTier = leavesCodex ? (target.preferredServiceTier
           ?? (target.effectiveRole.serviceTierSource === "role-default" ? target.effectiveRole.serviceTier : undefined)) ?? null : null;
         const resolved = resolvePipelineRole(

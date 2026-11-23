@@ -219,7 +219,7 @@ function settleRecord(progress: DeliveryProgressPort | null, operationId: string
  */
 export function payloadRefusal(
   capability: RuntimeImageCapability,
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   refs: readonly StructuredImageRef[],
   wantsImages = refs.length > 0,
 ): { error: string; status: number } | null {
