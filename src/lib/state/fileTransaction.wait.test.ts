@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
-import { blockingWaitDiagnostics, registryWaitCallSite, resetBlockingWaitsForTests, withWaitCorrelation } from "@/lib/blockingWaits";
+import { blockingWaitDiagnostics, fileTransactionCallSite, registryWaitCallSite, resetBlockingWaitsForTests, withWaitCorrelation } from "@/lib/blockingWaits";
 import {
   FileTransactionBusyError,
   fileTransactionSubject,
@@ -116,13 +116,25 @@ test("fileTransactionSubject, fileTransactionWaitLabel, holder.kind, and callSit
   expect(fileTransactionWaitLabel("fallback", "lifecycle-journal.json", "recorded-check.handoff"))
     .toBe("recorded-check.handoff");
 
-  // Checkout paths containing an ancestor `/src/<private-dir>/` MUST NOT leak the ancestor directory.
-  expect(registryWaitCallSite(
-    "Error\n    at waiter (/tmp/src/fixture-private-project/checkout/src/lib/recordedChecks/hostFence.ts:19:10)",
+  // Only frames strictly inside the verified repository/build root are emitted;
+  // external callers (even under dist/, src/lib/, or .next/server/) collapse to "external" / "unresolved".
+  const repoRoot = path.resolve(import.meta.dir, "../../..");
+  expect(fileTransactionCallSite(
+    `Error\n    at waiter (${repoRoot}/src/lib/recordedChecks/hostFence.ts:19:10)`,
   )).toBe("src/lib/recordedChecks/hostFence.ts:19:10");
   expect(registryWaitCallSite(
-    "Error\n    at outside (/tmp/src/fixture-private-project/customScript.ts:19:10)",
-  )).toBe("unresolved");
+    `Error\n    at waiter (${repoRoot}/src/lib/recordedChecks/hostFence.ts:19:10)`,
+  )).toBe("src/lib/recordedChecks/hostFence.ts:19:10");
+  for (const externalFrame of [
+    "/tmp/dist/fixture-account-319/review-owner.ts:1:65",
+    "/tmp/src/lib/fixture-account-319/review-owner.ts:1:65",
+    "/tmp/.next/server/fixture-account-319/review-owner.ts:1:65",
+    "/tmp/src/fixture-private-project/checkout/src/lib/recordedChecks/hostFence.ts:19:10",
+    "/tmp/src/fixture-private-project/customScript.ts:19:10",
+  ]) {
+    expect(fileTransactionCallSite(`Error\n    at outside (${externalFrame})`)).toBe("external");
+    expect(registryWaitCallSite(`Error\n    at outside (${externalFrame})`)).toBe("unresolved");
+  }
 });
 
 test("concurrent async waiters without withWaitCorrelation record closed-set subject, label, callSite, and holder, and isolate caller mutations", async () => {
@@ -249,4 +261,72 @@ test("cross-process, legacy, and arbitrary-role lock holders never leak paths, n
   expect(combinedLogs).not.toContain("fixture-account-017");
   expect(combinedLogs).not.toContain("Fixture Person");
   expect(combinedLogs).not.toContain("fixture-holder-019");
+});
+
+test("external callers under id-bearing directories log callSite='external' with zero private path segments", async () => {
+  const fileTransactionModule = path.resolve(import.meta.dir, "fileTransaction.ts");
+  const blockingWaitsModule = path.resolve(import.meta.dir, "../blockingWaits.ts");
+  const variants = [
+    "dist/fixture-account-319",
+    "src/lib/fixture-account-319",
+    ".next/server/fixture-account-319",
+    "external-dir/fixture-account-319",
+  ];
+  for (const relDir of variants) {
+    const callerDir = path.join(root, relDir);
+    fs.mkdirSync(callerDir, { recursive: true });
+    const callerScript = path.join(callerDir, "review-owner.ts");
+    const lockTarget = path.join(callerDir, "owner.lock");
+    fs.writeFileSync(callerScript, [
+      `import { withFileTransactionAsync } from ${JSON.stringify(fileTransactionModule)};`,
+      `import { resetBlockingWaitsForTests } from ${JSON.stringify(blockingWaitsModule)};`,
+      `const lines: string[] = [];`,
+      `resetBlockingWaitsForTests((line) => { lines.push(line); });`,
+      `let release!: () => void;`,
+      `const barrier = new Promise<void>((r) => { release = r; });`,
+      `let ready!: () => void;`,
+      `const entered = new Promise<void>((r) => { ready = r; });`,
+      `const h = withFileTransactionAsync(${JSON.stringify(lockTarget)}, "external busy fixture-account-319", async () => { ready(); await barrier; });`,
+      `await entered;`,
+      `const w = withFileTransactionAsync(${JSON.stringify(lockTarget)}, "external busy fixture-account-319", async () => "ok");`,
+      `await new Promise((r) => setTimeout(r, 80));`,
+      `release();`,
+      `await Promise.all([h, w]);`,
+      `console.log(JSON.stringify(lines));`,
+    ].join("\n"));
+
+    const proc = Bun.spawn([process.execPath, callerScript], {
+      env: { ...process.env, LLV_STATE_OWNER: "viewer" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect({ relDir, exitCode, stderr }).toMatchObject({ relDir, exitCode: 0 });
+    const emitted = JSON.parse(stdout.trim().split("\n").at(-1)!) as string[];
+    const waitLines = emitted.filter((line) => line.startsWith("[blocking-wait] "));
+    expect(waitLines.length).toBeGreaterThanOrEqual(1);
+    for (const line of waitLines) {
+      expect(line).not.toContain("fixture-account-319");
+      expect(line).not.toContain("review-owner");
+      expect(line).not.toContain(root);
+      const parsed = JSON.parse(line.slice("[blocking-wait] ".length)) as {
+        site: string;
+        subject: string | null;
+        label: string | null;
+        callSite?: string;
+        holder?: { kind?: string };
+      };
+      expect(parsed).toMatchObject({
+        site: "file-transaction",
+        subject: "file-transaction",
+        label: "file-transaction",
+        callSite: "external",
+        holder: { kind: "viewer" },
+      });
+    }
+  }
 });

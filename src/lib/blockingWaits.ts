@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { startupDiagnostic } from "./startupDiagnostics";
 
 /**
@@ -182,19 +184,26 @@ const KNOWN_SRC_TOP_ENTRIES: ReadonlySet<string> = new Set([
   "middleware.ts",
 ]);
 
-const VERIFIED_SOURCE_ROOT: string | null = (() => {
-  try {
-    const raw = import.meta.url.startsWith("file://") ? new URL(import.meta.url).pathname : import.meta.url;
-    const selfPath = path.resolve(raw).replaceAll("\\", "/");
+const VERIFIED_SOURCE_ROOTS: readonly string[] = (() => {
+  const roots = new Set<string>();
+  const addRootFrom = (rawPath: string) => {
+    const normalized = rawPath.replaceAll("\\", "/");
     const marker = Math.max(
-      selfPath.lastIndexOf("/src/"),
-      selfPath.lastIndexOf("/.next/server/"),
-      selfPath.lastIndexOf("/dist/"),
+      normalized.lastIndexOf("/src/"),
+      normalized.lastIndexOf("/.next/server/"),
+      normalized.lastIndexOf("/dist/"),
     );
-    return marker > 0 ? selfPath.slice(0, marker) : null;
-  } catch {
-    return null;
-  }
+    if (marker > 0) roots.add(normalized.slice(0, marker));
+  };
+  try {
+    const raw = import.meta.url.startsWith("file://") ? fileURLToPath(import.meta.url) : import.meta.url;
+    const resolved = path.resolve(raw);
+    addRootFrom(resolved);
+    try {
+      addRootFrom(fs.realpathSync(resolved));
+    } catch { /* realpath unavailable */ }
+  } catch { /* fallback empty */ }
+  return [...roots];
 })();
 
 export function normalizeBlockingWaitHolderKind(rawRole: unknown, fallback = "other-process"): string {
@@ -210,37 +219,43 @@ export function blockingWaitRole(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 function relativeVerifiedCallSite(rawFramePath: string): string | null {
-  const normalized = rawFramePath.replace(/^file:\/\//, "").replaceAll("\\", "/");
-  let candidate: string | null = null;
-  if (VERIFIED_SOURCE_ROOT && normalized.startsWith(`${VERIFIED_SOURCE_ROOT}/`)) {
-    candidate = normalized.slice(VERIFIED_SOURCE_ROOT.length + 1);
-  } else {
-    let bestOffset = -1;
-    for (const marker of ["/src/", "/.next/server/", "/dist/"]) {
-      const idx = normalized.lastIndexOf(marker);
-      if (idx > bestOffset) bestOffset = idx;
-    }
-    if (bestOffset >= 0) {
-      candidate = normalized.slice(bestOffset + 1);
-    } else if (/^(?:src|\.next\/server|dist)\//.test(normalized)) {
-      candidate = normalized;
+  if (!VERIFIED_SOURCE_ROOTS.length) return null;
+  const split = rawFramePath.match(/^(.*\.[cm]?[jt]sx?)(:\d+:\d+)$/);
+  if (!split) return null;
+  let filePart = split[1]!;
+  const coordSuffix = split[2]!;
+  if (filePart.startsWith("file://")) {
+    try {
+      filePart = fileURLToPath(filePart);
+    } catch {
+      return null;
     }
   }
-  if (!candidate || candidate.includes("..")) return null;
-  if (!/^(?:src|\.next\/server|dist)\/[A-Za-z0-9_./[\]-]+\.[cm]?[jt]sx?:\d+:\d+$/.test(candidate)) {
+  if (!path.isAbsolute(filePart)) return null;
+  let resolvedFile = path.resolve(filePart);
+  try {
+    if (fs.existsSync(resolvedFile)) resolvedFile = fs.realpathSync(resolvedFile);
+  } catch { /* keep resolved absolute path */ }
+  const normalized = resolvedFile.replaceAll("\\", "/");
+  let rel: string | null = null;
+  for (const verifiedRoot of VERIFIED_SOURCE_ROOTS) {
+    if (normalized.startsWith(`${verifiedRoot}/`)) {
+      rel = normalized.slice(verifiedRoot.length + 1);
+      break;
+    }
+  }
+  if (!rel || rel.includes("..")) return null;
+  if (!/^(?:src|\.next\/server|dist)\/[A-Za-z0-9_./[\]-]+\.[cm]?[jt]sx?$/.test(rel)) {
     return null;
   }
-  if (candidate.startsWith("src/")) {
-    const firstSegment = candidate.slice("src/".length).split("/")[0]?.split(":")[0] ?? "";
+  if (rel.startsWith("src/")) {
+    const firstSegment = rel.slice("src/".length).split("/")[0] ?? "";
     if (!KNOWN_SRC_TOP_ENTRIES.has(firstSegment)) return null;
   }
-  return candidate;
+  return `${rel}${coordSuffix}`;
 }
 
-/** Keep source coordinates relative to the verified project or build root,
- * never an absolute path, parent directory name, or function arguments.
- * Capture only on the slow path; ordinary registry writes allocate no stack. */
-export function registryWaitCallSite(stack: string | undefined): string {
+function collectVerifiedCallSite(stack: string | undefined, fallback: "unresolved" | "external"): string {
   const locations: string[] = [];
   for (const frame of stack?.split("\n").slice(1) ?? []) {
     const rawLocation = frame.trim().match(/\(?((?:file:\/\/)?[^\s()]+?\.[cm]?[jt]sx?:\d+:\d+)\)?$/)?.[1];
@@ -252,7 +267,20 @@ export function registryWaitCallSite(stack: string | undefined): string {
   }
   // Bundled helpers share one chunk: retain the caller frames as well as the
   // first coordinate so that its minified name cannot hide the write's origin.
-  return locations.length ? locations.join(" <- ").slice(0, 1_024) : "unresolved";
+  return locations.length ? locations.join(" <- ").slice(0, 1_024) : fallback;
+}
+
+/** Keep source coordinates strictly relative to the verified project or build root,
+ * never an absolute path, parent directory name, or external caller path.
+ * Capture only on the slow path; ordinary registry writes allocate no stack. */
+export function registryWaitCallSite(stack: string | undefined): string {
+  return collectVerifiedCallSite(stack, "unresolved");
+}
+
+/** Repo-relative caller coordinates for file-transaction waits; frames outside
+ * the verified project or build root are dropped and collapse to `"external"`. */
+export function fileTransactionCallSite(stack: string | undefined): string {
+  return collectVerifiedCallSite(stack, "external");
 }
 
 /** Runs `operation` with a correlation every wait inside it reports. */
@@ -286,10 +314,11 @@ export function recordBlockingWait(input: {
   const context = input.correlation ?? currentWaitCorrelation();
   const resolvedCallSite = input.callSite
     ? input.callSite.slice(0, 1_024)
-    : ((input.site === "registry-lock" || input.site === "registry-revision-retry" || input.site === "registry-lock-async") && input.durationMs >= BLOCKING_WAIT_LOG_MS)
-      || (input.site === "file-transaction" && input.durationMs >= 50)
+    : (input.site === "registry-lock" || input.site === "registry-revision-retry" || input.site === "registry-lock-async") && input.durationMs >= BLOCKING_WAIT_LOG_MS
       ? registryWaitCallSite(new Error().stack)
-      : undefined;
+      : input.site === "file-transaction" && input.durationMs >= 50
+        ? fileTransactionCallSite(new Error().stack)
+        : undefined;
   const sample: BlockingWaitSample = {
     site: input.site,
     ...(resolvedCallSite ? { callSite: resolvedCallSite } : {}),

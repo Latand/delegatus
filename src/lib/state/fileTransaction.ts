@@ -6,9 +6,9 @@ import path from "node:path";
 import {
   blockingWaitRole,
   currentWaitCorrelation,
+  fileTransactionCallSite,
   normalizeBlockingWaitHolderKind,
   recordBlockingWait,
-  registryWaitCallSite,
   type FileLockHolder,
 } from "@/lib/blockingWaits";
 import { noteWriterAdmitted } from "./admissionWitness";
@@ -415,7 +415,7 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
         durationMs,
         subject,
         correlation: currentWaitCorrelation() ?? { label: fileTransactionWaitLabel(busyMessage, subject, options.label) },
-        ...(durationMs >= 50 && callSiteStack ? { callSite: registryWaitCallSite(callSiteStack) } : {}),
+        ...(durationMs >= 50 && callSiteStack ? { callSite: fileTransactionCallSite(callSiteStack) } : {}),
         ...(holder ? { holder } : {}),
         refused: admittedAt === undefined,
       });
@@ -467,7 +467,7 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
         durationMs,
         subject,
         correlation: currentWaitCorrelation() ?? { label: fileTransactionWaitLabel(busyMessage, subject, options.label) },
-        ...(durationMs >= 50 && callSiteStack ? { callSite: registryWaitCallSite(callSiteStack) } : {}),
+        ...(durationMs >= 50 && callSiteStack ? { callSite: fileTransactionCallSite(callSiteStack) } : {}),
         ...(holder ? { holder } : {}),
         refused: admittedAt === undefined,
       });
@@ -594,7 +594,7 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
         durationMs,
         subject,
         correlation: currentWaitCorrelation() ?? { label: fileTransactionWaitLabel(busyMessage, subject, options.label) },
-        ...(durationMs >= 50 && callSiteStack ? { callSite: registryWaitCallSite(callSiteStack) } : {}),
+        ...(durationMs >= 50 && callSiteStack ? { callSite: fileTransactionCallSite(callSiteStack) } : {}),
         ...(holder ? { holder } : {}),
         refused: admittedAt === undefined,
       });
