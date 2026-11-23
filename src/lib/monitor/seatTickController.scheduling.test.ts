@@ -238,7 +238,7 @@ test("a check journals directly when the SQLite writer releases after 150 ms", a
     rig.deps.workStarted = () => { database.exec("BEGIN IMMEDIATE"); };
     try {
       const record = await runSeatTickCheck(PROJECT, rig.deps);
-      expect(record).not.toBeNull();
+      if (!record) throw new Error("expected a seat tick record after the writer released");
       expect(release).toBeDefined();
       expect(database.inTransaction).toBe(false);
       expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(2);
