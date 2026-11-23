@@ -13,7 +13,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
-import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, shellStartupFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, FingerprintInputError, GateCache, gateToolFiles, installedFingerprint, shellStartupFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
@@ -691,7 +691,11 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
         "git config": fingerprint(git(root, ["config", "--list", "--show-origin"])),
       };
       return { head, tree, components, key: fingerprint([5, components]) };
-    } catch (error) { unavailableReason = error instanceof Error ? error.name : "input fingerprint unavailable"; return; }
+    } catch (error) {
+      // Filesystem exceptions and Git stderr can contain private input values.
+      unavailableReason = error instanceof FingerprintInputError ? error.message : "input fingerprint unavailable";
+      return;
+    }
   };
   const changed = (initial: NonNullable<ReturnType<typeof snapshot>>): string[] => {
     const current = snapshot();
@@ -699,7 +703,7 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
       if (unavailableReason === "base changed") return ["base"];
       if (unavailableReason === "dirty worktree") return ["working inputs"];
       if (unavailableReason === "worktree index flags") return ["worktree index flags"];
-      return ["input fingerprint unavailable"];
+      return [unavailableReason];
     }
     return (Object.keys(initial.components) as (keyof typeof initial.components)[])
       .filter(name => initial.components[name] !== current.components[name]);

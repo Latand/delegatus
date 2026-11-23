@@ -20,17 +20,21 @@ export function shellStartupFingerprint(root: string, startup: string | undefine
   if (!stat.isFile() || bytes === "missing") throw new Error("BASH_ENV is not a readable file");
   return fingerprint([startup, file, stat.dev, stat.ino, bytes]);
 }
+
+/** A refusal whose message contains no filesystem paths or input values. */
+export class FingerprintInputError extends Error {}
+
 /** Include installed bytes: a lockfile alone cannot detect an edited compiler
  * or plugin. Bounded traversal follows package links, including an external
  * dependency directory, while breaking cycles. Hash large files in chunks.
  */
-function treeFingerprint(directory: string, label: string, exclude: (relative: string) => boolean = () => false): string {
+function treeFingerprint(directory: string, label: "checkout" | "node_modules", exclude: (relative: string) => boolean = () => false): string {
   const hash = createHash("sha256"), seen = new Set<string>();
   let entries = 0, bytes = 0;
   const buffer = Buffer.alloc(1024 * 1024);
   const visit = (file: string, relative: string) => {
     if (exclude(relative)) return;
-    if (++entries > 100_000) throw new Error("dependency fingerprint entry limit");
+    if (++entries > 100_000) throw new FingerprintInputError(`${label} fingerprint exceeds 100000 entries`);
     const stat = lstatSync(file);
     if (stat.isSymbolicLink()) {
       hash.update(`link:${relative}:${readlinkSync(file)}\0`);
@@ -41,14 +45,14 @@ function treeFingerprint(directory: string, label: string, exclude: (relative: s
       for (const child of readdirSync(file).sort()) visit(path.join(file, child), `${relative}/${child}`);
     } else if (stat.isFile()) {
       bytes += stat.size;
-      if (bytes > 2 * 1024 * 1024 * 1024) throw new Error("dependency fingerprint byte limit");
+      if (bytes > 2 * 1024 * 1024 * 1024) throw new FingerprintInputError(`${label} fingerprint exceeds 2 GiB`);
       // Installs sharing Bun's hard-linked cache flip group and other bits on
       // the same inode; only whether the owner may execute it reaches a check.
       hash.update(`file:${relative}:${stat.mode & 0o100 ? "x" : "-"}:${stat.size}\0`);
       const fd = openSync(file, "r");
       try { let count: number; while ((count = readSync(fd, buffer, 0, buffer.length, null))) hash.update(buffer.subarray(0, count)); }
       finally { closeSync(fd); }
-    } else throw new Error("unsupported dependency input");
+    } else throw new FingerprintInputError(`${label} fingerprint contains an unsupported file type`);
   };
   if (existsSync(directory)) visit(directory, label);
   return hash.digest("hex");
