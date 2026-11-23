@@ -8,6 +8,7 @@ import { takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineControllerJobs, startPipelineControllerJob, PIPELINE_CONTROLLER_MAX_JOBS } from "./controllerJobs";
 import { realExec } from "@/lib/workflows/provision";
+import { resetBlockingWaitsForTests } from "@/lib/blockingWaits";
 
 async function passedStagePublication(holdPush?: { entered(): void; ready: Promise<void>; wait: Promise<void> }) {
   const box = await realWorktreeLane("settlement-preparation", [
@@ -38,13 +39,26 @@ async function passedStagePublication(holdPush?: { entered(): void; ready: Promi
   return { ...box, publication, pushes: () => pushes, current: () => loadPipelines().find(row => row.id === box.id)! };
 }
 
+function comparisonFor(owner: NonNullable<ReturnType<typeof loadPipelines>[number]>) {
+  return {
+    target: owner.delivery?.target ?? { repository: "fixture-repo", remote: "origin", branch: `refs/heads/${owner.branch}` },
+    disposition: "comparison" as const, publish: "disabled" as const, active: false,
+    ownerId: owner.id, epoch: owner.delivery?.epoch ?? 1, journal: [],
+  };
+}
+
 /** Finish the real compact read, then commit a real evidence-journal write
  * before the ownership reader's freshness check. No exception is mocked. */
-async function racePreparation(box: Pick<Awaited<ReturnType<typeof passedStagePublication>>, "repo" | "h">,
+async function racePreparation(box: Pick<Awaited<ReturnType<typeof passedStagePublication>>, "id" | "repo" | "h">,
   mutate?: () => Promise<void>, mode: "authority" | "noop" | "progress" = "authority") {
   const peer = await createPipelineFromRequest({ task: "Preparation peer", repoDir: box.repo, autoStart: false,
     stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }], publication: "internal" }, box.h.ports);
   if (!peer.pipeline) throw new Error(peer.error);
+  await withPipelineMutation(async (rows, persist) => {
+    const row = rows.find(item => item.id === peer.pipeline!.id)!;
+    row.delivery = comparisonFor(rows.find(item => item.id === box.id)!);
+    await persist([row]);
+  });
   const original = stateStore.readCompactPipelineEvidence;
   let reads = 0;
   const read = spyOn(stateStore, "readCompactPipelineEvidence").mockImplementation(async (...args) => {
@@ -92,14 +106,165 @@ test.each(["noop", "progress"] as const)("ordinary peer %s writes during compact
   } finally { race.restore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test.each([
+  ["close", "preparation"], ["takeover", "preparation"], ["claim", "preparation"],
+  ["close", "git"], ["takeover", "git"], ["claim", "git"],
+  ["close", "checkpoint"], ["takeover", "checkpoint"], ["claim", "checkpoint"],
+] as const)("a disjoint %s during %s settles the original pass", async (action, phase) => {
+  const box = await passedStagePublication();
+  const target = { branch: "refs/heads/disjoint-delivery" };
+  const createPeer = async (task: string) => {
+    const { pipeline, error } = await createPipelineFromRequest({ task, repoDir: box.repo, autoStart: false,
+      stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
+      publication: "remote-branch", delivery: target }, box.h.ports);
+    if (!pipeline) throw new Error(error);
+    return pipeline;
+  };
+  const peer = action === "claim" ? undefined : await createPeer("Disjoint owner");
+  const successor = action === "takeover" ? await createPeer("Disjoint successor") : undefined;
+  let fired = false;
+  const write = async () => {
+    if (fired) return;
+    fired = true;
+    await withoutControllerPipelineScope(async () => {
+      if (action === "close") {
+        expect((await patchPipeline(peer!.id, { action: "close", reason: "Fixture close" }, box.h.ports)).error).toBeUndefined();
+      } else if (action === "takeover") {
+        expect((await takeoverPipelineDelivery(successor!.id, peer!.id, peer!.delivery!.epoch, "Fixture takeover", null)).error).toBeUndefined();
+      } else {
+        const claimed = await createPeer("Disjoint claim");
+        expect(claimed.delivery).toMatchObject({ active: true, ownerId: claimed.id });
+      }
+    });
+  };
+  const compact = stateStore.readCompactPipelineEvidence;
+  let ownershipReads = 0;
+  const read = spyOn(stateStore, "readCompactPipelineEvidence").mockImplementation(async (...args) => {
+    const ownership = new Error().stack?.includes("stageBranch.ts");
+    const result = await compact(...args);
+    if (ownership) {
+      ownershipReads++;
+      if (phase === "preparation") await write();
+    }
+    return result;
+  });
+  const execute = box.h.ports.exec;
+  let reachedGit = false;
+  box.h.ports.exec = async (...args) => {
+    const result = await execute(...args);
+    if (args[0] === "git" && args[1][0] === "status") {
+      reachedGit = true;
+      if (phase === "git") await write();
+    }
+    return result;
+  };
+  const mutate = pipelineStore.withPipelineMutation;
+  const checkpoint = phase === "checkpoint" ? spyOn(pipelineStore, "withPipelineMutation").mockImplementation(async (...args) => {
+    if (reachedGit) await write();
+    return mutate(...args);
+  }) : undefined;
+  try {
+    await withControllerPipelineScope([box.id], () => settlePendingStageGit(box.h.ports));
+    expect(fired).toBe(true);
+    expect(ownershipReads).toBe(1);
+    expect(box.current().cursor).toMatchObject({ stageId: "audit", state: "pending" });
+    expect(box.current().runs[0]!.attempts[0]!.settlementPreparationWait).toBeUndefined();
+    expect(box.current().delivery!.operation).toEqual(box.publication);
+    expect(box.current().lastPassedCommit).toBe(box.publication.sha);
+    expect(await box.git(box.worktree, "rev-parse", "HEAD")).toBe(box.publication.sha);
+    expect(box.pushes()).toBe(1);
+  } finally { read.mockRestore(); checkpoint?.mockRestore(); box.h.ports.exec = execute; await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["branch", "worktreeDir", "delivery.target"] as const)("a peer entering and leaving the same %s invalidates the proof", async field => {
+  const box = await passedStagePublication();
+  const { stageBranchOwnershipReader } = await import("./stageBranch");
+  const owner = box.current();
+  const { pipeline: peer, error } = await createPipelineFromRequest({ task: "Disjoint authority", repoDir: box.repo, autoStart: false,
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
+    publication: "remote-branch", delivery: { branch: "refs/heads/other-delivery" } }, box.h.ports);
+  if (!peer) throw new Error(error);
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+  const lines: string[] = [];
+  resetBlockingWaitsForTests(line => lines.push(line));
+  try {
+    const reader = stageBranchOwnershipReader(owner);
+    const token = await reader.read();
+    const before = Number(stateStore.pipelineAuthorityRevision(db.filename)?.split(":").at(-1));
+    const colliding = structuredClone(peer);
+    if (field === "delivery.target") {
+      // Keep the differing PR metadata and remote alias out of target identity.
+      colliding.delivery!.target = { ...owner.delivery!.target, remote: "other-remote", pr: 17 };
+      colliding.delivery!.ownerId = owner.id;
+      colliding.delivery!.disposition = "comparison";
+      colliding.delivery!.publish = "disabled";
+      colliding.delivery!.active = false;
+    } else colliding[field] = owner[field];
+    const update = db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?");
+    update.run(JSON.stringify(colliding), peer.id);
+    update.run(JSON.stringify(peer), peer.id);
+    expect(reader.current()).toBe(false);
+    expect(await reader.read()).not.toBe(token);
+    const diagnostics = lines.map(line => JSON.parse(line.slice("[blocking-wait] ".length)))
+      .filter(sample => sample.label === "pipelines.stage-ownership" && sample.stageOwnership);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].stageOwnership).toMatchObject({ before, after: before + 2,
+      change: { laneId: peer.id, fields: expect.stringContaining(field), operation: "update" } });
+  } finally { db.close(); resetBlockingWaitsForTests(); fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["replace", "schema", "database"] as const)("settlement rejects an old proof after a raw %s change", async change => {
+  const box = await passedStagePublication();
+  const { stageBranchOwnershipReader } = await import("./stageBranch");
+  const owner = box.current();
+  const { pipeline: peer, error } = await createPipelineFromRequest({ task: "Raw authority", repoDir: box.repo, autoStart: false,
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
+    publication: "internal" }, box.h.ports);
+  if (!peer) throw new Error(error);
+  const filename = path.join(process.env.LLV_STATE_DIR!, "state.sqlite");
+  const db = new Database(filename);
+  try {
+    if (change === "replace") {
+      db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+        .run(JSON.stringify({ ...peer, delivery: comparisonFor(owner) }), peer.id);
+    }
+    const reader = stageBranchOwnershipReader(owner);
+    const original = await reader.read();
+    if (change === "replace") {
+      db.exec("PRAGMA recursive_triggers=OFF");
+      db.query(`INSERT OR REPLACE INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+        SELECT collection,row_key,?,row_order,row_revision,controller_active FROM state_rows
+        WHERE collection='pipelines' AND row_key=?`).run(JSON.stringify(peer), peer.id);
+    } else if (change === "schema") db.exec("CREATE TABLE settlement_schema_probe (id INTEGER)");
+    else {
+      const replacement = path.join(path.dirname(filename), "replacement.sqlite");
+      const retired = path.join(path.dirname(filename), "retired.sqlite");
+      fs.writeFileSync(replacement, db.serialize());
+      fs.renameSync(filename, retired);
+      for (const suffix of ["-wal", "-shm"]) {
+        if (fs.existsSync(filename + suffix)) fs.renameSync(filename + suffix, retired + suffix);
+      }
+      fs.renameSync(replacement, filename);
+    }
+    expect(reader.current()).toBe(false);
+    expect(await stageBranchOwnershipReader(owner).read()).not.toBe(original);
+  } finally { db.close(); fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 test("the authority clock fences every claim field, raw moves and malformed records while retaining the general clock", async () => {
   const box = await passedStagePublication();
   const { stageBranchOwnershipReader } = await import("./stageBranch");
-  const inserted = stageBranchOwnershipReader(box.id); await inserted.read();
+  const inserted = stageBranchOwnershipReader(box.current()); await inserted.read();
   const peer = await createPipelineFromRequest({ task: "Authority clock peer", repoDir: box.repo, autoStart: false,
     stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
     publication: "remote-branch", delivery: { branch: "refs/heads/authority-clock-peer" } }, box.h.ports);
   if (!peer.pipeline) throw new Error(peer.error);
+  expect(inserted.current()).toBe(true);
+  await withPipelineMutation(async (rows, persist) => {
+    const row = rows.find(item => item.id === peer.pipeline!.id)!;
+    row.delivery!.target = { ...row.delivery!.target, repository: "other-delivery-repository", branch: `refs/heads/${box.current().branch}` };
+    await persist([row]);
+  });
   expect(inserted.current()).toBe(false);
   const filename = path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), db = new Database(filename);
   const query = "UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?";
@@ -114,7 +279,7 @@ test("the authority clock fences every claim field, raw moves and malformed reco
       row => { delete row.delivery; },
     ];
     for (const change of changes) {
-      const reader = stageBranchOwnershipReader(box.id); await reader.read();
+      const reader = stageBranchOwnershipReader(box.current()); await reader.read();
       const before = stateStore.pipelineAuthorityRevision(filename), general = stateStore.pipelineEvidenceRevision(filename);
       const record = JSON.parse(original); change(record);
       db.query(query).run(JSON.stringify(record), id);
@@ -133,7 +298,7 @@ test("the authority clock fences every claim field, raw moves and malformed reco
       expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
     }
     db.query(query).run(original, id);
-    const reader = stageBranchOwnershipReader(box.id); await reader.read();
+    const reader = stageBranchOwnershipReader(box.current()); await reader.read();
     const general = stateStore.pipelineEvidenceRevision(filename);
     const stable = stateStore.pipelineAuthorityRevision(filename);
     db.query(query).run(original, id);
@@ -148,28 +313,28 @@ test("the authority clock fences every claim field, raw moves and malformed reco
     db.query(query).run(JSON.stringify({ ...JSON.parse(original), state: "invalid" }), id);
     expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(stable);
     expect(reader.current()).toBe(false);
-    await expect(reader.read()).rejects.toThrow("pipeline ownership is unreadable");
+    await expect(stageBranchOwnershipReader(box.current()).read()).rejects.toThrow("pipeline ownership is unreadable");
     db.query(query).run(original, id);
-    await reader.read();
+    const moved = stageBranchOwnershipReader(box.current()); await moved.read();
     let before = stateStore.pipelineAuthorityRevision(filename);
     db.query("UPDATE state_rows SET row_key=? WHERE collection='pipelines' AND row_key=?").run(`${id}-moved`, id);
     expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
-    expect(reader.current()).toBe(false);
+    expect(moved.current()).toBe(false);
     db.query("UPDATE state_rows SET row_key=? WHERE collection='pipelines' AND row_key=?").run(id, `${id}-moved`);
-    await reader.read();
+    const archived = stageBranchOwnershipReader(box.current()); await archived.read();
     before = stateStore.pipelineAuthorityRevision(filename);
     db.query("UPDATE state_rows SET collection='pipelines_archive' WHERE collection='pipelines' AND row_key=?").run(id);
     expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
-    expect(reader.current()).toBe(false);
+    expect(archived.current()).toBe(false);
     before = stateStore.pipelineAuthorityRevision(filename);
     db.query("DELETE FROM state_rows WHERE collection='pipelines_archive' AND row_key=?").run(id);
     expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
-    const corrupt = stageBranchOwnershipReader(box.id); await corrupt.read();
+    const corrupt = stageBranchOwnershipReader(box.current()); await corrupt.read();
     before = stateStore.pipelineAuthorityRevision(filename);
     db.query(query).run("{broken", box.id);
     expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
     expect(corrupt.current()).toBe(false);
-    await expect(corrupt.read()).rejects.toThrow("corrupt pipelines SQLite row");
+    await expect(stageBranchOwnershipReader(JSON.parse(owner)).read()).rejects.toThrow("corrupt pipelines SQLite row");
   } finally {
     db.query(query).run(original, id); db.query(query).run(owner, box.id); db.close();
     await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true });
@@ -247,18 +412,31 @@ async function failPreparationInReplacementController(at: string, postPreparatio
 
 /** A valid peer changes authority after a real, fenced Git read. The adoption
  * variant writes just before the real mutation callback checks its fences. */
-async function raceAfterPreparation(box: Pick<Awaited<ReturnType<typeof passedStagePublication>>, "repo" | "h">,
-  point: "git-status" | "adoption" = "git-status", change?: () => Promise<void>) {
+async function raceAfterPreparation(box: Pick<Awaited<ReturnType<typeof passedStagePublication>>, "id" | "repo" | "h">,
+  point: "git-status" | "adoption" | "same-branch" = "git-status", change?: () => Promise<void>) {
   const peer = await createPipelineFromRequest({ task: "Independent authority", repoDir: box.repo, autoStart: false,
     stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
     publication: "internal" }, box.h.ports);
   if (!peer.pipeline) throw new Error(peer.error);
+  if (point !== "same-branch") await withPipelineMutation(async (rows, persist) => {
+    const row = rows.find(item => item.id === peer.pipeline!.id)!;
+    row.delivery = comparisonFor(rows.find(item => item.id === box.id)!);
+    await persist([row]);
+  });
   const mutate = pipelineStore.withPipelineMutation;
   const execute = box.h.ports.exec;
   let armed = false, writes = 0;
   const invalidate = async () => {
     armed = false;
-    await withoutControllerPipelineScope(() => mutate(async (rows, persist) => {
+    if (point === "same-branch") {
+      const owner = loadPipelines().find(row => row.id === box.id)!;
+      const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+      try {
+        const update = db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?");
+        update.run(JSON.stringify({ ...peer.pipeline, branch: owner.branch }), peer.pipeline!.id);
+        update.run(JSON.stringify(peer.pipeline), peer.pipeline!.id);
+      } finally { db.close(); }
+    } else await withoutControllerPipelineScope(() => mutate(async (rows, persist) => {
       const current = rows.find(row => row.id === peer.pipeline!.id)!;
       current.task += " changed";
       Object.assign(current, pipelineIdentity(current.id, current.task, current.repoDir));
@@ -271,7 +449,7 @@ async function raceAfterPreparation(box: Pick<Awaited<ReturnType<typeof passedSt
     const result = await execute(...args);
     if (args[0] === "git" && args[1][0] === "status") {
       armed = true;
-      if (point === "git-status") await invalidate();
+      if (point !== "adoption") await invalidate();
     }
     return result;
   };
@@ -295,7 +473,7 @@ async function refuseStaleSettlement(box: Awaited<ReturnType<typeof passedStageP
   return refused;
 }
 
-test.each(["git-status", "adoption"] as const)("post-preparation invalidation at %s parks at the original deadline and retries the same pass", async point => {
+test.each(["git-status", "adoption", "same-branch"] as const)("post-preparation invalidation at %s parks at the original deadline and retries the same pass", async point => {
   const box = await passedStagePublication();
   let clock = Date.parse(box.h.ports.now());
   box.h.ports.now = () => new Date(clock).toISOString();

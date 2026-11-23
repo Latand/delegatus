@@ -1333,23 +1333,26 @@ test("settlement polling reads revisions without cloning retained lane history",
 }), 15_000);
 
 
-test("shared compact authority observations keep each job's own lane out of its peer token", async () => {
+test("shared compact authority observations pin each job's lane and colliding peers", async () => {
   const { lane } = await committing();
   const peer = structuredClone(lane); peer.id = "authority-peer";
   Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
   peer.state = "closed"; peer.closedAt = "2026-10-22T00:00:00Z"; peer.cursor = null;
-  peer.runs = peer.runs.map(run => ({ ...run, attempts: [] })); peer.delivery = undefined;
+  peer.runs = peer.runs.map(run => ({ ...run, attempts: [] })); peer.delivery = {
+    target: { repository: "fixture-repo", remote: "origin", branch: `refs/heads/${lane.branch}` },
+    disposition: "comparison", publish: "disabled", active: false, ownerId: lane.id, epoch: 1, journal: [],
+  };
   savePipelines([lane, peer]);
   const { stageBranchOwnershipReader } = await import("./stageBranch");
-  const owner = stageBranchOwnershipReader(lane.id), other = stageBranchOwnershipReader(peer.id);
+  const owner = stageBranchOwnershipReader(lane), other = stageBranchOwnershipReader(peer);
   const originalOwner = await owner.read(), originalOther = await other.read();
   await withPipelineMutation(async (rows, persist) => {
     const current = rows.find(row => row.id === lane.id)!;
-    current.task += " changed branch";
+    current.task += " changed";
     Object.assign(current, pipelineIdentity(current.id, current.task, current.repoDir));
     await persist([current]);
   });
-  expect(await owner.read()).toBe(originalOwner);
+  expect(await owner.read()).not.toBe(originalOwner);
   expect(await other.read()).not.toBe(originalOther);
 });
 

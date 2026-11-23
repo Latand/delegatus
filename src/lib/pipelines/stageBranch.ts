@@ -1,8 +1,9 @@
 import { isStoredPipeline } from "./store";
 import { statePath } from "@/lib/configDir";
-import { readCompactPipelineEvidence, pipelineAuthorityRevision, stateEvidenceVersion, type CompactEvidenceCache } from "@/lib/state/sqliteStateStore";
+import { readCompactPipelineEvidence, pipelineStageAuthority, stateEvidenceVersion, type CompactEvidenceCache } from "@/lib/state/sqliteStateStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { settleStageAttemptPush } from "./stageAttemptPush";
+import { recordBlockingWait } from "@/lib/blockingWaits";
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { ExecPort } from "@/lib/workflows/provision";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -15,68 +16,103 @@ const pipelineTerminal = (pipeline: Pipeline) => pipeline.state === "completed" 
 
 export type StageBranchProtection = { branch: string; head: string; error: string | null };
 
-/** Other lanes can acquire branch claims while this lane is outside its lease.
-    Ignore their turn progress, but fence every change to repository/branch authority. */
-export function stageBranchOwnershipFence(pipelines: readonly Pipeline[], ownerId: string): string {
-  return performanceSpans.sync("controller.ownership", () => JSON.stringify(pipelines.filter((pipeline) => pipeline.id !== ownerId).map((pipeline) => [
-    pipeline.id, pipeline.repoDir, pipeline.worktreeDir, pipeline.branch,
-    pipeline.delivery?.target, pipeline.delivery?.active, pipeline.delivery?.ownerId,
-    pipeline.delivery?.epoch, pipeline.delivery?.publish, pipelineTerminal(pipeline),
-  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))));
+type BranchAuthority = Pick<Pipeline, "id" | "repoDir" | "worktreeDir" | "branch" | "delivery">;
+type AuthorityObservation = NonNullable<ReturnType<typeof pipelineStageAuthority>>;
+const OWNERSHIP_SITE = "pipelines.stage-ownership";
+const deliveryBranchName = (pipeline: BranchAuthority) => pipeline.delivery?.target.branch.slice("refs/heads/".length);
+
+function authorityKeys(owner: BranchAuthority, source?: string): string {
+  const target = owner.delivery?.target;
+  const branches = new Set([owner.branch, source, deliveryBranchName(owner)]);
+  return JSON.stringify([
+    ["unknown"], ["lane", owner.id], ["worktree", owner.worktreeDir],
+    ...[...branches].filter(branch => branch !== undefined).map(branch => ["branch", owner.repoDir, branch]),
+    ...(target ? [["target", target.repository, target.branch]] : []),
+  ].map(key => JSON.stringify(key)));
 }
 
-type BranchAuthority = { id: string; fence: string };
-// One compact database projection per process; replacement/eviction drops it.
-// Never retain historical payloads or an unbounded collection of state roots.
-let branchAuthorityCache: CompactEvidenceCache<BranchAuthority> | undefined;
+// The shared compact read validates retained records, including stores that
+// predate scoped tracking. It is only needed when starting a new proof.
+let branchAuthorityCache: CompactEvidenceCache<null> | undefined;
 const MAX_BRANCH_AUTHORITY_ROWS = 32_768;
+const authorityToken = (proof: AuthorityObservation) => `${proof.identity}:${proof.change?.revision ?? 0}`;
 
-/** The existing evidence journal includes raw SQL, older writers, deletes and
- * archive moves. Jobs share compact observations; unchanged polls read a
- * revision only, and changed reads project deltas with cooperative batches.
- */
-export function stageBranchOwnershipReader(ownerId: string) {
+export function stageBranchOwnershipReader(owner: BranchAuthority, source?: string) {
   const filename = statePath("state.sqlite");
-  let version: string | null = null;
-  let revision: string | null = null;
-  let token = "";
+  const keys = authorityKeys(owner, source);
+  let version: string | undefined;
+  let observation: AuthorityObservation | null = null;
+  let proof: AuthorityObservation | undefined;
   let pending: Promise<string> | undefined;
-  const current = () => {
-    if (version === null) return false;
-    const observed = stateEvidenceVersion(filename);
-    if (observed === version) return true;
-    // Acquiring a mutation lease writes the same database. Only pipeline-row
-    // authority changes can invalidate peer authority, not progress or leases.
-    if (revision !== null && pipelineAuthorityRevision(filename) === revision) {
-      version = observed;
-      return true;
+  let reported: string | undefined;
+  const observe = () => {
+    try {
+      const nextVersion = stateEvidenceVersion(filename);
+      if (version !== nextVersion) {
+        observation = nextVersion === "missing" ? null : pipelineStageAuthority(filename, keys);
+        // This version precedes the indexed read. A concurrent commit can
+        // cause a later recheck, but cannot make a stale observation current.
+        version = nextVersion;
+      }
+    } catch {
+      version = undefined;
+      observation = null;
     }
-    return false;
+    return observation;
+  };
+  const reject = (before: AuthorityObservation | null, after: AuthorityObservation | null, reason: string, synchronous: boolean) => {
+    const key = `${before && authorityToken(before)}:${after && authorityToken(after)}:${reason}`;
+    if (reported === key) return;
+    reported = key;
+    const change = before?.identity === after?.identity && after?.change && after.change.revision > (before?.change?.revision ?? 0)
+      ? { laneId: after.change.lane_id.slice(0, 120), fields: after.change.fields?.slice(0, 180) ?? null, operation: after.change.operation.slice(0, 16) } : undefined;
+    recordBlockingWait({ site: "state-write-lock", durationMs: 0, synchronous, refused: true,
+      subject: owner.id, correlation: { label: OWNERSHIP_SITE },
+      stageOwnership: { before: before?.revision ?? null, after: after?.revision ?? null, reason, change } });
+  };
+  const current = () => {
+    if (!proof) return false;
+    const after = observe();
+    if (!after || authorityToken(proof) !== authorityToken(after)) {
+      reject(proof, after, "pipeline branch ownership changed during settlement", true);
+      return false;
+    }
+    proof = after;
+    return true;
   };
   const read = (): Promise<string> => {
-    if (current()) return Promise.resolve(token);
+    // Once initialized, callers compare the token with their starting proof.
+    // Read scoped clocks directly so disjoint writes never restart hydration.
+    if (proof) {
+      current();
+      if (observation) return Promise.resolve(authorityToken(observation));
+      return Promise.reject(new Error("pipeline ownership changed during preparation"));
+    }
     if (pending) return pending;
-    pending = waitForStateLock("pipelines.stage-ownership", async () => {
-      const before = pipelineAuthorityRevision(filename);
-      const next = await readCompactPipelineEvidence(filename, branchAuthorityCache, (record, collection) => {
-        if (collection !== "pipelines") return { id: "", fence: "" };
-        if (!isStoredPipeline(record))
-          throw new Error("pipeline ownership is unreadable");
-        return { id: record.id, fence: stageBranchOwnershipFence([record], "") };
-      });
-      // A coherent projection remains useful after a freshness race. Retain
-      // it so the next admission reads deltas instead of restarting history.
-      if (next && next.rows.size <= MAX_BRANCH_AUTHORITY_ROWS
-        && (branchAuthorityCache?.identity !== next.identity || (branchAuthorityCache.sourceRevision ?? -1) <= (next.sourceRevision ?? -1)))
-        branchAuthorityCache = next;
-      else if (next && next.rows.size > MAX_BRANCH_AUTHORITY_ROWS) branchAuthorityCache = undefined;
-      const afterVersion = stateEvidenceVersion(filename);
-      if (!next || before === null || pipelineAuthorityRevision(filename) !== before)
-        throw new Error("pipeline ownership changed during preparation");
-      token = JSON.stringify([...next.rows.values()].filter(row => row.value.id && row.value.id !== ownerId).map(row => row.value.fence).sort());
-      version = afterVersion;
-      revision = before;
-      return token;
+    pending = waitForStateLock(OWNERSHIP_SITE, async () => {
+      const before = observe();
+      let after: AuthorityObservation | null;
+      try {
+        const next = await readCompactPipelineEvidence(filename, branchAuthorityCache, (record, collection) => {
+          if (collection === "pipelines" && !isStoredPipeline(record)) throw new Error("pipeline ownership is unreadable");
+          return null;
+        });
+        if (next && next.rows.size <= MAX_BRANCH_AUTHORITY_ROWS
+          && (branchAuthorityCache?.identity !== next.identity || (branchAuthorityCache.sourceRevision ?? -1) <= (next.sourceRevision ?? -1)))
+          branchAuthorityCache = next;
+        else if (next && next.rows.size > MAX_BRANCH_AUTHORITY_ROWS) branchAuthorityCache = undefined;
+        after = observe();
+        if (next && before && after && next.identity === before.identity && authorityToken(before) === authorityToken(after)) {
+          proof = after;
+          return authorityToken(proof);
+        }
+      } catch (error) {
+        reject(before, observe(), "pipeline ownership is unreadable", false);
+        throw error;
+      }
+      const reason = "pipeline ownership changed during preparation";
+      reject(before, after, reason, false);
+      throw new Error(reason);
     }).finally(() => { pending = undefined; });
     return pending;
   };
@@ -131,16 +167,10 @@ export async function commitAndAdoptStageBranch(
   attempt?: PipelineStageAttempt,
   now?: string,
 ): Promise<PipelineGitResult> {
-  const ownership = stageBranchOwnershipFence(pipelines(), pipeline.id);
+  const initialRows = pipelines();
   const execute = exec;
-  exec = (command, args, cwd, env, options) => {
-    if (stageBranchOwnershipFence(pipelines(), pipeline.id) !== ownership) {
-      return { code: null, stdout: "", stderr: "pipeline branch ownership changed during stage adoption" };
-    }
-    return execute(command, args, cwd, env, options);
-  };
   const cwd = pipeline.worktreeDir;
-  const branch = (await exec("git", ["branch", "--show-current"], cwd));
+  const branch = (await execute("git", ["branch", "--show-current"], cwd));
   if (branch.code !== 0) return { ok: false, error: `checking the stage branch: ${branch.stderr.trim()}` };
   const checkedOut = branch.stdout.trim();
   if (adoption && (typeof adoption.branch !== "string" || typeof adoption.target !== "string"
@@ -152,30 +182,64 @@ export async function commitAndAdoptStageBranch(
   const deliveryBranch = pipeline.delivery?.disposition === "owner"
     ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : null;
   const refused = (reason: string): PipelineGitResult => ({ ok: false, error: `adopting the stage branch: ${reason}` });
+  const names = new Set([pipeline.branch, source, ...(deliveryBranch ? [deliveryBranch] : [])]);
+  const deliveryTarget = pipeline.delivery?.target;
+  const exactCollision = (other: Pipeline) => other.worktreeDir === cwd
+    || Boolean(deliveryTarget && other.delivery?.target.repository === deliveryTarget.repository && other.delivery.target.branch === deliveryTarget.branch);
+  const candidates = (rows: readonly Pipeline[]) => rows.filter(other => {
+    const deliveryName = deliveryBranchName(other);
+    return other.id !== pipeline.id && (exactCollision(other) || names.has(other.branch)
+      || (deliveryName !== undefined && names.has(deliveryName)));
+  });
+  const stageBranchOwnershipFence = (rows: readonly Pipeline[]) => performanceSpans.sync("controller.ownership", () => JSON.stringify(rows.map(other => [
+    other.id, other.repoDir, other.worktreeDir, other.branch, other.delivery?.target, other.delivery?.active,
+    other.delivery?.ownerId, other.delivery?.epoch, other.delivery?.publish, other.delivery?.disposition, pipelineTerminal(other),
+  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))));
   const commonDirectories = async (candidate: Pipeline): Promise<{ directories: Set<string>; unresolved: boolean }> => {
     const directories = new Set<string>();
     let unresolved = false;
     for (const directory of new Set([candidate.repoDir, candidate.worktreeDir])) {
-      const result = (await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], directory));
+      const result = await execute("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], directory);
       if (result.code === 0 && result.stdout.trim()) directories.add(path.resolve(result.stdout.trim()));
       else unresolved = true;
     }
     return { directories, unresolved };
   };
-  const pipelineIdentity = (await commonDirectories(pipeline));
-  const others: Pipeline[] = [];
-  for (const other of pipelines()) {
-    if (other.id === pipeline.id) continue;
-    if (other.repoDir === pipeline.repoDir || other.worktreeDir === pipeline.worktreeDir
-      || (pipeline.delivery && other.delivery?.target.repository === pipeline.delivery.target.repository)) {
-      others.push(other);
-      continue;
+  // The durable proof uses stored coordinates. Git also checks potential
+  // holders of the actual source and destination refs across path aliases.
+  let pipelineIdentity: Awaited<ReturnType<typeof commonDirectories>> | undefined;
+  const colliding = async (peers: readonly Pipeline[]) => {
+    const others: Pipeline[] = [];
+    for (const other of peers) {
+      if (exactCollision(other) || other.repoDir === pipeline.repoDir
+        || (deliveryTarget && other.delivery?.target.repository === deliveryTarget.repository)) {
+        others.push(other);
+        continue;
+      }
+      pipelineIdentity ??= await commonDirectories(pipeline);
+      const otherIdentity = await commonDirectories(other);
+      // A removed checkout can still have a claim on this exact ref.
+      if (pipelineIdentity.unresolved || otherIdentity.unresolved
+        || [...pipelineIdentity.directories].some(directory => otherIdentity.directories.has(directory))) others.push(other);
     }
-    const otherIdentity = await commonDirectories(other);
-    // Preserve unresolved claims, including a removed seed checkout.
-    if ([...pipelineIdentity.directories].some((directory) => otherIdentity.directories.has(directory))
-      || pipelineIdentity.unresolved || otherIdentity.unresolved) others.push(other);
-  }
+    return others;
+  };
+  const initialPeers = candidates(initialRows);
+  let potential = stageBranchOwnershipFence(initialPeers);
+  const others = await colliding(initialPeers);
+  const ownership = stageBranchOwnershipFence(others);
+  exec = async (command, args, directory, env, options) => {
+    const peers = candidates(pipelines());
+    const next = stageBranchOwnershipFence(peers);
+    if (next !== potential) {
+      const resolved = await colliding(peers);
+      if (stageBranchOwnershipFence(resolved) !== ownership || stageBranchOwnershipFence(candidates(pipelines())) !== next) {
+        return { code: null, stdout: "", stderr: "pipeline branch ownership changed during stage adoption" };
+      }
+      potential = next;
+    }
+    return execute(command, args, directory, env, options);
+  };
   // A finished lane whose delivery claim was released keeps its branch name,
   // and a successor delivering to that pull request branch must not lose it.
   const ownedByOther = (name: string) => others.some((other) => other.delivery?.active
