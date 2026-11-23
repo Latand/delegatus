@@ -4322,7 +4322,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     || ["/api/files", "/api/team", "/api/tasks", "/api/tasks/accepted-control-task"].includes(url.pathname))) return serverFetch(input, init);
   // The driver supplies the real server projection for the liveness case, and the task summary case's records.
   if (["stale-working", "finished-work", "task-summary", "board-timeline"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
-    && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
+    && ["/api/files", "/api/tasks", "/api/board/work-time"].includes(url.pathname)) return serverFetch(input, init);
 
   if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
   if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings)/.test(url.pathname)) return serverFetch(input, init);

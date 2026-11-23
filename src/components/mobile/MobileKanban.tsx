@@ -1365,7 +1365,12 @@ export function MobileKanban(props: MobileKanbanProps) {
       </div>
       {timelineShown ? <div id={`${ids}-panel-timeline`} role="tabpanel" aria-labelledby={`${ids}-tab-timeline`} className="flex min-h-0 flex-1 flex-col">
         <BoardTimeline project={project} cards={timelineCards} members={timelineMembers}
-          pipelines={props.pipelines} nowMs={now * 1000} preference={timeline.preference} onPreference={timeline.update} phone />
+          pipelines={props.pipelines} nowMs={now * 1000} preference={timeline.preference} onPreference={timeline.update} phone
+          onOpenConversation={target => {
+            const file = resolveStageNavFile(target, props.files);
+            if (file) props.onOpenConversation(file);
+            else window.location.hash = formatConversationHash({ conversationId: target.conversationId ?? undefined, path: target.agentPath ?? "" });
+          }} />
       </div> : null}
       <div
         ref={pager}

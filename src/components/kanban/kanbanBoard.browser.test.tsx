@@ -1959,6 +1959,302 @@ describe("board timeline manager view", () => {
   }, 900_000);
 });
 
+/*
+ * Attempt rows of the chart open their conversation and say how long the agent worked
+ * (Build 7 … Build 11 of one stage: a 25-hour calendar span that holds under an hour of turns,
+ * a stage whose transcript cannot be read, and one working now). The work-time route answers from
+ * the table below, never from the chart; the expectations read the same table.
+ */
+describe("board timeline attempt rows: open the conversation, show real working time", () => {
+  const NOW = Date.parse("2026-11-22T10:30:00Z");
+  const H = 3_600_000, MIN = 60_000;
+  const ago = (hours: number) => NOW - hours * H;
+  // Attempt number → calendar span in hours before the clock, and the turn windows its transcript holds (null: no readable transcript).
+  const ATTEMPTS: Array<{ n: number; from: number; to: number | null; turns: Array<[number, number | null]> | null }> = [
+    { n: 7, from: 53, to: 51, turns: [[52.9, 52.5], [52.2, 51.9]] },
+    { n: 8, from: 49, to: 23.9, turns: [[48.9, 48.65], [30, 29.5], [24.2, 24]] },
+    { n: 9, from: 22, to: 19, turns: null },
+    { n: 10, from: 17, to: 8, turns: [[16.9, 12.4], [11, 9.5]] },
+    { n: 11, from: 1.5, to: null, turns: [[1.4, null]] },
+  ];
+  const workMs = (spec: (typeof ATTEMPTS)[number]) => spec.turns?.reduce((sum, [from, to]) => sum + (ago(to ?? 0) - ago(from)), 0) ?? null;
+  const conversationOf = (n: number) => `conversation_build_${n}`;
+
+  async function records(lang: "en" | "uk") {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const title = lang === "uk" ? "Графік: рядки спроб відкривають розмову" : "Chart: attempt rows open the conversation";
+    const role = { roleId: "builder" as const };
+    const resolved = resolvePipelineRole({ role, engine: "codex", model: "gpt-6.2-astra", effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
+    if (!resolved.role) throw new Error(resolved.error);
+    const lane = buildPipeline({ id: "attempt-lane", task: title, taskIds: ["attempt-task"], project: "atlas", repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(ago(54)),
+      stages: [{ id: "build", kind: "run", role, effectiveRole: resolved.role, next: null, prompt: "{{task}}" }] });
+    lane.state = "running"; lane.createdAt = iso(ago(54));
+    lane.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+    const file = { path: "/fixture/build-11.jsonl", conversationId: conversationOf(11), project: "atlas", projectName: "Atlas", root: "codex-sessions", name: "build-11.jsonl", title: "Build 11", kind: "session", fmt: "codex",
+      parent: null, engine: "codex", model: "gpt-6.2-astra", mtime: NOW / 1000, size: 100, proc: "running", activity: "live", pendingQuestion: null, waitingInput: null,
+      lastTurn: { startedAt: ago(1.4), endedAt: null }, agentActivity: { lastRecordAt: NOW, checking: false, check: null } } as unknown as FileEntry;
+    for (const spec of ATTEMPTS) {
+      lane.runs[0]!.attempts.push({ n: spec.n, state: spec.to === null ? "running" : "passed", effectiveRole: structuredClone(resolved.role), launchId: null, conversationId: conversationOf(spec.n), sessionId: null,
+        agentPath: `/fixture/build-${spec.n}.jsonl`, paneId: null, flowId: null, startedAt: iso(ago(spec.from)), completedAt: spec.to === null ? null : iso(ago(spec.to)), input: null, output: null, activatedBy: null, verdict: null, error: null } as unknown as Pipeline["runs"][number]["attempts"][number]);
+    }
+    const task = { id: "attempt-task", project: "atlas", text: title, status: "assigned", placement: "unplaced", createdAt: iso(ago(55)), updatedAt: iso(ago(1)),
+      dueAt: iso(NOW + 8 * H), dueTz: "UTC", assignments: [{ path: file.path, conversationId: file.conversationId, panePid: null, state: "linked", error: null, at: iso(ago(1.5)) }] } as unknown as BoardTask;
+    return { payload: { ...filesReadSummary([], [lane]), files: [file], tasks: [task], pipelines: [lane], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 1, smt: NOW / 1000 }], projectCwds: { atlas: "/fixture/atlas" } }, task, lane };
+  }
+
+  browserTest("a stage row opens its conversation, and its working time is the sum of its turns, with the calendar span labelled apart; 1440 and 390, uk and en", async () => {
+    const { timelineDuration } = await import("@/lib/board/taskTimelineView");
+    const out = path.join(os.tmpdir(), `llv-attempt-rows-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-timeline-attempt-rows"); fs.mkdirSync(evidence, { recursive: true });
+    let current = await records("en");
+    const asked: string[] = [];
+    const served = await serveEvidenceFixture(out, undefined, {
+      "/api/files": () => Response.json(current.payload),
+      "/api/tasks": () => Response.json({ tasks: current.payload.tasks }),
+      "/api/board/work-time": (request: Request) => {
+        const id = new URL(request.url).searchParams.get("conversationId") ?? "";
+        asked.push(id);
+        const spec = ATTEMPTS.find(candidate => conversationOf(candidate.n) === id);
+        const work = spec?.turns ? { windows: spec.turns.map(([from, to]) => [ago(from), to === null ? null : ago(to)]), lastRecordAt: NOW, complete: true } : null;
+        return Response.json({ work: { [id]: work } });
+      },
+    });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await records(lang);
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+        for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+          const tag = `${width}-${lang}-${theme}`;
+          const phone = width === 390;
+          asked.length = 0;
+          const opened = await openFixture(browser, "about:blank", { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date(NOW));
+          const { page, context, pageErrors } = opened;
+          try {
+            await context.addInitScript(({ stored }) => {
+              localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+              localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+            }, { stored: { view: "timeline", hours: 72, expanded: { "attempt-task": true } } });
+            await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+            await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+            await page.locator("[data-timeline-attempt]").first().waitFor();
+            await page.waitForFunction(() => document.querySelectorAll("[data-timeline-work-time='loading']").length === 0);
+            const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-timeline-attempt]")].map(row => {
+              const label = row.querySelector<HTMLElement>(".bt-label")!, box = label.getBoundingClientRect();
+              const bar = row.querySelector<HTMLElement>("[data-timeline-bar]");
+              const work = [...row.querySelectorAll<HTMLElement>("[data-timeline-work]")].reduce((sum, node) => sum + node.offsetWidth, 0);
+              return { key: row.dataset.timelineAttempt!, openable: row.dataset.openable ?? null, role: label.getAttribute("role"), tabindex: label.tabIndex, height: box.height, width: box.width,
+                work: row.querySelector("[data-timeline-work-time]")?.textContent ?? "", state: row.querySelector("[data-timeline-work-time]")?.getAttribute("data-timeline-work-time") ?? "",
+                wall: row.querySelector("[data-timeline-wall]")?.textContent ?? "", fills: row.querySelectorAll("[data-timeline-work]").length, fillWidth: work, barWidth: bar?.offsetWidth ?? 0 };
+            }));
+            check(rows.length === ATTEMPTS.length, `${tag}: ${rows.length} attempt rows, ${ATTEMPTS.length} expected`);
+            for (const [index, spec] of ATTEMPTS.entries()) {
+              const row = rows[index];
+              if (!row) continue;
+              const ms = workMs(spec);
+              const expectedWork = ms === null ? t("timeline.workUnknown") : t("timeline.worked", { duration: timelineDuration(ms, lang, t as never) });
+              check(row.work === expectedWork, `${tag}: attempt ${spec.n} work «${row.work}», expected «${expectedWork}»`);
+              check(row.state === (ms === null ? "unknown" : "known"), `${tag}: attempt ${spec.n} state ${row.state}`);
+              const wall = t("timeline.elapsed", { duration: spec.to === null ? timelineDuration(NOW - ago(spec.from), lang, t as never) : timelineDuration((spec.from - spec.to) * H, lang, t as never) });
+              check(row.wall === wall, `${tag}: attempt ${spec.n} calendar span «${row.wall}», expected «${wall}»`);
+              check(!row.wall.includes(t("timeline.worked", { duration: "" }).trim()) && !row.work.includes(t("timeline.elapsed", { duration: "" }).trim()), `${tag}: attempt ${spec.n} mixes the two figures`);
+              check(row.openable === "1" && row.role === "button" && row.tabindex === 0, `${tag}: attempt ${spec.n} is not a control (${row.openable}, ${row.role}, ${row.tabindex})`);
+              check(row.height >= (phone ? 44 : 24), `${tag}: attempt ${spec.n} target ${row.width}×${row.height}`);
+              check(ms === null ? row.fills === 0 : row.fills > 0, `${tag}: attempt ${spec.n} draws ${row.fills} work fills`);
+              // The fill is the turn time, not the calendar span: a 25 h attempt of under an hour of turns fills a sliver of its bar.
+              if (spec.n === 8) check(row.barWidth > 0 && row.fillWidth / row.barWidth < 0.1, `${tag}: attempt 8 fill ${row.fillWidth} of ${row.barWidth}`);
+            }
+            check(ATTEMPTS.every(spec => asked.includes(conversationOf(spec.n))), `${tag}: work-time asked for ${asked.join(",")}`);
+            const geometry = await timelineGeometry(page.locator("[data-board-timeline]"));
+            check(geometry.failures.length === 0, `${tag}: text cut by an edge: ${JSON.stringify(geometry.failures.slice(0, 5))}`);
+            check(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+            const scroller = page.locator("[data-timeline-scroll]");
+            await page.screenshot({ path: path.join(evidence, `${tag}-rows.png`) });
+            // Every row shows its open cue at rest, and on a desktop all five rows are one height (the calendar span stays on the meta line; the phone sets name and state on one line).
+            const cues = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-timeline-attempt]")].map(row => {
+              const cue = row.querySelector<SVGElement>("[data-timeline-open-cue]"), box = cue?.getBoundingClientRect(), name = row.querySelector(".bt-stage-name span")!.getBoundingClientRect();
+              return { shown: !!box && box.width > 0 && box.height > 0, afterName: !!box && box.left >= name.right - 0.5, height: row.querySelector(".bt-label")!.getBoundingClientRect().height };
+            }));
+            check(cues.length === ATTEMPTS.length && cues.every(cue => cue.shown && cue.afterName), `${tag}: open cue at rest ${JSON.stringify(cues)}`);
+            check(phone || new Set(cues.map(cue => Math.round(cue.height))).size === 1, `${tag}: stage row heights ${cues.map(cue => cue.height).join(",")}`);
+            // A hover tint (a pointer) and a pressed tint (any input) wash the row; the press ends off the row so it opens nothing.
+            const stage = scroller.locator(`[data-timeline-attempt*="9]"]`);
+            const tint = () => stage.evaluate(node => getComputedStyle(node).backgroundColor);
+            const rest = await tint();
+            if (!phone) {
+              await stage.hover();
+              const hovered = await tint();
+              check(hovered !== rest, `${tag}: hover leaves the row at ${hovered}`);
+              await page.screenshot({ path: path.join(evidence, `${tag}-hover.png`) });
+            }
+            const box = (await stage.boundingBox())!;
+            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+            await page.mouse.down();
+            const pressed = await tint();
+            check(pressed !== rest, `${tag}: press leaves the row at ${pressed}`);
+            await page.screenshot({ path: path.join(evidence, `${tag}-pressed.png`) });
+            await page.mouse.move(box.x + box.width / 2, Math.max(1, box.y - 40));
+            await page.mouse.up();
+            await page.mouse.move(1, 1);
+            // The legend names the outline as the stage's calendar span and the fill as the agent's working time, whole at this width.
+            const legend = page.locator(".bt-legend");
+            await legend.scrollIntoViewIfNeeded();
+            const legendRead = await legend.evaluate(node => {
+              const range = document.createRange(); range.selectNodeContents(node);
+              const box = range.getBoundingClientRect(), host = node.getBoundingClientRect();
+              return { text: node.textContent ?? "", whole: box.left >= host.left - 0.5 && box.right <= host.right + 0.5 && box.right <= window.innerWidth && box.bottom <= window.innerHeight + 0.5 };
+            });
+            check(legendRead.text === t("timeline.legend"), `${tag}: legend «${legendRead.text}»`);
+            check(legendRead.text.includes(lang === "uk" ? "товста лінія — етапи йшли (календарний час)" : "Thick line: stages ran (calendar time)"), `${tag}: legend does not name the thick task segment`);
+            check(legendRead.whole, `${tag}: legend cut by an edge`);
+            await legend.screenshot({ path: path.join(evidence, `${tag}-legend.png`) });
+            readings.push({ name: tag, rows, legend: legendRead, failures: geometry.failures });
+            // A tap on a bar opens the conversation the attempt recorded (no card holds it, so the board addresses it by its link).
+            await scroller.locator(`[data-timeline-attempt*="8]"] [data-timeline-bar]`).click();
+            await page.waitForFunction(id => decodeURIComponent(location.hash).includes(id), conversationOf(8));
+            await page.screenshot({ path: path.join(evidence, `${tag}-opened-recorded.png`) });
+            await page.evaluate(() => { location.hash = "#p=atlas"; });
+            // The live attempt's conversation is on the board: its window opens, and the keyboard does the same.
+            await page.locator(`[data-timeline-attempt*="11]"] .bt-label`).focus();
+            await page.keyboard.press("Enter");
+            // The board holds this conversation, so it opens it itself (the agent window on a desktop, the phone's own surface otherwise).
+            await page.waitForFunction(id => document.body.outerHTML.includes(id), conversationOf(11));
+            await page.waitForTimeout(600);
+            await page.screenshot({ path: path.join(evidence, `${tag}-opened-live.png`) });
+          } catch (error) {
+            failures.push(`${tag}: ${error instanceof Error ? error.message : String(error)}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify(readings, null, 1));
+    } finally {
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+/* The «Графік» toggle is the last segment of the header's panel group: Orchestrator, the recent
+   agents' clock and the chart read as one segmented control, pressed or not. Every frame is the
+   header at the exact width, in both languages and themes, with the chart shown and hidden, and
+   after a click (the focus the press leaves). The readings compare the segments' own computed
+   height, radius, border and fill. `LLV_HEADER_FRAMES_PHASE=before` names the frames of a run on
+   the base. */
+describe("board header chart toggle", () => {
+  const phase = process.env.LLV_HEADER_FRAMES_PHASE ?? "after";
+  const segmentReadings = (page: Page) => page.evaluate(() => {
+    const group = document.querySelector<HTMLElement>('.bar[data-bar="project"] [data-bar-group="panels"]');
+    if (!group) return null;
+    const chart = group.querySelector<HTMLElement>("[data-board-timeline-toggle]");
+    const segments = [group.querySelector<HTMLElement>("[data-orchestrator-toggle]"), group.querySelector<HTMLElement>("[data-bar-recent-toggle]"), chart];
+    const read = (node: HTMLElement | null) => {
+      if (!node) return null;
+      const style = getComputedStyle(node), box = node.getBoundingClientRect(), label = node.querySelector<HTMLElement>("[data-fit-label]");
+      const text = label && getComputedStyle(label).display !== "none" ? label.textContent : null;
+      const range = document.createRange(); range.selectNodeContents(node);
+      return { pressed: node.getAttribute("aria-pressed"), x: box.x, y: box.y, width: box.width, height: box.height, radius: [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomRightRadius, style.borderBottomLeftRadius],
+        border: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth], borderColor: style.borderTopColor, background: style.backgroundColor, color: style.color,
+        shadow: style.boxShadow, outline: style.outlineStyle === "none" ? "none" : `${style.outlineWidth} ${style.outlineColor}`, font: `${style.fontSize}/${style.fontWeight}`, text,
+        icon: (() => { const svg = node.querySelector("svg"); if (!svg) return null; const r = svg.getBoundingClientRect(); return { y: r.y + r.height / 2 - (box.y + box.height / 2), width: r.width }; })(),
+        cut: range.getBoundingClientRect().right > box.right + 0.5 || range.getBoundingClientRect().left < box.left - 0.5 };
+    };
+    return { bar: document.querySelector<HTMLElement>('.bar[data-bar="project"]')!.getBoundingClientRect().toJSON(), orchestrator: read(segments[0]!), recent: read(segments[1]!), chart: read(chart) };
+  });
+
+  browserTest("the chart toggle is the third segment of the panel group in every state", async () => {
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-header-chart-toggle"); fs.mkdirSync(evidence, { recursive: true });
+    const out = path.join(os.tmpdir(), `llv-header-chart-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    let current = await managerRecords("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang);
+        for (const theme of ["dark", "light"] as const) for (const { width, height } of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }]) for (const shown of [false, true]) {
+          const tag = `${width}-${lang}-${theme}-${shown ? "chart" : "board"}`;
+          const { page, context, pageErrors } = await openFixture(browser, "about:blank", { width, height }, theme, lang, "reduce", false, 1, new Date(MANAGER_NOW));
+          try {
+            await context.addInitScript(({ lang, theme, shown }) => {
+              localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+              if (localStorage.getItem("llv:kanban-seat:v2") === null) localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: false }, placement: "top", height: null, width: null }));
+              if (localStorage.getItem("llv:board-timeline:v1:atlas") === null) localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify({ view: shown ? "timeline" : "board", hours: 24, expanded: {} }));
+            }, { lang, theme, shown });
+            await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+            await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+            const toggle = page.locator("[data-board-timeline-toggle]");
+            await toggle.waitFor({ timeout: 20_000 });
+            await page.waitForFunction(() => document.querySelector("[data-board-timeline-toggle]")?.getAttribute("aria-pressed") !== null);
+            const bar = page.locator('.bar[data-bar="project"]');
+            const frame = async (state: string) => {
+              const box = (await bar.boundingBox())!;
+              const reading = await segmentReadings(page);
+              await page.screenshot({ path: path.join(evidence, `${phase}-${tag}-${state}.png`), clip: { x: Math.max(0, box.x + box.width - 560), y: box.y, width: Math.min(560, box.width), height: box.height }, animations: "disabled" });
+              readings.push({ name: `${phase}-${tag}-${state}`, reading });
+              return reading;
+            };
+            const rest = await frame("rest");
+            const check = (ok: boolean, detail: string) => { if (!ok) failures.push(`${tag}: ${detail}`); };
+            check(pageErrors.length === 0, `page errors ${pageErrors.join(" | ")}`);
+            check(!!rest?.chart && !!rest.recent && !!rest.orchestrator, "a segment is missing");
+            if (rest?.chart && rest.recent && rest.orchestrator) {
+              check(rest.chart.pressed === String(shown), `aria-pressed ${rest.chart.pressed}`);
+              for (const name of ["orchestrator", "recent"] as const) check(rest[name]!.height === rest.chart.height && rest[name]!.y === rest.chart.y, `${name} height ${rest[name]!.height} at ${rest[name]!.y} against the chart's ${rest.chart.height} at ${rest.chart.y}`);
+              check(Math.abs(rest.chart.x - (rest.recent.x + rest.recent.width)) < 1.01, `the chart segment sits ${rest.chart.x - (rest.recent.x + rest.recent.width)} px from the clock`);
+              check(rest.chart.radius.join(" ") === `0px ${rest.orchestrator.radius[0]} ${rest.orchestrator.radius[0]} 0px`, `chart radius ${rest.chart.radius.join(" ")}`);
+              check(rest.recent.radius.join(" ") === "0px 0px 0px 0px", `the clock's radius ${rest.recent.radius.join(" ")} is not square inside the group`);
+              check(rest.chart.border.join(" ") === `${rest.chart.border[0]} ${rest.chart.border[1]} ${rest.chart.border[2]} 0px`, `chart border ${rest.chart.border.join(" ")}`);
+              check(rest.chart.outline === "none" && rest.chart.shadow === "none", `chart resting outline ${rest.chart.outline}, shadow ${rest.chart.shadow}`);
+              check(Math.abs(rest.chart.icon!.y - rest.orchestrator.icon!.y) <= 1 && rest.chart.icon!.width === rest.orchestrator.icon!.width, "chart icon is not aligned with the orchestrator's");
+              check(!rest.chart.cut && (rest.chart.text === null) === (rest.orchestrator.text === null), `the chart's label is ${rest.chart.text} beside the orchestrator's ${rest.orchestrator.text} (cut: ${rest.chart.cut})`);
+            }
+            await toggle.click();
+            await page.mouse.move(0, 300);
+            await frame("pressed-by-click");
+            await toggle.click();
+            await frame("toggled-back");
+            /* The focus ring of each segment stays inside the group: after a click and a key (the state
+               the operator's frame showed) on the chart, and by Tab on every segment. */
+            const insideGroup = (name: string, node: NonNullable<Awaited<ReturnType<typeof segmentReadings>>>["chart"], at: string) => {
+              if (!node) { check(false, `${at}: ${name} is missing`); return; }
+              const layers = node.shadow.replace(/(?:rgba?|color)\([^)]*\)/g, "c").split(",").map(layer => layer.trim()).filter(layer => layer !== "none");
+              check(layers.length > 0 && layers.every(layer => layer.includes("inset")), `${at}: ${name} focus shadow "${node.shadow}" is not drawn inside the segment`);
+              check(node.outline === "none", `${at}: ${name} focus outline ${node.outline}`);
+              check(node.shadow !== rest?.[name === "chart" ? "chart" : name === "clock" ? "recent" : "orchestrator"]?.shadow, `${at}: ${name} shows no focus indicator`);
+              check(node.height === rest?.chart?.height && node.y === rest?.chart?.y, `${at}: ${name} spans ${node.height} at ${node.y}, the group ${rest?.chart?.height} at ${rest?.chart?.y}`);
+            };
+            await toggle.click();
+            await page.keyboard.press("ArrowDown");
+            await page.mouse.move(0, 300);
+            const keyed = await frame("focus-after-click-and-key");
+            check(await page.evaluate(() => document.activeElement?.hasAttribute("data-board-timeline-toggle") === true && document.activeElement.matches(":focus-visible")), "the chart toggle is not in focus-visible after click and key");
+            insideGroup("chart", keyed?.chart ?? null, "click+key");
+            await page.locator("[data-orchestrator-toggle]").focus();
+            await page.keyboard.press("Shift+Tab"); await page.keyboard.press("Tab");
+            for (const [name, key, selector] of [["orchestrator", "orchestrator", "[data-orchestrator-toggle]"], ["clock", "recent", "[data-bar-recent-toggle]"], ["chart", "chart", "[data-board-timeline-toggle]"]] as const) {
+              if (name !== "orchestrator") await page.keyboard.press("Tab");
+              check(await page.evaluate(selector => document.activeElement?.matches(`${selector}:focus-visible`) === true, selector), `Tab did not reach ${name} with focus-visible`);
+              const tabbed = await frame(`focus-tab-${name}`);
+              insideGroup(name, tabbed?.[key] ?? null, `Tab ${name}`);
+            }
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(evidence, `${phase}-readings.json`), JSON.stringify(readings, null, 2));
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); served.stop(); if (fd !== null) fs.closeSync(fd); }
+  }, 600_000);
+});
+
 describe("project default stage runtime", () => {
   browserTest("project menus show the saved runtime and roll back refused choices", async () => {
     const out = path.resolve(".artifacts/project-stage-runtime");

@@ -114,6 +114,27 @@ test("linked seats exchange attributed messages in both directions with one dura
   expect((await request(a, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(1);
 });
 
+test("HTTP admits a fresh UUID-shaped peer label and pins an already-bound install", async () => {
+  const a = await install("uuid-label-seat-a"), b = await install("uuid-label-seat-b");
+  const id = await link(a, b);
+  await request(a, "/test/seat", "POST", { project: key });
+  const label = ["33333333", "3333", "4333", "8333", "333333333333"].join("-");
+  const peerFile = path.join(root, "uuid-label-seat-a", "links", "peers.json");
+  const peers = JSON.parse(fs.readFileSync(peerFile, "utf8")) as { peers: { id: string; label: string }[] };
+  peers.peers.find(peer => peer.id === id)!.label = label;
+  fs.writeFileSync(peerFile, JSON.stringify(peers));
+
+  const fresh = await request(a, "/test/seat-send", "POST", { project: key, machine: label,
+    text: "Route the UUID-shaped label.", clientMessageId: "uuid-label-fresh" });
+  expect(fresh.status).toBe(200);
+  expect(fresh.body).toMatchObject({ outcome: "accepted", machine: label });
+
+  const bound = await request(a, "/test/seat-send", "POST", { project: key, machine: label, boundMachineInstall: label,
+    text: "A bound install must remain exact.", clientMessageId: "uuid-label-bound" });
+  expect(bound.status).toBe(409);
+  expect(bound.body).toMatchObject({ code: "machine_unknown", admission: "refused" });
+});
+
 for (const point of ["before", "after"] as const) {
   test(`linked seat relay survives receiver restart ${point} admission and preserves one operation`, async () => {
     const a = await install(`restart-seat-${point}-a`), b = await install(`restart-seat-${point}-b`);
