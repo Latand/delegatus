@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
-import { blockingWaitDiagnostics, resetBlockingWaitsForTests, withWaitCorrelation } from "@/lib/blockingWaits";
+import { blockingWaitDiagnostics, registryWaitCallSite, resetBlockingWaitsForTests, withWaitCorrelation } from "@/lib/blockingWaits";
 import {
   FileTransactionBusyError,
   fileTransactionSubject,
@@ -76,7 +76,7 @@ test("the shared async API releases a synchronous callback before a queued sync 
   expect(await attempt).toBe("written");
 });
 
-test("fileTransactionSubject and fileTransactionWaitLabel strip home paths, emails, UUIDs, hashes, and numeric slots", () => {
+test("fileTransactionSubject, fileTransactionWaitLabel, holder.kind, and callSite enforce closed allowlists and verified source roots", () => {
   const statePrefix = path.posix.join("/", "var", "fixture-user", ".config", "delegatus", "state");
   const syntheticHome = ["", "home", "fixture-user"].join("/");
   const syntheticEmail = ["fixture-user", "example.invalid"].join("@");
@@ -88,7 +88,7 @@ test("fileTransactionSubject and fileTransactionWaitLabel strip home paths, emai
   expect(fileTransactionSubject(`${statePrefix}/recorded-check-observers/7`))
     .toBe("recorded-check-observers/<slot>");
   expect(fileTransactionSubject(`${statePrefix}/seat-quota-recovery/40e715252667dc64f60fbea3a72d081dbe95de533df85f112022c836a9af4b53.json`))
-    .toBe("seat-quota-recovery/<id>.json");
+    .toBe("seat-quota-recovery/<entry>");
   expect(fileTransactionSubject(`${statePrefix}/done-media/owner.lock`))
     .toBe("done-media/owner.lock");
   expect(fileTransactionSubject(`${statePrefix}/prototype-reviews/12345678-1234-1234-1234-123456789abc.polls.lock`))
@@ -96,17 +96,36 @@ test("fileTransactionSubject and fileTransactionWaitLabel strip home paths, emai
   expect(fileTransactionSubject(`/tmp/${syntheticEmail}/private/lifecycle-journal.json`))
     .toBe("lifecycle-journal.json");
 
+  // Unknown parent directories or unknown filenames MUST collapse to "file-transaction" (never echo ids/names).
+  expect(fileTransactionSubject(`${statePrefix}/fixture-account-017/owner.lock`))
+    .toBe("file-transaction");
+  expect(fileTransactionSubject(`${statePrefix}/private-handle/custom-store.json`))
+    .toBe("file-transaction");
+
+  // Wait labels come strictly from the closed set (never echo arbitrary busy messages or personal names).
   expect(fileTransactionWaitLabel("recorded check host custody", "recorded-check-host-fences/<slot>"))
-    .toBe("recorded check host custody");
+    .toBe("recorded-check.host-custody");
+  expect(fileTransactionWaitLabel("Fixture Person is busy", "file-transaction"))
+    .toBe("file-transaction");
   expect(fileTransactionWaitLabel(`busy at ${syntheticHome}/secret`, "lifecycle-journal.json"))
     .toBe("lifecycle-journal.json");
   expect(fileTransactionWaitLabel(`${syntheticEmail} busy`, "lifecycle-journal.json"))
     .toBe("lifecycle-journal.json");
-  expect(fileTransactionWaitLabel("fallback", "lifecycle-journal.json", "custom.label"))
-    .toBe("custom.label");
+  expect(fileTransactionWaitLabel("arbitrary message", "file-transaction", "unknown.custom.label"))
+    .toBe("file-transaction");
+  expect(fileTransactionWaitLabel("fallback", "lifecycle-journal.json", "recorded-check.handoff"))
+    .toBe("recorded-check.handoff");
+
+  // Checkout paths containing an ancestor `/src/<private-dir>/` MUST NOT leak the ancestor directory.
+  expect(registryWaitCallSite(
+    "Error\n    at waiter (/tmp/src/fixture-private-project/checkout/src/lib/recordedChecks/hostFence.ts:19:10)",
+  )).toBe("src/lib/recordedChecks/hostFence.ts:19:10");
+  expect(registryWaitCallSite(
+    "Error\n    at outside (/tmp/src/fixture-private-project/customScript.ts:19:10)",
+  )).toBe("unresolved");
 });
 
-test("concurrent async waiters without withWaitCorrelation record privacy-safe subject, label, callSite, and holder, and isolate caller mutations", async () => {
+test("concurrent async waiters without withWaitCorrelation record closed-set subject, label, callSite, and holder, and isolate caller mutations", async () => {
   const lines: string[] = [];
   resetBlockingWaitsForTests((line) => { lines.push(line); });
   const prevOwner = process.env.LLV_STATE_OWNER;
@@ -139,13 +158,13 @@ test("concurrent async waiters without withWaitCorrelation record privacy-safe s
     expect(samples.length).toBeGreaterThanOrEqual(2);
     for (const sample of samples) {
       expect(sample.subject).toBe("recorded-check-host-fences/<slot>");
-      expect(sample.label).toBe("recorded check host custody");
+      expect(sample.label).toBe("recorded-check.host-custody");
       expect(sample.holder).toMatchObject({ kind: "viewer", sameProcess: true });
       expect(sample.holder!.ageMs).toBeGreaterThanOrEqual(0);
       expect(sample.callSite).toContain("src/lib/state/fileTransaction.wait.test.ts:");
       if (process.env.HOME) expect(sample.callSite).not.toContain(process.env.HOME);
     }
-    expect(lines.some((line) => line.includes("recorded-check-host-fences/<slot>") && line.includes("recorded check host custody"))).toBe(true);
+    expect(lines.some((line) => line.includes("recorded-check-host-fences/<slot>") && line.includes("recorded-check.host-custody"))).toBe(true);
 
     // Caller mutating returned diagnostics objects must not corrupt stored samples.
     samples[0]!.subject = "corrupted-subject";
@@ -159,7 +178,7 @@ test("concurrent async waiters without withWaitCorrelation record privacy-safe s
   }
 });
 
-test("cross-process and legacy lock holders report remote kind without leaking paths or secrets", async () => {
+test("cross-process, legacy, and arbitrary-role lock holders never leak paths, names, or unknown roles", async () => {
   const lines: string[] = [];
   resetBlockingWaitsForTests((line) => { lines.push(line); });
 
@@ -196,7 +215,7 @@ test("cross-process and legacy lock holders report remote kind without leaking p
     expect(sample).toMatchObject({
       site: "file-transaction",
       subject: "attempt-temp.sqlite.sweep",
-      label: "recorded-check handoff",
+      label: "recorded-check.handoff",
       holder: { kind: "worker", sameProcess: false },
     });
   } finally {
@@ -204,19 +223,30 @@ test("cross-process and legacy lock holders report remote kind without leaking p
     await child.exited.catch(() => {});
   }
 
-  // 2. Legacy lock file written without `role` falls back cleanly to kind="other-process".
-  resetBlockingWaitsForTests();
-  const legacyFile = path.join(root, "legacy-store.json");
-  const legacyLock = `${legacyFile}.write-lock`;
-  // Use a live non-self PID (parent process) so ownerIsStale treats the lock as live.
-  fs.writeFileSync(legacyLock, JSON.stringify({ pid: process.ppid, startIdentity: null, token: "legacy-token" }));
-  setTimeout(() => fs.rmSync(legacyLock, { force: true }), 80);
-  expect(await withFileTransactionAsync(legacyFile, "legacy store busy", () => "ok")).toBe("ok");
-  const legacySample = blockingWaitDiagnostics().longest.find((item) => item.subject === "legacy-store.json");
-  expect(legacySample).toMatchObject({
+  // 2. Arbitrary account path + arbitrary busy message + arbitrary holder role MUST redact all three!
+  const leakLines: string[] = [];
+  resetBlockingWaitsForTests((line) => { leakLines.push(line); });
+  const leakDir = path.join(root, "fixture-account-017");
+  fs.mkdirSync(leakDir, { recursive: true });
+  const leakFile = path.join(leakDir, "owner.lock");
+  const leakLock = `${leakFile}.write-lock`;
+  fs.writeFileSync(leakLock, JSON.stringify({
+    pid: process.ppid,
+    startIdentity: null,
+    token: "arbitrary-token",
+    role: "fixture-holder-019",
+  }));
+  setTimeout(() => fs.rmSync(leakLock, { force: true }), 80);
+  expect(await withFileTransactionAsync(leakFile, "Fixture Person lock busy", () => "ok")).toBe("ok");
+  const leakSample = blockingWaitDiagnostics().longest.find((item) => item.site === "file-transaction");
+  expect(leakSample).toMatchObject({
     site: "file-transaction",
-    subject: "legacy-store.json",
-    label: "legacy store busy",
+    subject: "file-transaction",
+    label: "file-transaction",
     holder: { kind: "other-process", sameProcess: false },
   });
+  const combinedLogs = leakLines.join("\n");
+  expect(combinedLogs).not.toContain("fixture-account-017");
+  expect(combinedLogs).not.toContain("Fixture Person");
+  expect(combinedLogs).not.toContain("fixture-holder-019");
 });

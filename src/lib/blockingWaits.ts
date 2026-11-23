@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { startupDiagnostic } from "./startupDiagnostics";
 
 /**
@@ -150,17 +151,101 @@ function round(value: number): number {
   return Math.max(0, Math.round(value * 10) / 10);
 }
 
+const KNOWN_BLOCKING_WAIT_ROLES: ReadonlySet<string> = new Set([
+  "viewer",
+  "runtime-host",
+  "mcp",
+  "tool",
+  "worker",
+  "helper",
+  "cli",
+  "embedded",
+  "test",
+  "other-process",
+  "unowned",
+]);
+
+const KNOWN_SRC_TOP_ENTRIES: ReadonlySet<string> = new Set([
+  "app",
+  "components",
+  "hooks",
+  "lib",
+  "runtime-host",
+  "styles",
+  "test-helpers",
+  "instrumentation.ts",
+  "instrumentation.test.ts",
+  "proxy.ts",
+  "proxy.test.ts",
+  "proxy.host.test.ts",
+  "proxy.team.test.ts",
+  "middleware.ts",
+]);
+
+const VERIFIED_SOURCE_ROOT: string | null = (() => {
+  try {
+    const raw = import.meta.url.startsWith("file://") ? new URL(import.meta.url).pathname : import.meta.url;
+    const selfPath = path.resolve(raw).replaceAll("\\", "/");
+    const marker = Math.max(
+      selfPath.lastIndexOf("/src/"),
+      selfPath.lastIndexOf("/.next/server/"),
+      selfPath.lastIndexOf("/dist/"),
+    );
+    return marker > 0 ? selfPath.slice(0, marker) : null;
+  } catch {
+    return null;
+  }
+})();
+
+export function normalizeBlockingWaitHolderKind(rawRole: unknown, fallback = "other-process"): string {
+  const candidate = typeof rawRole === "string" ? rawRole.trim() : "";
+  if (KNOWN_BLOCKING_WAIT_ROLES.has(candidate)) return candidate;
+  const safeFallback = fallback.trim();
+  return KNOWN_BLOCKING_WAIT_ROLES.has(safeFallback) ? safeFallback : "other-process";
+}
+
 export function blockingWaitRole(env: NodeJS.ProcessEnv = process.env): string {
   const owner = env.LLV_STATE_OWNER?.trim();
   return owner ? owner.slice(0, 32) : "unowned";
 }
 
-/** Keep source coordinates, never the absolute path or function arguments.
+function relativeVerifiedCallSite(rawFramePath: string): string | null {
+  const normalized = rawFramePath.replace(/^file:\/\//, "").replaceAll("\\", "/");
+  let candidate: string | null = null;
+  if (VERIFIED_SOURCE_ROOT && normalized.startsWith(`${VERIFIED_SOURCE_ROOT}/`)) {
+    candidate = normalized.slice(VERIFIED_SOURCE_ROOT.length + 1);
+  } else {
+    let bestOffset = -1;
+    for (const marker of ["/src/", "/.next/server/", "/dist/"]) {
+      const idx = normalized.lastIndexOf(marker);
+      if (idx > bestOffset) bestOffset = idx;
+    }
+    if (bestOffset >= 0) {
+      candidate = normalized.slice(bestOffset + 1);
+    } else if (/^(?:src|\.next\/server|dist)\//.test(normalized)) {
+      candidate = normalized;
+    }
+  }
+  if (!candidate || candidate.includes("..")) return null;
+  if (!/^(?:src|\.next\/server|dist)\/[A-Za-z0-9_./[\]-]+\.[cm]?[jt]sx?:\d+:\d+$/.test(candidate)) {
+    return null;
+  }
+  if (candidate.startsWith("src/")) {
+    const firstSegment = candidate.slice("src/".length).split("/")[0]?.split(":")[0] ?? "";
+    if (!KNOWN_SRC_TOP_ENTRIES.has(firstSegment)) return null;
+  }
+  return candidate;
+}
+
+/** Keep source coordinates relative to the verified project or build root,
+ * never an absolute path, parent directory name, or function arguments.
  * Capture only on the slow path; ordinary registry writes allocate no stack. */
 export function registryWaitCallSite(stack: string | undefined): string {
   const locations: string[] = [];
   for (const frame of stack?.split("\n").slice(1) ?? []) {
-    const location = frame.match(/(?:^|\/)((?:src|\.next\/server|dist)\/[A-Za-z0-9_./[\]-]+\.[cm]?[jt]sx?:\d+:\d+)\)?$/)?.[1];
+    const rawLocation = frame.trim().match(/\(?((?:file:\/\/)?[^\s()]+?\.[cm]?[jt]sx?:\d+:\d+)\)?$/)?.[1];
+    if (!rawLocation) continue;
+    const location = relativeVerifiedCallSite(rawLocation);
     if (!location || /(?:blockingWaits|sqliteRegistryStore|agent\/registry|state\/fileTransaction)\.[cm]?[jt]sx?:/.test(location)) continue;
     locations.push(location);
     if (locations.length === 8) break;
@@ -210,7 +295,7 @@ export function recordBlockingWait(input: {
     ...(resolvedCallSite ? { callSite: resolvedCallSite } : {}),
     ...(input.holder ? {
       holder: {
-        kind: input.holder.kind.slice(0, 32),
+        kind: normalizeBlockingWaitHolderKind(input.holder.kind, "other-process"),
         ageMs: round(input.holder.ageMs),
         sameProcess: Boolean(input.holder.sameProcess),
       },

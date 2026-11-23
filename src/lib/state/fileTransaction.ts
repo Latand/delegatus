@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   blockingWaitRole,
   currentWaitCorrelation,
+  normalizeBlockingWaitHolderKind,
   recordBlockingWait,
   registryWaitCallSite,
   type FileLockHolder,
@@ -19,59 +20,124 @@ const LOCK_STALE_MS = 30_000;
 const SYNC_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 const activeAsyncTransactions = new Map<string, number>();
 
-const BUCKETED_LOCK_PARENTS = new Set([
-  "recorded-check-host-fences",
-  "recorded-check-observers",
-  "seat-quota-recovery",
-  "done-media",
-  "telegram",
-  "prototype-reviews",
-  "codex-update",
+const KNOWN_LOCK_PARENT_SUBJECTS: ReadonlyMap<string, string> = new Map([
+  ["recorded-check-host-fences", "recorded-check-host-fences/<slot>"],
+  ["recorded-check-observers", "recorded-check-observers/<slot>"],
+  ["seat-quota-recovery", "seat-quota-recovery/<entry>"],
+  ["done-media", "done-media/owner.lock"],
+  ["report-media", "report-media/owner"],
+  ["prototype-reviews", "prototype-reviews/<entry>"],
+  ["telegram", "telegram/<entry>"],
+  ["codex-update", "codex-update/<entry>"],
 ]);
-const GENERIC_LOCK_BASENAMES = new Set(["owner.lock", "switch", "job", "lock"]);
-const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-const LONG_HEX_PATTERN = /[0-9a-f]{16,}/gi;
 
-function sanitizeLockSegment(segment: string): string {
-  const trimmed = segment.trim();
-  if (!trimmed) return "";
-  if (/^\d+$/.test(trimmed)) return "<slot>";
-  const replaced = trimmed
-    .replace(UUID_PATTERN, "<id>")
-    .replace(LONG_HEX_PATTERN, "<id>")
-    .replace(/[^A-Za-z0-9._<>-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return replaced;
-}
+const KNOWN_LOCK_BASENAME_SUBJECTS: ReadonlySet<string> = new Set([
+  "attempt-temp.sqlite.sweep",
+  "hot-state-authority.json",
+  "lifecycle-journal.json",
+  "operator-settings.json",
+  "worker-limit.json",
+  "project-settings.json",
+  "tasks-row-preparation.json",
+  "disk-pressure.json",
+  "disk-pressure-notices.json",
+  "release-runs.json",
+  "structured-user-metadata-publication",
+  ".delegatus-initialization",
+  "import-job",
+  "publication.lock",
+  "openai-api-key",
+  "voice-settings.json",
+  "accounts.json",
+  "asks-you-settings.json",
+  "companion-state.json",
+  "memory-settings.json",
+  "role-memory-history.json",
+  "provider-settings.json",
+  "loop-profiler.json",
+]);
 
-/** Derives a bounded, privacy-safe lock subject from a target path without
-    exposing home directories, usernames, project roots, UUIDs, or hashes. */
+const KNOWN_BUSY_LABELS: ReadonlyMap<string, string> = new Map([
+  ["recorded check host custody", "recorded-check.host-custody"],
+  ["recorded-check handoff", "recorded-check.handoff"],
+  ["recorded-check acknowledgement", "recorded-check.acknowledgement"],
+  ["recorded-check observation", "recorded-check.observation"],
+  ["attempt-temp sweep admission", "attempt-temp.sweep"],
+  ["attempt evidence copy admission", "attempt-evidence.copy"],
+  ["approved attempt-temp execution", "attempt-temp.approved"],
+  ["temporary data retention", "temporary-data.retention"],
+  ["done media is busy", "done.media"],
+  ["report media is busy", "report.media"],
+  ["prototype decision is busy", "prototype.decision"],
+  ["prototype publication is busy", "prototype.publication"],
+  ["Telegram review polls are busy", "telegram.review-polls"],
+  ["Telegram review post is busy", "telegram.review-post"],
+  ["operator settings are busy", "operator.settings"],
+  ["worker limit store is busy", "operator.worker-limit"],
+  ["hot-state authority is busy", "state.hot-authority"],
+  ["retirement guard fence is busy", "state.retirement-guard"],
+  ["disk pressure report is busy", "state.disk-pressure"],
+  ["disk pressure notices", "state.disk-pressure-notices"],
+  ["release runs busy", "release.runs"],
+  ["profile-store-busy", "loop-profiler.store"],
+  ["memory import busy", "memory.import"],
+  ["memory source busy", "memory.source"],
+  ["shared memory settings are busy", "memory.settings"],
+  ["role memory history setting is busy", "memory.role-history"],
+  ["metadata collection is busy", "metadata.collection"],
+  ["account guard obligations are busy", "account-guard.obligations"],
+  ["interruption index initialization is busy", "interruption.index"],
+  ["recipient interruption evidence is busy", "interruption.evidence"],
+  ["project initialization is already in progress; retry", "pipeline.initialize"],
+  ["conversation migration journals are busy", "accounts.migration"],
+  ["the voice settings are busy", "voice.settings"],
+  ["the provider settings are busy", "provider.settings"],
+  ["the key is busy", "keys.store"],
+  ["companion state is busy", "voice-companion.state"],
+  ["asks-you settings are busy", "asks-you.settings"],
+  ["native caller proof is busy", "attention.native-proof"],
+  ["Codex sub-agent observation boundary is busy", "codex.subagent-boundary"],
+  ["App repository declaration is busy", "git.forge-credentials"],
+]);
+
+const KNOWN_EXPLICIT_LABELS: ReadonlySet<string> = new Set(KNOWN_BUSY_LABELS.values());
+
+/** Maps a target lock path strictly onto a closed set of canonical subject
+    tokens so untrusted directory names, account ids, usernames, or filenames
+    can never enter diagnostic logs. */
 export function fileTransactionSubject(filePath: string): string {
   const segments = filePath.replaceAll("\\", "/").split("/").filter(Boolean);
   const rawBase = segments.at(-1) ?? "";
   const rawParent = segments.at(-2) ?? "";
-  const base = sanitizeLockSegment(rawBase);
-  const keepParent = Boolean(rawParent) && (
-    BUCKETED_LOCK_PARENTS.has(rawParent)
-    || GENERIC_LOCK_BASENAMES.has(rawBase)
-    || /^\d+$/.test(rawBase)
-  );
-  const parent = keepParent ? sanitizeLockSegment(rawParent) : "";
-  const subject = parent && base ? `${parent}/${base}` : base;
-  return (subject || "file-transaction").slice(0, 80);
+  if (rawParent === "prototype-reviews") {
+    if (rawBase.endsWith(".polls.lock")) return "prototype-reviews/<id>.polls.lock";
+    if (rawBase.endsWith(".telegram.lock")) return "prototype-reviews/<id>.telegram.lock";
+    if (rawBase === "publication.lock") return "prototype-reviews/publication.lock";
+    return "prototype-reviews/<entry>";
+  }
+  const parentSubject = KNOWN_LOCK_PARENT_SUBJECTS.get(rawParent);
+  if (parentSubject) return parentSubject;
+  if (KNOWN_LOCK_BASENAME_SUBJECTS.has(rawBase)) return rawBase;
+  if (rawBase.endsWith(".pending.jsonl")) return "interruption-obligations";
+  if (rawBase.endsWith(".polls.lock")) return "prototype-reviews/<id>.polls.lock";
+  if (rawBase.endsWith(".telegram.lock")) return "prototype-reviews/<id>.telegram.lock";
+  return "file-transaction";
 }
 
-/** Derives a bounded, privacy-safe wait label from the caller's busy message or
-    sanitized lock subject when no explicit `withWaitCorrelation` is active. */
+/** Maps a wait onto a closed set of canonical operation labels (or the closed
+    subject token). Arbitrary caller busy messages are never echoed into logs. */
 export function fileTransactionWaitLabel(busyMessage: string, subject: string, explicitLabel?: string): string {
-  const candidate = (explicitLabel?.trim() || busyMessage.trim())
-    .replace(/\s+/g, " ")
-    .replace(/[^\x20-\x7E]/g, "");
-  if (candidate && !/[\\/]|@/.test(candidate)) {
-    const cleaned = candidate.replace(UUID_PATTERN, "<id>").replace(LONG_HEX_PATTERN, "<id>").trim();
-    if (cleaned) return cleaned.slice(0, 80);
-  }
-  return subject.slice(0, 80);
+  const explicit = explicitLabel?.trim();
+  if (explicit && KNOWN_EXPLICIT_LABELS.has(explicit)) return explicit;
+  const knownBusy = KNOWN_BUSY_LABELS.get(busyMessage.trim());
+  if (knownBusy) return knownBusy;
+  const knownSubject = KNOWN_LOCK_BASENAME_SUBJECTS.has(subject)
+    || subject === "interruption-obligations"
+    || subject === "prototype-reviews/<id>.polls.lock"
+    || subject === "prototype-reviews/<id>.telegram.lock"
+    || subject === "prototype-reviews/publication.lock"
+    || [...KNOWN_LOCK_PARENT_SUBJECTS.values()].includes(subject);
+  return knownSubject ? subject : "file-transaction";
 }
 
 function parseHolderRecord(raw: string, mtimeMs: number): FileLockHolder | undefined {
@@ -79,10 +145,8 @@ function parseHolderRecord(raw: string, mtimeMs: number): FileLockHolder | undef
     const parsed = JSON.parse(raw) as { pid?: unknown; role?: unknown };
     const pid = typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0 ? parsed.pid : null;
     const sameProcess = pid === process.pid;
-    const rawRole = typeof parsed.role === "string" ? parsed.role.trim() : "";
-    const kind = rawRole && /^[A-Za-z0-9._-]{1,32}$/.test(rawRole)
-      ? rawRole
-      : (sameProcess ? blockingWaitRole() : "other-process");
+    const fallback = sameProcess ? blockingWaitRole() : "other-process";
+    const kind = normalizeBlockingWaitHolderKind(parsed.role, fallback);
     return {
       kind,
       ageMs: Math.max(0, Date.now() - mtimeMs),
@@ -240,7 +304,7 @@ function enqueue(filePath: string): LockTicket {
     pid: process.pid,
     startIdentity: procBackend.processIdentity(process.pid),
     token: crypto.randomUUID(),
-    role: blockingWaitRole(),
+    role: normalizeBlockingWaitHolderKind(blockingWaitRole(), "unowned"),
   };
   const ticketPath = path.join(
     queuePath,
@@ -427,7 +491,7 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
   const queuePath = `${filePath}.write-locks`;
   const deadline = options.waitMs === undefined ? Infinity : startedAt + Math.max(0, options.waitMs);
   await fsp.mkdir(queuePath, { recursive: true, mode: 0o700 });
-  const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID(), role: blockingWaitRole() };
+  const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID(), role: normalizeBlockingWaitHolderKind(blockingWaitRole(), "unowned") };
   const ticketPath = path.join(queuePath, `${String(Date.now()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`);
   const ticket = { lockPath, queuePath, owner, ticketPath };
   const ticketHandle = await fsp.open(ticketPath, "wx", 0o600);
