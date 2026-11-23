@@ -1,5 +1,4 @@
-import { liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, registryLiveRootSession } from "@/lib/agent/registry";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
 
 /**
@@ -87,14 +86,7 @@ const projectionHost = globalThis as typeof globalThis & {
 
 function productionSources(): BridgeGatewaySources {
   return {
-    rootConversationId: () => {
-      const snapshot = agentRegistry().readOnlySnapshot();
-      const source: RootSessionSource = {
-        conversations: Object.values(snapshot.conversations),
-        configuredRootId: process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null,
-      };
-      return liveRootSession(source)?.conversationId ?? null;
-    },
+    rootConversationId: () => registryLiveRootSession(agentRegistry(), process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null)?.conversationId ?? null,
     liveRealtimeSessionId: (conversationId) => {
       const host = structuredDeliveryHostForConversation(conversationId) as
         { currentRealtimeSessionId?: () => string | null } | null;

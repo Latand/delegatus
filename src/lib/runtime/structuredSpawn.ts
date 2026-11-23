@@ -555,7 +555,7 @@ function reconciledInitialMessage(
    delivered one from the journal, and a claimed one is already uncertain. */
 async function settleInitialMessageReservation(registry: AgentRegistry, launchId: string): Promise<void> {
   const clientMessageId = `spawn_${launchId}`;
-  const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)
+  const reservation = registryRowsMatching(registry.readOnlySnapshot(), "heldDeliveries", "clientMessageId", clientMessageId)
     .find((delivery) => delivery.clientMessageId === clientMessageId);
   if (reservation && reservation.state !== "delivered") {
     await registry.deliveryWrite({ label: "delivery.settle", operationId: reservation.command.operationId },
@@ -564,8 +564,9 @@ async function settleInitialMessageReservation(registry: AgentRegistry, launchId
 }
 
 async function markInitialMessageTimeout(registry: AgentRegistry, launchId: string, error: StructuredInitialMessageTimeoutError): Promise<void> {
-  const reservation = Object.values(registry.readOnlySnapshot().heldDeliveries)
-    .find((delivery) => delivery.clientMessageId === `spawn_${launchId}`);
+  const clientMessageId = `spawn_${launchId}`;
+  const reservation = registryRowsMatching(registry.readOnlySnapshot(), "heldDeliveries", "clientMessageId", clientMessageId)
+    .find((delivery) => delivery.clientMessageId === clientMessageId);
   if (reservation && reservation.state !== "delivered") {
     await registry.deliveryWrite({ label: "delivery.settle", operationId: reservation.command.operationId },
       () => registry.recordDeliveryOutcome(reservation.id, "delivery-uncertain", error.message));
@@ -2407,8 +2408,9 @@ function spawnMessageOrigin(receipt: SpawnReceipt, registry: AgentRegistry): Mes
 async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: string): Promise<void | "held"> {
   if (!input.prompt.trim() && !input.imageRefs?.length) return;
   if (input.roleMemoryRevision) {
-    const priorHold = Object.values(input.registry.readOnlySnapshot().heldDeliveries).find(delivery =>
-      delivery.clientMessageId === `spawn_${input.receipt.launchId}`
+    const clientMessageId = `spawn_${input.receipt.launchId}`;
+    const priorHold = registryRowsMatching(input.registry.readOnlySnapshot(), "heldDeliveries", "clientMessageId", clientMessageId).find(delivery =>
+      delivery.clientMessageId === clientMessageId
       && delivery.state === "held"
       && !!delivery.command.roleMemoryRevision
       && delivery.command.roleMemoryRevision !== input.roleMemoryRevision);

@@ -2145,6 +2145,38 @@ export class SqliteAgentRegistryStore {
     });
   }
 
+  /** Indexed root-session lookup matching `liveRootSession` without expanding
+      archived conversations. Returns undefined before caller indexes exist. */
+  liveRootSession(configuredRootId: string | null): { conversationId: string; path: string | null } | null | undefined {
+    const readRoot = (): { conversationId: string; path: string | null } | null | undefined => {
+      const readConversation = (id: string) => {
+        const stored = this.db.query<{ value_json: string }, [string]>(
+          `SELECT value_json FROM ${this.recordsSource} WHERE collection='conversations' AND row_key=?`,
+        ).get(id);
+        this.onRowPayloadRead?.("conversations", stored ? 1 : 0);
+        if (!stored) return null;
+        const parsed = this.parseRow("conversations", id, stored.value_json, true) as {
+          generations?: readonly { path?: unknown }[];
+        } | null;
+        const lastPath = parsed?.generations?.at(-1)?.path;
+        return { conversationId: id, path: typeof lastPath === "string" ? lastPath : null };
+      };
+      if (configuredRootId) {
+        const configured = readConversation(configuredRootId);
+        if (configured) return configured;
+      }
+      if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_caller_roots'").get()) {
+        return undefined;
+      }
+      const rootId = this.db.query<{ conversation_id: string }, []>(
+        "SELECT conversation_id FROM registry_caller_roots ORDER BY updated_at DESC,row_order DESC LIMIT 1",
+      ).get()?.conversation_id;
+      if (!rootId) return null;
+      return readConversation(rootId);
+    };
+    return this.db.inTransaction ? readRoot() : this.withCallerRead(readRoot);
+  }
+
   private withCallerRead<T>(read: () => T): T {
     const ownsTransaction = !this.db.inTransaction;
     if (ownsTransaction) beginRegistryTransaction(this.db);
