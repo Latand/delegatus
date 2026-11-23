@@ -27,7 +27,7 @@ test.each(["head", "base", "source", "config", "environment", "tool", "operation
   if (kind === "operation") extra.LLV_GATE_PUBLICATION_ID = "operation-two";
   if (kind === "epoch") extra.LLV_GATE_PUBLICATION_EPOCH = "2";
   if (kind === "authority") extra.LLV_GATE_PUBLICATION_FENCE = "custody-two";
-  if (kind === "privacy") extra.LLV_PRIVACY_OCR_LANGUAGES = "eng";
+  if (kind === "privacy") extra.LLV_PRIVACY_KNOWN_VALUES = "fixture-only private label";
   if (kind === "privacy-path") {
     extra.LLV_PRIVACY_KNOWN_VALUES_FILE = path.join(f.dir, ".git", "other-known.json");
     fs.writeFileSync(extra.LLV_PRIVACY_KNOWN_VALUES_FILE, "[]");

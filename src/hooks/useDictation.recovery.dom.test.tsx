@@ -686,3 +686,37 @@ test.each([false, true])("OpenAI Stop retains one waiter and reports commit send
     expect(traces.at(-1)).toMatchObject({ drainOutcome: sendError ? "error" : "ok", outcome: sendError ? "incomplete" : "complete" });
   } finally { globalThis.fetch = previousFetch; }
 }));
+
+test("the microphone begins only after its recorder is ready, including a slow module load", async () => {
+  const oldMic = mediaDevices.getUserMedia;
+  const originalSource = process.env.NEXT_PUBLIC_DICTATION_WORKLET_SOURCE;
+  process.env.NEXT_PUBLIC_DICTATION_WORKLET_SOURCE = "/* fixture */";
+  const urls: string[] = [];
+  const oldNode = Object.getOwnPropertyDescriptor(globalThis, "AudioWorkletNode");
+  const prototype = AudioFixture.prototype;
+  let release!: () => void;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  const order: string[] = [];
+  Object.defineProperty(prototype, "audioWorklet", { configurable: true, value: { addModule: async (url: string) => { urls.push(url); await ready; } } });
+  Object.defineProperty(globalThis, "AudioWorkletNode", { configurable: true, value: class {
+    port = { onmessage: null, close() {} };
+    constructor() { order.push("recorder"); }
+    connect() {} disconnect() {}
+  } });
+  mediaDevices.getUserMedia = async () => { order.push("microphone"); return stream; };
+  try {
+    mount(); const started = current.start(); await tick();
+    const whileLoading = [...order];
+    release(); await started;
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toStartWith("blob:");
+    expect(whileLoading).toEqual([]);
+    expect(order).toEqual(["recorder", "microphone"]);
+  } finally {
+    if (originalSource === undefined) delete process.env.NEXT_PUBLIC_DICTATION_WORKLET_SOURCE;
+    else process.env.NEXT_PUBLIC_DICTATION_WORKLET_SOURCE = originalSource;
+    release(); mediaDevices.getUserMedia = oldMic; Reflect.deleteProperty(prototype, "audioWorklet");
+    if (oldNode) Object.defineProperty(globalThis, "AudioWorkletNode", oldNode);
+    else Reflect.deleteProperty(globalThis, "AudioWorkletNode");
+  }
+});

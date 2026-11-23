@@ -10,11 +10,11 @@ import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
 import { isReminderVersion } from "./seatTickReminders";
+import { maintenanceAnnouncements } from "./seatMaintenanceDelivery";
 
 import {
   emptySeatTickState,
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
-  SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -110,6 +110,15 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
     /* A plan from before reported stalls records none, so no stall yields. */
     ...(conversationIds(raw.reportedStalls).length > 0 ? { reportedStalls: conversationIds(raw.reportedStalls) } : {}),
+    ...(Array.isArray(raw.reportsOwed) ? { reportsOwed: raw.reportsOwed.filter(
+      (entry): entry is { key: string; label: string } => !!entry && typeof entry === "object"
+        && typeof entry.key === "string" && typeof entry.label === "string",
+    ).slice(-64) } : {}),
+    ...(raw.reportRequest && typeof raw.reportRequest === "object"
+      && typeof (raw.reportRequest as Record<string, unknown>).key === "string"
+      && Array.isArray((raw.reportRequest as Record<string, unknown>).outcomeKeys)
+      ? { reportRequest: { key: String((raw.reportRequest as Record<string, unknown>).key).slice(0, 300),
+        outcomeKeys: conversationIds((raw.reportRequest as Record<string, unknown>).outcomeKeys).slice(-64) } } : {}),
   };
 }
 
@@ -347,7 +356,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     announcedLanes: conversationIds(raw.announcedLanes),
     /* Absent on every row from before #2063, and absent reads as empty: a
        settled deploy nobody announced is announced. */
-    announcedMaintenance: conversationIds(raw.announcedMaintenance).slice(-SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
+    announcedMaintenance: maintenanceAnnouncements(conversationIds(raw.announcedMaintenance)),
     announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     ...(typeof raw.formPageAfter === "string" && raw.formPageAfter.length > 0 && raw.formPageAfter.length <= 500 ? { formPageAfter: raw.formPageAfter } : {}),
     ...(isoOrNull(raw.deployResumeThrough) ? { deployResumeThrough: isoOrNull(raw.deployResumeThrough)! } : {}),
@@ -462,6 +471,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     announcedMaintenance: row.announcedMaintenance,
     harvestedChildren: row.harvestedChildren,
     ...(row.reportsOwed ? { reportsOwed: row.reportsOwed } : {}),
+    ...(row.reportsAcknowledged ? { reportsAcknowledged: row.reportsAcknowledged } : {}),
     ...(row.reportsOwedDropped ? { reportsOwedDropped: row.reportsOwedDropped } : {}),
     ...(row.reportSeenAt !== undefined ? { reportSeenAt: row.reportSeenAt } : {}),
     ...(row.reportFingerprint !== undefined ? { reportFingerprint: row.reportFingerprint } : {}),

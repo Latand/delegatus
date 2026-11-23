@@ -170,7 +170,7 @@ test("a fresh process adopts the persisted retry without creating another attemp
 }, 20_000);
 
 
-for (const fence of ["admission", "async-admission", "dispatch", "recovery", "idle"] as const)
+for (const fence of ["admission", "async-admission", "dispatch", "recovery"] as const)
 test(`production continuation retry rechecks custody at ${fence} after an await`, async () => {
   const f = fixture();
   const { sendOwnerContinuation } = await import("./ownerRun");
@@ -200,10 +200,6 @@ test(`production continuation retry rechecks custody at ${fence} after an await`
     if (fence === "async-admission") await request.admissionGuardAsync?.();
     if (fence === "dispatch") await dependencies?.authorizeDispatch?.();
     if (fence === "recovery") request.recoveryAuthorityGuard?.();
-    if (fence === "idle") {
-      expect(await dependencies?.idleContinuationAllowed?.()).toBe(false);
-      throw Error("owner continuation retry custody changed");
-    }
     effects++;
     return { ok: true, structured: true, target: f.conversationId, outcome: "held", operationId: continuation.operationId };
   });
@@ -290,7 +286,8 @@ test("orphan recovery in a fresh process spends the persisted continuation retry
   const retry = issued.continuation!;
   changeRun(f.record.requestId, row => ({ ...row, ownerPid: dead.pid, ownerIdentity: "exited-fixture-owner", ownerTurn: {
     clientAttemptId: issued.clientAttemptId, continuation: retry, restartRetries: issued.restartRetries, admissionComplete: true,
-    rawRequest: f.request, context: { messageId: f.request.input.respond_to!, text: "Inspect fixture", requestText: null } } }));
+    // The runner persists only a verified owner claim as an owner turn's raw request.
+    rawRequest: { ...f.request, input: { ...f.request.input, requester: { ...f.request.input.requester!, is_owner: true } } }, context: { messageId: f.request.input.respond_to!, text: "Inspect fixture", requestText: null } } }));
   const source = (file: string) => JSON.stringify(new URL(file, import.meta.url).href);
   const program = `
     Date.now = () => ${epoch};

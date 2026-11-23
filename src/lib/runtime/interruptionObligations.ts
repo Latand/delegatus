@@ -9,7 +9,7 @@ import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry"
 import { killedBackgroundWorkNotice } from "@/lib/pipelines/backgroundTasks";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
-import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, SqliteStateCollection, stateEvidenceVersion } from "@/lib/state/sqliteStateStore";
 import { writeJsonDurably, fsyncPath } from "@/lib/state/durableJson";
 import { withFileTransaction, withFileTransactionAsync, withFileTransactionAttempt, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
@@ -186,6 +186,31 @@ function cutRows(directory: string): SqliteStateCollection<InterruptionObligatio
 function withCutRows<T>(directory: string, read: (rows: SqliteStateCollection<InterruptionObligation>) => T): T {
   const rows = cutRows(directory);
   try { return read(rows); } finally { rows.close(); }
+}
+
+// Cache only complete list results. Each miss reads one SQLite snapshot and
+// closes its handle. A concurrent commit prevents publishing that snapshot
+// for reuse, while the current reader can still use its consistent rows.
+type CutListSnapshot = { version: string; records: InterruptionObligation[] };
+const cutListSnapshots = new Map<string, CutListSnapshot>();
+
+function sealedCutList(directory: string): InterruptionObligation[] {
+  const key = path.resolve(directory);
+  const database = cutDatabase(key);
+  const version = stateEvidenceVersion(database);
+  let cached = cutListSnapshots.get(key);
+  cutListSnapshots.delete(key);
+  if (!cached || cached.version !== version) {
+    const records = withCutRows(key, rows => rows.snapshot());
+    // The directory reader visits sorted filenames before its stable date sort.
+    records.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt)
+      || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    if (stateEvidenceVersion(database) !== version) return records;
+    cached = { version, records };
+  }
+  cutListSnapshots.set(key, cached);
+  if (cutListSnapshots.size > 16) cutListSnapshots.delete(cutListSnapshots.keys().next().value!);
+  return structuredClone(cached.records);
 }
 
 function fileStamp(filename: string): string | null {
@@ -467,6 +492,9 @@ export function submittedContinuationOutcome(
     as a severed turn — and must still owe one continuation. */
 function coversSameCut(existing: InterruptionObligation, input: InterruptionObligationInput): boolean {
   if (existing.conversationId !== input.conversationId || existing.hostKey !== input.hostKey) return false;
+  // A checkout census proves a more specific boundary for a standalone
+  // assignment. Its reader reconciles any ordinary pre-stop release record.
+  if (input.boundary.startsWith("checkout-merger:") && existing.reason === "viewer-release" && !existing.seat && !existing.stage) return false;
   /* Between two restart records of a conversation that is no seat, the id is
      the whole identity: each names its cut by the turn that was cut. */
   if (restartRecordOfNoSeat(existing) && restartRecordOfNoSeat(input)) return false;
@@ -771,13 +799,38 @@ function createInterruptionObligationStore(
   };
   const list = (page?: { after: string; limit: number; nextCursor: string | null; names?: string[] }): InterruptionObligation[] => {
     if (recipientRecords) return recipientRecords;
+    if (!guardOnly && !page && !held) {
+      const sealed = source();
+      if (sealed && sealed.pendingStamp === fileStamp(pendingFile) && activeClaims().length === 0) {
+        const now = Date.now();
+        const records = sealedCutList(directory);
+        const hasExpired = records.some((obligation) => {
+          const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;
+          return !interruptionObligationUnresolved(obligation) && now - resolvedAt > RESOLVED_RETENTION_MS;
+        });
+        if (!hasExpired) {
+          const current = source();
+          if (current && JSON.stringify(current) === JSON.stringify(sealed)
+            && fileStamp(pendingFile) === sealed.pendingStamp && activeClaims().length === 0) {
+            return records;
+          }
+        }
+      }
+    }
     importPending();
     return transaction(() => {
       let names: string[];
+      let snapshotByName: Map<string, InterruptionObligation> | null = null;
       try {
-        names = page?.names ?? (!guardOnly && source()
-          ? withCutRows(directory, rows => rows.snapshot().map(record => `${record.id}.json`))
-          : fs.readdirSync(guardOnly ? indexDirectory : directory));
+        if (page?.names) {
+          names = page.names;
+        } else if (!guardOnly && source()) {
+          const rows = withCutRows(directory, collection => collection.snapshot());
+          snapshotByName = new Map(rows.map(record => [`${record.id}.json`, record]));
+          names = [...snapshotByName.keys()];
+        } else {
+          names = fs.readdirSync(guardOnly ? indexDirectory : directory);
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         names = [];
@@ -795,7 +848,7 @@ function createInterruptionObligationStore(
       // Advance over inspected keys even when a record is temporarily unreadable.
       if (page) page.nextCursor = candidates.length > selected.length ? selected.at(-1)!.slice(0, -5) : null;
       for (const name of selected) {
-        const obligation = read(path.join(directory, name));
+        const obligation = snapshotByName ? (snapshotByName.get(name) ?? null) : read(path.join(directory, name));
         if (!obligation) {
           if (guardOnly && !pending.some(item => `${item.id}.json` === name)) {
             // A failed read can be temporary. Only a proven absent canonical
@@ -1155,7 +1208,16 @@ export function interruptionObligationDirectory(registryFilename: string): strin
  * more than the Viewer knows: background or external work may have survived
  * the handover, so it asks for inspection before anything is re-run.
  */
-export function interruptionContinuationText(obligation: InterruptionObligation): string {
+export function interruptionContinuationText(obligation: InterruptionObligation, checkoutBatchDirectory?: string): string {
+  if (obligation.boundary.startsWith("checkout-merger:")) {
+    return [
+      "Checkout handover interrupted your standalone merger assignment. Reconcile the original batch under your existing assignment.",
+      checkoutBatchDirectory ? `The original batch uses TMPDIR ${JSON.stringify(checkoutBatchDirectory)}.` : "Locate the original batch directory from your previous turn.",
+      "Read merge-batch.json, its lock, recorder ownership and terminal receipts, then verify the worktree, current main and exact forge state.",
+      "An interrupted gate or a missing receipt grants no pass. Leave live operations with their owners and hold uncertain operations for reconciliation. Use terminal results only for their exact batch tuple.",
+      "Before continuing, establish exclusive batch custody and prove the next action is still owed. Preserve the original batch and report any outcome you cannot establish to the project seat.",
+    ].join(" ");
+  }
   const at = obligation.checkpoint.lastEventAt === null
     ? "an unrecorded time"
     : new Date(obligation.checkpoint.lastEventAt).toISOString();

@@ -986,40 +986,48 @@ conversations fall back to their latest recorded message author. Owner
 conversations and installation-owned seats without a member binding retain
 their existing reach.
 
-A project's seat states its own reach, and resolution ends at it. A seat a
-person designated is bound to that person: a member's seat keeps the member's
-reach whoever writes later, and the owner's seat has installation reach. A
-member's message to the owner's seat fences it as message authority, and the
-owner's next message there restores its reach. A rotation the seat or the seat
-tick triggers keeps the kind of reach it inherits: a binding stays a binding,
-and a member's message travels as message authority (`workspaceFromMessage` on
-the seat record), so the successor starts fenced and the next person who writes
-to it decides. One member message therefore never becomes a permanent binding.
-The handover parent of a successor carries no authority. The trade-off is the
-one every owner conversation already has: after the owner writes, the seat acts
-with the owner's reach while the member's earlier request is still in its
-context. An older build reads a `workspaceFromMessage` seat as a plain member
-binding, which is the narrower answer.
-A seat belongs to its project, so the Telegram grant on its record stays
-usable under member reach: the project's current seat passes the five
-`telegram_bot_*` tools while a member's message fences it. Its workers hold no
-grant, a seat a person designated for a member stays without the tools, and
-losing the project ends the grant. The grant adds no chat scoping: the seat
-reaches every chat the agent route serves, so a member can read and write
-through the seat to any of them (operator decision, 2026-11-11).
-`publish_prototype_review` and `read_prototype_review` pass to their routes,
-which apply the workspace fence to the caller themselves. Every other
-installation-wide tool stays refused. A record's agent author carries the
-sender's project as a label; the result scan does not read it as a project
-key, and the answer withholds an author from outside the caller's reach.
-A seat record written before the field existed, bound by a rotation an agent
-or the seat tick triggered (an agent trigger, the automatic-replacement fence
-or the authentication recovery key on its intent), is read as message authority, so a seat an earlier
-release bound this way answers to the next person who writes to it with no
-state edit. The seat launch records the same marker in its launch profile
-(`workspace.fromMessage`), so the conversation keeps answering to the latest
-person after it leaves the seat. An adopted conversation without a durable
-launch binding of its own receives the fence as message authority too.
+A project's current seat states its own reach, and resolution ends at it. The
+manager authority resolver validates its project, generation, epoch and absence
+of conflicting designations before its persisted designation decides its call permissions independently of human message authors
+and earlier refusals. A member-bound seat retains its workspace restriction;
+an installation-owned seat retains installation authority. Explicit member
+launch bindings remain restrictive even if the conversation becomes a seat.
+Rotations carry the designation's reach. A legacy binding inherited from a
+message remains restrictive while the conversation is the active seat; an
+authorized redesignation or rotation can change that binding. The handover
+parent carries no additional authority. This stable override applies only to
+calls by the seat itself. Existing workers and deeper descendants keep their
+ordinary ancestry, latest-author, project and account restrictions.
+
+An inherited message binding (`workspaceFromMessage`) retains its existing
+Telegram grant while its member still holds the project. Workers and seats
+explicitly designated for a member acquire no such grant. The grant adds no
+chat scoping: it covers the chats the agent route serves. Once a conversation
+leaves the seat map, its launch marker (`workspace.fromMessage`) restores
+ordinary message-authority resolution. Ordinary conversations continue to use
+their launch binding or latest admitted member, including revocation checks.
+
+`publish_prototype_review` and `read_prototype_review` also pass through their
+HTTP workspace fence. Taskless form routes resolve their project from the
+authenticated current seat. A current seat's exact keyed replay reads its
+settled receipt for that caller, project and task before workspace admission,
+including after a restart. An omitted task uses the same pipeline-stage task inference as the
+HTTP scope handler, including when that stage conversation is also a seat.
+Changed arguments conflict; a different caller or a seat in another project
+cannot read that receipt. The HTTP scope supplies the verified project when
+the receipt is written; replay rechecks the current seat project after reading
+it. The actual HTTP read or publication also checks the admitted caller,
+project and task before accessing its target, so a change between scope
+resolution and dispatch cannot put another target's result in that receipt.
+Legacy receipts without a proven project require ordinary HTTP admission.
+A scope response that omits its project is refused before a receipt is stored.
+Pending or retryable publications still use normal recovery and
+admission. New calls retain all workspace checks. MCP and HTTP workspace
+refusals name the failed check without exposing target identities.
+
+A record's agent author carries the sender's project as a label; the result
+scan does not read it as a project key, and the answer withholds an author from
+outside the caller's reach.
 
 Authority resolution shares one lazy seat map across the parent chain. The
 process retains one map for the seats file's path and filesystem identity;

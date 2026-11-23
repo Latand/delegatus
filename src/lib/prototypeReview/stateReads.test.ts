@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
+import { operatorDecisions } from "./read";
 import { saveTasks, loadTasks, loadTasksForList, taskFeedSource } from "@/lib/tasks/store";
 import { findPrototypeRound, mutatePrototypeRound, withPrototypeState } from "./store";
 import { taskForPrototype } from "./world";
@@ -166,4 +168,27 @@ test.each(["round", "task", "write"])("prototype %s rejects a malformed selected
       : () => mutatePrototypeRound("task-1024", review, () => {});
     expect(read).toThrow("invalid persisted task row");
   } finally { status("inbox"); db.close(); }
+});
+
+
+test("a Decisions response uses one dismissal snapshot for every task and the requested round", () => {
+  const source = tasks().at(-1)!;
+  const entries = Array.from({ length: 7 }, (_, n) => {
+    const id = `fixture-task-${n}`;
+    const round = { ...source.prototypeReviews![0]!, id: `pr_${n.toString(16).padStart(32, "0")}`, taskId: id };
+    return { ...source, id, prototypeReviews: [round] };
+  });
+  const read = LegacyDocumentStore.prototype.read;
+  let lookups = 0;
+  const spy = spyOn(LegacyDocumentStore.prototype, "read").mockImplementation(function (this: LegacyDocumentStore<unknown>, filePath) {
+    if (path.basename(filePath) === "attention-dismissals.json") lookups++;
+    return read.call(this, filePath);
+  });
+  try {
+    const selected = entries[3]!.prototypeReviews[0]!.id;
+    const result = operatorDecisions(source.project, entries, selected);
+    expect(result.decisions.map(round => round.id)).toEqual(entries.map(task => task.prototypeReviews[0]!.id));
+    expect(result.round?.id).toBe(selected);
+    expect(lookups).toBe(1);
+  } finally { spy.mockRestore(); }
 });

@@ -19,22 +19,66 @@ const NOW = Date.parse(AT) + 1000;
 const required = { issues: "write", pull_requests: "read", metadata: "read" };
 const landingPermissions = { contents: "read", metadata: "read" };
 
-test.skipIf(process.platform === "win32").each(["close", "part", "missing-pr", "missing-issues", "manual-batch", "missing-landing"] as const)("private App issue settlement handles %s through the production scheduler", async mode => {
+function nativeGitPath(): string | undefined {
+  const directories = (process.env.PATH ?? "").split(path.delimiter)
+    .filter(directory => !/\/delegatus\/agent-(?:git-hooks|forge)\//.test(directory));
+  return directories.map(directory => path.join(directory, "git"))
+    .find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+}
+
+test.skipIf(process.platform === "win32").each([
+  "close", "part", "missing-pr", "missing-issues", "manual-batch", "missing-landing", "cold-batch",
+  "associated-batch", "associated-reverted-before", "associated-restored-later", "associated-reverted-after",
+  "associated-merge", "associated-merge-reverted-before",
+] as const)("private App issue settlement handles %s through the production scheduler", async mode => {
   const directory = path.join(root, mode);
   const granted: Record<string, string> = { ...required };
   if (mode === "missing-pr") delete granted.pull_requests;
   if (mode === "missing-issues") delete granted.issues;
-  if (mode === "manual-batch") granted.contents = "read";
+  const associated = mode.startsWith("associated-");
+  const cold = mode === "cold-batch" || mode === "missing-landing";
+  const carried = associated || cold || mode === "manual-batch";
+  if (carried && mode !== "missing-landing") granted.contents = "read";
   const app = caseSensitiveAppFixture(directory, granted);
-  const manual = ["manual-batch", "missing-landing"].includes(mode);
-  const graph = manual ? batchLandingFixture(directory) : null;
+  const kind = associated ? mode.replace("associated-", "carrier-") : "rebased";
+  const graph = carried ? batchLandingFixture(directory, kind) : null;
   const dataFile = path.join(directory, "issue.json");
   const callsFile = path.join(directory, "gh-calls.jsonl");
+  const gitCallsFile = path.join(directory, "git-calls.jsonl");
+  const clone = path.join(directory, "lane-clone");
+  const nativeGit = nativeGitPath();
+  if (!nativeGit) throw new Error("Git is required for the landing fixture");
+  if (graph && cold) {
+    graph.git("clone", "--no-local", "--single-branch", "--branch", "lane", graph.directory, clone);
+    for (const sha of [graph.landing, graph.tip, graph.base]) {
+      expect(Bun.spawnSync(["git", "cat-file", "-e", sha], { cwd: clone, stderr: "ignore" }).exitCode).toBe(1);
+    }
+    fs.writeFileSync(path.join(directory, "git"), `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === "fetch") {
+  const env = process.env;
+  const expected = Buffer.from(["x-access-token", "fixture-landing"].join(":")).toString("base64");
+  const header = ["AUTH", "ORIZATION"].join("") + ": " + ["ba", "sic"].join("") + " " + expected;
+  const scoped = env.GIT_CONFIG_COUNT === "2"
+    && env.GIT_CONFIG_KEY_0 === "http.https://github.com/acme/widgets.git.extraheader"
+    && env.GIT_CONFIG_VALUE_0 === header
+    && env.GIT_CONFIG_KEY_1 === "credential.helper" && env.GIT_CONFIG_VALUE_1 === ""
+    && env.GIT_CONFIG_GLOBAL === "/dev/null" && env.GIT_CONFIG_NOSYSTEM === "1"
+    && env.GIT_TERMINAL_PROMPT === "0";
+  const noPersonal = env.GIT_ASKPASS === "" && env.GIT_CONFIG_PARAMETERS === undefined;
+  const fs = await import("node:fs");
+  fs.appendFileSync(${JSON.stringify(gitCallsFile)}, JSON.stringify({ scoped, noPersonal, objects: args.slice(args.indexOf("origin") + 1) }) + "\\n");
+  if (!scoped) process.exit(1);
+}
+process.exit(Bun.spawnSync([${JSON.stringify(nativeGit)}, ...args], { stdin: "ignore", stdout: "inherit", stderr: "inherit" }).exitCode);
+`, { mode: 0o700 });
+  }
   const oldDirectory = path.join(directory, "old-helper");
   fs.mkdirSync(oldDirectory);
   const stale = "process.exit(88);\n";
   fs.writeFileSync(path.join(oldDirectory, "forge-app-token.mjs"), stale);
-  const source = { ...app.source, GH_TOKEN: "inherited", FIXTURE_ISSUE_DATA: dataFile, FIXTURE_GH_CALLS: callsFile, [FORGE_DIR_ENV]: oldDirectory };
+  const source = { ...app.source, GH_TOKEN: "inherited", FIXTURE_ISSUE_DATA: dataFile, FIXTURE_GH_CALLS: callsFile, [FORGE_DIR_ENV]: oldDirectory,
+    ...(cold ? { GIT_ASKPASS: "fixture-personal", GIT_CONFIG_PARAMETERS: "'credential.helper=fixture-personal'" } : {}) };
   const previous = Object.fromEntries(Object.keys(source).map(key => [key, process.env[key]]));
   const clock = spyOn(Date, "now").mockReturnValue(NOW);
   const host = globalThis as typeof globalThis & { __llvIssueDeliveryRunning?: Promise<unknown> | null; __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
@@ -55,18 +99,22 @@ test.skipIf(process.platform === "win32").each(["close", "part", "missing-pr", "
     const data: ForgeCacheFile = { schemaVersion: 1, repositories: {} };
     if (graph) {
       lane.merge = undefined; lane.lastPassedCommit = graph.head;
-      lane.repoDir = mode === "missing-landing" ? path.join(directory, "unavailable-repo") : graph.directory;
+      lane.repoDir = cold ? clone : graph.directory;
       data.repositories[REPO] = emptyRepositoryEntry();
       data.repositories[REPO]!.prs["9"] = { url: `https://github.com/${REPO}/pull/9`, state: "closed", headRefName: "pipeline/widgets", createdAt: AT, checkedAt: AT, closes: [] };
     }
+    const legacyBatch = mode === "associated-restored-later";
+    if (legacyBatch) lane.issueDelivery = [{ repository: REPO, number: 7, pr: 9, batch: 10, mode: "close", at: AT, state: "pending" }];
     fs.writeFileSync(dataFile, JSON.stringify({
       issue: { state: mode === "part" ? "closed" : "open", state_reason: mode === "part" ? "completed" : null }, comments: [],
-      primary: { number: 9, state: "closed", merged_at: manual ? null : AT, title: "Widget controls",
+      primary: { number: 9, state: "closed", merged_at: carried && !associated ? null : AT, title: "Widget controls",
+        ...(associated ? { merge_commit_sha: graph?.landing } : {}),
         head: { ref: "pipeline/widgets", sha: graph?.head ?? "a".repeat(40) },
-        base: { ref: manual ? "integration/widgets" : "main", repo: { default_branch: "main" } } },
-      ...(graph ? { landing: graph.landing, baseTip: graph.base,
+        base: { ref: carried ? "integration/widgets" : "main", repo: { default_branch: "main" } } },
+      ...(graph ? { landing: graph.landing, baseTip: graph.base, graphDir: graph.directory,
         carrier: { number: 10, state: "closed", merged_at: AT, merge_commit_sha: graph.tip,
-          title: "Widget batch", head: { ref: "integration/widgets" }, base: { ref: "main", repo: { default_branch: "main" } } } } : {}),
+          title: legacyBatch ? "Merge batch: #9" : "Widget batch",
+          head: { ref: legacyBatch ? "merge-batch/widgets" : "integration/widgets" }, base: { ref: "main", repo: { default_branch: "main" } } } } : {}),
     }));
     fs.writeFileSync(path.join(directory, "gh"), `#!${process.execPath}
 import fs from "node:fs";
@@ -81,8 +129,16 @@ let result;
 if (route.includes("/pulls/")) { need("pull_requests"); result = route.endsWith("/10") ? value.carrier : value.primary; }
 else if (route.includes("/commits/")) { need("pull_requests"); result = [value.carrier]; }
 else if (route.includes("/branches/")) { need("contents"); result = value.baseTip; }
-else if (route.includes("/compare/")) { need("contents"); const sha = route.split("/compare/")[1].split("...")[0]; result = { status: "ahead", merge_base_commit: { sha } }; }
-else if (route.includes("/issues/9/comments")) { need("issues"); result = { body: "Включено комітом " + value.landing + ".", author_association: "NONE" }; }
+else if (route.includes("/compare/")) {
+  need("contents");
+  const [sha, target] = route.split("/compare/")[1].split("?")[0].split("...");
+  const ancestor = Bun.spawnSync([${JSON.stringify(nativeGit)}, "merge-base", "--is-ancestor", sha, target], { cwd: value.graphDir, stderr: "inherit" });
+  result = { status: ancestor.exitCode === 0 ? "ahead" : "diverged", merge_base_commit: { sha } };
+}
+else if (route.includes("/issues/9/comments")) {
+  need("issues");
+  result = value.primary.merged_at ? undefined : { body: "Включено комітом " + value.landing + ".", author_association: "NONE" };
+}
 else if (route === "graphql") { need("issues"); need("pull_requests"); result = { data: { repository: { issue: { timelineItems: { nodes: [{ closer: { number: 9, repository: { nameWithOwner: "acme/widgets" } } }] } } } } }; }
 else {
   need("issues");
@@ -105,9 +161,24 @@ process.stdout.write(route.includes("/branches/") ? String(result) : JSON.string
     } });
     await Promise.all([host.__llvIssueDeliveryRunning, host.__llvAutoMergeRunning, host.__llvPostMergeRunning]);
     const saved = JSON.parse(fs.readFileSync(dataFile, "utf8"));
-    const calls: Array<{ identity: string }> = fs.existsSync(callsFile) ? fs.readFileSync(callsFile, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
+    const calls: Array<{ identity: string; args: string[] }> = fs.existsSync(callsFile) ? fs.readFileSync(callsFile, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
     expect(calls.every(call => call.identity === "app")).toBe(true);
+    if (associated) expect(calls.some(call => call.args[1]?.includes("/issues/9/comments"))).toBe(false);
+    if (cold) {
+      const gitCalls: Array<{ scoped: boolean; noPersonal: boolean; objects: string[] }> = fs.existsSync(gitCallsFile)
+        ? fs.readFileSync(gitCallsFile, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
+      if (mode === "missing-landing") expect(gitCalls).toEqual([]);
+      else {
+        if (!graph) throw new Error("Cold batch fixture is missing");
+        expect(gitCalls).toEqual([
+          { scoped: true, noPersonal: true, objects: [graph.landing] },
+          { scoped: true, noPersonal: true, objects: [graph.tip, graph.base] },
+        ]);
+      }
+    }
     if (mode.startsWith("missing-")) {
+      expect(saved.issue.state).toBe("open");
+      expect(saved.comments).toEqual([]);
       expect(lane.issueDelivery).toMatchObject([{ state: "refused", reason: "app-permission" }]);
       if (mode === "missing-landing") {
         expect(app.tokens().map(token => token.permissions)).toEqual([required]);
@@ -115,11 +186,17 @@ process.stdout.write(route.includes("/branches/") ? String(result) : JSON.string
         expect(app.tokens()).toEqual([]);
         expect(calls).toEqual([]);
       }
+    } else if (associated && (mode.includes("reverted") || mode === "associated-restored-later")) {
+      expect(calls.some(call => call.args.includes("--method"))).toBe(false);
+      expect(saved.issue.state).toBe("open");
+      expect(saved.comments).toEqual([]);
+      expect(lane.issueDelivery).toMatchObject([{ state: "pending", failures: 1 }]);
+      expect(app.tokens().map(token => token.permissions)).toEqual([required, landingPermissions]);
     } else {
       expect(lane.issueDelivery).toMatchObject([{ state: mode === "part" ? "reopened" : "closed" }]);
       expect(saved.issue.state).toBe(mode === "part" ? "open" : "closed");
       expect(saved.comments).toHaveLength(1);
-      expect(app.tokens().map(token => token.permissions)).toEqual(manual ? [required, landingPermissions] : [required]);
+      expect(app.tokens().map(token => token.permissions)).toEqual(carried ? [required, landingPermissions] : [required]);
     }
     expect(fs.readFileSync(path.join(oldDirectory, "forge-app-token.mjs"), "utf8")).toBe(stale);
   } finally {

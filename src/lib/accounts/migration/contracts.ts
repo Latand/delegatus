@@ -1,3 +1,6 @@
+/** Maximum automatic claims of one admitted message across recovery and migration. */
+export const DELIVERY_ATTEMPT_LIMIT = 12;
+
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import type { AgentEngine } from "@/lib/agent/cli";

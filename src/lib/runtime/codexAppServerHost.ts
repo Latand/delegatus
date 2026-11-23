@@ -1779,7 +1779,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       provisional.viewerMcpTransport = viewer?.enabled === true
         ? typeof viewer.command === "string" ? "stdio" : typeof viewer.url === "string" ? "http" : null
         : null;
-      config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
+      // A reconnected listener keeps its verified launch root across Viewer restarts.
+      config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy,
+        options.env ?? process.env, provisional.gateCheckRoot);
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;
       Object.assign(config.features as Record<string, unknown>, cleanup.features);
@@ -3712,6 +3714,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     return true;
   }
 
+  /** A replacement can claim the same native listener. Relinquish this
+      connection locally because process termination belongs to its writer. */
+  detachAfterStartupCustodyLoss(): void {
+    if (!(this.child instanceof CodexSocketTransport) || this.releasing || this.released) return;
+    this.disconnectSocketConnection();
+    const cleanup = this.releaseCleanup;
+    this.releaseCleanup = null;
+    cleanup?.();
+  }
+
   private disconnectSocketConnection(): void {
     if (!(this.child instanceof CodexSocketTransport)) throw new Error("Codex host has no socket connection");
     this.released = true;
@@ -4865,7 +4877,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       try {
         this.openingAuthority?.();
         decodeCodexServerRequest(this.protocol, id, attention.method, params);
-        if (!current() || this.gateCheckRequests.size > 1) throw new Error("gate wait does not belong to the current native turn or another wait is active");
+        if (!current()) throw new Error("gate wait does not belong to the current native turn");
         result = replayResult ?? await runGateCheckTool(params.arguments, this.gateCheckRoot,
           AbortSignal.any([this.gateCheckAbort.signal, waitAbort.signal]), attention.receipt?.gateWait?.runId);
       } catch (error) {

@@ -9,6 +9,8 @@ import { stampAttentionRoutes, type AttentionRoutingInputs } from "@/lib/attenti
 import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
 import type { FileEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { BoardTask } from "@/lib/tasks/types";
+import { emptyMaintenanceCounts, emptyMaintenanceLog, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import { laneState } from "@/components/kanban/cardState";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
@@ -2479,11 +2481,13 @@ test("a deploy reminder credits the matching ordinary pause agenda", () => {
   const paused = lane({ pausedBy: "seat", state: "inert", pausedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() });
   const deploy = { deploymentId: "deploy-pause-credit", phase: "succeeded" as const, sha: "c".repeat(40), error: null,
     settledAt: new Date(NOW - MINUTE).toISOString() };
-  const first = seatTickDecision(input({ pipelines: [paused], state: stateWith({ stalledSeen: [paused.id] }), settledDeploys: [deploy] }));
+  const waitingTaskId = "waiting-on-deploy";
+  const first = seatTickDecision(input({ pipelines: [paused], pauseWaitingTasks: { [paused.id]: [waitingTaskId] },
+    state: stateWith({ stalledSeen: [paused.id] }), settledDeploys: [deploy] }));
   expect(first.verdict.kind).toBe("wake");
   if (first.verdict.kind !== "wake") return;
   expect(first.verdict.items.map(item => item.id)).toEqual([deploy.deploymentId, paused.id]);
-  expect(first.verdict.items[1]).toMatchObject({ reminderKind: "pause" });
+  expect(first.verdict.items[1]).toMatchObject({ reminderKind: "pause", label: expect.stringContaining(waitingTaskId) });
   const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
   const quiet = seatTickDecision(input({ now: NOW + 90 * MINUTE, pipelines: [paused], state: landed, settledDeploys: [] }));
   expect(quiet.verdict.kind).toBe("quiet");
@@ -2512,7 +2516,7 @@ test("cropped outcome bullets leave child, deployment and maintenance obligation
       { kind: "pipeline", id: "visible-lane", label: "completed", laneAnnouncement: "visible-lane:completed", itemVersion: "lane@one" },
       { kind: "child", id: "cropped-child", label: "long child result ".repeat(500), outcomeIds: ["child-outcome"], stateTokens: ["cropped-child@one"], stallToken: "child-stall" },
       { kind: "deploy", id: "cropped-deploy", label: "deploy settled", deploy: { deploymentId: "cropped-deploy", phase: "succeeded", sha: "a".repeat(40), error: null } },
-      { kind: "maintenance", id: "cropped-maintenance", label: "maintenance finished", maintenance: { runId: "cropped-maintenance" } },
+      { kind: "maintenance", id: "cropped-maintenance", label: "maintenance finished", maintenance: { runId: "cropped-maintenance", page: 0, pages: 1 } },
     ],
   };
   const text = seatTickWakeMessage({ project: "fixture-project", reasons: verdict.reasons, items: verdict.items, deferred: 0, signals: [] });
@@ -2686,6 +2690,54 @@ describe("seat-owned parked lane wakes", () => {
 describe("waits routed to the seat", () => {
   const ask = { key: "reason:ask-1", id: "conversation_deployer", label: "deploy the release — deployer asks: «Roll out now?»; reply with send_message to conversation_deployer" };
   const lastWakeAt = new Date(NOW - 5 * MINUTE).toISOString();
+
+  test("a Waiting task takes one worker-ask line instead of a sweep row", () => {
+    const since = new Date(NOW - 2 * 86_400_000).toISOString();
+    const row: BoardTask = { id: "task-resumable", project: PROJECT, status: "blocked", text: "Continue the rollout",
+      placement: "unplaced", assignments: [], createdAt: since, updatedAt: since,
+      hold: { kind: "resource", by: "agent", note: "Wait for memory", since } };
+    const operatorTask = { ...row, id: "task-operator", hold: { ...row.hold!, kind: "operator" as const } };
+    const tasks = [row, operatorTask].map(task => ({
+      id: task.id, title: task.text, status: task.status, updatedAt: task.updatedAt, owned: false, hold: task.hold,
+    }));
+    const workerAsks = seatAgendaAsks({ files: [], tasks: [row, operatorTask], pipelines: [] }, NOW / 1000, PROJECT);
+    expect(workerAsks).toHaveLength(1);
+    const state = stateWith({ lastWakeAt });
+    const first = seatTickDecision(input({ tasks, workerAsks, state }));
+    expect(reasonsOf(first.verdict)).toEqual(["worker-ask"]);
+    if (first.verdict.kind !== "wake") throw new Error("expected a task wake");
+    expect(first.verdict.items).toEqual([expect.objectContaining({ kind: "ask", id: row.id, label: expect.stringContaining("Verify the wait now") })]);
+    expect(first.verdict.taskPage?.rows.map(page => page.item.id)).toEqual([operatorTask.id]);
+    const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+    const moved = tasks.map(task => task.id === row.id ? { ...task, status: "assigned" as const } : task);
+    const same = seatTickDecision(input({ now: NOW + MINUTE, tasks: moved, workerAsks, state: landed }));
+    expect(reasonsOf(same.verdict)).toEqual([]);
+  });
+
+  test("a due pause reminder carries its Waiting card id and the resume action", () => {
+    const since = new Date(NOW - MINUTE).toISOString();
+    const boardTask: BoardTask = { id: "task-paused", project: PROJECT, status: "blocked", text: "Resume the paused work",
+      placement: "unplaced", assignments: [], createdAt: since, updatedAt: since };
+    const pipeline = { id: "paused-lane", project: PROJECT, state: "paused", taskIds: [boardTask.id], pausedAt: since,
+      createdAt: since, runs: [], pause: { reason: "quota", resumeCondition: { kind: "account-usage", engine: "codex",
+        accountId: "account-fixture", window: "session", belowPercent: 80 } } } as unknown as Pipeline;
+    const waits = new Map<string, string[]>();
+    waits.set(pipeline.id, [boardTask.id]); // durable fresh quota observation adds linked task membership
+    const workerAsks = seatAgendaAsks({ files: [], pipelines: [pipeline], tasks: [boardTask] }, NOW / 1000, PROJECT, waits);
+    const decision = seatTickDecision(input({
+      tasks: [{ id: boardTask.id, title: boardTask.text, status: "blocked", updatedAt: since, owned: false }],
+      pipelines: [lane({ id: pipeline.id, title: "Paused work", state: "inert", updatedAt: since, pausedBy: "other", pausedAt: since,
+        pause: pipeline.pause, pauseConditionMet: true })],
+      pauseWaitingTasks: Object.fromEntries(waits), workerAsks,
+    }));
+    expect(workerAsks).toEqual([]);
+    if (decision.verdict.kind !== "wake") throw new Error("expected a pause wake");
+    expect(decision.verdict.items).toContainEqual(expect.objectContaining({ id: pipeline.id, reminderKind: "pause",
+      label: expect.stringMatching(/task-paused.*pipeline_action resume/) }));
+    expect(decision.verdict.items[0]!.label).toContain(boardTask.id);
+    expect(decision.verdict.taskPage?.rows ?? []).toEqual([]);
+    expect(seatTickWakeCommitPlan(decision.verdict, { fingerprint: "quota-deploy", eventsThrough: 0 })).toBeTruthy();
+  });
 
   test("an ask wakes the seat on the next check, without waiting for the interval, and names the question and the way to answer", () => {
     const decision = seatTickDecision(input({ workerAsks: [ask], state: stateWith({ lastWakeAt }) }));
@@ -2900,6 +2952,80 @@ describe("reserved task pages", () => {
   });
 });
 
+test("maintenance handoffs page task/action pairs and credit only the delivered page", () => {
+  const handoffs = Array.from({ length: 7 }, (_, n) => ({ taskId: `handoff-${n + 1}`, reason: `Reason ${n + 1}`, action: `Run action ${n + 1}` }));
+  const run = { runId: "maintenance-run", project: PROJECT, state: "succeeded", endedAt: new Date(NOW - MINUTE).toISOString(),
+    claimedAt: new Date(NOW - 10 * MINUTE).toISOString(), launchedAt: new Date(NOW - 9 * MINUTE).toISOString(), intervalHours: 12,
+    taskId: "maintenance-card", counts: { writes: 7, tasks: 7, status: 7, closed: 0, created: 0, text: 0, details: 0, looks: 0 },
+    log: { changes: [], omittedChanges: 0, logGaps: 0, attention: [], leftAlone: [], seat: handoffs, verdict: "pass" } } as never;
+  const policy = { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 };
+  let check = input({ settledMaintenance: [run], policy, state: stateWith({ lastWakeAt: new Date(NOW - 5 * MINUTE).toISOString() }) });
+  const first = seatTickDecision(check);
+  if (first.verdict.kind !== "wake") throw new Error("maintenance page wake expected");
+  expect(first.verdict.items[0]!.label).toContain("handoff-1: Reason 1 — Run action 1");
+  expect(first.verdict.items[0]!.label).toContain("handoff-3: Reason 3 — Run action 3");
+  expect(first.verdict.items[0]!.label).not.toContain("handoff-4:");
+  const firstText = seatTickWakeMessage({ project: PROJECT, ...first.verdict, signals: [] });
+  const firstPlan = seatTickWakeCommitPlan({ ...first.verdict, items: [...first.verdict.items] }, { fingerprint: "maintenance-unchanged", eventsThrough: 0, frozenText: firstText })!;
+  const landed = seatTickWakeCommit(first.state, firstPlan, NOW);
+  check = { ...check, now: NOW + SEAT_TICK_WAKE_INTERVAL_MS, state: JSON.parse(JSON.stringify(landed)) };
+  const second = seatTickDecision(check);
+  if (second.verdict.kind !== "wake") throw new Error("remaining maintenance page must stay owed");
+  expect(second.verdict.items[0]!.label).toContain("handoff-4: Reason 4 — Run action 4");
+  const secondText = seatTickWakeMessage({ project: PROJECT, ...second.verdict, signals: [] });
+  const secondPlan = seatTickWakeCommitPlan({ ...second.verdict, items: [...second.verdict.items] }, { fingerprint: "maintenance-unchanged", eventsThrough: 0, frozenText: secondText })!;
+  const secondLanded = seatTickWakeCommit(second.state, secondPlan, check.now);
+  const third = seatTickDecision({ ...check, now: check.now + SEAT_TICK_WAKE_INTERVAL_MS, state: JSON.parse(JSON.stringify(secondLanded)) });
+  if (third.verdict.kind !== "wake") throw new Error("last maintenance page must stay owed");
+  expect(third.verdict.items[0]!.label).toContain("handoff-7: Reason 7 — Run action 7");
+  const thirdText = seatTickWakeMessage({ project: PROJECT, ...third.verdict, signals: [] });
+  const thirdPlan = seatTickWakeCommitPlan({ ...third.verdict, items: [...third.verdict.items] }, { fingerprint: "maintenance-unchanged", eventsThrough: 0, frozenText: thirdText })!;
+  const complete = seatTickWakeCommit(third.state, thirdPlan, check.now + SEAT_TICK_WAKE_INTERVAL_MS);
+  expect(complete.announcedMaintenance).toEqual(["maintenance-run"]);
+  expect(reasonsOf(seatTickDecision({ ...check, now: check.now + 2 * SEAT_TICK_WAKE_INTERVAL_MS, state: complete }).verdict)).not.toContain("maintenance-settled");
+});
+
+test("a 67-page maintenance run stays complete after restart and agenda eviction", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "maintenance-delivery-"));
+  const file = path.join(root, "tick.json");
+  const run: MaintenanceRun = { kind: "run", runId: "long-maintenance-run", project: PROJECT, state: "succeeded", endedAt: new Date(NOW - MINUTE).toISOString(),
+    claimedAt: new Date(NOW - 10 * MINUTE).toISOString(), launchedAt: new Date(NOW - 9 * MINUTE).toISOString(), intervalHours: 12,
+    taskId: "maintenance-card", slot: 1, seat: { seatEpoch: 7, conversationId: CONVERSATION }, repoDir: null, clientAttemptId: "maintenance-attempt",
+    launchId: null, conversationId: null, transcriptPath: null, failure: null, changedTaskIds: [], supersededTaskIds: [],
+    counts: { ...emptyMaintenanceCounts(), tasks: 200 }, log: { ...emptyMaintenanceLog(),
+      seat: Array.from({ length: 200 }, (_, index) => ({ taskId: `handoff-${index}`, reason: "Ownerless wait", action: "Resume the task" })) } };
+  const policy = { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 };
+  let state = stateWith({ lastWakeAt: new Date(NOW - SEAT_TICK_WAKE_INTERVAL_MS).toISOString() });
+  const checkAt = (page: number) => input({ now: NOW + page * SEAT_TICK_WAKE_INTERVAL_MS, settledMaintenance: [run], policy, state });
+  try {
+    for (let page = 0; page < 67; page++) {
+      const { now } = checkAt(page);
+      const decision = seatTickDecision(checkAt(page));
+      if (decision.verdict.kind !== "wake") throw new Error(`expected maintenance page ${page}`);
+      expect(decision.verdict.items[0]?.maintenance).toEqual({ runId: run.runId, page, pages: 67 });
+      const text = seatTickWakeMessage({ project: PROJECT, ...decision.verdict, signals: [] });
+      const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "maintenance", eventsThrough: 0, frozenText: text })!;
+      writeSeatTickState(PROJECT, { ...decision.state, seatEpoch: 7, outstandingWake: {
+        clientMessageId: `maintenance-wake-${page}`, conversationId: CONVERSATION, seatEpoch: 7, operationId: null,
+        preparedAt: new Date(now).toISOString(), text, commit,
+      } }, file);
+      const restored = readSeatTickState(PROJECT, file);
+      state = seatTickWakeCommit(restored, restored.outstandingWake!.commit, now);
+      if (page < 66) expect(state.announcedMaintenance).not.toContain(run.runId);
+    }
+    expect(state.announcedMaintenance).toEqual([run.runId]);
+    writeSeatTickState(PROJECT, { ...state, itemsShown: [] }, file);
+    const reader = Bun.spawnSync({ cmd: [process.execPath, "-e", `
+      import { readSeatTickState } from ${JSON.stringify(path.join(import.meta.dir, "seatTickState.ts"))};
+      console.log(JSON.stringify(readSeatTickState(process.argv[1], process.argv[2])));
+    `, PROJECT, file], stdout: "pipe", stderr: "pipe" });
+    expect(reader.exitCode, reader.stderr.toString()).toBe(0);
+    state = JSON.parse(reader.stdout.toString());
+    expect(state.announcedMaintenance).toEqual([run.runId]);
+    const next = seatTickDecision(checkAt(67)).verdict;
+    expect(next.kind === "wake" && next.items.some(item => item.kind === "maintenance")).toBe(false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("the Tasks header retains hot overdue counts when the indexed next page excludes delivered dates", () => {
   const tasks = Array.from({ length: 12 }, (_, n): SeatTickTaskInput => ({ id: `overdue-${String(n).padStart(2, "0")}`, title: "Finish", status: "inbox", owned: false, updatedAt: new Date(NOW - 86_400_000).toISOString(), dueAt: new Date(NOW - 86_400_000).toISOString() }));
