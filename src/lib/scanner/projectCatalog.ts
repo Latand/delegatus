@@ -641,8 +641,8 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
         console.error("[project catalog] project identity succession deferred; a later scan will retry");
       }
     }
-    /* Network work, so detached from the scan and after its persistence; an
-       unanswered lookup decides nothing and the next scan asks again. */
+    /* Network work stays detached from the scan. Unanswered checks can retry
+       after the forge cooldown while the catalog keeps using local identity. */
     scheduleForgeRenames(forgeCandidates);
     if (boardHealed) {
       try {
