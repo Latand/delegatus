@@ -63,7 +63,8 @@ test.each(["checks", "transport"] as const)("raw %s catalog drift with a real Ap
   const recorded = recordPublicationFailure(subject, undefined, { operationId: `drift-${phase}`, epoch: 1, at,
     cause: "check-failure", detail: drift, recoverable: true }, [60_000, 300_000, 900_000]);
   expect(recorded.retryAt).toBe("2026-11-24T10:01:00.000Z");
-  const decisive = { ...failure, outputTail: `${output}\npre-push: types: failed (1)`, retryablePrivacyDrift: false as const };
+  const decisive = { step: failure.step, code: failure.code, signal: failure.signal, durationMs: failure.durationMs,
+    outputTail: `${output}\npre-push: types: failed (1)`, changedFiles: failure.changedFiles };
   expect(publicationPrivacyDrift(decisive.outputTail)).toBe(false);
   expect(recoverablePublication({ error: drift, failure: decisive })).toBe(false);
 });
