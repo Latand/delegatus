@@ -197,6 +197,17 @@ test("a swarm level says it is read only and offers no local mutation controls",
   expect(markup).not.toContain("data-rule-revert");
 });
 
+test("an opened swarm rule's detail line starts with its first provenance word, and a role rule's with its reason", () => {
+  const rule: RuleView = { id: "r_public", rule: "Name the file a change reaches.", why: "A change outside it surprises the reviewer.", state: "active", hints: [], roleId: "builder", fixRound: false, stageId: "", fresh: false, createdAt: "2026-10-23", changedAt: "2026-10-23", awaitingCuration: true };
+  setLocale("en");
+  const provenance = (kind: "swarm" | "role") => {
+    const markup = renderToStaticMarkup(<RuleSection kind={kind} title="Rules" scope={{ ...scope(80), scope: kind === "swarm" ? "swarm:builder" : "role:atlas:builder", kind, roleId: "builder", bound: 4000, active: [rule] }} focusRule={rule.id} onDelete={() => {}} onRestore={() => {}} />);
+    return markup.match(/data-rule-provenance=""[^>]*>([\s\S]*?)<\/span><\/span>/)?.[1]?.replace(/<[^>]+>/g, "") ?? "";
+  };
+  expect(provenance("swarm")).toBe(translate("en", "roleMemory.unreviewed"));
+  expect(provenance("role")).toBe(` · ${translate("en", "roleMemory.unreviewed")}`);
+});
+
 /* Audit B26: delete leaves at once, a refusal puts the rule back with the
    save error; restore and a text's revert are predicted the same way. */
 test("a delete leaves the list at once while the write is held, and a refusal brings the rule back with the save error", async () => {

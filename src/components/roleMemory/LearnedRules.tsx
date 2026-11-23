@@ -248,11 +248,11 @@ function RuleRow({ rule, kind, focused, scopeRole, onDelete, onRevert }: { rule:
       <div className="min-w-0 flex-1">
       <button type="button" aria-expanded={open} onClick={() => setExpansion({ focused, open: !open })} title={rule.note ?? (open ? undefined : `${t("roleMemory.why")} ${rule.why}`)}
         className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-        <span className={`block text-[12.5px] leading-[17px] text-primary [overflow-wrap:anywhere] ${open ? "" : "line-clamp-2"}`}>{rule.rule}</span>
+        <span className={`text-[12.5px] leading-[17px] text-primary [overflow-wrap:anywhere] ${open ? "block" : "line-clamp-2"}`}>{rule.rule}</span>
         {open ? (
           <span className="mt-0.5 block text-[11.5px] leading-4 text-secondary [overflow-wrap:anywhere]">
             {kind === "swarm" ? null : <><b className="font-semibold">{t("roleMemory.why")}</b> {rule.why}</>}
-            {meta.length ? <span data-rule-provenance="" className="text-muted"> · {meta.map((part, index) => <span key={index}>{index ? " · " : ""}{part}</span>)}</span> : null}
+            {meta.length ? <span data-rule-provenance="" className="text-muted">{kind === "swarm" ? "" : " · "}{meta.map((part, index) => <span key={index}>{index ? " · " : ""}{part}</span>)}</span> : null}
           </span>
         ) : null}
         {rule.hints.length ? (
@@ -290,7 +290,7 @@ function LeftRow({ rule, onRestore, counterpart, onFocus, onRevert, focused }: {
   return (
     <li ref={row} title={rule.note} data-left-rule={rule.id} data-focused={focused ? "" : undefined} className={`flex items-start gap-2 rounded-[8px] px-2 py-1 ${focused ? "bg-sunken" : ""}`}>
       <span className="min-w-0 flex-1">
-        <span className="block text-[11.5px] leading-4 text-muted line-through line-clamp-2 [overflow-wrap:anywhere]">{rule.rule}</span>
+        <span className="text-[11.5px] leading-4 text-muted line-through line-clamp-2 [overflow-wrap:anywhere]">{rule.rule}</span>
         <span className="block text-[10.5px] leading-4 text-muted [overflow-wrap:anywhere]">{t(reason)}{rule.where ? ` · ${rule.where}` : ""}</span>
         {counterpart ? <button type="button" data-rule-counterpart={counterpart.id} onClick={() => onFocus?.(counterpart.id)} className="text-left text-[11px] leading-4 text-accent [overflow-wrap:anywhere]">{counterpart.rule.slice(0, 70)}…</button> : null}
         <EarlierTexts rule={rule} onRevert={onRevert} />
@@ -520,7 +520,7 @@ export function LearnedRulesRow({ project, size, onOpened }: { project: string |
   const { t } = useLocale();
   const { view } = useProjectRules(project);
   if (!project) return null;
-  /* Every rule of the project, whatever its kind or role: the window's chips and headings add up to it. */
+  /* Every rule of the project, whatever its kind or role: the window's level list and headings add up to it. */
   const total = view?.scopes.reduce((sum, scope) => sum + scope.active.length, 0) ?? 0;
   const count = t("roleMemory.total", { count: total });
   const open = () => { openRulesWindow(project); onOpened?.(); };

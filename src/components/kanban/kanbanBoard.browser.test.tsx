@@ -4190,7 +4190,7 @@ const S7_STATES: S7State[] = [
   { id: "many-list-end", data: "many", endScroll: true, define: () => ["last:[data-memory-profile] [data-profile-level]"], act: async (page) => {
     await page.evaluate(() => { const list = document.querySelector<HTMLElement>("[data-memory-profile]")!; list.scrollTop = list.scrollHeight; });
   } },
-  { id: "topic", topicIds: S7_TOPIC_IDS, define: () => ['[data-level-pane="topic"] h3', '[data-level-pane="topic"] [data-rules-section]'], act: async (page) => { await page.locator('[data-profile-topic="0"]').click(); await page.locator('[data-level-pane="topic"]').waitFor(); } },
+  { id: "topic", topicIds: S7_TOPIC_IDS, define: () => ['[data-level-pane="topic"] h3', '[data-level-pane="topic"] [data-rules-section]'], act: async (page) => { await page.locator('[data-profile-topic="0"]').click(); await page.locator('[data-level-pane="topic"]').waitFor(); await page.evaluate(() => { for (const scroller of document.querySelectorAll<HTMLElement>("[data-memory-profile], [data-level-pane]")) scroller.scrollTop = 0; }); } },
   { id: "focus", focus: "b-export-format", define: () => ['[data-learned-rule="b-export-format"][data-open][data-focused]'] },
   { id: "focus-departed", focus: "r-merged", define: () => ['[data-left-rule="r-merged"][data-focused]', '[data-rules-history][aria-expanded="true"]'] },
   { id: "swarm", define: () => ["[data-level-pane] h3", '[data-learned-rule="sw-1"]'], act: async (page, { openLevel }) => { await openLevel(S7_SWARM); } },
@@ -4257,6 +4257,15 @@ const measureS7 = (page: Page, args: { phone: boolean; scopes: Record<string, { 
     const line = range.getClientRects()[0], at = remove.getBoundingClientRect();
     checked.removes++;
     if (line && Math.abs(at.top + at.height / 2 - (line.top + line.height / 2)) > 2) out.push(`x:${id}`);
+  }
+  /* A closed rule keeps to two lines, and an archived one too: the clamp is the closed row's defining element in the `long` state. */
+  for (const [selector, label, lineHeight] of [["[data-learned-rule]:not([data-open])", "button > span", 17], ["[data-left-rule]", ":scope > span > span", 16]] as const) {
+    for (const row of win.querySelectorAll<HTMLElement>(selector)) {
+      const text = row.querySelector<HTMLElement>(label);
+      if (!text) continue;
+      const lines = Math.round(text.getBoundingClientRect().height / lineHeight);
+      if (text.getBoundingClientRect().height > lineHeight * 2 + 1) out.push(`clamp:${row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule")}:${lines}`);
+    }
   }
   if (document.documentElement.scrollWidth > innerWidth) out.push("page-overflow");
   const title = document.getElementById("rules-window-title")!, titleBox = title.getBoundingClientRect();
@@ -4377,10 +4386,10 @@ describe("memory profile window: levels on the left, rules on the right", () => 
     const frames: unknown[] = [], failures: string[] = [], edges = new Map<string, Set<string>>();
     const pairs = [["en", "light"], ["en", "dark"], ["uk", "light"], ["uk", "dark"]] as const;
     try {
-      /* Desktop and phone widths take every state in every pair; the widths between them take the states that carry their own layout, in two pairs. */
+      /* Desktop, 1000 px and phone widths take every state in every pair; the widths between them take the states that carry their own layout, in two pairs. */
       const plan: { width: number; height: number; pairs: readonly (readonly ["en" | "uk", "light" | "dark"])[]; only?: (state: S7State) => boolean }[] = [
         { width: 1440, height: 900, pairs }, { width: 390, height: 844, pairs },
-        { width: 1000, height: 700, pairs: [["uk", "light"], ["en", "dark"]], only: state => !!state.wide },
+        { width: 1000, height: 700, pairs },
         { width: 768, height: 800, pairs: [["uk", "light"], ["en", "dark"]], only: state => !!state.edge },
         { width: 640, height: 800, pairs: [["uk", "light"], ["en", "dark"]], only: state => !!state.edge },
       ];
