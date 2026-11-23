@@ -357,13 +357,17 @@ test("the real controller returns while a 20 second fenced Git job remains pendi
   expect(pipelineControllerJobLanes()).toEqual([]);
 }, 60_000);
 
-test.each(["branch", "repository", "claim", "release", "remove", "archive", "progress", "raw-owner", "raw-peer"] as const)("a %s peer change retains stage-job authority fences", async change => {
+test.each(["branch", "repository", "claim", "release", "remove", "archive", "progress", "raw-owner", "raw-peer"] as const)("a %s change retains stage-job authority fences with a colliding peer", async change => {
   const { h, lane } = await committing();
   const peer = structuredClone(lane);
   peer.id = "controller-peer";
   Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
   peer.state = "closed"; peer.closedAt = h.ports.now(); peer.cursor = null;
-  peer.delivery = undefined; peer.publication = "internal"; peer.runs = peer.runs.map(run => ({ ...run, attempts: [] }));
+  peer.delivery = {
+    target: lane.delivery?.target ?? { repository: "fixture-repo", remote: "origin", branch: `refs/heads/${lane.branch}` },
+    disposition: "comparison", publish: "disabled", active: false, ownerId: lane.id, epoch: lane.delivery?.epoch ?? 1, journal: [],
+  };
+  peer.publication = "internal"; peer.runs = peer.runs.map(run => ({ ...run, attempts: [] }));
   if (change === "release") { peer.state = "paused"; peer.closedAt = null; }
   savePipelines([lane, peer]);
   const entered = latch(), release = latch();
