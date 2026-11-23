@@ -115,7 +115,7 @@ test.each(["success", "previous-classification", "exhausted", "exhausted-restart
   expect(pipeline().runs[0]!.attempts).toEqual([expect.objectContaining(originalAttempt)]);
 });
 
-test("a durable delivered continuation is charged before a newer cut replaces its wait", async () => {
+test.each(["delivered", "pre-execution-refused"] as const)("a newer cut charges only a %s prior continuation", async receipt => {
   const f = await providerRecoveryHarness("codex", "other", workspaceError);
   const pipeline = loadPipelines()[0]!;
   const attempt = pipeline.runs[0]!.attempts[0]!;
@@ -125,16 +125,17 @@ test("a durable delivered continuation is charged before a newer cut replaces it
     resumeAt: new Date(oldCut).toISOString(), resetsAt: null, continuationRequestedAt: new Date(oldCut + 1).toISOString() };
   attempt.providerRecoveryBudget = { tries: 0, startedAt: new Date(oldCut).toISOString(), engine: "codex" };
   savePipelines([pipeline]);
-  f.h.ports.conversationDeliveryCompleted = (_conversationId, key) => key.endsWith(`-${oldCut}`);
+  f.h.ports.conversationDeliveryCompleted = (_conversationId, key) => receipt === "delivered" && key.endsWith(`-${oldCut}`);
 
   f.advance(1_000);
   f.cut();
   await recoverPipelineProviderTurn(pipeline.id, { ...f.h.ports });
 
   const next = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  const tries = receipt === "delivered" ? 1 : 0;
   expect(next.providerWait).toMatchObject({
-    condition: { kind: "transient" }, tries: 1,
-    resumeAt: new Date(f.now() + 120_000).toISOString(),
+    condition: { kind: "transient" }, tries,
+    resumeAt: new Date(f.now() + 60_000 * 2 ** tries).toISOString(),
   });
-  expect(next.providerRecoveryBudget).toMatchObject({ tries: 1, startedAt: new Date(oldCut).toISOString() });
+  expect(next.providerRecoveryBudget).toMatchObject({ tries, startedAt: new Date(oldCut).toISOString() });
 });
