@@ -8,7 +8,8 @@ import { resolveShortId } from "@/lib/shortIds";
 import { spawn } from "node:child_process";
 
 import { changelogDelta, summarizeDelta } from "./changelog";
-import { shortSha, type CheckFailureCode, type CommitLine, type Relation, type Revision, type UpdateDelta } from "./types";
+import { shortSha, type CheckFailureCode, type CommitLine, type GreenTip, type Relation, type Revision, type UpdateDelta } from "./types";
+import type { GreenVerdict } from "./green";
 
 export const TIP_REF = "refs/self-update/tip";
 export const CANONICAL_REMOTE = "https://github.com/Latand/delegatus.git";
@@ -117,15 +118,22 @@ async function commitsBetween(repo: string, from: string, to: string): Promise<C
 }
 
 export type CheckOutcome =
-  | { ok: true; installed: Revision; available: Revision | null; relation: Relation; ahead: number; behind: number; delta: UpdateDelta | null }
+  | { ok: true; installed: Revision; available: Revision | null; relation: Relation; ahead: number; behind: number; delta: UpdateDelta | null; greenTip?: GreenTip }
   | { ok: false; error: string; code?: CheckFailureCode; installed: Revision | null };
 
 /** installed: the revision the install runs or will run next; `HEAD` in a
     checkout that was never updated. `fetchInstalled` lets a bare check
     repository learn it from the remote first. */
-export interface CheckInput { repo: string; remote: string; branch: string; installed?: string; fetchInstalled?: boolean }
+export interface CheckInput {
+  repo: string;
+  remote: string;
+  branch: string;
+  installed?: string;
+  fetchInstalled?: boolean;
+  readGreen?(sha: string): Promise<GreenVerdict>;
+}
 
-export async function checkForUpdate({ repo, remote, branch, installed: installedRev = "HEAD", fetchInstalled = false }: CheckInput): Promise<CheckOutcome> {
+export async function checkForUpdate({ repo, remote, branch, installed: installedRev = "HEAD", fetchInstalled = false, readGreen }: CheckInput): Promise<CheckOutcome> {
   let installed: Revision | null = null;
   try {
     if (fetchInstalled) await ensureCommit(repo, remote, branch, installedRev);
@@ -141,15 +149,35 @@ export async function checkForUpdate({ repo, remote, branch, installed: installe
     const relation: Relation = behindAll === 0 ? "ahead" : ahead === 0 ? "behind" : "diverged";
     if (relation === "ahead") return { ok: true, installed, available: null, relation, ahead, behind: 0, delta: null };
 
+    let target = tip;
+    let greenTip: GreenTip | undefined;
+    if (readGreen) {
+      // First parents are revisions the tracked branch actually served as its tip.
+      const candidates = (await git(repo, "rev-list", "--first-parent", `${base}..${tip}`)).trim().split("\n");
+      target = "";
+      for (const sha of candidates) {
+        // A checkout can be on a PR parent already included in main. Never
+        // offer an older main revision that would drop that installed history.
+        if (relation === "behind" && sha !== tip && (await runGit(["merge-base", "--is-ancestor", base, sha], repo)).code !== 0) break;
+        const verdict = await readGreen(sha);
+        if (sha === tip) greenTip = { revision: await readRevision(repo, tip), verdict };
+        if (verdict.state === "green") { target = sha; break; }
+        // A failed forge read stops this scan. The next poll can reuse the
+        // recent verdicts and retry from the tip.
+        if (verdict.state === "unknown") break;
+      }
+      if (!target) return { ok: true, installed, available: null, relation, ahead, behind: behindAll, delta: null, greenTip };
+    }
+
     const [available, commits, oldLog, newLog] = await Promise.all([
-      readRevision(repo, tip),
-      commitsBetween(repo, base, tip),
+      greenTip?.revision.sha === target ? greenTip.revision : readRevision(repo, target),
+      commitsBetween(repo, base, target),
       showFile(repo, base, "CHANGELOG.md"),
-      showFile(repo, tip, "CHANGELOG.md"),
+      showFile(repo, target, "CHANGELOG.md"),
     ]);
     /* Counted as listed (no merges); a tip that only merges known work still
        counts its merges rather than reading "0 commits behind". */
-    const behind = commits.length > 0 ? commits.length : behindAll;
+    const behind = commits.length > 0 ? commits.length : target === tip ? behindAll : await count(repo, `${base}..${target}`);
     return {
       ok: true,
       installed,
@@ -158,6 +186,7 @@ export async function checkForUpdate({ repo, remote, branch, installed: installe
       ahead,
       behind,
       delta: { commits, summary: summarizeDelta(changelogDelta(oldLog, newLog), behind) },
+      ...(greenTip ? { greenTip } : {}),
     };
   } catch (error) {
     return {

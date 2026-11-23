@@ -474,6 +474,29 @@ describe("automatic updates", () => {
     expect(copy).not.toContain(locale === "en" ? "Waiting over 24 hours" : "Очікування понад 24 години");
   });
 
+  test.each([
+    ["en", "Green update available", "No newer green revision found", "Automatic updates are on", "Turn off"],
+    ["uk", "Доступне оновлення, що пройшло CI", "поки немає новішої версії", "Автооновлення ввімкнено", "Вимкнути"],
+  ] as const)("%s panel names the green target or says it is waiting for one", (locale, targetCopy, waitCopy, autoCopy, switchCopy) => {
+    setLocale(locale);
+    const greenTip = { revision: rev("c".repeat(40), "1.2.4"), verdict: { state: "red" as const } };
+    const found = snapshot(available());
+    found.check.greenTip = greenTip;
+    const panel = render(found);
+    expect(text(panel)).toContain(`${targetCopy} · ${NEW_REV.short}`);
+    expect(button(panel, "update")?.disabled).toBe(false);
+    flushSync(() => root!.unmount());
+    host?.remove();
+    const waiting = snapshot({ check: { ...idleCheck(), state: "no-green", at: AT, nextPollAt: NEXT, greenTip } });
+    waiting.auto = { availability: "available", enabled: true, off: null, phase: "not-green", target: greenTip.revision,
+      green: greenTip.verdict, blockers: null, waitingSince: null, longWait: false };
+    const idle = render(waiting);
+    expect(text(idle)).toContain(waitCopy);
+    expect(text(section(idle, "auto"))).toContain(autoCopy);
+    expect(text(button(idle, "toggle-auto"))).toContain(switchCopy);
+    expect(button(idle, "update")).toBeNull();
+  });
+
   test.each(["en", "uk"] as const)("managed installs offer the auto switch in %s", (locale) => {
     setLocale(locale);
     const s = snapshot();

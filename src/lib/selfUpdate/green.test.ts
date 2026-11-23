@@ -27,6 +27,21 @@ function reader(options: { runs?: Record<string, unknown>[]; targetRuns?: Record
 }
 
 describe("green merge evidence", () => {
+  test("tracked updates use exact required evidence and replace cached green when admission finds a queued rerun", async () => {
+    const requiredRun = { id: 20, name: "runtime-gate", status: "completed", conclusion: "success" as string | null, app: { id: 15368 } };
+    const targetRuns = [requiredRun, { id: 21, name: "optional", status: "completed", conclusion: "failure", app: { id: 15368 } }];
+    const h = reader({ targetRuns, requiredChecks: [{ context: "runtime-gate", app_id: 15368 }] });
+    const read = (fresh = false) => h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, fresh, "tracked-update");
+    expect(await read()).toMatchObject({ state: "green", total: 1 });
+    targetRuns.push({ ...requiredRun, id: 22, status: "queued", conclusion: null });
+    expect(await read()).toMatchObject({ state: "green" });
+    expect(await read(true)).toMatchObject({ state: "pending", checks: ["runtime-gate"] });
+    expect(await read()).toMatchObject({ state: "pending" });
+    targetRuns[2] = { ...requiredRun, id: 22 };
+    h.advance(15 * 60_000);
+    expect(await read()).toMatchObject({ state: "green" });
+  });
+
   test("exact deployment reads required checks on the target while the equal-tree PR head is red", async () => {
     const targetRuns = [
       { id: 12, name: "runtime-gate", status: "in_progress", conclusion: null as string | null, app: { id: 15368 } },

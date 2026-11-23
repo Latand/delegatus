@@ -44,10 +44,10 @@ notice, separate manual restarts, and deferred drain policy are superseded.
   new admission immediately. Work already admitted keeps its custody and can
   finish. The hold covers new pipeline stages, automatic flow rounds, seat
   sends and structured delivery; queued work remains durable.
-- The cohort records its target, identity and start time. A newer green tip
-  does not replace an owned target. Restart recovery restores the same cohort
-  and hold from durable records. An unreadable custody record remains held
-  for repair.
+- The cohort records its target, identity and start time. A later check may
+  replace a waiting target before its build or deployment begins. Restart
+  recovery restores the same cohort and hold from durable records. An unreadable
+  custody record remains held for repair.
 - The Update surface shows the actual blockers: running turns and stages,
   operator activity, another update or restart, insufficient memory, and
   unreadable activity. Normal admission still requires the quiet probes,
@@ -175,12 +175,15 @@ under the state directory, `/proc`, and anonymous GitHub reads.
 
 ### 1.1 The target
 
-The target is the tip the check found, and only when the relation is `behind`
-(the installed revision is an ancestor of the tip). `diverged` and `ahead` are
-left alone (§8). The automatic path never walks back to an older green commit
-when the tip is not green. The next merge on top gets a verdict of its own,
-and with `strict` protection its pull request's checks ran on a tree that
-already contains the earlier commit.
+For a GitHub-tracked checkout or managed install, the Update button and
+automatic updates use the same check. It walks back from the fetched branch
+tip in first-parent order through revisions newer than the installation. It
+offers the first revision with green required checks. Red and pending commits
+are skipped. If the search finds no eligible revision or a GitHub read fails,
+the dialog shows the wait and automatic updates stay enabled. Checkout fetch
+verifies that the chosen commit is still on the remote branch before creating
+a release worktree.
+Automatic updates still leave `diverged` and `ahead` installs alone (§8).
 
 ### Exact post-merge runtime evidence
 
@@ -196,10 +199,10 @@ leave their commits ineligible; a newer green tip may be used instead.
 
 ### 1.2 Which checks vouch for the target
 
-When the PR head and the merged commit have identical trees, the PR head's
-checks vouch for the target. When those trees differ, a Delegatus checkout
-requires the exact post-merge push workflow described above. Other repositories
-still require matching trees.
+The updater uses required checks on the exact tracked commit, with the
+configured GitHub App binding where present. When the merged commit's tree
+differs from the PR head, Delegatus also requires the exact post-merge push
+workflow described above. Other repositories still require matching trees.
 
 ### 1.3 The reads
 
@@ -207,10 +210,10 @@ still require matching trees.
 timeout and follows bounded pagination:
 
 1. Find the merged pull request for the exact target and tracked branch.
-2. Compare the PR head tree with the target tree. For a match, evaluate the PR
-   head checks. For a mismatch on Delegatus, evaluate the target checks and
-   require the app-bound runtime gate and its matching successful push workflow
-   and check suite. For a mismatch elsewhere, report `untested-tree`.
+2. Compare the PR head tree with the target tree. Evaluate the checks on the
+   target. For a mismatch on Delegatus, also require the app-bound runtime
+   gate and its matching successful push workflow and check suite. For a
+   mismatch elsewhere, report `untested-tree`.
 3. Read check runs, statuses and branch protection; require every required
    context and refuse red or incomplete evidence.
 
@@ -227,20 +230,14 @@ re-exports them.
 
 | verdict | when | final for this target? |
 | --- | --- | --- |
-| `green` | at least one check; every check finished; none red; every required context present | yes |
-| `red` | any check concluded `FAILURE`, `CANCELLED`, `TIMED_OUT`, `ACTION_REQUIRED`, `STARTUP_FAILURE`, or a status `error`/`failure`. A red check that protection does not require still counts | yes |
+| `green` | every configured required context has a passing check, or all observed checks pass when no required contexts are configured | re-read periodically and at admission |
+| `red` | a relevant check concluded `FAILURE`, `CANCELLED`, `TIMED_OUT`, `ACTION_REQUIRED`, `STARTUP_FAILURE`, or a status `error`/`failure` | re-read periodically and at admission |
 | `no-checks` | the head has no check run and no status | yes |
 | `no-pull-request` | §1.3 step 1 | yes |
 | `untested-tree` | §1.3 step 2 cannot establish target evidence | re-read periodically |
-| `pending` | a check has not finished, or a required context is missing | re-read at each check. It becomes `checks-timeout` 90 minutes after the first read (`MERGE_WAIT_LIMIT_MS`, `autoMerge.ts:37`) |
+| `pending` | a relevant check has not finished, or a required context is missing | re-read periodically |
 | `unknown` | network failure, timeout, a 403/429 rate limit, a 404 (a private repository without credentials), or an answer that does not parse | re-read at the next check, or at `x-ratelimit-reset` when GitHub named one |
 | `unavailable` | the remote is not on github.com (a path, another forge, a GitHub Enterprise host) | until the remote changes |
-
-"Required checks green" in the specification is read as "every check green,
-the required ones included". Read literally, "required" means only the two
-privacy gates here, so a pull request whose tests failed could be merged and
-then installed automatically. The operator asked for *green merges*, and the
-auto-merge runner already set the same bar.
 
 **Without GitHub** (`unavailable`), the switch is shown disabled with the
 remote named. **Without checks** (`no-checks`), a tip is never applied, and
@@ -249,9 +246,11 @@ automatically" (merge policy §4.3). **When GitHub cannot be read**
 (`unknown`), nothing is applied and GitHub's own words are shown with the
 time of the next try. `unknown` never counts as green.
 
-Final verdicts are cached per target in `auto.json` (the last eight) for the
-waiting display. The build boundary and both restart admissions bypass that
-cache and the required-context cache. A changed or unreadable check defers the
+Recent selection verdicts are cached in memory to bound GitHub reads. Red
+results are retried within an hour and other results within 15 minutes,
+subject to the forge's rate-limit reset. The automatic waiting display keeps
+recent verdicts in `auto.json`. Update and restart admission reread the
+required contexts and check results. A changed or unreadable check defers the
 apply. These additional reads can meet GitHub's anonymous rate limit; a limit
 response is an `unknown` verdict and waits for a later try.
 
@@ -532,8 +531,8 @@ memory:
 | facts | action |
 | --- | --- |
 | setting off, or availability not `available` (§8) | nothing |
-| check `update-available`, relation `behind`, no verdict for the tip or verdict `pending`/`unknown` due | read green (§1) |
-| tip `green`, not built (`installed.sha ≠ tip`), nothing busy, ≥ 4 GB available | start the runner on the tip with `trigger: "auto"` |
+| no newer green revision | keep automatic updates enabled and check again on the poll cadence |
+| selected green revision, not built, nothing busy, ≥ 4 GB available | refresh the selected revision's evidence, then start the runner with `trigger: "auto"` |
 | built, web does not serve it, no request outstanding | probe; when quiet twice (§2.2), persist the request, then `requestRestart(record, "web")` |
 | web serves it, the runtime host does not | the same for `"runtime-host"` |
 | both serve it | write the history entry, clear the wait clock, prune (§6.3) |
@@ -939,8 +938,6 @@ reload row, evidence).
   runtime host's deployment coordinator, which holds a built, health-checked
   candidate until §2.2 holds. That touches the release succession itself and
   deserves its own design.
-- **Walking back to the newest green ancestor** when the tip is not green.
-  The next green merge carries the same code.
 - **Authenticated GitHub reads** (private repositories, a higher rate limit),
   and forges other than github.com.
 - **The long-wait Needs-you item was delivered by #2430.** It carries the
@@ -955,10 +952,10 @@ reload row, evidence).
 ## Validation against the requirement
 
 "Make Delegatus update itself after green merges": with the switch on, a
-checkout install notices a new commit on its branch within 15 minutes. It
-installs the commit only when the merged pull request that produced it passed
-every check on the same code, builds it without touching what runs, and moves
-web and then the runtime host onto it at the next moment when no agent turn,
+checkout install checks its tracked branch every 15 minutes. It selects the
+latest revision ahead of the installation with passing required checks,
+builds it in its own release worktree, and moves web and then the runtime host
+onto it at the next moment when no agent turn,
 pipeline stage, person or update is in flight. It records what it did as the
 manual path records it, marked automatic. A failure falls back as a manual
 restart does, puts the pointer back, and turns the switch off with the reason.

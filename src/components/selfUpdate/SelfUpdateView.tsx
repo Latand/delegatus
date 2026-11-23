@@ -301,6 +301,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
 
   if (update.state === "idle" || (update.state === "done" && freshTarget)) {
     if (!s.available || s.check.state !== "update-available") {
+      if (s.check.state === "no-green") return null;
       const rebuildCheckout = s.mode === "checkout" && s.auto?.availability === "hand-managed" && s.check.relation === "equal";
       const copy = rebuildCheckout ? t("selfUpdate.update.rebuildNote") : s.check.state === "up-to-date"
         ? t(managed ? "selfUpdate.update.nothingToDeploy" : "selfUpdate.update.nothingToBuild", { sha: s.installed.short, branch })
@@ -415,7 +416,8 @@ function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: Vie
   const names = useBlockerNames();
   if (!auto) return null;
   const available = auto.availability === "available";
-  const failed = auto.off?.stage === "build" ? s.update.steps.find((step) => step.state === "failed") : null;
+  const failed = auto.off?.stage === "build" && auto.off.target === s.update.target
+    ? s.update.steps.find((step) => step.state === "failed") : null;
   const offReason = failed ? `${stepName(failed.name, t)}: ${stepFailureText(failed, t) ?? auto.off!.reason}` : auto.off?.reason ?? "";
   const phase = auto.off ? t(s.mode === "managed" ? "selfUpdate.auto.offReasonManaged" : "selfUpdate.auto.offReason", { reason: offReason, sha: auto.target?.short ?? auto.off.target.slice(0, 7) })
     : auto.enabled && auto.deferred ? t("selfUpdate.auto.deferred", { time: clock(auto.deferred.until) })
@@ -424,7 +426,8 @@ function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: Vie
     : auto.phase === "deploying" ? t("selfUpdate.auto.deploying", { sha: auto.target?.short ?? "" })
     : auto.phase === "restarting-web" ? t("selfUpdate.auto.restartingWeb", { sha: auto.target?.short ?? "" })
     : auto.phase === "restarting-host" ? t("selfUpdate.auto.restartingHost", { sha: auto.target?.short ?? "" })
-    : auto.phase === "not-green" ? t("selfUpdate.auto.notGreen", { sha: auto.target?.short ?? "", reason: auto.green?.detail ?? auto.green?.state ?? "" })
+    : auto.phase === "not-green" ? s.check.state === "no-green" && !auto.drain ? t("selfUpdate.auto.noGreen")
+      : t("selfUpdate.auto.notGreen", { sha: auto.target?.short ?? "", reason: auto.green?.detail ?? auto.green?.state ?? "" })
     : auto.phase === "checks" ? t("selfUpdate.auto.checking", { sha: auto.target?.short ?? "" })
     : t(auto.enabled ? s.mode === "managed" ? "selfUpdate.auto.readyManaged" : "selfUpdate.auto.ready"
       : s.mode === "managed" ? "selfUpdate.auto.disabledManaged" : "selfUpdate.auto.disabled");
