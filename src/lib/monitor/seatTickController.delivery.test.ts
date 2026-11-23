@@ -5,6 +5,7 @@ import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestrat
 import { cancelSeatQuotaOnControl } from "./seatQuotaRecovery";
 import { wakeResponseEvidenceFromEvents, wakeResponseRecoveryKey, type SeatWakeResponse } from "./seatWakeResponse";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
 // Terminal inbound failures survive fresh controller instances and enter the
 // same recovery record that ordinary composer revival and lost-seat rotation use.
@@ -16,7 +17,9 @@ test.each(["direct", "partial", "admitted", "busy-revival", "gone-before-nudge"]
   const { journal, client, sessionId } = hostedSeat(fixture);
   const key = { engine: "claude" as const, sessionId };
   const entry = fixture.registry.hostEntry(key)!;
-  fixture.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: { pid: 4100, startIdentity: "fixture-writer", bootEpoch: "fixture-boot" } } });
+  // Settlement checks the recorded process identity while the admitted nudge is queued.
+  const writer = mode === "admitted" ? captureProcessIdentity(process.pid) : { pid: 4100, startIdentity: "fixture-writer", bootEpoch: "fixture-boot" };
+  fixture.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: writer } });
   fixture.registry.reconcileConversations([{ engine: "claude", path: fixture.seat.path!, accountId: null,
     launchProfile: emptyLaunchProfile({ cwd: fixture.cwd }), turn: { state: "idle", source: "assistant", terminalAt: new Date(NOW).toISOString() }, observedAt: new Date(NOW).toISOString() }]);
   const failure = (id: string) => {
@@ -38,7 +41,7 @@ test.each(["direct", "partial", "admitted", "busy-revival", "gone-before-nudge"]
         }
         return { ok: false, outcome: "failed", status: 409, admission: "refused", error: "fixture refused before reservation" };
       },
-      seatActivity: { conversationId: fixture.seat.conversationId, verified: true, host: { state: "alive", kind: "structured", pid: 4100 },
+      seatActivity: { conversationId: fixture.seat.conversationId, verified: true, host: { state: "alive", kind: "structured", pid: writer.pid },
         turnState: "idle", lifecycle: "waiting", reason: "host_alive_turn_idle", activity: { state: "idle", check: null, idleForMs: minutes * MINUTE } } });
     rig.deps.sources!.registry = () => fixture.registry;
     rig.deps.seatRecovery = { client, cleanup: async (_id, guard, idle) => {
@@ -65,6 +68,7 @@ test.each(["direct", "partial", "admitted", "busy-revival", "gone-before-nudge"]
     if (mode === "admitted") {
       expect(fixture.row().hostRecovery?.incoming?.phase).toBe("nudge");
       const waiting = await step(16); expect(waiting.rig.sent).toHaveLength(0); expect(cleaned).toBe(0);
+      expect(fixture.row().hostRecovery?.incoming?.phase).toBe("nudge");
       const settled = await step(26); expect(settled.rig.sent).toHaveLength(0);
     }
     expect(fixture.row().hostRecovery?.incoming?.phase).toBe("cleanup");
@@ -885,8 +889,9 @@ test("a re-host keeps an unsettled original nudge fenced", async () => {
     const old = f.fixture.registry.hostEntry(f.key)!;
     f.fixture.registry.upsert({ ...old, claimEpoch: old.claimEpoch + 1,
       structuredHost: { ...old.structuredHost!, writerClaimEpoch: old.claimEpoch + 1,
-        process: { pid: 4200, startIdentity: "fixture-successor", bootEpoch: "fixture-boot" } } });
+        process: captureProcessIdentity(process.pid) } });
     for (const minute of [16, 17]) {
+      setSystemTime(new Date(NOW + minute * MINUTE));
       const rig = f.ready(minute);
       rig.deps.seatRecovery = { client: f.client, cleanup: async () => { cleanups++; return false; } };
       await runSeatTickCheck(f.fixture.project, rig.deps);
