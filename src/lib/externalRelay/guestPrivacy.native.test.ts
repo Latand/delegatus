@@ -8,7 +8,7 @@ import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { runClaimedRequest } from "./runner";
 import { requestSchema } from "./protocol";
 import { updateRelayStore, newTargetSettings, readRunLedger, type PairedRelay } from "./store";
-import { startTestRelay } from "./testRelay";
+import { ownerIntentFixture, startTestRelay } from "./testRelay";
 import { readAnswerRecord, relayAnswersRoot } from "./answers";
 import { readConversations } from "./conversations";
 
@@ -49,7 +49,9 @@ for (const ending of ["success", "failure", "cancellation"] as const)
     const launched = new Promise<ephemeral.EphemeralAgentRun>(resolve => { ready = resolve; });
     const original = ephemeral.runEphemeralAgent;
     const launch = spyOn(ephemeral, "runEphemeralAgent").mockImplementation(async input => {
-      const run = await original(input); ready(run); return run;
+      const run = await original(input);
+      if (input.key.startsWith("external-relay:")) ready(run);
+      return run;
     });
     let modelCalls = 0;
     const contexts: string[] = [];
@@ -92,8 +94,9 @@ process.exit(await child.exited);`);
       }] };
     updateRelayStore(store => ({ ...store, relays: [relay] }));
     const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-06T12:00:01Z"));
+    const ownerIntentCommand = ownerIntentFixture(work, false);
     try {
-      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command });
+      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command, ownerIntentCommand });
       expect(result?.outcome).toBe(ending === "success" ? "answered" : "failed");
       if (ending === "cancellation") expect(result).toMatchObject({ reason: "cancelled" });
       expect(modelCalls).toBe(1);
@@ -118,7 +121,7 @@ process.exit(await child.exited);`);
       follow.input.short_term_memory = null;
       follow.input.conversation = [{ ...trigger, id: "follow_up", text: "Follow up", reply_to: null }];
       follow.input.respond_to = "follow_up"; follow.input.request_text = "Follow up";
-      expect((await runClaimedRequest(relay, follow, undefined, { leaseWorker: false, command }))?.outcome).toBe("answered");
+      expect((await runClaimedRequest(relay, follow, undefined, { leaseWorker: false, command, ownerIntentCommand }))?.outcome).toBe("answered");
       expect(modelCalls).toBe(2);
       for (const marker of markers) expect(contexts[1]).not.toContain(marker);
       const next = JSON.parse(fs.readFileSync(capture, "utf8"));
@@ -151,7 +154,9 @@ for (const ending of ["success", "failure", "cancellation", "ordinary-control"] 
     const launched = new Promise<ephemeral.EphemeralAgentRun>(resolve => { ready = resolve; });
     const original = ephemeral.runEphemeralAgent;
     const launch = spyOn(ephemeral, "runEphemeralAgent").mockImplementation(async input => {
-      const run = await original(input); ready(run); return run;
+      const run = await original(input);
+      if (input.key.startsWith("external-relay:")) ready(run);
+      return run;
     });
     const output = { action: "reply", text: "Done.", reply_to: null };
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
@@ -209,6 +214,7 @@ process.exit(await child.exited);`);
       }] };
     updateRelayStore(store => ({ ...store, relays: [relay] }));
     const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-06T12:00:01Z"));
+    const ownerIntentCommand = ownerIntentFixture(work, false);
     try {
       if (ending === "ordinary-control") {
         const control = await original({ key: "claude-control", engine: "claude", model: "haiku", effort: null, account,
@@ -217,7 +223,7 @@ process.exit(await child.exited);`);
         for (const marker of markers) expect(exports.some(body => body.includes(marker))).toBe(true);
         return;
       }
-      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command });
+      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command, ownerIntentCommand });
       expect(result?.outcome).toBe(ending === "success" ? "answered" : "failed");
       if (ending === "cancellation") expect(result).toMatchObject({ reason: "cancelled" });
       for (const marker of markers) expect(contexts[0]).toContain(marker);
@@ -241,7 +247,7 @@ process.exit(await child.exited);`);
       follow.input.respond_to = "follow_up"; follow.input.request_text = "Follow up";
       const previousCalls = contexts.length;
       refusing = false;
-      expect((await runClaimedRequest(relay, follow, undefined, { leaseWorker: false, command }))?.outcome).toBe("answered");
+      expect((await runClaimedRequest(relay, follow, undefined, { leaseWorker: false, command, ownerIntentCommand }))?.outcome).toBe("answered");
       expect(contexts.length).toBeGreaterThan(previousCalls);
       for (const body of contexts.slice(previousCalls)) for (const marker of markers) expect(body).not.toContain(marker);
       expect(exports).toEqual([]);

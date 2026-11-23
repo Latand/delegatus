@@ -2938,6 +2938,7 @@ export async function claudeStartupHostOptions(
     appendSystemPrompt: await learnedRulesForLaunchProfile(entry.launchProfile, identity ? { engine: "claude", ...identity, cwd: entry.cwd, home: owner?.home, env: access.env, claudeSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath, providerAccount: Boolean(owner?.claudeProvider) } : undefined),
     mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
     mcpStatePath: launchPaths?.mcpStatePath,
+    ...(entry.launchProfile?.ownerRelayHandoffOnly ? { tools: ["Read"] } : {}),
     readOnly: launchProfileEngineReadOnly(entry.launchProfile),
     restricted: entry.launchProfile?.sandbox === "restricted",
     env: access.env,
@@ -3796,7 +3797,7 @@ async function adoptStructuredHostsPass(
         // The surviving process retains its original MCP capability and launch
         // policy. Rotating its token would strand every tool call after adoption.
         if (entry.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) {
-          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, omitSkillsInstructions, env: stageEnvironment,
+          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, omitSkillsInstructions, ...(launchProfile?.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}), env: stageEnvironment,
             mcpServers: launchProfile?.mcpServers ?? ["viewer"], plugins: launchProfile?.plugins ?? [] };
         }
         const capability = (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath)));
@@ -3820,6 +3821,7 @@ async function adoptStructuredHostsPass(
           cleanMemory: launchProfile?.cleanMemory === true,
           omitSkillsInstructions,
           nativeMemoryEnabled,
+          ...(launchProfile?.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
           developerInstructions: await learnedRulesForLaunchProfile(launchProfile, { engine: "codex", ...memoryStartIdentity(registry, conversation.id), cwd: entry.cwd, home: owner?.home, env: access.env, nativeMemoryEnabled }),
           mcpServers: launchProfile?.mcpServers ?? ["viewer"],
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
