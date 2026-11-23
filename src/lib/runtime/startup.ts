@@ -106,6 +106,7 @@ import {
   initializeRecipientInterruptionIndex,
   recipientInterruptionEvidence,
   recipientInterruptionObligationStore,
+  RecipientInterruptionEvidenceError,
   interruptionObligationUnresolved,
   interruptionStageOf,
   restartCutProposal,
@@ -127,6 +128,7 @@ type RecipientStartupAuthority = Required<Pick<import("./structuredRecovery").St
 type StartupPassState = {
   restartCutObservations?: Map<string, { owner: string; at: number; transcript: string; workAt: number | null }>;
   recipients?: Map<string, Promise<RecipientStartupAuthority>>;
+  reportedInterruptionRefusals?: Set<RecipientInterruptionEvidenceError["category"]>;
   recipientDependencies?: StructuredStartupDependencies;
   /** The host rows this process has found cut. The set silences the generic
       Codex nudge for them and gates nothing else. */
@@ -3025,9 +3027,22 @@ async function prepareStructuredStartupRecipientOnce(
   if (!evidenceVersion) refuse("recipient pipeline ownership index is unavailable or incomplete");
   const membershipIdentity = startupMembershipIdentity(selection);
   const interruptionDirectory = interruptionObligationDirectory(registry.filename);
+  const holdInterruptionFailure = (cause: unknown): never => {
+    let message = "recipient interruption evidence is unavailable or incomplete";
+    if (cause instanceof RecipientInterruptionEvidenceError) {
+      message = cause.message;
+      // Delivery holds retry independently. Emit each redacted reason once.
+      const reported = startupPassState(registry).reportedInterruptionRefusals ??= new Set();
+      if (!reported.has(cause.category)) {
+        reported.add(cause.category);
+        console.error(`[structured hosts] ${message}`);
+      }
+    }
+    throw new StructuredRecoveryHeldForUpdateError(message, { cause });
+  };
   const interruptionEvidence = () => {
     try { return recipientInterruptionEvidence(interruptionDirectory, selection.selectedIds); }
-    catch { return refuse("recipient interruption evidence is unavailable or incomplete"); }
+    catch (cause) { return holdInterruptionFailure(cause); }
   };
   let interruptionRevision = interruptionEvidence().revision;
   let stamp: RestartCutStamp | undefined;
@@ -3049,7 +3064,7 @@ async function prepareStructuredStartupRecipientOnce(
   };
   if (dependencies.interruptions) refuse("recipient interruption evidence requires the indexed store");
   const allInterruptions = recipientInterruptionObligationStore(interruptionDirectory, selection.selectedIds);
-  const obligations = () => allInterruptions.list().filter(item => item.hostKey === hostKey);
+  const obligations = () => interruptionEvidence().records.filter(item => item.hostKey === hostKey);
   let rejectWait: ((error: unknown) => void) | undefined;
   const stopped = new Promise<never>((_resolve,reject) => { rejectWait=reject; });
   const onAbort = () => rejectWait?.(Object.assign(new StructuredRecoveryHeldForUpdateError(
@@ -3070,7 +3085,8 @@ async function prepareStructuredStartupRecipientOnce(
       if (recoveries.some(target => !orchestratorRestartRecoveryCaptureIsCurrent(registry,target,seats(),currentSnapshot))) {
         refuse("recipient startup seat evidence changed during preparation");
       }
-      recordOrchestratorRestartObligations(allInterruptions,recoveries);
+      try { recordOrchestratorRestartObligations(allInterruptions,recoveries); }
+      catch (cause) { return holdInterruptionFailure(cause); }
       settleSubmittedInterruptionObligations(registry,allInterruptions,obligations().filter(interruptionObligationUnresolved));
       interruptionRevision = interruptionEvidence().revision;
       const recognition = await restartCutTargets(registry,relevantSeats(),obligations(),new Set([hostKey]),
@@ -3080,7 +3096,8 @@ async function prepareStructuredStartupRecipientOnce(
       if (stamp && currentRestartCutStamp(stamp,entry!) !== stamp.value) refuse("recipient restart cut evidence changed");
       const cutState = startupPasses.get(registry)!;
       const cutKeys = cutState.cutHostKeys ??= new Set<string>();
-      recordRestartCuts(allInterruptions,recognition.cuts,cutKeys);
+      try { recordRestartCuts(allInterruptions,recognition.cuts,cutKeys); }
+      catch (cause) { return holdInterruptionFailure(cause); }
       const unwithdrawn = withdrawRestartCutProposals(allInterruptions,recognition.disproved,cutKeys,"the turn's own evidence shows it ended by itself");
       interruptionRevision = interruptionEvidence().revision;
       if (recognition.undecided.has(hostKey) || unwithdrawn.has(hostKey)) {
