@@ -19,7 +19,7 @@ import { ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, ATTEMPT_SCRATCH_RETENTION_MS } from "
 /** The sweep helper serves every minute tick from one process. */
 const checkoutReads: RetainedCheckoutReads = new Map();
 
-export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory = new RepositoryLinkInventory(), now = Date.now, retentionMs = FINISHED_LANE_RETENTION_MS): Promise<AttemptTempAuthority> {
+export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory = new RepositoryLinkInventory(), now = Date.now, retentionMs = FINISHED_LANE_RETENTION_MS, requireAttempt = false): Promise<AttemptTempAuthority> {
   if (!owner.pipelineId) {
     // A missing process snapshot cannot end a standalone host: reconnect and
     // resume keep its durable launch alive. Pin the keyed facts through dispatch.
@@ -47,6 +47,7 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory =
     || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId);
   const run = pipeline.runs.find(run => run.attempts.some(matches));
   const attempt = run?.attempts.find(matches);
+  if (requireAttempt && !attempt) return observed("unknown");
   if (attempt?.launchId === owner.launchId && attempt.state === "running") return observed("live");
   if (pipeline.state === "closed" || pipeline.state === "completed") {
     const finish = laneFinish(pipeline, retentionMs);

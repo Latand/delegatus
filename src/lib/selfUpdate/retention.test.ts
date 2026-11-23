@@ -576,6 +576,29 @@ test("recent and newest-K releases are kept; K follows LLV_SELF_UPDATE_KEEP_RELE
   expect(report.removed).toHaveLength(5);
 });
 
+test("the cleaner retains the newest 15, the running release and pinned data", async () => {
+  const h = fixture(20), git = h.ports.git!;
+  h.ports.git = async (args, cwd) => {
+    const result = await git(args, cwd);
+    return args[0] === "worktree" && args[1] === "list" ? { ...result, stdout: `worktree ${h.root}\0HEAD main\0\0${result.stdout}` } : result;
+  };
+  const running = h.dirs[1]!, pinned = h.dirs[2]!;
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: running }));
+  fs.writeFileSync(path.join(pinned, ".delegatus-keep"), "");
+  const journal: Array<{ phase: string; directory: string; bytes: number; proof: string }> = [];
+  h.ports.cleaner = { allowed: () => true, dryRun: false,
+    journal: (phase, directory, bytes, proof) => journal.push({ phase, directory, bytes, proof }) };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  const removed = [h.dirs[0]!, h.dirs[3]!, h.dirs[4]!];
+  expect(report.removed.map(row => row.dir)).toEqual(removed);
+  expect(journal).toEqual(removed.flatMap(directory => ["intent", "removed"].map(phase => expect.objectContaining({
+    phase, directory, bytes: expect.any(Number), proof: expect.stringContaining("beyond newest 15"),
+  }))));
+  for (const dir of [running, pinned, ...h.dirs.slice(-15)]) expect(exists(dir)).toBeTrue();
+  expect(exists(path.join(running, ".next/cache/webpack/cache"))).toBeTrue();
+}, 30_000);
+
 test.each(["pointer", "listing", "scan", "launcher"])("an unreadable %s removes nothing", async kind => {
   const h = fixture();
   if (kind === "pointer") fs.writeFileSync(h.record.releasePointer, "invalid");

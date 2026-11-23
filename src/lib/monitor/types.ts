@@ -1540,6 +1540,8 @@ export interface SeatTickCard {
   ref: string;
   kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "check-errors" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery" | "disk-pressure";
   detail: string;
+  /** Update a disk warning with the cleaner's durable completion report. */
+  cleanupReport?: boolean;
   /**
    * Whether the condition still holds.
    *

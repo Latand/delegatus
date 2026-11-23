@@ -3,6 +3,8 @@ import { withSelfObservation, type RetentionScan } from "./retentionInspection";
 import { RetentionWorker, RetentionInspectionError, type RetentionInspection } from "./retentionWorker";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
+import type { CleanerJournal } from "@/lib/cleaner/diskJournal";
+import { assertRetentionTestPath } from "@/lib/retentionTestSafety";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
@@ -10,7 +12,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { inspectTree, matchesSnapshot, mountPointsUnder, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
 import { classifyStatus, disposableGeneratedTree, disposableIgnoredPath, keptIgnored, lockCheckoutHead, parseWorktreeList } from "@/lib/pipelines/worktreeSweep";
 import { runGit } from "./git";
-import { builtRevision } from "./steps";
+import { builtRevision, releaseBuilt } from "./steps";
 import { adoptLegacyTrash, isGatedTrashRow, quarantineTree, reopenGate, settleGatedTrash } from "./gatedTrash";
 import type { LauncherRecord } from "./launcher";
 import { retentionErrorDetails } from "./retentionLog";
@@ -41,6 +43,7 @@ export type RetentionPorts = {
   maxCandidates?: number;
   removeTree?: (directory: string) => Promise<void>;
   lockHead?: (directory: string) => (() => void) | null;
+  cleaner?: { allowed: () => boolean; journal: CleanerJournal; dryRun: boolean };
 };
 const under = (entry: string, root: string) => entry === root || entry.startsWith(root + path.sep);
 
@@ -71,6 +74,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   try {
   const now = ports.now ?? Date.now;
   const run = ports.git ?? runGit;
+  const cleaner = ports.cleaner;
   const report: RetentionReport = { at: new Date(now()).toISOString(),
     ...(typeof ports.env?.LLV_RETENTION_RUN_ID === "string" && { runId: ports.env.LLV_RETENTION_RUN_ID }),
     removed: [], reclaimedCacheBytes: 0, kept: [], errors: [] };
@@ -152,6 +156,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     }) || proc.references?.some(entry => entry.includes(dir)));
   };
   const protect = (candidate: Candidate, current: Awaited<ReturnType<typeof read>>, processes: ProcessScan, recovering = false): string | null => {
+    if (cleaner && !cleaner.allowed()) return "cleaner ownership changed";
     const { record: owner, inputs: state } = current;
     if (owner.releasesDir !== record.releasesDir || owner.checkout !== record.checkout || owner.releasePointer !== record.releasePointer)
       throw new Error("installation changed during retention");
@@ -207,6 +212,12 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   };
   const prune = async () => {
     const root = path.resolve(record.releasesDir);
+    if (cleaner) {
+      assertRetentionTestPath(root);
+      assertRetentionTestPath(reportFile);
+      if (!record.checkout) return;
+      assertRetentionTestPath(record.checkout);
+    }
     // No update cache or interrupted work exists on a clean first start.
     // In particular, it needs no Linux procfs inventory on other platforms.
     if (!previousTrash.some(file => TRASH_JOURNAL.test(file))
@@ -230,8 +241,12 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
       if (record.checkout ? !/^[a-f0-9]{12}$/.test(name) : !/^npm-\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(name)) continue;
       const registered = listed.find(entry => path.resolve(entry.path) === dir && !entry.bare && !entry.prunable);
+      if (cleaner && (dir === path.resolve(record.checkout!) || registered && listed[0] === registered)) continue;
       if (record.checkout && !registered) { report.kept.push({ dir, reason: "unregistered", bytes: 0 }); continue; }
       let sha = registered?.head ?? "";
+      if (cleaner && (!registered || registered.branch || !sha.startsWith(name) || !releaseBuilt(dir, sha))) {
+        report.kept.push({ dir, reason: "release ownership unproven", bytes: 0 }); continue;
+      }
       if (!record.checkout) {
         try { sha = JSON.parse(fs.readFileSync(path.join(dir, "node_modules/delegatus-cli/package.json"), "utf8")).gitHead ?? ""; }
         catch { /* Unknown package revision cannot match serving revisions. */ }
@@ -239,7 +254,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       candidates.push({ dir, sha, age: releaseAge(dir, !!record.checkout), locked: registered?.locked ?? false, identity: identity(dir) });
     }
     const rawKeep = Number((ports.env ?? process.env).LLV_SELF_UPDATE_KEEP_RELEASES?.trim() || 3);
-    const keepCount = Number.isFinite(rawKeep) ? Math.max(1, Math.floor(rawKeep)) : 3;
+    const configuredKeep = Number.isFinite(rawKeep) ? Math.max(1, Math.floor(rawKeep)) : 3;
+    const keepCount = cleaner ? Math.max(15, configuredKeep) : configuredKeep;
     // Validate every safety input before the first mutation.
     const protectedSet = new Map(candidates.map(candidate => [candidate.dir, protect(candidate, initial, processes)]));
     // A whole release an interrupted pass quarantined, still intact, is still
@@ -266,9 +282,9 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         else quarantined.push({ dir: row.directory, sha: row.context?.sha ?? "", age, locked: false, identity: String(row.identity ?? "") });
       } catch { /* An unreadable journal is replayed, and reported, below. */ }
     }
-    const newest = new Set([...candidates.filter(candidate => !protectedSet.get(candidate.dir)),
+    const newest = new Set([...candidates.filter(candidate => cleaner || !protectedSet.get(candidate.dir)),
       ...quarantined.filter(candidate => !protect(candidate, initial, processes, true))]
-      .filter(candidate => now() - candidate.age >= DAY).sort((a, b) => byAge(b, a)).slice(0, keepCount).map(candidate => candidate.dir));
+      .filter(candidate => cleaner || now() - candidate.age >= DAY).sort((a, b) => byAge(b, a)).slice(0, keepCount).map(candidate => candidate.dir));
     const safeRef = async (sha: string) => {
       const refs = await run(["for-each-ref", "--contains", sha, "--format=%(refname)", "refs/heads", "refs/remotes", "refs/self-update/tip"], record.checkout!);
       return refs.code === 0 && refs.stdout.split("\n").some(ref => ref.trim().length > 0);
@@ -295,7 +311,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const bytes = reason === "mount-boundary" ? 0 : await bytesOf(candidate.dir);
           report.kept.push({ dir: candidate.dir, reason, bytes });
           // Runtime caches and unfinished builds are kept. Only webpack is disposable.
-          if (["mount-boundary", "in-flight", "changed"].includes(reason) || !record.checkout
+          if (cleaner || ["mount-boundary", "in-flight", "changed"].includes(reason) || !record.checkout
             || ((await read()).inputs.inFlight ?? []).some(dir => under(dir, candidate.dir))) continue;
           const head = await run(["rev-parse", "HEAD"], candidate.dir);
           if (head.code !== 0 || builtRevision(candidate.dir) !== head.stdout.trim()) continue;
@@ -343,7 +359,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const listing = await run(["worktree", "list", "--porcelain", "-z"], record.checkout);
           if (listing.code !== 0) throw new Error("cannot refresh release worktree listing");
           const entry = parseWorktreeList(listing.stdout).find(entry => path.resolve(entry.path) === candidate.dir);
-          if (!entry || entry.locked || entry.head !== actualHead.stdout.trim() || await freshProtection(candidate) || mounts(candidate.dir).length) {
+          if (!entry || entry.locked || cleaner && entry.branch || entry.head !== actualHead.stdout.trim()
+            || await freshProtection(candidate) || mounts(candidate.dir).length) {
             report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue;
           }
           let content = await worktreeStatus(candidate.dir);
@@ -356,6 +373,11 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             const target = path.join(candidate.dir, ignored);
             let stat: fs.Stats;
             try { stat = fs.lstatSync(target); } catch { content = { ...content, ignored: [ignored] }; break; }
+            if (cleaner) {
+              const generated = stat.isDirectory() && disposableGeneratedTree(target, true);
+              if (!generated && !stat.isFile() && !stat.isSymbolicLink()) { content = { ...content, ignored: [ignored] }; break; }
+              continue;
+            }
             if (stat.isFile() || stat.isSymbolicLink()) {
               const parent = path.dirname(target), parentIdentity = identity(parent);
               const { current, processes: fresh } = await freshObservation();
@@ -434,13 +456,25 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           }
           // Rename out of the release path, recheck Git content there, then
           // remove from behind the closed gate. The ready marker goes first.
+          const preserve = (directory: string) => fs.existsSync(path.join(root, ".delegatus-keep"))
+            || !!inspectTree(directory, { registeredWorktree: true, preserveKeep: true, mounts: mounts(path.resolve(directory)) }).hold;
+          if (cleaner && (preserve(candidate.dir) || cleaner.dryRun)) {
+            report.kept.push({ dir: candidate.dir, reason: cleaner.dryRun ? "dry-run" : "keep marker, Git, or filesystem boundary", bytes }); continue;
+          }
           const journal = path.join(path.dirname(reportFile), `release-trash-${randomUUID()}.json`);
           const row = quarantineTree(candidate.dir, journal, { sha: candidate.sha, age: candidate.age });
           if (!row) { report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue; }
           const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree, first: [".next/DELEGATUS_RELEASE_READY"],
-            beforeGate: trash => releaseContentHold(trash, candidate.sha),
-            observe: (trash, gate) => gatedReleaseHold(candidate, trash, gate) });
+            beforeGate: async trash => cleaner && (preserve(trash) || !releaseBuilt(trash, candidate.sha))
+              ? "keep marker, Git, or filesystem boundary" : releaseContentHold(trash, candidate.sha),
+            observe: (trash, gate) => gatedReleaseHold(candidate, trash, gate),
+            validate: cleaner && (directory => !preserve(directory)),
+            beforeRemove: cleaner && (() => {
+              if (!cleaner.allowed()) throw new Error("cleaner lost traffic ownership");
+              cleaner.journal("intent", candidate.dir, bytes, `registered release ${candidate.sha} beyond newest ${keepCount}, ref preserved, fenced owner and process checks clear`);
+            }) });
           if (!outcome.removed) { report.kept.push({ dir: candidate.dir, reason: outcome.reason, bytes }); continue; }
+          cleaner?.journal("removed", candidate.dir, bytes, `registered release ${candidate.sha} beyond newest ${keepCount}, ref preserved, fenced owner and process checks clear`);
           report.removed.push({ dir: candidate.dir, sha: candidate.sha, bytes });
           await dropWorktreeMetadata(candidate.dir);
           continue;
@@ -462,6 +496,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       } catch (error) { if (error instanceof RetentionInspectionError) throw error; report.errors.push(`${candidate.dir}: ${String(error)}`); }
     }
     // Recover only intents whose original path belongs to this releases root.
+    if (cleaner) return; // Existing journals stay with their original retention owner.
     let recovered = 0;
     const recoveryFiles = previousTrash.filter(file => TRASH_JOURNAL.test(file));
     const afterRecoveryCursor = (file: string) => recoveryCursor !== undefined && file > recoveryCursor;

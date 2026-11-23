@@ -1,0 +1,157 @@
+import fs from "node:fs";
+import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
+import { statePath } from "@/lib/configDir";
+import { attemptTempConfigParent } from "@/lib/runtime/attemptTempPaths";
+import { assertRetentionTestPath } from "@/lib/retentionTestSafety";
+import { diskVolumes, type DiskPressure } from "@/lib/state/diskPressure";
+import { writeJsonDurably } from "@/lib/state/durableJson";
+import { FileTransactionBusyError, withFileTransactionAsync } from "@/lib/state/fileTransaction";
+import { STATE_LOCK_WAIT_MS } from "@/lib/state/lockWait";
+import { tempSweepMode } from "@/lib/tempSweep";
+import {
+  cleanerJournalFile, createCleanerJournal, DISK_CLEANER_CLASSES, diskCleanerStateFile, type CleanerHold, type CleanerSlice, type DiskCleanerClass,
+} from "./diskJournal";
+import { readDiskCleanerPass, type CleanerSpace, type DiskCleanerPass } from "./diskState";
+import { recordDiskCleanerReport } from "./diskReport";
+import type { CleanerSweepRequest, CleanerSweepResult } from "./diskSweep";
+
+const DEFAULT_FREE_GB = 150;
+export const DISK_CLEANER_COOLDOWN_MS = 15 * 60_000;
+const PASS_BUDGET_MS = 20 * 60_000;
+const EVIDENCE_SLICES = 16;
+
+export function diskCleanerThreshold(env: Readonly<Record<string, string | undefined>> = process.env) {
+  const raw = env.LLV_CLEANER_FREE_GB?.trim();
+  const value = raw ? Number(raw) : DEFAULT_FREE_GB;
+  return Number.isFinite(value * 1e9) && value >= 0 ? value * 1e9 : DEFAULT_FREE_GB * 1e9;
+}
+
+function needsCleaning(pressure: DiskPressure, threshold: number, readings: CleanerSpace[]) {
+  return pressure.volumes.some(row => row.level === "warning" || row.level === "critical")
+    || [...pressure.volumes, ...readings].some(row => row.freeBytes !== null && row.freeBytes < threshold);
+}
+
+function measure(): CleanerSpace[] {
+  return diskVolumes([{ role: "root", directory: "/" }, { role: "state", directory: statePath() },
+    { role: "attempt config", directory: attemptTempConfigParent() }, { role: "checkout", directory: process.cwd() }])
+    .map(row => ({ volume: row.volume ?? `unknown:${row.roles.join("/")}`, roles: row.roles, freeBytes: row.freeBytes }));
+}
+
+async function readJournal(id: string) {
+  const removed: Record<DiskCleanerClass, number> = { "attempt-temp": 0, release: 0, evidence: 0 };
+  const pending = new Set<string>();
+  let errors = 0;
+  const lines = createInterface({ input: fs.createReadStream(cleanerJournalFile(id)), crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      try {
+        const row = JSON.parse(line);
+        const kind = row.class as DiskCleanerClass;
+        if (!DISK_CLEANER_CLASSES.includes(kind) || typeof row.path !== "string"
+          || !Number.isFinite(row.bytes) || row.bytes < 0 || typeof row.proof !== "string") throw new Error("invalid removal record");
+        const key = JSON.stringify([kind, row.path]);
+        if (row.phase === "intent") pending.add(key);
+        else if (row.phase === "removed" && pending.delete(key)) removed[kind] += row.bytes;
+        else if (row.phase === "refused" && pending.delete(key)) continue;
+        else throw new Error("unbound removal record");
+      } catch { errors++; }
+    }
+  } catch { errors++; }
+  return { removed, uncertain: pending.size, errors };
+}
+
+type Ports = {
+  active: () => boolean;
+  project: () => Promise<string | null>;
+  card: (pass: DiskCleanerPass) => Promise<boolean>;
+  sweep: (request: CleanerSweepRequest) => Promise<CleanerSweepResult>;
+  releases: (id: string) => Promise<CleanerSlice>;
+  now?: () => number;
+  measure?: () => CleanerSpace[];
+  env?: Readonly<NodeJS.ProcessEnv>;
+};
+
+/** One host-wide pass. The async file lease covers Viewers that overlap
+ * during succession, and the durable finish time owns the cooldown. */
+export async function reconcileAutomaticDiskCleaner(pressure: DiskPressure, ports: Ports) {
+  const env = ports.env ?? process.env, now = ports.now ?? Date.now;
+  const mode = env.LLV_CLEANER === "dry-run" ? "dry-run" : tempSweepMode(env);
+  const active = () => !!mode && env.LLV_CLEANER !== "off" && ports.active();
+  if (!active()) return;
+  const file = diskCleanerStateFile();
+  assertRetentionTestPath(file);
+  const readSpace = ports.measure ?? measure;
+  const threshold = diskCleanerThreshold(env);
+  const existing = readDiskCleanerPass();
+  if (existing?.finished && existing.card && now() < existing.finished.at + DISK_CLEANER_COOLDOWN_MS) return;
+  const before = readSpace();
+  if ((!existing || existing.finished && existing.card) && !needsCleaning(pressure, threshold, before)) return;
+  try {
+    await withFileTransactionAsync(file, "automatic disk cleaner", async () => {
+      if (!active()) return;
+      let pass = readDiskCleanerPass();
+      const finish = async (run: DiskCleanerPass, kept: CleanerHold[], errors: number, incomplete: boolean) => {
+        const journal = await readJournal(run.id);
+        const result = { ...run, finished: { ...journal, errors: errors + journal.errors, incomplete, kept, at: now(), after: readSpace() } };
+        writeJsonDurably(file, result);
+        return result;
+      };
+      if (pass && !pass.finished) pass = await finish(pass, [], 0, true);
+      if (pass?.finished && !pass.card && active()) {
+        recordDiskCleanerReport(pass);
+        if (await ports.card(pass)) {
+          pass = { ...pass, card: true };
+          writeJsonDurably(file, pass);
+        }
+      }
+      if (!active() || pass?.finished && (!pass.card || now() < pass.finished.at + DISK_CLEANER_COOLDOWN_MS)) return;
+      const before = readSpace();
+      if (!needsCleaning(pressure, threshold, before)) return;
+      const project = await ports.project();
+      if (!active() || !project) return;
+      const run: DiskCleanerPass = { id: randomUUID(), project, mode: mode!, episode: pressure.episode, startedAt: now(),
+        before, scratchCursor: pass?.scratchCursor ?? "" };
+      createCleanerJournal(run.id);
+      writeJsonDurably(file, run);
+      let kept: CleanerHold[] = [];
+      let errors = 0, incomplete = false;
+      const next = (slice: CleanerSlice) => {
+        errors += slice.errors;
+        kept = [...kept, ...slice.kept].sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path)).slice(0, 5);
+      };
+      const attempt = async <T extends CleanerSlice>(operation: () => Promise<T>) => {
+        try { const slice = await operation(); next(slice); return slice; }
+        catch (error) {
+          errors++; incomplete = true;
+          console.error("[disk cleaner] sweep failed", error instanceof Error ? error.message : String(error));
+          return null;
+        }
+      };
+      const started = performance.now();
+      const mayContinue = () => active() && performance.now() - started < PASS_BUDGET_MS;
+      if (mayContinue()) await attempt(() => ports.releases(run.id));
+      let evidenceMore = true;
+      for (let page = 0; page < EVIDENCE_SLICES && evidenceMore && mayContinue(); page++) {
+        const slice = await attempt(() => ports.sweep({ id: run.id, class: "evidence" }));
+        evidenceMore = !!slice?.more;
+      }
+      while (mayContinue()) {
+        const cursor = run.scratchCursor!;
+        const slice = await attempt(() => ports.sweep({ id: run.id, class: "attempt-temp", after: cursor }));
+        if (!slice) break;
+        if (slice.more && (!slice.next || slice.next <= cursor)) { incomplete = true; break; }
+        run.scratchCursor = slice.next ?? "";
+        if (!slice.more) break;
+        writeJsonDurably(file, run);
+      }
+      pass = await finish(run, kept, errors, incomplete || evidenceMore || !mayContinue());
+      if (active()) {
+        recordDiskCleanerReport(pass);
+        if (await ports.card(pass)) writeJsonDurably(file, { ...pass, card: true });
+      }
+    }, { waitMs: STATE_LOCK_WAIT_MS });
+  } catch (error) {
+    if (!(error instanceof FileTransactionBusyError)) throw error;
+  }
+}

@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, test } from "bun:test";
 import { startDiskPressureWatch, stopDiskPressureWatch } from "./diskPressureWatch";
 import type { CleanerController } from "@/lib/cleaner/run";
+import type { DiskPressure } from "./diskPressure";
 
 test("the pressure observer starts without a resources request and retires its held tick", async () => {
   let started!: () => void, release!: () => void;
@@ -68,5 +69,47 @@ test("a standalone watcher anchors daily eligibility once for its whole lifetime
     if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER; else process.env.LLV_STATE_OWNER = previousOwner;
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
     fs.rmSync(state, { recursive: true, force: true });
+  }
+});
+
+test("the automatic pass starts on an unmeasured warning and does not overlap the next observation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-watch-"));
+  const saved = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_STATE_OWNER: process.env.LLV_STATE_OWNER };
+  process.env.LLV_STATE_DIR = root;
+  process.env.LLV_STATE_OWNER = "viewer";
+  const pressure: DiskPressure = {
+    at: "2031-01-01T00:00:00Z", episode: "warning-fixture",
+    volumes: [{ roles: ["state"], level: "warning", freeBytes: 120e9 }],
+    consumers: [], criticalBytes: 2e9, warningBytes: 130e9,
+  };
+  const scheduled: Array<() => void> = [];
+  const schedule = ((callback: () => void) => {
+    scheduled.push(callback);
+    return { unref() {} } as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  let launches = 0, cards = 0, observations = 0;
+  try {
+    startDiskPressureWatch({ schedule, readPressure: async () => { observations++; return pressure; },
+      automatic: async report => { expect(report).toBe(pressure); launches++; await hold; },
+      actions: { active: () => true, project: async () => "repo-fixture", early: () => {},
+        card: async () => { cards++; return true; }, report: async () => true },
+    });
+    scheduled.shift()!();
+    for (let i = 0; i < 100 && !scheduled.length; i++) await Bun.sleep(2);
+    expect(launches).toBe(1);
+    expect(cards).toBe(0);
+    expect(scheduled).toHaveLength(1);
+    scheduled.shift()!();
+    for (let i = 0; i < 100 && !scheduled.length; i++) await Bun.sleep(2);
+    expect(observations).toBe(2);
+    expect(launches).toBe(1);
+  } finally {
+    stopDiskPressureWatch(); release();
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

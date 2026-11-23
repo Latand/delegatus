@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import type { CleanerHold, CleanerJournal } from "@/lib/cleaner/diskJournal";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+import { statePath } from "@/lib/configDir";
 import { attemptTempJournalPath, finishTreeTrash, mountPointsUnder, removeTreeViaTrash } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { readEnvelope } from "@/lib/recordedChecks/wire";
@@ -25,6 +27,8 @@ export type TemporaryDataPorts = {
   now?: () => number; clock?: () => number; budgetMs?: number; mode?: "on" | "dry-run";
   onRemoved?: (row: TemporaryDataCandidate) => void;
   checkoutReads?: RetainedCheckoutReads;
+  taskReferences?: (row: TemporaryDataCandidate, authority: TemporaryDataAuthority) => boolean;
+  cleaner?: { allowed: () => boolean; journal: CleanerJournal; processClear: (directory: string, target: string) => boolean };
 };
 const identity = (stat: fs.Stats) => `${stat.dev}:${stat.ino}`;
 const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
@@ -163,11 +167,13 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
   }
   const pending = [target], seen = new Set<string>();
   let bytes = 0;
+  let newest = 0;
   while (pending.length) {
     if (clock() >= deadline || entries.size >= MAX_PROTECTION_ENTRIES) throw new Error("protection-budget");
     const file = pending.pop()!, stat = fs.lstatSync(file, { bigint: true });
     if (stat.dev !== BigInt(root.dev) || stat.isSymbolicLink() || !stat.isFile() && !stat.isDirectory()) throw new Error("indirect-tree");
     const name = path.basename(file);
+    newest = Math.max(newest, Number(stat.mtimeNs) / 1e6);
     if (name === ".delegatus-keep") throw new Error("keep-marker");
     if (file !== target && lifecycleControlName(name)) throw new Error("lifecycle-control");
     if (PRESERVATION_NAMES.has(name)) throw new Error("preservation-record");
@@ -190,7 +196,7 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
       listings.set(file, names);
     }
   }
-  return { bytes, files: [...entries.keys()], directories: [...parents.keys(), ...listings.keys()], current: () => {
+  return { bytes, newest, files: [...entries.keys()], directories: [...parents.keys(), ...listings.keys()], current: () => {
     try {
       if (![...entries, ...parents].every(([file, before]) => signature(fs.lstatSync(file, { bigint: true })) === before)) return false;
       // Directory clocks can share a kernel granule. Compare the actual names
@@ -260,11 +266,14 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         return super.targets(repository, discovered);
       }
     }({ now: clock, budgetMs: Math.max(0, deadline - clock()), retained, freshMs: ports.checkoutReads ? undefined : 10000 });
-    const report = { checked: 0, removed: 0, removedBytes: 0, wouldRemove: 0, wouldRemoveBytes: 0, kept: {} as Record<string, number>, errors: 0 };
-    for (const row of store.due(now(), 128)) {
+    const keptRows: CleanerHold[] = [];
+    const report = { checked: 0, removed: 0, removedBytes: 0, wouldRemove: 0, wouldRemoveBytes: 0, kept: {} as Record<string, number>, errors: 0, keptRows };
+    const cleaner = ports.cleaner;
+    for (const row of cleaner ? store.dueEvidence(now()) : store.due(now(), 128)) {
       assertRetentionTestPath(row.directory);
       assertRetentionTestPath(row.scope);
-      if (clock() >= deadline) break;
+      if (cleaner && (row.directory !== path.resolve(row.directory) || !row.directory.startsWith(row.scope + path.sep))) continue;
+      if (clock() >= deadline || cleaner && !cleaner.allowed()) break;
       report.checked++;
       store.record(row.directory, now() + 60000, row.bytes, "pending");
       let release: (() => void) | undefined;
@@ -272,6 +281,9 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
       let bytes = row.bytes, reason = "held";
       let nextCheck = now() + 60000;
       const journal = attemptTempJournalPath(row.directory);
+      const proof = () => `evidence ledger identity ${row.identity}, ${row.kind}, seven-day expiry and tree age, open-task and live reference checks clear`;
+      let intent = false;
+      const taskHeld = (authority: TemporaryDataAuthority) => row.kind !== "journal" && ports.taskReferences?.(row, authority) === true;
       try {
         const candidateName = path.basename(row.directory);
         if (lifecycleControlName(candidateName)) {
@@ -306,6 +318,15 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         assertRetentionTestPath(row.directory);
         const authority = await ports.authority(row);
         assertRetentionTestPath(row.directory);
+        if (taskHeld(authority)) {
+          reason = "referenced by an open task";
+          nextCheck = now() + 3600000;
+          if (cleaner && !bytes && !fs.existsSync(journal)) {
+            try { bytes = temporaryDataProtection(row, row.directory, clock, deadline).bytes; }
+            catch { /* Keep the task reference as the reason even when allocation is unavailable. */ }
+          }
+          continue;
+        }
         let currentAuthority = authority;
         const due = () => currentAuthority.expiresAt !== null && now() >= currentAuthority.expiresAt && authority.current() && currentAuthority.current();
         if (!due()) {
@@ -343,12 +364,16 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           });
           const files = [...protection.files, ...checkouts, ...discoveries];
           const directories = [...protection.directories, ...[...repositories].flatMap(repository => retained.get(repository)?.directories.map(directory => directory.path) ?? [])];
+          if (row.kind !== "journal" && ports.taskReferences) {
+            files.push(statePath("state.sqlite"), statePath("state.sqlite-wal"), statePath("tasks.json"));
+          }
           let admitted = false;
           try { admitted = mutationCurrent(files, directories, () => clock() < deadline
             && store.get(row.directory)?.identity === row.identity
             && mounts(current).length === 0
             && inventory.unchangedAll()
             && protection?.current() === true
+            && (!cleaner || cleaner.allowed() && cleaner.processClear(row.directory, current)) && !taskHeld(currentAuthority)
             // Authority may change during the final filesystem snapshot reads.
             // Keep its current check adjacent to the native removal edge.
             && due(), performance.now() + Math.max(0, deadline - clock()));
@@ -364,11 +389,17 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           assertRetentionTestPath(current);
           protection = temporaryDataProtection(row, current, clock, deadline);
           bytes = protection.bytes;
+          if (cleaner && protection.newest > now() - TEMPORARY_DATA_RETENTION_MS) { reason = "evidence touched within seven days"; return true; }
           const clear = await ports.references(row, current, inventory);
           assertRetentionTestPath(current);
           if (!clear) { reason = "live-reference"; return true; }
           currentAuthority = await ports.authority(row);
           assertRetentionTestPath(current);
+          if (taskHeld(currentAuthority)) { reason = "referenced by an open task"; return true; }
+          if (cleaner && !intent && ports.mode !== "dry-run") {
+            cleaner.journal("intent", row.directory, bytes, proof());
+            intent = true;
+          }
           if (currentAuthority.revision !== authority.revision || !validate(current)) { reason = "fence-changed"; return true; }
           return false;
         };
@@ -404,7 +435,10 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
             fs.renameSync(file.trash, row.directory); fs.unlinkSync(journal);
           }
         }
-        if (removed) { report.removed++; report.removedBytes += bytes; ports.onRemoved?.(row); store.forget(row.directory); reason = "removed"; }
+        if (removed) {
+          cleaner?.journal("removed", row.directory, bytes, proof());
+          report.removed++; report.removedBytes += bytes; ports.onRemoved?.(row); store.forget(row.directory); reason = "removed";
+        }
       } catch (error) {
         if (error instanceof RetentionTestSafetyError) throw error;
         reason = error instanceof Error ? error.message : "inspection-unavailable"; report.errors++;
@@ -419,8 +453,12 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
       finally {
         try { release?.(); } catch { report.errors++; }
         if (reason !== "removed" && reason !== "absent") {
+          if (intent && !mutationStarted && !fs.existsSync(journal) && fs.existsSync(row.directory)) {
+            cleaner!.journal("refused", row.directory, bytes, reason);
+          }
           store.record(row.directory, nextCheck, bytes, reason);
           report.kept[reason] = (report.kept[reason] ?? 0) + 1;
+          if (cleaner) keptRows.push({ path: row.directory, reason, bytes });
         }
       }
     }

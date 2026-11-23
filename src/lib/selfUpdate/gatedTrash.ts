@@ -28,6 +28,7 @@ export type GatedTrashOutcome = { removed: true } | { removed: false; reason: st
 export type GatedTrashOptions = {
   /** Runs after the rename with the gate open; a reason restores the tree. */
   beforeGate?: (trash: string) => Promise<string | null>;
+  beforeRemove?: () => void;
   /** Runs with the gate closed. Throwing restores the tree, then rethrows. */
   observe: (trash: string, gate: string) => Promise<string | null>;
   /** Runs with the gate closed and cwd at the trash: pass "." paths. */
@@ -235,6 +236,7 @@ export async function settleGatedTrash(journal: string, row: GatedTrashRow, opti
           if (!entries) reason = "inventory-bound";
           else writeJsonDurably(inventoryFile(journal), [...entries], { space: 0 });
         }
+        if (!reason) options.beforeRemove?.();
       }
     } catch (error) { failure = error; }
     if (!reason && failure === undefined) {
