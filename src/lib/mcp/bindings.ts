@@ -8475,7 +8475,7 @@ export function viewerMcpToolPolicy(
   );
   return {
     permit: (tool, args) => {
-      if (!hostHealthProbe && tool !== "send_message_to_orchestrator" && domainDependencies.attentionAuthority) {
+      if (!hostHealthProbe && tool !== "send_message_to_orchestrator" && typeof domainDependencies.attentionAuthority === "function") {
         const caller = authorityOf(domainDependencies);
         if (caller.kind === "worker" && ownerRelayHandoffOnlyGrant(caller.conversationId)) {
           return { allowed: false, code: "tool_not_permitted", error: "Guest-origin owner relays may use Viewer only for the verified project-seat handoff." };
