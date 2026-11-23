@@ -47,6 +47,7 @@ import { registryConversationsForEntryKey, registryKeysMatchingBounded, registry
 import { entryRevision, readAgentProjection, subjectId as agentStateSubjectId } from "@/lib/agentState/store";
 import { cachedAgentObservationForRevision } from "@/lib/agentState/projectionCache";
 import { fileSignature } from "@/lib/agentState/transcript";
+import { hostTurnRecordIdentity } from "./eventStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 import { recoverMemberAdoption } from "./memberAdoptionRecovery";
@@ -934,6 +935,7 @@ function settledOrphanWithPendingDelivery(registry: AgentRegistry, entry: AgentR
   if (!fresh || !proc.determined || proc.value.status !== "alive" || !sameRecordedProcessIdentity(proc.value.identity, process)
     || !owner.determined || owner.value !== "absent" || !turn.determined || turn.value.state === "open"
     || !attention.determined || attention.value.length !== 0 || !transcript.determined || !obligations.determined) return false;
+  if (turn.evidence.source === "operation-ledger" && hostTurnRecordIdentity(entry.key.sessionId) !== turn.evidence.ref) return false;
   const expectedProcessSignature = (() => {
     try { return fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })); } catch { return null; }
   })();
