@@ -31,7 +31,7 @@ for (const handoffOnly of [false, true]) {
     const home = process.env.HOME!;
     const profile = emptyLaunchProfile({ cwd: home, cleanMemory: true, ownerRelayHandoffOnly: handoffOnly });
     const options = await claudeStructuredHostOptions({ spec: { engine: "claude", command: "claude", windowName: "owner-handoff", cwd: home, launchProfile: profile },
-      account: { engine: "claude", accountId: "fixture", kind: "managed", home, transcriptRoot: home, env: {} } },
+      account: { engine: "claude", accountId: "fixture", kind: "managed", home, transcriptRoot: home, env: { NODE_ENV: "test" } } },
     { env: process.env, host: {} });
     expect(options.tools).toEqual(handoffOnly ? ["Read"] : undefined);
   });
