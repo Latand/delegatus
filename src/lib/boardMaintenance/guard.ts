@@ -3,13 +3,14 @@ import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import type { BoardTask } from "@/lib/tasks/types";
 import { projectForCwd } from "@/lib/scanner/describe";
+import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { canonicalOrchestratorProject, orchestratorSeatForOrUnknown, revokedOrchestratorSeatConversationsOrUnknown } from "@/lib/orchestrator/seats";
-import { maintenanceRunForConversation, maintenanceRunIdForConversation, readMaintenanceRun, bindMaintenanceConversation } from "./store";
+import { maintenanceRunForConversation, maintenanceRunIdForConversation, readMaintenanceRun, readMaintenanceProject, bindMaintenanceConversation } from "./store";
 import { maintenanceRunIsLive, type MaintenanceRun, type MaintenanceChange } from "./types";
 
 type RegistrySnapshot = ReturnType<ReturnType<typeof agentRegistry>["readOnlySnapshot"]>;
 
-export interface MaintainerCaller { conversationId: string; project: string | null; run: MaintenanceRun | null; endedScheduledRun?: boolean }
+export interface MaintainerCaller { conversationId: string; project: string | null; run: MaintenanceRun | null; endedScheduledRun?: boolean; binding?: string; claimCurrent?: boolean }
 export function maintainerCallerOf(conversationId: string | null, snapshot: RegistrySnapshot): MaintainerCaller | null {
   if (!conversationId) return null;
   const id = readOnlyConversationLookupFromSnapshot(snapshot).canonicalConversationId(conversationId as `conversation_${string}`);
@@ -28,7 +29,15 @@ export function maintainerCallerOf(conversationId: string | null, snapshot: Regi
   }
   const endedScheduledRun = identifiedScheduledRun && !run;
   if (!run && role !== "maintainer" && !endedScheduledRun) return null;
-  return { conversationId: id, run, endedScheduledRun, project: run?.project ?? snapshot.conversations[id]?.projectOwnership?.project ?? (snapshot.conversations[id]?.generations.at(-1)?.launchProfile.cwd ? projectForCwd(snapshot.conversations[id].generations.at(-1)!.launchProfile.cwd!) : null) };
+  const claim = run ? readMaintenanceProject(run.project) : null;
+  const seat = run?.audit ? orchestratorSeatForOrUnknown(run.project)?.active : null;
+  let claimCurrent = run ? claim?.currentRunId === run.runId && (!run.audit || claim?.audit?.revision === run.audit.revision && seat?.conversationId === run.seat.conversationId && seat.seatEpoch === run.seat.seatEpoch) : undefined;
+  const conversation = snapshot.conversations[id];
+  const generation = conversation?.generations.at(-1);
+  const entry = conversation && generation ? snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })] : null;
+  if (conversation?.supersededBy || generation?.archivedAt || entry && (entry.status === "dead" || entry.status === "unhosted" || !entry.claimOwner || entry.structuredHost && entry.claimEpoch !== entry.structuredHost.writerClaimEpoch)) claimCurrent = false;
+  const project = run?.project ?? conversation?.projectOwnership?.project ?? (generation?.launchProfile.cwd ? projectForCwd(generation.launchProfile.cwd) : null);
+  return { conversationId: id, run, endedScheduledRun, project, claimCurrent, binding: JSON.stringify([id, role, conversation?.projectOwnership, generation?.id, generation?.path, generation?.launchProfile.workspace, generation?.host?.identity, generation?.host?.epoch, entry?.claimOwner, entry?.claimEpoch, entry?.structuredHost?.writerClaimEpoch, run?.runId, run?.seat, run?.launchId, run?.conversationId, claim?.currentRunId, claim?.audit?.revision]) };
 }
 export interface MaintenanceRefusal { code: string; error: string; field?: string }
 /** A retired seat's own card, verified against current/pending designations.
@@ -67,6 +76,7 @@ export function maintainerTaskWriteRefusal(input: { caller: MaintainerCaller; ar
   const { caller, args, task } = input;
   const refuse = (code: string, error: string, field?: string) => ({ code, error, field });
   if (caller.endedScheduledRun || caller.run && !maintenanceRunIsLive(caller.run)) return refuse("maintainer_run_ended", "This maintenance run has ended; Delegatus accepts no more board writes from it.");
+  if (caller.claimCurrent === false) return refuse("maintainer_authority_changed", "The original maintenance claim no longer owns this project audit.");
   if (task?.details?.startsWith("Delegatus board maintenance run")) return refuse("maintainer_delete_refused", "Delegatus manages maintenance cards. Leave this card alone.");
   const project = input.create ? args.project : task?.project;
   if (!caller.project || typeof project !== "string" || canonicalOrchestratorProject(project) !== canonicalOrchestratorProject(caller.project) || args.project !== undefined && canonicalOrchestratorProject(String(args.project)) !== canonicalOrchestratorProject(caller.project)) {
@@ -88,4 +98,8 @@ export function maintenanceChange(tool: MaintenanceChange["tool"], before: Board
     ...(fields.includes("status") ? { statusFrom: before?.status, statusTo: after.status } : {}),
     ...(fields.includes("text") ? { titleFrom: before?.text.split("\n")[0], titleTo: after.text.split("\n")[0], textBefore: before?.text } : {}),
   };
+}
+
+export function maintainerCallerChanged(initial: MaintainerCaller | null, current: MaintainerCaller | null): boolean {
+  return !!initial && (!current || current.conversationId !== initial.conversationId || current.project !== initial.project || current.binding !== initial.binding || current.run?.runId !== initial.run?.runId || !!initial.run && maintenanceRunIsLive(initial.run) && !!current.run && !maintenanceRunIsLive(current.run));
 }

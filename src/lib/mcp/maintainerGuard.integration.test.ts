@@ -1,10 +1,11 @@
 import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test, spyOn } from "bun:test";
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-maintenance-mcp-"));
-const original = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR = root;
+import { afterEach, expect, test, spyOn, setSystemTime } from "bun:test";
+afterEach(() => setSystemTime());
+// The preload has already bound task-store constants to this private root.
+const root = process.env.LLV_STATE_DIR!;
+if (!root) throw Error("isolated state directory required");
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
 const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
@@ -12,18 +13,18 @@ const { loadTasks } = await import("@/lib/tasks/store");
 const { claimMaintenanceRun, patchMaintenanceRun, readMaintenanceRun } = await import("@/lib/boardMaintenance/store");
 const worker = ["conversation", "fixture-maintainer"].join("_");
 const project = "fixture-maintenance";
-const snapshot = new AgentRegistry(path.join(root, "fixture-registry.json")).readOnlySnapshot();
+const snapshot = structuredClone(new AgentRegistry(path.join(root, "fixture-registry.json")).readOnlySnapshot());
 snapshot.conversations[worker as `conversation_${string}`] = { id: worker, agentRole: "maintainer", projectOwnership: { project }, generations: [], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
 let seq = 0; let role = "maintainer";
 const domain = {
   callerAttribution: () => ({ kind: "agent", conversationId: worker, role: "builder" }),
   attentionAuthority: () => ({ kind: "worker", conversationId: worker, role: "builder" }),
   registrySnapshot: () => { snapshot.conversations[worker as `conversation_${string}`].agentRole = role; return snapshot; },
+  authorizedSeats: () => [{ project, conversationId: "fixture-seat" }, { project: "fixture-request-audit", conversationId: "fixture-audit-seat" }],
   listPipelineRecords: () => [], operatorLocale: () => "uk",
 };
 const service = createMcpToolService(viewerMcpBindings(undefined, undefined, domain as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as never));
 const call = (tool: string, args: Record<string, unknown>) => service.callTool(tool, { clientRequestId: `maintenance-test-${++seq}`, ...args });
-afterAll(() => { if (original === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = original; fs.rmSync(root, { recursive: true, force: true }); });
 test("durable maintainer role fences writes on the service wire, independent of claimed role", async () => {
   const denied = await call("send_message", { conversationId: "fixture-target", text: "fixture" }); expect(denied).toMatchObject({ ok: false, code: "maintainer_tool_refused" });
   const result = claimMaintenanceRun({ project, now: Date.now(), intervalHours: 3, seat: { conversationId: "fixture-seat", seatEpoch: 1 }, repoDir: "/fixtures/repository" }); if (!result.claimed) throw new Error("claim expected");
@@ -196,4 +197,125 @@ test("the real transcript projection permits gone history and refuses a verified
   const live = await tools.callTool("agent_activity", { clientRequestId: "real-live-idle-activity", conversationId: historyId, full: true });
   expect((live as unknown as { conversations: unknown[] }).conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "host_alive_turn_idle", turnState: "idle", host: { state: "alive" }, evidenceSource: "transcript" });
   expect(await tools.callTool("update_task", { clientRequestId: "real-live-idle-closure", taskId, status: "done" })).toMatchObject({ ok: false, code: "maintainer_done_refused" });
+});
+
+
+for (const tool of ["create_task", "update_task"] as const) for (const change of ["null", "role", "generation", "project", "claim"] as const) test(`last task-store await refuses ${tool} after maintainer ${change} replacement`, async () => {
+  const id = `conversation_fixture-race-${tool}-${change}`;
+  const record = { id, agentRole: "maintainer", projectOwnership: { project }, generations: [{ id: "native-one", path: "fixture-native", launchProfile: {}, host: { identity: "owner-one", epoch: 1 } }], continuityPaths: [], abandonedContinuityPaths: [], migration: null };
+  const local = structuredClone(snapshot); local.conversations[id] = record as never;
+  let callerId: string | null = id;
+  const manual = { ...domain, registrySnapshot: () => local, callerAttribution: () => ({ kind: "agent", conversationId: callerId }), attentionAuthority: () => callerId ? ({ kind: "worker", conversationId: callerId, role: "maintainer" }) : ({ kind: "unidentified" }) };
+  const tools = createMcpToolService(viewerMcpBindings(undefined, undefined, manual as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(manual as never));
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  const taskId = `fixture-target-${tool}-${change}`;
+  const at = "2026-09-30T12:00:00.000Z";
+  mutateTasks(tasks => ({ tasks: [...tasks, { id: taskId, project, text: "Збережена задача", status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }], result: undefined }));
+  const before = loadTasks();
+  const locks = await import("@/lib/state/lockWait");
+  const originalWait = locks.waitForStateLock;
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const spy = spyOn(locks, "waitForStateLock").mockImplementation(async (site, operation, options) => {
+    if (site === (tool === "create_task" ? "mcp.tasks.create" : "tasks.mutation")) { enter(); await barrier; }
+    return originalWait(site, operation, options);
+  });
+  try {
+    const pending = tools.callTool(tool, { clientRequestId: `race-${tool}-${change}`, ...(tool === "create_task" ? withTaskDue({ project, text: "Нова задача" }) : { taskId, text: "Застаріла зміна" }) });
+    await entered;
+    if (change === "null") callerId = null;
+    if (change === "role") record.agentRole = "builder";
+    if (change === "generation") record.generations[0].id = "native-two";
+    if (change === "project") record.projectOwnership.project = "another-project";
+    if (change === "claim") record.generations[0].host.epoch++;
+    const changed = local.conversations[id];
+    Object.assign(changed, record);
+    release();
+    expect(await pending).toMatchObject({ ok: false, code: "maintainer_authority_changed" });
+    expect(loadTasks()).toEqual(before);
+  } finally { release(); spy.mockRestore(); }
+});
+
+
+test("two audited requests use real task services and recover a Done owner after a lost log", async () => {
+  const { auditFixture } = await import("@/lib/boardMaintenance/testFixture");
+  const { auditRequestKey, auditSourceMarker } = await import("@/lib/boardMaintenance/audit");
+  const { saveMaintenanceAuditLaunch } = await import("@/lib/boardMaintenance/store");
+  const { taskRevision } = await import("@/lib/tasks/revision");
+  const { parseMaintenanceReport } = await import("@/lib/boardMaintenance/text");
+  const auditProject = "fixture-request-audit";
+  const now = Date.parse("2026-11-08T03:00:00.000Z");
+  setSystemTime(now);
+  const claim = claimMaintenanceRun({ project: auditProject, now, intervalHours: 3, seat: { conversationId: "fixture-seat", seatEpoch: 1 }, repoDir: root });
+  if (!claim.claimed) throw Error("expected claim");
+  const seatFile = path.join(root, "orchestrator-seats.json");
+  const seats = fs.existsSync(seatFile) ? JSON.parse(fs.readFileSync(seatFile, "utf8")) : { schemaVersion: 1, nextSeatEpoch: 3, seats: {}, pending: {}, revocations: [], history: [] };
+  seats.seats[auditProject] = { project: auditProject, ...claim.run.seat, path: null, mandate: "fixture", state: "active", intent: { clientRequestId: "fixture-audit-seat", mode: "spawn", launchId: null, error: null }, designatedAt: claim.run.claimedAt, activatedAt: claim.run.claimedAt };
+  fs.writeFileSync(seatFile, JSON.stringify(seats));
+  const input = auditFixture(claim.run);
+  const repeated = { ...input.occurrences[0], key: "fixture-repeated-occurrence", seq: 2, text: "Repeat the second request." };
+  input.occurrences.push(repeated);
+  saveMaintenanceAuditLaunch(claim.run.runId, input, { prompt: JSON.stringify(input) });
+  const id = "conversation_fixture-auditor";
+  patchMaintenanceRun(claim.run.runId, { conversationId: id, state: "running" });
+  const local = structuredClone(snapshot);
+  local.conversations[id] = { id, agentRole: "maintainer", projectOwnership: { project: auditProject }, generations: [], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
+  const source = input.window.sources[0];
+  local.conversations[source.conversationId] = { id: source.conversationId, engine: "codex", projectOwnership: { project: auditProject }, generations: [{ id: source.generation, path: source.path, launchProfile: {} }], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
+  const manual = { ...domain, registrySnapshot: () => local, callerAttribution: () => ({ kind: "agent", conversationId: id }), attentionAuthority: () => ({ kind: "worker", conversationId: id, role: "maintainer" }) };
+  const factory = () => createMcpToolService(viewerMcpBindings(undefined, undefined, manual as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(manual as never));
+  const keys = [0, 1].map(i => auditRequestKey(input.occurrences[0].key, i));
+  const before = loadTasks().filter(t => t.project === auditProject);
+  const args = { project: auditProject, text: "Довести прийнятий запит до обліку", findingKey: keys[1], details: auditSourceMarker(keys[1]), dueAt: new Date(now + 3600000).toISOString(), dueTz: "Europe/Kyiv", clientRequestId: keys[1] };
+  for (const invalid of [{ ...args, details: undefined }, { ...args, clientRequestId: "unbound-audit-operation" }, { ...args, findingKey: keys[0] }]) {
+    expect(await factory().callTool("create_task", invalid)).toMatchObject({ ok: false, code: "maintainer_audit_refused" });
+    expect(loadTasks().filter(t => t.project === auditProject)).toEqual(before);
+  }
+  const sourceConversation = local.conversations[source.conversationId];
+  sourceConversation.projectOwnership!.project = "revoked-source-project";
+  expect(await factory().callTool("create_task", args)).toMatchObject({ ok: false, code: "maintainer_audit_refused" });
+  expect(loadTasks().filter(t => t.project === auditProject)).toEqual(before);
+  sourceConversation.projectOwnership!.project = auditProject;
+  const ledger = await import("@/lib/boardMaintenance/store");
+  const log = spyOn(ledger, "recordMaintenanceChange").mockImplementation(() => { throw Error("injected lost log"); });
+  try { expect(await factory().callTool("create_task", args)).toMatchObject({ ok: true }); } finally { log.mockRestore(); }
+  const task = loadTasks().find(t => t.project === auditProject)!;
+  expect(task.details).toBe(auditSourceMarker(keys[1]));
+  expect(task.dueAt).toBe(args.dueAt); expect(task.dueTz).toBe(args.dueTz);
+  expect(readMaintenanceRun(claim.run.runId)?.log.logGaps).toBe(1);
+  const first = { ...task };
+  expect(await factory().callTool("update_task", { taskId: task.id, expectedProject: auditProject, expectedRevision: taskRevision(task), replaceLine: { index: 0, text: "overwrite source proof" }, clientRequestId: "fixture-marker-removal" })).toMatchObject({ ok: false, code: "maintainer_delete_refused" });
+  expect(loadTasks().find(t => t.id === task.id)).toEqual(first);
+  expect(await factory().callTool("update_task", { taskId: task.id, expectedProject: auditProject, expectedRevision: taskRevision(task), appendLine: auditSourceMarker(keys[1]), clientRequestId: keys[1] })).toMatchObject({ ok: true, changedFields: [] });
+  expect(loadTasks().find(t => t.id === task.id)).toEqual(first);
+  expect(await factory().callTool("update_task", { taskId: task.id, status: "done", expectedProject: auditProject, expectedRevision: taskRevision(task), clientRequestId: "fixture-finish-audit-owner" })).toMatchObject({ ok: true });
+  expect(await factory().callTool("create_task", args)).toMatchObject({ ok: true, replay: true, matched: true });
+  const childCode = `
+    import {createMcpToolService, MemoryMcpReceiptStore} from './src/lib/mcp/server';
+    import {viewerMcpBindings,viewerMcpToolPolicy} from './src/lib/mcp/bindings';
+    const snapshot=${JSON.stringify(local)};
+    const domain={registrySnapshot:()=>snapshot,callerAttribution:()=>({kind:'agent',conversationId:${JSON.stringify(id)}}),attentionAuthority:()=>({kind:'worker',conversationId:${JSON.stringify(id)},role:'maintainer'}),authorizedSeats:()=>[{project:${JSON.stringify(auditProject)},conversationId:'fixture-audit-seat'}],listPipelineRecords:()=>[],operatorLocale:()=> 'uk'};
+    const service=createMcpToolService(viewerMcpBindings(undefined,undefined,domain as never),new MemoryMcpReceiptStore(),viewerMcpToolPolicy(domain as never));
+    process.stdout.write(JSON.stringify(await service.callTool('create_task',${JSON.stringify(args)})));
+  `;
+  const child = Bun.spawn([process.execPath, "-e", childCode], { env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text(); const childError = await new Response(child.stderr).text();
+  expect(await child.exited, childError).toBe(0); expect(JSON.parse(output)).toMatchObject({ ok: true, replay: true, matched: true });
+  const after = loadTasks().filter(t => t.project === auditProject);
+  expect(after.length - before.length).toBe(1); expect(after[0].status).toBe("done"); expect(after[0].dueAt).toBe(first.dueAt);
+  const repeatKey = auditRequestKey(repeated.key, 0);
+  const append = { taskId: task.id, expectedProject: auditProject, expectedRevision: taskRevision(after[0]), appendLine: auditSourceMarker(repeatKey), clientRequestId: repeatKey };
+  expect(await factory().callTool("update_task", append)).toMatchObject({ ok: true });
+  const owner = loadTasks().find(t => t.id === task.id)!;
+  expect(owner.status).toBe("done"); expect(owner.dueAt).toBe(first.dueAt); expect(owner.dueTz).toBe(first.dueTz);
+  expect(await factory().callTool("update_task", { ...append, expectedRevision: taskRevision(owner), dueAt: new Date(now + 7200000).toISOString() })).toMatchObject({ ok: false, code: "maintainer_audit_refused" });
+  expect(loadTasks().find(t => t.id === task.id)).toEqual(owner);
+  expect(await factory().callTool("create_task", { ...args, findingKey: repeatKey, details: auditSourceMarker(repeatKey), clientRequestId: repeatKey })).toMatchObject({ ok: true, replay: true, matched: true, taskId: task.id });
+  expect(loadTasks().filter(t => t.project === auditProject)).toHaveLength(1);
+  const rows = keys.map((key, i) => ({ key, occurrence: input.occurrences[0].key, requestIndex: i, at: input.occurrences[0].at, request: i ? "abandoned accepted request" : "already done request", outcome: i ? "filed" : "done", taskId: i ? task.id : null, code: "observed", merge: "unread", install: "unread", acceptance: "observed", checkedAt: input.snapshotAt, next: "", dueAt: i ? task.dueAt : null, dueTz: i ? task.dueTz : null, mutation: i ? { key, state: "readback" } : null }));
+  rows.push({ ...rows[1], key: repeatKey, occurrence: repeated.key, requestIndex: 0, request: "Repeated outcome already accounted", outcome: "updated", mutation: { key: repeatKey, state: "readback" } });
+  const manifest = { version: 1, runId: input.runId, revision: input.revision, lower: input.window.lower, upper: input.window.upper, rows: 3, occurrences: [{ key: input.occurrences[0].key, requests: 2, nextIndex: 2 }, { key: repeated.key, requests: 1, nextIndex: 1 }] };
+  const report = [...rows.map(row => `audit-row: ${JSON.stringify(row)}`), `audit-manifest: ${JSON.stringify(manifest)}`, "Verdict: pass"].join("\n");
+  expect(parseMaintenanceReport(report, input, loadTasks()).audit).toMatchObject({ complete: true, error: null });
 });

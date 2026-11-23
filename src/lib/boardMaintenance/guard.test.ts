@@ -24,14 +24,14 @@ test("each task refusal has a clear code, with hidden create allowed", () => {
 });
 test("mutating tool classification is fail closed; config reads remain available", () => {
   const allowed = ["create_task", "update_task", "agent_activity", "lifecycle_events", "seat_tick_settings", "account_project_binding", "role_presets", "auto_updates"];
-  for (const tool of MUTATING_MCP_TOOL_NAMES) expect(permitMaintainerTool(tool, {}).allowed).toBe(allowed.includes(tool));
+  for (const tool of MUTATING_MCP_TOOL_NAMES) expect(permitMaintainerTool(tool, {}).allowed, tool).toBe(allowed.includes(tool));
   for (const [tool, args] of [["seat_tick_settings", { maintenance: { enabled: true } }], ["role_presets", { overrides: {} }], ["auto_updates", { enabled: true }], ["account_project_binding", { action: "add" }]] as const) expect(permitMaintainerTool(tool, args)).toMatchObject({ allowed: false, code: "maintainer_tool_refused" });
   expect(permitMaintainerTool("account_project_binding", { action: "list", project: PROJECT }).allowed).toBe(true);
 });
 
 test("only a confirmed retired seat card can be hidden as done history", () => {
   held = sandbox(); const run = claim();
-  const snapshot = new AgentRegistry(statePath("fixture-registry.json")).readOnlySnapshot();
+  const snapshot = structuredClone(new AgentRegistry(statePath("fixture-registry.json")).readOnlySnapshot());
   const id = "conversation_old-seat";
   snapshot.conversations[id] = { id, agentRole: "orchestrator", generations: [], continuityPaths: [], abandonedContinuityPaths: [] } as never;
   const task: BoardTask = { id: "retired-card", placement: "unplaced", project: PROJECT, text: "orchestrator · You are this project's orchestrator…", status: "assigned", assignments: [{ conversationId: id, launchId: "old-launch", path: null, panePid: null, state: "linked", error: null, at: run.claimedAt }], createdAt: run.claimedAt, updatedAt: run.claimedAt };
