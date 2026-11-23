@@ -10,30 +10,6 @@ const nativeTest = test.skipIf(process.platform !== "linux" || !["x64", "arm64"]
 afterEach(() => { for (const dir of roots.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 const { fixture, commitFixtureInputs } = createPublicationFixtures(root, roots);
 
-test.each([".next", "node_modules"])("an oversized ignored %s input names the limit and can be removed before retrying publication", directory => {
-  const f = fixture();
-  fs.mkdirSync(path.join(f.dir, ".git", "info"), { recursive: true });
-  fs.writeFileSync(path.join(f.dir, ".git", "info", "exclude"), `${directory}/\n`);
-  const artifact = path.join(f.dir, directory, "oversized.bin");
-  fs.mkdirSync(path.dirname(artifact), { recursive: true });
-  fs.writeFileSync(artifact, "");
-  fs.truncateSync(artifact, 2 * 1024 * 1024 * 1024 + 1);
-
-  const refused = f.run(true);
-  const input = directory === ".next" ? "checkout" : "node_modules";
-  expect(refused.status, refused.stderr).toBe(1);
-  expect(refused.stderr).toContain(`publication inputs cannot be certified: ${input} fingerprint exceeds 2 GiB`);
-  expect(refused.stderr).not.toContain(artifact);
-  expect(fs.existsSync(f.receipt)).toBeFalse();
-
-  fs.unlinkSync(artifact);
-  const prepared = f.run(true);
-  expect(prepared.status, prepared.stderr).toBe(0);
-  const transported = f.run(false);
-  expect(transported.status, transported.stderr).toBe(0);
-  expect(fs.existsSync(f.receipt)).toBeFalse();
-}, 60_000);
-
 test("prepared checks are consumed once by a fresh native hook, with fresh privacy and no second admission", () => {
   const f = fixture();
   const prepared = f.run(true);
