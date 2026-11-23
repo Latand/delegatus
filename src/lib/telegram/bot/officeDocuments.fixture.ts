@@ -1,12 +1,13 @@
 import { deflateRawSync } from "node:zlib";
 
 /** Neutral Office files created by tests; no external programs or client data. */
-export function officeZip(entries: Record<string, string | Buffer>, compressed = true, dataDescriptor = false): Buffer {
+/** `trailer` follows each deflate stream inside its member, as a crafted file could. */
+export function officeZip(entries: Record<string, string | Buffer>, compressed = true, dataDescriptor = false, trailer = Buffer.alloc(0)): Buffer {
   const locals: Buffer[] = [], directory: Buffer[] = [];
   let offset = 0;
   for (const [filename, value] of Object.entries(entries)) {
     const name = Buffer.from(filename), content = Buffer.from(value);
-    const encoded = compressed ? deflateRawSync(content) : content;
+    const encoded = compressed ? Buffer.concat([deflateRawSync(content), trailer]) : content;
     let crc = 0xffffffff;
     for (const byte of content) {
       crc ^= byte;

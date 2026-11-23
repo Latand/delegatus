@@ -5,6 +5,8 @@ const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
   for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);
   return value >>> 0;
 });
+type InflateInfo = { buffer: Buffer; engine: { bytesWritten: number } };
+
 function crc32(bytes: Buffer): number {
   let crc = 0xffffffff;
   for (const byte of bytes) crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 255]!;
@@ -62,7 +64,9 @@ export function inspectOfficeZip(bytes: Buffer, maxBytes: number, inspect: (name
     const encoded = bytes.subarray(start, start + compressed);
     let content = encoded;
     if (method === 8) {
-      const inflated = inflateRawSync(encoded, { info: true, maxOutputLength: Math.max(1, expanded) });
+      // With `info`, zlib also returns its engine; the Node typings lack that overload.
+      const inflated = inflateRawSync(encoded, { info: true, maxOutputLength: Math.max(1, expanded) }) as unknown as InflateInfo;
+      // Trailing bytes after the deflate stream would escape inspection.
       if (inflated.engine.bytesWritten !== compressed) return invalid();
       content = inflated.buffer;
     }

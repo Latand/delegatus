@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { officeXmlText } from "./officeDocuments";
+import { inspectOfficeZip, officeXmlText } from "./officeDocuments";
+import { officeZip } from "./officeDocuments.fixture";
 
 const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
 const S = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
@@ -42,4 +43,12 @@ test.each([
 
 test("non-XML members are left to the raw byte scan", () => {
   expect(officeXmlText("media/image1.png", Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toBeNull();
+});
+
+test("bytes hidden after a member's deflate stream make the package uninspectable", () => {
+  const inspected: string[] = [];
+  const entries = { "[Content_Types].xml": "<Types/>", "docProps/custom.xml": "<property>Neutral</property>" };
+  expect([...inspectOfficeZip(officeZip(entries), 1024, name => inspected.push(name))]).toEqual(Object.keys(entries));
+  expect(inspected).toEqual(Object.keys(entries));
+  expect(() => inspectOfficeZip(officeZip(entries, true, false, Buffer.from("trailing note")), 1024, () => {})).toThrow();
 });
