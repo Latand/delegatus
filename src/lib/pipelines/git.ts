@@ -1729,6 +1729,7 @@ export function pipelinePublicationHookEnv(source: NodeJS.ProcessEnv = process.e
     if (key === "NODE_ENV" || key === "NEXT_PHASE" || key === "NEXT_RUNTIME" || /^__NEXT_/.test(key)
       || (/^(?:LLV|DELEGATUS)_/.test(key) && !/^(?:LLV_(?:GATE|PRIVACY)_|(?:LLV|DELEGATUS)_PUBLICATION_|LLV_AGENT_GIT_GUARD_DIR$|LLV_DOCKER_NSENTER_SHIMS$|(?:LLV|DELEGATUS)_(?:AGENT_CPU$|CPU_PRESSURE|WORK_(?:SCOPE_)?CPU_QUOTA$))/.test(key))) env[key] = undefined;
   }
+  if (source.LLV_DOCKER_NSENTER_SHIMS === "1") env.LLV_DOCKER_NSENTER_SHIMS = "1";
   return env;
 }
 
@@ -2347,13 +2348,15 @@ async function reconcilePublication(id: string, expectedEpoch: number, exec: Exe
       const retained = current.delivery.operation.executor?.result;
       const failure = retained?.failure ? { ...retained.failure,
         outputTail: redactPublicationText(retained.failure.outputTail).slice(-4000) } : undefined;
+      const phaseTimings = retained?.phaseTimings;
       const result: PipelinePublishResult = remote.sha === operation.sha
-        ? { ok: true, sha: operation.sha, remote: "published" }
+        ? { ok: true, sha: operation.sha, remote: "published", ...(phaseTimings ? { phaseTimings } : {}) }
         : retained
           ? { ok: false, error: failure ? publicationFailureDetail(failure)
             : retained.ok ? "publication did not leave its accepted head on the remote; the executor completed without confirmation"
               : redactBounded(redactPublicationText(retained.error), 4500),
-            ...(failure ? { failure } : {}), ...(!retained.ok && retained.outcome ? { outcome: retained.outcome } : {}) }
+            ...(failure ? { failure } : {}), ...(!retained.ok && retained.outcome ? { outcome: retained.outcome } : {}),
+            ...(phaseTimings ? { phaseTimings } : {}) }
           : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
       if (!result.ok && (!retained || (retained.ok && retained.uncertain))) result.outcome = "not-landed";
       const attempt = current.runs.find((run) => run.stageId === current.cursor?.stageId)?.attempts.at(-1);
@@ -2377,7 +2380,9 @@ async function reconcilePublication(id: string, expectedEpoch: number, exec: Exe
       if (result.ok) current.publishedCommit = operation.sha;
       else if ((current.state === "running" || (current.state === "needs_decision" && publicationPark)) && current.cursor?.state === "committing"
         && current.lastPassedCommit === operation.sha) current.stateDetail = result.error;
-      deliveryJournal(current, "recovery", "publisher quiescent; remote reconciled", conversationId);
+      const timing = result.phaseTimings
+        ? `; phases preparation=${result.phaseTimings.preparationMs}ms checks=${result.phaseTimings.checksMs}ms transport=${result.phaseTimings.transportMs}ms` : "";
+      deliveryJournal(current, "recovery", `publisher quiescent; remote reconciled${timing}`, conversationId);
       tx.put(current);
       return null;
     });
@@ -2491,7 +2496,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
   // The repository's gate can finish before Git's authenticated discovery.
   // The subsequent native hook verifies this exact operation's consumed
-  // inputs, with fresh privacy, under a separate bounded transport deadline.
+  // inputs under a separate bounded transport deadline.
   const preparation = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
     ? publicationPreparationVersion(pipeline.worktreeDir) : undefined;
   let transportBudgetMs = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
@@ -2515,16 +2520,14 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
       const runtime = preparation === 2 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
       const checked = await exec(runtime, ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
       if (checked.code !== 0) return { ...failure("checking the publication before transport", checked), phaseTimings: { ...phaseTimings, preparationMs: Math.max(0, Math.round(performance.now() - checkStarted)) } };
-      // Preparation includes privacy: its elapsed time is a conservative
-      // observation even with older hooks that report no per-step timings.
-      // Allow a second scan under load, capped by this publication's budget,
-      // and retain the pack margin outside the hook's verdict deadline.
+      // Preparation includes the full privacy scan and heavy checks. The
+      // transport hook only validates their receipt, so its bound is fixed
+      // independently of preparation time; retain the pack margin outside it.
       const preparationElapsed = Math.max(0, Math.round(performance.now() - checkStarted));
       const checkReceipt = readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
       phaseTimings = { preparationMs: Math.max(0, preparationElapsed - (checkReceipt.checksMs ?? preparationElapsed)),
         checksMs: checkReceipt.checksMs ?? preparationElapsed, transportMs: 0 };
-      transportBudgetMs = Math.min(budget.ms, Math.max(PUBLICATION_TRANSPORT_MS,
-        Math.ceil(2 * preparationElapsed)) + PUBLICATION_PACK_MARGIN_MS);
+      transportBudgetMs = Math.min(budget.ms, PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS);
       // An older or failed gate cannot turn an exit code into a check receipt.
       const current = await currentPipelineBranchHead(pipeline, exec);
       if (!current.ok) return current;

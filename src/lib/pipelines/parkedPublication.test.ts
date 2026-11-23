@@ -1345,10 +1345,11 @@ test("the publication hook environment drops the Viewer's settings and keeps the
     // The operator's CPU placement choices reach the hook's gates.
     DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_CPU_PRESSURE_HOLD: "30", DELEGATUS_WORK_CPU_QUOTA: "900", DELEGATUS_WORK_SCOPE_CPU_QUOTA: "200",
     LLV_DOCKER_NSENTER_SHIMS: "1" });
-  // Every key present is an explicit removal; a kept variable is inherited untouched.
-  expect(Object.values(env).every((value) => value === undefined)).toBe(true);
-  expect(Object.hasOwn(env, "LLV_DOCKER_NSENTER_SHIMS")).toBe(false);
-  expect(Object.keys(env).sort()).toEqual(["DELEGATUS_DEBUG", "LLV_LANG", "LLV_LAUNCHER_CHECKOUT", "LLV_LAUNCHER_REEXEC", "LLV_SKIP_HOOKS", "LLV_STATE_OWNER", "LLV_TOKEN", "NEXT_RUNTIME", "NODE_ENV"]);
+  // Viewer controls are removed while the container's host-user lookup shim
+  // remains available to the isolated native-tool admission path.
+  expect(Object.values(env).filter(value => value !== undefined)).toEqual(["1"]);
+  expect(env.LLV_DOCKER_NSENTER_SHIMS).toBe("1");
+  expect(Object.keys(env).sort()).toEqual(["DELEGATUS_DEBUG", "LLV_DOCKER_NSENTER_SHIMS", "LLV_LANG", "LLV_LAUNCHER_CHECKOUT", "LLV_LAUNCHER_REEXEC", "LLV_SKIP_HOOKS", "LLV_STATE_OWNER", "LLV_TOKEN", "NEXT_RUNTIME", "NODE_ENV"]);
 });
 
 test("a publisher that died with its Viewer retries at once, and that retry is counted against the same bound", async () => {

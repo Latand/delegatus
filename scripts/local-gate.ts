@@ -17,7 +17,6 @@ import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerpri
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
-import { readSafeRegularFile } from "./privacy-safe-path";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -235,6 +234,7 @@ export const ISOLATED_DIRECTORY_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HO
 /** Everything that might resolve state, including build imports, is sandboxed. */
 export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...inherited };
+  if (inherited.LLV_DOCKER_NSENTER_SHIMS === "1" || process.env.LLV_DOCKER_NSENTER_SHIMS === "1") env.LLV_DOCKER_NSENTER_SHIMS = "1";
   // Git exports these to hooks. Keeping them makes a fixture's `git -C`
   // operate on the pushing repository instead of the fixture repository.
   for (const key of [
@@ -940,14 +940,14 @@ class AdmittedGateFailed extends Error {
  * own ledgers; the admitted hook still credits this invocation's queue wait.
  * Bound the admission itself independently of the execution budget. */
 export async function runAdmittedChecks(command: string[], root: string, env: NodeJS.ProcessEnv, deadline: PushDeadline | null,
-  cancel?: AbortSignal, admissionMs = 60_000): Promise<void> {
+  cancel?: AbortSignal, admissionMs = 60_000, admissionLabel = "publication checks"): Promise<void> {
   const budget = cpuWaitBudget(env);
   const started = path.join(budget.directory, "running");
   const admission = new AbortController();
   const stop = cancel ? AbortSignal.any([cancel, admission.signal]) : admission.signal;
   const timer = setTimeout(() => {
     if (!cancel?.aborted && !existsSync(started)) {
-      console.error(`pre-push: CPU admission deadline exceeded after ${admissionMs} ms; checks did not start`);
+      console.error(`pre-push: CPU admission deadline exceeded after ${admissionMs} ms; ${admissionLabel} did not start`);
       admission.abort();
     }
   }, admissionMs);
@@ -959,7 +959,7 @@ export async function runAdmittedChecks(command: string[], root: string, env: No
       LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(deadline ? deadline.at + (deadline.cpuWaitMs ?? 0) : Date.now() + 15 * 60_000, env)),
     }, Infinity, undefined, stop);
     if (outcome.leaked) throw new ContainmentFailed("admitted checks", outcome.leaked, outcome.cancelled);
-    if (admission.signal.aborted) throw new AdmittedGateFailed(75, "publication checks stopped while waiting for CPU admission");
+    if (admission.signal.aborted) throw new AdmittedGateFailed(75, `${admissionLabel} stopped while waiting for CPU admission`);
     if (outcome.cancelled) return;
     if (outcome.stopped) throw new NoVerdict({ name: "push checks", command }, deadline ?? { startedAt: Date.now() - (outcome.ranMs ?? 0), at: Date.now() }, outcome);
     if (outcome.code !== 0) throw new AdmittedGateFailed(outcome.code ?? 1);
@@ -1007,9 +1007,8 @@ function publicationObservationComponents(env: NodeJS.ProcessEnv) {
 }
 const publicationObservationInputs = (env: NodeJS.ProcessEnv) => fingerprint(publicationObservationComponents(env));
 
-/** The native transport checks current privacy data after the expensive
- * checks. Shared known values may refresh while those checks run. Bind their
- * paths and options to the receipt, then scan private copies of current data. */
+/** Bind the exact external privacy inputs used by the prepared scan into its
+ * receipt. The transport hook checks these hashes and never repeats the scan. */
 function publicationPrivacyFiles(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(["LLV_PRIVACY_KNOWN_VALUES_FILE", "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE"]
     .filter(name => env[name]).map(name => {
@@ -1033,7 +1032,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   }
   const receiptFile = process.env.LLV_GATE_PUBLICATION_RECEIPT;
   const transport = mode === "pre-push" && !admitted && !!receiptFile && !publicationPrepare;
-  if (publicationPrepare && (!receiptFile || mode !== "pre-push" || admitted)) throw new Error("publication preparation requires custody");
+  if (publicationPrepare && (!receiptFile || mode !== "pre-push")) throw new Error("publication preparation requires custody");
   let deadline = pushDeadline(process.env, Date.now(), admitted);
   const checkTransportDeadline = () => {
     if (transport && deadline && Date.now() >= deadline.at) {
@@ -1041,11 +1040,14 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     }
   };
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
-  if ((publicationPrepare || requestedStep) && process.env.LLV_GATE_SANDBOX_RECORD) {
+  // Admission wait roots are custody for the bounded handoff only. Their
+  // values are volatile and do not belong in the prepared input receipt.
+  if (admitted) delete process.env.LLV_GATE_ADMISSION_WAIT_ROOTS;
+  if ((publicationPrepare || transport) || (requestedStep && process.env.LLV_GATE_SANDBOX_RECORD)) {
     // Git prepends its exec directory before invoking native hooks. Match it
     // once the cleanup owner is present; the bootstrap re-enters below.
     const prefix = git(root, ["--exec-path"]) + path.delimiter;
-    if (publicationPrepare || !process.env.PATH?.startsWith(prefix)) process.env.PATH = prefix + (process.env.PATH ?? "");
+    if (!process.env.PATH?.startsWith(prefix)) process.env.PATH = prefix + (process.env.PATH ?? "");
   }
   let publishedTree: string | undefined;
   if (mode === "pre-push" && process.env.LLV_GATE_PUSH_HEAD && process.env.LLV_GATE_PUSH_HEAD !== git(root, ["rev-parse", "HEAD"])) {
@@ -1198,7 +1200,22 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     if (execution !== "cloud" && execution !== "local") throw new Error("invalid check execution setting");
     const config = execution === "cloud" && steps.some(step => step.name !== "privacy")
       ? await cloudCheckConfig(root, process.env.LLV_GATE_LANE_ID, process.env.LLV_GATE_STAGE_ID) : null;
-    if (publicationPrepare && !config) {
+    if (publicationPrepare && !admitted && !config) {
+      // Admit before resolving or installing any pinned tool. Cold installs
+      // are preparation work too, and must not sit in the shared queue beyond
+      // the same bounded wait as the checks they enable.
+      // gate-slot supplies this same default to its admitted child; normalize
+      // before taking the receipt snapshot so both processes certify the
+      // environment the checks actually receive.
+      process.env.NODE_OPTIONS ??= "--max-old-space-size=11264";
+      const testAdmission = process.env.NODE_ENV === "test" ? Number(process.env.LLV_GATE_TEST_ADMISSION_MS) : NaN;
+      const admissionMs = Number.isSafeInteger(testAdmission) && testAdmission > 0 ? Math.min(testAdmission, 60_000) : 60_000;
+      const runtime = path.basename(process.execPath) === "bun-container" ? process.execPath : "bun";
+      await runAdmittedChecks(["bash", "scripts/gate-slot.sh", runtime, "scripts/local-gate.ts", "pre-push", "--publication-prepare", "--admitted"],
+        root, process.env, deadline, undefined, admissionMs, "publication tool preparation");
+      return;
+    }
+    if (publicationPrepare && admitted && !config) {
       const budget = cpuWaitBudget(process.env);
       try {
         const until = deadline!.at + (deadline!.cpuWaitMs ?? 0);
@@ -1215,7 +1232,9 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     const publicationInputs = inputReader?.snapshot();
     checkTransportDeadline();
     const observationComponents = publicationObservationComponents(process.env);
-    const checkComponents: Record<string, string> = { ...observationComponents, plan: fingerprint(steps) };
+    const privacyFiles = publicationPrepare ? publicationPrivacyFiles(privacyEnv) : undefined;
+    const checkComponents: Record<string, string> = { ...observationComponents, plan: fingerprint(steps),
+      ...(privacyFiles ? { "privacy files": fingerprint(privacyFiles) } : {}) };
     if (publicationInputs) Object.assign(checkComponents, publicationInputs.components);
     const assertPublicationInputs = (phase: string, privacy?: Record<string, string>) => {
       const observation = publicationObservationComponents(process.env);
@@ -1228,6 +1247,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       if (changed.length) throw new Error(`publication inputs changed during ${phase}; changed components: ${changed.join(", ")}`);
     };
     if (inputReader && !publicationInputs) throw new Error("publication inputs cannot be certified: " + inputReader.reason());
+    let privacyInputsToAssert: Record<string, string> | undefined;
     if (transport) {
       const observed = [process.env.LLV_GATE_PUSH_HEAD, process.env.LLV_GATE_PUBLICATION_REF, process.env.LLV_GATE_PUBLICATION_REMOTE_HEAD].join(" ");
       if (process.env.LLV_GATE_PUBLICATION_OBSERVED !== observed) throw new Error("publication requires the native hook's pushed ref observation");
@@ -1238,6 +1258,13 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
         const changed = receipt.components ? Object.keys(checkComponents).filter(name => checkComponents[name] !== receipt.components![name]) : ["component record unavailable"];
         throw new Error(`publication check inputs changed; changed components: ${changed.length ? changed.join(", ") : "receipt digest"}`);
       }
+      const currentPrivacyFiles = publicationPrivacyFiles(privacyEnv);
+      const certifiedPrivacy = receipt.components?.["privacy files"];
+      if (!certifiedPrivacy || certifiedPrivacy !== fingerprint(currentPrivacyFiles)) {
+        const changed = Object.keys(currentPrivacyFiles);
+        throw new Error(`publication check inputs changed; changed components: ${changed.length ? changed.map(name => `privacy files (${name})`).join(", ") : "privacy files"}`);
+      }
+      privacyInputsToAssert = currentPrivacyFiles;
     }
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
     const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error) : undefined;
@@ -1251,20 +1278,9 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       return;
     }
     if (transport) {
-      // A lesson refresh must not change the data this scan actually uses.
-      // Missing inputs stay missing so the scanner retains its own refusal.
-      for (const name of ["LLV_PRIVACY_KNOWN_VALUES_FILE", "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE"] as const) {
-        const file = privacyEnv[name];
-        if (file && existsSync(file)) {
-          const copy = path.join(sandbox, name);
-          try { writeFileSync(copy, readSafeRegularFile(file)); }
-          catch { throw new Error(`publication privacy inputs cannot be certified; changed components: privacy files (${name})`); }
-          privacyEnv[name] = copy;
-        }
-      }
-      const privacy = publicationPrivacyFiles(privacyEnv);
-      await runSteps(mode, steps.filter(step => step.name === "privacy"), options);
-      assertPublicationInputs("privacy checks", privacy);
+      // Preparation completed the full privacy scan before Git opened its
+      // transport. The consumed receipt binds those exact privacy inputs.
+      assertPublicationInputs("transport", privacyInputsToAssert);
       checkTransportDeadline();
       console.error("pre-push: verified completed checks for this publication; transport admitted");
     } else if (mode === "pre-push" && !admitted) {
@@ -1311,12 +1327,12 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       } else await privacy();
     } else {
       const checksStarted = performance.now();
-      await runSteps(mode, admitted ? steps.filter(step => step.name !== "privacy") : steps, options);
+      await runSteps(mode, admitted && !publicationPrepare ? steps.filter(step => step.name !== "privacy") : steps, options);
       if (publicationPrepare) checksMs = Math.max(0, Math.round(performance.now() - checksStarted));
     }
     if (publicationPrepare) {
       checksMs ??= Math.max(0, Math.round(performance.now() - checksStarted));
-      assertPublicationInputs("checks");
+      assertPublicationInputs("checks", privacyFiles);
       writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents, checksMs);
     }
   } catch (error) {
@@ -1339,6 +1355,6 @@ if (import.meta.main) {
     try { await main("pre-push", process.argv[4] === "--admitted", false, step); } catch (error) { endHook("pre-push", error); }
   } else {
     if (mode !== "pre-commit" && mode !== "pre-push") throw new Error("usage: local-gate.ts pre-commit|pre-push|check-step");
-    try { await main(mode, process.argv[3] === "--admitted", process.argv[3] === "--publication-prepare"); } catch (error) { endHook(mode, error); }
+    try { await main(mode, process.argv.includes("--admitted"), process.argv.includes("--publication-prepare")); } catch (error) { endHook(mode, error); }
   }
 }

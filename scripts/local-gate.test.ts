@@ -124,6 +124,12 @@ test("state isolation replaces inherited roots and removes the live owner claim"
   expect(isolatedEnvironment(sandbox, { NODE_ENV: "test", LLV_GATE_LOCK_DIR: sandbox }).LLV_GATE_LOCK_DIR).toBe(sandbox);
   expect(env.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
 });
+test("isolated publication checks preserve the container host-user lookup shim", () => {
+  const sandbox = mkdtempSync(path.join(tmpdir(), "gate-container-env-")); roots.push(sandbox);
+  const env = isolatedEnvironment(sandbox, { NODE_ENV: "test", LLV_DOCKER_NSENTER_SHIMS: "1" });
+  expect(env.LLV_DOCKER_NSENTER_SHIMS).toBe("1");
+  expect(env.HOME).toStartWith(sandbox + path.sep);
+});
 test("scope uses executed import closure and the workflow test lists", () => {
   const doc = discover(root, "HEAD", ["CONTRIBUTING.md"]);
   expect([doc.linux, doc.runtime, doc.native]).toEqual([false, false, false]);

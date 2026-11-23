@@ -9,7 +9,7 @@ import { publishPipelineBranch } from "../src/lib/pipelines/git";
 import { pipelineCorpus } from "../src/lib/pipelines/fixtures/corpus";
 import { findPipelineRecord, loadPipelines, savePipelines } from "../src/lib/pipelines/store";
 import { realExec, type ExecPort } from "../src/lib/workflows/provision";
-import { DEFAULT_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS } from "../src/lib/pipelines/gateBudget";
+import { PUBLICATION_PACK_MARGIN_MS } from "../src/lib/pipelines/gateBudget";
 
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -38,7 +38,8 @@ nativeTest("a first cold native publication completes one check phase before one
       }
       return realExec(command, args, cwd, { ...f.env, ...overrides }, options);
     };
-    expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, sha: f.head, remote: "published" });
+    const result = await publishPipelineBranch(subject, exec, { acceptedSha: f.head });
+    expect(result).toMatchObject({ ok: true, sha: f.head, remote: "published" });
     expect(publicationCommands).toEqual(["prepare", "push"]);
     expect(pushes).toBe(1); expect(http.rpc()).toBe(1); expect(http.rejected()).toBe(0);
     expect(findPipelineRecord(subject.id)!.delivery!.journal.at(-1)!.reason).toMatch(/phases preparation=\d+ms checks=\d+ms transport=\d+ms/);
@@ -120,7 +121,9 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
           pushes++;
           expect(env?.LLV_GATE_PUBLICATION_RECEIPT).toBeUndefined();
         }
-        return realExec(command, args, cwd, { ...f.env, ...env }, options);
+        const hookEnv = { ...f.env, ...env };
+        if (f.env.LLV_PRIVACY_KNOWN_VALUES_FILE) hookEnv.LLV_PRIVACY_KNOWN_VALUES_FILE = f.env.LLV_PRIVACY_KNOWN_VALUES_FILE;
+        return realExec(command, args, cwd, hookEnv, options);
       };
       expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, remote: "published" });
       expect(preparations).toBe(0); expect(pushes).toBe(1); expect(http.rpc()).toBe(1);
@@ -130,7 +133,7 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
   }, 90_000);
 }
 
-for (const scenario of ["slow privacy", "changed input", "capped budget", "over cap"] as const) {
+for (const scenario of ["slow privacy", "changed input", "changed privacy input", "capped budget"] as const) {
   test(`measured publication transport handles ${scenario}`, async () => {
     const f = fixture();
     // This path is embedded in tracked record.ts and scanned by the real
@@ -144,15 +147,20 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
     f.env.HOOK_CLOCK = preload;
     f.env.HOOK_PRIVACY = path.join(root, "scripts/privacy-publication-gate.ts");
     fs.copyFileSync(path.join(root, "scripts/privacy-known-value-fingerprints.json"), path.join(f.dir, "scripts/privacy-known-value-fingerprints.json"));
-    const preparationMs = ["capped budget", "over cap"].includes(scenario) ? 600_000 : 70_000;
-    const transportMs = scenario === "over cap" ? DEFAULT_PUBLICATION_PUSH_MS - PUBLICATION_PACK_MARGIN_MS + 1 : preparationMs;
-    // After each real scan, its child advances the shared clock. The over-cap
-    // child stays pending until the hook cancels it, keeping the verdict stable.
+    if (scenario === "changed privacy input") {
+      const knownValues = path.join(f.dir, ".git", "known-values.txt");
+      fs.writeFileSync(knownValues, "initial synthetic fixture value\n");
+      f.env.LLV_PRIVACY_KNOWN_VALUES_FILE = knownValues;
+    }
+    const preparationMs = scenario === "capped budget" ? 600_000 : 70_000;
+    // Log the complete privacy scan before advancing the logical clock. The
+    // event order proves privacy finished before Git starts remote discovery.
     fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts") {
+      require("node:fs").appendFileSync(process.env.CREDENTIAL_EVENTS!, JSON.stringify({kind:"privacy-start",at:Number(require("node:fs").readFileSync(process.env.CREDENTIAL_CLOCK!, "utf8"))}) + "\\n");
       require("node:child_process").execFileSync(process.execPath, [process.env.HOOK_PRIVACY, ...process.argv.slice(3)], { stdio: "inherit" });
+      require("node:fs").appendFileSync(process.env.CREDENTIAL_EVENTS!, JSON.stringify({kind:"privacy-complete",at:Number(require("node:fs").readFileSync(process.env.CREDENTIAL_CLOCK!, "utf8"))}) + "\\n");
       const fs = require("node:fs"), file = ${JSON.stringify(clock)};
-      fs.writeFileSync(file, String(Number(fs.readFileSync(file, "utf8")) + (process.env.LLV_GATE_PUBLICATION_OBSERVED ? ${transportMs} : ${preparationMs})));
-      ${scenario === "over cap" ? 'if (process.env.LLV_GATE_PUBLICATION_OBSERVED) await new Promise(() => {});' : ""}
+      fs.writeFileSync(file, String(Number(fs.readFileSync(file, "utf8")) + (process.env.LLV_GATE_PUBLICATION_OBSERVED ? 0 : ${preparationMs})));
     }\n`);
     commitFixtureInputs(f);
     const http = await httpFixture(f, false), previous = loadPipelines();
@@ -173,27 +181,31 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
           transportBudget = options?.timeoutMs ?? 0;
           hookAllowance = Number(env?.LLV_GATE_PUSH_DEADLINE) - Date.now();
           if (scenario === "changed input") fs.appendFileSync(path.join(f.dir, "example.ts"), "// changed after preparation\n");
+          if (scenario === "changed privacy input") fs.appendFileSync(f.env.LLV_PRIVACY_KNOWN_VALUES_FILE!, "refreshed synthetic fixture value\n");
         }
-        return realExec(command, args, cwd, { ...f.env, ...env }, options);
+        const hookEnv = { ...f.env, ...env };
+        if (f.env.LLV_PRIVACY_KNOWN_VALUES_FILE) hookEnv.LLV_PRIVACY_KNOWN_VALUES_FILE = f.env.LLV_PRIVACY_KNOWN_VALUES_FILE;
+        return realExec(command, args, cwd, hookEnv, options);
       };
       const result = await publishPipelineBranch(subject, exec, { acceptedSha: f.head });
-      if (scenario === "changed input") {
+      if (["changed input", "changed privacy input"].includes(scenario)) {
         expect(result).toMatchObject({ ok: false });
-        expect(result.ok ? "" : result.error).toContain("publication inputs cannot be certified: dirty worktree");
-      } else if (scenario === "over cap") {
-        expect(result).toMatchObject({ ok: false, failure: { retryableDeadline: true, hookStoppedCheck: "privacy" } });
+        expect(result.ok ? "" : result.error).toMatch(scenario === "changed input"
+          ? /publication inputs cannot be certified: dirty worktree/
+          : /publication check inputs changed; changed components: privacy files \(LLV_PRIVACY_KNOWN_VALUES_FILE\)/);
       } else {
         expect(result).toMatchObject({ ok: true, sha: f.head, remote: "published" });
         expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
       }
-      expect(transportBudget).toBeGreaterThanOrEqual(Math.min(DEFAULT_PUBLICATION_PUSH_MS, 2 * preparationMs + PUBLICATION_PACK_MARGIN_MS));
-      expect(transportBudget).toBeLessThanOrEqual(DEFAULT_PUBLICATION_PUSH_MS);
-      if (scenario === "capped budget") expect(transportBudget).toBe(DEFAULT_PUBLICATION_PUSH_MS);
+      expect(transportBudget).toBe(PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS);
       expect(hookAllowance).toBe(transportBudget - PUBLICATION_PACK_MARGIN_MS);
       expect(pushes).toBe(1);
       expect(http.rpc()).toBe(["slow privacy", "capped budget"].includes(scenario) ? 1 : 0);
       expect(http.events().filter(event => event.kind === "checks")).toHaveLength(1);
-      expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(scenario === "changed input" ? 1 : 2);
+      expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(1);
+      const events = http.events().map(event => event.kind);
+      expect(events.indexOf("privacy-complete")).toBeGreaterThanOrEqual(0);
+      expect(events.indexOf("privacy-complete")).toBeLessThan(events.indexOf("mint"));
       expect(findPipelineRecord(subject.id)!.delivery!.operation!.state).toBe("settled");
     } finally { monotonic.mockRestore(); date.mockRestore(); savePipelines(previous); http.close(); }
   }, 90_000);
@@ -205,10 +217,11 @@ test.each([["short preparation", 10_000], ["long preparation", 40_000]] as const
   const preload = path.join(f.dir, ".git", "transport-clock.ts");
   const startedAt = Date.now();
   fs.writeFileSync(clock, String(startedAt));
-  fs.writeFileSync(preload, `import fs from "node:fs"; Date.now = () => Number(fs.readFileSync(${JSON.stringify(clock)}, "utf8"));`);
+  fs.writeFileSync(preload, `import fs from "node:fs"; Date.now = () => process.env.LLV_GATE_PUBLICATION_OBSERVED && process.env.LLV_GATE_PUSH_DEADLINE
+    ? Number(process.env.LLV_GATE_PUSH_DEADLINE) + 1 : Number(fs.readFileSync(${JSON.stringify(clock)}, "utf8"));`);
   f.env.HOOK_CLOCK = preload;
-  // Advance the hook's clock past its deadline during the fresh privacy
-  // observation. No elapsed-time sleeps or transport-kill races are needed.
+  // Advance the hook's clock past its fixed deadline during receipt
+  // validation. No elapsed-time sleeps or transport-kill races are needed.
   fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts" && process.env.LLV_GATE_PUBLICATION_OBSERVED) require("node:fs").writeFileSync(${JSON.stringify(clock)}, String(Number(process.env.LLV_GATE_PUSH_DEADLINE) + 1));\n`);
   const http = await httpFixture(f), previous = loadPipelines();
   let elapsedMonotonicMs = 0;
@@ -229,8 +242,7 @@ test.each([["short preparation", 10_000], ["long preparation", 40_000]] as const
         preparationCompletedAt = Date.now();
       }
       if (command === "git" && args[0] === "push") {
-        const expectedBudget = Math.min(DEFAULT_PUBLICATION_PUSH_MS,
-          Math.max(PUBLICATION_TRANSPORT_MS, 2 * preparationMs) + PUBLICATION_PACK_MARGIN_MS);
+        const expectedBudget = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
         const deadline = Number(env?.LLV_GATE_PUSH_DEADLINE);
         expect(options?.timeoutMs).toBe(expectedBudget);
         expect(deadline).toBeGreaterThanOrEqual(preparationCompletedAt + expectedBudget - PUBLICATION_PACK_MARGIN_MS);
@@ -276,6 +288,7 @@ for (const change of ["pause", "epoch", "owner", "head", "authentication", "lost
       const result = await publishPipelineBranch(subject, exec, { acceptedSha: f.head });
       if (change === "lost-reply") {
         expect(result).toMatchObject({ ok: true, remote: "unreachable", uncertain: true });
+        expect(result.phaseTimings).toMatchObject({ preparationMs: expect.any(Number), checksMs: expect.any(Number), transportMs: expect.any(Number) });
         expect(http.rpc()).toBe(1);
         // A fresh controller process reads the durable operation and reconciles
         // the already-written remote without another transport or credential.
@@ -287,6 +300,11 @@ for (const change of ["pause", "epoch", "owner", "head", "authentication", "lost
         const child = await realExec(process.execPath, [childSource], root, { ...f.env, LLV_STATE_DIR: process.env.LLV_STATE_DIR }, { timeoutMs: 30_000 });
         expect(child.code, child.stderr).toBe(0);
         expect(findPipelineRecord(subject.id)!.publishedCommit).toBe(f.head);
+        const settled = findPipelineRecord(subject.id)!.delivery!.operation!;
+        expect(settled.result?.phaseTimings).toEqual(result.phaseTimings);
+        expect(settled.executor?.result?.phaseTimings).toEqual(result.phaseTimings);
+        expect(findPipelineRecord(subject.id)!.delivery!.journal.at(-1)!.reason)
+          .toMatch(/publisher quiescent; remote reconciled; phases preparation=\d+ms checks=\d+ms transport=\d+ms/);
       } else {
         expect(result.ok).toBeFalse();
         expect(http.rpc()).toBe(0);
