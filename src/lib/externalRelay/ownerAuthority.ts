@@ -49,10 +49,14 @@ export async function recordOwnerRelayHandoffOutcome(conversationId: string, out
   return recorded;
 }
 
-/** Guest-origin owner turns receive only the request-bound seat handoff. */
-export function liveOwnerRelayHandoffOnly(conversationId: string): boolean {
+/** The launch grant remains restricted when its relay run pauses or settles. */
+export function ownerRelayHandoffOnlyGrant(conversationId: string): boolean {
   const conversation = agentRegistry().conversation(conversationId as ViewerConversationId);
   return conversation?.generations.some(generation => generation.launchProfile.ownerRelayHandoffOnly === true) ?? false;
+}
+
+function guestOwnerTurn(turn: NonNullable<RunRecord["ownerTurn"]>): boolean {
+  return (turn.rawRequest as { delivery?: unknown } | undefined)?.delivery === "guest";
 }
 
 function liveOwnerRelayRun(conversationId: string): { run: RunRecord; project: string | null } | null {
@@ -62,6 +66,7 @@ function liveOwnerRelayRun(conversationId: string): { run: RunRecord; project: s
     if (ledger.v !== 1 || store.v !== 1) return null;
     for (const run of ledger.runs) {
       if (!run.ownerTurn || run.ownerTurn.cancel || run.conversationId !== conversationId || !run.ownerIdentity || procBackend.processIdentity(run.ownerPid) !== run.ownerIdentity) continue;
+      if (guestOwnerTurn(run.ownerTurn) && run.ownerTurn.seatHandoff !== true) continue;
       // The preceding turn can still call MCP while the reply waits in the queue.
       // Only delivery of this request grants its conversation the owner's tools.
       const continuation = run.ownerTurn.continuation;
@@ -131,6 +136,7 @@ function ownerRelayReplyAuthorized(relayId: string, targetId: string, requestId:
     const target = relay?.targets.find(t => t.id === targetId);
     const run = ledger.runs.find(r => r.requestId === requestId && r.relayId === relayId && r.targetId === targetId);
     return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn
+      && (reply !== "agent" || !guestOwnerTurn(run.ownerTurn) || run.ownerTurn.seatHandoff === true)
       && (!run.ownerTurn.cancel || reply === "status" || reply === "failure" && (run.ownerTurn.confirmed === true || !!run.ownerTurn.quarantinedAt) && !!run.ownerTurn.diagnostic)
       && relay?.paused === false && target?.enabled === true && (target.ownerTier === true || run.ownerTurn.prototype === true);
   } catch { return false; }
@@ -151,6 +157,7 @@ export async function ownerRelayAuthorizedAsync(relayId: string, targetId: strin
     const target = relay?.targets.find(row => row.id === targetId);
     const run = ledger.runs.find(row => row.requestId === requestId && row.relayId === relayId && row.targetId === targetId);
     return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn && !run.ownerTurn.cancel
+      && (!guestOwnerTurn(run.ownerTurn) || run.ownerTurn.seatHandoff === true)
       && relay?.paused === false && target?.enabled === true && (target.ownerTier === true || run.ownerTurn.prototype === true);
   } catch { return false; }
 }
@@ -174,7 +181,8 @@ export function ownerRelayHandoffSpawnAuthorized(clientAttemptId: string | null 
     if (ledger.v !== 1) return false;
     return ledger.runs.some(run => run.ownerTurn?.clientAttemptId === clientAttemptId
       && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
-      && (run.ownerTurn.rawRequest as { delivery?: unknown } | undefined)?.delivery === "guest"
+      && run.ownerTurn.seatHandoff === true
+      && guestOwnerTurn(run.ownerTurn)
       && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId));
   } catch {
     return false;

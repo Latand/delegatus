@@ -301,13 +301,16 @@ for (const failCloud of [false, true]) test(`owner relay routes through repo Clo
   const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
     engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env },
   } });
-  const raw = { ...contextRequest, request_id: `owner_cloud_${failCloud}`, chat: { key: "owner_cloud_chat_fixture" }, input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const words = "Summarize the project discussion.";
+  const raw = { ...contextRequest, request_id: `owner_cloud_${failCloud}`, chat: { key: "owner_cloud_chat_fixture" }, input: { ...contextRequest.input, tools: [],
+    conversation: contextRequest.input.conversation.map(message => message.id === contextRequest.input.respond_to ? { ...message, text: words } : message),
+    request_text: words, requester: { ...contextRequest.input.requester, is_owner: true } } };
   try {
     const result = await runClaimedRequest(relay, raw, undefined, { leaseWorker: false,
       cloudTransport: async input => {
         cloudCalls++;
         expect(input).toMatchObject({ environmentId: "repo-env", fullAccess: true });
-        expect(input.prompt).toContain("<owner_request>");
+        expect(input.prompt).toContain(words);
         if (failCloud) throw new CloudFailure(true);
         return JSON.stringify({ action: "reply", text: "Cloud owner answer", reply_to: "m1" });
       },
@@ -316,7 +319,7 @@ for (const failCloud of [false, true]) test(`owner relay routes through repo Clo
     });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: failCloud ? "Local owner answer" : "Cloud owner answer" } });
     expect(cloudCalls).toBe(1); expect(localCalls).toBe(failCloud ? 1 : 0);
-    expect(select).toHaveBeenCalledTimes(failCloud ? 1 : 0);
+    expect(select).toHaveBeenCalledTimes(failCloud ? 2 : 1);
   } finally { select.mockRestore(); repository.close(); await server.close(); }
 });
 
@@ -414,7 +417,7 @@ test("owner Cloud trims duplicated optional history and sends one bounded turn",
         observe: async () => ({ state: "ended", finalText: "duplicate" }), stop: async () => {} },
     });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud answer" } });
-    expect(cloudCalls).toBe(1); expect(completions).toHaveLength(1); expect(select).not.toHaveBeenCalled();
+    expect(cloudCalls).toBe(1); expect(completions).toHaveLength(1); expect(select).toHaveBeenCalledTimes(1);
   } finally { select.mockRestore(); repository.close(); await server.close(); }
 });
 
@@ -570,7 +573,7 @@ for (const state of ["unresolved", "deleted", "reassigned", "switch-before-launc
         observe: async () => ({ state: "ended", finalText: "Done" }), stop: async () => {}, noExecution: async () => true, pollMs: 1,
       } });
       expect(launches).toBe(state === "valid" ? 1 : 0);
-      if (state !== "valid" && state !== "switch-before-launch") expect(selection).not.toHaveBeenCalled();
+      if (state !== "valid" && state !== "switch-before-launch") expect(selection).toHaveBeenCalledTimes(1);
       if (state === "valid") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
       else if (state === "switch-before-launch") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Your request could not be completed. Please try again." } });
       else expect(result).toMatchObject({ outcome: "failed", reason: "configuration_error", detail: expect.stringContaining("configured project directory") });

@@ -17,7 +17,7 @@ import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { defaultStartHost, structuredHostWorkingDirectory, materializeStructuredHostAccess, structuredHostAccessPolicy, terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
 import { CLEANER_SANDBOX_READY } from "@/lib/runtime/cleanerSandboxProbe";
 import { procBackend } from "@/lib/proc";
-import { reserveRun, updateRelayStore } from "@/lib/externalRelay/store";
+import { changeRun, reserveRun, updateRelayStore } from "@/lib/externalRelay/store";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { claimCleanerRun, updateActiveCleanerRun } from "@/lib/cleaner/store";
 
@@ -115,6 +115,8 @@ test("guest owner relay spawn is request-bound and materializes restricted read-
     childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid),
     runDir: root, startedAt: "2026-10-01T00:00:00Z", ownerTurn: { clientAttemptId: id, rawRequest: { delivery: "guest" } } }, 1)).toBe("added");
 
+  expect((await launch(id, { ownerRelayHandoffOnly: true }, { autonomousStructured: true })).status).toBe(403);
+  changeRun("owner-handoff-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, seatHandoff: true } }));
   const rejected = await launch(`${id}-spoof`, { ownerRelayHandoffOnly: true }, { autonomousStructured: true });
   expect(rejected.status).toBe(403);
   for (const elevated of [

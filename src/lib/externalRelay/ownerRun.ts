@@ -31,7 +31,7 @@ import { changeRun, changeRunAsync, ownerRelayStoreDeadline, readRunLedger, type
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { noteRelayOutcome } from "./activity";
 import { offersHandoff, type ExternalRelayRequest, type ExternalRelayDecision, type ExternalRelayAnswer } from "./protocol";
-import { ownerRelayHandoffRequested, type OwnerInstruction } from "./profile";
+import type { OwnerInstruction } from "./profile";
 import type { RelayTargetSettings } from "./store";
 import { json } from "./prompt";
 import { compactToolIndex } from "./toolIndex";
@@ -93,6 +93,7 @@ export type OwnerPromptAdditions = {
   optional?: string;
   mediaMessageIds?: readonly string[];
   requireToolTable?: boolean;
+  handoffOnly?: boolean;
 };
 export type PreparedOwnerPrompt = { prompt: string; seen: string[]; digest: string; context?: string };
 type Additions = string | OwnerPromptAdditions;
@@ -147,7 +148,7 @@ function boundedOwnerPrompt(request: ExternalRelayRequest, owner: OwnerInstructi
     } };
     const hideTools = !!cuts.tool_entries_omitted;
     const sections = ownerStaticSections(value, hideTools);
-    const handoffOnly = value.delivery === "guest" || ownerRelayHandoffRequested(instruction);
+    const handoffOnly = value.delivery === "guest" || extra.handoffOnly === true;
     const closing = ownerClosingRules(value, hardCapMinutes, { hideTools, handoffOnly });
     const digest = createHash("sha256").update(sections + "\n" + closing).digest("hex");
     const prompt = record ? ownerContinuationPromptText(value, instruction, sections, closing, fullContext || record.staticDigest !== digest)

@@ -73,7 +73,9 @@ import { answerRecorder, countMemberAnswers, readAnswerRecord, type RelayAnswerD
 import {
   answerProfileFor,
   ownerTierFor,
-  ownerRelayGuestHandoffRequested,
+  ownerHandoffIntentPrompt,
+  ownerHandoffIntentSchema,
+  ownerReplyChain,
   ownerBindingRefusal,
   exemptFromMemberLimit,
   memberLimitFor,
@@ -87,6 +89,7 @@ import {
   reserveRunAsync,
   RelayStoreBusy,
   ownerRelayStoreDeadline,
+  readRelayStore,
   readRunLedger,
   runHoldsCapacity,
   ownerStopPending,
@@ -126,13 +129,7 @@ const countKey = (relayId: string, targetId: string) =>
   `${relayId}:${targetId}`;
 /** Keep only the explicit reply chain needed to interpret this owner request. */
 function retainOwnerReplyChain(request: ExternalRelayRequest, ownerMessageId: string): void {
-  const byId = new Map(request.input.conversation.map(message => [message.id, message]));
-  const retained = new Set<string>();
-  let current = byId.get(ownerMessageId);
-  for (let depth = 0; current && depth < 12 && !retained.has(current.id); depth++) {
-    retained.add(current.id);
-    current = current.reply_to ? byId.get(current.reply_to) : undefined;
-  }
+  const retained = ownerReplyChain(request, ownerMessageId);
   request.input.conversation = request.input.conversation.filter(message => retained.has(message.id));
   const mediaRefs = new Set(request.input.conversation.flatMap(message => (message.media ?? []).map(media => media.ref)));
   request.input.documents = request.input.documents.filter(document =>
@@ -193,11 +190,16 @@ const failed = (lease_id: string, reason: string): ExternalRelayCompletion => ({
   detail: null,
 });
 export { completeRelayRequest } from "./relayCompletion";
+const OWNER_INTENT_TIMEOUT_MS = 15_000;
+type RelayRuntime = HeadlessReviewRuntime & ToolLoopRuntime & {
+  timeoutMs?: number; ownerPorts?: OwnerRunPorts; cloudTransport?: CloudTransport; ownerIntentCommand?: string;
+  onUnknownFeature?: () => Promise<unknown>; onLeaseReady?: () => void; leaseWorker?: boolean; ownerRecovery?: RunRecord;
+};
 export async function runClaimedRequest(
   relay: PairedRelay,
   raw: unknown,
   onFreed?: () => void,
-  runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts; cloudTransport?: CloudTransport; onUnknownFeature?: () => Promise<unknown>; onLeaseReady?: () => void; leaseWorker?: boolean; ownerRecovery?: RunRecord },
+  runtime?: RelayRuntime,
 ): Promise<ExternalRelayCompletion | null> {
   const serviceDeadline = relayRequestDeadline(raw);
   const recovery = runtime?.ownerRecovery;
@@ -594,6 +596,7 @@ export async function runClaimedRequest(
   let turn: ReturnType<typeof conversationTurnPrompt> | null = null;
   let conversationBroken = false;
   let runDir: string | null = null;
+  let replacedRunDir: string | null = null;
   let ownerFileInstructions: string | undefined;
   let capacityReleased = false;
   let duplicate = false;
@@ -758,12 +761,21 @@ export async function runClaimedRequest(
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
     const guestOwner = request.delivery === "guest" ? ownerTierFor(target, request, { guestHandoff: true }) : null;
+    let handoffOnly = recovery?.ownerTurn?.seatHandoff === true;
+    if (recovery && request.delivery === "guest" && (!guestOwner || !handoffOnly)) return null;
     owner = request.delivery === "guest"
-      ? guestOwner && ownerRelayGuestHandoffRequested(guestOwner) ? guestOwner : null
+      ? handoffOnly ? guestOwner : null
       : prototype || target.ownerTier === true ? ownerMessage : null;
-    if (owner || request.delivery === "guest") delete profile.pageRead;
-    boundedOwnerTurn = !!owner && !prototype;
-    ownerExecution = boundedOwnerTurn;
+    const intentOwner = !recovery && !prototype ? guestOwner ?? (cloud ? owner : null) : null;
+    const bindOwnerReply = () => {
+      if (owner || request.delivery === "guest") delete profile.pageRead;
+      boundedOwnerTurn = !!owner && !prototype;
+      ownerExecution = boundedOwnerTurn;
+      if (owner) allowOwnerReply = () => ownerStatusReply
+        ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
+        : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
+    };
+    if (!intentOwner) bindOwnerReply();
     if (owner && recovery?.ownerTurn?.context) owner = recovery.ownerTurn.context;
     if (owner && !prototype && !recovery && request.delivery !== "guest") {
       try { owner.localContext = await withViewerOperation("telegram.outbound-state", () =>
@@ -776,17 +788,15 @@ export async function runClaimedRequest(
     // request-local: the handoff sees the triggering owner message and its
     // media, never the guest's surrounding history or retained memory.
     if (owner && request.delivery === "guest") retainOwnerReplyChain(request, owner.messageId);
-    if (owner) allowOwnerReply = () => ownerStatusReply
-      ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
-      : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
-    const handoffOnly = !!owner && ownerRelayGuestHandoffRequested(owner);
     // The local runner binds Viewer calls for owner chat turns and handoffs.
     // Legacy claims without chat scope can still use a bound Cloud repository.
-    const repositoryBoundOwner = cloud && !!owner && !handoffOnly;
-    const usingCloud = cloud && (!owner || repositoryBoundOwner && !!cloudEnvironment(configuredTarget!, true));
-    if (repositoryBoundOwner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
+    let repositoryBoundOwner = cloud && !!owner && !handoffOnly;
+    let usingCloud = cloud && (!owner || repositoryBoundOwner && !!cloudEnvironment(configuredTarget!, true));
+    if (!intentOwner && repositoryBoundOwner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
     const authority = conversationAuthority(request.input.requester, !!owner);
-    const usesConversation = request.delivery !== "guest" && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
+    const canUseConversation = () => request.delivery !== "guest" && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
+    let usesConversation = !intentOwner && canUseConversation();
+    let intentPending = !!intentOwner;
     let preResolvedConversation: RelayConversation | null = null;
     let preResolutionPending = false;
     if (usesConversation) {
@@ -796,7 +806,7 @@ export async function runClaimedRequest(
         preResolvedConversation = await lookupChainConversationAsync(relay, target, request, authority!);
       }
     }
-    const selectAccount = () => prototype || usingCloud || owner && (conversation ?? preResolvedConversation)?.conversationId ? null : accountManager.resolveHeadlessSpawn(target.engine!,
+    const selectAccount = () => intentPending || prototype || usingCloud || owner && (conversation ?? preResolvedConversation)?.conversationId ? null : accountManager.resolveHeadlessSpawn(target.engine!,
       conversation?.accountId ?? preResolvedConversation?.accountId ?? null,
       [], target.project, target.model);
     let selection = selectAccount();
@@ -814,7 +824,16 @@ export async function runClaimedRequest(
         : await fs.promises.mkdtemp(path.join(externalRelayTempRoot(), "llv-external-relay-"));
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
-    const record = {
+    const ownerTurn = (instruction: NonNullable<typeof owner>): NonNullable<RunRecord["ownerTurn"]> => ({
+      clientAttemptId: `relay-owner-${requestId}${recovery ? "-retry" : ""}`,
+      ...(recovery ? { restartRetries: 1 as const } : {}),
+      ...(handoffOnly ? { seatHandoff: true as const } : {}),
+      rawRequest: raw, context: instruction, delivery: request.owner_delivery,
+      request: { text: instruction.text, requestText: instruction.requestText },
+      ...(instruction.bridgeReport ? { bridgeReport: instruction.bridgeReport } : {}),
+      ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}),
+    });
+    const record: RunRecord = {
       requestId,
       leaseId,
       relayId: relay.id,
@@ -825,12 +844,7 @@ export async function runClaimedRequest(
       ownerIdentity,
       runDir,
       startedAt: new Date().toISOString(),
-      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}${recovery ? "-retry" : ""}`,
-        ...(recovery ? { restartRetries: 1 as const } : {}),
-        rawRequest: raw, context: owner, delivery: request.owner_delivery,
-        request: { text: owner.text, requestText: owner.requestText },
-        ...(owner.bridgeReport ? { bridgeReport: owner.bridgeReport } : {}),
-        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } } : {}),
+      ...(owner && !intentOwner ? { ownerTurn: ownerTurn(owner) } : {}),
     };
     let admissionDecline: ExternalRelayCompletion | null = null;
     let wakeHold: (() => void) | null = null;
@@ -935,6 +949,88 @@ export async function runClaimedRequest(
         return acked && !leaseUnavailable;
       },
     };
+    if (intentOwner) {
+      if (!await lease.ack()) return null;
+      if (activeDrain()) {
+        await releaseAdmission();
+        if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
+      }
+      const canRouteOwner = () => {
+        const current = readRelayStore().relays.find(item => item.id === relay.id);
+        return current?.paused === false && current.targets.some(item => item.id === target.id && item.enabled && item.ownerTier === true);
+      };
+      const checkIntentLaunch = () => {
+        callAbort.signal.throwIfAborted();
+        if (leaseUnavailable || releaseRequested || activeDrain() || Date.now() >= admissionCutoff() || !canRouteOwner())
+          throw new Error("relay owner intent admission expired");
+      };
+      try {
+        const routingAccount = accountManager.resolveHeadlessSpawn(target.engine, null, [], target.project, target.model);
+        if (routingAccount.kind === "available") {
+          const probe = await runEphemeralAgent({ key: `relay-intent:${requestId}`, privateContext: true,
+            engine: target.engine, model: target.model, effort: null, account: routingAccount.account,
+            ["prompt"]: ownerHandoffIntentPrompt(request, intentOwner), schema: ownerHandoffIntentSchema,
+            runDir: path.join(runDir, "intent"), hardCapMs: 60_000, authorizeLaunch: checkIntentLaunch,
+            runtime: { command: runtime?.ownerIntentCommand, timeoutMs: Math.min(OWNER_INTENT_TIMEOUT_MS, runtime?.timeoutMs ?? Infinity, remainingMs(deadline)) },
+          });
+          run = probe;
+          const cancelProbe = () => probe.cancel();
+          callAbort.signal.addEventListener("abort", cancelProbe, { once: true });
+          if (callAbort.signal.aborted) cancelProbe();
+          try {
+            await changeRunAsync(requestId, current => ({ ...current, childPid: probe.pid, childIdentity: probe.identity }), ownerRelayStoreDeadline());
+            const verdict = await probe.done;
+            const answer = verdict.answer as { seat_handoff?: unknown } | null;
+            handoffOnly = verdict.status === "done" && answer?.seat_handoff === true && Object.keys(answer).length === 1;
+          } finally {
+            callAbort.signal.removeEventListener("abort", cancelProbe);
+          }
+          await changeRunAsync(requestId, current => ({ ...current, childPid: null, childIdentity: null }), ownerRelayStoreDeadline());
+          run = null;
+        }
+      } catch (error) {
+        if (run) throw error; // The normal stop path still owns the probe.
+        console.info("External relay owner intent unavailable; using ordinary routing");
+      }
+      if (leaseUnavailable || callAbort.signal.aborted) return null;
+      if (releaseRequested || Date.now() >= admissionCutoff()) return await finish(declined(leaseId, "busy"));
+      handoffOnly = handoffOnly && canRouteOwner();
+      if (guestOwner && handoffOnly) {
+        replacedRunDir = await createOwnerRunDirectory();
+        if (leaseUnavailable || callAbort.signal.aborted) return null;
+        if (releaseRequested || Date.now() >= admissionCutoff()) return await finish(declined(leaseId, "busy"));
+        handoffOnly = canRouteOwner();
+        if (handoffOnly) {
+          record.runDir = replacedRunDir;
+          record.ownerTurn = ownerTurn(guestOwner);
+          await changeRunAsync(requestId, current => ({ ...current, runDir: record.runDir, ownerTurn: record.ownerTurn }), ownerRelayStoreDeadline());
+          replacedRunDir = runDir;
+          runDir = record.runDir;
+          if (leaseUnavailable || callAbort.signal.aborted) return null;
+          if (releaseRequested || Date.now() >= admissionCutoff()) return await finish(declined(leaseId, "busy"));
+          if (!ownerRelayAuthorized(relay.id, target.id, requestId)) return await finish(declined(leaseId, "disabled"));
+          owner = guestOwner;
+          retainOwnerReplyChain(request, owner.messageId);
+        }
+      } else if (owner) {
+        record.ownerTurn = ownerTurn(owner);
+        await changeRunAsync(requestId, current => ({ ...current, ownerTurn: record.ownerTurn }), ownerRelayStoreDeadline());
+      }
+      bindOwnerReply();
+      repositoryBoundOwner = cloud && !!owner && !handoffOnly;
+      usingCloud = cloud && (!owner || repositoryBoundOwner && !!cloudEnvironment(configuredTarget!, true));
+      if (repositoryBoundOwner && !usingCloud) cloudOwnerDirectory(target.project);
+      usesConversation = canUseConversation();
+      intentPending = false;
+      if (usesConversation) {
+        await releaseAdmission();
+        if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
+      } else {
+        selection = selectAccount();
+        const unavailable = capacityDecline();
+        if (unavailable) return await finish(unavailable);
+      }
+    }
     // Codex Cloud receives text-only turns through this transport. Guest
     // history photos belong to the hosted assistant in that case; handing the
     // request back keeps the client from claiming an answer without seeing them.
@@ -1041,7 +1137,7 @@ export async function runClaimedRequest(
         const inboundRefs = new Set(inbound?.files.map(file => file.ref));
         const mediaMessageIds = request.input.conversation.filter(message => message.media?.some(media => inboundRefs.has(media.ref))).map(message => message.id);
         // The Cloud JSON tool loop cannot look up a catalogue through local MCP.
-        const ownerAdditions = { mediaMessageIds, requireToolTable: usingCloud, mandatory: [inbound?.prompt, usingCloud ? undefined : ownerFileInstructions,
+        const ownerAdditions = { mediaMessageIds, handoffOnly, requireToolTable: usingCloud, mandatory: [inbound?.prompt, usingCloud ? undefined : ownerFileInstructions,
           ...(usingCloud ? [rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : "", frame] : []),
         ].filter(Boolean).join("\n") };
         // Prepare only the mode that will be sent. Cloud has no native cursor.
@@ -1091,7 +1187,7 @@ export async function runClaimedRequest(
           // A confirmed Cloud refusal may fall back to a native conversation;
           // recompute from unchanged inputs for that actual delivery mode.
           if (owner && cloudFailed) {
-            const fallbackAdditions = { mediaMessageIds, mandatory: [inbound?.prompt, ownerFileInstructions,
+            const fallbackAdditions = { mediaMessageIds, handoffOnly, mandatory: [inbound?.prompt, ownerFileInstructions,
               rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : ""].filter(Boolean).join("\n") };
             preparedOwner = conversation?.conversationId
               ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, fallbackAdditions)
@@ -1493,6 +1589,7 @@ export async function runClaimedRequest(
         console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
       }
     } finally {
+      if (replacedRunDir) await fs.promises.rm(replacedRunDir, { recursive: true, force: true }).catch(() => console.error("Relay intent directory cleanup failed"));
       notifyInitialLease();
       await transport?.close();
       transport = null;

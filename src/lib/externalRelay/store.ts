@@ -108,6 +108,7 @@ export type RunRecord = {
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
   ownerTurn?: { rawRequest?: unknown; context?: import("./profile").OwnerInstruction; restartRetries?: 1; restartPending?: true;
+    seatHandoff?: true;
     handoffOutcome?: { status: "accepted" | "refused" | "uncertain"; project: string | null; code: string | null };
     delivery?: import("./protocol").OwnerDelivery;
     /** Persisted before /complete; an absent ACK never authorizes /send. */
