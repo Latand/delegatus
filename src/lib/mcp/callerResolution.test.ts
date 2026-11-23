@@ -499,7 +499,7 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
         db.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.structuredHost',json(?),'$.artifactPath',?)
           WHERE collection='entries' AND row_key LIKE 'history:%'`).run(JSON.stringify(structuredHostFixture(null)), nativePath);
         realpaths = 0;
-        expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "evidence-incomplete", retryable: true });
+        expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "evidence-incomplete", retryable: false });
         expect(realpaths).toBe(4);
       }
     } finally {
