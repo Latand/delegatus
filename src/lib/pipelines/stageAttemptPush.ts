@@ -8,6 +8,7 @@ import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { rollupChecksWithIdentity } from "@/lib/forge/checkRollup";
 import type { ExecPort } from "@/lib/workflows/provision";
 import { DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, verifyPassedHeadIntegration, type PipelineGitResult } from "./git";
+import { withLaneIndexLockRecovery } from "./indexLock";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 class StagePushRemoteUnavailable extends Error {}
@@ -520,8 +521,12 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     if (current.code !== 0 || current.stdout.trim() !== head) return refuse("the lane head raced the attempt proof");
     if (head !== tip) {
-      const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", tip], pipeline.worktreeDir);
-      if (merged.code !== 0) return refuse("the proved push could not fast-forward the lane");
+      const updateCheckout = withLaneIndexLockRecovery(pipeline, exec);
+      const merged = await updateCheckout("git", ["merge", "--ff-only", "--no-overwrite-ignore", tip], pipeline.worktreeDir);
+      if (merged.code !== 0) {
+        const lockDetail = merged.stderr.startsWith("index.lock ") ? `: ${merged.stderr}` : "";
+        return refuse(`the proved push could not fast-forward the lane${lockDetail}`);
+      }
     }
     if (await remoteHead() !== tip
       || (integrationBase && !await integrationOrigin(pipeline, integrationBase, deliveryUrl, exec))) return refuse("the adopted remote moved before acceptance");
