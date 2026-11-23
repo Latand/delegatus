@@ -4,12 +4,65 @@ import path from "node:path";
 import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { savePipelines } from "@/lib/pipelines/store";
+import { FileTransactionAdmissionError, withFileTransaction } from "@/lib/state/fileTransaction";
 import * as pipelineState from "@/lib/state/sqliteStateStore";
 import { prepareStructuredStartupRecipient } from "./startup";
 import { interruptionObligationDirectory, initializeRecipientInterruptionIndex } from "./interruptionObligations";
+import { StructuredRecoveryHeldForUpdateError } from "./structuredRecovery";
 import { structuredRestartFixture, recipientDispatchPipeline, addressedRecipientSocket } from "./startupRecipient.fixture";
 
 setDefaultTimeout(60_000);
+
+for (const [fault, category] of [
+  ["lock", "journal lock busy"],
+  ["missing marker", "source marker missing or mismatched"],
+  ["mismatched marker", "source marker missing or mismatched"],
+  ["journal", "pending journal changed"],
+  ["index", "recipient index invalid or unavailable"],
+] as const) {
+  test(`recipient preparation reports redacted interruption evidence for ${fault}`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "recipient-evidence-"));
+    const oldState = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR = directory;
+    const { registry, conversation } = structuredRestartFixture(directory, "codex", "unhosted");
+    const obligations = interruptionObligationDirectory(registry.filename);
+    const pending = `${obligations}.pending.jsonl`;
+    const diagnostic = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      savePipelines([]);
+      await initializeRecipientInterruptionIndex(obligations);
+      if (fault === "missing marker") fs.unlinkSync(obligations);
+      if (fault === "mismatched marker") fs.writeFileSync(obligations, "unreadable marker payload");
+      if (fault === "journal") fs.appendFileSync(pending, "changed journal payload\n");
+      if (fault === "index") {
+        const db = new Database(path.join(directory, "state.sqlite"));
+        try { db.exec("DROP INDEX state_rows_interruption_recipient_v3"); } finally { db.close(); }
+      }
+      const message = `recipient interruption evidence is unavailable or incomplete (${category})`;
+      const check = async () => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const result = await prepareStructuredStartupRecipient(registry, conversation.id, { orchestratorSeats: () => [] })
+            .catch((error: unknown) => error);
+          expect(result).toBeInstanceOf(StructuredRecoveryHeldForUpdateError);
+          if (!(result instanceof Error)) throw new Error("unsafe recipient evidence was accepted");
+          expect(result.message).toBe(message);
+          expect(result.cause).toBeInstanceOf(Error);
+          const cause = result.cause as Error;
+          expect(cause.message).toBe(message);
+          if (fault === "lock") expect(cause.cause).toBeInstanceOf(FileTransactionAdmissionError);
+          if (fault === "mismatched marker") expect(cause.cause).toBeInstanceOf(SyntaxError);
+          if (fault === "index") expect((cause.cause as Error).message).toBe("interruption source index is incomplete or incompatible");
+        }
+      };
+      if (fault === "lock") await withFileTransaction(pending, "fixture lock busy", check);
+      else await check();
+      expect(diagnostic.mock.calls).toEqual([[`[structured hosts] ${message}`]]);
+    } finally {
+      diagnostic.mockRestore(); registry.close();
+      if (oldState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = oldState;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 for (const identity of ["path", "session"] as const)
 for (const archived of [false, true])

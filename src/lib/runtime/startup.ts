@@ -106,6 +106,7 @@ import {
   initializeRecipientInterruptionIndex,
   recipientInterruptionEvidence,
   recipientInterruptionObligationStore,
+  RecipientInterruptionEvidenceError,
   interruptionObligationUnresolved,
   interruptionStageOf,
   restartCutProposal,
@@ -127,6 +128,7 @@ type RecipientStartupAuthority = Required<Pick<import("./structuredRecovery").St
 type StartupPassState = {
   restartCutObservations?: Map<string, { owner: string; at: number; transcript: string; workAt: number | null }>;
   recipients?: Map<string, Promise<RecipientStartupAuthority>>;
+  reportedInterruptionRefusals?: Set<RecipientInterruptionEvidenceError["category"]>;
   recipientDependencies?: StructuredStartupDependencies;
   /** The host rows this process has found cut. The set silences the generic
       Codex nudge for them and gates nothing else. */
@@ -3026,7 +3028,19 @@ async function prepareStructuredStartupRecipientOnce(
   const interruptionDirectory = interruptionObligationDirectory(registry.filename);
   const interruptionEvidence = () => {
     try { return recipientInterruptionEvidence(interruptionDirectory, selection.selectedIds); }
-    catch { return refuse("recipient interruption evidence is unavailable or incomplete"); }
+    catch (cause) {
+      let message = "recipient interruption evidence is unavailable or incomplete";
+      if (cause instanceof RecipientInterruptionEvidenceError) {
+        message = cause.message;
+        // Delivery holds retry independently. Emit each redacted reason once.
+        const reported = startupPassState(registry).reportedInterruptionRefusals ??= new Set();
+        if (!reported.has(cause.category)) {
+          reported.add(cause.category);
+          console.error(`[structured hosts] ${message}`);
+        }
+      }
+      throw new StructuredRecoveryHeldForUpdateError(message, { cause });
+    }
   };
   let interruptionRevision = interruptionEvidence().revision;
   let stamp: RestartCutStamp | undefined;
@@ -3048,7 +3062,7 @@ async function prepareStructuredStartupRecipientOnce(
   };
   if (dependencies.interruptions) refuse("recipient interruption evidence requires the indexed store");
   const allInterruptions = recipientInterruptionObligationStore(interruptionDirectory, selection.selectedIds);
-  const obligations = () => allInterruptions.list().filter(item => item.hostKey === hostKey);
+  const obligations = () => interruptionEvidence().records.filter(item => item.hostKey === hostKey);
   let rejectWait: ((error: unknown) => void) | undefined;
   const stopped = new Promise<never>((_resolve,reject) => { rejectWait=reject; });
   const onAbort = () => rejectWait?.(Object.assign(new StructuredRecoveryHeldForUpdateError(

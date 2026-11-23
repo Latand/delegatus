@@ -157,6 +157,7 @@ const DELIVERY_DRAIN_MAX_BACKOFF_MS = 1_000;
 /** How often the delivery watchdog looks for stalls, overdue wakes and lanes
     to reconcile. */
 const DELIVERY_WATCHDOG_MS = 1_000;
+const GUARD_RETRY_LOG_INTERVAL_MS = 60_000;
 /** How often accepted sends past their settlement deadline are ended with no
     reader asking (incident 2026-10-06). */
 const DELIVERY_SETTLEMENT_SWEEP_MS = 15_000;
@@ -2521,12 +2522,38 @@ export async function bindStructuredDeliveryQueue(
      its deadline is ended, all with the browser closed. */
   const watchdogMs = dependencies.watchdogIntervalMs ?? DELIVERY_WATCHDOG_MS;
   if (watchdogMs > 0) {
+    let watchingGuard = false;
+    let nextGuardLogAt = 0;
+    let suppressedFailures = 0;
+    const watchGuard = async () => {
+      // Several ticks can share one in-flight guard pass. Report its result once.
+      if (watchingGuard) return;
+      watchingGuard = true;
+      try {
+        await enforceGuard(true);
+        nextGuardLogAt = 0;
+        suppressedFailures = 0;
+      } catch (error) {
+        if (stopped || state.activeQueue !== queue) return;
+        const now = performance.now();
+        if (now < nextGuardLogAt) {
+          suppressedFailures++;
+          return;
+        }
+        controllerDiagnosticError("[structured delivery] paid-credit guard retry pending",
+          nextGuardLogAt === 0 ? error : { suppressedFailures });
+        nextGuardLogAt = now + GUARD_RETRY_LOG_INTERVAL_MS;
+        suppressedFailures = 0;
+      } finally {
+        watchingGuard = false;
+      }
+    };
     watchdogTimer = setInterval(() => {
       /* A7: it runs while startup still seats hosts. Marking stalls and lost
          wakes only writes records; an unregistered host's target stays
          deferred by the drain, which notes `startup` on its records. */
       if (stopped || state.activeQueue !== queue) return;
-      void enforceGuard(true).catch(error => controllerDiagnosticError("[structured delivery] paid-credit guard retry pending", error));
+      void watchGuard();
       void queue.tick().catch((error) => {
         controllerDiagnosticError("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
       });
