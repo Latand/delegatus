@@ -1,4 +1,4 @@
-import { ownGateSandboxes } from "./gateSandboxRecords";
+import { ownGateSandboxes, recordGateSandbox, releaseGateSandbox, retainGateSandbox } from "./gateSandboxRecords";
 import { timedCommand, observeCommandExecution } from "../src/lib/recordedChecks/commandTiming";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -8,7 +8,7 @@ import path from "node:path";
 
 import { captureProcessIdentity, processIdentityStatus, systemBootEpoch, type ProcessIdentity } from "../src/lib/processIdentity";
 import { procBackend } from "../src/lib/proc";
-import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { ownFixtureTree, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
 import { cpuBudgetTimer, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuSlotForOwner, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
@@ -27,8 +27,11 @@ import { serviceSurvivors } from "./owned-runner.cleanup";
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
  * runs the command inside the owner's namespaces. */
-type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true };
+type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; deadlineFile?: string; namespace?: true };
 const args = process.argv.slice(2);
+const deadlineFile = process.env.LLV_OWNED_RUN_DEADLINE_FILE;
+delete process.env.LLV_OWNED_RUN_DEADLINE_FILE;
+const deadlineRequested = (file = deadlineFile) => !!file && fs.existsSync(file);
 function writeCompletionReceipt() {
   const filename = process.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
   const token = process.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
@@ -53,7 +56,8 @@ const launchOwner = args[0] === "--service"
 const broker = await startCheckBroker(launchOwner);
 process.env.LLV_CHECK_BROKER = broker.address;
 delete process.env.DELEGATUS_CHECK_BROKER;
-const offset = args[0] === "--budget" ? 2 : ["--portable", "--namespace"].includes(args[0] ?? "") ? 1 : 0;
+const offset = args[0] === "--owned-budget" ? args.length
+  : args[0] === "--budget" ? 2 : ["--portable", "--namespace"].includes(args[0] ?? "") ? 1 : 0;
 if (args[offset] && !args[offset]!.startsWith("--")) {
   const command = args.slice(offset), preload = path.join(import.meta.dir, "check-test-preload.ts");
   const admitted = withTestAdmission(command, preload);
@@ -84,27 +88,62 @@ if (args[0] === "--namespace-guardian") {
 } else if (args[0] === "--namespace") {
   warnGateTaskFallback("namespace cleanup fallback has no systemd gate unit");
   await runSandboxGate(args.slice(1), timeoutMs, import.meta.path);
-} else if (args[0] === "--budget") {
-  const allowance = Number(args[1]), command = args.slice(2);
-  if (!Number.isFinite(allowance) || allowance <= 0 || !command.length) throw new Error("owned runner budget needs a finite allowance and a command");
+} else if (args[0] === "--budget" || args[0] === "--owned-budget") {
+  const allowance = Number(args[1]), requested = args.slice(2), owned = args[0] === "--owned-budget";
+  if (!Number.isFinite(allowance) || allowance <= 0 || !requested.length) throw new Error("owned runner budget needs a finite allowance and a command");
+  const command = owned ? [process.execPath, import.meta.path, ...(process.platform === "linux" ? [] : ["--portable"]), ...requested] : requested;
+  const directory = owned ? recordGateSandbox(fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-deadline-"))) : undefined;
+  const deadline = directory && path.join(directory, "expired");
   const budget = cpuWaitBudget(process.env);
-  const child = spawn(command[0]!, command.slice(1), { stdio: "inherit", env: { ...budget.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) } });
+  const child = ownFixtureTree(spawn(command[0]!, command.slice(1), { stdio: "inherit", env: { ...budget.env,
+    LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)),
+    ...(deadline ? { LLV_OWNED_RUN_DEADLINE_FILE: deadline } : {}),
+  } }));
   const close = new Promise<number>(resolve => {
     child.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
     child.once("error", error => { console.error(`owned runner: budget launch failed: ${error.message}`); resolve(1); });
   });
-  let stopped = 0, cleanup: Promise<void> | undefined;
+  let stopped = 0, cleanup: Promise<void> | undefined, cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+  let requestedDeadline = false, cleanupFailed = false;
   const stop = (code: number) => {
     stopped ||= code;
-    cleanup ??= stopFixtureProcess(child).catch(error => { console.error(`owned runner: budget cleanup failed: ${error.message}`); budget.close(); process.exit(1); });
+    cleanup ??= stopFixtureProcess(child).catch(error => {
+      console.error(`owned runner: budget cleanup failed: ${error.message}`);
+      if (directory) retainGateSandbox(directory);
+      budget.close(); process.exit(1);
+    });
+  };
+  const refuseCleanup = (reason: string) => {
+    cleanupFailed = true;
+    console.error(`owned runner: budget cleanup failed: ${reason}`);
+    stop(1);
   };
   process.on("SIGTERM", () => stop(143)); process.on("SIGINT", () => stop(130));
-  const stopTimer = cpuBudgetTimer(allowance, budget.elapsed, () => { console.error("owned runner: execution guard expired"); stop(124); });
+  const stopTimer = cpuBudgetTimer(allowance, budget.elapsed, () => {
+    console.error("owned runner: execution guard expired");
+    if (!deadline) return stop(124);
+    // Let the service classify its own cutoff and let its client wait for
+    // systemd to drain the cgroup. The guard keeps the same cleanup allowance.
+    try {
+      fs.writeFileSync(deadline, "", { flag: "wx", mode: 0o600 });
+      requestedDeadline = true;
+      cleanupTimer = setTimeout(() => refuseCleanup("owned supervisor did not confirm deadline cleanup"), 5_000);
+    } catch (error) {
+      refuseCleanup(`could not request the owned deadline: ${(error as Error).message}`);
+    }
+  });
   const code = await close;
-  await cleanup;
+  clearTimeout(cleanupTimer);
   stopTimer();
-  try { await broker.close(); } finally { budget.close(); }
-  process.exit(stopped || code);
+  await cleanup;
+  try { await broker.close(); } finally {
+    budget.close();
+    if (directory) {
+      if (cleanupFailed) retainGateSandbox(directory);
+      else releaseGateSandbox(directory);
+    }
+  }
+  process.exit(cleanupFailed ? 1 : stopped || (requestedDeadline && code === 0 ? 124 : code));
 } else if (args[0] === "--portable") {
   warnGateTaskFallback("no systemd user gate unit on this host");
   // The fallback uses the same spawn ledger and independent guardian as direct
@@ -119,6 +158,7 @@ if (args[0] === "--namespace-guardian") {
     producerReport("portable", null, { phase: "close", cleanup: "confirmed" });
     process.exit(refused === "deadline" ? 124 : 137);
   }
+  if (deadlineRequested()) { await broker.close(); process.exit(124); }
   const parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY
     ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
   const parentAlive = () => !parent || (processIdentityStatus(parent) === "alive" && !procBackend.processExited(parent.pid));
@@ -184,6 +224,7 @@ if (args[0] === "--namespace-guardian") {
     const refusal = recordedSupervisorRefusal(recorded);
     if (refusal) cancellation ??= supervisorCancellation(refusal);
     if (refusal || !parentAlive()) cancel(refusal === "deadline" ? 124 : 137);
+    else if (deadlineRequested()) cancel(124);
   }, 100);
   process.on("SIGTERM", () => cancel(143)); process.on("SIGINT", () => cancel(130, "SIGINT"));
   const stopTimer = cpuBudgetTimer(timeoutMs, budget.elapsed, () => cancel(124));
@@ -202,6 +243,10 @@ if (args[0] === "--namespace-guardian") {
     } catch { guardianConfirmed = false; }
   }
   fs.rmSync(directory, { recursive: true, force: true });
+  if (deadlineFile && interrupted === 124 && !guardianConfirmed) {
+    console.error("owned runner: budget cleanup failed: portable guardian did not confirm cleanup");
+    cleanupFailed = true;
+  }
   producerReport("portable", commandIdentity, { ...await execution(), phase: "close", commandExit, commandSignal, cancellation, cleanup: cleanupFailed || !guardianConfirmed ? "unknown" : "confirmed" });
   if (commandExit !== null && !cleanupFailed && guardianConfirmed) writeCompletionReceipt();
   process.exit(cleanupFailed ? 1 : interrupted || code || guardian.exitCode || 0);
@@ -260,9 +305,10 @@ if (args[0] === "--namespace-guardian") {
   }
   const serviceEvidence = { unit: launch.unit, invocation: process.env.INVOCATION_ID ?? "", cgroup };
   const refused = recordedSupervisorRefusal(recorded);
-  if (refused) {
+  if (refused || (launch.deadlineFile && deadlineRequested(launch.deadlineFile))) {
     producerReport("service", null, { service: serviceEvidence, phase: "close", cleanup: "pending" });
-    budget.close(); process.exit(refused === "deadline" ? 124 : 137);
+    try { await broker.close(); } finally { budget.close(); }
+    process.exit(refused && refused !== "deadline" ? 137 : 124);
   }
   const members = () => {
     const visit = (directory: string): number[] => fs.readFileSync(path.join(directory, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number)
@@ -282,7 +328,7 @@ if (args[0] === "--namespace-guardian") {
   let cancellation: ProducerReport["cancellation"] = null;
   let settled = false;
   let stopExecutionTimer = () => {};
-  const finish = async (code: number) => {
+  const finish = async (code: number, timedOut = false) => {
     if (settled) return;
     settled = true;
     clearInterval(taskTimer);
@@ -296,7 +342,7 @@ if (args[0] === "--namespace-guardian") {
     // A deadline ends the main process before systemd drains the cgroup.
     // Its pending children are expected; the waiting client returns only after
     // that cleanup. A normal exit with children still refuses the check.
-    if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(member => `${member.pid} (${member.startIdentity})`).join(", ")}`);
+    if (survivors.length) console.error(`owned runner: ${timedOut && code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(member => `${member.pid} (${member.startIdentity})`).join(", ")}`);
     if (commandExit !== null && survivors.length === 0) writeCompletionReceipt();
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
@@ -314,9 +360,10 @@ if (args[0] === "--namespace-guardian") {
     const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
     const refusal = recordedSupervisorRefusal(recorded);
     if (refusal) cancellation ??= supervisorCancellation(refusal);
-    if (refusal || !alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(refusal === "deadline" ? 124 : 137);
+    if (refusal || !alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(refusal === "deadline" ? 124 : 137, refusal === "deadline");
+    else if (launch.deadlineFile && deadlineRequested(launch.deadlineFile)) void finish(124, true);
   }, 100);
-  stopExecutionTimer = cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124); });
+  stopExecutionTimer = cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124, true); });
   // A kernel watchdog bounds a hung supervisor while its execution timer
   // excludes queue waits. RuntimeMaxSec cannot be extended on older systemd.
   // A short-lived helper can fail under pressure while the command is healthy.
@@ -365,6 +412,7 @@ if (args[0] === "--namespace-guardian") {
   process.on("SIGINT", () => { void finish(130); });
 } else {
   if (!args.length) throw new Error("usage: owned-runner.ts command [args...]");
+  if (deadlineRequested()) { await broker.close(); process.exit(124); }
   const sandbox = signalSandboxContext();
   if (sandbox && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status !== 0) {
     console.error("owned runner: no reachable systemd user manager, so no gate service; the command runs in a bounded leaf of this agent's own scope instead");
@@ -383,7 +431,7 @@ if (args[0] === "--namespace-guardian") {
     try { parent = hostProcessIdentity(parent); }
     catch (error) { throw new Error(`owned runner cannot verify its supervising process from the gate service: ${(error as Error).message}`); }
   }
-  fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, deadlineFile, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
   const cpu = [...gateServiceProperties(), ...gateTaskProperties()];
   const recorded = process.env.LLV_RECORDED_CHECK_ID ? [`--setenv=LLV_RECORDED_CHECK_ID=${process.env.LLV_RECORDED_CHECK_ID}`] : [];
   const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, ...recorded, "--service-type=exec", "-p", "Delegate=yes", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
@@ -407,13 +455,14 @@ if (args[0] === "--namespace-guardian") {
   // The client is outside the limited unit. It can still stop that exact unit
   // if its supervisor stalls at saturation, and keeps a peak if it is killed.
   const taskFile = `${file}.tasks`;
-  let tasks: GateTasks | undefined, taskError = false;
+  let tasks: GateTasks | undefined, taskError = false, serviceCgroup: string | undefined;
   let snapshot: GateTaskSnapshot = { max: null, peak: null, peakSource: "sampled", denied: 0 };
   const sampleTasks = () => {
     try {
       if (fs.existsSync(taskFile)) {
         const row = JSON.parse(fs.readFileSync(taskFile, "utf8")) as { cgroup: string; snapshot: GateTaskSnapshot };
-        if (!row.cgroup.endsWith(`/${unit}`) || row.cgroup.split("/").includes("..")) throw new Error("invalid gate task cgroup");
+        if (!row.cgroup.startsWith("/") || !row.cgroup.endsWith(`/${unit}`) || row.cgroup.split("/").includes("..")) throw new Error("invalid gate task cgroup");
+        serviceCgroup = row.cgroup;
         tasks ??= new GateTasks(path.join("/sys/fs/cgroup", row.cgroup));
         tasks.snapshot = { ...row.snapshot, peak: Math.max(tasks.snapshot.peak ?? 0, row.snapshot.peak ?? 0) || null,
           denied: Math.max(tasks.snapshot.denied, row.snapshot.denied) };
@@ -450,6 +499,17 @@ if (args[0] === "--namespace-guardian") {
       const events = cgroup && path.join("/sys/fs/cgroup", cgroup, "cgroup.events");
       if (events && fs.existsSync(events) && /^populated 0$/m.test(fs.readFileSync(events, "utf8"))) writeCompletionReceipt();
     } catch { /* A missing/invalid cgroup observation cannot authorize cleanup. */ }
+  }
+  if (deadlineFile && code === 124 && !taskError) {
+    let empty = false;
+    if (serviceCgroup) {
+      try { empty = /^populated 0$/m.test(fs.readFileSync(path.join("/sys/fs/cgroup", serviceCgroup, "cgroup.events"), "utf8")); }
+      catch (error) { empty = (error as NodeJS.ErrnoException).code === "ENOENT"; }
+    }
+    if (!empty) {
+      console.error(`owned runner: budget cleanup failed: could not confirm the owned cgroup drained for ${unit}`);
+      taskError = true;
+    }
   }
   fs.rmSync(directory, { recursive: true, force: true });
   process.exit(snapshot.denied > 0 ? GATE_TASK_LIMIT_EXIT : taskError ? 1 : code);

@@ -385,11 +385,10 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     let taskPeak: string | null = null;
     let survivors: string | undefined;
     try {
-      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
-        // Keep the independent five-second cleanup allowance, measured as
-        // execution time by the outer guard. A fixed wall timeout here would
-        // kill a healthy supervisor during a nested CPU queue wait.
-        cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(Math.min(budgets.fileMs, remaining)) }, stdio: ["ignore", fd, fd],
+      const fileBudget = String(Math.min(budgets.fileMs, remaining));
+      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--owned-budget", fileBudget,
+        process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+        cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: fileBudget }, stdio: ["ignore", fd, fd],
       });
       exitCode = await result.exited;
     } finally { closeSync(fd); }
@@ -397,10 +396,13 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     // exits is neither a bound handle nor proof against PID reuse.
     try {
       const output = sandboxDiagnostic(readFileSync(log, "utf8"));
-      survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
+      const lines = output.split("\n");
+      survivors = lines.find(line => line.startsWith("owned runner: surviving owned processes:"));
       const task = gateTaskDiagnostics(output);
       taskPeak = task.peak;
-      if (exitCode !== 0 && task.failure) throw new Error(task.failure);
+      const cleanupFailure = lines.find(line => line.startsWith("owned runner: budget cleanup failed:"));
+      const refusal = task.failure ?? cleanupFailure;
+      if (exitCode !== 0 && refusal) throw new Error(refusal);
       if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, filtered);
       // A complete report still needs the service's ownership verdict.
