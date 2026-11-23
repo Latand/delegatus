@@ -98,7 +98,7 @@ function laneLine(pipeline: Pipeline): string {
   const escalate = `if only the operator can decide, ask them with publish_prototype_review, then dismiss_attention escalate {reviewId} with target {kind:"pipeline", pipelineId:"${pipeline.id}"}`;
   switch (laneNeedKind(pipeline)) {
     case "lane-merge":
-      return `${kind}${title} — completed; ${mergeStep(pipeline)}; merge reason: ${clip(pipeline.merge?.reason ?? "no reason recorded", QUESTION_MAX)}; ${escalate}`;
+      return `${kind}${mergeStep(pipeline)}; ${title} — completed; merge reason: ${clip(pipeline.merge?.reason ?? "no reason recorded", QUESTION_MAX)}; ${escalate}`;
     case "lane-review":
       return `${kind}${title} —${stage} review budget spent, the last fix was not re-reviewed; pipeline_action accept-head once it holds; ${escalate}`;
     default: {
@@ -123,14 +123,20 @@ function agendaKey(route: { key: string; returnedFrom?: string }): string {
 /** Said first on a wait that came back from a decision round. */
 function returnedNote(route: { returnedFrom?: string }): string {
   return route.returnedFrom
-    ? `[back from decision round ${route.returnedFrom}: read it with read_prototype_review; carry the operator's answer here, or answer or ask again if it was dismissed or replaced] `
+    ? `[back from decision round ${route.returnedFrom}: use read_prototype_review and carry out the answer or ask again if dismissed or replaced] `
     : "";
+}
+
+export interface SeatAgendaPauses {
+  quotaReadyLaneIds?: readonly string[];
+  deployLaneIds?: readonly string[];
 }
 
 /** Every wait the board routes to this project's seat, oldest first. */
 export function seatAgendaAsks(
   body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks?: readonly BoardTask[] },
   now: number, project: string, pauseWaitingTasks: Map<string, string[]> = new Map(),
+  pauses: SeatAgendaPauses = {},
 ): SeatTickWorkerAskInput[] {
   const canonical = canonicalOrchestratorProject(project);
   const asks: SeatTickWorkerAskInput[] = [];
@@ -148,10 +154,12 @@ export function seatAgendaAsks(
   const projectLanes = body.pipelines.filter(pipeline => canonicalOrchestratorProject(pipeline.project) === canonical);
   const waitingLaneTasks = new Map<string, string[]>();
   if (body.tasks?.length) {
-    const index = waitingRouteIndex(body.tasks, projectLanes, working);
-    for (const task of body.tasks) {
-      if (task.status === "done" || (!task.hold && task.status !== "blocked")
-        || canonicalOrchestratorProject(task.project) !== canonical) continue;
+    const projectTasks = body.tasks.filter(task => canonicalOrchestratorProject(task.project) === canonical);
+    const index = waitingRouteIndex(body.tasks, projectLanes, working, {
+      quota: new Set(pauses.quotaReadyLaneIds), deploy: new Set(pauses.deployLaneIds),
+    });
+    for (const task of projectTasks) {
+      if (task.status === "done" || (!task.hold && task.status !== "blocked")) continue;
       const liveMember = task.assignments.some(a => working.has(a.conversationId ?? "") || working.has(a.path ?? ""));
       const route = waitingRoute(task, index, now * 1000, liveMember);
       if (route?.owner !== "seat") continue;
@@ -160,17 +168,17 @@ export function seatAgendaAsks(
           label: clip(`«${clip(cleanTitle(task.text, 90), 90)}» (task ${task.id}) — ${route.why}. ${route.action}`, LABEL_MAX),
           sinceMs: Date.parse(task.hold?.since ?? task.statusBy?.at ?? task.updatedAt) || null });
       } else {
-        const tasks = route.rule === "pause-ready" ? pauseWaitingTasks : waitingLaneTasks;
-        const linked = tasks.get(route.laneId);
+        const byLane = route.rule === "pause-ready" ? pauseWaitingTasks : waitingLaneTasks;
+        const linked = byLane.get(route.laneId);
         if (linked) linked.push(task.id);
-        else tasks.set(route.laneId, [task.id]);
+        else byLane.set(route.laneId, [task.id]);
       }
     }
   }
   const successorOwners = indexMergeSuccessors(body.pipelines);
   const lanes = projectLanes
     .flatMap((pipeline) => {
-      if (laneWaitCleared(pipeline) || mergeSuccessor(pipeline, successorOwners)) return [];
+      if (pipeline.hiddenAt || laneWaitCleared(pipeline) || mergeSuccessor(pipeline, successorOwners)) return [];
       const state = laneState(pipeline);
       const route = state.route;
       if (state.owner !== "seat" || !route) return [];
@@ -178,9 +186,9 @@ export function seatAgendaAsks(
       const waitingTaskIds = waitingLaneTasks.get(pipeline.id)?.sort();
       const pages = waitingTaskIds?.length ? Array.from({ length: Math.ceil(waitingTaskIds.length / 4) }, (_, page) => waitingTaskIds.slice(page * 4, page * 4 + 4)) : [undefined];
       return pages.map((page, index) => {
-        const waiting = page?.length ? `After settling this lane, move Waiting task(s) ${page.join(", ")} by re-sending or clearing their holds. ` : "";
+        const waiting = page?.length ? `Waiting task(s) ${page.join(", ")}: re-send or clear their holds after settling the lane. ` : "";
         const key = agendaKey(route) + (page ? `@waiting:${index + 1}:${waitingTaskIds!.length}:${page.join(",")}` : "");
-      return { key, id: pipeline.id, label: clip(`${waiting}${laneLine(pipeline)} ${returnedNote(route)}`, LABEL_MAX),
+        return { key, id: pipeline.id, label: clip(`${returnedNote(route)}${waiting}${laneLine(pipeline)}`, LABEL_MAX),
           ...(page ? { waitingTaskIds: page } : {}), sinceMs: state.sinceMs,
           seatOwnedLane: { id: pipeline.id, title: pipeline.task || pipeline.id, sinceMs: state.sinceMs,
             reason: `${kind}: ${pipeline.merge?.state === "blocked" ? clip(pipeline.merge.reason ?? "merge stopped", 120) : pipeline.stateDetail ?? state.stop?.kind ?? pipeline.state}` } };

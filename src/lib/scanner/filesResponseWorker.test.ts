@@ -969,14 +969,71 @@ test("the seat agenda worker returns a task ask and the task carried by a due pa
     id, project, text: `Check ${id}`, status: "blocked", placement: "unplaced", assignments: [],
     createdAt: since, updatedAt: since, hold: { kind: "resource", by: "agent", note: "Wait for memory", since },
   }));
-  const pipelines = [{ id: "due-pause", task: "Resume after the wait", project, taskIds: ["paused"],
+  tasks.push({ ...tasks[0]!, id: "operator-access", hold: { kind: "operator", by: "operator", note: "Grant release access", since } });
+  tasks.push({ ...tasks[1]!, id: "quota-paused" });
+  const pipelines = [{ id: "due-pause", task: "Resume after the wait", project, taskIds: ["paused", "operator-access"],
     state: "paused", stages: [], runs: [], pausedAt: since, createdAt: since }];
   try {
-    const result = await seatAgendaInWorker(JSON.stringify({ files: [], tasks, pipelines }), project, now / 1000, runtimeFor(state));
+    const quota = { ...pipelines[0]!, id: "ready-quota", taskIds: ["quota-paused", "operator-access"],
+      pause: { reason: "Wait for quota", resumeCondition: { kind: "account-usage", engine: "codex", accountId: "fixture-account", window: "weekly", belowPercent: 70 } } };
+    const result = await seatAgendaInWorker(JSON.stringify({ files: [], tasks, pipelines: [...pipelines, quota] }), project, now / 1000,
+      runtimeFor(state), undefined, { quotaReadyLaneIds: [quota.id] });
     expect(result.asks).toEqual([expect.objectContaining({
       id: "resumable", waitingTaskIds: ["resumable"], label: expect.stringContaining("Verify the wait now"),
     })]);
-    expect(result.pauseWaitingTasks).toEqual({ "due-pause": ["paused"] });
+    expect(result.pauseWaitingTasks).toEqual({ "due-pause": ["paused"], "ready-quota": ["quota-paused"] });
+  } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+});
+
+test("retained lanes share the seat agenda's prerequisite rows and live assignments", async () => {
+  const { seatAgendaInWorker } = await import("./filesResponseWorker");
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const { initializeStateCollections } = await import("@/lib/state/sqliteStateStore");
+  const { isPipeline } = await import("@/lib/pipelines/storedRecord");
+  const { laneRouteKey } = await import("@/lib/attention/routeTypes");
+  const { seatReadBoard, SEAT_READ_AT, SEAT_READ_NOW } = await import("@/lib/monitor/seatReads.fixture");
+  const state = scratchState(), runtime = runtimeFor(state);
+  const project = "retained-fixture";
+  const worker = { ...seatReadBoard(0).files[0]!, project, activity: "live" as const, proc: "running" as const,
+    operatorAsk: undefined, attentionRoute: undefined };
+  const assignment = { path: worker.path, conversationId: worker.conversationId, state: "linked" as const, panePid: null, error: null, at: SEAT_READ_AT };
+  const task = (id: string, other: Partial<import("@/lib/tasks/types").BoardTask> = {}): import("@/lib/tasks/types").BoardTask => ({
+    id, project, text: `Check ${id}`, status: "assigned", placement: "unplaced",
+    assignments: [], updatedAt: SEAT_READ_AT, createdAt: SEAT_READ_AT, ...other,
+  });
+  const prerequisite = task("aabb0011", { assignments: [assignment] });
+  const dependent = task("aabb0022", { status: "blocked", hold: { kind: "task", ref: prerequisite.id, note: "Until the prerequisite settles", since: SEAT_READ_AT, by: "agent" } });
+  const working = task("aabb0033", { status: "blocked", assignments: [assignment], hold: { kind: "resource", note: "Wait for memory", since: SEAT_READ_AT, by: "agent" } });
+  const acceptance = task("aabb0044", { status: "blocked", hold: { kind: "external", note: "Check the running build", since: SEAT_READ_AT, by: "agent" } });
+  const delegated = task("aabb0055", { status: "blocked", hold: { kind: "external", note: "Follow the recorded decision", since: SEAT_READ_AT, by: "agent" } });
+  const retained = (id: string, taskIds: string[]) => ({ ...buildPipeline({ id, task: "Earlier work", taskIds, project, repoDir: "/fixture/repo",
+    stages: [{ kind: "run", id: "build", next: null, prompt: "Build the fixture",
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: SEAT_READ_AT }), cursor: null, state: "closed" as const, closedAt: SEAT_READ_AT, hiddenAt: SEAT_READ_AT });
+  const historical = retained("retained-lane", [dependent.id, working.id, delegated.id]);
+  const merged = { ...retained("retained-merged", [acceptance.id]), state: "completed" as const,
+    merge: { gitOnly: true as const, state: "merged" as const, by: "outside" as const, repository: "fixture/repo",
+      prNumber: null, policyChangedAt: SEAT_READ_AT, reviewedHead: "", chain: [], updates: [], seenChecks: [], head: null,
+      headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null, requestedAt: SEAT_READ_AT, mergedHead: null, mergeCommit: null,
+      method: null, mergedAt: SEAT_READ_AT, attempts: 0, reason: null, blockedAt: null, updatedAt: SEAT_READ_AT } };
+  expect(isPipeline(historical)).toBe(true);
+  expect(isPipeline(merged)).toBe(true);
+  const parked: import("@/lib/pipelines/types").Pipeline = { ...retained("routed-lane", [delegated.id]), hiddenAt: null, closedAt: null, state: "needs_decision" };
+  parked.attentionRoute = { key: laneRouteKey(parked, "lane-decision"), owner: "form", form: { taskId: delegated.id, reviewId: "open-round" } };
+  try {
+    initializeStateCollections(path.join(state, "state.sqlite"), ["pipelines", "pipelines_archive"].map(collection => ({
+      collection, schemaVersion: 5, migrationId: "fixture", key: (lane: { id: string }) => lane.id,
+      loadRecords: () => collection === "pipelines_archive" ? [historical, merged] : [],
+    })));
+    const body = { files: [worker], tasks: [prerequisite, dependent, working, acceptance, delegated], pipelines: [parked] };
+    const read = (snapshot: typeof body) => seatAgendaInWorker(JSON.stringify(snapshot), project, SEAT_READ_NOW, runtime);
+    expect((await read(body)).asks).toEqual([expect.objectContaining({ id: acceptance.id, label: expect.stringContaining("deployment_status") })]);
+    const resumed = await read({ ...body, tasks: [{ ...prerequisite, status: "done" }, dependent, working, acceptance, delegated], files: [] });
+    expect(resumed.asks).toEqual([
+      expect.objectContaining({ id: dependent.id, label: expect.stringContaining("recorded prerequisite cleared") }),
+      expect.objectContaining({ id: working.id, label: expect.stringContaining("Verify the wait now") }),
+      expect.objectContaining({ id: acceptance.id, label: expect.stringContaining("deployment_status") }),
+    ]);
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 });
 

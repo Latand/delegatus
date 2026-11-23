@@ -10,6 +10,7 @@ import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
 import type { FileEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
+import { emptyMaintenanceCounts, emptyMaintenanceLog, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import { laneState } from "@/components/kanban/cardState";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
@@ -2916,10 +2917,51 @@ test("maintenance handoffs page task/action pairs and credit only the delivered 
   const thirdText = seatTickWakeMessage({ project: PROJECT, ...third.verdict, signals: [] });
   const thirdPlan = seatTickWakeCommitPlan({ ...third.verdict, items: [...third.verdict.items] }, { fingerprint: "maintenance-unchanged", eventsThrough: 0, frozenText: thirdText })!;
   const complete = seatTickWakeCommit(third.state, thirdPlan, check.now + SEAT_TICK_WAKE_INTERVAL_MS);
-  expect(complete.announcedMaintenance).toEqual(["maintenance-run:page:0", "maintenance-run:page:1", "maintenance-run:page:2"]);
-  expect(seatTickDecision({ ...check, now: check.now + 2 * SEAT_TICK_WAKE_INTERVAL_MS, state: complete }).verdict.kind).toBe("quiet");
+  expect(complete.announcedMaintenance).toEqual(["maintenance-run"]);
+  expect(reasonsOf(seatTickDecision({ ...check, now: check.now + 2 * SEAT_TICK_WAKE_INTERVAL_MS, state: complete }).verdict)).not.toContain("maintenance-settled");
 });
 
+test("a 67-page maintenance run stays complete after restart and agenda eviction", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "maintenance-delivery-"));
+  const file = path.join(root, "tick.json");
+  const run: MaintenanceRun = { kind: "run", runId: "long-maintenance-run", project: PROJECT, state: "succeeded", endedAt: new Date(NOW - MINUTE).toISOString(),
+    claimedAt: new Date(NOW - 10 * MINUTE).toISOString(), launchedAt: new Date(NOW - 9 * MINUTE).toISOString(), intervalHours: 12,
+    taskId: "maintenance-card", slot: 1, seat: { seatEpoch: 7, conversationId: CONVERSATION }, repoDir: null, clientAttemptId: "maintenance-attempt",
+    launchId: null, conversationId: null, transcriptPath: null, failure: null, changedTaskIds: [], supersededTaskIds: [],
+    counts: { ...emptyMaintenanceCounts(), tasks: 200 }, log: { ...emptyMaintenanceLog(),
+      seat: Array.from({ length: 200 }, (_, index) => ({ taskId: `handoff-${index}`, reason: "Ownerless wait", action: "Resume the task" })) } };
+  const policy = { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 };
+  let state = stateWith({ lastWakeAt: new Date(NOW - SEAT_TICK_WAKE_INTERVAL_MS).toISOString() });
+  const checkAt = (page: number) => input({ now: NOW + page * SEAT_TICK_WAKE_INTERVAL_MS, settledMaintenance: [run], policy, state });
+  try {
+    for (let page = 0; page < 67; page++) {
+      const { now } = checkAt(page);
+      const decision = seatTickDecision(checkAt(page));
+      if (decision.verdict.kind !== "wake") throw new Error(`expected maintenance page ${page}`);
+      expect(decision.verdict.items[0]?.maintenance).toEqual({ runId: run.runId, page, pages: 67 });
+      const text = seatTickWakeMessage({ project: PROJECT, ...decision.verdict, signals: [] });
+      const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "maintenance", eventsThrough: 0, frozenText: text })!;
+      writeSeatTickState(PROJECT, { ...decision.state, seatEpoch: 7, outstandingWake: {
+        clientMessageId: `maintenance-wake-${page}`, conversationId: CONVERSATION, seatEpoch: 7, operationId: null,
+        preparedAt: new Date(now).toISOString(), text, commit,
+      } }, file);
+      const restored = readSeatTickState(PROJECT, file);
+      state = seatTickWakeCommit(restored, restored.outstandingWake!.commit, now);
+      if (page < 66) expect(state.announcedMaintenance).not.toContain(run.runId);
+    }
+    expect(state.announcedMaintenance).toEqual([run.runId]);
+    writeSeatTickState(PROJECT, { ...state, itemsShown: [] }, file);
+    const reader = Bun.spawnSync({ cmd: [process.execPath, "-e", `
+      import { readSeatTickState } from ${JSON.stringify(path.join(import.meta.dir, "seatTickState.ts"))};
+      console.log(JSON.stringify(readSeatTickState(process.argv[1], process.argv[2])));
+    `, PROJECT, file], stdout: "pipe", stderr: "pipe" });
+    expect(reader.exitCode, reader.stderr.toString()).toBe(0);
+    state = JSON.parse(reader.stdout.toString());
+    expect(state.announcedMaintenance).toEqual([run.runId]);
+    const next = seatTickDecision(checkAt(67)).verdict;
+    expect(next.kind === "wake" && next.items.some(item => item.kind === "maintenance")).toBe(false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test("the Tasks header retains hot overdue counts when the indexed next page excludes delivered dates", () => {
   const tasks = Array.from({ length: 12 }, (_, n): SeatTickTaskInput => ({ id: `overdue-${String(n).padStart(2, "0")}`, title: "Finish", status: "inbox", owned: false, updatedAt: new Date(NOW - 86_400_000).toISOString(), dueAt: new Date(NOW - 86_400_000).toISOString() }));

@@ -214,6 +214,9 @@ test("a long returned merge wake retains every task id and retry action before t
   const ask = seatAgendaAsks({ files: [], pipelines: [lane], tasks }, now, "project-a").find(item => item.id === lane.id)!;
   expect(ask.waitingTaskIds).toEqual(ids);
   expect(ask.label).toContain("pipeline_action retry-merge");
+  expect(ask.label).toContain(lane.attentionRoute.returnedFrom!);
+  expect(ask.label).toContain("read_prototype_review");
+  expect(ask.label.length).toBeLessThanOrEqual(700);
   for (const id of ids) expect(ask.label).toContain(id);
 });
 

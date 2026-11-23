@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadTasks, saveTasks } from "./store";
+import { loadTasks, mutateTasks, saveTasks } from "./store";
 import { taskRevision } from "./revision";
 import { expect, test } from "bun:test";
 import { createTask, patchTask } from "./commands";
@@ -145,6 +145,37 @@ test("an empty operator label cannot park an agent update and is routed to the s
   expect(result.task.status).toBe("assigned");
   expect(result.task.hold?.note).toBe("");
   expect(waitingRoute(result.task, waitingRouteIndex([result.task], []), Date.parse(NOW))).toMatchObject({ owner: "seat", why: expect.stringContaining("names no action") });
+});
+
+test("an empty operator hold enters Waiting only while its decision form is open", async () => {
+  const { prototypeTask } = await import("@/lib/voiceCompanion/prototypeRead.fixture");
+  const { dismissAttention } = await import("@/lib/attention/dismissals");
+  const { resolvedPrototypeSummary } = await import("@/lib/prototypeReview/read");
+  const original = prototypeTask("hold-form-task");
+  const round = original.prototypeReviews![0]!;
+  const target = { kind: "prototype" as const, taskId: original.id, reviewId: round.id };
+  const operator = { kind: "operator" as const, surface: "desktop" as const };
+  const update = () => mutateTasks(rows => {
+    const patched = ok(patchTask(rows, original.id, { status: "blocked", hold: { kind: "operator" } }, original.updatedAt, { actor: "agent" }));
+    return { tasks: patched.tasks, result: patched.task };
+  });
+  saveTasks([original]);
+  try {
+    expect(update().status).toBe("blocked");
+    await dismissAttention(target, operator);
+    expect(resolvedPrototypeSummary(original)?.waitingDismissal).toBeDefined();
+    expect(update().status).toBe("inbox");
+    await dismissAttention(target, operator, { undo: true });
+    const answered = structuredClone(original);
+    answered.prototypeReviews![0]!.decision = { chosen: [1], comment: "", at: original.updatedAt,
+      revision: 1, delivery: { state: "no-orchestrator", conversationId: null, clientMessageId: "fixture-answer", text: "First variant chosen" } };
+    expect(resolvedPrototypeSummary(answered)?.waitingReviewId).toBeNull();
+    saveTasks([answered]);
+    expect(update().status).toBe("inbox");
+  } finally {
+    await dismissAttention(target, operator, { undo: true });
+    saveTasks([]);
+  }
 });
 
 

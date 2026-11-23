@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { seatTickBullet } from "./report";
 import { redactMonitorText } from "./redact";
 import { maintenanceItemLabel } from "@/lib/boardMaintenance/text";
+import { maintenanceAnnouncements, maintenancePageToken } from "./seatMaintenanceDelivery";
 import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
 
 import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SEAT_TICK_SETTINGS_REF } from "./cards";
@@ -15,7 +16,6 @@ import { seatTickReminders, taskIsOverdue, reminderDeliveredVersion, pauseRemind
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
-  SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT,
   SEAT_TICK_REPORTED_STALLS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_REPORTS_OWED_LIMIT,
@@ -216,8 +216,6 @@ function seatSettledMaintenance(input: SeatTickCheckInput) {
     && run.endedAt && input.now - Date.parse(run.endedAt) <= input.policy.backlogAfterMs
     && !(input.state.announcedMaintenance ?? []).includes(run.runId));
 }
-
-function maintenancePageToken(runId: string, page: number): string { return `${runId}:page:${page}`; }
 
 function seatSettledDeploys(input: SeatTickCheckInput): readonly SeatTickDeployInput[] {
   return (input.settledDeploys ?? []).filter((deploy) => {
@@ -2290,7 +2288,9 @@ export function seatTickWakeCommitPlan(
   const announcedLanes = items.flatMap((item) => item.laneAnnouncement ? [item.laneAnnouncement] : []);
   /* The same rule for a settled deploy (#2063): the landing of the wake that
      carried it is what announces it, once. */
-  const announcedMaintenance = items.filter(item => item.kind === "maintenance").flatMap(item => item.maintenance ? [maintenancePageToken(item.maintenance.runId, item.maintenance.page)] : []);
+  const maintenanceReceipts = (item: SeatTickItem) => item.maintenance
+    ? [maintenancePageToken(item.maintenance.runId, item.maintenance.page, item.maintenance.pages)] : [];
+  const announcedMaintenance = items.flatMap(maintenanceReceipts);
   const announcedDeploys = items.filter((item) => item.kind === "deploy").map((item) => item.id);
   const deployResumeThrough = items.filter(item => item.kind === "deploy" && item.occurredAt && Number.isFinite(Date.parse(item.occurredAt)))
     .map(item => item.occurredAt!).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
@@ -2317,7 +2317,7 @@ export function seatTickWakeCommitPlan(
         .filter(id => terminal.has(id)).map(id => `child:${id}`) : []),
       ...(item.stateTokens ?? []).map(id => `shown:${id}`),
       ...(item.laneAnnouncement ? [`lane:${item.laneAnnouncement}`] : []),
-      ...(item.maintenance ? [`maintenance:${item.maintenance.runId}:page:${item.maintenance.page}`] : []),
+      ...maintenanceReceipts(item).map(receipt => `maintenance:${receipt}`),
       ...(item.kind === "deploy" ? [`deploy:${item.id}`] : []),
       ...(item.stallToken ? [`stall:${item.stallToken}`] : []),
       ...seatTickOwedOutcomes([item]).filter(outcome => owedKeys.has(outcome.key)).map(outcome => `report:${outcome.key}`),
@@ -2449,7 +2449,7 @@ export function seatTickWakeCommit(
     ...(formPageAfter ? { formPageAfter } : {}),
     itemsShown: mergeAgendaVersions(state.itemsShown ?? [], visibleAgendaVersions(state, commit).map(version => reminderDeliveredVersion(version, now)), commit.activeStallTokens, now),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
-    announcedMaintenance: announced(state.announcedMaintenance ?? [], commit.announcedMaintenance ?? [], SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
+    announcedMaintenance: maintenanceAnnouncements(state.announcedMaintenance ?? [], commit.announcedMaintenance ?? []),
     announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     ...(commit.deployResumeThrough && Number.isFinite(Date.parse(commit.deployResumeThrough)) ? { deployResumeThrough: new Date(Math.max(
       Date.parse(state.deployResumeThrough ?? "") || 0, Date.parse(commit.deployResumeThrough),

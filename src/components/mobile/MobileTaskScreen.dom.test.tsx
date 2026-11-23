@@ -244,8 +244,9 @@ test("the status is a sheet: a choice moves the task with a guarded write and a 
   click(form.querySelector('[type="submit"]') as unknown as HTMLElement);
   expect(nav.getState().sheet).toBeNull();
   expect(q(host, "[data-phone-task-status-pill]")!.getAttribute("data-phone-task-status-pill")).toBe("blocked");
-  expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: en("kanban.status.blocked") }));
+  expect(q(host, "[data-test-receipt]")).toBeNull();
   await sleep(20);
+  expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: en("kanban.status.blocked") }));
   expect(patches).toHaveLength(1);
   expect(patches[0]!.body).toMatchObject({ status: "blocked", hold: { kind: "operator", note: "Choose the release" }, expectedRevision: "r-t-many-1" });
   click(q(host, "[data-test-undo]"));

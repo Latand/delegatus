@@ -68,7 +68,7 @@ import { taskPriority, type BoardTask, type TaskBoardVisibility, type TaskColor,
 export type StatusMoveOutcome =
   | { kind: "noop" }
   /* `lineage`: see the header; a fenced write that undoes this one names it. */
-  | { kind: "saved"; task: BoardTask; from: TaskStatus; to: TaskStatus; lineage: number }
+  | { kind: "saved"; task: BoardTask; from: TaskStatus; fromHold: TaskHold | null; to: TaskStatus; lineage: number }
   | { kind: "settled"; task: BoardTask; from: TaskStatus; to: TaskStatus }
   | { kind: "conflict"; task: BoardTask; from: TaskStatus; to: TaskStatus; serverStatus: TaskStatus }
   | { kind: "failed"; from: TaskStatus; to: TaskStatus; error: string; status: number };
@@ -508,7 +508,8 @@ export class TaskStatusMutations {
     const from = current?.status ?? task.status;
     if (from === to && !current?.pending && !options.fenced && !Object.hasOwn(options, "hold")) return Promise.resolve({ kind: "noop" });
     const override: Override = current ?? { status: to, pending: 0, baseRevision: revisionOf(task), confirmedRevision: null };
-    override.status = to;
+    // A clear can move the card. Keep its editor mounted until the write lands.
+    override.status = options.hold === null ? from : to;
     override.pending += 1;
     this.overrides.set(id, override);
     this.emit();
@@ -592,8 +593,9 @@ export class TaskStatusMutations {
       this.remember(stored);
       guard = this.guardFor(stored)!;
     }
+    const previous = { status: this.known.get(id)?.status ?? task.status, hold: this.holdFor(task) };
     const first = guard ? await this.patchSafely(id, { status: to, ...holdPatch, expectedProject: guard.project, expectedRevision: guard.revision }) : NO_FENCE;
-    if (first.ok) return this.saved(first.task, from, to, guard!.revision);
+    if (first.ok) return this.saved(first.task, previous, to, guard!.revision);
     if (first.status !== 409) return this.fail(id, from, to, first.status, first.error);
 
     const stored = await this.readSafely(id);
@@ -611,7 +613,7 @@ export class TaskStatusMutations {
     }
     if (!Object.hasOwn(options, "hold") && (stored.status === from || revisionOf(stored) === guard?.revision)) {
       const retry = await this.patchSafely(id, { status: to, ...holdPatch, expectedProject: stored.project, expectedRevision: revisionOf(stored) ?? "" });
-      if (retry.ok) return this.saved(retry.task, from, to, revisionOf(stored));
+      if (retry.ok) return this.saved(retry.task, stored, to, revisionOf(stored));
       return this.fail(id, from, to, retry.status, retry.error);
     }
     this.settle(id, stored.status, revisionOf(stored), true);
@@ -619,11 +621,11 @@ export class TaskStatusMutations {
     return { kind: "conflict", task: stored, from, to, serverStatus: stored.status };
   }
 
-  private saved(task: BoardTask, from: TaskStatus, to: TaskStatus, replacing: string | null): StatusMoveOutcome {
+  private saved(task: BoardTask, previous: Pick<BoardTask, "status" | "hold">, to: TaskStatus, replacing: string | null): StatusMoveOutcome {
     this.remember(task, replacing, true);
     this.settle(task.id, task.status, revisionOf(task), true);
     this.ports.changed();
-    return { kind: "saved", task, from, to, lineage: this.lineages.get(task.id) ?? 0 };
+    return { kind: "saved", task, from: previous.status, fromHold: previous.hold ?? null, to, lineage: this.lineages.get(task.id) ?? 0 };
   }
 
   private fail(id: string, from: TaskStatus, to: TaskStatus, status: number, error: string): StatusMoveOutcome {

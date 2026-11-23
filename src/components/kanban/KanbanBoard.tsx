@@ -1027,8 +1027,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return true;
   };
 
-  const [holdEditing, setHoldEditing] = useState<string | null>(null);
-  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean; hold?: Partial<TaskHold> | null } = {}) => {
+  const [holdEditor, setHoldEditing] = useState<{ cardId: string } | null>(null);
+  const holdEditing = holdEditor?.cardId ?? null;
+  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean; hold?: Partial<TaskHold> | null; editor?: typeof holdEditor } = {}) => {
     const task = card.task ? tasksById.current.get(card.task.id) ?? card.task : null;
     if (!task) return;
     const from = card.status;
@@ -1038,15 +1039,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const written = settles();
     const entry: HistoryEntry = { kind: "status", taskId: task.id, title: short, from, to, fromHold: controller.holdFor(task) ?? null, toHold: null, settled: written.promise };
     historyRef.current.record(entry);
-    const optimisticReceiptId = to === "blocked" ? null : show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
+    const optimisticReceiptId = to === "blocked" || options.hold === null ? null : show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
     if (optimisticReceiptId) entryReceipts.current.set(entry, optimisticReceiptId);
-    if (options.focus) focusMoved(card.id, to);
+    if (options.focus && options.hold !== null) focusMoved(card.id, to);
     void controller.move(task, to, Object.hasOwn(options, "hold") ? { hold: options.hold } : {}).then((outcome: StatusMoveOutcome) => {
       if (outcome.kind === "saved") {
         entry.to = outcome.task.status;
         entry.lineages = new Map([[task.id, outcome.lineage]]);
         entry.toHold = outcome.task.hold ?? null;
-        if (to === "blocked" && holdEditing === card.id) setHoldEditing(null);
+        if (options.editor) setHoldEditing(current => current === options.editor ? null : current);
+        if (options.focus && options.hold === null) focusMoved(card.id, outcome.task.status);
         if (outcome.task.status !== to && optimisticReceiptId) dismiss(optimisticReceiptId);
         const receiptId = optimisticReceiptId && outcome.task.status === to ? optimisticReceiptId
           : show(t("kanban.moved", { title: short, status: statusLabel(t, outcome.task.status) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
@@ -1079,9 +1081,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
         }, { error: true });
       }
     });
-  }, [controller, dismiss, flash, focusMoved, holdEditing, show, step, t]);
+  }, [controller, dismiss, flash, focusMoved, show, step, t]);
   const moveToColumn = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean } = {}) => {
-    if (to === "blocked") { setHoldEditing(card.id); return; }
+    if (to === "blocked") { setHoldEditing({ cardId: card.id }); return; }
     move(card, to, options);
   }, [move]);
   const cardsByIdRef = useRef(cardsById);
@@ -1515,7 +1517,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       checked: card.status === status,
       onSelect: () => moveToColumn(card, status, { focus: true }),
     })),
-    { type: "item", id: "hold", label: t("kanban.hold.edit"), keepFocus: true, onSelect: () => setHoldEditing(card.id) },
+    { type: "item", id: "hold", label: t("kanban.hold.edit"), keepFocus: true, onSelect: () => setHoldEditing({ cardId: card.id }) },
   ], [moveToColumn, t]);
   const menuFor = (): { label: string; items: KanbanMenuItem[] } | null => {
     const open = menu.open;
@@ -2988,7 +2990,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   });
   const cardSaveHold = useStableCallback((card: KanbanCardModel, hold: Partial<TaskHold> | null) => {
     const hasOwner = card.task?.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state));
-    move(card, hold ? "blocked" : hasOwner ? "assigned" : "inbox", { hold, focus: true });
+    move(card, hold ? "blocked" : hasOwner ? "assigned" : "inbox", { hold, focus: true, editor: holdEditor });
   });
   const cardCancelHold = useStableCallback(() => { const id = holdEditing; setHoldEditing(null); if (id) focusCard(id); });
 

@@ -15,8 +15,13 @@ export type WaitingRoute =
 
 type WaitingTask = Pick<BoardTask, "id" | "status" | "hold" | "prototypeReview" | "prototypeReviews" | "prototypeReviewReplica" | "doneAt" | "updatedAt">;
 
+interface ReadyPauses {
+  quota?: ReadonlySet<string>;
+  deploy?: ReadonlySet<string>;
+}
+
 /** Index the same snapshot once for the whole project's routing pass. */
-export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status" | "assignments">[], pipelines: readonly Pipeline[], liveAssignments: ReadonlySet<string> = new Set()) {
+export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status" | "assignments">[], pipelines: readonly Pipeline[], liveAssignments: ReadonlySet<string> = new Set(), readyPauses: ReadyPauses = {}) {
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   const lanesById = new Map<string, Pipeline>();
   const lanesByTask = new Map<string, Set<Pipeline>>();
@@ -30,7 +35,7 @@ export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status
       linked.add(owner);
     }
   }
-  return { tasksById, lanesById, lanesByTask, liveAssignments };
+  return { tasksById, lanesById, lanesByTask, liveAssignments, readyPauses };
 }
 
 function laneOpen(lane: Pipeline): boolean {
@@ -89,7 +94,8 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
   const stopped = routed.find(({ route }) => route?.owner === "seat");
   if (stopped) return seat("lane-stop", "its lane waits on the seat", "Follow the lane’s wake item and move the task out of Waiting.", stopped.lane);
   const paused = open.filter(lane => lane.state === "paused");
-  const due = paused.find(lane => !pausedByOperator(lane) && pauseReminderDue(lane.pause, lane.pausedAt ?? lane.createdAt, now));
+  const due = paused.find(lane => !pausedByOperator(lane) && (input.readyPauses.deploy?.has(lane.id)
+    || pauseReminderDue(lane.pause, lane.pausedAt ?? lane.createdAt, now, input.readyPauses.quota?.has(lane.id))));
   if (due) return seat("pause-ready", "its lane’s pause needs review", "Review the pause and use pipeline_action resume when ready.", due);
   if (paused.some(lane => lane.pause?.resumeCondition?.kind === "date" && Date.parse(lane.pause.resumeCondition.at) > now)) {
     return { owner: "agents", rule: "dated", action: "Wait for the lane’s resume date." };
@@ -110,15 +116,15 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
     return seat("wait-cleared", "its recorded prerequisite cleared", "Start or continue the work, then clear the hold.");
   }
   if (until > now || hold?.kind === "postponed") return { owner: "agents", rule: "dated", action: "Keep the recorded postponement or reset time." };
-  if (lanes.length && !open.length && lanes.some(lane => lane.merge?.state === "merged")) {
-    return seat("unowned", "its lanes settled and work merged", "Check acceptance on the running build with deployment_status. Close the task or name what remains.");
-  }
   const dependencyHasOwner = !!dependency && (dependency.assignments.some(a => a.state === "spawning" && !a.conversationId
-    || !!a.conversationId && input.liveAssignments.has(a.conversationId))
-    || dependency.status === "blocked" && [...(input.lanesByTask.get(dependency.id) ?? [])].some(laneActive))
+    || input.liveAssignments.has(a.conversationId ?? "") || input.liveAssignments.has(a.path ?? ""))
+    || [...(input.lanesByTask.get(dependency.id) ?? [])].some(laneActive))
     || !!dependencyLane && laneActive(dependencyLane);
   if (dependencyHasOwner || open.length && (hold?.kind === "pr" || hold?.kind === "issue")) {
     return { owner: "agents", rule: "dependency", action: "Keep the hold while its prerequisite is open." };
+  }
+  if (lanes.length && !open.length && lanes.some(lane => lane.merge?.state === "merged")) {
+    return seat("unowned", "its lanes settled and work merged", "Check acceptance on the running build with deployment_status. Close the task or name what remains.");
   }
   if (paused.length || routed.some(({ route }) => route?.owner === "system")) {
     return { owner: "agents", rule: "lane", action: "Keep the hold while the lane’s pause or retry is pending." };

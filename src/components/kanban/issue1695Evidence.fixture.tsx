@@ -3168,6 +3168,7 @@ const evidence = {
   publishDelayedLaunch() { feedRecoveryEcho = true; },
   delayedLaunchRetired() { return Boolean(readOutbox(searchVer2.conversationId!).find(entry => entry.id === "delayed-launch")?.retiredEchoId); },
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
+  taskPatchGate: null as Promise<void> | null,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
   pipelineStageRuntime: "local" as "local" | "codex-cloud",
@@ -4836,6 +4837,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.taskPatches.push({ id, body });
     const write = { id, startedAt: performance.now(), answeredAt: 0 };
     evidence.taskWrites.push(write);
+    if (evidence.taskPatchGate) await evidence.taskPatchGate;
     await new Promise((resolve) => setTimeout(resolve, evidence.taskAnswerDelayMs));
     write.answeredAt = performance.now();
     if (evidence.refuseNextTaskPatch) {
@@ -4852,6 +4854,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (Object.hasOwn(body, "hold")) {
       next.hold = readTaskHold(body.hold, new Date().toISOString(), "operator", current.hold);
       if (next.hold) next.status = "blocked";
+      if (SCENARIO === "hold-kinds" && next.hold?.kind === "resource") next.status = "inbox";
     }
     if (Object.hasOwn(body, "restoreHold")) next.hold = storedTaskHold(body.restoreHold);
     if (body.board) next.board = body.board as BoardTask["board"];

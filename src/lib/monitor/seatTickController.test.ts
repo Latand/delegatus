@@ -935,10 +935,7 @@ test.each(["child", "deploy", "maintenance", "stall"] as const)("legacy retained
   } });
   rig.deps.sources!.now = () => NOW + 2 * MINUTE;
   await runSeatTickCheck(PROJECT, rig.deps);
-  const expected = kind === "maintenance"
-    ? [...keys(complete), ...keys(remaining).map(id => `${id}:page:0`)]
-    : keys(items);
-  expect(ledger(rig.deps.readState!(PROJECT))).toEqual(expected);
+  expect(ledger(rig.deps.readState!(PROJECT))).toEqual(keys(items));
 });
 
 test.each([30, 200])("full report ledgers deliver a complete maintenance settlement within two wakes and retain unrelated debt (label chars: %s)", async labelChars => {
@@ -980,7 +977,7 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
      short labels fit it into the first. */
   expect(rig.sent.some(message => message.text.includes(`\n${bullet}\n`))).toBe(true);
   if (labelChars === 30) expect(rig.sent[0]!.text).toContain(`\n${bullet}\n`);
-  expect(rig.written.at(-1)!.announcedMaintenance).toEqual([`${run.runId}:page:0`]);
+  expect(rig.written.at(-1)!.announcedMaintenance).toEqual([run.runId]);
 });
 
 test("the controller keeps unpaid report reminders after the delivered agenda drains, until its matching bridge report lands", async () => {

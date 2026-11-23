@@ -6,7 +6,8 @@ import { readFindingKey } from "./finding";
 import { canonicalProject } from "@/lib/projects/aliases";
 
 import { holdParks, validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
-import { prototypeReviewSummary, prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
+import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
+import { resolvedPrototypeSummary } from "@/lib/prototypeReview/read";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { taskMutationView } from "./mutationView";
@@ -755,7 +756,9 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   const restoringHold = Object.hasOwn(input, "restoreHold");
   const writingHold = Object.hasOwn(input, "hold");
   const ownerColumn = (): TaskStatus => task.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state)) ? "assigned" : "inbox";
-  const hasCurrentDecision = prototypeWaitsOnOperator(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary, task);
+  const hasCurrentDecision = (writingHold || patch.status === "blocked")
+    && (task.prototypeReviews?.length || task.prototypeReviewReplica || task.prototypeReview)
+    && prototypeWaitsOnOperator(resolvedPrototypeSummary(task), task);
   if (restoringHold) {
     if (options.actor !== "operator" || Object.hasOwn(input, "hold")) return { ok: false, status: 400, error: "restoreHold is reserved for fenced operator undo" };
     patch.hold = storedTaskHold(input.restoreHold, notes);

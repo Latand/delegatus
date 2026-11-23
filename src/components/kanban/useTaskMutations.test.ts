@@ -91,6 +91,22 @@ test("a server-normalized Waiting request settles every surface on the accepted 
   expect(mutations.statuses().has("a")).toBe(false);
 });
 
+test("a queued move records the actual status and hold its guarded Undo must restore", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const original = task("a", "assigned", 1);
+  const hold = { kind: "resource" as const, note: "Wait for memory", since: original.updatedAt, by: "operator" as const };
+  const first = mutations.move(original, "blocked", { hold });
+  const second = mutations.move(original, "blocked", { hold: { kind: "operator", note: "Grant access" } });
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: { ...task("a", "inbox", 2), hold } });
+  expect(await first).toMatchObject({ kind: "saved", from: "assigned", fromHold: null });
+  await flush();
+  expect(server.patches[1]!.body.expectedRevision).toBe(REV(2));
+  server.patches[1]!.answer.resolve({ ok: true, task: task("a", "blocked", 3) });
+  expect(await second).toMatchObject({ kind: "saved", from: "inbox", fromHold: hold });
+});
+
 test("a refused write returns the card to the column it came from", async () => {
   const server = scripted();
   const mutations = new TaskStatusMutations(server.ports);
