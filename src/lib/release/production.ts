@@ -13,6 +13,7 @@ import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSucce
 import { isReleasePublishStage } from "@/lib/pipelines/releaseTagPolicy";
 import { createPipelineFromRequest } from "@/lib/pipelines/engine";
 import { releaseCutFromTag } from "../../../scripts/release-verify";
+import { readReleaseProject } from "./store";
 import type { CreatePipelineRequest, Pipeline } from "@/lib/pipelines/types";
 import { MAX_STAGE_PROMPT_LENGTH } from "@/lib/pipelines/limits";
 import { productionReleaseController, releaseRequestDigest, ReleaseValidationRefusal, type ReleasePorts } from "./run";
@@ -68,8 +69,8 @@ async function registryHasRelease(packageName: string, version: string): Promise
 export async function mergedReleasePullRequest(repo: string, version: string, main: string, git: (...args: string[]) => Promise<string>, run: typeof command = command): Promise<{ commit: string; pr: number } | null> {
   if (!/^\d+\.\d+\.\d+$/.test(version)) return null;
   try {
-    const rows = JSON.parse(await run("gh", ["pr", "list", "--repo", repo, "--state", "merged", "--base", "main", "--search", `Release ${version}`, "--limit", "100", "--json", "title,number,baseRefName,mergedAt,mergeCommit"])) as {
-      title?: string; number?: number; baseRefName?: string; mergedAt?: string | null; mergeCommit?: { oid?: string } | null;
+    const rows = JSON.parse(await run("gh", ["pr", "list", "--repo", repo, "--state", "merged", "--base", "main", "--search", `Release ${version}`, "--limit", "100", "--json", "title,number,baseRefName,mergedAt,headRefOid,mergeCommit"])) as {
+      title?: string; number?: number; baseRefName?: string; mergedAt?: string | null; headRefOid?: string; mergeCommit?: { oid?: string } | null;
     }[];
     const candidates: { commit: string; pr: number }[] = [];
     for (const row of rows) {
@@ -261,9 +262,27 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const changes = cut ? await changesSinceRelease(repoDir, name, cut.revision, command, tag.boundary) : [];
       const registryHasTag = await registryHasRelease(pkg.name, version);
       const repo = await command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], repoDir);
-      const recovery = pkg.version !== version ? await mergedReleasePullRequest(repo, pkg.version, main, (...args) => git(...args), command) : null;
       const snapshot = lanes();
-      return { repoDir, src, policy: { now: sources.now(), enabled: setting.enabled, requested: false,
+      const releasePr = pkg.version !== version ? await mergedReleasePullRequest(repo, pkg.version, main, (...args) => git(...args), command) : null;
+      let recovery: { commit: string; pr: number; cut: string | null } | null = null;
+      if (releasePr) {
+        const recorded = [readReleaseProject(project).live, ...readReleaseProject(project).history].filter(Boolean);
+        for (const runRecord of recorded) {
+          if (runRecord!.lastTag !== name || !/^[a-f0-9]{40}$/.test(runRecord!.cut)) continue;
+          const owner = runRecord!.pipelineId ? snapshot.find(runRecord!.pipelineId) : null;
+          const resolved = owner ? snapshot.resolve(owner) : null;
+          if (resolved?.merge?.prNumber === releasePr.pr) {
+            recovery = { ...releasePr, cut: runRecord!.cut };
+            break;
+          }
+        }
+        if (!recovery) recovery = { ...releasePr, cut: null };
+        if (recovery.cut) {
+          try { await git("merge-base", "--is-ancestor", recovery.cut, main); }
+          catch { recovery = { ...releasePr, cut: null }; }
+        }
+      }
+      return { repoDir, src, recovery, policy: { now: sources.now(), enabled: setting.enabled, requested: false,
         tickEnabled: effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled,
         mergeEnabled: mergeOnReviewEnabled(project),
         live: snapshot.current.some(p => {
@@ -282,10 +301,11 @@ export function releaseControllerForSources(sources: SeatTickSources) {
           const lane = snapshot.resolve(p);
           const published = !lane.stages.some(stage => stage.id === "prepare")
             && lane.stages.some(stage => isReleasePublishStage(stage));
-          if (lane.state === "completed" && !published && lane.merge?.state === "cancelled" && !lane.delivery?.active) return false;
+          if (lane.state === "completed" && !published && !lane.delivery?.active
+            && (lane.merge?.state === "cancelled" || lane.merge?.state === "blocked" && lane.merge.reason === "the PR was closed")) return false;
           return !(lane.state === "completed" && (lane.merge?.state === "merged" || published));
         }),
-        mainVersion: pkg.version, lastTag: { name, version, at, boundary: tag.boundary }, registryHasTag, recovery,
+        mainVersion: pkg.version, lastTag: { name, version, at, boundary: tag.boundary }, registryHasTag,
         checks: await requiredReleaseChecks(repo, [main, ...(cut ? [cut.revision] : [])]), hold: null,
         draining: !!activeDrain(), deploying: ledger?.state === "ok" && !!ledger.value[0] && !ledger.value[0].terminal,
         tools: (await captureTools(repoDir)).missing, minChanges: setting.minChanges, minGapHours: setting.minGapHours, changes, deployments, isAncestor } };
@@ -319,6 +339,7 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       return lane ? { state: lane.state, merged: lane.merge?.state === "merged",
         mergeActive: !!lane.delivery?.active || !!lane.merge && (["queued", "checking", "waiting-checks", "updating", "merging", "refreshing"].includes(lane.merge.state)),
         mergeCancelled: lane.merge?.state === "cancelled",
+        mergeStopReason: lane.merge?.state === "blocked" && lane.merge.reason === "the PR was closed" ? lane.merge.reason : null,
         mergeCommit: lane.merge?.mergeCommit, pr: lane.merge?.prNumber,
         declined: !!lane.decisionAnswers?.some(a => a.stageId === "publish" && /не випускати|decline|do not release/i.test(a.answer)) } : null;
     },

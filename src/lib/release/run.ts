@@ -10,13 +10,13 @@ import type { ReleaseSetting } from "./settings";
 export interface ReleasePorts {
   now: () => number;
   settings: (project: string) => ReleaseSetting | null | undefined;
-  observe: (project: string, frozenCut?: string) => Promise<{ policy: ReleaseInput; repoDir: string; src: string; recovery?: { commit: string; pr: number } | null } | null>;
+  observe: (project: string, frozenCut?: string) => Promise<{ policy: ReleaseInput; repoDir: string; src: string; recovery?: { commit: string; pr: number; cut: string | null } | null } | null>;
   taskDone: (project: string, taskId: string) => boolean;
   supersedingTag: (project: string, run: ReleaseRun) => Promise<string | null>;
   task: (project: string, run: ReleaseRun, adopted?: string) => string;
   create: (request: CreatePipelineRequest, key: string) => Promise<string>;
   lookup?: (key: string) => string | null;
-  pipeline: (id: string) => { state: string; merged: boolean; declined: boolean; mergeActive?: boolean; mergeCancelled?: boolean; mergeCommit?: string | null; pr?: number | null } | null;
+  pipeline: (id: string) => { state: string; merged: boolean; declined: boolean; mergeActive?: boolean; mergeCancelled?: boolean; mergeStopReason?: string | null; mergeCommit?: string | null; pr?: number | null } | null;
 }
 export interface ReleaseController {
   reconcile: (project: string) => Promise<string | null>;
@@ -59,13 +59,14 @@ async function admit(project: string, ports: ReleasePorts): Promise<string | nul
   if (!run || run.key !== claim.key || run.cut !== claim.cut || run.pipelineId || !run.request) return null;
   const candidate = observed.recovery;
   const releasePrMerged = !!candidate && candidate.commit === run.request.baseRef
+    && candidate.cut === run.cut
     && run.request.stages.some(stage => stage.id === "review" && stage.prompt?.includes(`PR ${candidate.pr}`));
   if (run.trigger === "recovery" || run.phase === "publish" && !observed.policy.registryHasTag) {
     if (!releasePrMerged) {
       return settle(project, ports, run, "failed", "release-recovery-evidence-changed") ? "release: recovery-candidate-changed" : null;
     }
   }
-  const safety = await releaseState({ ...observed.policy, requested: run.phase === "publish" ? run.trigger === "requested" : true,
+  const safety = await releaseState({ ...observed.policy, requested: run.phase === "publish" ? run.trigger === "requested" || run.trigger === "recovery" : true,
     publishing: run.phase === "publish", releasePrMerged: run.phase === "publish" && releasePrMerged,
     frozenCut: run.cut, hold: row.hold?.reason ?? null });
   if (safety.state !== "due") {
@@ -159,8 +160,10 @@ async function reconcileRun(project: string, ports: ReleasePorts): Promise<strin
   }
 
   const lane = run.pipelineId ? ports.pipeline(run.pipelineId) : null;
-  if (lane?.state === "completed" && run.phase !== "publish" && lane.mergeCancelled && !lane.mergeActive) {
-    return settle(project, ports, run, "failed", "release-merge-cancelled") ? "release: failed" : null;
+  if (lane?.state === "completed" && run.phase !== "publish" && !lane.mergeActive
+    && (lane.mergeCancelled || lane.mergeStopReason)) {
+    const reason = lane.mergeCancelled ? "release-merge-cancelled" : `release-merge-stopped: ${lane.mergeStopReason}`;
+    return settle(project, ports, run, "failed", reason) ? `release: ${reason}` : null;
   }
   if (lane?.state === "completed" && lane.merged && run.phase !== "publish") {
     if (!lane.mergeCommit || !/^[a-f0-9]{40}$/.test(lane.mergeCommit) || !lane.pr || !run.request) return "release: merge receipt incomplete";
@@ -211,8 +214,10 @@ export function productionReleaseController(ports: ReleasePorts): ReleaseControl
       if (!ports.settings(project)?.enabled) return null;
       if (!observed) { retireInapplicableBlocker(project); return NOT_APPLICABLE; }
       const recovery = observed.policy.mainVersion !== observed.policy.lastTag.version ? observed.recovery : null;
-      const decision = await releaseState({ ...observed.policy, publishing: !!recovery, releasePrMerged: !!recovery,
-        hold: row.hold?.reason ?? null, requested: !!row.request,
+      const recoveryProven = !!recovery?.cut;
+      const decision = await releaseState({ ...observed.policy, publishing: recoveryProven, releasePrMerged: recoveryProven,
+        frozenCut: recovery?.cut ?? undefined,
+        hold: row.hold?.reason ?? null, requested: !!row.request || recoveryProven,
         settled: row.history.at(-1) ?? null });
       if (!ports.settings(project)?.enabled) return null;
       const now = ports.now();
@@ -223,10 +228,11 @@ export function productionReleaseController(ports: ReleasePorts): ReleaseControl
         nextEligibleAt: releaseGapStart(observed.policy.lastTag.at, row.history.at(-1)) + observed.policy.minGapHours * 3_600_000 },
         blocked: decision.blocker && trackBlocker
           ? current.blocked?.kind === decision.blocker ? current.blocked : { kind: decision.blocker, since: now, episode: `${decision.blocker}:${now}` } : null }));
+      if (recovery && !recovery.cut) return "release: release-recovery-cut-unavailable";
       if (recovery) {
         if (decision.state !== "due" || !decision.cut) return `release: ${decision.reason}`;
         if (!/^[a-f0-9]{40}$/.test(recovery.commit) || !Number.isSafeInteger(recovery.pr) || recovery.pr < 1) return "release: recovery-candidate-invalid";
-        const runCut = decision.cut.revision;
+        const runCut = recovery.cut!;
         const key = `release-recovery:${observed.policy.mainVersion}:${recovery.commit}`;
         const request: CreatePipelineRequest = { task: `Release ${observed.policy.mainVersion}: publication recovery`, repoDir: observed.repoDir,
           src: observed.src, baseBranch: "main", baseRef: recovery.commit, autoStart: true, publication: "remote-branch", finishesTask: true,

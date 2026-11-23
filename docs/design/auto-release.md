@@ -507,7 +507,8 @@ with `needs_decision` until a quoted operator go names them. Its brief:
   tag action. Review and publish both run
   `bun scripts/release-verify.ts --preflight --cut <cut> --tag vX.Y.Z --pr <number>`
   at that exact commit. Preflight rejects a moved checkout, a commit off
-  main, invalid provenance, conflicting release tags or a product path in
+  main, invalid provenance (compared with the reviewed PR head's capture inputs),
+  conflicting release tags or a product path in
   the release PR's own diff from the commit's first parent. It permits later
   product commits already present in main, provided the frozen cut is an
   ancestor. The annotated tag records that cut for the next changelog. It

@@ -9,12 +9,13 @@ import { ready } from "./policy.fixture";
 import { releaseState } from "./policy";
 import { mergedReleasePullRequest, releaseControllerForSources } from "./production";
 import { releaseStages, releasePublishStages } from "./stages";
+import { RELEASE_DEFAULTS } from "./settings";
 import { mutateReleaseProject, readReleaseProject } from "./store";
 import { normalizeStages } from "@/lib/pipelines/engine";
 import { pipelineRoleLookup } from "@/lib/pipelines/roles";
 import { buildPipeline } from "@/lib/pipelines/store";
 import { resetAutoMergeForTests, sweepAutoMerge, type AutoMergePorts } from "@/lib/forge/autoMerge";
-import { defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { defaultSeatTickSettings, effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import type { CreatePipelineRequest, Pipeline } from "@/lib/pipelines/types";
 
@@ -117,7 +118,7 @@ test.each(["open", "different-pr", "different-target", "different-project", "com
   });
 
 // Retain the reviewer's real adapter observation, with local CLI/registry fixtures.
-async function observe(rows: Pipeline[], archived: Pipeline[] = [], versionAhead = false, pullRequests: unknown[] = [], boundary: string | null = null, frozenCut?: string) {
+async function observe(rows: Pipeline[], archived: Pipeline[] = [], versionAhead = false, pullRequests: unknown[] = [], boundary: string | null = null, frozenCut?: string, releaseEnabled = false) {
   const bin = path.join(directory, "bin"); fs.mkdirSync(bin, { recursive: true });
   const gitLogFile = path.join(directory, "git-log.jsonl");
   const priorPath = process.env.PATH, priorFetch = globalThis.fetch;
@@ -130,13 +131,16 @@ if(tool==='bun')out=JSON.stringify({missing:[],chrome:'/fixture/chrome'});consol
     for (const name of ["git", "gh", "bun"]) fs.writeFileSync(path.join(bin, name), script, { mode: 0o700 });
     process.env.PATH = bin + path.delimiter + priorPath;
     globalThis.fetch = (async () => new Response(JSON.stringify({ version: "1.0.0" }), { status: 200 })) as unknown as typeof fetch;
-    const { ports } = capture({ now: () => Date.parse(at), pipelines: () => rows, archivedPipelines: () => { archiveReads++; return archived; },
-      settings: () => defaultSeatTickSettings(project), seatFor: () => ({ active: { conversationId: "seat" } }),
+    const settings = { ...defaultSeatTickSettings(project), release: { ...RELEASE_DEFAULTS, enabled: releaseEnabled } };
+    const adapter = capture({ now: () => Date.parse(at), pipelines: () => rows, archivedPipelines: () => { archiveReads++; return archived; },
+      settings: () => settings, seatFor: () => ({ active: { conversationId: "seat" } }),
       registry: () => ({ conversation: () => ({ generations: [{ path: "fixture-seat" }] }) }),
     } as unknown as Partial<SeatTickSources>);
-    const observed = await ports.observe(project, frozenCut);
+    const productionObserve = adapter.ports.observe;
+    const observed = await productionObserve(project, frozenCut);
     if (!observed) throw new Error("fixture release is inapplicable");
-    return { ...observed, archiveReads, gitLogs: fs.existsSync(gitLogFile) ? fs.readFileSync(gitLogFile, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) : [] };
+    return { ...observed, ports: adapter.ports, controller: adapter.controller, productionObserve, archiveReads,
+      gitLogs: fs.existsSync(gitLogFile) ? fs.readFileSync(gitLogFile, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) : [] };
   } finally { process.env.PATH = priorPath; globalThis.fetch = priorFetch; }
 }
 test("a successful publish lane ceases to block future releases", async () => {
@@ -160,6 +164,16 @@ test("a cancelled completed preparation reports the version mismatch without rea
   preparation.delivery = { target: { repository: project, remote: "fixture", branch: "refs/heads/release", pr: 7 },
     disposition: "owner", publish: "enabled", active: false, ownerId: preparation.id, epoch: 1, journal: [] };
   const { policy } = await observe([preparation], Array.from({ length: 256 }, (_, i) => lane("cold-cancelled-" + i)), true);
+  expect(policy.live).toBe(false);
+  expect(await releaseState({ ...ready(), live: policy.live, mainVersion: policy.mainVersion, lastTag: policy.lastTag }))
+    .toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
+});
+test("a completed preparation stopped by a closed PR is terminal for the live guard", async () => {
+  const preparation = lane("closed-pr-preparation");
+  preparation.merge = { ...merge("blocked"), reason: "the PR was closed" };
+  preparation.delivery = { target: { repository: project, remote: "fixture", branch: "refs/heads/release", pr: 7 },
+    disposition: "owner", publish: "enabled", active: false, ownerId: preparation.id, epoch: 1, journal: [] };
+  const { policy } = await observe([preparation], [], true);
   expect(policy.live).toBe(false);
   expect(await releaseState({ ...ready(), live: policy.live, mainVersion: policy.mainVersion, lastTag: policy.lastTag }))
     .toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
@@ -190,6 +204,52 @@ test("production recovery accepts only one exact merged Release version PR on ma
   expect(await read([valid])).toEqual({ commit, pr: 23 });
   expect(await read([{ ...valid, title: "Release 1.1.1" }])).toBeNull();
   expect(await read([valid, { ...valid, number: 24 }])).toBeNull();
+});
+
+test("production observer and controller recover the closed preparation at its recorded cut despite newer deployments", async () => {
+  const preparation = lane("recovered-preparation");
+  preparation.merge = { ...merge("blocked"), reason: "the PR was closed" };
+  preparation.merge.prNumber = 23;
+  preparation.delivery = { target: { repository: project, remote: "fixture", branch: "refs/heads/release", pr: 23 },
+    disposition: "owner", publish: "enabled", active: false, ownerId: preparation.id, epoch: 1, journal: [] };
+  const oldCut = brief.cut, newerCut = "f".repeat(40), commit = "c".repeat(40);
+  mutateReleaseProject(project, row => ({ ...row, request: { at, by: { kind: "gateway", project, conversationId: null, seatEpoch: null }, why: null },
+    history: [{ key: "release-key", cut: oldCut, lastTag: "v1.0.0", trigger: "amount", startedAt: Date.parse(at), taskId: "release-task",
+      pipelineId: preparation.id, request: { task: preparation.task, repoDir: process.cwd(), baseRef: oldCut, stages: releaseStages(brief) } as never,
+      outcome: "failed", at: Date.parse(at), reason: "release-merge-stopped: the PR was closed" }] }));
+  const pullRequest = { title: "Release 1.1.0", number: 23, baseRefName: "main", mergedAt: at, mergeCommit: { oid: commit } };
+  const result = await observe([preparation], [], true, [pullRequest], null, undefined, true);
+  expect(result.recovery).toEqual({ commit, pr: 23, cut: oldCut });
+  result.ports.settings = () => ({ enabled: true, askBeforePublish: true, minChanges: 30, minGapHours: 12,
+    updatedAt: at, setBy: { kind: "gateway", project, conversationId: null, seatEpoch: null }, why: null });
+  const observedRecovery: unknown[] = [];
+  result.ports.observe = async (...args) => {
+    const observed = await result.productionObserve(...args);
+    observedRecovery.push(observed?.recovery ?? null);
+    return observed && { ...observed, policy: { ...observed.policy, enabled: true, tickEnabled: true, mergeEnabled: true,
+      checks: "green", tools: [],
+      deployments: [{ revision: oldCut, at: Date.parse(at) - 8 * 3_600_000 }, { revision: newerCut, at: Date.parse(at) - 7 * 3_600_000 }],
+      isAncestor: async (ancestor: string, descendant: string) => ancestor === descendant || ancestor === oldCut && descendant === newerCut } };
+  };
+  const admitted: CreatePipelineRequest[] = [];
+  result.ports.task = () => "recovery-task";
+  result.ports.taskDone = () => false;
+  result.ports.create = async request => { admitted.push(request); return "recovery-publisher"; };
+  const input = { project, seat: { conversationId: "seat", seatEpoch: 1 },
+    settings: effectiveSeatTickSettings(defaultSeatTickSettings(project), Date.parse(at), 60_000) } as never;
+  const priorPath = process.env.PATH, priorFetch = globalThis.fetch;
+  process.env.PATH = path.join(directory, "bin") + path.delimiter + priorPath;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ version: "1.0.0" }), { status: 200 })) as unknown as typeof fetch;
+  let launch: string | null;
+  try { launch = await result.controller.launchIfDue(input); }
+  finally { process.env.PATH = priorPath; globalThis.fetch = priorFetch; }
+  if (launch !== "release: launched") throw new Error(`${launch}: ${JSON.stringify(observedRecovery)}`);
+  expect(admitted).toHaveLength(1);
+  expect(admitted[0]).toMatchObject({ baseRef: commit });
+  const publishRequest = JSON.stringify(admitted[0]);
+  expect(publishRequest).toContain(oldCut);
+  expect(publishRequest).not.toContain(newerCut);
+  expect(readReleaseProject(project).live).toMatchObject({ cut: oldCut, pipelineId: "recovery-publisher", phase: "publish" });
 });
 test("a completed merged preparation needs no archived successor lookup", async () => {
   const preparation = lane("completed-merged-preparation");

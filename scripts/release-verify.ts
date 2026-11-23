@@ -138,10 +138,11 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
     if (!/^[1-9]\d*$/.test(pullRequest)) throw new Error("release PR must be a pull request number");
     if (!/^[a-f0-9]{40}$/i.test(cut)) throw new Error("cut must be an exact commit SHA");
     const head = await git("rev-parse", "HEAD");
-    const pr = JSON.parse(await ports.command("gh", ["pr", "view", pullRequest, "--json", "state,baseRefName,mergeCommit"]));
+    const pr = JSON.parse(await ports.command("gh", ["pr", "view", pullRequest, "--json", "state,baseRefName,headRefOid,mergeCommit"]));
     if (pr.state !== "MERGED" || pr.baseRefName !== "main" || !/^[a-f0-9]{40}$/.test(pr.mergeCommit?.oid ?? "")) {
       return { errors: ["release PR is unmerged; merge the reviewed release PR into main before tagging, then rerun preflight"] };
     }
+    if (!/^[a-f0-9]{40}$/.test(pr.headRefOid ?? "")) return { errors: ["release PR's reviewed head is unreadable"] };
     const tagCommit = pr.mergeCommit.oid;
     if (head !== tagCommit) return { errors: ["release checkout differs from the PR's integrated main commit; review and check out that commit before tagging"] };
     try {
@@ -152,10 +153,10 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
     } catch { return { errors: ["release tag commit is not on origin/main; merge the reviewed release PR first, then rerun preflight on its merged commit"] }; }
     await git("--no-replace-objects", "merge-base", "--is-ancestor", cut, tagCommit);
     const captureInputs = {
-      generatorSha256: createHash("sha256").update(await (ports.readFileAt?.(cut, "scripts/capture-readme-media.ts")
-        ?? git("--no-replace-objects", "show", `${cut}:scripts/capture-readme-media.ts`))).digest("hex"),
-      seedSha256: createHash("sha256").update(await (ports.readFileAt?.(cut, "scripts/readme-demo-state.ts")
-        ?? git("--no-replace-objects", "show", `${cut}:scripts/readme-demo-state.ts`))).digest("hex"),
+      generatorSha256: createHash("sha256").update(await (ports.readFileAt?.(pr.headRefOid, "scripts/capture-readme-media.ts")
+        ?? git("--no-replace-objects", "show", `${pr.headRefOid}:scripts/capture-readme-media.ts`))).digest("hex"),
+      seedSha256: createHash("sha256").update(await (ports.readFileAt?.(pr.headRefOid, "scripts/readme-demo-state.ts")
+        ?? git("--no-replace-objects", "show", `${pr.headRefOid}:scripts/readme-demo-state.ts`))).digest("hex"),
     };
     const pkg = JSON.parse(await git("--no-replace-objects", "show", `${tagCommit}:package.json`));
     const registryURL = `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}`;

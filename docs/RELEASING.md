@@ -218,6 +218,8 @@ chooses «Випустити й більше не питати» or turns the ch
    `bun scripts/release-verify.ts --preflight --cut <full-cut-sha> --tag vX.Y.Z --pr <number>`
    with the version from that commit's `package.json`. Preflight verifies the
    merged PR, current `origin/main`, ancestry from the cut and README provenance.
+   Provenance is compared with the capture driver and seed at the merged PR's
+   reviewed head; the original production cut remains the changelog boundary.
    It checks the release PR's own delta and verifies that the frozen cut is an
    ancestor of the integrated main commit. A squash may include product PRs
    merged after the cut. The release tag records the cut, so those later PRs

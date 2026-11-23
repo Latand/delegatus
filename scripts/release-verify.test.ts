@@ -142,7 +142,7 @@ test("preflight distinguishes a matching local-only tag, a confirmed remote tag,
   const runPreflight = async (local: boolean, localCommit: string, remoteLines: string, packagePublished = false, message = `Delegatus 1.2.0\n\nRelease-Cut: ${"a".repeat(40)}`) => verifyRelease("v1.2.0", "a".repeat(40), {
     now: () => 0, wait: async () => {}, provenance: () => true, registry: async () => packagePublished ? { version: "1.2.0" } : null,
     command: async (file, args) => {
-      if (file === "gh") return JSON.stringify({ state: "MERGED", baseRefName: "main", mergeCommit: { oid: head } });
+      if (file === "gh") return JSON.stringify({ state: "MERGED", baseRefName: "main", headRefOid: head, mergeCommit: { oid: head } });
       args = args.filter(arg => arg !== "--no-replace-objects");
       if (args[0] === "fetch") return "";
       if (args[0] === "show" && args[1] === `${head}:package.json`) return JSON.stringify({ name: "package-example", version: "1.2.0" });
@@ -336,7 +336,7 @@ test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "
       command: async (file, args) => {
         if (file === "git") return git(...args);
         if (scenario === "checkout moved") git("commit", "--allow-empty", "-m", "head moves during forge read");
-        return JSON.stringify({ state: scenario === "open PR" ? "OPEN" : "MERGED", baseRefName: scenario === "wrong base" ? "other" : "main",
+        return JSON.stringify({ state: scenario === "open PR" ? "OPEN" : "MERGED", baseRefName: scenario === "wrong base" ? "other" : "main", headRefOid: reviewed,
           mergeCommit: { oid: merged } });
       },
     };
