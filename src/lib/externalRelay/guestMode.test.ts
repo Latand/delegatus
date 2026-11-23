@@ -21,6 +21,7 @@ import { ownerIntentFixture, startTestRelay } from "./testRelay";
 import { readConversations } from "./conversations";
 import { CloudFailure } from "./cloud";
 import { richRequest } from "./rich.fixture";
+import { ownerRunRoot } from "./runDirectory";
 
 const dir = path.join(import.meta.dir, "fixtures/relay_v1");
 const source = fs.readFileSync(path.join(dir, "claimed_guest_owner.json"));
@@ -243,7 +244,8 @@ test("service-verified owner on guest delivery gets a request-local seat handoff
       stop: async () => {}, pollMs: 1,
     } });
     expect(launches).toBe(1);
-    const intentPrompt = fs.readFileSync(intentCapture, "utf8");
+    const { cwd, prompt: intentPrompt } = JSON.parse(fs.readFileSync(intentCapture, "utf8"));
+    expect(path.dirname(path.dirname(path.dirname(cwd)))).toBe(fs.realpathSync(ownerRunRoot()));
     expect(intentPrompt).toContain("The example project has a moderation regression.");
     expect(intentPrompt).toContain(request.input.request_text!);
     expect(intentPrompt).not.toContain("PRIVATE_GUEST_HISTORY");
@@ -297,7 +299,7 @@ test("summarizing a quoted project discussion on guest delivery never launches t
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Here is the summary.", reply_to: null } });
     expect(cloudCalls).toBe(1);
     expect(localLaunches).toBe(0);
-    const intent = fs.readFileSync(intentCapture, "utf8");
+    const { prompt: intent } = JSON.parse(fs.readFileSync(intentCapture, "utf8"));
     expect(intent).toContain(trigger.text);
     expect(intent).toContain("Please fix the moderation rules in the next release.");
   } finally { await server.close(); }

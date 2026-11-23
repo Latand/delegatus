@@ -7,7 +7,7 @@ export function ownerIntentFixture(root: string, seatHandoff: boolean, capture?:
   fs.writeFileSync(command, `#!${process.execPath}
 const fs = require('fs'), args = process.argv.slice(2);
 const prompt = await Bun.stdin.text();
-${capture ? `fs.writeFileSync(${JSON.stringify(capture)}, prompt);` : ""}
+${capture ? `fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ cwd: process.cwd(), prompt }));` : ""}
 const output = { seat_handoff: ${seatHandoff} };
 const outputFile = args[args.indexOf('--output-last-message') + 1];
 if (args.includes('--output-last-message')) fs.writeFileSync(outputFile, JSON.stringify(output));

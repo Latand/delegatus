@@ -20,7 +20,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline, remainingMs } from "./deadline";
-import { ownerRelayAuthorized, liveOwnerRelayRequest, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized, ownerRelayHandoffOutcome } from "./ownerAuthority";
+import { ownerRelayAuthorized, liveOwnerRelayRequest, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized, ownerRelayHandoffOutcome, ownerRelayIntentEnabled } from "./ownerAuthority";
 import { ownerRequestTimeoutText } from "./requestTimeout";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
@@ -76,6 +76,7 @@ import {
   ownerHandoffIntentPrompt,
   ownerHandoffIntentSchema,
   ownerReplyChain,
+  type OwnerInstruction,
   ownerBindingRefusal,
   exemptFromMemberLimit,
   memberLimitFor,
@@ -89,7 +90,6 @@ import {
   reserveRunAsync,
   RelayStoreBusy,
   ownerRelayStoreDeadline,
-  readRelayStore,
   readRunLedger,
   runHoldsCapacity,
   ownerStopPending,
@@ -818,13 +818,14 @@ export async function runClaimedRequest(
       selection.kind === "exhausted" && selection.resetsAt ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000)) : null) : null;
     const earlyCapacityDecline = capacityDecline();
     if (earlyCapacityDecline) return await finish(earlyCapacityDecline);
+    const createAnswerDirectory = () => fs.promises.mkdtemp(path.join(externalRelayTempRoot(), "llv-external-relay-"));
     runDir = recovery
       ? owner && !prototype ? await resolveOwnerRunDirectory(recovery.runDir) : recovery.runDir
-      : owner && !prototype ? await createOwnerRunDirectory()
-        : await fs.promises.mkdtemp(path.join(externalRelayTempRoot(), "llv-external-relay-"));
+      : intentOwner || owner && !prototype ? await createOwnerRunDirectory()
+        : await createAnswerDirectory();
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
-    const ownerTurn = (instruction: NonNullable<typeof owner>): NonNullable<RunRecord["ownerTurn"]> => ({
+    const ownerTurn = (instruction: OwnerInstruction): NonNullable<RunRecord["ownerTurn"]> => ({
       clientAttemptId: `relay-owner-${requestId}${recovery ? "-retry" : ""}`,
       ...(recovery ? { restartRetries: 1 as const } : {}),
       ...(handoffOnly ? { seatHandoff: true as const } : {}),
@@ -955,10 +956,7 @@ export async function runClaimedRequest(
         await releaseAdmission();
         if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
       }
-      const canRouteOwner = () => {
-        const current = readRelayStore().relays.find(item => item.id === relay.id);
-        return current?.paused === false && current.targets.some(item => item.id === target.id && item.enabled && item.ownerTier === true);
-      };
+      const canRouteOwner = () => ownerRelayIntentEnabled(relay.id, target.id);
       const checkIntentLaunch = () => {
         callAbort.signal.throwIfAborted();
         if (leaseUnavailable || releaseRequested || activeDrain() || Date.now() >= admissionCutoff() || !canRouteOwner())
@@ -996,22 +994,21 @@ export async function runClaimedRequest(
       if (releaseRequested || Date.now() >= admissionCutoff()) return await finish(declined(leaseId, "busy"));
       handoffOnly = handoffOnly && canRouteOwner();
       if (guestOwner && handoffOnly) {
-        replacedRunDir = await createOwnerRunDirectory();
+        record.ownerTurn = ownerTurn(guestOwner);
+        await changeRunAsync(requestId, current => ({ ...current, ownerTurn: record.ownerTurn }), ownerRelayStoreDeadline());
         if (leaseUnavailable || callAbort.signal.aborted) return null;
         if (releaseRequested || Date.now() >= admissionCutoff()) return await finish(declined(leaseId, "busy"));
-        handoffOnly = canRouteOwner();
-        if (handoffOnly) {
-          record.runDir = replacedRunDir;
-          record.ownerTurn = ownerTurn(guestOwner);
-          await changeRunAsync(requestId, current => ({ ...current, runDir: record.runDir, ownerTurn: record.ownerTurn }), ownerRelayStoreDeadline());
-          replacedRunDir = runDir;
-          runDir = record.runDir;
-          if (leaseUnavailable || callAbort.signal.aborted) return null;
-          if (releaseRequested || Date.now() >= admissionCutoff()) return await finish(declined(leaseId, "busy"));
-          if (!ownerRelayAuthorized(relay.id, target.id, requestId)) return await finish(declined(leaseId, "disabled"));
-          owner = guestOwner;
-          retainOwnerReplyChain(request, owner.messageId);
-        }
+        if (!ownerRelayAuthorized(relay.id, target.id, requestId)) return await finish(declined(leaseId, "disabled"));
+        owner = guestOwner;
+        retainOwnerReplyChain(request, owner.messageId);
+      } else if (guestOwner) {
+        // The probe needs the native host mount. Ordinary answers keep their
+        // separate temporary directory and receive the complete guest context.
+        replacedRunDir = await createAnswerDirectory();
+        record.runDir = replacedRunDir;
+        await changeRunAsync(requestId, current => ({ ...current, runDir: record.runDir }), ownerRelayStoreDeadline());
+        replacedRunDir = runDir;
+        runDir = record.runDir;
       } else if (owner) {
         record.ownerTurn = ownerTurn(owner);
         await changeRunAsync(requestId, current => ({ ...current, ownerTurn: record.ownerTurn }), ownerRelayStoreDeadline());

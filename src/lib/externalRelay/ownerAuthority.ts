@@ -59,6 +59,16 @@ function guestOwnerTurn(turn: NonNullable<RunRecord["ownerTurn"]>): boolean {
   return (turn.rawRequest as { delivery?: unknown } | undefined)?.delivery === "guest";
 }
 
+/** The intent probe runs before an owner turn exists. Read settings without
+ * taking the pairing lock or creating state in the native launch guard. */
+export function ownerRelayIntentEnabled(relayId: string, targetId: string): boolean {
+  try {
+    const store = JSON.parse(fs.readFileSync(externalRelayFile("relays"), "utf8")) as RelayStore;
+    const relay = store.v === 1 ? store.relays.find(row => row.id === relayId) : null;
+    return relay?.paused === false && relay.targets.some(target => target.id === targetId && target.enabled && target.ownerTier === true);
+  } catch { return false; }
+}
+
 function liveOwnerRelayRun(conversationId: string): { run: RunRecord; project: string | null } | null {
   try {
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
