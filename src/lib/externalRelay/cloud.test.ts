@@ -796,10 +796,10 @@ test("a Cloud target continues its local Codex owner conversation with the local
       continuation: { conversationId: "conversation_cloud_local", prompt: "Next task" }, onConversation() {},
       ports: {
         launch: async () => { throw new Error("existing conversation must continue"); },
-        continue: async (_turn, _text, target, authorize, repositoryBound) => {
+        continue: async (turn, _text, target, authorize, repositoryBound) => {
           expect(repositoryBound).toBe(true);
           authorize(); sends++; expect(target.engine).toBe("codex"); expect(target.project).toBe(repository.project);
-          return { ok: true, structured: true, target: "conversation_cloud_local", outcome: "held", operationId: "cloud_local_continue" };
+          return { ok: true, structured: true, target: "conversation_cloud_local", outcome: "held", operationId: turn.continuation!.operationId };
         },
         observe: async () => ({ state: "ended", finalText: "Done", firstMessagePending: false }),
         stop: async () => { throw new Error("completed continuation must settle"); }, pollMs: 1,

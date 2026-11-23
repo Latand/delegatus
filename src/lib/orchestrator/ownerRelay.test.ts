@@ -91,6 +91,7 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
   else delete process.env.LLV_SPAWN_CAPABILITY;
   const domain: Partial<ViewerMcpDomainDependencies> = {
     registrySnapshot: () => registry.readOnlySnapshot(),
+    loadTasks: () => [],
     completedFileScan: async () => ({ generation: 1, targetGeneration: 1, cacheStatus: "hit", requestCount: 1, cloneDurationMs: 0, snapshot: {
       files: [], complete: true, projectCatalog: [
         { project: "project-a", displayName: "Example sender", smt: 1, conversations: 1 },
@@ -199,8 +200,7 @@ test("a native guest handoff reads its ready attachment and delivers its descrip
   const { ownerRunRoot } = await import("@/lib/externalRelay/runDirectory");
   const { readRelayStore } = await import("@/lib/externalRelay/store");
   const { accountManager } = await import("@/lib/accounts/manager");
-  const sharp = (await import("sharp")).default;
-  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
+  const attachment = Buffer.from("Moderation issue details\n");
   const sender = actor(undefined, "builder", "codex", true);
   const seat = actor("project-b");
   ownerRun(sender);
@@ -216,18 +216,18 @@ test("a native guest handoff reads its ready attachment and delivers its descrip
       tools: contextRequest.input.tools.filter(tool => tool.mode === "handoff"),
       conversation: [
         { ...source, id: "linked-issue", text: "The example project has a moderation regression.", reply_to: null,
-          media: [{ ref, kind: "photo", availability: "ready", mime_type: "image/png", filename: "screenshot.png",
-            byte_size: png.length, expires_at: "2099-01-01T00:00:00Z" }] },
+          media: [{ ref, kind: "document", availability: "ready", mime_type: "text/plain", filename: "report.txt",
+            byte_size: attachment.length, expires_at: "2099-01-01T00:00:00Z" }] },
         { ...source, id: "owner-message", text: words, reply_to: "linked-issue" },
       ],
-      documents: [{ title: "Screenshot", text: description, message_id: "linked-issue", media_ref: ref, extraction: "complete" }],
+      documents: [{ title: "Report", text: description, message_id: "linked-issue", media_ref: ref, extraction: "complete" }],
     },
   });
   let downloads = 0;
   const server = await startTestRelay(req => {
     if (!req.url?.endsWith(`/media/${ref}`)) return { body: { status: "ok" } };
     downloads++;
-    return { headers: { "content-type": "image/png", "content-length": String(png.length) }, raw: png };
+    return { headers: { "content-type": "text/plain", "content-length": String(attachment.length) }, raw: attachment };
   });
   updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({
     ...relay, origin: server.origin, api_base: `${server.origin}/v1`,
@@ -255,13 +255,13 @@ test("a native guest handoff reads its ready attachment and delivers its descrip
           // A separate native process reads the path using the worker's launch cwd.
           const native = Bun.spawn([process.execPath, "-e", "process.stdout.write(require('fs').readFileSync(process.argv[1]))", relative],
             { cwd, stdout: "pipe", stderr: "pipe" });
-          expect(Buffer.from(await new Response(native.stdout).arrayBuffer())).toEqual(png);
+          expect(Buffer.from(await new Response(native.stdout).arrayBuffer())).toEqual(attachment);
           expect(await native.exited).toBe(0);
           return { status: 202, body: { conversationId: sender.id } };
         },
         observe: async () => {
           const documents = promptSection<Array<{ title: string; text: string }>>(handoffPrompt, "documents");
-          expect(documents).toContainEqual(expect.objectContaining({ title: "Screenshot", text: description }));
+          expect(documents).toContainEqual(expect.objectContaining({ title: "Report", text: description }));
           expect(await service.callTool("send_message_to_orchestrator", {
             clientRequestId: "ready-attachment-seat-handoff", project: "project-b",
             text: documents.map(document => `${document.title}: ${document.text}`).join("\n"),
@@ -461,7 +461,7 @@ test("an owner report reply carries verbatim approval and stored report only to 
 });
 
 for (const approval of [false, true])
-  test(`runner routes ${approval ? "an adjacent approval to its report seat" : "an independent instruction past an unrelated report"} through MCP and HTTP`, async () => {
+  test(`runner routes ${approval ? "an explicit approval reply to its report seat" : "an independent instruction past an unrelated report"} through MCP and HTTP`, async () => {
     const { Database } = await import("bun:sqlite");
     const { appendBridgeReports, recordBridgeReportTelegram } = await import("@/lib/bridge/store");
     const { recordPublishedRelayReference } = await import("@/lib/externalRelay/publishedReferences");
@@ -494,7 +494,7 @@ for (const approval of [false, true])
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true }, request_text: words, respond_to: "owner-message",
         conversation: [
           { ...contextRequest.input.conversation[0], id: "preceding-report", text: reportText, author: { ...contextRequest.input.conversation[0]!.author, self: true } },
-          { ...contextRequest.input.conversation[0], id: "owner-message", text: `/ai ${words}`, reply_to: null },
+          { ...contextRequest.input.conversation[0], id: "owner-message", text: `/ai ${words}`, reply_to: approval ? "preceding-report" : null },
         ],
       },
     });
@@ -588,10 +588,12 @@ test("owner board fallback creates an assigned task that the seat tick owes as u
     changeFingerprint: "owner-board", state: emptySeatTickState(), policy: DEFAULT_SEAT_TICK_POLICY,
     settings: effectiveSeatTickSettings(defaultSeatTickSettings("project-b"), now, SEAT_TICK_WAKE_INTERVAL_MS),
   });
-  expect(decision.verdict).toMatchObject({ kind: "wake", reasons: [expect.objectContaining({ kind: "unstarted-task" })], items: [expect.objectContaining({ id: task.id })] });
+  expect(decision.verdict).toMatchObject({ kind: "wake", reasons: [expect.objectContaining({ kind: "unstarted-task" })],
+    taskPage: { rows: [expect.objectContaining({ item: expect.objectContaining({ id: task.id }) })] } });
 });
 
 test("ordinary worker board creation keeps its inbox default", async () => {
+  actor("project-b");
   const sender = actor();
   expect(await toolsFor(sender).service.callTool("create_task", withTaskDue({ clientRequestId: "worker-board", project: "project-b", text: "Виконати зміну" }))).toMatchObject({ ok: true });
   expect(loadTasks().find(task => task.text === "Виконати зміну")!.status).toBe("inbox");
