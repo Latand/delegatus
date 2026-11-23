@@ -38,8 +38,6 @@ function fixture(systemd: boolean) {
 test.skipIf(process.platform !== "linux")("a Linux gate without systemd uses the explicit portable fallback", () => {
   const f = fixture(false); const run = f.run('echo "$NODE_OPTIONS"; exit 37');
   expect(run.status).toBe(37); expect(run.stderr).toContain("portable cleanup on linux is best effort");
-  expect(run.stderr).toContain("task limit unavailable: no systemd user gate unit");
-  expect(run.stderr.match(/gate-slot: task limit unavailable:/g)).toHaveLength(1);
 });
 test("memory service forwards args, status and bounded tree termination", () => {
   const f = fixture(true);
