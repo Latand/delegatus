@@ -182,17 +182,17 @@ temp-file-and-rename write as `persistProjectAliases`.
    operator step O5 comes before the rename.
 3. Both remotes must be on `github.com`. Other forges are deferred.
 4. Ask GitHub `repos/<old owner>/<old name>` and
-   `repos/<new owner>/<new name>`. Use `gh api` when `gh` is on `PATH` and
-   authenticated (this covers private repositories), otherwise an
-   unauthenticated REST `fetch`, which is enough for a public repository
-   like this one. Equal `id` means a proven rename. Different ids, or a `404`
-   for the old name, means refused. A network error means no decision yet,
-   and the next scan asks again.
+   `repos/<new owner>/<new name>`. Use `gh api` with the Viewer's GitHub CLI
+   configuration. On macOS, also check the agent CLI install locations,
+   including Homebrew. An unauthenticated REST request can still find public
+   repositories when `gh` fails. Equal ids prove a rename. Different ids or
+   an authenticated `404` refuse it. A failed lookup leaves the local project
+   usable, and a later scan can retry after a cooldown.
 5. A proven pair becomes a `ProjectSuccession { source: old, target: new }`
    passed to `recordProjectSuccessions`. The call runs as a detached promise
    after the scan's persist phase and never under a pipeline lease (the
-   network rule in AGENTS.md). Results are memoized per process, so each pair
-   costs at most two requests per boot.
+   network rule in AGENTS.md). A proven or refused pair is memoized for the
+   life of the process.
 
 **Worktree grouping.** The recognizers in `projectInfoFromCwd` find the
 parent repository by path and folder name (`.claude/worktrees`, `worktrees/`,
