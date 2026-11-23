@@ -1,4 +1,5 @@
 import { gateToolingFiles } from "./gateTooling";
+import { gateAdmissionInterpreter, gateAdmissionLauncherParent } from "./gateAdmissionLauncher";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -385,19 +386,20 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
 }
 
 /** Route Linux admission calls from older helper copies through the installed
- * detector, even when they carry an explicit LLV_GATE_BUN interpreter. */
+ * detector, even when they carry an explicit LLV_GATE_BUN interpreter. Without
+ * one the launcher runs `bun` from the caller's PATH, as gate-slot does: the
+ * Viewer's own interpreter can be container-only (`bun-container` in the
+ * image) and a bridged agent runs on the host. Check keys and Cloud inputs
+ * read the recorded interpreter (gateAdmissionLauncher.ts), never this path. */
 export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.ProcessEnv>> = process.env): Record<string, string> {
   if (process.platform !== "linux") return {};
   try {
     const helper = path.join(path.dirname(resolveSignalTooling().gate), "cpu-admission.ts");
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-    const parent = path.join(os.homedir(), ".cache/delegatus/gate-admission");
-    let nativeBun = source.LLV_GATE_BUN || process.execPath;
     // Launch and publication can both apply this binding. Rebind the helper
-    // while retaining the caller's original interpreter.
-    if (path.dirname(path.dirname(nativeBun)) === parent && path.basename(nativeBun) === "bun") {
-      nativeBun = fs.readFileSync(path.join(path.dirname(nativeBun), "interpreter"), "utf8");
-    }
+    // while retaining the caller's original interpreter, or its absence.
+    const recorded = gateAdmissionInterpreter(source.LLV_GATE_BUN);
+    const nativeBun = recorded === undefined ? source.LLV_GATE_BUN || "" : recorded ?? "";
     const body = Buffer.from(`#!/bin/bash
 set -eu
 if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
@@ -405,9 +407,9 @@ if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
     --wait|--claim) shift; set -- ${quote(helper)} "$@" ;;
   esac
 fi
-exec ${quote(nativeBun)} "$@"
+exec ${nativeBun ? quote(nativeBun) : "bun"} "$@"
 `);
-    const directory = cacheSignalTooling(parent, new Map([["bun", body], ["interpreter", Buffer.from(nativeBun)]]));
+    const directory = cacheSignalTooling(gateAdmissionLauncherParent(), new Map([["bun", body], ["interpreter", Buffer.from(nativeBun)]]));
     return { LLV_GATE_BUN: path.join(directory, "bun") };
   } catch { return {}; }
 }

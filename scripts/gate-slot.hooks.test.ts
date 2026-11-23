@@ -30,6 +30,26 @@ test.skipIf(process.platform !== "linux").each(["bun", "bun-1.4.0"])("installed 
   } finally { f.close(); }
 });
 
+test.skipIf(process.platform !== "linux")("installed admission routing without an interpreter runs gate-slot under the caller's PATH Bun", () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+    // The caller's only Bun is a copy; the routed launcher must not name the
+    // interpreter that generated it (in the image, a container-only binary).
+    const bin = path.join(f.dir, "caller-bin");
+    fs.mkdirSync(bin);
+    fs.copyFileSync(process.execPath, path.join(bin, "bun"), fs.constants.COPYFILE_FICLONE);
+    const PATH = [bin, ...(f.env.PATH ?? "").split(path.delimiter).filter(entry => entry && !fs.existsSync(path.join(entry, "bun")))].join(path.delimiter);
+    const env: NodeJS.ProcessEnv = { ...f.env, PATH, LLV_GATE_RUNNER: "off" };
+    delete env.LLV_GATE_BUN;
+    const routed = installedGateAdmissionEnv(env);
+    expect(fs.readFileSync(routed.LLV_GATE_BUN!, "utf8")).not.toContain(process.execPath);
+    const result = Bun.spawnSync(f.command("routed"), { env: { ...env, ...routed } });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("routed\n");
+  } finally { f.close(); }
+});
+
 test.skipIf(!hasUserManager).each(["bun", "bun-1.4.0"])("a pre-commit service and its %s client cannot fence their own queued ESLint", async name => {
   const f = fixture(), roots: string[] = [], control = new AbortController();
   const log = path.join(f.dir, "pre-commit.stderr");

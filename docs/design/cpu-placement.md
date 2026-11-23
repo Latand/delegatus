@@ -736,8 +736,13 @@ The same final claim transaction rejects a drain observation if another caller
 admitted work during the check.
 
 Managed Linux stages supply the installed gate helper through a host-local Bun
-launcher in `LLV_GATE_BUN`. The launcher retains an explicit interpreter and
-ordinary hook commands resolve Bun through their own `PATH`. Wrappers send
+launcher in `LLV_GATE_BUN`. The launcher retains an explicit interpreter;
+without one it runs `bun` from the caller's `PATH`, as gate-slot does, so a
+host agent bridged from the image never receives the container-only
+interpreter. Ordinary hook commands resolve Bun through their own `PATH`.
+Check keys and Cloud check inputs read the interpreter the launcher recorded,
+never its per-release path, so routing neither refuses Cloud publication nor
+changes a check's reuse key across releases. Wrappers send
 both readiness and final claim through the installed helper, including from
 older checkouts. Each new engine launch receives this routing automatically.
 An already-running waiter keeps its launch environment and completes under the
