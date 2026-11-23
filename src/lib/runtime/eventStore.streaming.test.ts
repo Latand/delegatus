@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
 import { captureRuntimeEventPosition, FileRuntimeEventStore, readRuntimeEventPage } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
+import { wakeResponseEvidenceFromEvents } from "@/lib/monitor/seatWakeResponse";
 
 const event = (seq: number): RuntimeEvent => ({ kind: "delta", turnId: "turn", text: "дані 🌱", seq });
 function fixture(contents: string) {
@@ -122,6 +123,47 @@ test("a page can stop at historical proof with a 100 MiB suffix and resume at it
     }, undefined, f.directory);
     expect(second?.position.seq).toBe(2);
     expect(seen).toEqual([1, 2]);
+  } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test("a complete final event without LF supplies terminal proof at stable EOF", async () => {
+  const terminal: RuntimeEvent = { kind: "turn-ended", turnId: "wake-turn", status: "completed", seq: 1 };
+  const f = fixture(JSON.stringify(terminal));
+  try {
+    const seen: RuntimeEvent[] = [];
+    const page = await readRuntimeEventPage("thread", undefined, e => { seen.push(e); }, undefined, f.directory);
+    expect(seen).toEqual([terminal]);
+    expect(page).toMatchObject({ state: "current", position: { offset: Buffer.byteLength(JSON.stringify(terminal)), seq: 1 } });
+    fs.writeFileSync(f.filename, '{"kind":"turn-ended"');
+    const pending: RuntimeEvent[] = [];
+    expect(await readRuntimeEventPage("thread", undefined, e => { pending.push(e); }, undefined, f.directory))
+      .toMatchObject({ state: "incomplete", position: { offset: 0 } });
+    expect(pending).toEqual([]);
+  } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test("wake replay reaches an answer after a writer-valid event larger than 32 MiB", async () => {
+  const f = fixture("");
+  const row = { clientMessageId: "wake", operationId: "operation", conversationId: "conversation_fixture", seatEpoch: 7,
+    deliveredAt: "2026-11-01T00:00:00Z", progressAt: "2026-11-01T00:00:00Z", boundMs: 900_000, action: "pending" as const };
+  try {
+    const store = new FileRuntimeEventStore(f.directory);
+    store.append("thread", { kind: "delta", turnId: "unrelated", text: "x".repeat(32 * 1024 * 1024 + 1), seq: 1 });
+    store.append("thread", { kind: "turn-started", turnId: "wake-turn", seq: 2 });
+    store.append("thread", { kind: "item", turnId: "wake-turn", phase: "completed",
+      deliveryEcho: { operationId: row.operationId, at: row.deliveredAt }, item: { type: "user" }, seq: 3 });
+    store.append("thread", { kind: "delta", turnId: "wake-turn", text: "answered", seq: 4 });
+    store.append("thread", { kind: "turn-ended", turnId: "wake-turn", status: "completed", seq: 5 });
+
+    const replayed: Record<string, unknown>[] = [];
+    let position;
+    do {
+      const page = await readRuntimeEventPage("thread", position, event => { replayed.push(event); }, undefined, f.directory);
+      if (!page) throw new Error("event page position was refused");
+      position = page.position;
+      if (page.state === "current") break;
+    } while (true);
+    expect(wakeResponseEvidenceFromEvents(row, replayed)).toMatchObject({ answered: true, turnId: "wake-turn" });
   } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
 });
 

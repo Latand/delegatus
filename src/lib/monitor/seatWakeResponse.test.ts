@@ -6,7 +6,7 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { fixtureRegistry, FIXTURE_SESSION, FIXTURE_CONVERSATION } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
-import { normalizeSeatWakeResponse, observeSeatWakeResponse, seatWakeResponseBound, wakeResponseEvidenceFromEvents, wakeResponseRecoveryKey, type SeatWakeResponse } from "./seatWakeResponse";
+import { matchingWakeResponseCheckpoint, normalizeSeatWakeResponse, observeSeatWakeResponse, seatWakeResponseBound, wakeResponseEvidenceFromEvents, wakeResponseRecoveryKey, type SeatWakeResponse } from "./seatWakeResponse";
 const row: SeatWakeResponse = { clientMessageId: "wake", operationId: "operation", conversationId: "conversation_fixture", seatEpoch: 7,
   deliveredAt: "2026-11-01T00:00:00Z", progressAt: "2026-11-01T00:00:00Z", boundMs: 900_000, action: "pending" };
 
@@ -22,6 +22,15 @@ test("wake preparation survives serialization while legacy rows retain their mis
   expect(normalizeSeatWakeResponse(JSON.parse(JSON.stringify(row)))).toEqual(row);
   expect(normalizeSeatWakeResponse({ ...row, preparedAt: "invalid" })).toBeUndefined();
   expect(normalizeSeatWakeResponse({ ...row, preparedAt: "2026-11-01T00:01:00Z" })).toBeUndefined();
+});
+test("receipt timeouts preserve replay progress and a new receipt binding reopens the prefix", () => {
+  const checkpoint = { generationId: "generation", identity: "a".repeat(64), binding: "b".repeat(64), fromPreparation: false,
+    nativeTurns: [["native-turn", false] as [string, boolean]],
+    position: { source: "1:2:3", offset: 3_146_040, edge: "c".repeat(64), seq: 20 },
+    reduction: { terminal: false, continuation: false, replied: false, providerFailure: false, inputBound: false, turnId: "turn" } };
+  expect(matchingWakeResponseCheckpoint([checkpoint], "generation", checkpoint.identity, checkpoint.binding, true)).toEqual(checkpoint);
+  expect(matchingWakeResponseCheckpoint([checkpoint], "generation", checkpoint.identity, checkpoint.binding, false)).toEqual(checkpoint);
+  expect(matchingWakeResponseCheckpoint([checkpoint], "generation", checkpoint.identity, "d".repeat(64), false)).toBeUndefined();
 });
 test("response belongs to the delivered turn; provider failures and unrelated input give no answer", () => {
   const start = { kind: "turn-started", turnId: "operation" };
@@ -39,6 +48,25 @@ test("a joined input and a stable recovery nudge retain their own membership", (
   const key = wakeResponseRecoveryKey(recovering);
   expect(key).toBe(wakeResponseRecoveryKey({ ...row, action: "nudging" }));
   expect(wakeResponseEvidenceFromEvents(recovering, [{ kind: "turn-started", turnId: key }, { kind: "delta", turnId: key, text: "answer" }, { kind: "turn-ended", turnId: key, status: "completed" }], [key]).answered).toBe(true);
+});
+
+test.each(["wake", "nudge"] as const)("joined %s output before its delivery echo cannot settle the response", action => {
+  const recovering = action === "nudge" ? { ...row, action: "nudged" as const } : row;
+  const operationId = action === "nudge" ? wakeResponseRecoveryKey(recovering) : row.operationId;
+  const events = [
+    { kind: "turn-started", turnId: "joined-native-turn" },
+    { kind: "delta", turnId: "joined-native-turn", text: "earlier turn response" },
+    { kind: "item", turnId: "joined-native-turn", phase: "completed", item: { type: "reasoning", text: "x".repeat(200_000) } },
+    { kind: "item", turnId: "joined-native-turn", deliveryEcho: { operationId }, item: { type: "user" } },
+    { kind: "turn-ended", turnId: "joined-native-turn", status: "completed" },
+  ];
+  const continuations = action === "nudge" ? [operationId] : [];
+  const nudgeRecoveryOps = action === "nudge" ? [operationId] : [];
+  expect(wakeResponseEvidenceFromEvents(recovering, events, continuations, "joined-native-turn", action === "nudge", nudgeRecoveryOps))
+    .toMatchObject({ answered: false });
+  events.splice(4, 0, { kind: "delta", turnId: "joined-native-turn", text: "answer after joined input" });
+  expect(wakeResponseEvidenceFromEvents(recovering, events, continuations, "joined-native-turn", action === "nudge", nudgeRecoveryOps))
+    .toMatchObject({ answered: true });
 });
 
 

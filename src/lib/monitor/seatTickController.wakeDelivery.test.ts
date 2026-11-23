@@ -8,7 +8,7 @@ import { fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_SESSION } from "@/lib/ag
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import type { RuntimeEvent } from "@/lib/runtime/engineHost";
 
-test.each(["wake", "nudge", "paged", "unknown", "unanswered", "prepared"] as const)("production tail replay reconciles a persisted hold (%s)", async mode => {
+test.each(["wake", "nudge", "paged", "unknown", "unanswered", "unanswered-growing", "nudge-terminal-growing", "prepared"] as const)("production tail replay reconciles a persisted hold (%s)", async mode => {
   const previous = process.env.LLV_STATE_DIR;
   const root = fs.mkdtempSync(path.join(SANDBOX, "response-tail-replay-"));
   process.env.LLV_STATE_DIR = root;
@@ -22,10 +22,10 @@ test.each(["wake", "nudge", "paged", "unknown", "unanswered", "prepared"] as con
     const seat = { conversationId: FIXTURE_CONVERSATION, seatEpoch: 7, path: fixture.conversations[FIXTURE_CONVERSATION]!.generations[0]!.path };
     const response: SeatWakeResponse = {
       clientMessageId: "scheduled-wake", operationId: "scheduled-operation", conversationId: FIXTURE_CONVERSATION, seatEpoch: 7,
-      generationId: FIXTURE_SESSION, turnId: "wake-turn", deliveredAt: at(-30), progressAt: at(mode === "nudge" ? -18 : -30),
-      boundMs: 10 * MINUTE, action: mode === "nudge" ? "nudged" : "pending",
+      generationId: FIXTURE_SESSION, turnId: "wake-turn", deliveredAt: at(-30), progressAt: at(mode.startsWith("nudge") ? -18 : -30),
+      boundMs: 10 * MINUTE, action: mode.startsWith("nudge") ? "nudged" : "pending",
     };
-    if (mode === "nudge") {
+    if (mode.startsWith("nudge")) {
       response.recovery = { text: "continue the pending wake", origin: { kind: "agent", role: "seat-tick", project: PROJECT } };
       const admitted = registry.holdDelivery(FIXTURE_CONVERSATION, response.recovery.text, wakeResponseRecoveryKey(response), "text", [], null,
         { operationId: "nudge-operation", origin: response.recovery.origin, policy: "queue" });
@@ -71,9 +71,19 @@ test.each(["wake", "nudge", "paged", "unknown", "unanswered", "prepared"] as con
       mode === "paged" ? "during completion".repeat(200_000) : "");
     turn("intervening-turn", -23, "intervening activity".repeat(16_000));
     if (mode === "nudge") turn("nudge-turn", -18, "pending request answered", "nudge-operation");
+    if (mode === "nudge-terminal-growing") turn("nudge-turn", -18, "", "nudge-operation");
     turn("later-turn", -12, "unrelated activity".repeat(19_000));
-    const answered = mode !== "unknown" && mode !== "unanswered";
+    if (mode === "unanswered-growing" || mode === "nudge-terminal-growing") {
+      for (let index = 0; index < 5; index++) store.append(FIXTURE_SESSION, {
+        kind: "delta", turnId: `unrelated-${index}`, text: "x".repeat(220_000), seq: events.length + index + 1,
+      });
+    }
+    const answered = mode === "wake" || mode === "paged" || mode === "nudge";
     expect(wakeResponseEvidenceFromEvents(response, events as Record<string, unknown>[], ["nudge-operation"]).answered).toBe(answered);
+    if (mode === "nudge-terminal-growing") {
+      expect(await observeSeatWakeResponse(response, PROJECT)).toMatchObject({ answered: false, terminal: true });
+      return;
+    }
     writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, wakeResponse: response }, stateFile);
     const reopen = (now = NOW) => {
       const rig = harness({ stateFile, now, pipelines: OPEN_LANE, seat,
@@ -81,7 +91,7 @@ test.each(["wake", "nudge", "paged", "unknown", "unanswered", "prepared"] as con
       rig.deps.sources!.wakeResponse = observeSeatWakeResponse;
       return rig;
     };
-    if (mode === "unanswered") {
+    if (mode === "unanswered" || mode === "unanswered-growing") {
       const early = reopen(NOW - 25 * MINUTE);
       expect(await runSeatTickCheck(PROJECT, early.deps)).toMatchObject({ verdict: "refused" });
       expect(early.sent).toEqual([]);
@@ -101,7 +111,7 @@ test.each(["wake", "nudge", "paged", "unknown", "unanswered", "prepared"] as con
         { generationId: FIXTURE_SESSION, reduction: { turnId: "wake-turn", replied: true, terminal: false } },
       ]);
     }
-    if (mode === "unanswered") {
+    if (mode === "unanswered" || mode === "unanswered-growing") {
       expect(first.sent.map(message => message.clientMessageId)).toEqual([wakeResponseRecoveryKey(response)]);
       expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.action).toBe("nudged");
       return;

@@ -44,6 +44,7 @@ interface ResponseReduction {
   continuation: boolean;
   replied: boolean;
   providerFailure: boolean;
+  inputBound: boolean;
 }
 
 export interface WakeResponseStart {
@@ -51,10 +52,18 @@ export interface WakeResponseStart {
   position: RuntimeEventPosition;
 }
 
-interface WakeResponseCheckpoint extends WakeResponseStart {
+export interface WakeResponseCheckpoint extends WakeResponseStart {
+  identity: string;
   binding: string;
+  nativeTurns: Array<[string, boolean]>;
   fromPreparation: boolean;
   reduction: ResponseReduction;
+}
+
+export function matchingWakeResponseCheckpoint(checkpoints: WakeResponseCheckpoint[] | undefined, generationId: string,
+  identity: string, binding: string, receiptUnavailable: boolean): WakeResponseCheckpoint | undefined {
+  const prior = checkpoints?.find(entry => entry.generationId === generationId && entry.identity === identity);
+  return prior && (prior.binding === binding || receiptUnavailable) ? prior : undefined;
 }
 
 export function normalizeWakeResponseStart(value: unknown): WakeResponseStart | undefined {
@@ -69,14 +78,18 @@ function normalizeCheckpoints(value: unknown): WakeResponseCheckpoint[] | undefi
   return value.slice(0, 4).flatMap((item: WakeResponseCheckpoint | null) => {
     const start = normalizeWakeResponseStart(item);
     if (!start || !item || typeof item.binding !== "string" || !/^[a-f0-9]{64}$/.test(item.binding)
+      || typeof item.identity !== "string" || !/^[a-f0-9]{64}$/.test(item.identity)
+      || !Array.isArray(item.nativeTurns) || item.nativeTurns.some(entry => !Array.isArray(entry) || entry.length !== 2
+        || typeof entry[0] !== "string" || !entry[0] || typeof entry[1] !== "boolean")
       || typeof item.fromPreparation !== "boolean") return [];
     const reduction = item.reduction;
-    if (!reduction || [reduction.terminal, reduction.continuation, reduction.replied, reduction.providerFailure].some(flag => typeof flag !== "boolean")
+    if (!reduction || [reduction.terminal, reduction.continuation, reduction.replied, reduction.providerFailure, reduction.inputBound].some(flag => typeof flag !== "boolean")
       || (reduction.turnId !== undefined && (typeof reduction.turnId !== "string" || !reduction.turnId))
       || (reduction.progressAt !== undefined && !Number.isFinite(Date.parse(reduction.progressAt)))) return [];
-    const { turnId, progressAt, terminal, continuation, replied, providerFailure } = reduction;
-    return [{ ...start, binding: item.binding, fromPreparation: item.fromPreparation,
-      reduction: { terminal, continuation, replied, providerFailure, ...(turnId ? { turnId } : {}), ...(progressAt ? { progressAt } : {}) } }];
+    const { turnId, progressAt, terminal, continuation, replied, providerFailure, inputBound } = reduction;
+    return [{ ...start, identity: item.identity, binding: item.binding,
+      nativeTurns: [...new Map(item.nativeTurns.map(([turn, continuation]) => [turn, continuation] as const))], fromPreparation: item.fromPreparation,
+      reduction: { terminal, continuation, replied, providerFailure, inputBound, ...(turnId ? { turnId } : {}), ...(progressAt ? { progressAt } : {}) } }];
   });
 }
 
@@ -181,11 +194,19 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
   for (const [generationId, membership] of newestFirst) {
     // A changed receipt, batch, or recovery key may make earlier events
     // relevant. Reuse reductions only for the same obligation and bindings.
-    const binding = crypto.createHash("sha256").update(JSON.stringify([row.conversationId, row.seatEpoch, row.clientMessageId,
-      [...membership.operations].sort(), [...membership.nativeTurns].sort()])).digest("hex");
-    const previous = row.scan?.find(entry => entry.generationId === generationId && entry.binding === binding);
-    const start = row.scanFrom?.generationId === generationId ? row.scanFrom.position : undefined;
-    let fromPreparation = previous?.fromPreparation ?? (start !== undefined);
+    const identity = crypto.createHash("sha256").update(JSON.stringify([row.conversationId, row.seatEpoch, row.clientMessageId,
+      [...membership.operations].sort()])).digest("hex");
+    const prior = row.scan?.find(entry => entry.generationId === generationId && entry.identity === identity);
+    // A transient receipt timeout removes optional native-turn evidence. Keep
+    // the durable cursor and reducer in that case; a newly observed turn id
+    // changes the binding and requires replay from the beginning.
+    const missingReceipt = membership.nativeTurns.size === 0;
+    if (missingReceipt && prior) for (const [turnId, continuation] of prior.nativeTurns) membership.nativeTurns.set(turnId, continuation);
+    const binding = crypto.createHash("sha256").update(JSON.stringify([identity, [...membership.nativeTurns].sort()])).digest("hex");
+    const previous = matchingWakeResponseCheckpoint(row.scan, generationId, identity, binding, missingReceipt);
+    const bindingChanged = !!prior && prior.binding !== binding && !missingReceipt;
+    const start = !bindingChanged && row.scanFrom?.generationId === generationId ? row.scanFrom.position : undefined;
+    let fromPreparation = bindingChanged ? false : previous?.fromPreparation ?? (start !== undefined);
     let reduction = previous ? { ...previous.reduction } : emptyReduction();
     let answered = false;
     const visit = (event: Record<string, unknown>) => answered = reduceResponse(row, membership, reduction, event);
@@ -200,8 +221,10 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
         page = await readRuntimeEventPage(generationId, undefined, visit, signal);
       }
       if (!page) throw new Error("response ledger position is unavailable");
-      scan.push({ generationId, binding, position: page.position, fromPreparation, reduction });
-      if (page.state !== "current" && !answered) wait = page.state === "more"
+      scan.push({ generationId, identity, binding: missingReceipt && previous ? previous.binding : binding,
+        nativeTurns: [...membership.nativeTurns],
+        position: page.position, fromPreparation, reduction });
+      if (page.state !== "current" && !answered && !reduction.terminal) wait = page.state === "more"
         ? "Delivered wake response evidence is still being checked in the host event log."
         : "Delivered wake response evidence is incomplete in the host event log.";
     } catch {
@@ -229,14 +252,15 @@ interface ResponseMembership {
 }
 
 function emptyReduction(): ResponseReduction {
-  return { terminal: false, continuation: false, replied: false, providerFailure: false };
+  return { terminal: false, continuation: false, replied: false, providerFailure: false, inputBound: false };
 }
 
 function reduceResponse(row: SeatWakeResponse, membership: ResponseMembership, state: ResponseReduction, event: Record<string, unknown>): boolean {
   const turnId = event.turnId;
   if (typeof turnId !== "string") return false;
   const native = membership.nativeTurns.get(turnId);
-  const start = event.kind === "turn-started" ? membership.operations.get(turnId) ?? native : undefined;
+  const operationStart = event.kind === "turn-started" ? membership.operations.get(turnId) : undefined;
+  const start = operationStart ?? (event.kind === "turn-started" ? native : undefined);
   const echo = object(event.deliveryEcho);
   let linked = false;
   let continued = false;
@@ -248,9 +272,18 @@ function reduceResponse(row: SeatWakeResponse, membership: ResponseMembership, s
     }
   }
   if (start !== undefined || turnId !== state.turnId && (linked || native !== undefined)) {
-    Object.assign(state, emptyReduction(), { turnId, progressAt: undefined, continuation: start ?? native ?? false });
+    Object.assign(state, emptyReduction(), { turnId, progressAt: undefined, continuation: start ?? native ?? false,
+      inputBound: operationStart !== undefined });
   }
   if (turnId !== state.turnId) return false;
+  if (linked && !state.inputBound) {
+    // A receipt can identify an already-running native turn before the input
+    // joins it. Output before the echo belongs to the earlier turn activity.
+    state.replied = false;
+    state.providerFailure = false;
+    state.progressAt = undefined;
+    state.inputBound = true;
+  }
   state.continuation ||= continued;
   if (event.kind === "item") {
     const item = object(event.item);

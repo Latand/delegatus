@@ -683,10 +683,11 @@ async function readEventBytes(handle: Awaited<ReturnType<typeof open>>, start: n
   return bytes;
 }
 
-async function eventPositionEdge(handle: Awaited<ReturnType<typeof open>>, offset: number): Promise<string | undefined> {
+async function eventPositionEdge(handle: Awaited<ReturnType<typeof open>>, offset: number, allowStableEof = false): Promise<string | undefined> {
   const start = Math.max(0, offset - 256);
   const bytes = await readEventBytes(handle, start, offset - start);
-  if (bytes.length === 0 || bytes.at(-1) === 10) return createHash("sha256").update(bytes).digest("hex");
+  if (bytes.length === 0 || bytes.at(-1) === 10 || allowStableEof && offset === (await handle.stat()).size)
+    return createHash("sha256").update(bytes).digest("hex");
 }
 
 async function verifyEventPageSource(handle: Awaited<ReturnType<typeof open>>, filename: string, before: fs.Stats): Promise<number> {
@@ -718,9 +719,10 @@ export async function captureRuntimeEventPosition(threadId: string, directory = 
   finally { await handle?.close(); }
 }
 
-/** Read one page of the append-only host ledger from a durable line boundary.
- * One oversized first record may extend the page up to the ledger's record
- * limit. The visitor can stop as soon as it has positive proof. */
+/** Read one bounded page of the append-only host ledger from a durable line
+ * boundary. The page may include one record beyond its byte budget so every
+ * event accepted by the writer can be decoded. The visitor can stop as soon
+ * as it has positive proof. */
 export async function readRuntimeEventPage(threadId: string, position: RuntimeEventPosition | undefined,
   visit: (event: RuntimeEvent) => boolean | void, signal?: AbortSignal, directory = statePath("structured-host-events"),
 ): Promise<{ position: RuntimeEventPosition; state: "current" | "more" | "incomplete" } | null> {
@@ -732,11 +734,11 @@ export async function readRuntimeEventPage(threadId: string, position: RuntimeEv
     const source = eventPageSource(before);
     const start = position?.offset ?? 0;
     if (position && (position.source !== source || start > before.size
-      || (await eventPositionEdge(handle, start)) !== position.edge)) return null;
+      || (await eventPositionEdge(handle, start, start === before.size)) !== position.edge)) return null;
     signal?.throwIfAborted();
     const chunks = [await readEventBytes(handle, start, Math.min(EVENT_PAGE_BYTES, before.size - start))];
     let length = chunks[0]!.length;
-    while (chunks.at(-1)!.indexOf(10) < 0 && length < before.size - start && length <= EVENT_TAIL_MAX_RECORD_BYTES) {
+    while (chunks.at(-1)!.indexOf(10) < 0 && length < before.size - start) {
       signal?.throwIfAborted();
       const chunk = await readEventBytes(handle, start + length, Math.min(EVENT_TAIL_STEP_BYTES, before.size - start - length));
       chunks.push(chunk);
@@ -748,7 +750,6 @@ export async function readRuntimeEventPage(threadId: string, position: RuntimeEv
     let seq = position?.seq;
     let yieldedAt = performance.now();
     for (let end = bytes.indexOf(10); end >= 0; end = bytes.indexOf(10, consumed)) {
-      if (end - consumed > EVENT_TAIL_MAX_RECORD_BYTES) throw new Error("runtime event ledger record exceeds the page limit");
       const event = parseLedgerEvent(decoder.decode(bytes.subarray(consumed, end)), false, seq)!;
       consumed = end + 1;
       seq = event.seq;
@@ -758,9 +759,20 @@ export async function readRuntimeEventPage(threadId: string, position: RuntimeEv
         yieldedAt = performance.now();
       }
     }
+    // A complete JSON value at stable EOF is accepted by load/scan as a
+    // writer-valid terminal record even when the delimiter was lost. Malformed
+    // or partial final bytes remain pending and do not advance the cursor.
+    if (consumed < bytes.length && start + bytes.length === before.size && bytes.at(-1) !== 10) {
+      const final = parseLedgerEvent(decoder.decode(bytes.subarray(consumed)), true, seq);
+      if (final) {
+        seq = final.seq;
+        consumed = bytes.length;
+        visit(final);
+      }
+    }
     signal?.throwIfAborted();
     const offset = start + consumed;
-    const edge = consumed === 0 && position ? position.edge : await eventPositionEdge(handle, offset);
+    const edge = consumed === 0 && position ? position.edge : await eventPositionEdge(handle, offset, offset === before.size);
     if (!edge) throw new Error("runtime event page ended off its line boundary");
     const size = await verifyEventPageSource(handle, filename, before);
     return { position: { source, offset, edge, ...(seq === undefined ? {} : { seq }) },
