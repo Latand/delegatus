@@ -358,7 +358,8 @@ function responseAuthorityResult(tool: string, args: McpToolArgs, authority: Mcp
   catch (error) {
     if (BOARD_READ_TOOLS.has(tool)) return boardReadFailure(tool, args, error);
     const code = error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "caller_unidentified";
-    return failure(tool, clientRequestId(args), code, code === "workspace_forbidden" ? "workspace access denied" : "caller authority changed before response", false, false, { code });
+    return failure(tool, clientRequestId(args), code, error instanceof McpToolRefusal ? error.message : "caller authority changed before response", false, false,
+      error instanceof McpToolRefusal ? error.details : { code });
   }
 }
 
@@ -394,6 +395,8 @@ export interface McpToolCallContext {
   priorAcceptedDeployment?: { deploymentId: string; revision: string };
   /** Numeric transport subphases, supplied by the service, never tool arguments. */
   recordTiming?: (phase: "http", milliseconds: number) => void;
+  /** Encoded HTTP-validated prototype identity; the effect endpoint rechecks it. */
+  prototypeReceiptScope?: string;
   /** #1490: the durable binding this call's dispatch must use. Present only on
       a recoverable mutation's single dispatch; the binding reads its downstream
       idempotency key from here rather than deriving one of its own. */
@@ -505,6 +508,10 @@ export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) 
       caller's clientRequestId never answers another's. A refusal burns nothing.
       Must not mutate state. */
   receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string | null>;
+  /** Optional identity-only scope for a settled receipt read before workspace
+   * admission. Must prove current caller ownership without consulting workspace
+   * grants or dispatching. Null requires the ordinary admission path. */
+  replayReceiptScope?: (args: McpToolArgs) => string | null;
   /** Resolve guarded references to their retained full identity before hashing a receipt. */
   canonicalizeReceiptArgs?: (args: McpToolArgs) => McpToolArgs;
 };
@@ -2502,6 +2509,8 @@ function failure(
 
 export interface McpToolService {
   callTool(toolName: string, args: McpToolArgs, context?: McpToolCallContext): Promise<McpToolResult>;
+  /** Read an already settled, caller-owned receipt; never claim or dispatch. */
+  replayTool?(toolName: string, args: McpToolArgs): Promise<McpToolResult | null>;
 }
 
 type McpTimingOutcome = "success" | "failure" | "replay" | "conflict" | "pending" | "deadline" | "cancelled";
@@ -2870,6 +2879,35 @@ export function createMcpToolService(
   const pendingLocalReleases = new Map<string, { digest: string; binding: McpRequestBinding; store: McpRecoveryReceiptStore }>();
   bindings = witnessStoreWriters(bindings);
   const service: McpToolService = {
+    async replayTool(toolName, args) {
+      if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName) || !supportsMcpRecovery(receipts)) return null;
+      const tool = toolName as McpToolName;
+      const scopeOf = bindings[tool].replayReceiptScope;
+      if (!scopeOf) return null;
+      const effective = (await normalizeShortIdArgs(normalizeBoundedMcpNumerics(tool, args).args));
+      const requestId = clientRequestId(effective);
+      const scope = scopeOf(effective);
+      if (!requestId || !scope) return null;
+      const permit = () => policy?.permit(tool, effective);
+      const verdict = permit();
+      if (verdict && !verdict.allowed) return failure(tool, requestId, verdict.code, verdict.error, false);
+      let record: McpReceiptRecord | null;
+      try { record = await receipts.lookup(receiptKey(tool, requestId, scope)); }
+      catch { return failure(tool, requestId, "receipt_unavailable", "the caller's receipt could not be read", true, false, { check: "receipt-store" }); }
+      // Storage may yield across a caller switch or a seat replacement. A
+      // receipt read cannot acquire the departed caller's authority.
+      if (scopeOf(effective) !== scope) return null;
+      const current = permit();
+      if (current && !current.allowed) return failure(tool, requestId, current.code, current.error, false);
+      if (!record?.result) return null;
+      const digest = requestDigest(tool, bindings[tool].canonicalizeReceiptArgs?.(effective) ?? effective);
+      if (record.digest !== digest) return failure(tool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
+      // A retryable publication still needs the Viewer's claim recovery path.
+      if (!record.result.ok && record.result.retryable) return null;
+      let result = withoutPrototypeTaskFields({ ...record.result, replayed: true });
+      if (effective.full !== true) result = shortIdsInAnswer(result);
+      return result;
+    },
     callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
         if ((RETIRED_FLOW_TOOL_NAMES as readonly string[]).includes(toolName)) {
@@ -3034,6 +3072,12 @@ export function createMcpToolService(
       } catch (error) {
         if (BOARD_READ_TOOLS.has(typedTool)) return finish(boardReadFailure(typedTool, args, error), "failure");
         // Nothing is claimed yet, so the same key may be tried again as it is.
+        if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") {
+          return finish(failure(typedTool, requestId, "workspace_forbidden", error.message, false, false, error.details), "failure");
+        }
+        if (error instanceof McpToolRefusal && error.details.code === "prototype_project_unavailable") {
+          return finish(failure(typedTool, requestId, "prototype_project_unavailable", error.message, true, false, error.details), "failure");
+        }
         if (error instanceof McpToolRefusal && error.details.code === "short_id_ambiguous") {
           return finish(failure(typedTool, requestId, "short_id_ambiguous", error.message, false, false, error.details), "failure");
         }
@@ -3808,10 +3852,10 @@ export function createMcpToolService(
           const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
-          /* Named issue, cross-project and orchestrator refusals preserve the
+          /* Named issue, workspace, cross-project and orchestrator refusals preserve the
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (error instanceof McpUnadmittedRefusal || BOARD_READ_TOOLS.has(typedTool) || typedTool === "issue_report" || typedTool === "github_app_connect" || typedTool === "message_receipt" || typedTool === "leave_lesson" || typedTool === "pipeline_action" || error.details.code === "cross_project_refused"
+            && (error instanceof McpUnadmittedRefusal || BOARD_READ_TOOLS.has(typedTool) || typedTool === "issue_report" || typedTool === "github_app_connect" || typedTool === "message_receipt" || typedTool === "leave_lesson" || typedTool === "pipeline_action" || error.details.code === "cross_project_refused" || error.details.code === "workspace_forbidden"
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel", "deploy_exact_sha"].includes(typedTool)
               || error.details.code === "CONVERSATION_NOT_FOUND" && error.details.retryable === false)
             ? { code: error.details.code, retryable: error.details.retryable } : null;
@@ -3935,7 +3979,7 @@ export function createMcpToolService(
       return await runWithMcpCallerResolution(() => service.callTool(tool, args, context));
     } finally { finish(); }
   } });
-  return { callTool: async function callTool(tool: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
+  return { replayTool: (tool, args) => service.replayTool!(tool, args), callTool: async function callTool(tool: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
     const board = BOARD_READ_TOOLS.has(tool);
     // Establish native proof and the canonical board before cursor filter matching.
     if (board && "nativeCallerProof" in args) {
@@ -4006,7 +4050,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Create a durable board task. Give every promise a future dueAt. Pass dueTz with dueAt when creating the task. A promise within an existing outcome is an open step on that task, whose dueAt must be no later than the earliest open promise.",
-    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
+    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. Kind operator moves the task to Waiting for an action only the operator can take, such as answering a published decision form or supplying access or a setting they control. Other kinds keep the task in its work column. Delegatus brings the wait back to the seat when it clears or nobody carries it. Use worker for a free worker slot and resource for machine capacity. Clear or update the hold when work resumes.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
     "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
@@ -4020,7 +4064,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Give an undated open task a dueAt when you touch it. Reschedule with a future dueAt and dueReason (1 to 200 UTF-16 code units after trimming) when moving a passed date later; this records a slip. Moves before the date passes or to an earlier instant count nothing. Only the operator may clear a date. Keep the task due no later than its earliest open promise.",
     "Update a durable board task. Orchestrators and stage agents: set note whenever the situation changes — why it is parked, what or whom it waits for, or what runs now. Keep it current in one or two short plain sentences in the operator's language (at most 280 UTF-16 code units after whitespace collapse; recommended target 220). A write replaces it; null clears it.",
-    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
+    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. Kind operator moves the task to Waiting for an action only the operator can take, such as answering a published decision form or supplying access or a setting they control. Other kinds keep the task in its work column. Delegatus brings the wait back to the seat when it clears or nobody carries it. Use worker for a free worker slot and resource for machine capacity. Clear or update the hold when work resumes.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
     "`refine` writes only the human part, as it always has. `text` and `refine.text` are written in the operator's interface language; another language is stored with a warning.",
@@ -4486,6 +4530,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
     text: z.string().min(1).describe("Hard maximum 6000 UTF-16 code units after task text normalization; recommended target 4500. The HUMAN part of the card: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context belongs in details."),
+    status: z.unknown().optional().describe('Legacy "blocked" request to park the task. Use an operator hold naming the next action. Other holds keep the task in Inbox.'),
     hold: taskHoldInputSchema.optional(),
     steps: taskStepsInputSchema.optional(),
     details: normalizedUtf16Text(TASK_DETAILS_LIMIT, value => value.trim()).optional()

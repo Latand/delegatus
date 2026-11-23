@@ -3714,6 +3714,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     return true;
   }
 
+  /** A replacement can claim the same native listener. Relinquish this
+      connection locally because process termination belongs to its writer. */
+  detachAfterStartupCustodyLoss(): void {
+    if (!(this.child instanceof CodexSocketTransport) || this.releasing || this.released) return;
+    this.disconnectSocketConnection();
+    const cleanup = this.releaseCleanup;
+    this.releaseCleanup = null;
+    cleanup?.();
+  }
+
   private disconnectSocketConnection(): void {
     if (!(this.child instanceof CodexSocketTransport)) throw new Error("Codex host has no socket connection");
     this.released = true;
@@ -4867,7 +4877,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       try {
         this.openingAuthority?.();
         decodeCodexServerRequest(this.protocol, id, attention.method, params);
-        if (!current() || this.gateCheckRequests.size > 1) throw new Error("gate wait does not belong to the current native turn or another wait is active");
+        if (!current()) throw new Error("gate wait does not belong to the current native turn");
         result = replayResult ?? await runGateCheckTool(params.arguments, this.gateCheckRoot,
           AbortSignal.any([this.gateCheckAbort.signal, waitAbort.signal]), attention.receipt?.gateWait?.runId);
       } catch (error) {

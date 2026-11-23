@@ -18,7 +18,7 @@ import { StructuredSendRefusedError } from "./engineHost";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import { ownedHostProcess } from "./fixtures/ownedHostProcess";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, republishStructuredDeliveryHost } from "./structuredDeliveryController";
-import { mirrorSettledReceipts, resolveSendReceipt, sendReceiptFor, settleDueSends } from "./sendSettlement";
+import { mirrorSettledReceipts, resolveSendReceipt, sendReceiptFor, settleDueSends, SEND_LOST_REASON, SEND_UNSETTLEABLE_REASON } from "./sendSettlement";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
 import { DeliveryWake } from "./deliveryWake";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -4569,7 +4569,7 @@ test("late discarded-successor cleanup republishes the committed retarget host",
   journal.close();
 });
 
-test("a send admitted while the runtime is unavailable settles without the runtime coming back", async () => {
+test.each([false, true])("a send admitted while the runtime is unavailable settles without the runtime coming back, claimed=%s", async claimed => {
   /* #1131, the bug this fix had rebuilt inside itself: with no runtime client
      the send is still ACCEPTED — a durable reservation, an operation id handed
      back — but no journal operation exists for it, so nothing the journal could
@@ -4577,9 +4577,11 @@ test("a send admitted while the runtime is unavailable settles without the runti
      while the runtime is healthy picked it up, which is the one condition a
      lost send does not meet. The deadline now covers that reservation too: the
      receipt query ends it from the durable record alone, and because the record
-     is terminal the recovered runtime hands the engine nothing. */
+     is terminal the recovered runtime hands the engine nothing. An unclaimed
+     reservation proves non-execution under the actuator's registry lock. Once
+     claimed, the unavailable journal leaves the outcome uncertain. */
   const sessionId = "0ff1ce11-2222-\x34222-8222-222222222222";
-  const directory = path.join(sandbox, "runtime-unavailable-admission");
+  const directory = path.join(sandbox, `runtime-unavailable-admission-${claimed}`);
   const artifactPath = path.join(directory, `${sessionId}.jsonl`);
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const profile = emptyLaunchProfile({ cwd: directory });
@@ -4634,6 +4636,12 @@ test("a send admitted while the runtime is unavailable settles without the runti
   const operationId = (admitted as { operationId: string }).operationId;
   expect(operationId).toBeTruthy();
   expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "assigned" }]);
+  const [reservation] = registry.pendingDeliveries(conversation.id);
+  if (claimed) {
+    expect(registry.beginDeliveryAttempt(reservation!.id, reservation!.generationId!)).toMatchObject({
+      state: "delivery-uncertain", attempts: 1,
+    });
+  }
 
   /* Inside the window the answer is still honest about being in flight: the
      recipient may simply be mid-turn, and ending it here would cancel a message
@@ -4644,22 +4652,23 @@ test("a send admitted while the runtime is unavailable settles without the runti
   const pastDeadline = await resolveSendReceipt(operationId, {
     registry,
     client: null,
-    now: () => Date.now() + 11 * 60_000,
+    now: () => Date.parse(reservation!.assignedAt ?? reservation!.createdAt) + 11 * 60_000,
   });
   expect(pastDeadline).toMatchObject({
     operationId,
     state: "failed",
-    duplicateRisk: true,
-    resend: "verify-first",
+    duplicateRisk: claimed,
+    resend: claimed ? "verify-first" : "safe",
     /* Nothing was asked of the journal, so nothing is credited to it. */
     evidence: "delivery-record",
   });
-  expect(pastDeadline?.reason).toContain("could not give it a terminal answer");
+  expect(pastDeadline?.reason).toBe(claimed ? SEND_UNSETTLEABLE_REASON : SEND_LOST_REASON);
   /* Asking again is idempotent: one terminal answer, not a fresh one per read. */
   expect(await resolveSendReceipt(operationId, { registry, client: null })).toMatchObject({
     state: "failed",
-    resend: "verify-first",
+    resend: claimed ? "verify-first" : "safe",
   });
+  expect(sendReceiptFor(new AgentRegistry(registry.filename).readOnlySnapshot(), operationId)).toEqual(pastDeadline);
 
   const ledger = createFakeDeliveryLedger();
   const journal = new RuntimeJournal(path.join(directory, "events.sqlite"), { structuredHosts: true });
@@ -4858,8 +4867,8 @@ test("a send held because the runtime socket is missing records why it waits fro
   }
 });
 
-test("a send held through a runtime outage is ended by the background settlement, and its record keeps the ending", async () => {
-  const fixture = idleHostedConversation("progress-outage-settles", "5eed0002-2222-\x34222-8222-222222222222");
+test.each([false, true])("a send held through a runtime outage is ended by the background settlement, and its record keeps the ending, claimed=%s", async claimed => {
+  const fixture = idleHostedConversation(`progress-outage-settles-${claimed}`, "5eed0002-2222-\x34222-8222-222222222222");
   const { registry, conversation } = fixture;
   const progress = new DeliveryProgressStore(null);
   const missing = new UnixRuntimeHostClient(path.join(fixture.directory, "absent.sock"), 200);
@@ -4873,12 +4882,27 @@ test("a send held through a runtime outage is ended by the background settlement
   expect(admitted).toMatchObject({ ok: true, outcome: "held" });
   const operationId = (admitted as { operationId: string }).operationId;
   expect(progress.get(operationId)).toMatchObject({ waitReason: "evidence-unreadable", terminal: null });
+  const [reservation] = registry.pendingDeliveries(conversation.id);
+  if (claimed) {
+    expect(registry.beginDeliveryAttempt(reservation!.id, reservation!.generationId!)).toMatchObject({
+      state: "delivery-uncertain", attempts: 1,
+    });
+  }
 
-  const swept = await settleDueSends({ registry, client: missing, progress, readMs: 500, now: () => Date.now() + 11 * 60_000 });
-  expect(swept.settled).toMatchObject([{ operationId, state: "failed", duplicateRisk: true }]);
+  const swept = await settleDueSends({ registry, client: missing, progress, readMs: 500,
+    now: () => Date.parse(reservation!.assignedAt ?? reservation!.createdAt) + 11 * 60_000 });
+  expect(swept.settled).toMatchObject([{ operationId, state: "failed", duplicateRisk: claimed }]);
   const ended = progress.get(operationId)!;
-  expect(ended).toMatchObject({ originalKey: "outage-settles-key", terminal: { state: "uncertain" }, nextWakeAt: null });
-  expect(ended.terminal!.reason).toContain("could not give it a terminal answer");
+  expect(ended).toMatchObject({ originalKey: "outage-settles-key", terminal: { state: claimed ? "uncertain" : "failed" }, nextWakeAt: null });
+  expect(ended.terminal!.reason).toBe(claimed ? SEND_UNSETTLEABLE_REASON : SEND_LOST_REASON);
+  const reopened = new AgentRegistry(registry.filename);
+  expect(await resolveSendReceipt(operationId, { registry: reopened, client: missing })).toMatchObject({
+    state: "failed", duplicateRisk: claimed, resend: claimed ? "verify-first" : "safe",
+  });
+  expect(reopened.readOnlySnapshot().heldDeliveries[reservation!.id]).toMatchObject({ state: "failed" });
+  expect(reopened.readOnlySnapshot().deliveryOperationOwners[operationId]).toMatchObject({
+    terminalState: "failed", terminalDisposition: claimed ? "unverified" : "lost",
+  });
 });
 
 test("a send ended by the delivery record alone closes its progress record on the next sweep", async () => {

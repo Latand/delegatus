@@ -159,6 +159,35 @@ test.each(["viewer", "runtime-host"])("the default %s loop sink quiets package d
   }
 });
 
+test.each(["viewer", "runtime-host"])("%s summary retains request drops through ordinary monitor ticks", role => {
+  const previousOwner = process.env.LLV_STATE_OWNER;
+  const lines: string[] = [];
+  let at = 0;
+  const spans = createPerformanceSpans(() => at);
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, spans);
+  try {
+    process.env.LLV_STATE_OWNER = role;
+    const requestId = (index: number) => ["00000000", "0000", "4000", "8000", index.toString(16).padStart(12, "0")].join("-");
+    for (let i = 0; i < 257; i++) spans.request(requestId(i), "snapshot");
+    const lastRequest = requestId(256);
+    for (let i = 0; i < 17; i++) spans.event("rpc.receive", lastRequest, i);
+
+    for (at = 10; at <= 60_000; at += 10) monitor.tick();
+
+    const summary = lines.find(line => line.startsWith("[performance summary] "));
+    expect(summary).toBeDefined();
+    expect(JSON.parse(summary!.slice("[performance summary] ".length))).toMatchObject({
+      role,
+      monotonic: 60_000,
+      requests: { dropped: 2, droppedOverflow: 2, droppedExpired: 0 },
+    });
+  } finally {
+    monitor.stop();
+    if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER;
+    else process.env.LLV_STATE_OWNER = previousOwner;
+  }
+});
+
 test("long gaps without a recorder always explain their profiling status", () => {
   let at = 0;
   const lines: string[] = [];

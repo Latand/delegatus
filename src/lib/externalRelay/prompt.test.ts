@@ -21,7 +21,8 @@ function longReplyRequest() {
     author: { ...base.author, self: true } };
   const current = { ...base, id: "new-reply", text: "Поясни останній пункт", reply_to: parent.id };
   request.input.conversation = [
-    ...Array.from({ length: 20 }, (_, index) => ({ ...base, id: `earlier-${index}`, text: "Earlier 😀 <answer> ".repeat(400),
+    ...Array.from({ length: 20 }, (_, index) => ({ ...base, id: `earlier-${index}`,
+      text: "Earlier 😀 <answer> ".repeat(index < 11 ? 400 : 10),
       author: { ...base.author, self: true } })), parent, current,
   ];
   request.input.respond_to = current.id;
@@ -63,7 +64,7 @@ test("structured owner prompt builders fit escaped history while preserving the 
   expect(JSON.stringify(request)).toBe(original);
 });
 
-test("owner continuation budgets inbound context with optional memory and advances only retained history", async () => {
+test("owner continuation retains inbound context and oversized memory without advancing the file-only history cursor", async () => {
   const { ownerContinuationPrompt } = await import("./ownerRun");
   const { request, parent, current } = longReplyRequest();
   request.input.short_term_memory = "optional memory ".repeat(2200);
@@ -72,13 +73,13 @@ test("owner continuation budgets inbound context with optional memory and advanc
   const turn = ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: null }, { mandatory: inboundContext });
 
   expect(Buffer.byteLength(turn.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
-  expect(turn.prompt).toContain(inboundContext);
-  expect(turn.prompt).not.toContain("optional memory");
-  const retained = section(turn.prompt, "conversation") as OwnerPromptMessage[];
+  expect(turn.context).toContain(inboundContext);
+  expect(section(turn.context!, "short_term_memory")).toBe(request.input.short_term_memory!);
+  const retained = section(turn.context!, "conversation") as OwnerPromptMessage[];
   expect(retained.find(message => message.id === current.id)).toEqual({ ...current, text: undefined, text_reference: "owner_request.text" });
   expect(retained.find(message => message.id === parent.id)).toEqual(parent);
   expect(turn.seen).toContain(current.id);
-  expect(turn.seen).toContain(parent.id);
+  expect(turn.seen).not.toContain(parent.id);
   expect(turn.seen).not.toContain("earlier-0");
 });
 
@@ -92,7 +93,7 @@ test("mandatory oversized input is refused whole before a prompt can be dispatch
   expect(current.text).toBe(original);
 });
 
-test("known agent answers stay in the resumed conversation while only the new owner message is sent", async () => {
+test("a witnessed agent answer stays visible when it is the current reply target", async () => {
   const { ownerContinuationPrompt, ownerInitialCursor } = await import("./ownerRun");
   const request = requestSchema.parse(contextRequest);
   request.input.tools = [];
@@ -106,15 +107,21 @@ test("known agent answers stay in the resumed conversation while only the new ow
   const record = { seen: cursor.seen, staticDigest: cursor.digest, anchors: [root.id, parent.id], conversationId: "conversation_current",
     answerWitness: { conversationId: "conversation_current", inReplyTo: root.id, textSha256: createHash("sha256").update(parent.text).digest("hex") } };
   const turn = ownerContinuationPrompt(followup, instruction, 1, record);
-  expect(section(turn.prompt, "conversation")).toEqual([{ ...next, text: undefined, text_reference: "owner_request.text" }]);
+  expect(section(turn.prompt, "conversation")).toEqual([root, parent, { ...next, text: undefined, text_reference: "owner_request.text" }]);
+  expect(section(turn.prompt, "owner_reply_context")).toMatchObject({ message_id: parent.id });
   expect(Buffer.byteLength(turn.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
   expect(turn.seen).toContain(parent.id);
   expect(turn.seen).toContain(next.id);
   const replaced = ownerContinuationPrompt(followup, instruction, 1, { ...record, conversationId: "conversation_replaced" });
-  expect(section(replaced.prompt, "conversation")).toEqual([parent, { ...next, text: undefined, text_reference: "owner_request.text" }]);
+  expect(section(replaced.prompt, "conversation")).toEqual(section(turn.prompt, "conversation"));
   const edited = { ...followup, input: { ...followup.input, conversation: [root, { ...parent, text: parent.text + " Changed." }, next] } };
-  expect((section(ownerContinuationPrompt(edited, instruction, 1, record).prompt, "conversation") as OwnerPromptMessage[])[0]!.text)
+  expect((section(ownerContinuationPrompt(edited, instruction, 1, record).prompt, "conversation") as OwnerPromptMessage[]).find(row => row.id === parent.id)?.text)
     .toBe(parent.text + " Changed.");
+
+  const recent = Array.from({ length: 10 }, (_, i) => ({ ...root, id: `recent-${i}` }));
+  const unthreaded = { ...followup, input: { ...followup.input, conversation: [root, parent, ...recent, { ...next, reply_to: null }] } };
+  const rows = section(ownerContinuationPrompt(unthreaded, instruction, 1, record).prompt, "conversation") as OwnerPromptMessage[];
+  expect(rows.map(row => row.id)).toEqual([...recent.map(row => row.id), next.id]);
 });
 
 
@@ -244,7 +251,7 @@ test("owner continuation sends unseen data and refreshes changed instructions", 
   const continued = ownerContinuationPrompt(request, owner, 1, next);
   expect(continued.prompt).not.toContain("<service_instructions>");
   expect(continued.prompt).toContain("<owner_request>");
-  expect(Buffer.byteLength(continued.prompt)).toBeLessThan(Buffer.byteLength(ownerRunPrompt(request, owner, 1)) / 10);
+  expect(Buffer.byteLength(continued.prompt)).toBeLessThan(Buffer.byteLength(ownerRunPrompt(request, owner, 1)));
   request.input.tools = [];
   expect(ownerContinuationPrompt(request, owner, 1, next).prompt).toContain("<service_instructions>");
   expect(ownerContinuationPrompt(request, owner, 1, record).prompt).toContain("<service_instructions>");
@@ -262,10 +269,10 @@ test("owner continuation carries an unseen explicit reply alongside local outbou
   const first = ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: null });
   const prompt = ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: first.digest }).prompt;
   expect(prompt).toContain("<local_outbound_context>"); expect(prompt).toContain("<owner_reply_context>");
-  expect(ownerContinuationPrompt(request, owner, 1, { seen: ["unseen-parent"], staticDigest: first.digest }).prompt).not.toContain("<owner_reply_context>");
+  expect(ownerContinuationPrompt(request, owner, 1, { seen: ["unseen-parent"], staticDigest: first.digest }).prompt).toContain("<owner_reply_context>");
 });
 
-test("owner continuation never repeats seen reply context and prefers complete recovered rows", async () => {
+test("owner continuation keeps the seen reply chain and prefers complete recovered rows", async () => {
   const { ownerContinuationPrompt } = await import("./ownerRun");
   const request = requestSchema.parse(contextRequest);
   const root = { ...request.input.conversation[0]!, id: "seen-root", reply_to: null, text: "already delivered root" };
@@ -277,13 +284,14 @@ test("owner continuation never repeats seen reply context and prefers complete r
     localContext: { resolution: "history" as const, questionIds: [], origins: {},
       conversation: [{ ...parent, text: "full confirmed recovered text" }] } };
   const turn = ownerContinuationPrompt(request, owner, 1, { seen: [root.id], staticDigest: null });
-  expect(turn.prompt).not.toContain("already delivered root");
+  expect(turn.prompt).toContain("already delivered root");
   expect(turn.prompt).not.toContain("truncated recovered text");
   expect(turn.prompt.match(/full confirmed recovered text/g)).toHaveLength(1);
   expect(turn.prompt).toContain('"id":"new-parent"');
   expect(turn.prompt).toContain("full confirmed recovered text");
   expect(turn.prompt).toContain("current request");
-  expect(turn.prompt).not.toContain("<owner_reply_context>");
+  expect(section(turn.prompt, "owner_reply_context")).toEqual({ message_id: parent.id, reply_to: root.id,
+    earlier_request: { message_id: root.id } });
 });
 
 test("owner initial cursor records the exact conversation sent with the first prompt", async () => {
@@ -312,10 +320,10 @@ test("local recovery retains the full explicit chain once and every reply refere
   } };
   for (const turn of [prepareOwnerPrompt(request, owner, 1),
     ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: null })]) {
-    expect(turn.prompt.match(/Confirmed full quoted message\./g)).toHaveLength(1);
-    expect(turn.prompt.match(/Original requested fact: amber\./g)).toHaveLength(1);
-    expect(turn.prompt).not.toContain("Service excerpt");
-    expect(turn.seen).toEqual(expect.arrayContaining([earlier.id, parent.id, current.id]));
+    expect(turn.context!.match(/Confirmed full quoted message\./g)).toHaveLength(1);
+    expect(turn.context!.match(/Original requested fact: amber\./g)).toHaveLength(1);
+    expect(turn.context).not.toContain("Service excerpt");
+    expect(turn.seen).toEqual([current.id]);
     expect(section(turn.prompt, "owner_request")).toEqual({ message_id: current.id, text: current.text, request_text: "" });
     expect(Buffer.byteLength(turn.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
   }

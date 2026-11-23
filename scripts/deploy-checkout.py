@@ -2,6 +2,7 @@
 import argparse
 import contextlib
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -24,15 +25,35 @@ import uuid
 
 CPU_SLICE = "delegatus.slice"
 CPU_WEIGHT = "1000"
+CHECKOUT_MERGER_CAPTURE = "checkout-mergers.json"
+CHECKOUT_MERGER_LIMIT = 200
+CHECKOUT_MERGER_MAX_BYTES = 512 * 1024
 SAMPLE_TIMEOUT = 180
 PROTECTED_READERS = 4
-SAMPLE_RETRY_INTERVAL = 10
 
 
 def census_identity(value):
     return (isinstance(value, dict) and type(value.get("pid")) is int and value["pid"] > 0
             and isinstance(value.get("startIdentity"), str) and bool(value["startIdentity"])
             and (value.get("bootEpoch") is None or isinstance(value["bootEpoch"], str)))
+
+
+def validate_merger_census_row(row):
+    host, pipeline, merger = row.get("host") or {}, row.get("pipeline"), row.get("merger")
+    if merger is None:
+        return
+    process = host.get("process")
+    if (not isinstance(merger, dict) or pipeline is not None or host.get("kind") != "structured"
+            or host.get("state") not in ["alive", "gone"] or row.get("turnState") not in ["busy", "idle"]
+            or not isinstance(merger.get("conversationId"), str) or merger["conversationId"] != row.get("conversationId")
+            or merger.get("engine") not in ["claude", "codex"] or not text(merger.get("sessionId"))
+            or not text(merger.get("path")) or not os.path.isabs(merger["path"])
+            or type(merger.get("claimEpoch")) is not int or merger["claimEpoch"] < 1
+            or not census_identity(merger.get("process")) or merger["process"] != process
+            or (not census_identity(merger.get("writer"))
+                and not (host.get("state") == "gone" and merger.get("writer") is None))
+            or "batch" not in merger):
+        raise RuntimeError("standalone merger census row malformed")
 
 
 class BaselineReadinessError(RuntimeError):
@@ -51,6 +72,10 @@ class BaselineReadinessError(RuntimeError):
         super().__init__("baseline serving health unavailable")
 
 
+class SwitchRefused(RuntimeError):
+    """A fixed, publishable admission refusal."""
+
+
 def census_environment(state):
     # The census needs filesystem and interpreter settings only. An allowlist
     # also excludes credentials whose names do not contain "token" or "secret".
@@ -63,13 +88,16 @@ def census_environment(state):
     return environment
 
 
-def protected_host_census(release, bun, state, target, timeout):
+def protected_host_census(release, bun, state, target, timeout, cut_boundary=None):
     """One owned child, bounded by the capture's remaining wall-clock allowance."""
     if not 0 < timeout <= 30:
         raise RuntimeError("census deadline")
     deadline = time.monotonic() + timeout
-    child = subprocess.Popen([bun, "--no-env-file", str(release / "scripts/protected-host-census.ts"), target,
-                              str(max(0, int(timeout * 1000)))], cwd=release,
+    command = [bun, "--no-env-file", str(release / "scripts/protected-host-census.ts"), target,
+               str(max(0, int(timeout * 1000)))]
+    if cut_boundary is not None:
+        command.append(cut_boundary)
+    child = subprocess.Popen(command, cwd=release,
                              env=census_environment(state), stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     data = bytearray()
@@ -127,6 +155,9 @@ def protected_host_census(release, bun, state, target, timeout):
                         or not census_identity(writer.get("process"))
                         or not isinstance(writer.get("exitFile"), str) or not os.path.isabs(writer["exitFile"])))):
                 raise RuntimeError("census row malformed")
+            merger = row.get("merger")
+            if merger is not None:
+                validate_merger_census_row(row)
         return answer
     finally:
         # This child inherits the evidence worker's process group, so the
@@ -181,11 +212,16 @@ def ready(serving, target, placement=True):
 
 
 def run_switch(adapter, target, samples=21, interval=15, timeout=SAMPLE_TIMEOUT):
+    old, hosts = adapter.preflight()
+    if getattr(adapter, "switch_mode", None) == "relaunch":
+        result = observe_switch(adapter, target, samples, interval, timeout, old, hosts)
+        adapter.emit(result)
+        return result
     # Keep termination deferred through recovery and the final cleanup, too.
     with deferred_termination():
         result = None
         try:
-            result = observe_switch(adapter, target, samples, interval, timeout)
+            result = observe_switch(adapter, target, samples, interval, timeout, old, hosts)
         finally:
             relocation = getattr(adapter, "relocation", None)
             if relocation and relocation["stopSubmitted"]:
@@ -232,8 +268,10 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=SAMPLE_TIMEOUT)
         return result
 
 
-def observe_switch(adapter, target, samples, interval, timeout):
-    old, hosts = adapter.preflight()
+def observe_switch(adapter, target, samples, interval, timeout, old, hosts):
+    in_place = getattr(adapter, "switch_mode", None) == "relaunch"
+    if in_place:
+        old, hosts = adapter.capture_relaunch(hosts)
     started = utc()
     diagnostics = []
     serving = {}
@@ -243,13 +281,26 @@ def observe_switch(adapter, target, samples, interval, timeout):
     adapter.switch_attempted = True
     # Even a publication call which raises after its atomic rename owes samples.
     try:
-        adapter.publish()
-        relocation = adapter.restart()
+        if in_place:
+            adapter.relaunch(old)
+        else:
+            adapter.publish()
+            relocation = adapter.restart()
+    except SwitchRefused as error:
+        diagnostics.append(str(error))
+        if in_place:
+            adapter.relaunch_evidence["result"] = "refused"
     except Exception as error:
         diagnostics.append(type(error).__name__)
+        if in_place:
+            adapter.relaunch_evidence["custodyUnknown"] = True
     finally:
         # A restart that raised after stopping still recorded what it did.
         relocation = relocation or getattr(adapter, "relocation", None)
+        refreshed_mergers = getattr(adapter, "refreshed_mergers", [])
+        refreshed_ids = {host["conversationId"] for host in refreshed_mergers}
+        hosts = [host for host in hosts if not host.get("merger") or host["conversationId"] not in refreshed_ids]
+        hosts.extend(refreshed_mergers)
         last_owner_start = None
         for index in range(samples):
             if index:
@@ -259,7 +310,7 @@ def observe_switch(adapter, target, samples, interval, timeout):
             recovered_during_sample = False
             def owner_check(cutoff=None):
                 nonlocal recovered_during_sample, last_owner_start
-                if not relocation or not relocation["stopSubmitted"]:
+                if in_place or not relocation or not relocation["stopSubmitted"]:
                     return False
                 now = adapter.clock.now()
                 if (relocation.get("started") is not True and last_owner_start is not None
@@ -282,8 +333,12 @@ def observe_switch(adapter, target, samples, interval, timeout):
                 return recovered
             owner_check()
             sample_started = adapter.clock.now()
-            sample = adapter.sample(old, hosts, target, started if index == samples - 1 else None, index, timeout,
-                                    owner_check=owner_check)
+            # Leave room for the service continuity poll within this sample.
+            poll_budget = min(0.8, timeout / 10) if in_place else 0
+            wait_for_target = not in_place or adapter.relaunch_evidence["result"] == "done"
+            sample = adapter.sample(old, hosts, target, started if index == samples - 1 else None,
+                                    index, timeout - poll_budget, owner_check=owner_check,
+                                    wait_for_target=wait_for_target)
             if recovered_during_sample and not ready(sample.serving, target):
                 sample.incomplete = True
             serving, protected = sample.serving, sample.protected
@@ -291,6 +346,10 @@ def observe_switch(adapter, target, samples, interval, timeout):
             for note in sample.diagnostics:
                 if note not in diagnostics:
                     diagnostics.append(note)
+            if in_place:
+                remaining = max(0, timeout - (adapter.clock.now() - sample_started))
+                with adapter.bounded_command_scope(time.monotonic() + min(poll_budget, remaining)):
+                    adapter.poll_relaunch_unit()
             try:
                 adapter.emit({"sample": index + 1, "serving": serving, "protected": protected,
                               "elapsedMs": round((adapter.clock.now() - sample_started) * 1000),
@@ -298,28 +357,75 @@ def observe_switch(adapter, target, samples, interval, timeout):
             except Exception as error:
                 diagnostics.append("sample-log:" + type(error).__name__)
     healthy = ready(serving, target)
+    relaunch = None
+    if in_place:
+        relaunch = adapter.finish_relaunch(hosts, protected)
+        switch_failed = (relaunch["result"] in {"rolled-back", "fell-back", "refused", "request-refused"}
+                         or relaunch["unitLeftActive"] or relaunch["scopeStopped"]
+                         or relaunch["custodyChanged"] or bool(relaunch["generationSurvivors"]))
+        switch_unknown = relaunch["result"] != "done" or relaunch["unitUnknown"] or relaunch["custodyUnknown"]
+    else:
+        switch_failed = not (relocation is not None and relocation.get("released") is True
+                             and relocation.get("placement") == "placed" and relocation.get("started") is True)
+        switch_unknown = False
+    settle_merger_samples(protected, interrupted, unreadable, relaunch,
+                          getattr(adapter, "merger_boundary", None))
     outcomes = {entry["outcome"] for entry in protected}
     unknown = ("unknown" in outcomes or interrupted is None or bool(unreadable) or sample.incomplete
+               or bool(relocation and relocation.get("mergerReconciliationUnknown"))
                or any("worker-cleanup-pending" in note for note in diagnostics)
                or any(note.startswith(("recovery:", "sample-recovery:")) for note in diagnostics))
-    relocation_ready = (relocation is not None and relocation.get("released") is True
-                        and relocation.get("placement") == "placed" and relocation.get("started") is True)
-    verdict = "fail" if not healthy or "lost" in outcomes or not relocation_ready else "needs_decision" if unknown else "pass"
+    if switch_failed or "lost" in outcomes:
+        verdict = "fail"
+    elif switch_unknown:
+        verdict = "needs_decision"
+    elif not healthy:
+        verdict = "fail"
+    else:
+        verdict = "needs_decision" if unknown else "pass"
     result = {"verdict": verdict, "target": target, "serving": serving,
               "protected": protected, "interrupted": interrupted,
-              "interruptedUnreadable": unreadable, "relocation": relocation, "diagnostics": diagnostics}
-    if locals().get("recovered_during_sample"):
+              "interruptedUnreadable": unreadable, "relocation": relocation,
+              "relaunch": relaunch, "diagnostics": diagnostics}
+    if recovered_during_sample:
         result["recovery"] = {"state": "complete", "ownerPid": os.getpid(), "unit": adapter.unit}
     adapter.last_result = result
     return result
 
 
+def settle_merger_samples(protected, interrupted, unreadable, relaunch, relocation_boundary):
+    boundary = relaunch.get("mergerReleaseBoundary") if relaunch else relocation_boundary
+    cuts = {row["conversationId"]: row for row in interrupted or []
+            if boundary is not None and row.get("kind") == "standalone-merger" and row.get("boundary") == boundary}
+    for outcome in protected:
+        if outcome.get("kind") != "standalone-merger":
+            continue
+        cut = cuts.get(outcome["conversationId"])
+        if relaunch:
+            if outcome["outcome"] not in ("completed", "recovered"):
+                continue
+            if relaunch["result"] != "done" or not (outcome.get("custody") or {}).get("verifiedReleaseExit"):
+                outcome.update(outcome="unknown", reason="merger-release-exit-unverified")
+                continue
+        elif cut and cut["state"] == "discharged" and cut.get("resolution") in (
+                "the captured merger turn settled", "the merger was explicitly stopped"):
+            outcome["outcome"] = "completed" if cut["resolution"] == "the captured merger turn settled" else "stopped"
+            outcome.pop("reason", None)
+            continue
+        if outcome["outcome"] == "recovered" and not (cut and cut["state"] == "delivered"):
+            outcome.update(outcome="unknown", reason="merger-receipt-read-incomplete" if interrupted is None or unreadable
+                           else "merger-continuation-receipt-missing")
+
+
 class EvidenceSample:
     def __init__(self, hosts):
         self.serving = {}
-        self.protected = [{"pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"),
-                           "attempt": host.get("attempt"), "captured": host,
-                           "outcome": "unknown", "reason": "not-observed"} for host in hosts]
+        self.protected = []
+        for host in hosts:
+            identity = ({"kind": "standalone-merger", "conversationId": host["conversationId"]}
+                        if host.get("merger") else {"pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"),
+                                                    "attempt": host.get("attempt"), "captured": host})
+            self.protected.append({**identity, "outcome": "unknown", "reason": "not-observed"})
         self.interrupted, self.unreadable = None, ["interrupted:not-observed"]
         self.diagnostics = []
         self.incomplete = False
@@ -364,37 +470,28 @@ class EvidenceSample:
 
 
 def evidence_frames(adapter, kind, inputs, deadline):
-    """Read-only work in one lane. Each host gets a first read before retries."""
+    """Read each captured host once. An inconclusive result remains visible until a fresh sample."""
     clock = adapter.clock
     if clock.now() >= deadline:
         return
     if kind == "protected":
-        pending = inputs
-        while pending and clock.now() < deadline:
-            remaining = []
-            for index, host in pending:
-                if clock.now() >= deadline:
-                    return
-                yield "reading", index
-                if clock.now() >= deadline:
-                    return
-                try:
-                    if host.get("startIdentity") and process_or_gone(adapter, host) is not None:
-                        outcome = {"outcome": "preserved", "attempt": host["attempt"]}
-                    else:
-                        outcome = adapter.stage(host)
-                except Exception as error:
-                    outcome = {"outcome": "unknown", "reason": "protected-read:" + type(error).__name__}
-                if clock.now() >= deadline:
-                    return
-                yield "protected", [index, outcome]
-                if outcome["outcome"] == "unknown":
-                    remaining.append((index, host))
-            pending = remaining
-            if pending and clock.now() + SAMPLE_RETRY_INTERVAL < deadline:
-                clock.sleep(SAMPLE_RETRY_INTERVAL)
-            else:
+        stage = adapter.protected_stage_reader() if hasattr(adapter, "protected_stage_reader") else adapter.stage
+        for index, host in inputs:
+            if clock.now() >= deadline:
                 return
+            yield "reading", index
+            if clock.now() >= deadline:
+                return
+            try:
+                if not host.get("merger") and host.get("startIdentity") and process_or_gone(adapter, host) is not None:
+                    outcome = {"outcome": "preserved", "attempt": host["attempt"]}
+                else:
+                    outcome = stage(host)
+            except Exception as error:
+                outcome = {"outcome": "unknown", "reason": "protected-read:" + type(error).__name__}
+            if clock.now() >= deadline:
+                return
+            yield "protected", [index, outcome]
     elif kind == "interrupted":
         try:
             answer = adapter.interrupted(*inputs)
@@ -405,7 +502,8 @@ def evidence_frames(adapter, kind, inputs, deadline):
         if clock.now() < deadline:
             yield "interrupted", answer
     elif kind == "serving":
-        old, target = inputs
+        old, target = inputs[:2]
+        wait_for_target = len(inputs) == 2 or inputs[2]
         try:
             for entry in old:
                 if clock.now() >= deadline:
@@ -424,6 +522,8 @@ def evidence_frames(adapter, kind, inputs, deadline):
                 yield "diagnostic", "serving:not-ready"
             except Exception as error:
                 yield "diagnostic", "serving:" + type(error).__name__
+            if not wait_for_target:
+                return
             clock.sleep(max(0, min(1, deadline - clock.now())))
 
 
@@ -606,7 +706,8 @@ def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
                         os.close(read_fd)
 
 
-def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collect=run_evidence_workers, owner_check=None):
+def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collect=run_evidence_workers, owner_check=None,
+                   wait_for_target=True):
     deadline = adapter.clock.now() + timeout
     sample = EvidenceSample(hosts)
     recoveries = 0
@@ -622,11 +723,18 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
         numbered = list(enumerate(hosts))
         offset = index % len(numbered)
         numbered = numbered[offset:] + numbered[:offset]
-        lanes.extend(("protected", numbered[i::PROTECTED_READERS], protected_cutoff)
-                     for i in range(min(len(hosts), PROTECTED_READERS)))
+        # Keep a pipeline on one reader so all its stages use the same observed runs.
+        by_pipeline = {}
+        for row in numbered:
+            by_pipeline.setdefault(row[1].get("pipelineId") or ("unbound", row[0]), []).append(row)
+        groups = [[] for _ in range(min(len(by_pipeline), PROTECTED_READERS))]
+        for group, rows in enumerate(by_pipeline.values()):
+            groups[group % len(groups)].extend(rows)
+        lanes.extend(("protected", group, protected_cutoff) for group in groups)
     # Serving and protected evidence share the sample cutoff. Running them in
     # one bounded batch prevents slow stage reads from starving serving proof.
-    lanes.append(("serving", [old, target], serving_cutoff))
+    serving_inputs = [old, target] if wait_for_target else [old, target, False]
+    lanes.append(("serving", serving_inputs, serving_cutoff))
     collect(adapter, lanes, sample, serving_cutoff, owner_check=check_owner)
     check_owner(deadline)
     if since:
@@ -637,9 +745,10 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
         while adapter.clock.now() < deadline:
             if witness_generation != recoveries:
                 before = recoveries
-                collect(adapter, [("serving", [old, target])], sample, deadline, owner_check=check_owner)
+                collect(adapter, [("serving", serving_inputs)], sample, deadline, owner_check=check_owner)
                 check_owner(deadline)
-                if not ready(sample.serving, target):
+                # An unsettled relaunch still owes the interruption inventory.
+                if wait_for_target and not ready(sample.serving, target):
                     sample.incomplete = True
                     sample.unavailable(("interrupted", [since, hosts]), "serving-witness-unavailable")
                     break
@@ -667,7 +776,7 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
         witness_generation = -1
         while adapter.clock.now() < deadline and witness_generation != recoveries:
             before = recoveries
-            collect(adapter, [("serving", [old, target])], sample, deadline, owner_check=check_owner)
+            collect(adapter, [("serving", serving_inputs)], sample, deadline, owner_check=check_owner)
             check_owner(deadline)
             if not ready(sample.serving, target):
                 sample.incomplete = True
@@ -788,6 +897,24 @@ def file_identity(path):
     return status.st_ino, status.st_size, status.st_mtime_ns
 
 
+def optional_json(path):
+    try:
+        value = json.loads(path.read_bytes())
+    except FileNotFoundError:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("expected a JSON object")
+    return value
+
+
+def path_present(path):
+    try:
+        path.lstat()
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def obligation_places(directory, pending):
     """Every place a record can be, by what would change if one moved: the
     pending journal and each import claim by file identity, the record
@@ -869,7 +996,7 @@ def read_obligations(directory, pending, claims):
     return records, unreadable
 
 
-def interrupted_conversations(state, since, hosts=()):
+def interrupted_conversations(state, since, hosts=(), *, merger_release_boundary=None):
     """The conversations whose turn this switch cut, as the Viewers recorded
     them: an incumbent at release, the booting successor at restart, and the
     records it could not read or that are too incomplete to name a
@@ -916,31 +1043,54 @@ def interrupted_conversations(state, since, hosts=()):
         conversation = record["conversationId"]
         stage = record.get("stage")
         host = protected.get(conversation)
-        if not stage and host:
+        if not stage and host and host.get("pipelineId"):
             stage = {"pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"), "attempt": host.get("attempt")}
-        listed.append({"conversationId": conversation, "recordedAt": record["recordedAt"],
+        cut_boundary = record.get("boundary")
+        merger = (host or {}).get("merger")
+        relaunch_cut = (merger and merger_release_boundary is not None and cut_boundary == merger_release_boundary
+                        and record["reason"] == "viewer-release" and not stage and not record.get("seat")
+                        and record["path"] == merger["path"] and record["engine"] == merger["engine"]
+                        and record["hostKey"] == f'{merger["engine"]}:{merger["sessionId"]}'
+                        and record.get("claimEpoch") == merger["claimEpoch"]
+                        and census_identity(record.get("owner"))
+                        and record["owner"]["pid"] == merger["process"]["pid"]
+                        and record["owner"]["startIdentity"] == merger["process"]["startIdentity"]
+                        and record["owner"].get("bootEpoch") in (None, merger["process"].get("bootEpoch")))
+        relocation_cut = isinstance(cut_boundary, str) and cut_boundary.startswith("checkout-merger:")
+        kind = {"kind": "standalone-merger", "boundary": cut_boundary} if relocation_cut or relaunch_cut else {}
+        listed.append({**kind, "conversationId": conversation, "recordedAt": record["recordedAt"],
                        "reason": record["reason"], "state": record["state"],
                        "resolution": record.get("resolution"), "stage": stage or None,
                        "backgroundTasks": record["checkpoint"].get("backgroundTasks", [])})
     return sorted(listed, key=lambda entry: (entry["recordedAt"], entry["conversationId"])), unreadable
 
 
-def write_json(destination, body):
+def sync_directory(path):
+    directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def write_json(destination, body, *, exclusive=False):
+    write_atomic(destination, (json.dumps(body, indent=2) + "\n").encode("utf-8"), exclusive=exclusive)
+
+
+def write_atomic(destination, contents, *, exclusive=False):
     """Private atomic results remain readable if the launching turn disappears."""
     destination = pathlib.Path(destination)
     fd, name = tempfile.mkstemp(prefix=".deploy-", dir=destination.parent)
     try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(body, stream, indent=2)
-            stream.write("\n")
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(contents)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, destination)
-        directory = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        if exclusive:
+            os.link(name, destination)
+        else:
+            os.replace(name, destination)
+        sync_directory(destination.parent)
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -1039,6 +1189,15 @@ RELEASE_WAIT = 30
 SIGNAL_WAIT = 5
 STOP_SETTLE = 300
 START_ATTEMPTS = 3
+RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1"
+CHECKOUT_HANDOFF = "delegatus-checkout-launcher-v2"
+REQUEST_WAIT = 120
+# bin/launcher-deadline.mjs exports 10-minute switch and rollback bounds.
+SWITCH_TIMEOUT = 600
+ROLLBACK_TIMEOUT = 600
+RELAUNCH_SETTLE = 60
+UNIT_FENCE_PROPERTIES = ("ActiveState", "MainPID", "NRestarts", "InvocationID",
+                         "InactiveEnterTimestampMonotonic")
 
 
 class LeftoverProcesses(RuntimeError):
@@ -1113,6 +1272,13 @@ def stage_outcome(host, attempts, activity):
     lost = bool(re.search(r"host.*lost|lost.*host|interrupted.*restart|stopped.*turn went silent", current.get("error") or "", re.I))
     if current["state"] in ["passed", "failed", "needs_decision", "skipped"]:
         result["outcome"] = "lost" if lost else "completed"
+        # Stops for recovery and operator actions share the stage stop path.
+        # Require a pass or a stage's own verdict in addition to terminal state.
+        if (not lost and current["n"] == host["attempt"]
+                and text(host.get("conversationId")) and current.get("conversationId") == host["conversationId"]
+                and text(current.get("launchId"))
+                and (current["state"] == "passed" or current.get("verdict") or current.get("report"))):
+            result["settlementStopOperationId"] = f'{current["launchId"]}:{host["stageId"]}:{current["n"]}'
     elif (current["state"] in ["running", "reviewing", "committing"]
           and activity.get("host", {}).get("state") == "alive"
           and activity.get("lifecycle") in ["running", "waiting", "blocked"]):
@@ -1120,7 +1286,7 @@ def stage_outcome(host, attempts, activity):
     return result
 
 
-def complete_census(answer):
+def complete_activity(answer):
     """The census is a capped selection; it has no pagination cursor."""
     selection = answer.get("selection") or {}
     if (answer.get("unselectedCount") != 0
@@ -1135,10 +1301,15 @@ def complete_census(answer):
             or any(selection.get(key, 0) for key in ["projected", "unreadable"])
             or any(row.get("evidenceSource") != "transcript" for row in answer.get("conversations", []))):
         raise RuntimeError("protected activity capture incomplete")
-    if any("lifecycle" in row and row.get("lifecycle") not in ["starting", "running", "waiting", "stalled", "completed", "failed", "blocked", "gone"]
-           for row in answer.get("conversations", [])):
-        raise RuntimeError("protected activity capture incomplete")
     return answer["conversations"]
+
+
+def complete_census(answer):
+    rows = complete_activity(answer)
+    if any("lifecycle" in row and row.get("lifecycle") not in ["starting", "running", "waiting", "stalled", "completed", "failed", "blocked", "gone"]
+           for row in rows):
+        raise RuntimeError("protected activity capture incomplete")
+    return rows
 
 
 def detached_command(script, config, state, run_id):
@@ -1348,6 +1519,7 @@ class Checkout:
         self.signal_process = signal_process
         self.census_adapter = census
         self.relocation = None
+        self.switch_mode = None
         self.cgroup_root = pathlib.Path(cgroup_root)
         self.agents = {}
         self.retirement_roots = {}
@@ -1355,6 +1527,7 @@ class Checkout:
         self.leftovers_found = []
         self.helper_custody = {}
         self.custody_rows = []
+        self.refreshed_mergers = []
         self.boot_epoch = epoch()
         self.process_read, self.http, self.runtime, self.command = process_read, http, runtime, execute
         self.config_file = pathlib.Path(config).resolve()
@@ -1378,6 +1551,9 @@ class Checkout:
                 raise RuntimeError("plan paths must be absolute")
         self.pointer = self.state / "self-update" / ("release-" + self.install + ".json")
         self.record_file = self.pointer.with_name("launcher-" + self.install + ".json")
+        self.request_file = self.pointer.with_name("request-" + self.install + ".json")
+        self.trial_file = self.pointer.with_name("trial-" + self.install + ".json")
+        self.result_file = self.request_file.with_suffix(".json.result.json")
         environment = {}
         for line in pathlib.Path(self.plan["tokenFile"]).read_text().splitlines():
             if line.strip() and not line.lstrip().startswith("#") and "=" in line:
@@ -1425,17 +1601,20 @@ class Checkout:
             self.command = execute
             self._command_deadline = None
 
-    def census(self, timeout=30):
-        return self.census_adapter(self.release, self.plan["bun"], self.state, self.target, timeout)
+    def census(self, timeout=30, cut_boundary=None):
+        arguments = (self.release, self.plan["bun"], self.state, self.target, timeout)
+        return self.census_adapter(*arguments) if cut_boundary is None else self.census_adapter(*arguments, cut_boundary)
 
-    def read_host_census(self, _conversation_id):
+    def read_host_census(self):
         return self.census()
 
     def process(self, entry):
         return read_process(entry, self.process_read)
 
     def interrupted(self, since, hosts):
-        return interrupted_conversations(self.state, since, hosts)
+        relaunch = getattr(self, "relaunch_evidence", {})
+        return interrupted_conversations(self.state, since, hosts,
+                                         merger_release_boundary=relaunch.get("mergerReleaseBoundary"))
 
     sample = collect_sample
 
@@ -1449,6 +1628,71 @@ class Checkout:
         output = self.command(["systemctl", "--user", "list-jobs", "--no-legend", "--no-pager", "--plain"])
         return [line for line in output.splitlines() if self.unit in line.split()]
 
+    def show(self, units, *properties):
+        return self.command(["systemctl", "--user", "show", *units,
+                             *[part for name in properties for part in ("-p", name)]])
+
+    def show_units(self, units, *properties):
+        if not units:
+            return {}
+        result = {}
+        for block in self.show(sorted(units), "Id", *properties).split("\n\n"):
+            values = systemd_properties(block)
+            name = values.pop("Id", None)
+            if name not in units or name in result or any(key not in values for key in properties):
+                raise RuntimeError("unit properties unreadable")
+            result[name] = values
+        if result.keys() != set(units):
+            raise RuntimeError("unit properties incomplete")
+        return result
+
+    def require_relocation_safe(self):
+        bound = systemd_properties(self.show([self.unit], "BoundBy")).get("BoundBy")
+        if bound is None:
+            raise SwitchRefused("bound units unreadable")
+        units = self.show_units(set(bound.split()), "ActiveState")
+        # An activating or reloading unit can already have members and can
+        # become active before systemd applies the dependency transaction.
+        active = sum(unit["ActiveState"] not in {"inactive", "failed"} for unit in units.values())
+        if active:
+            raise SwitchRefused("relocation would stop " + str(active) + " bound units")
+        if systemd_properties(self.show([self.unit], "BoundBy")).get("BoundBy") != bound:
+            raise SwitchRefused("bound units changed before relocation")
+
+    def require_relaunch_ready(self, record):
+        launcher = record["launcher"]
+        if type(launcher.get("relaunch")) is not int or launcher["relaunch"] != 1 or launcher.get("protocol") != RELAUNCH_PROTOCOL:
+            raise SwitchRefused("launcher cannot relaunch in place")
+        if pathlib.Path(record.get("requestFile") or "").resolve() != self.request_file:
+            raise SwitchRefused("checkout launcher topology differs from plan")
+        try:
+            supported = (RELAUNCH_PROTOCOL in (self.release / "bin/launcher-relaunch.mjs").read_text()
+                         and CHECKOUT_HANDOFF in (self.release / "bin/cli.mjs").read_text())
+        except (OSError, UnicodeError):
+            supported = False
+        if not supported:
+            raise SwitchRefused("target release cannot take a relaunch")
+        if (path_present(self.request_file) or path_present(self.trial_file)
+                or self.pending_update()):
+            raise SwitchRefused("launcher request or update already pending")
+        if launcher.get("state") != "healthy":
+            raise SwitchRefused("launcher not idle")
+        if self.target == self.baseline["sha"] or self.release == pathlib.Path(self.baseline["dir"]).resolve():
+            raise SwitchRefused("target already serving")
+
+    def pending_update(self):
+        try:
+            apply = optional_json(self.pointer.with_name("apply.json"))
+            gate = optional_json(self.pointer.with_name("auto-admission.json"))
+            return (apply is not None and (not isinstance(apply.get("state"), str)
+                                           or apply["state"] in {"building", "ready", "switching"})
+                    or gate is not None and (type(gate.get("until")) not in {int, float}
+                                             or not 0 <= gate["until"] < float("inf")
+                                             or not isinstance(gate.get("id"), str)
+                                             or gate["until"] > time.time() * 1000))
+        except (OSError, ValueError):
+            return True
+
     def preflight(self):
         if sys.platform != "linux":
             raise RuntimeError("this checkout procedure requires Linux user systemd")
@@ -1459,7 +1703,8 @@ class Checkout:
         evidence = json.loads(pathlib.Path(self.plan["verificationFile"]).read_text())
         if evidence.get("sha") != self.target or evidence.get("runtimeHost") != "pass" or evidence.get("viewer") != "pass":
             raise RuntimeError("both isolated runtime rehearsals required")
-        if json.loads(self.pointer.read_text()) != self.baseline:
+        self.baseline_text = self.pointer.read_bytes().decode("utf-8")
+        if json.loads(self.baseline_text) != self.baseline:
             raise RuntimeError("baseline pointer changed")
         record = json.loads(self.record_file.read_text())
         if (pathlib.Path(record["checkout"]).resolve() != self.checkout
@@ -1482,6 +1727,18 @@ class Checkout:
             answer = self.census(max(0, capture_deadline - self.clock.now()))
             return complete_census(answer)
         rows = retry(capture, self.clock, 30)
+        hosts = self.capture_hosts(rows)
+        placement = self.placement()
+        self.switch_mode = "relaunch" if placement["actual"] == placement["expected"] else "relocation"
+        if self.switch_mode == "relaunch":
+            self.require_relaunch_ready(record)
+        else:
+            self.require_relocation_safe()
+        # Last, so the inventory is read immediately before publication.
+        self.fence()
+        return [record[role] for role in ["launcher", "web", "runtimeHost"]], hosts
+
+    def capture_hosts(self, rows):
         self.custody_rows = rows
         hosts = []
         self.agents = {}
@@ -1497,9 +1754,105 @@ class Checkout:
                 hosts.append({**entry, "startIdentity": proc["startIdentity"] if proc else None,
                               "conversationId": row["conversationId"], "pipelineId": pipeline["pipelineId"],
                               "stageId": pipeline["stageId"], "attempt": pipeline["attempt"]})
-        # Last, so the inventory is read immediately before publication.
-        self.fence()
-        return [record[role] for role in ["launcher", "web", "runtimeHost"]], hosts
+        hosts.extend(self.merger_hosts(rows))
+        return hosts
+
+    def merger_hosts(self, rows):
+        hosts = []
+        for row in rows:
+            merger = row.get("merger")
+            if merger:
+                process = merger["process"]
+                pid = process["pid"]
+                start = process["startIdentity"].removeprefix(str(pid) + ":")
+                identity = {"pid": pid, "startIdentity": start}
+                observed_epoch = process.get("bootEpoch")
+                if (not start.isdecimal() or observed_epoch not in [None, self.boot_epoch]
+                        or observed_epoch is None and not self.process(identity)):
+                    raise RuntimeError("standalone merger custody changed")
+                hosts.append({**identity, "conversationId": merger["conversationId"], "merger": merger})
+        return hosts
+
+    def arm_merger_recovery(self, before_stop=None):
+        hosts = self.merger_hosts(self.custody_rows)
+        self.refreshed_mergers = hosts
+        destination = self.state / CHECKOUT_MERGER_CAPTURE
+        captured_at = getattr(self, "merger_observed_at", utc())
+        previous_bytes = None
+        previous_rows = []
+        try:
+            with destination.open("rb") as stream:
+                previous_bytes = stream.read(CHECKOUT_MERGER_MAX_BYTES + 1)
+            if len(previous_bytes) > CHECKOUT_MERGER_MAX_BYTES:
+                raise RuntimeError("standalone merger inventory exceeds reader byte limit")
+            previous = json.loads(previous_bytes.decode("utf-8"))
+            if not isinstance(previous, list) or len(previous) > CHECKOUT_MERGER_LIMIT:
+                raise RuntimeError("standalone merger inventory is malformed")
+            previous_rows = previous
+        except FileNotFoundError:
+            pass
+        boundary = getattr(self, "merger_boundary", None) or "checkout-merger:" + uuid.uuid4().hex
+        self.merger_boundary = boundary
+        def valid_identity(identity):
+            return (isinstance(identity, dict) and type(identity.get("pid")) is int and identity["pid"] > 0
+                    and isinstance(identity.get("startIdentity"), str) and bool(identity["startIdentity"])
+                    and (identity.get("bootEpoch") is None or isinstance(identity.get("bootEpoch"), str)))
+        def valid_row(row):
+            batch = row.get("batch")
+            return (isinstance(row, dict) and re.fullmatch(r"conversation_[\w-]+", row.get("conversationId", ""))
+                    and row.get("engine") in ["claude", "codex"] and isinstance(row.get("sessionId"), str)
+                    and bool(row["sessionId"]) and isinstance(row.get("path"), str) and os.path.isabs(row["path"])
+                    and (row.get("turnState") is None or row.get("turnState") in ["busy", "idle"])
+                    and type(row.get("claimEpoch")) is int and row["claimEpoch"] > 0
+                    and valid_identity(row.get("process"))
+                    and "writer" in row and (valid_identity(row.get("writer")) or row.get("writer") is None)
+                    and re.fullmatch(r"checkout-merger:[0-9a-f]{32}", row.get("boundary", ""))
+                    and isinstance(row.get("capturedAt"), str) and parse_time(row["capturedAt"])
+                    and parse_time(row["capturedAt"]) <= parse_time(captured_at)
+                    and row.get("admissionProof") in [None, "fresh-cut-v1"]
+                    and "batch" in row and (batch is None or isinstance(batch, dict) and isinstance(batch.get("directory"), str)
+                         and os.path.isabs(batch["directory"]) and isinstance(batch.get("identity"), str)
+                         and isinstance(batch.get("branch"), str)))
+        if not all(valid_row(row) for row in previous_rows):
+            raise RuntimeError("standalone merger inventory failed successor validation")
+        # Retain expired cuts as identity fences. Startup recognizes the exact
+        # predecessor and suppresses generic recovery, while the window check
+        # prevents delivery from an expired cut.
+        captures = {row["conversationId"]: row for row in previous_rows}
+        for host in hosts:
+            captures[host["conversationId"]] = {**host["merger"], "capturedAt": captured_at, "boundary": boundary,
+                                                 "admissionProof": "fresh-cut-v1"}
+        if len(captures) > CHECKOUT_MERGER_LIMIT:
+            raise RuntimeError("standalone merger inventory exceeds its bound")
+        inventory = list(captures.values())
+        serialized = (json.dumps(inventory, indent=2) + "\n").encode("utf-8")
+        if len(serialized) > CHECKOUT_MERGER_MAX_BYTES:
+            raise RuntimeError("standalone merger inventory exceeds reader byte limit")
+        decoded = json.loads(serialized)
+        if not isinstance(decoded, list) or len(decoded) != len(captures) or not all(valid_row(row) for row in decoded):
+            raise RuntimeError("standalone merger inventory failed successor validation")
+        try:
+            write_atomic(destination, serialized)
+            if before_stop:
+                before_stop()
+        except Exception:
+            # A directory sync may fail after the rename. Restore the exact
+            # prior inventory whenever the stop has yet to be submitted.
+            # After submission, late census failures must retain custody.
+            if before_stop:
+                try:
+                    if previous_bytes is not None:
+                        write_atomic(destination, previous_bytes)
+                    else:
+                        try:
+                            destination.unlink()
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            sync_directory(destination.parent)
+                except OSError as error:
+                    raise SwitchRefused("could not restore prior merger inventory: " + type(error).__name__) from error
+            raise
 
     def placement(self):
         """Observed configuration and cgroup, against the required CPU slice.
@@ -1969,17 +2322,394 @@ class Checkout:
 
     def publish(self):
         # Repeat the immutability fences immediately before the atomic write.
-        if (json.loads(self.pointer.read_text()) != self.baseline
-                or self.head(self.checkout) != self.plan["checkoutHead"] or self.head(self.release) != self.target):
+        if (self.head(self.checkout) != self.plan["checkoutHead"] or self.head(self.release) != self.target
+                or self.pointer.read_bytes() != self.baseline_text.encode("utf-8")):
             raise RuntimeError("publication inputs changed")
         write_json(self.pointer, {"sha": self.target, "dir": str(self.release),
                                   "checkoutHead": self.plan["checkoutHead"], "publishedAt": utc()})
-        self.emit({"published": self.target})
+        if self.switch_mode != "relaunch":
+            self.emit({"published": self.target})
+
+    def unit_facts(self):
+        unit = systemd_properties(self.show([self.unit], *UNIT_FENCE_PROPERTIES))
+        jobs = self.jobs()
+        if any(key not in unit for key in UNIT_FENCE_PROPERTIES) or any(
+                not re.fullmatch(r"[0-9]+", unit[key])
+                for key in ("MainPID", "NRestarts", "InactiveEnterTimestampMonotonic")):
+            raise RuntimeError("service continuity properties unreadable")
+        if unit["ActiveState"] == "active" and not re.fullmatch(r"[0-9a-f]{32}", unit["InvocationID"]):
+            raise RuntimeError("active service invocation unreadable")
+        pid = int(unit["MainPID"])
+        try:
+            identity = start_identity(self.process_read(pid, "stat")) if pid else None
+        except (FileNotFoundError, ProcessLookupError):
+            identity = None
+        return {**unit, "MainPID": pid, "startIdentity": identity, "bootEpoch": self.boot_epoch, "jobs": jobs}
+
+    def poll_relaunch_unit(self):
+        evidence = self.relaunch_evidence
+        try:
+            fact = self.unit_facts()
+            changed = fact != evidence["unitBefore"]
+            # Losing the stat read alone does not prove an identity change.
+            unknown = fact["ActiveState"] == "active" and fact["startIdentity"] is None
+            if unknown:
+                changed = {**fact, "startIdentity": evidence["unitBefore"]["startIdentity"]} != evidence["unitBefore"]
+            evidence["unitAfter"] = fact
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            fact, changed, unknown = None, False, True
+        poll = {"at": utc(), "unit": fact}
+        evidence["polls"].append(poll)
+        if changed and not evidence["unitLeftActive"]:
+            evidence["unitLeftActive"] = poll
+        if unknown and not evidence["unitUnknown"]:
+            evidence["unitUnknown"] = poll
+        return not changed and not unknown
+
+    def capture_relaunch(self, hosts):
+        placement = self.placement()
+        if placement["actual"] != placement["expected"]:
+            raise SwitchRefused("service placement changed before relaunch")
+        unit = self.unit_facts()
+        if unit["ActiveState"] != "active" or unit["jobs"] or not unit["startIdentity"]:
+            raise SwitchRefused("agent preservation or idle service fence unavailable")
+        group = placement["actual"]
+        record = json.loads(self.record_file.read_bytes())
+        self.require_relaunch_ready(record)
+        ancestors = self.launcher_ancestors(record, group)
+        if ancestors.get(unit["MainPID"], (None,))[0] != unit["startIdentity"]:
+            raise SwitchRefused("service MainPID changed before relaunch")
+        captured = self.generation(group)
+        if json.loads(self.record_file.read_bytes()) != record:
+            raise SwitchRefused("launcher ownership changed before relaunch")
+        self.require_relaunch_ready(record)
+        self.relaunch_record = record
+        self.relaunch_hosts = self.relaunch_host_inventory()
+        scopes = self.show_units({entry["scope"] for entry in self.relaunch_hosts.values() if entry["scope"]},
+                                 "LoadState", "ActiveState", "InvocationID")
+        if any(scope["LoadState"] != "loaded" or scope["ActiveState"] != "active"
+               or not re.fullmatch(r"[0-9a-f]{32}", scope["InvocationID"]) for scope in scopes.values()):
+            raise SwitchRefused("host scope continuity unavailable")
+        # Repeat the last preflight fence against the refreshed census.
+        custody = self.helper_custody.copy()
+        self.fence()
+        self.helper_custody = {**custody, **self.helper_custody}
+        self.relaunch_evidence = {
+            "requestId": uuid.uuid4().hex, "result": "unsettled", "unitBefore": unit,
+            "unitAfter": unit, "unitLeftActive": None, "unitUnknown": None, "polls": [],
+            "scopes": {name: {"before": scope} for name, scope in scopes.items()},
+            "scopeStopped": [], "generationSurvivors": [], "signalled": [],
+            "custodyChanged": False, "custodyUnknown": False,
+            "launcherBefore": {"pid": record["launcher"]["pid"],
+                               "startIdentity": record["launcher"]["startIdentity"], "bootEpoch": self.boot_epoch},
+        }
+        # Include work admitted during the census refresh, retaining the
+        # original identity of work that had already been captured.
+        refreshed = {(entry["pid"], entry["startIdentity"]): entry for entry in self.refreshed_hosts}
+        refreshed.update({(entry["pid"], entry["startIdentity"]): entry for entry in hosts})
+        generation = [{"pid": pid, "startIdentity": identity} for pid, identity in captured.items()
+                      if pid not in ancestors]
+        if any({"pid": child["pid"], "startIdentity": child["startIdentity"]} not in generation
+               for child in (record["web"], record["runtimeHost"])):
+            raise SwitchRefused("serving generation changed before relaunch")
+        return generation, list(refreshed.values())
+
+    def relaunch(self, generation):
+        evidence = self.relaunch_evidence
+        request = {"requestId": evidence["requestId"], "role": "relaunch", "target": self.target,
+                   "rollbackPointer": self.baseline_text, "requestedAt": utc()}
+        with deferred_termination():
+            if not self.poll_relaunch_unit():
+                return
+            record = json.loads(self.record_file.read_bytes())
+            self.require_relaunch_ready(record)
+            if record != self.relaunch_record:
+                raise SwitchRefused("launcher ownership changed before relaunch")
+            self.publish()
+            try:
+                write_json(self.request_file, request, exclusive=True)
+            except FileExistsError:
+                evidence["result"] = "request-refused"
+                return
+            evidence["requestedAt"] = request["requestedAt"]
+        with contextlib.suppress(OSError):
+            self.emit({"published": self.target, "relaunchRequestId": request["requestId"]})
+        self.await_relaunch(request)
+        if evidence["result"] != "done":
+            return
+        evidence["mergerReleaseBoundary"] = self.merger_release_boundary()
+        deadline = self.clock.now() + RELEASE_WAIT
+        while True:
+            evidence["generationSurvivors"] = [
+                {**entry, "reason": "generation survivor"} for entry in generation
+                if self.identity_alive(entry)
+            ]
+            self.poll_relaunch_unit()
+            if not evidence["generationSurvivors"] or self.clock.now() >= deadline:
+                break
+            self.clock.sleep(min(1, deadline - self.clock.now()))
+
+    def merger_release_boundary(self):
+        # Match Viewer release receipts to the same authority digest the
+        # departing Viewer records, or its PID on a checkout without a target.
+        try:
+            with (self.state / "viewer-release.json").open("rb") as stream:
+                target = stream.read(64 * 1024 + 1)
+        except FileNotFoundError:
+            return f'viewer-release:pid-{self.relaunch_record["web"]["pid"]}'
+        except OSError:
+            return None
+        if len(target) > 64 * 1024:
+            return None
+        try:
+            release = json.loads(target)
+        except (ValueError, UnicodeError):
+            return None
+        if not isinstance(release, dict) or release.get("revision") != self.target:
+            return None
+        return "viewer-release:" + hashlib.sha256(target).hexdigest()[:16]
+
+    def await_relaunch(self, request):
+        evidence = self.relaunch_evidence
+        started = self.clock.now()
+        deadline = started + REQUEST_WAIT
+        wall_start = time.time()
+        owner = evidence["launcherBefore"]
+        while True:
+            self.poll_relaunch_unit()
+            try:
+                result = optional_json(self.result_file)
+                trial = optional_json(self.trial_file)
+                record = optional_json(self.record_file)
+                result = result if result and result.get("requestId") == request["requestId"] else {}
+                if result.get("state") == "rejected":
+                    evidence["lastRejectedReceipt"] = result
+                if (result.get("target") == self.target
+                        and result.get("launcherPid") == owner["pid"]
+                        and result.get("launcherIdentity") == owner["startIdentity"]):
+                    state = result.get("state")
+                    if state == "rolled-back" or state == "done" and result.get("revision") == self.target:
+                        evidence.update(result=state, receipt=result)
+                        return
+                if trial and trial.get("requestId") == request["requestId"] and trial.get("target") == self.target:
+                    # Translate the launcher's wall deadline once against the
+                    # dispatch clock. Neither torn reads nor restarts can
+                    # turn a trial into an unlimited wait.
+                    rollback = trial.get("state") == "rolled-back"
+                    bound = started + REQUEST_WAIT + SWITCH_TIMEOUT + RELAUNCH_SETTLE + (ROLLBACK_TIMEOUT if rollback else 0)
+                    expires = trial.get("switchDeadlineAt")
+                    if type(expires) in {int, float} and 0 < expires < float("inf"):
+                        deadline = max(deadline, min(bound, started + expires / 1000 - wall_start
+                                                     + RELAUNCH_SETTLE + (ROLLBACK_TIMEOUT if rollback else 0)))
+                launcher = (record or {}).get("launcher", {})
+                if (launcher.get("requestId") == request["requestId"]
+                        and launcher.get("pid") == owner["pid"]
+                        and launcher.get("startIdentity") == owner["startIdentity"]):
+                    error_kind = (launcher.get("error") or {}).get("kind")
+                    if error_kind == "message" and not trial and not path_present(self.request_file):
+                        evidence["result"] = "refused"
+                        return
+                    if (error_kind == "fell-back" and not trial and not path_present(self.request_file)
+                            and self.pointer.read_bytes() == self.baseline_text.encode("utf-8")):
+                        # The rollback receipt precedes removal of the trial.
+                        # Re-read if the first result read raced that removal.
+                        terminal = optional_json(self.result_file)
+                        if not terminal or terminal.get("requestId") != request["requestId"]:
+                            evidence["result"] = "fell-back"
+                            return
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+            remaining = deadline - self.clock.now()
+            if remaining <= 0 or evidence["unitLeftActive"]:
+                return
+            self.clock.sleep(min(1, remaining))
+
+    def identity_alive(self, entry):
+        try:
+            stat = self.process_read(entry["pid"], "stat")
+            return start_identity(stat) == entry["startIdentity"] and stat[stat.rfind(")") + 2] not in "ZX"
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+
+    def relaunch_host_inventory(self):
+        evidence = {}
+        for row in self.custody_rows:
+            host = row["host"]
+            if host["state"] != "alive":
+                continue
+            pid = host["pid"]
+            identity = self.agents.get(pid)
+            if not identity:
+                raise SwitchRefused("host identity unavailable before relaunch")
+            key = (pid, identity)
+            if key in evidence:
+                continue
+            entry = {"pid": pid, "startIdentity": identity, "bootEpoch": self.boot_epoch}
+            native = host.get("process")
+            if native and (native["startIdentity"] != str(pid) + ":" + identity
+                           or native.get("bootEpoch") not in {None, self.boot_epoch}):
+                raise SwitchRefused("host identity changed before relaunch")
+            group = kernel_cgroup(self.process_read(pid, "cgroup"))
+            if not self.identity_alive(entry):
+                raise SwitchRefused("host identity changed before relaunch")
+            scope = next((segment for segment in reversed(group.split("/")) if segment.endswith(".scope")), None)
+            # This is the host-exits slot key used by hostExit.ts. A legacy
+            # census row can lack its registry identity, so no slot is guessed.
+            slots = {}
+            writer = host.get("exitWriter")
+            if native:
+                name = hashlib.sha256(json.dumps([pid, native["startIdentity"], native.get("bootEpoch")],
+                                                 separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+                slots = {kind: self.state / "host-exits" / (name + "." + kind + ".json")
+                         for kind in ("writer", "exit", "stop")}
+            if writer and (not slots or pathlib.Path(writer["exitFile"]).resolve() != slots["exit"]
+                           or optional_json(slots["writer"]) != writer["process"]):
+                raise SwitchRefused("host exit writer changed before relaunch")
+            helpers = [{key: member[key] for key in ("pid", "startIdentity", "role")}
+                       for member in self.helper_custody.values() if member["hostPid"] == pid
+                       and member["hostStartIdentity"] == identity]
+            # A current Viewer's descendants may not yet need W1–W8 to pass
+            # the inventory. Keep their custody proof when generation found it.
+            work = {field: row.get(field) for field in ("conversationId", "pipeline", "turnState")}
+            evidence[key] = {"process": entry, "scope": scope, "cgroup": group, "slots": slots, "work": work,
+                             "writer": writer["process"] if writer else None, "helpers": helpers}
+        return evidence
+
+    def finish_relaunch(self, hosts, protected):
+        evidence = self.relaunch_evidence
+        scopes = evidence["scopes"]
+        try:
+            current = self.show_units(scopes, "LoadState", "ActiveState", "InvocationID")
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            current = {}
+            evidence["custodyUnknown"] = True
+        for name, fact in current.items():
+            scopes[name]["after"] = fact
+        sampled = {(host["pid"], host["startIdentity"]): (host, outcome)
+                   for host, outcome in zip(hosts, protected)}
+        host_evidence = {}
+        for key, before in self.relaunch_hosts.items():
+            process, scope, slots = before["process"], before["scope"], before["slots"]
+            detail = {"process": process, "scope": scope, "cgroup": before["cgroup"],
+                      "writerBefore": before["writer"], "helpersBefore": before["helpers"], "work": before["work"]}
+            host_evidence[key] = detail
+            try:
+                alive = self.identity_alive(process)
+                detail["alive"] = alive
+                after = current.get(scope)
+                if after is not None and (after["LoadState"] == "loaded" and (
+                        after["InvocationID"] and after["InvocationID"] != scopes[scope]["before"]["InvocationID"]
+                        or alive and (after["ActiveState"] != "active" or not after["InvocationID"]))
+                        or after["LoadState"] == "not-found" and alive):
+                    if scope not in evidence["scopeStopped"]:
+                        evidence["scopeStopped"].append(scope)
+                elif after is not None and after["LoadState"] not in {"loaded", "not-found"}:
+                    evidence["custodyUnknown"] = True
+                if alive and kernel_cgroup(self.process_read(process["pid"], "cgroup")) != before["cgroup"]:
+                    evidence["custodyChanged"] = True
+                detail["helpersAfter"] = [p for p in before["helpers"] if self.identity_alive(p)]
+                detail["writerAfter"] = optional_json(slots["writer"]) if slots else None
+                if alive:
+                    writer = before["writer"]
+                    writer_live = not writer or (writer.get("bootEpoch") in {None, self.boot_epoch}
+                        and writer["startIdentity"].startswith(str(writer["pid"]) + ":")
+                        and self.identity_alive({"pid": writer["pid"],
+                                                 "startIdentity": writer["startIdentity"].split(":", 1)[1]}))
+                    if (detail["helpersAfter"] != before["helpers"] or detail["writerAfter"] != writer
+                            or not writer_live or slots and optional_json(slots["exit"]) is not None):
+                        evidence["custodyChanged"] = True
+                    continue
+                exit_record = optional_json(slots["exit"]) if slots else None
+                stop = optional_json(slots["stop"]) if slots else None
+                if stop and stop.get("active") == 0:
+                    stop = stop.get("prior")
+                if stop is not None and not isinstance(stop, dict):
+                    raise ValueError("invalid host stop receipt")
+                if (exit_record is None or not (type(exit_record.get("code")) is int
+                                               or isinstance(exit_record.get("signal"), str))):
+                    evidence["custodyUnknown"] = True
+                    continue
+                detail["exit"] = {"code": exit_record.get("code"), "signal": exit_record.get("signal"),
+                                  "stopPath": (stop or {}).get("path"),
+                                  "stopOperationId": (stop or {}).get("operationId")}
+                exit_signal = detail["exit"]["signal"]
+                named_signal = isinstance(exit_signal, str) and exit_signal.upper() != "EOF"
+                signal_code = type(exit_record.get("code")) is int and 128 < exit_record["code"] < 128 + signal.NSIG
+                recorded_at = exit_record.get("at")
+                requested_at = evidence.get("requestedAt")
+                signalled = named_signal or signal_code
+                clean_exit = not signalled and (exit_signal == "EOF" or exit_record.get("code") == 0)
+                sample = sampled.get(key)
+                receipt_signal = (stop or {}).get("signal")
+                recorded_signal = signal.Signals.__members__.get(receipt_signal) if text(receipt_signal) else None
+                matching_signal = (recorded_signal
+                                   and (not named_signal or recorded_signal.name == exit_signal.upper())
+                                   and (not signal_code or 128 + recorded_signal == exit_record["code"]))
+                release_boundary = evidence.get("mergerReleaseBoundary")
+                release_stop = (sample and sample[0].get("merger")
+                                and stop and stop.get("path") == "deploy-cut" and release_boundary
+                                and stop.get("operationId") == release_boundary
+                                and receipt_signal in ("EOF", "SIGTERM", "SIGKILL"))
+                if ((clean_exit and not stop or release_stop and (clean_exit or matching_signal))
+                        and text(recorded_at) and text(requested_at)):
+                    requested, exited = parse_time(requested_at), parse_time(recorded_at)
+                    if (exited >= requested and (not release_stop or text(stop.get("at"))
+                            and requested <= parse_time(stop["at"]) <= exited)):
+                        detail["verifiedReleaseExit"] = True
+                captured_turn = before["work"].get("turnState")
+                if signalled and not detail.get("verifiedReleaseExit"):
+                    # Every signal-shaped host exit needs the durable product
+                    # stop receipt. The exit code alone is not evidence that
+                    # an idle host was intentionally cleaned up.
+                    if not detail["exit"]["stopPath"]:
+                        evidence["custodyChanged"] = True
+                    elif captured_turn == "busy":
+                        if (stop.get("path") != "pipeline-stage-stop" or not matching_signal
+                                or not self.settled_relaunch_stop(before["work"], sample, stop)):
+                            evidence["custodyChanged"] = True
+                    elif captured_turn != "idle":
+                        # The cleanup is receipted, but its effect on work we
+                        # could not classify is still uncertain.
+                        evidence["custodyUnknown"] = True
+                if (isinstance(detail["exit"]["signal"], str) and detail["exit"]["signal"].upper() != "EOF"
+                        and not detail["exit"]["stopPath"]):
+                    evidence["custodyChanged"] = True
+                    if scope and evidence["unitLeftActive"] and scope not in evidence["scopeStopped"]:
+                        evidence["scopeStopped"].append(scope)
+            except (OSError, ValueError, RuntimeError, KeyError, IndexError):
+                evidence["custodyUnknown"] = True
+        evidence["hosts"] = list(host_evidence.values())
+        for entry, outcome in zip(hosts, protected):
+            custody = host_evidence.get((entry["pid"], entry["startIdentity"]))
+            if custody:
+                outcome["custody"] = custody
+            elif outcome["outcome"] == "preserved":
+                evidence["custodyUnknown"] = True
+        self.poll_relaunch_unit()
+        return evidence
+
+    def settled_relaunch_stop(self, work, sample, stop):
+        pipeline = work["pipeline"]
+        operation = stop.get("operationId")
+        if not (sample and pipeline and text(operation)
+                and operation.endswith(f':{pipeline["stageId"]}:{pipeline["attempt"]}')):
+            return False
+        host, outcome = sample
+        if (host.get("conversationId") != work["conversationId"]
+                or any(host.get(field) != pipeline[field] for field in ("pipelineId", "stageId", "attempt"))):
+            return False
+        if outcome["outcome"] == "preserved":
+            # The host can finish between the final sample and the custody read.
+            try:
+                outcome.update(self.stage(host))
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError, IndexError):
+                return False
+        return outcome.get("settlementStopOperationId") == operation
 
     def active_state(self):
         return systemd_properties(self.command(["systemctl", "--user", "show", self.unit, "-p", "ActiveState"])).get("ActiveState")
 
-    def generation(self, group):
+    def generation(self, group, rows=None):
         """The serving generation's members of the service cgroup, read
         immediately before the stop: the recorded launcher, Viewer and runtime
         host, the launcher's verified ancestors up to MainPID, and helpers
@@ -1988,14 +2718,10 @@ class Checkout:
         Each is held as PID and start identity; only these, and processes
         whose parents still reach them, can later be proven leftovers."""
         record = json.loads(self.record_file.read_text())
-        rows = complete_census(self.census())
-        self.custody_rows = rows
-        for row in rows:
-            host = row.get("host") or {}
-            if host.get("state") == "alive" and isinstance(host.get("pid"), int):
-                proc = self.process({"pid": host["pid"]})
-                if proc:
-                    self.agents[host["pid"]] = proc["startIdentity"]
+        rows = complete_census(self.census()) if rows is None else rows
+        previous_agents = self.agents
+        self.refreshed_hosts = self.capture_hosts(rows)
+        self.agents = {**previous_agents, **self.agents}
         owners = {pid: ("agent", identity) for pid, identity in self.agents.items()}
         for key in ["launcher", "web", "runtimeHost"]:
             owners[record[key]["pid"]] = ("current", record[key].get("startIdentity"))
@@ -2264,27 +2990,72 @@ class Checkout:
             return self.relocate()
 
     def relocate(self):
-        group = self.placement()["actual"]
+        placement = self.placement()
+        group = placement["actual"]
         relocation = {"from": group, "stopSubmitted": False, "released": False, "survivors": [],
                       "signalled": [], "started": False, "startAttempts": 0,
                       "outcome": None, "placement": None, "diagnostics": []}
         self.relocation = relocation
         try:
+            # An incomplete final census cannot authorize stopping the service.
+            # This conservative boundary precedes census observation. A matching
+            # stop admitted while the census/inventory is being written stays visible.
+            self.merger_observed_at = utc()
+            self.merger_cut_boundary = self.merger_observed_at
+            self.custody_rows = complete_census(self.census(cut_boundary=self.merger_cut_boundary))
             try:
-                captured = self.generation(group)
+                captured = self.generation(group, self.custody_rows)
             except Exception as error:
                 # Without the capture no survivor can be proven, so none is signalled.
                 captured = {}
                 relocation["diagnostics"].append("generation:" + type(error).__name__)
             relocation["captured"] = len(captured)
             self.retirement_capture = captured
+            def final_relocation_fence():
+                if self.switch_mode != "relocation":
+                    return
+                current = self.placement()
+                if (current["actual"] != group or current["expected"] != placement["expected"]
+                        or group == current["expected"]):
+                    raise SwitchRefused("service placement changed before relocation")
+                self.require_relocation_safe()
+            self.arm_merger_recovery(before_stop=final_relocation_fence)
             # Marked before submission: a submission that times out may still stop.
             relocation["stopSubmitted"] = True
             self.command(["systemctl", "--user", "--no-block", "stop", self.unit])
+            # The Viewer can admit a standalone merger between the final
+            # census and systemd receiving the stop. Reconcile the durable
+            # registry once more while the named stop is pending; keep the
+            # same boundary so already recorded owners retain their key.
             def stopped():
                 if self.jobs() or self.active_state() not in ["inactive", "failed"]:
                     raise RuntimeError("named stop pending")
             retry(stopped, self.clock, STOP_SETTLE)
+            # Admission is closed only after stop settlement. Reconcile once
+            # more before starting the successor so a receipt written after
+            # the first census is durably captured.
+            try:
+                late_rows = complete_census(self.census(cut_boundary=self.merger_cut_boundary))
+                known = {row.get("conversationId"): row for row in self.custody_rows}
+                for row in late_rows:
+                    conversation = row.get("conversationId")
+                    previous = known.get(conversation)
+                    old_merger, new_merger = (previous or {}).get("merger"), row.get("merger")
+                    same_cut = (old_merger and new_merger
+                                and old_merger.get("claimEpoch") == new_merger.get("claimEpoch")
+                                and old_merger.get("process") == new_merger.get("process"))
+                    if same_cut:
+                        for field in ("writer", "batch"):
+                            if new_merger.get(field) is None and old_merger.get(field) is not None:
+                                new_merger[field] = old_merger[field]
+                    elif old_merger and not new_merger:
+                        continue
+                    known[conversation] = row
+                self.custody_rows = list(known.values())
+                self.arm_merger_recovery()
+            except Exception as error:
+                relocation["diagnostics"].append("late-merger-census:" + type(error).__name__)
+                relocation["mergerReconciliationUnknown"] = True
             if self.await_release(group, RELEASE_WAIT):
                 relocation["released"], relocation["outcome"] = True, "released"
             else:
@@ -2302,6 +3073,9 @@ class Checkout:
                     relocation["signalled"] = self.retire(survivors, group)
                     relocation["released"] = self.await_release(group, RELEASE_WAIT)
                     relocation["outcome"] = "released-after-retirement" if relocation["released"] else "not-released"
+        except SwitchRefused as error:
+            relocation["diagnostics"].append(str(error))
+            relocation["outcome"] = "stop-refused"
         except Exception as error:
             relocation["diagnostics"].append("relocation:" + type(error).__name__)
             relocation["outcome"] = relocation["outcome"] or "stop-incomplete"
@@ -2319,11 +3093,72 @@ class Checkout:
             raise RuntimeError("named service start refused")
         return relocation
 
+    def protected_stage_reader(self):
+        """One worker/sample owns these observations. Process identity is checked again for each captured host."""
+        pipelines = {}
+        census = None
+
+        def runs(pipeline_id):
+            if pipeline_id not in pipelines:
+                try:
+                    answer = self.mcp.call("get_pipeline", {"pipelineId": pipeline_id, "full": True})
+                    pipelines[pipeline_id] = (answer["pipeline"]["runs"], None)
+                except Exception as error:
+                    pipelines[pipeline_id] = (None, "pipeline-unavailable:" + type(error).__name__)
+            return pipelines[pipeline_id]
+
+        def hosts():
+            nonlocal census
+            if census is None:
+                try:
+                    result = self.read_host_census()
+                except Exception as error:
+                    census = (None, "census-unavailable:" + type(error).__name__)
+                else:
+                    try:
+                        by_conversation = {}
+                        for row in complete_census(result):
+                            by_conversation.setdefault(row.get("conversationId"), []).append(row)
+                        census = (by_conversation, None)
+                    except Exception:
+                        census = (None, "census-incomplete")
+            return census
+
+        return lambda host: self.observed_merger(host) if host.get("merger") else self.observed_stage(host, runs, hosts)
+
     def stage(self, host):
+        return self.protected_stage_reader()(host)
+
+    def observed_merger(self, host):
+        identifier = host["conversationId"]
+        rows = complete_activity(self.mcp.call("agent_activity", {"conversationId": identifier, "compact": False, "includeGone": True}))
+        active = rows[0] if len(rows) == 1 and rows[0].get("conversationId") == identifier and not rows[0].get("pipeline") else {}
+        process = active.get("host") or {}
+        observed = {"kind": "standalone-merger", "conversationId": identifier}
+        if (self.switch_mode == "relaunch" and active.get("lifecycle") == "completed"
+                and active.get("turnState") == "idle" and active.get("transcriptPath") == host["merger"]["path"]
+                and process.get("state") in ("gone", "dead")):
+            return {**observed, "outcome": "completed"}
+        if (process.get("kind") != "structured" or process.get("state") != "alive"
+                or active.get("lifecycle") in ("failed", "interrupted", "stalled") or type(process.get("pid")) is not int):
+            return {**observed, "outcome": "unknown", "reason": "merger-host-unverified"}
+        delivery = self.mcp.call("conversation_deliverability", {"conversationId": identifier})
+        if (delivery.get("conversationId") != identifier or delivery.get("transcriptPath") != host["merger"]["path"]
+                or delivery.get("deliverable") is not True or delivery.get("processRecorded") is not True):
+            return {**observed, "outcome": "unknown", "reason": "merger-deliverability-unverified"}
+        if process["pid"] == host["pid"] and self.process(host):
+            return {**observed, "outcome": "preserved"}
+        if self.process({"pid": process["pid"]}):
+            return {**observed, "outcome": "recovered"}
+        return {**observed, "outcome": "unknown", "reason": "merger-host-unverified"}
+
+    def observed_stage(self, host, read_runs, read_hosts):
         outcome = {"outcome": "unknown"}
+        runs, reason = read_runs(host["pipelineId"])
+        if reason:
+            return {**outcome, "reason": reason}
         try:
-            answer = self.mcp.call("get_pipeline", {"pipelineId": host["pipelineId"], "full": True})
-            run = next((r for r in answer["pipeline"]["runs"] if r["stageId"] == host["stageId"]), None)
+            run = next((r for r in runs if r["stageId"] == host["stageId"]), None)
             attempts = run["attempts"] if run else []
             current = max((a for a in attempts if not a.get("historical")), key=lambda a: a["n"], default={})
         except Exception as error:
@@ -2340,15 +3175,10 @@ class Checkout:
             if not conversation:
                 return {**outcome, "reason": "stage-conversation-pending"}
             outcome["observedConversationId"] = conversation
-            try:
-                result = self.read_host_census(conversation)
-            except Exception as error:
-                return {**outcome, "reason": "census-unavailable:" + type(error).__name__}
-            try:
-                rows = complete_census(result)
-            except Exception:
-                return {**outcome, "reason": "census-incomplete"}
-            matches = [row for row in rows if row.get("conversationId") == conversation]
+            rows, reason = read_hosts()
+            if reason:
+                return {**outcome, "reason": reason}
+            matches = rows.get(conversation, [])
             if len(matches) != 1:
                 return {**outcome, "reason": "census-unmatched"}
             activity = matches[0]
@@ -2486,6 +3316,8 @@ class Checkout:
             relocation = event.get("relocation")
             if relocation:
                 serving += " relocation=" + str(relocation.get("outcome"))
+            if event.get("relaunch"):
+                serving += " relaunch=" + event["relaunch"]["result"]
             recovery = event.get("recovery")
             if recovery:
                 serving += " recovery=" + recovery["state"] + " ownerPid=" + str(recovery["ownerPid"])
@@ -2520,8 +3352,9 @@ def run_worker(adapter):
             verdict = "fail" if attempted else "needs_decision"
             if getattr(adapter, "last_result", None) is None:
                 leftovers = error.members if isinstance(error, LeftoverProcesses) else None
+                diagnostic = str(error) if isinstance(error, SwitchRefused) else type(error).__name__
                 adapter.emit({"verdict": verdict, "serving": {},
-                              "diagnostics": [type(error).__name__],
+                              "diagnostics": [diagnostic],
                               "phase": "observation" if attempted else "before-switch",
                               **({"leftovers": leftovers} if leftovers else {})})
             write_json(status_file, {"phase": "finished", "at": utc(), "verdict": verdict,
@@ -2553,6 +3386,7 @@ def main():
                 waiters = sum(member["role"] == "wait-owner" for member in adapter.helper_custody.values())
                 print("Protected helper custody: " + str(waiters) + " wait owners and "
                       + str(len(adapter.helper_custody) - waiters) + " helpers of live agent hosts")
+            print("Switch mode: " + ("relaunch in place" if adapter.switch_mode == "relaunch" else "relocation (stop and start)"))
             print("Preflight: pass; no switch performed")
             return 0
         if args.start:
@@ -2578,6 +3412,8 @@ def main():
             print(line, file=sys.stderr)
         if isinstance(error, BaselineReadinessError):
             print("Procedure stopped: " + ", ".join(error.checks), file=sys.stderr)
+        elif isinstance(error, SwitchRefused):
+            print("Procedure stopped: " + str(error), file=sys.stderr)
         else:
             print("Procedure stopped: " + type(error).__name__, file=sys.stderr)
         return 2
