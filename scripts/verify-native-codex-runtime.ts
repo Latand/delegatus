@@ -51,7 +51,11 @@ export const files = [
   "src/lib/runtime/codexSteerDelivery.integration.test.ts",
   "src/lib/runtime/deliveryLongTurn.native.test.ts",
   "src/lib/runtime/codexTurnProfile.test.ts",
+  // Restart scenarios launch real fixture processes. Give each group its
+  // own file budget in the shared comparator.
   "src/lib/runtime/codexAppServerHost.test.ts",
+  "src/lib/runtime/codexAppServerHost.callbacks.test.ts",
+  "src/lib/runtime/codexAppServerHost.mcpRecovery.test.ts",
   "src/lib/runtime/claudeStreamBrokerHost.test.ts",
   "src/lib/runtime/structuredDeliveryQueue.test.ts",
   "src/lib/runtime/structuredDeliveryController.test.ts",
