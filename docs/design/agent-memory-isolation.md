@@ -380,7 +380,7 @@ None of the tests below needs root.
     - a fatal exit reaps the unit through the fake runner.
   - The watchdog over a fake process tree: an agent over its limit loses its largest PID; a root victim is fatal; the shared-budget kill; the identity-fenced reap.
 - **Host tests.** In `claudeStreamBrokerHost.test.ts`, `codexAppServerHost.test.ts` and `copilotAcpHost.test.ts`:
-  - `fakeSpawn` (`claudeStreamBrokerHost.test.ts:153`, `codexAppServerHost.test.ts:489`) captures the wrapped argv;
+  - `fakeSpawn` (`claudeStreamBrokerHost.test.ts:334`, `codexAppServerHost.fixture.ts:447`) captures the wrapped argv;
   - `FakeClaude`/`FakeAppServer` emits `close` with `SIGKILL` after the fake cgroup records `oom_kill`, and the host state reads dead with `memory.lastKill.fatal`;
   - a close during release is not classified.
 - **`src/lib/runtime/registryPersistence.test.ts`.** Memory columns persist on a terminal dead state and normalize from stored rows; malformed shapes are dropped.

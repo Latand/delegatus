@@ -9,6 +9,9 @@ import { laneStopKind } from "@/lib/pipelines/laneStop";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { cleanTitle } from "@/lib/title";
+import { isWorkingAgent } from "@/components/workingAgents";
+import { waitingRoute, waitingRouteIndex } from "@/lib/tasks/waitingRoute";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { laneNeedKind, laneWaitCleared } from "./routeTypes";
@@ -95,7 +98,7 @@ function laneLine(pipeline: Pipeline): string {
   const escalate = `if only the operator can decide, ask them with publish_prototype_review, then dismiss_attention escalate {reviewId} with target {kind:"pipeline", pipelineId:"${pipeline.id}"}`;
   switch (laneNeedKind(pipeline)) {
     case "lane-merge":
-      return `${kind}${title} — completed, its merge stopped: ${clip(pipeline.merge?.reason ?? "no reason recorded", QUESTION_MAX)}; ${mergeStep(pipeline)}; ${escalate}`;
+      return `${kind}${mergeStep(pipeline)}; ${title} — completed; merge reason: ${clip(pipeline.merge?.reason ?? "no reason recorded", QUESTION_MAX)}; ${escalate}`;
     case "lane-review":
       return `${kind}${title} —${stage} review budget spent, the last fix was not re-reviewed; pipeline_action accept-head once it holds; ${escalate}`;
     default: {
@@ -104,7 +107,7 @@ function laneLine(pipeline: Pipeline): string {
       }
       const attempt = pipeline.cursor ? latestOperationalStageAttempt(pipeline, pipeline.cursor.stageId) : null;
       if (stop?.kind !== "question" || (attempt?.verdict ?? attempt?.report?.verdict)?.status !== "needs_decision") {
-        return `${kind}${title} —${stage} ${laneQuestion(pipeline)}; repair the stop, then pipeline_action retry-stage; ${escalate}`;
+        return `${kind}${title} —${stage} pipeline_action retry-stage; ${laneQuestion(pipeline)}; repair the stop; ${escalate}`;
       }
       return `${kind}${title} —${stage} asks ${laneQuestion(pipeline)}; answer with pipeline_action resolve-decision (expectedRevision from get_pipeline), or retry-stage for a mechanical stop; ${escalate}`;
     }
@@ -120,35 +123,78 @@ function agendaKey(route: { key: string; returnedFrom?: string }): string {
 /** Said first on a wait that came back from a decision round. */
 function returnedNote(route: { returnedFrom?: string }): string {
   return route.returnedFrom
-    ? `[back from decision round ${route.returnedFrom}: read it with read_prototype_review; carry the operator's answer here, or answer or ask again if it was dismissed or replaced] `
+    ? `[back from decision round ${route.returnedFrom}: use read_prototype_review and carry out the answer or ask again if dismissed or replaced] `
     : "";
 }
 
+export interface SeatAgendaPauses {
+  quotaReadyLaneIds?: readonly string[];
+  deployLaneIds?: readonly string[];
+}
+
 /** Every wait the board routes to this project's seat, oldest first. */
-export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[] }, now: number, project: string): SeatTickWorkerAskInput[] {
+export function seatAgendaAsks(
+  body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks?: readonly BoardTask[] },
+  now: number, project: string, pauseWaitingTasks: Map<string, string[]> = new Map(),
+  pauses: SeatAgendaPauses = {},
+): SeatTickWorkerAskInput[] {
   const canonical = canonicalOrchestratorProject(project);
-  const asks: (SeatTickWorkerAskInput & { since: number })[] = [];
+  const asks: SeatTickWorkerAskInput[] = [];
+  const working = new Set<string>();
   for (const file of withoutArchivedPredecessors([...body.files])) {
     if (canonicalOrchestratorProject(file.project) !== canonical) continue;
+    if (isWorkingAgent(file, now)) {
+      working.add(file.path);
+      if (file.conversationId) working.add(file.conversationId);
+    }
     const reason = attentionReason(file, now);
     if (!reason || reason.dismissal || reason.route?.owner !== "seat") continue;
-    asks.push({ key: agendaKey(reason.route), id: file.conversationId ?? file.path, label: clip(returnedNote(reason.route) + conversationLine(file, reason), LABEL_MAX), since: reason.since });
+    asks.push({ key: agendaKey(reason.route), id: file.conversationId ?? file.path, label: clip(returnedNote(reason.route) + conversationLine(file, reason), LABEL_MAX), sinceMs: reason.since * 1000 });
+  }
+  const projectLanes = body.pipelines.filter(pipeline => canonicalOrchestratorProject(pipeline.project) === canonical);
+  const waitingLaneTasks = new Map<string, string[]>();
+  if (body.tasks?.length) {
+    const projectTasks = body.tasks.filter(task => canonicalOrchestratorProject(task.project) === canonical);
+    const index = waitingRouteIndex(body.tasks, projectLanes, working, {
+      quota: new Set(pauses.quotaReadyLaneIds), deploy: new Set(pauses.deployLaneIds),
+    });
+    for (const task of projectTasks) {
+      if (task.status === "done" || (!task.hold && task.status !== "blocked")) continue;
+      const liveMember = task.assignments.some(a => working.has(a.conversationId ?? "") || working.has(a.path ?? ""));
+      const route = waitingRoute(task, index, now * 1000, liveMember);
+      if (route?.owner !== "seat") continue;
+      if (route.carriedBy === "task") {
+        asks.push({ key: route.key, id: task.id, waitingTaskIds: [task.id],
+          label: clip(`«${clip(cleanTitle(task.text, 90), 90)}» (task ${task.id}) — ${route.why}. ${route.action}`, LABEL_MAX),
+          sinceMs: Date.parse(task.hold?.since ?? task.statusBy?.at ?? task.updatedAt) || null });
+      } else {
+        const byLane = route.rule === "pause-ready" ? pauseWaitingTasks : waitingLaneTasks;
+        const linked = byLane.get(route.laneId);
+        if (linked) linked.push(task.id);
+        else byLane.set(route.laneId, [task.id]);
+      }
+    }
   }
   const successorOwners = indexMergeSuccessors(body.pipelines);
-  const lanes = body.pipelines
-    .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === canonical)
+  const lanes = projectLanes
     .flatMap((pipeline) => {
-      if (laneWaitCleared(pipeline) || mergeSuccessor(pipeline, successorOwners)) return [];
+      if (pipeline.hiddenAt || laneWaitCleared(pipeline) || mergeSuccessor(pipeline, successorOwners)) return [];
       const state = laneState(pipeline);
       const route = state.route;
       if (state.owner !== "seat" || !route) return [];
       const kind = laneNeedKind(pipeline)?.replace("lane-", "") ?? pipeline.state;
-      return [{ key: agendaKey(route), id: pipeline.id, label: clip(returnedNote(route) + laneLine(pipeline), LABEL_MAX),
-        sinceMs: state.sinceMs,
-        seatOwnedLane: { id: pipeline.id, title: pipeline.task || pipeline.id, sinceMs: state.sinceMs,
-          reason: `${kind}: ${pipeline.merge?.state === "blocked" ? pipeline.merge.reason ?? "merge stopped" : pipeline.stateDetail ?? state.stop?.kind ?? pipeline.state}` } }];
+      const waitingTaskIds = waitingLaneTasks.get(pipeline.id)?.sort();
+      const pages = waitingTaskIds?.length ? Array.from({ length: Math.ceil(waitingTaskIds.length / 4) }, (_, page) => waitingTaskIds.slice(page * 4, page * 4 + 4)) : [undefined];
+      return pages.map((page, index) => {
+        const waiting = page?.length ? `Waiting task(s) ${page.join(", ")}: re-send or clear their holds after settling the lane. ` : "";
+        const key = agendaKey(route) + (page ? `@waiting:${index + 1}:${waitingTaskIds!.length}:${page.join(",")}` : "");
+        return { key, id: pipeline.id, label: clip(`${returnedNote(route)}${waiting}${laneLine(pipeline)}`, LABEL_MAX),
+          ...(page ? { waitingTaskIds: page } : {}), sinceMs: state.sinceMs,
+          seatOwnedLane: { id: pipeline.id, title: pipeline.task || pipeline.id, sinceMs: state.sinceMs,
+            reason: `${kind}: ${pipeline.merge?.state === "blocked" ? clip(pipeline.merge.reason ?? "merge stopped", 120) : pipeline.stateDetail ?? state.stop?.kind ?? pipeline.state}` } };
+      });
     });
-  const ordered: SeatTickWorkerAskInput[] = [...asks.map((ask) => ({ key: ask.key, id: ask.id, label: ask.label, sinceMs: ask.since * 1000 })), ...lanes];
+  const ordered: SeatTickWorkerAskInput[] = [...asks, ...lanes];
   return ordered.sort((a, b) => {
     const age = (a.sinceMs ?? Number.POSITIVE_INFINITY) - (b.sinceMs ?? Number.POSITIVE_INFINITY);
     if (age) return age;
