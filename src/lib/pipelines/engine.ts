@@ -195,7 +195,7 @@ import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork, pipelinePublicationHoldsHost } from "./hostRetirement";
+import { parkedProviderError, pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork, pipelinePublicationHoldsHost, providerRecoveryTurnMatches } from "./hostRetirement";
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
@@ -16792,10 +16792,61 @@ export function decisionAnswerActorRefusal(
   return null;
 }
 
-/** Accepting an answer reserves work; publication continuations first verify
+/** Release the provider-cut writer before a manual action reserves its successor. */
+async function releaseParkedProviderHost(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, action: "retry-stage" | "resolve-decision",
+  ports: PipelinePorts, persist: () => Promise<void>,
+): Promise<PipelinePatchResult | null> {
+  const { n, launchId, conversationId, agentPath, providerWait } = attempt;
+  const refuse = (reason: string): PipelinePatchResult => ({ status: 409, error: `${reason}. Read the stage's current activity before repeating ${action}` });
+  if (!conversationId || !agentPath || !providerWait || !ports.sourcePathAllowed(agentPath)) {
+    return refuse("The provider-cut attempt's host identity could not be verified");
+  }
+  const target = { stageId: stage.id, attempt: n, launchId, conversationId, agentPath, paneId: null };
+  const workHeld = () => ports.conversationDeliveryOutstanding?.(conversationId) !== false || recordedHostHeld(conversationId);
+  const workRefusal = () => refuse("The provider-cut attempt has pending delivery or recorded work");
+  if (workHeld()) return workRefusal();
+  const resident = await ports.stageHostResident(target);
+  if (workHeld()) return workRefusal();
+  if (!resident) return null;
+
+  const read = () => ports.durableTurnEvidence(attempt.effectiveRole.engine, agentPath, undefined,
+    attemptEvidenceFloor(attempt), undefined, providerWait.turnTs);
+  const currentCut = (evidence: StageTurnEvidence | null) => ports.sourcePathAllowed(agentPath)
+    && providerRecoveryTurnMatches(attempt, evidence, unixMs(ports.now())) && stageTurnEvidenceCurrent(evidence) === true;
+  const evidence = await read();
+  if (workHeld()) return workRefusal();
+  if (!currentCut(evidence)) return refuse("The provider cut is no longer the verified terminal turn");
+
+  // The runtime rechecks the cut, host generation, writer, and idle state
+  // before signalling. The owned key reconciles a queued stop on a later call.
+  const stopped = await ports.stopStageAgent(target, {
+    onlyIfIdle: true, requireIdleEvidence: true, operationId: terminalIdleStopKey(target),
+    providerRecovery: { pipelineId: pipeline.id, stageId: stage.id, attempt: n,
+      turnTs: providerWait.turnTs, controlGeneration: pipeline.controlGeneration ?? null },
+  });
+  if (stopped.outcome === "unresolved") {
+    rememberUnresolvedTermination(attempt, stopped, ports.now());
+    await persist();
+  }
+  if (stopped.outcome === "deferred") return { status: 409,
+    error: `The provider-cut attempt's host could not be verified idle. Wait for its turn, tools, permissions, questions, and deliveries to settle before repeating ${action}` };
+  if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+    return refuse("The provider-cut attempt's host has not confirmed termination");
+  }
+
+  const latest = await read();
+  const stillResident = await ports.stageHostResident(target);
+  if (workHeld()) return workRefusal();
+  if (stillResident || !currentCut(latest)) return refuse("The provider-cut attempt's host or transcript changed during termination");
+  return null;
+}
+
+/** Accepting an answer reserves work. Publication continuations first verify
     that the old producer has finished its repair turn. */
 async function resolveDecision(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
+  persist: () => Promise<void>,
   producerEvidence?: RepairProducerEvidence,
 ): Promise<PipelinePatchResult> {
   const refusal = decisionAnswerActorRefusal(pipeline, actor, req.clientRequestId);
@@ -16843,7 +16894,8 @@ async function resolveDecision(
   if (budgetRefusal) return budgetRefusal;
   const custodyDecision = pipeline.state === "needs_decision" && passedStageCustodyPark(pipeline, attempt);
   const publicationDecision = pipeline.state === "needs_decision" && (passedStagePublicationPark(pipeline, attempt) || custodyDecision);
-  if (stage?.kind !== "run" || !attempt || (!attempt.completedAt && !custodyDecision) || (!publicationDecision
+  const providerError = attempt && parkedProviderError(pipeline, attempt);
+  if (stage?.kind !== "run" || !attempt || (!attempt.completedAt && !custodyDecision) || (!publicationDecision && !providerError
     && (attempt.state !== "needs_decision" || attempt.verdict?.status !== "needs_decision"))) {
     return { error: "resolve-decision requires a run attempt settled with a needs_decision verdict", status: 409 };
   }
@@ -16865,10 +16917,15 @@ async function resolveDecision(
     const repairRefusal = publicationRepairProducerRefusal(pipeline, attempt, producerEvidence, ports);
     if (repairRefusal) return { error: repairRefusal, status: 409 };
   }
+  if (providerError) {
+    const hostRefusal = await releaseParkedProviderHost(pipeline, stage, attempt, "resolve-decision", ports, persist);
+    if (hostRefusal) return hostRefusal;
+    delete attempt.providerWait?.stageRetry;
+  }
   const decision: PipelineDecisionAnswer = {
     clientRequestId: req.clientRequestId, expectedRevision: answeredRevision,
     stageId: stage.id, attempt: attempt.n, nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1,
-    question: publicationDecision ? pipeline.stateDetail! : attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
+    question: providerError ?? (publicationDecision ? pipeline.stateDetail! : attempt.output ?? attempt.report?.summary ?? ""), answer: req.answer,
     actor: structuredClone(actor!), at: ports.now(),
   };
   // Custody refused before completion. Retire it only after the producer checks
@@ -17550,7 +17607,7 @@ async function applyPipelinePatch(
       return { pipeline };
     }
     if (req.action === "resolve-decision") {
-      const result = await resolveDecision(pipeline, req, actor, ports, decisionProducerEvidence);
+      const result = await resolveDecision(pipeline, req, actor, ports, persist, decisionProducerEvidence);
       if (result.pipeline && !result.replayed) await persist();
       return result;
     }
@@ -18294,8 +18351,9 @@ async function applyPipelinePatch(
         await persist();
         return { pipeline };
       }
+      const providerError = stage?.kind === "run" && attempt && parkedProviderError(pipeline, attempt);
       const parkedRunningReceipt = (state: string, receipt: { error?: string | null } | null | undefined, settlementWasPending = false): boolean =>
-        state === "path-pending" && !settledAttempt && !explicitReceiptRetry && !settlementWasPending && attempt !== null && stage?.kind === "run"
+        state === "path-pending" && !providerError && !settledAttempt && !explicitReceiptRetry && !settlementWasPending && attempt !== null && stage?.kind === "run"
         && attempt.launchId === retryLaunchId && !!attempt.agentPath && !!attempt.conversationId && !!attempt.completedAt
         && attempt.state === "needs_decision" && !attempt.report && !isStructuredSpawnPark(pipeline, attempt) && !stagedLaunchRecovery(receipt);
       /* Settlement is authoritative for launch admission, including retained
@@ -18375,7 +18433,7 @@ async function applyPipelinePatch(
            never produced a turn keeps the spawn recovery rules above. */
         if (
           state === "path-pending"
-          && parkedRunningReceipt(state, receipt, settlementWasPending)
+          && (providerError && !stagedLaunchRecovery(receipt) || parkedRunningReceipt(state, receipt, settlementWasPending))
         ) {
           return { conflict: null, claimRequired: false };
         }
@@ -18475,7 +18533,7 @@ async function applyPipelinePatch(
           return { error: "the parked attempt recorded a stage report while its host was stopping", status: 409 };
         }
       }
-      if (attempt && !completedRetry) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
+      if (attempt && !completedRetry && !providerError) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
       const beforeStop = completedRetryRefusal();
       if (beforeStop) return beforeStop;
       if (completedRetry && stage && attempt) {
@@ -18519,7 +18577,11 @@ async function applyPipelinePatch(
          The conversation can still have a live successor that owns the writer;
          inspect it after every awaited retry preparation and immediately before
          the synchronous reset. */
-      if (!completedRetry && (attempt?.state === "failed" || attempt?.state === "needs_decision")
+      if (providerError && stage && attempt) {
+        const hostRefusal = await releaseParkedProviderHost(pipeline, stage, attempt, "retry-stage", ports, persist);
+        if (hostRefusal) return hostRefusal;
+        delete attempt.providerWait?.stageRetry;
+      } else if (!completedRetry && (attempt?.state === "failed" || attempt?.state === "needs_decision")
         && attempt.conversationId && (await ports.conversationHostProcess?.(attempt.conversationId))?.state === "alive") {
         return { error: "the failed attempt still has a live stage host; retry was cancelled", status: 409 };
       }
@@ -19370,8 +19432,13 @@ async function resolveStageCompletionTarget(
       || forkSuccessors.has(target) || handoffSuccessors.has(target) || backgroundParks.has(target)));
   if (live.length === 0) {
     const settled = runStages.at(-1)!;
+    const providerError = settled.pipeline.cursor?.stageId === settled.stageId
+      && currentAttempt(settled.pipeline, settled.stageId) === settled.attempt
+      && parkedProviderError(settled.pipeline, settled.attempt);
     return { refusal: {
-      error: `stage ${settled.stageId} attempt ${settled.attempt.n} already settled as ${settled.attempt.state}; its completion can no longer be reported`,
+      error: providerError
+        ? `stage ${settled.stageId} attempt ${settled.attempt.n} settled after a provider error. Ask the pipeline owner to use retry-stage or resolve-decision once its host is idle`
+        : `stage ${settled.stageId} attempt ${settled.attempt.n} already settled as ${settled.attempt.state}; its completion can no longer be reported`,
       status: 409,
       code: "STAGE_REPORT_SETTLED",
       slots: slots(runStages),

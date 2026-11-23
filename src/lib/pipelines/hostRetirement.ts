@@ -1,5 +1,5 @@
 import type { RuntimeEngine, RuntimeProviderRecoveryRef } from "@/lib/runtime/contracts";
-import { durableStageTurnEvidence } from "./durableEvidence";
+import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
 import { liveBackgroundTasks } from "./backgroundTasks";
 import { classifyProviderCondition } from "./providerConditions";
 import { pipelineAttemptMayBeWorking } from "./attemptWorking";
@@ -72,6 +72,25 @@ export function pipelineRetirementOwnership(pipeline: Pipeline) {
 // Dependency-free so the controller scope can share it without its imports.
 export { pipelineAttemptMayBeWorking };
 
+/** Retained provider parks have no stage verdict. The closing recovery entry
+ * must still describe the current decision before a manual action can use it. */
+export function parkedProviderError(pipeline: Pipeline, attempt: PipelineStageAttempt): string | null {
+  const wait = attempt.providerWait;
+  const recovery = attempt.providerRecoveries?.at(-1);
+  const detail = attempt.error;
+  if (pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "running"
+    || attempt.state !== "needs_decision" || !attempt.completedAt || attempt.historical || attempt.report || attempt.verdict
+    || attempt.paneId || !attempt.agentPath || !attempt.conversationId || !attempt.sessionId
+    || !wait || wait.retryCancelled || !Number.isFinite(wait.turnTs) || wait.turnTs <= 0
+    || wait.condition.kind === "turn_cut" || wait.condition.kind === "host_death"
+    || recovery?.action !== "park" || recovery.condition.kind !== wait.condition.kind
+    || !recovery.summary.startsWith(`stage cut by ${wait.condition.label}`)
+    || !detail || detail !== pipeline.stateDetail) return null;
+  if (wait.stageRetry) return wait.stageRetry.controlGeneration === (pipeline.controlGeneration ?? null)
+    && detail === wait.stageRetry.detail ? detail : null;
+  return detail === recovery.summary ? detail : null;
+}
+
 /** Fresh pipeline ownership for an engine-issued recovery. A ref never grants
     authority to a source owner, publication, or a different/current attempt. */
 export function providerRecoveryAttempt(
@@ -92,32 +111,38 @@ export function providerRecoveryAttempt(
     || attempt.activation && attempt.activation.phase !== "settled" || wait.retryCancelled
     || wait.turnTs !== ref.turnTs || !Number.isFinite(ref.turnTs) || ref.turnTs <= 0
     || !attempt.startedAt || !Number.isFinite(Date.parse(attempt.startedAt)) || Date.parse(attempt.startedAt) > ref.turnTs
-    || !["usage_limit", "auth_required", "transient"].includes(wait.condition.kind)
     || attempt.effectiveRole.engine !== target.engine || !attempt.conversationId
     || resolveConversation(attempt.conversationId) !== resolveConversation(target.conversationId)
     || attempt.sessionId !== target.sessionId || !target.agentPath || attempt.agentPath !== target.agentPath
     || attempt.paneId) return null;
-  const running = pipeline.state === "running" && attempt.state === "running";
+  const accountRecovery = ["usage_limit", "auth_required", "transient"].includes(wait.condition.kind);
+  const running = accountRecovery && pipeline.state === "running" && attempt.state === "running";
   const retry = wait.stageRetry;
-  const parked = pipeline.state === "needs_decision" && attempt.state === "needs_decision" && retry
+  const parked = accountRecovery && pipeline.state === "needs_decision" && attempt.state === "needs_decision" && retry
     && retry.controlGeneration === ref.controlGeneration
     && retry.detail === pipeline.stateDetail && retry.detail === attempt.error
     && (wait.condition.kind === "usage_limit" || retry.fallback === false);
-  return running || parked ? attempt : null;
+  return running || parked || parkedProviderError(pipeline, attempt) ? attempt : null;
 }
 
 /** Native terminal evidence and complete prompt history must name this exact cut. */
-export async function providerRecoveryTurnProven(attempt: PipelineStageAttempt, ref: RuntimeProviderRecoveryRef): Promise<boolean> {
-  if (!attempt.agentPath) return false;
-  const evidence = await durableStageTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
-    undefined, attempt.startedAt, undefined, ref.turnTs);
+export function providerRecoveryTurnMatches(attempt: PipelineStageAttempt, evidence: StageTurnEvidence | null, now: number): boolean {
+  const cut = attempt.providerWait;
   const notice = evidence?.terminalProviderMessage;
   return evidence?.turn === "terminal" && evidence.promptHistoryComplete === true
-    && !!notice && notice.ts === ref.turnTs
-    && classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass, notice.text).kind === attempt.providerWait?.condition.kind
+    && !!cut && !!notice && notice.ts === cut.turnTs
+    && classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass, notice.text).kind === cut.condition.kind
     && Array.isArray(evidence.prompts)
-    && !(evidence.externalPromptAfterCut ?? evidence.prompts.some(prompt => prompt.origin === "external" && prompt.ts > ref.turnTs))
-    && Array.isArray(evidence.backgroundTasks) && liveBackgroundTasks(evidence.backgroundTasks, Date.now()).length === 0;
+    && !(evidence.externalPromptAfterCut ?? evidence.prompts.some(prompt => prompt.origin === "external" && prompt.ts > cut.turnTs))
+    && Array.isArray(evidence.backgroundTasks) && liveBackgroundTasks(evidence.backgroundTasks, now).length === 0;
+}
+
+export async function readProviderRecoveryTurnProof(attempt: PipelineStageAttempt, ref: RuntimeProviderRecoveryRef): Promise<(() => boolean) | null> {
+  if (!attempt.agentPath) return null;
+  const evidence = await durableStageTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
+    undefined, attempt.startedAt, undefined, ref.turnTs);
+  return providerRecoveryTurnMatches(attempt, evidence, Date.now())
+    ? () => stageTurnEvidenceCurrent(evidence) === true : null;
 }
 
 /** Match each recorded identity independently: adoption and runtime succession
