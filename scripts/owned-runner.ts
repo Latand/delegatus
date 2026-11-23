@@ -39,12 +39,18 @@ function alive(identity: ProcessIdentity) {
 }
 let gateParent: ProcessIdentity | undefined;
 if (gateParentPid !== undefined && process.platform === "linux") {
-  // The slot holder launches this process directly. Capture its identity
-  // before awaiting any setup and refuse a dispatch after reparenting.
+  // Bind the Bash wrapper before setup. A Bun launcher can sit between the
+  // wrapper and this process, and queue owner mappings can name another PID.
   const pid = Number(gateParentPid);
-  if (pid <= 1 || pid !== process.ppid) throw new Error("owned runner's gate wrapper ended before admission");
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("owned runner has an invalid gate wrapper PID");
   gateParent = captureProcessIdentity(pid);
-  if (!alive(gateParent)) throw new Error("owned runner has no live gate wrapper identity");
+  let ancestor = process.ppid;
+  const seen = new Set<number>();
+  while (ancestor > 1 && ancestor !== pid && !seen.has(ancestor)) {
+    seen.add(ancestor);
+    ancestor = procBackend.readPpid(ancestor) ?? 0;
+  }
+  if (ancestor !== pid || !alive(gateParent)) throw new Error("owned runner's gate wrapper ended before admission");
 }
 function writeCompletionReceipt() {
   const filename = process.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
