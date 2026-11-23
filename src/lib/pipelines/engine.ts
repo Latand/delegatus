@@ -24,7 +24,7 @@ import { claudeCloudStageClient, CLAUDE_SUBMISSION_RECOVERY_MS } from "./cloudCl
 import { HostedCloudError } from "./cloudHostedErrors";
 import { prepareCloudPatch, applyCloudPatch } from "./cloudStagePatch";
 import { FlowRetiredError, STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
-import { preparePipelineSetup } from "./git";
+import { CONTROLLER_ARTIFACT_UNSTAGE_STEP, preparePipelineSetup } from "./git";
 import { restoreMissingLaneWorktree } from "./missingWorktree";
 import { projectSetupRecipe } from "@/lib/projects/setupRecipe";
 import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequestResult } from "./stagePullRequest";
@@ -5229,7 +5229,7 @@ const CUSTODY_ACCEPTANCE_RECOVERY = "To accept the stage's own work without a ne
 function passedStageCustodyPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
   const detail = pipeline.stateDetail;
   return pipeline.cursor?.state === "committing" && attempt?.state === "needs_decision"
-    && attempt.verdict?.status === "pass" && (detail?.startsWith("settling the stage push:") === true
+    && !attempt.artifactUnstageRetry && attempt.verdict?.status === "pass" && (detail?.startsWith("settling the stage push:") === true
       || detail?.startsWith("stage push refused:") === true);
 }
 
@@ -6433,12 +6433,42 @@ function stageCommitRepairDeclined(text: string): string | null {
 
 /** The park text for a stage that was asked to repair and is parked by `reason`. */
 function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): string {
+  const unstage = isArtifactUnstageFailure(reason);
   for (const asked of [attempt.commitRepair?.detail, attempt.publicationRepair?.detail]) {
     if (asked && !reason.includes(asked)) reason += `\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
   }
-  const action = "Fix the reported staging/commit/hook failure, then use retry-stage to commit the existing outputs without rerunning the agent.";
-  return (/^(?:staging|committing) the passed stage:/.test(reason) || attempt.commitRepair?.outcome?.status === "rejected")
+  const action = unstage
+    ? "After the index is available, use retry-stage to settle the saved pass on its reported commit."
+    : "Fix the reported staging/commit/hook failure, then use retry-stage to commit the existing outputs without rerunning the agent.";
+  return (unstage || /^(?:staging|committing) the passed stage:/.test(reason) || attempt.commitRepair?.outcome?.status === "rejected")
     && !reason.includes(action) ? `${reason}\n${action}` : reason;
+}
+
+function isArtifactUnstageFailure(reason: string | null | undefined): boolean {
+  return reason?.startsWith(`${CONTROLLER_ARTIFACT_UNSTAGE_STEP}:`) === true;
+}
+
+function artifactUnstageRetryRefusal(pipeline: Pipeline, attempt: PipelineStageAttempt): string | null {
+  const report = attempt.report;
+  const saved = attempt.artifactUnstageRetry;
+  const delivery = pipeline.delivery;
+  const deliveryBranch = delivery?.disposition === "owner" ? delivery.target.branch.replace(/^refs\/heads\//, "") : null;
+  if (!report || report.verdict.status !== "pass" || attempt.verdict?.status !== "pass"
+    || !attempt.conversationId || report.actor.kind !== "agent" || report.actor.conversationId !== attempt.conversationId
+    || !report.provenance.head || !/^[0-9a-f]{40}$/.test(report.provenance.head)
+    || report.provenance.state === "pending" || report.provenance.uncommitted?.length !== 0
+    || (report.provenance.branch !== pipeline.branch && report.provenance.branch !== deliveryBranch)
+    || (saved && (saved.head !== report.provenance.head || saved.branch !== report.provenance.branch || saved.reportSeq !== report.seq))) {
+    return "the artifact cleanup retry requires a matching saved pass report for a clean owned branch and exact HEAD";
+  }
+  const operation = delivery?.operation;
+  if (operation && (operation.state !== "settled" || operation.sha !== pipeline.lastPassedCommit || operation.epoch !== delivery?.epoch)) {
+    return "another publication owns settlement; reconcile its operation before retrying artifact cleanup";
+  }
+  if (publishesRemoteBranch(pipeline) || report.provenance.branch === deliveryBranch) {
+    return deliveryOwnerError(pipeline, delivery ? pipelineDeliveryLookup({ ...delivery.target, active: true }) : null);
+  }
+  return null;
 }
 
 /** A passed turn parked at its commit boundary still owns its produced work.
@@ -6447,11 +6477,11 @@ function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): strin
 async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts): Promise<PipelinePatchResult | null> {
   const stage = currentStage(pipeline);
   const attempt = stage && currentAttempt(pipeline, stage.id);
-  if (pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
-    || !attempt || attempt.verdict?.status !== "pass"
-    || (attempt.commitRepair?.outcome?.status !== "rejected"
-      && !/^(?:staging|committing) the passed stage:/.test(attempt.error ?? "")
-      && !passedStageCustodyPark(pipeline, attempt))) return null;
+  if (pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing" || !attempt) return null;
+  const unstage = !!attempt.artifactUnstageRetry || isArtifactUnstageFailure(attempt.error);
+  const commitRefusal = attempt.verdict?.status === "pass" && (attempt.commitRepair?.outcome?.status === "rejected"
+    || /^(?:staging|committing) the passed stage:/.test(attempt.error ?? "") || passedStageCustodyPark(pipeline, attempt));
+  if (!unstage && !commitRefusal) return null;
   if (pipeline.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before retrying settlement", status: 409 };
   if (attempt.conversationId) {
     const boundary = attempt.commitRepair?.requestedAt ?? attempt.commitRepair?.sendingAt;
@@ -6466,6 +6496,12 @@ async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts):
       const pending = attempt.commitRepair ? "commit repair turn" : "stage conversation";
       return { error: `the ${pending} may still be running or queued; wait for it to finish before retrying settlement`, status: 409 };
     }
+  }
+  if (unstage) {
+    const refusal = artifactUnstageRetryRefusal(pipeline, attempt);
+    if (refusal) return { error: refusal, status: 409 };
+    const report = attempt.report!;
+    attempt.artifactUnstageRetry ??= { head: report.provenance.head!, branch: report.provenance.branch, reportSeq: report.seq };
   }
   if (attempt.commitRepair) {
     // Explicit retry renews permission for one commit after a rejected repair.
@@ -6663,8 +6699,13 @@ async function commitPassedStage(
   if (!(await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist))) return;
   /* Every park after a requested repair keeps the refusal it was about. A
      custody refusal also names its in-place recovery. */
+  const retry = attempt.artifactUnstageRetry;
   const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt,
-    /^(?:settling the stage push:|stage push refused:)/.test(reason) ? `${reason}\n${CUSTODY_ACCEPTANCE_RECOVERY}` : reason), attempt);
+    !retry && /^(?:settling the stage push:|stage push refused:)/.test(reason) ? `${reason}\n${CUSTODY_ACCEPTANCE_RECOVERY}` : reason), attempt);
+  if (retry) {
+    const refusal = artifactUnstageRetryRefusal(pipeline, attempt);
+    if (refusal) { await parkStage(refusal); return; }
+  }
   const pushRefusal = await stageAttemptPushRefusal(attempt.launchId);
   if (pushRefusal !== null) { await parkStage(pushRefusal); return; }
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
@@ -6677,13 +6718,14 @@ async function commitPassedStage(
       await persist();
     },
   } : undefined;
-  let result = allowCommit
+  let result = allowCommit || retry
     ? await commitAndAdoptStageBranch(pipeline, stage.id, ports.exec, loadPipelinesForList, attempt.branchAdoption, async (intent) => {
       attempt.branchAdoption = intent;
       await persist();
     }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl, attempt, ports.now())
     : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile, commitControl);
   if (!result.ok) {
+    if (retry) { await parkStage(result.error); return; }
     if (result.commitTimeout || result.commitCancelled) {
       const failures = (attempt.stageCommitWait?.failures ?? 0) + 1;
       if (failures > 4) {
@@ -6718,6 +6760,10 @@ async function commitPassedStage(
     await parkStage(result.error);
     return;
   }
+  if (retry && result.sha !== retry.head) {
+    await parkStage("the settled HEAD differs from the saved pass report");
+    return;
+  }
   if (attempt.stageCommitWait) {
     if (pipeline.stateDetail === attempt.stageCommitWait.detail) pipeline.stateDetail = null;
     delete attempt.stageCommitWait;
@@ -6728,7 +6774,7 @@ async function commitPassedStage(
   }
   if (pipeline.lastPassedCommit && result.sha !== pipeline.lastPassedCommit) {
     const ancestor = (await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, result.sha], pipeline.worktreeDir));
-    if (ancestor.code !== 0 && (ancestor.code !== 1 || !allowCommit)) {
+    if (ancestor.code !== 0 && (ancestor.code !== 1 || !allowCommit || retry)) {
       await parkStage(`stage head ${shortId(result.sha)} does not descend from accepted head ${shortId(pipeline.lastPassedCommit)}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`);
       return;
     }
@@ -6770,6 +6816,7 @@ async function commitPassedStage(
     return;
   }
   pipeline.lastPassedCommit = result.sha;
+  delete attempt.artifactUnstageRetry;
   if (!publishesRemoteBranch(pipeline) || terminalLocalOutput) {
     attempt.state = "passed";
     attempt.completedAt = ports.now();

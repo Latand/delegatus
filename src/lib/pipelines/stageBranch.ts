@@ -8,7 +8,7 @@ import type { ExecPort } from "@/lib/workflows/provision";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import path from "node:path";
 
-import { commitPipelineStage, reconcilePipelineStageHead, type PipelineGitResult, type ProvisionExecPort, type StageCommitControl } from "./git";
+import { commitPipelineStage, reconcilePipelineStageHead, retryStageArtifactUnstage, type PipelineGitResult, type ProvisionExecPort, type StageCommitControl } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const pipelineTerminal = (pipeline: Pipeline) => pipeline.state === "completed" || pipeline.state === "closed";
@@ -152,6 +152,11 @@ export async function commitAndAdoptStageBranch(
   const deliveryBranch = pipeline.delivery?.disposition === "owner"
     ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : null;
   const refused = (reason: string): PipelineGitResult => ({ ok: false, error: `adopting the stage branch: ${reason}` });
+  const unstageRetry = attempt?.artifactUnstageRetry;
+  if (unstageRetry && (adoption || checkedOut !== unstageRetry.branch
+    || (checkedOut !== pipeline.branch && checkedOut !== deliveryBranch))) {
+    return refused("the checkout does not match the saved pass report and owned branch");
+  }
   const commonDirectories = async (candidate: Pipeline): Promise<{ directories: Set<string>; unresolved: boolean }> => {
     const directories = new Set<string>();
     let unresolved = false;
@@ -163,6 +168,9 @@ export async function commitAndAdoptStageBranch(
     return { directories, unresolved };
   };
   const pipelineIdentity = (await commonDirectories(pipeline));
+  if (unstageRetry && (pipelineIdentity.unresolved || pipelineIdentity.directories.size !== 1)) {
+    return refused("the checkout does not belong to the saved repository");
+  }
   const others: Pipeline[] = [];
   for (const other of pipelines()) {
     if (other.id === pipeline.id) continue;
@@ -182,6 +190,10 @@ export async function commitAndAdoptStageBranch(
     ? other.branch === name || other.delivery.target.branch === `refs/heads/${name}`
     : other.branch === name && !pipelineTerminal(other));
   if (ownedByOther(source)) return refused("another pipeline owns the stage branch");
+  if (unstageRetry && deliveryBranch !== null && deliveryBranch !== source && ownedByOther(deliveryBranch))
+    return refused("another pipeline owns the delivery branch");
+  if (unstageRetry && others.some(other => other.worktreeDir === cwd && !pipelineTerminal(other)))
+    return refused("another pipeline owns the stage worktree");
   let custodyHead: string | null = null;
   if (!adoption && attempt && now && (source === pipeline.branch || source === deliveryBranch)) {
     const pushed = await performanceSpans.wait("pipeline.attempt-push-proof", async () => {
@@ -189,17 +201,21 @@ export async function commitAndAdoptStageBranch(
       if (head.code !== 0 || !/^[0-9a-f]{40}$/.test(head.stdout.trim())) return { ok: false as const,
         error: "settling the stage push: the lane head cannot be read; both tips are preserved" };
       custodyHead = head.stdout.trim();
+      if (unstageRetry && custodyHead !== unstageRetry.head) return refused("the worktree HEAD differs from the saved pass report");
       return settleStageAttemptPush(pipeline, attempt, exec, now);
     });
     if (pushed) {
       if (!pushed.ok && pushed.deferred) pipeline.stateDetail = pushed.error;
-      if (pushed.ok && attempt.report) attempt.report.provenance = { ...attempt.report.provenance, head: pushed.sha };
-      return pushed;
+      if (!pushed.ok || !unstageRetry) {
+        if (pushed.ok && attempt.report) attempt.report.provenance = { ...attempt.report.provenance, head: pushed.sha };
+        return pushed;
+      }
     }
   }
   // The proof and ordinary committer share one parent. Its existing head guard
   // also applies to clean worktrees, which otherwise accept a late foreign tip.
   const commitOwned = async (): Promise<PipelineGitResult> => {
+    if (unstageRetry) return retryStageArtifactUnstage(pipeline, unstageRetry, exec);
     const result = await commitPipelineStage(pipeline, stageId, true, exec, undefined, custodyHead, receiptFile, control);
     if (!result.ok && custodyHead !== null && result.error === `read-only stage ${stageId} created a commit`) {
       return { ...result, error: "settling the stage push: the lane head raced the attempt proof; both tips are preserved" };

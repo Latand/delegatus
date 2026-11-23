@@ -695,6 +695,8 @@ export type PipelineStageAttempt = {
   backgroundWait?: BackgroundWait;
   /** A controller commit interruption keeps the passed attempt retrying itself. */
   stageCommitWait?: { retryAt: string; detail: string; failures: number };
+  /** Artifact cleanup retries must settle the exact saved pass after restart. */
+  artifactUnstageRetry?: { head: string; branch: string; reportSeq: number };
   /** Mechanical retries retain this attempt, its accepted head and receipts. */
   settlementAdmissionRetry?: { retryAt: string; failures: number };
   spawnInterruptionRetry?: { retryAt: string; failures: number };

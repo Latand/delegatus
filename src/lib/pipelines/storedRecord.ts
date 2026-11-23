@@ -380,6 +380,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isSpawnActivation(attempt.activation) &&
     isSpawnAdmissionBudget(attempt.spawnAdmissionBudget) &&
     isStageReport(attempt.report) &&
+    isArtifactUnstageRetry(attempt.artifactUnstageRetry) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
     isStartupOwnerWait(attempt.startupOwnerWait) &&
     isStartupOwnerWait(attempt.roleMemoryDispatchWait) &&
@@ -528,6 +529,15 @@ function isStageProvenance(value: unknown): boolean {
     && provenance.outputs.every((output) => Boolean(output && typeof output === "object" && !Array.isArray(output)
       && typeof (output as { path: unknown }).path === "string"
       && ((output as { present: unknown }).present === null || typeof (output as { present: unknown }).present === "boolean")));
+}
+
+function isArtifactUnstageRetry(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const { head, branch, reportSeq } = value as Record<string, unknown>;
+  return typeof head === "string" && /^[0-9a-f]{40}$/.test(head)
+    && typeof branch === "string" && !!branch
+    && Number.isSafeInteger(reportSeq) && Number(reportSeq) > 0;
 }
 
 /** A stage attempt's own completion report (graph slice 2). */

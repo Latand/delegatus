@@ -286,6 +286,8 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const local = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     if (local.code !== 0) return refuse("the lane head cannot be read");
     const head = local.stdout.trim();
+    const retryHead = attempt.artifactUnstageRetry?.head;
+    if (retryHead && head !== retryHead) return refuse("the lane head differs from the saved pass report");
     const candidates = directory ? await recordedPushesForRef(directory, ref) : [];
     // No agent commit or push exists to adopt. Let the ordinary stage
     // committer preserve dirty output even while publication is offline.
@@ -520,6 +522,8 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     if (current.code !== 0 || current.stdout.trim() !== head) return refuse("the lane head raced the attempt proof");
     if (head !== tip) {
+      // Artifact cleanup settles an existing pass on its observed commit.
+      if (retryHead) return refuse("adopting the remote tip would move the saved pass report's head");
       const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", tip], pipeline.worktreeDir);
       if (merged.code !== 0) return refuse("the proved push could not fast-forward the lane");
     }
