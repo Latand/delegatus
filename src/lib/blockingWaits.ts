@@ -46,6 +46,8 @@ export interface BlockingWaitSample {
   /** Bounded caller coordinates for a slow registry wait, relative to source. */
   callSite?: string;
   stateWait?: { callSite: string; reason: string; outcome: string; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs: number; pid: number; processKind: string; release: string | null; holder?: StateLockHolder };
+  stageOwnership?: { before: number | null; after: number | null; reason: string;
+    change?: { laneId: string; fields: string | null; operation: string } };
   site: BlockingWaitSite;
   /** `LLV_STATE_OWNER` of this process, or `unowned`. */
   role: string;
@@ -186,6 +188,7 @@ export function recordBlockingWait(input: {
   correlation?: BlockingWaitCorrelation | null;
   refused?: boolean;
   stateWait?: BlockingWaitSample["stateWait"];
+  stageOwnership?: BlockingWaitSample["stageOwnership"];
 }): void {
   if (!Number.isFinite(input.durationMs) || (input.durationMs <= 0 && !input.refused)) return;
   const deferred = input.stateWait?.outcome === "deferred";
@@ -195,6 +198,7 @@ export function recordBlockingWait(input: {
     ...((input.site === "registry-lock" || input.site === "registry-revision-retry" || input.site === "registry-lock-async") && input.durationMs >= BLOCKING_WAIT_LOG_MS
       ? { callSite: registryWaitCallSite(new Error().stack) } : {}),
     ...(input.stateWait ? { stateWait: input.stateWait } : {}),
+    ...(input.stageOwnership ? { stageOwnership: input.stageOwnership } : {}),
     role: blockingWaitRole(),
     durationMs: round(input.durationMs),
     synchronous: input.synchronous,

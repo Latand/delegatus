@@ -1574,6 +1574,31 @@ function pipelineIndexRevision(filename: string, table: "pipeline_evidence_clock
   return clock ? `${identity.slice(filename.length + 1)}:${schema}:${clock.revision}` : null;
 }
 
+type StageAuthorityChange = { revision: number; lane_id: string; operation: string; fields: string | null };
+
+/** One snapshot of the global clock and the newest write to any selected key.
+ * Every lookup is by primary key; registry size and unrelated writes do not
+ * affect the number of rows read. */
+export function pipelineStageAuthority(filename: string, keys: string): {
+  identity: string; revision: number; change: StageAuthorityChange | null;
+} | null {
+  const reader = evidenceVersions.reader;
+  if (!reader || !reader.identity.startsWith(`${filename}:`)) return null;
+  const { db, identity } = reader;
+  const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+  if (!evidenceIndexReadyAt(db, `${identity}:${schema}`)) return null;
+  const row = db.query<{ schema_version: number; clock: number; revision: number | null } & Omit<StageAuthorityChange, "revision">, [string]>(`
+    SELECT schema_version,clock.revision AS clock,latest.* FROM pragma_schema_version,pipeline_authority_clock clock LEFT JOIN (
+      SELECT a.revision,a.lane_id,a.operation,a.fields FROM json_each(?) keys
+      CROSS JOIN pipeline_stage_authority a ON a.key=keys.value
+      ORDER BY a.revision DESC,a.lane_id LIMIT 1
+    ) latest ON true WHERE clock.id=1`).get(keys);
+  if (!row || row.schema_version !== schema) return null;
+  const { clock, revision, lane_id, operation, fields } = row;
+  return { identity: `${identity.slice(filename.length + 1)}:${schema}`, revision: clock,
+    change: revision === null ? null : { revision, lane_id, operation, fields } };
+}
+
 export type PipelineRecipientSelection = { ids: readonly string[]; conversationIds: readonly string[];
   agentPaths?: readonly string[]; sessionIds?: readonly string[] };
 

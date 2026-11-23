@@ -13959,10 +13959,12 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     });
     const remaining = unixMs(waiting?.retryAfter ?? null) - unixMs(ports.now());
     if (remaining > 0) { ports.scheduleTick?.(remaining); throw preparationRefusal(); }
-    const ownership = stageBranchOwnershipReader(preview.id);
+    const ownership = stageBranchOwnershipReader(preview, attempt.branchAdoption?.branch ?? ports.stageBranchProtections?.get(preview.id)?.branch);
     let ownershipFence: string;
-    try { ownershipFence = await ownership.read(); }
-    catch (error) {
+    try {
+      ownershipFence = await ownership.read();
+      if (!ownership.current()) throw new Error("pipeline branch ownership changed during settlement");
+    } catch (error) {
       await recordStageSettlementPreparationFailure(preview, preparationIdentity, ports, error);
       throw preparationRefusal();
     }
@@ -13976,8 +13978,8 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
       ownershipInvalidated = true;
       return false;
     };
-    const matches = (current: Pipeline | null) => current !== null && version() === rowVersion
-      && ownershipCurrent() && controllerTickFingerprint(current) === fingerprint
+    const matches = (current: Pipeline | null) => current !== null && ownershipCurrent()
+      && version() === rowVersion && controllerTickFingerprint(current) === fingerprint
       && !(current.delivery?.operation?.state === "running" && proactivePipelineExecutionError(current, "prepare"))
       && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
@@ -14001,7 +14003,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     let validation: Promise<void> | undefined;
     const revalidate = () => validation ??= withViewerOperation("pipelines.revalidate", async () => {
       try {
-        if (version() !== rowVersion) { abort.abort(); return; }
+        if (version() !== rowVersion) { ownershipCurrent(); abort.abort(); return; }
         if (await ownership.read() !== ownershipFence) {
           ownershipInvalidated = true;
           abort.abort();
