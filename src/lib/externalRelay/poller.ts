@@ -1,6 +1,6 @@
 import { RelayPollDiagnostics, relayPollFailure } from "./pollDiagnostics";
 import { ownerTierFor } from "./profile";
-import { ownerRunRoot } from "./runDirectory";
+import { removeOwnerRunDirectory } from "./runDirectory";
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { deliverOwnerLateAnswer, expireOwnerLateAnswer, ownerLateAnswerTerminal, ownerLateAnswerUndeliverable, ownerRecoveryRequest } from "./ownerLateDelivery";
 import { ownerFailureAnswer, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
@@ -338,8 +338,9 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
   await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
 }
 function removeRunDirectory(directory: string): void {
-  if ([externalRelayTempRoot(), ownerRunRoot()].includes(path.dirname(path.resolve(directory))) && path.basename(directory).startsWith("llv-external-relay-"))
+  if (path.dirname(path.resolve(directory)) === externalRelayTempRoot() && path.basename(directory).startsWith("llv-external-relay-"))
     fs.rmSync(directory, { recursive: true, force: true });
+  else removeOwnerRunDirectory(directory);
 }
 /* A paired relay's targets come from endpoint 6 whenever the settings page
    reads them (at most every 30 s), every 5 min from the claim loop, and once

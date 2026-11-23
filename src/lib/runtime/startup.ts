@@ -1,8 +1,13 @@
 import { registryOpenSpawnReceipts } from "@/lib/agent/registry";
+import path from "node:path";
 import { restoreStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { realExec } from "@/lib/workflows/provision";
 import { stageGitEnvironment } from "./stageGitEnvironment";
 import { withHostStopOrigin } from "./hostExit";
+import { checkoutMergerCustody, checkoutMergerHostKey, checkoutMergerOperationId, checkoutMergerTurn, checkoutMergerWithinWindow, currentCheckoutMerger,
+  readCheckoutMergerCuts, CHECKOUT_MERGER_BOUNDARY, CHECKOUT_MERGER_WINDOW_MS, type CheckoutMergerCut } from "./checkoutMergerRecovery";
+import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
@@ -115,6 +120,7 @@ let deferredAdoptionLogged = false;
 type RecipientStartupAuthority = Required<Pick<import("./structuredRecovery").StructuredRecoveryRequest,
   "admissionGuard" | "authorityGuard" | "acceptSuccessorClaim">>;
 type StartupPassState = {
+  restartCutObservations?: Map<string, { owner: string; at: number; transcript: string; workAt: number | null }>;
   recipients?: Map<string, Promise<RecipientStartupAuthority>>;
   recipientDependencies?: StructuredStartupDependencies;
   /** The host rows this process has found cut. The set silences the generic
@@ -640,6 +646,7 @@ interface RestartCutRecognition {
       compared wherever this pass would replace the predecessor's ownership of
       the row. */
   stamps: Map<string, RestartCutStamp>;
+  continuing: Set<string>;
   /** Proposals the evidence no longer supports: restart records of a row no
       successor has taken, which this pass decided "no cut" from durable
       evidence that the turn ended. */
@@ -665,6 +672,12 @@ function transcriptIdentity(transcriptPath: string): string {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
   }
+}
+
+function transcriptGrewSince(before: string, after: string): boolean {
+  const [beforeDevice, beforeInode, beforeSize] = before.split(":");
+  const [device, inode, size] = after.split(":");
+  return device === beforeDevice && inode === beforeInode && Number(size) > Number(beforeSize);
 }
 
 function fileModifiedAt(filename: string): number | "absent" | "unknown" {
@@ -765,8 +778,13 @@ async function restartCutTargets(
   readLedger: typeof readHostTurnRecord,
   prepared: RegistryFile | undefined = undefined,
   now = Date.now(),
+  checkoutMergerKeys: ReadonlySet<string> = new Set(),
 ): Promise<RestartCutRecognition> {
   const snapshot = prepared ?? await preparedStartupSnapshot(registry);
+  const observations = startupPassState(registry).restartCutObservations ??= new Map();
+  if (!scope) for (const key of observations.keys()) {
+    if (!snapshot.entries[key]?.structuredHost) observations.delete(key);
+  }
   const seated = new Set(seats.flatMap((seat) => seat.conversationId?.startsWith("conversation_")
     ? [registry.canonicalConversationId(seat.conversationId as ViewerConversationId)]
     : []));
@@ -781,7 +799,7 @@ async function restartCutTargets(
     const id = registry.canonicalConversationId(obligation.conversationId);
     recorded.set(id, [...recorded.get(id) ?? [], obligation]);
   }
-  const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), settled: new Set(), stamps: new Map(), disproved: [] };
+  const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), settled: new Set(), stamps: new Map(), continuing: new Set(), disproved: [] };
   const self = captureProcessIdentity(process.pid);
   for await (const conversation of startupHostedConversationRows(snapshot)) {
     const generation = conversation.generations.at(-1);
@@ -790,6 +808,7 @@ async function restartCutTargets(
     /* A seat has its own capture and is not stamped by this one. */
     if (seated.has(conversationId)) continue;
     const hostKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
+    if (checkoutMergerKeys.has(hostKey)) continue;
     const entry = snapshot.entries[hostKey];
     const proposals = entry
       ? (recorded.get(conversationId) ?? []).filter((obligation) => restartCutProposal(obligation, { hostKey, claimEpoch: entry.claimEpoch }))
@@ -819,6 +838,31 @@ async function restartCutTargets(
       : await readStableTailRecords(generation.path).catch((): StableTailRead => ({ integrity: "uncertain", records: [] }));
     const evidence = tail.integrity === "complete" ? transcriptCutEvidenceFromRecords(tail.records, conversation.engine) : null;
     const at = evidence?.lastWork?.at ?? null;
+    // A registry checkpoint can precede unfinished work before the restart.
+    // Only new work after this startup first observed this owner proves
+    // continuity. Keep the first observation across every deferral re-probe.
+    const owner = JSON.stringify([generation.path, entry.claimEpoch, entry.claimOwner,
+      entry.structuredHost.endpoint, entry.structuredHost.process]);
+    let observation = observations.get(hostKey);
+    if (!observation || observation.owner !== owner) {
+      observation = { owner, at: now, transcript, workAt: at };
+      observations.set(hostKey, observation);
+    }
+    const latest = startupHostSnapshot(registry, entry.key).entries[hostKey];
+    const engine = entry.structuredHost.process;
+    if (live && at !== null && at > observation.at && at > (observation.workAt ?? -Infinity)
+      && transcriptGrewSince(observation.transcript, transcript)
+      && latest?.claimEpoch === entry.claimEpoch && latest.claimOwner === entry.claimOwner
+      && latest.updatedAt === entry.updatedAt && latest.artifactPath === generation.path
+      && latest.structuredHost?.endpoint === entry.structuredHost.endpoint
+      && latest.structuredHost?.process && engine
+      && sameRecordedProcessIdentity(engine, latest.structuredHost.process)
+      && processIdentityStatus(engine) === "alive") {
+      recognition.settled.add(hostKey);
+      recognition.continuing.add(hostKey);
+      recognition.disproved.push(...proposals);
+      continue;
+    }
     const files = restartCutStampFiles(
       ledger.state === "read" ? ledger.identity : ledger.state === "absent" ? "absent" : hostTurnRecordIdentity(generation.id),
       transcript,
@@ -903,6 +947,106 @@ async function restartCutTargets(
     });
   }
   return recognition;
+}
+
+async function checkoutMergersForStartup(registry: AgentRegistry, store: InterruptionObligationStore,
+  scope: ReadonlySet<string> | null, client: RuntimeHostClient | null) {
+  const cuts = readCheckoutMergerCuts(path.dirname(registry.filename));
+  const captured = new Map<string, CheckoutMergerCut>();
+  const waiting = new Set<string>();
+  if (!cuts.length) return { captured, waiting };
+  const records = store.list();
+  const existing = new Map(records.filter(row => row.boundary.startsWith(CHECKOUT_MERGER_BOUNDARY))
+    .map(row => [`${row.conversationId}:\0${row.boundary}`, row]));
+  const releaseCuts = new Map<string, InterruptionObligation[]>();
+  for (const row of records) {
+    if (row.reason !== "viewer-release" || row.seat || row.stage || row.state !== "owed") continue;
+    const group = releaseCuts.get(row.hostKey) ?? [];
+    group.push(row);
+    releaseCuts.set(row.hostKey, group);
+  }
+  await forEachStartupBatch(cuts, async cut => {
+    const key = checkoutMergerHostKey(cut);
+    if (scope && !scope.has(key)) return;
+    const current = () => registry.livenessConversationSnapshot(cut.conversationId);
+    const resolveReleaseCuts = () => {
+      for (const row of releaseCuts.get(key) ?? []) {
+        if (row.conversationId === cut.conversationId && row.claimEpoch === cut.claimEpoch
+          && row.owner && sameRecordedProcessIdentity(cut.process, row.owner)
+          && (registry.deliveryAdmissionForKey(cut.conversationId, row.id).outcome === "not-executed"
+            || row.state === "owed" && row.attempts === 0)) {
+          store.update(row.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "the checkout cut accounts for this predecessor" });
+        }
+      }
+    };
+    const uncertainRelease = (releaseCuts.get(key) ?? []).some(row => row.conversationId === cut.conversationId
+      && row.claimEpoch === cut.claimEpoch && row.owner && sameRecordedProcessIdentity(cut.process, row.owner)
+      && row.state === "owed" && (() => {
+        const admission = registry.deliveryAdmissionForKey(cut.conversationId, row.id);
+        return admission.outcome === "admitted" || admission.outcome === "unknown" && row.attempts > 0;
+      })());
+    if (uncertainRelease) { waiting.add(key); return; }
+    const prior = existing.get(`${cut.conversationId}:\0${cut.boundary}`);
+    if (prior) {
+      const entry = currentCheckoutMerger(current(), cut);
+      if (entry?.claimEpoch === cut.claimEpoch || entry?.claimEpoch === cut.claimEpoch + 1 && interruptionObligationUnresolved(prior)) {
+        captured.set(key, cut);
+        resolveReleaseCuts();
+      }
+      return;
+    }
+    const custody = checkoutMergerCustody(current(), cut);
+    if (custody === "changed") return;
+    captured.set(key, cut);
+    // Expiry ends the unattended continuation and keeps the generic startup
+    // nudge from reopening this same captured predecessor under another key.
+    if (!checkoutMergerWithinWindow(cut)) return;
+    let explicitlyStopped = false;
+    if (custody === "ended") {
+      if (!client) { waiting.add(key); return; }
+      try {
+        explicitlyStopped = await hasRuntimeSwitchKill(client, cut.conversationId, cut.capturedAt, [], true, true);
+      } catch {
+        waiting.add(key);
+        return;
+      }
+      assertStartupReadActive();
+    }
+    const turn = custody === "ended" && !explicitlyStopped ? await checkoutMergerTurn(cut) : null;
+    assertStartupReadActive();
+    if (!checkoutMergerWithinWindow(cut)) return;
+    if (custody === "ended" && !explicitlyStopped) {
+      if (!client) { waiting.add(key); return; }
+      try {
+        explicitlyStopped = await hasRuntimeSwitchKill(client, cut.conversationId, cut.capturedAt, [], true, true);
+      } catch {
+        waiting.add(key);
+        return;
+      }
+      assertStartupReadActive();
+    }
+    // Read again at the record write, including explicit stop and a successor
+    // claim acquired while the transcript was being read.
+    const latest = checkoutMergerCustody(current(), cut);
+    if (latest === "changed") {
+      captured.delete(key);
+      return;
+    }
+    if (latest === "wait" || latest === "ended" && !explicitlyStopped && (turn === null || turn === "wait")) {
+      waiting.add(key);
+      return;
+    }
+    const answeredBy = latest === "stopped" || explicitlyStopped ? "the merger was explicitly stopped"
+      : turn === "finished" ? "the captured merger turn settled" : undefined;
+    const { obligation } = store.record({
+      conversationId: cut.conversationId, engine: cut.engine, hostKey: key, path: cut.path,
+      owner: cut.process, claimEpoch: cut.claimEpoch, turnRef: null, boundary: cut.boundary,
+      reason: "viewer-restart", recordedAt: cut.capturedAt, checkpoint: { lastEventKind: null, lastEventAt: null },
+      seat: null, ...(answeredBy ? { answeredBy } : {}),
+    });
+    if (obligation.boundary === cut.boundary) resolveReleaseCuts();
+  }, assertStartupReadActive);
+  return { captured, waiting };
 }
 
 /** Records each cut once. A cut the host ledger decided is named by the turn
@@ -1016,7 +1160,8 @@ function interruptionObligationDischarge(
   }
   if (settledStageConversationIds.has(conversationId)) return "its pipeline stage is already settled";
   const recordedAt = Date.parse(obligation.recordedAt);
-  if (now - recordedAt > INTERRUPTION_OBLIGATION_MAX_AGE_MS) return "the interruption is too old to resume unattended";
+  const maxAge = obligation.boundary.startsWith(CHECKOUT_MERGER_BOUNDARY) ? CHECKOUT_MERGER_WINDOW_MS : INTERRUPTION_OBLIGATION_MAX_AGE_MS;
+  if (now - recordedAt > maxAge) return "the interruption is too old to resume unattended";
   /* An admitted continuation is replayed under its own key until it reports
      arrival; a later message cannot un-send it. */
   if (obligation.state !== "owed") return null;
@@ -1097,7 +1242,9 @@ function settleSubmittedInterruptionObligations(
     const outcome = obligation.state === "submitted"
       ? submittedContinuationOutcome(obligation, snapshot, (id) => registry.canonicalConversationId(id))
       : null;
-    if (!outcome) {
+    const checkout = outcome && obligation.boundary.startsWith(CHECKOUT_MERGER_BOUNDARY)
+      ? registry.deliveryAdmissionForKey(obligation.conversationId, obligation.id) : null;
+    if (!outcome || checkout && (checkout.outcome !== "admitted" || checkout.state !== outcome.state)) {
       unresolved.push(obligation);
       continue;
     }
@@ -1158,6 +1305,8 @@ async function deliverInterruptionContinuations(
   store: InterruptionObligationStore,
   obligations: readonly InterruptionObligation[],
   publishedHostKeys: ReadonlySet<string>,
+  checkoutMergers: ReadonlyMap<string, CheckoutMergerCut>,
+  assertActive: () => void,
 ): Promise<string[]> {
   const failures: string[] = [];
   /* Each conversation's continuations are admitted one after another, every
@@ -1170,12 +1319,50 @@ async function deliverInterruptionContinuations(
   }
   const deliverOne = async (obligation: InterruptionObligation): Promise<void> => {
     if (obligation.reason === "account-guard") return;
-    if (!publishedHostKeys.has(obligation.hostKey)) return;
+    const checkout = checkoutMergers.get(obligation.hostKey);
+    const merger = obligation.boundary.startsWith(CHECKOUT_MERGER_BOUNDARY);
+    if (merger ? checkout?.boundary !== obligation.boundary : !publishedHostKeys.has(obligation.hostKey)) return;
     const snapshot = registry.livenessConversationSnapshot(obligation.conversationId);
     const recorded = snapshot.entries[obligation.hostKey]?.structuredHost?.process ?? null;
-    if (obligation.owner && recorded
+    if (!merger && obligation.owner && recorded
       && recorded.pid === obligation.owner.pid
       && recorded.startIdentity === obligation.owner.startIdentity) return;
+    const checkoutAuthority = checkout && merger ? () => {
+      assertActive();
+      const latest = registry.livenessConversationSnapshot(checkout.conversationId);
+      const current = currentCheckoutMerger(latest, checkout);
+      const admission = registry.deliveryAdmissionForKey(checkout.conversationId, obligation.id);
+      const sameReservation = admission.outcome === "admitted" && admission.operationId === checkoutMergerOperationId(checkout);
+      const freshCutAdmission = admission.outcome === "unknown" && checkout.admissionProof === "fresh-cut-v1";
+      const ended = checkoutMergerCustody(latest, checkout) === "ended";
+      if (!current || !checkoutMergerWithinWindow(checkout)
+        || !(ended && (admission.outcome === "not-executed" || freshCutAdmission)
+          || sameReservation && (ended || current.claimEpoch === checkout.claimEpoch + 1))
+        || newerInterruptionMessages(registry, obligation, latest, new Map()).some(message => message.pending || message.delivered)) {
+        throw new DeliveryAdmissionRefusedError("standalone merger recovery authority changed");
+      }
+    } : undefined;
+    if (checkout && merger) {
+      const prior = registry.deliveryAdmissionForKey(checkout.conversationId, obligation.id);
+      if (prior.outcome === "unknown" && checkout.admissionProof !== "fresh-cut-v1"
+        || prior.outcome === "not-executed" && checkoutMergerCustody(snapshot, checkout) !== "ended") return;
+      if (typeof client.effectBatch !== "function") {
+        failures.push(`${checkout.conversationId}: stop evidence is unavailable`);
+        return;
+      }
+      const stopped = await hasRuntimeSwitchKill(client, checkout.conversationId, checkout.capturedAt, [], true, true);
+      assertActive();
+      if (stopped) {
+        store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "the merger was explicitly stopped" });
+        return;
+      }
+      checkoutAuthority?.();
+      // A send admitted or delivered while we read the journal wins the
+      // conversation. The normal continuation probe reconciles it next.
+      const latest = registry.livenessConversationSnapshot(checkout.conversationId);
+      if (newerInterruptionMessages(registry, obligation, latest, new Map()).some(message => message.pending || message.delivered)) return;
+      if (prior.outcome !== "admitted" && checkoutMergerCustody(latest, checkout) !== "ended") return;
+    }
     const conversation = snapshot.conversations[registry.canonicalConversationId(obligation.conversationId)];
     const generation = conversation?.generations.at(-1);
     if (!conversation || !generation) return;
@@ -1183,14 +1370,19 @@ async function deliverInterruptionContinuations(
       path: generation.path,
       conversationId: conversation.id,
       clientMessageId: obligation.id,
-      text: interruptionContinuationText(obligation),
+      text: interruptionContinuationText(obligation, checkout?.batch ? path.join(checkout.batch.directory, "tmp") : undefined),
+      ...(checkout && merger ? { operationId: checkoutMergerOperationId(checkout), policy: "queue" as const,
+        ...(checkout.admissionProof === "fresh-cut-v1" ? { freshCheckoutCutAdmission: true as const } : {}) } : {}),
       images: [],
       origin: delegatusOriginForRecipient(snapshot, conversation.id, RECOVERY_NOTICE_ORIGIN.role ?? "runtime-host"),
+      admissionGuard: checkoutAuthority,
+      recoveryAuthorityGuard: checkoutAuthority,
     }, {
       enabled: () => true,
       client: () => client,
       registry: () => registry,
       interruptionContinuation: true,
+      authorizeDispatch: checkoutAuthority,
     });
     if (result?.ok) {
       store.update(obligation.id, {
@@ -1223,7 +1415,9 @@ async function deliverInterruptionContinuations(
       try {
         await deliverOne(obligation);
       } catch (error) {
-        failures.push(`${obligation.conversationId}: ${error instanceof Error ? error.message : String(error)}`);
+        const failure = `${obligation.conversationId}: ${error instanceof Error ? error.message : String(error)}`;
+        if (obligation.boundary.startsWith(CHECKOUT_MERGER_BOUNDARY)) console.error("[structured hosts] merger continuation deferred", failure);
+        else failures.push(failure);
       }
     }
   }));
@@ -2509,6 +2703,7 @@ function startStructuredHostPass(
     const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
     const generation = await client?.startupGeneration?.() ?? null;
     const replaced = Boolean(current.ready && generation && current.generation && generation !== current.generation);
+    if (replaced) current.restartCutObservations?.clear();
     if (current.ready && !resumeDeferred && !replaced) return current.ready;
     const isolatedRowRetry = rowRetry && !replaced;
     startupDiagnostic("error", isolatedRowRetry ? "[structured hosts] row retry admitted" : "[structured hosts] startup pass admitted", {
@@ -2685,6 +2880,8 @@ async function adoptStructuredHostsPass(
      the agent resumed and the restart cut again is seen. */
   settleSubmittedInterruptionObligations(registry, interruptions,
     interruptions.list().filter(interruptionObligationUnresolved));
+  const checkout = await checkoutMergersForStartup(registry, interruptions, resumeDeferred, client);
+  const checkoutKeys = new Set([...checkout.captured.keys(), ...checkout.waiting]);
   const recognition = await restartCutTargets(
     registry,
     orchestratorSeats(),
@@ -2692,6 +2889,8 @@ async function adoptStructuredHostsPass(
     resumeDeferred,
     dependencies.readHostTurnRecord ?? readHostTurnRecord,
     recoveryBoundarySnapshot,
+    Date.now(),
+    checkoutKeys,
   );
   const passState = startupPasses.get(registry);
   const cutHostKeys = passState ? passState.cutHostKeys ??= new Set<string>() : new Set<string>();
@@ -2704,7 +2903,7 @@ async function adoptStructuredHostsPass(
      disproved proposal is still on file: left exactly as they were, and asked
      again by the deferral re-probe. */
   const heldHostKeys = new Set([...recognition.undecided, ...unwithdrawn]);
-  for (const key of [...recognition.stamps.keys(), ...recognition.cuts.map((cut) => cut.hostKey)]) {
+  for (const key of [...recognition.stamps.keys(), ...recognition.continuing, ...recognition.cuts.map((cut) => cut.hostKey)]) {
     if (!heldHostKeys.has(key)) releaseRestartCutRow(key);
   }
   /* A queued message's on-demand recovery waits for these rows as well, until
@@ -2815,7 +3014,7 @@ async function adoptStructuredHostsPass(
   }
   {
     assertActive();
-    const deferredHostKeys = new Set<string>();
+    const deferredHostKeys = new Set<string>(checkout.waiting);
     if (pipelineEvidence.deferred.size) {
       const deferralSnapshot = await preparedStartupSnapshot(registry);
       for await (const conversation of startupConversationRows(deferralSnapshot)) {
@@ -2857,6 +3056,8 @@ async function adoptStructuredHostsPass(
     await reconcileDeadStructuredRegistryHostsOffLoop(registry, (entry) => hasStructuredDeliveryHost(entry.key)
       || orchestratorHostKeys.has(sessionKeyId(entry.key))
       || interruptionHostKeys.has(sessionKeyId(entry.key))
+      || checkoutKeys.has(sessionKeyId(entry.key))
+      || recognition.continuing.has(sessionKeyId(entry.key))
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key))
       || delayedRows.has(sessionKeyId(entry.key))
@@ -2904,6 +3105,9 @@ async function adoptStructuredHostsPass(
       try { assertActive(); } catch { return false; }
       return (!resumeDeferred || resumeDeferred.has(sessionKeyId(entry.key)))
         && !hasStructuredDeliveryHost(entry.key)
+        && !recognition.continuing.has(sessionKeyId(entry.key))
+        && (!checkoutKeys.has(sessionKeyId(entry.key)) || Boolean(entry.structuredHost?.process
+          && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })))
         && !delayedRows.has(sessionKeyId(entry.key))
         && !retainedHostKeys.has(sessionKeyId(entry.key))
         && !skippedHostKeys.has(sessionKeyId(entry.key))
@@ -3217,7 +3421,9 @@ async function adoptStructuredHostsPass(
     const candidateHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
     const shouldRetainCandidateOrAdopt: StructuredHostAdoptionFilter = (entry) =>
       hasStructuredDeliveryHost(entry.key) || candidateHostKeys.has(sessionKeyId(entry.key))
+      || checkoutKeys.has(sessionKeyId(entry.key))
       || codexBootAdoptionRetired(entry)
+      || recognition.continuing.has(sessionKeyId(entry.key))
       /* A row this boot could not read a transcript for is left exactly as it
          was. The demotion below retires a skipped row — it releases the endpoint,
          clears the active turn and can signal an unclaimable Claude orphan — and
@@ -3235,6 +3441,7 @@ async function adoptStructuredHostsPass(
       (item): item is AdoptedCodexHost => item.key.engine === "codex"
         && startupHostInScope(registry, sessionKeyId(item.key))
         && !orchestratorHostKeys.has(sessionKeyId(item.key))
+        && !checkoutKeys.has(sessionKeyId(item.key))
         && !interruptionHostKeys.has(sessionKeyId(item.key))
         && !neverNudged.has(sessionKeyId(item.key)),
     );
@@ -3330,6 +3537,7 @@ async function adoptStructuredHostsPass(
       (item): item is AdoptedCodexHost => item.key.engine === "codex"
         && startupHostInScope(registry, sessionKeyId(item.key))
         && !orchestratorHostKeys.has(sessionKeyId(item.key))
+        && !checkoutKeys.has(sessionKeyId(item.key))
         && !interruptionHostKeys.has(sessionKeyId(item.key))
         && !neverNudged.has(sessionKeyId(item.key))
         && !heldHostKeys.has(sessionKeyId(item.key)),
@@ -3371,7 +3579,7 @@ async function adoptStructuredHostsPass(
       }
       assertAdoptedHostsAreClaimed(nextAdoptedHosts, dependencies.hostClaimed);
     }
-    const waitingContinuationHostKeys = new Set<string>();
+    const waitingContinuationHostKeys = new Set(checkout.waiting);
     if (client) {
       await reportProgress("recovering orchestrator deliveries");
       /* Re-read: identity, a seat rotation or a message admitted while this
@@ -3405,7 +3613,7 @@ async function adoptStructuredHostsPass(
         return false;
       });
       const continuationFailures = await deliverInterruptionContinuations(
-        registry, client, interruptions, readyInterruptions, finalHostKeys,
+        registry, client, interruptions, readyInterruptions, finalHostKeys, checkout.captured, assertActive,
       );
       await reportProgress("recovering interrupted deliveries");
       const codexContinuationFailures = await enqueueInterruptedCodexContinuations(
@@ -3418,6 +3626,11 @@ async function adoptStructuredHostsPass(
       );
       await reportProgress("kicking recovered deliveries");
       await kickStructuredDeliveryQueue();
+      if (checkoutKeys.size) {
+        const unresolved = settleSubmittedInterruptionObligations(registry, interruptions,
+          interruptions.list().filter(row => checkoutKeys.has(row.hostKey) && interruptionObligationUnresolved(row)));
+        for (const row of unresolved) waitingContinuationHostKeys.add(row.hostKey);
+      }
       /* The pass retries until every owed continuation is admitted; each retry
          replays the same key, so a slow admission never becomes a second one. */
       if (continuationFailures.length > 0) {

@@ -4,6 +4,7 @@ import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sendFailureWarningSuppressed, sweepSendFailureNotices } from "./sendFailureNotice";
 import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "./agentScope";
 import { withHostStopOrigin } from "./hostExit";
+import { checkoutMergerCutForOperation, currentCheckoutMerger } from "./checkoutMergerRecovery";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
@@ -90,7 +91,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends, settleEchoedSend } from "./sendSettlement";
+import { confirmJournalDelivery, deliveryRouteOf, fencePendingSends, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends, settleEchoedSend } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary, realtimeBoundConversationIds } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -319,9 +320,10 @@ function hostProjectionKey(state: HostState): string {
 export async function publishStructuredHostProjection(
   client: RuntimeHostClient,
   event: RuntimeEventInput,
+  invalidateFiles = true,
 ): Promise<void> {
   await client.append(event);
-  await publishFilesRevision(client);
+  if (invalidateFiles) await publishFilesRevision(client);
 }
 
 function hostResolver(
@@ -968,6 +970,9 @@ export async function bindStructuredDeliveryQueue(
       progressStore.note(operationId, conversationId, note);
     },
     stalled: (operationId) => progressStore.stalled(operationId),
+    flush: () => !stopped && state.activeQueue === queue && progressStore.flush(),
+    releaseRecoveryAttempt: (operationId, attempt, executorId) => !stopped && state.activeQueue === queue
+      && progressStore.releaseRecoveryAttempt(operationId, attempt, executorId),
     deadline: (operationId, deadlineAt, policy) => {
       if (!stopped && state.activeQueue === queue) progressStore.deadline(operationId, deadlineAt, policy);
     },
@@ -1077,6 +1082,20 @@ export async function bindStructuredDeliveryQueue(
         return !!session && runtimeIdleKillMatches({ ...session, retirementBlocked: false }, session.sessionKey, fence);
       },
       seatQuotaDispatchGuard: prepareSeatQuotaDispatch,
+      checkoutMergerDispatchGuard: async (operationId, conversationId) => {
+        const cut = checkoutMergerCutForOperation(registry.filename, conversationId, operationId);
+        if (!cut) throw new StructuredSendRefusedError("checkout merger recovery window or inventory changed");
+        if (await hasRuntimeSwitchKill(client, conversationId, cut.capturedAt, [], true, true)) {
+          throw new StructuredSendRefusedError("the merger was explicitly stopped");
+        }
+        return () => {
+          const current = currentCheckoutMerger(registry.livenessConversationSnapshot(cut.conversationId), cut);
+          if (!checkoutMergerCutForOperation(registry.filename, conversationId, operationId)
+            || current?.claimEpoch !== cut.claimEpoch + 1) {
+            throw new StructuredSendRefusedError("checkout merger recovery authority changed");
+          }
+        };
+      },
       bindDeliveryGeneration: async (operationId, generationId) => {
         const bound = await registry.bindDeliveryOperationGenerationOffLoop(operationId, generationId);
         /* The queue defers the message and comes back; nothing was handed over. */
@@ -1154,6 +1173,9 @@ export async function bindStructuredDeliveryQueue(
       },
       ...(typeof client.events === "function" ? { events: (afterEventSeq: number) => client.events(afterEventSeq) } : {}),
       status: async (operationId: string) => (await client.operationStatus(operationId))?.receipt ?? null,
+      fencePendingSends: operationIds => fencePendingSends(operationIds, { registry, client, progress, assertActive: () => {
+        if (stopped || state.activeQueue !== queue) throw new Error("delivery executor retired");
+      } }),
       /* The durable delivery record's own fence (#1131): a send a receipt query
          already ended — the only answer it could give while this socket was
          unreachable — must not be actuated when the socket comes back. */
