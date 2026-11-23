@@ -644,9 +644,17 @@ for (const prior of ["none", "action", "unknown", "reassigned", "rich"] as const
           if (prior === "rich") parts = await relayAnswerOp("conversation_fallback_tools", {
             format: "rich_markdown", buttons: [[{ text: "Open docs", url: "https://example.test/docs" }]],
           });
-          return { state: "ended", finalText: prior === "unknown" ? "[ignore]" : "Done" };
+          return { state: "ended", finalText: "Done" };
         }, stop: async () => {}, pollMs: 1,
       } });
+      if (prior === "unknown") {
+        expect({ launches, cloud }).toEqual({ launches: 0, cloud: 1 });
+        const callIds = calls.map(body => (body as { call_id: string }).call_id);
+        expect([...new Set(callIds)]).toEqual([expect.any(String)]);
+        expect(result).toMatchObject({ outcome: "answered", answer: { text: "The outcome of write_note remains unknown." } });
+        expect(readRunLedger().runs.some(row => row.requestId === "cloud_fallback_tools_unknown")).toBe(false);
+        return;
+      }
       expect(launches).toBe(1);
       expect(cloud).toBe(priorCall ? 2 : 1);
       if (prior === "reassigned") {
@@ -657,8 +665,7 @@ for (const prior of ["none", "action", "unknown", "reassigned", "rich"] as const
         expect(called).toMatchObject({ status: "completed", ...(prior === "none" ? { results: [{ status: "ok" }] } : {}) });
         expect(repeated).toEqual(called);
         expect(calls).toHaveLength(1);
-        expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", ...(prior === "unknown" ? {} : { text: "Done" }) } });
-        if (prior === "unknown") expect(called).toMatchObject({ callsLeft: 0, actionSent: true });
+        expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Done" } });
         if (prior === "rich") {
           expect(parts).toMatchObject({ format: "rich_markdown", buttons: [[{ text: "Open docs" }]] });
           expect(result).toMatchObject({ answer: { format: "rich_markdown", buttons: [[{ text: "Open docs" }]] } });
