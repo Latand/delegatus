@@ -5,13 +5,13 @@ import { actionOutcomeAnswer } from "./actionOutcome";
 import { CloudFailure, cloudEnvironment, cloudTransport, runCloudRelay, type CloudTransport } from "./cloud";
 import { scrubOwnerReply } from "./ownerOutput";
 import { cloudOwnerDirectory, CloudOwnerDirectoryError } from "./ownerRun";
-import { createOwnerRunDirectory } from "./runDirectory";
+import { createOwnerRunDirectory, resolveOwnerRunDirectory } from "./runDirectory";
 import { hasInboundMedia, prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
 import { createToolResultMedia } from "./toolResultMedia";
 import { isInboundImage, RELAY_HISTORY_MEDIA, validateMediaInput } from "./mediaInputValidation";
 import { validateAnswerComposition } from "./composition";
 import { answerCapabilities, checkedAnswerV2, checkedRoundV2, withAnswerParts, answerFiles, type AnswerDrop } from "./answerV2";
-import { stageGeneratedAttachments, uploadAnswerAttachments, type StagedAttachment } from "./attachments";
+import { ownerAnswerFileInstructions, stageGeneratedAttachments, uploadAnswerAttachments, type StagedAttachment } from "./attachments";
 import { openOwnerAnswer } from "./ownerAnswer";
 import { hydrateToolIndex } from "./toolIndex";
 import { openOwnerServiceTools } from "./ownerServiceTools";
@@ -317,6 +317,7 @@ export async function runClaimedRequest(
   let loop: ReturnType<typeof createToolLoop> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let transport: RelayLeaseTransport | InlineRelayLeaseTransport | null = null;
+  let completionDowngrade: string | undefined;
   let pendingBeat: Promise<void> | null = null;
   let finishing: Promise<ExternalRelayCompletion | null> | null = null;
   let ownerParts: ReturnType<typeof openOwnerAnswer> | null = null;
@@ -448,14 +449,16 @@ export async function runClaimedRequest(
           ? await deliverOwnerLateAnswer(relay, requestId, body, stagedAttachments, allowOwnerReply!)
           : transport
           ? await transport.complete(body, until, caps?.plainMax ?? 4000, ownerStatusReply ? "status" : failureReply ? "failure" : !!allowOwnerReply)
-          : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax, recorder?.recordCompletionRefusal);
+          : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax,
+            recorder?.recordCompletionRefusal, undefined, refusal => { completionDowngrade = refusal.reason; });
       } catch {
         if (allowOwnerReply && body.outcome === "answered") {
           console.error("Owner relay completion acknowledgement unavailable; delivery retained");
           sent = { body, delivery: "unconfirmed" };
         } else {
           console.error("External relay helper completion unavailable; using Viewer transport");
-          sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax, recorder?.recordCompletionRefusal);
+          sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax,
+            recorder?.recordCompletionRefusal, undefined, refusal => { completionDowngrade = refusal.reason; });
         }
       } finally { completionInFlight = false; }
       if (sent.delivery === "refused" && body.outcome === "declined" && body.reason === "handoff") {
@@ -494,7 +497,9 @@ export async function runClaimedRequest(
         // release) leaves recovery cleanup only, never a second completion.
         if (recorded && (cloud || !capacityReleased)) await recordAcceptedCompletion(requestId);
       }
-      if (!ownerPastWindow() && caps?.rich && sent.body !== body) recorder?.annotateV2({ drops: [...answerDrops, {part:"answer",reason:"service_downgrade"}] });
+      if (!ownerPastWindow() && caps?.rich && completionDowngrade) {
+        recorder?.annotateV2({ drops: [...answerDrops, { part: "answer", reason: completionDowngrade }] });
+      }
       if (initiallyLate && body.outcome === "answered" && sent.delivery !== "accepted") {
         await changeRunAsync(requestId, row => ({ ...row, ...(!ownerRunPending() && !ownerStopPending(row) ? { capacityReleased: true as const } : {}),
           ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn?.lateAnswer, body, files: stagedAttachments } } }), ownerRelayStoreDeadline());
@@ -573,6 +578,7 @@ export async function runClaimedRequest(
   let turn: ReturnType<typeof conversationTurnPrompt> | null = null;
   let conversationBroken = false;
   let runDir: string | null = null;
+  let ownerFileInstructions: string | undefined;
   let capacityReleased = false;
   let duplicate = false;
   let run: EphemeralAgentRun | null = null;
@@ -676,9 +682,9 @@ export async function runClaimedRequest(
     };
     transport = recovery ? null : runtime?.leaseWorker === false
       ? new InlineRelayLeaseTransport(relay, requestId, target.id, leaseId, intervalMs, onHeartbeat, initialProgress,
-        () => { void runtime?.onUnknownFeature?.(); }, recorder?.recordCompletionRefusal)
+        () => { void runtime?.onUnknownFeature?.(); }, recorder?.recordCompletionRefusal, refusal => { completionDowngrade = refusal.reason; })
       : new RelayLeaseTransport(relay, requestId, target.id, leaseId, intervalMs, onHeartbeat, initialProgress,
-        () => { void runtime?.onUnknownFeature?.(); }, undefined, recorder?.recordCompletionRefusal);
+        () => { void runtime?.onUnknownFeature?.(); }, undefined, recorder?.recordCompletionRefusal, refusal => { completionDowngrade = refusal.reason; });
     if (transport) {
       await transport.ready;
       const firstBeatDeadline = runtime?.leaseWorker === false ? null
@@ -775,8 +781,10 @@ export async function runClaimedRequest(
       selection.kind === "exhausted" && selection.resetsAt ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000)) : null) : null;
     const earlyCapacityDecline = capacityDecline();
     if (earlyCapacityDecline) return await finish(earlyCapacityDecline);
-    runDir = recovery?.runDir ?? (owner && !prototype ? await createOwnerRunDirectory()
-      : await fs.promises.mkdtemp(path.join(externalRelayTempRoot(), "llv-external-relay-")));
+    runDir = recovery
+      ? owner && !prototype ? await resolveOwnerRunDirectory(recovery.runDir) : recovery.runDir
+      : owner && !prototype ? await createOwnerRunDirectory()
+        : await fs.promises.mkdtemp(path.join(externalRelayTempRoot(), "llv-external-relay-"));
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
     const record = {
@@ -992,7 +1000,10 @@ export async function runClaimedRequest(
           // Service tools never read the Delegatus board; their names stay local.
           steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
         } : undefined);
-        if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, ownerCredentials, () => (!leaseUnavailable || ownerExecution) && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal,toolMedia ?? undefined);
+        if (owner && !prototype && caps?.rich) {
+          if (caps.media) ownerFileInstructions = await ownerAnswerFileInstructions(runDir);
+          ownerParts = openOwnerAnswer(relay.id, request, runDir, ownerCredentials, () => (!leaseUnavailable || ownerExecution) && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal,toolMedia ?? undefined);
+        }
       }
       const final = rounds === RELAY_TOOL_ROUNDS || !!loop && loop.callsLeft() === 0;
       try {
@@ -1003,7 +1014,7 @@ export async function runClaimedRequest(
         const inboundRefs = new Set(inbound?.files.map(file => file.ref));
         const mediaMessageIds = request.input.conversation.filter(message => message.media?.some(media => inboundRefs.has(media.ref))).map(message => message.id);
         // The Cloud JSON tool loop cannot look up a catalogue through local MCP.
-        const ownerAdditions = { mediaMessageIds, requireToolTable: usingCloud, mandatory: [inbound?.prompt,
+        const ownerAdditions = { mediaMessageIds, requireToolTable: usingCloud, mandatory: [inbound?.prompt, usingCloud ? undefined : ownerFileInstructions,
           ...(usingCloud ? [rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : "", frame] : []),
         ].filter(Boolean).join("\n") };
         // Prepare only the mode that will be sent. Cloud has no native cursor.
@@ -1053,7 +1064,7 @@ export async function runClaimedRequest(
           // A confirmed Cloud refusal may fall back to a native conversation;
           // recompute from unchanged inputs for that actual delivery mode.
           if (owner && cloudFailed) {
-            const fallbackAdditions = { mediaMessageIds, mandatory: [inbound?.prompt,
+            const fallbackAdditions = { mediaMessageIds, mandatory: [inbound?.prompt, ownerFileInstructions,
               rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : ""].filter(Boolean).join("\n") };
             preparedOwner = conversation?.conversationId
               ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, fallbackAdditions)

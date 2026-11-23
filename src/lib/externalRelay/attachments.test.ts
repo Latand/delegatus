@@ -1,17 +1,19 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import * as workerThreads from "node:worker_threads";
 import sharp from "sharp";
 import { Database } from "bun:sqlite";
-import { stageGeneratedAttachments, stageOwnerAttachments, uploadAnswerAttachments, contentDisposition, validateAttachmentContent } from "./attachments";
+import { stageGeneratedAttachments, stageOwnerAttachments, uploadAnswerAttachments, contentDisposition, ownerAnswerFileInstructions, validateAttachmentContent } from "./attachments";
 import { answerCapabilities, type AnswerDrop } from "./answerV2";
 import { richRequest } from "./rich.fixture";
 import { startTestRelay } from "./testRelay";
 import { readSqliteMemory, SQLITE_MEMORY_MESSAGE_PREFIX } from "@/lib/sqliteMemoryDiagnostics";
+import { createOwnerRunDirectory, removeOwnerRunDirectory, resolveOwnerRunDirectory } from "./runDirectory";
 // Owner documents reject hidden ancestors, including a stage's TMPDIR.
 // Keep the fixture's dedicated root independent of that runner environment.
-const root = fs.mkdtempSync(path.join("/tmp", "relay-attachments-"));
+const root = fs.realpathSync(fs.mkdtempSync(path.join("/tmp", "relay-attachments-")));
 const MiB=1024*1024;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const caps = answerCapabilities(richRequest(true), "codex");
@@ -260,6 +262,132 @@ test("aggregate bytes above 64 MiB are refused and staged copies are removed", a
   expect(new Set(fs.readdirSync(root).filter(name=>name.startsWith("relay-job-")))).toEqual(before);
 },30_000);
 
+test("owner output is confined to this run and retains the document checks", async () => {
+  const runDir = path.join(root, ".runs", "current");
+  const output = path.join(runDir, "outbox");
+  const sibling = path.join(root, ".runs", "other", "outbox");
+  const state = path.join(output, "state");
+  for (const directory of [output, sibling, state, path.join(output, ".hidden")]) fs.mkdirSync(directory, { recursive: true });
+  const report = path.join(output, "report.md");
+  const context = path.join(runDir, "context.txt");
+  const outside = path.join(root, "outside.md");
+  const other = path.join(sibling, "report.md");
+  const hidden = path.join(output, ".hidden", "report.md");
+  const stateFile = path.join(state, "report.md");
+  for (const file of [report, context, outside, other, hidden, stateFile]) fs.writeFileSync(file, "Report");
+  const linkedFile = path.join(output, "link.md");
+  const hardLink = path.join(output, "hard.md");
+  const linkedDir = path.join(output, "linked");
+  fs.symlinkSync(outside, linkedFile);
+  fs.linkSync(outside, hardLink);
+  fs.symlinkSync(sibling, linkedDir, "dir");
+  const disguised = path.join(output, "markup.txt");
+  fs.writeFileSync(disguised, "<html><body>Report</body></html>");
+  const send = (file: string) => stageOwnerAttachments([{ path: file, kind: "document" }], runDir, caps, [], { home: root, stateDir: state }, []);
+  const [file] = await send(report);
+  expect(fs.readFileSync(file!.file, "utf8")).toBe("Report");
+  for (const invalid of [context, other, hidden, stateFile, linkedFile, hardLink, path.join(linkedDir, "report.md")]) {
+    await expect(send(invalid)).rejects.toMatchObject({ code: "document_forbidden_path" });
+  }
+  await expect(send([output, "..", "context.txt"].join(path.sep))).rejects.toMatchObject({ code: "document_outside_roots" });
+  await expect(send(outside)).rejects.toMatchObject({ code: "document_outside_roots" });
+  await expect(send(disguised)).rejects.toMatchObject({ code: "document_type" });
+
+  const unconfigured = path.join(root, "unconfigured");
+  fs.mkdirSync(unconfigured);
+  const externalReport = path.join(unconfigured, "report.md");
+  fs.writeFileSync(externalReport, "Outside report");
+  await expect(send(externalReport)).rejects.toMatchObject({ code: "document_outside_roots" });
+  fs.renameSync(output, path.join(runDir, "old-output"));
+  fs.symlinkSync(unconfigured, output, "dir");
+  const beforeRefusal = fs.readdirSync(runDir).sort();
+  await expect(send(externalReport)).rejects.toMatchObject({ code: "document_outside_roots" });
+  await expect(send(report)).rejects.toMatchObject({ code: "document_forbidden_path" });
+  expect(fs.readdirSync(runDir).sort()).toEqual(beforeRefusal);
+
+  fs.unlinkSync(output);
+  fs.renameSync(path.join(runDir, "old-output"), output);
+  const linkedInside = path.join(output, "linked-inside.md");
+  fs.symlinkSync(report, linkedInside);
+  await expect(send(linkedInside)).rejects.toMatchObject({ code: "document_forbidden_path" });
+  const linkedRoot = path.join(output, "linked-root");
+  fs.symlinkSync(path.dirname(runDir), linkedRoot, "dir");
+  await expect(send(path.join(linkedRoot, "current", "outbox", "report.md")))
+    .rejects.toMatchObject({ code: "document_forbidden_path" });
+});
+
+test("owner run output remains usable when the cache ancestor is a symlink", async () => {
+  const target = path.join(root, "cache-target");
+  const linkedCache = path.join(root, "linked-cache");
+  fs.mkdirSync(target);
+  fs.symlinkSync(target, linkedCache, "dir");
+  const runDir = await createOwnerRunDirectory(path.join(linkedCache, "delegatus", "relay-runs"));
+  const output = path.join(runDir, "outbox");
+  await fs.promises.mkdir(output, { recursive: true });
+  const report = path.join(output, "report.md");
+  await fs.promises.writeFile(report, "Report");
+  const instructions = await ownerAnswerFileInstructions(runDir);
+
+  expect(runDir.startsWith(path.join(target, "delegatus", "relay-runs") + path.sep)).toBe(true);
+  expect(instructions).toContain(JSON.stringify(output));
+  const [staged] = await stageOwnerAttachments([{ path: report, kind: "document" }], runDir, caps, [],
+    { home: root, stateDir: path.join(root, "state") }, []);
+  expect(fs.readFileSync(staged!.file, "utf8")).toBe("Report");
+  const server = await startTestRelay(req => ({ status: 201, body: {
+    attachment_id: req.url!.split("/").at(-1), sha256: req.headers["delegatus-relay-sha256"],
+    byte_size: Buffer.byteLength("Report"), mime_type: "text/markdown", filename: "report.md",
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+  } }));
+  try {
+    const uploaded = await uploadAnswerAttachments({ api_base: `${server.origin}/v1`, credential: "x".repeat(43) },
+      richRequest(true), [staged!], Date.now() + 10_000, new AbortController().signal, []);
+    expect(uploaded).toEqual([{ attachment_id: staged!.id, kind: "document", caption: "" }]);
+  } finally { await server.close(); }
+
+  const legacyRoot = path.join(linkedCache, "delegatus", "relay-runs");
+  await fs.promises.mkdir(legacyRoot, { recursive: true });
+  const legacyRun = await fs.promises.mkdtemp(path.join(legacyRoot, "llv-external-relay-"));
+  const legacyOutbox = path.join(legacyRun, "outbox");
+  await fs.promises.mkdir(legacyOutbox, { recursive: true });
+  const legacyReport = path.join(legacyOutbox, "recovered.md");
+  await fs.promises.writeFile(legacyReport, "Recovered report");
+  const recoveredRun = await resolveOwnerRunDirectory(legacyRun, legacyRoot);
+  expect(recoveredRun).toBe(await fs.promises.realpath(legacyRun));
+  const [recovered] = await stageOwnerAttachments([{ path: legacyReport, kind: "document" }], recoveredRun, caps, [],
+    { home: root, stateDir: path.join(root, "state") }, []);
+  expect(fs.readFileSync(recovered!.file, "utf8")).toBe("Recovered report");
+  const recoveredServer = await startTestRelay(req => ({ status: 201, body: {
+    attachment_id: req.url!.split("/").at(-1), sha256: createHash("sha256").update("Recovered report").digest("hex"),
+    byte_size: Buffer.byteLength("Recovered report"), mime_type: "text/markdown", filename: "recovered.md",
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+  } }));
+  try {
+    const uploaded = await uploadAnswerAttachments({ api_base: `${recoveredServer.origin}/v1`, credential: "x".repeat(43) },
+      richRequest(true), [recovered!], Date.now() + 10_000, new AbortController().signal, []);
+    expect(uploaded).toEqual([{ attachment_id: recovered!.id, kind: "document", caption: "" }]);
+  } finally { await recoveredServer.close(); }
+  removeOwnerRunDirectory(legacyRun, legacyRoot);
+  expect(fs.existsSync(legacyRun)).toBe(false);
+});
+
+test("owner run recovery refuses a linked run entry and keeps the sibling intact", async () => {
+  const runRoot = path.join(root, "run-recovery");
+  const sibling = path.join(runRoot, "llv-external-relay-sibling");
+  const entry = path.join(runRoot, "llv-external-relay-retained");
+  fs.mkdirSync(sibling, { recursive: true });
+  fs.mkdirSync(entry);
+  const report = path.join(sibling, "report.md");
+  fs.writeFileSync(report, "Sibling report");
+  expect(await resolveOwnerRunDirectory(entry, runRoot)).toBe(fs.realpathSync(entry));
+
+  fs.rmdirSync(entry);
+  fs.symlinkSync(sibling, entry, "dir");
+  await expect(resolveOwnerRunDirectory(entry, runRoot)).rejects.toThrow("external relay owner run directory is outside its root");
+  removeOwnerRunDirectory(entry, runRoot);
+  expect(fs.lstatSync(entry).isSymbolicLink()).toBe(true);
+  expect(fs.readFileSync(report, "utf8")).toBe("Sibling report");
+});
+
 test("owner staging reads configured document roots and keeps malformed settings failures private", async () => {
   const state = path.join(root, "configured-state");
   fs.mkdirSync(path.join(state, "telegram"), { recursive: true });
@@ -272,6 +400,7 @@ test("owner staging reads configured document roots and keeps malformed settings
   try {
     const send = () => stageOwnerAttachments([{ path: file, kind: "document" }], root, caps, [], { home: root, stateDir: state });
     expect(await send()).toHaveLength(1);
+    expect(await ownerAnswerFileInstructions(root)).toContain(JSON.stringify(directory));
     db.query("UPDATE settings SET value = ? WHERE key = ?").run("malformed setting", "document_roots");
     await expect(send()).rejects.toMatchObject({ code: "document_invalid" });
   } finally { db.close(); if (old === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = old; }
