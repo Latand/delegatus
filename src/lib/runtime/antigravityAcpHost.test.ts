@@ -1169,4 +1169,101 @@ describe("AntigravityAcpHost", () => {
     expect(outboundPrompts.length - promptsBeforeReleaseRetry).toBe(0);
     await adoptedAfterRelease.release();
   });
+
+  it("reconciles the delivery SQLite index completely when an older JSONL ledger backup is restored and forked past synced_seq", async () => {
+    const forkSessionId = `ag_fork_${crypto.randomUUID().slice(0, 8)}`;
+    const eventsDir = path.join(stateDir, "runtime-events-fork");
+    const ledger = new FileRuntimeEventStore(eventsDir);
+    const ledgerFile = path.join(eventsDir, `${forkSessionId}.jsonl`);
+    const backupFile = path.join(stateDir, `${forkSessionId}.backup.jsonl`);
+    const outboundPrompts: string[] = [];
+    let lastPromptId = 0;
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+    const makeOpts = (): AntigravityAcpHostOptions => ({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore: ledger,
+      shutdownGraceMs: 50,
+      processIdentity: () => "start-id-fork",
+      signalProcess: ((_pid: number) => { fake.closeChild(0); return true; }) as typeof process.kill,
+      spawnProcess: () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          } else if (method === "session/new" || method === "session/resume") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId: forkSessionId } });
+          } else if (method === "session/prompt" && id !== undefined) {
+            lastPromptId = id;
+            outboundPrompts.push(String(id));
+          } else if (method === "session/close") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          }
+        });
+        return fake.child;
+      },
+    });
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+    const appendFillers = (turnId: string, sourceId: string, count: number, prefix: string) => {
+      const events = ledger.load(forkSessionId);
+      const shape = events.filter((ev) => "turnId" in ev && ev.turnId === turnId);
+      let seq = events.at(-1)!.seq;
+      const lines: string[] = [];
+      for (let i = 0; i < count; i += 1) {
+        for (const row of shape) {
+          lines.push(JSON.stringify({ ...row, seq: ++seq }).replaceAll(turnId, `${prefix}-turn-${i}`).replaceAll(sourceId, `${prefix}-entry-${i}`));
+        }
+      }
+      fs.appendFileSync(ledgerFile, `${lines.join("\n")}\n`);
+    };
+
+    // 1. Create anchor delivery and back up the JSONL ledger right after anchor.
+    let host = await AntigravityAcpHost.start(makeOpts());
+    expect((await host.send({ id: "anchor", text: "anchor" })).outcome).toBe("turn-started");
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await tick();
+    await host.release();
+    fs.copyFileSync(ledgerFile, backupFile);
+
+    // 2. Extend ledger on branch A with `old-middle` + 4100 fillers and populate SQLite index via adopt().
+    host = await AntigravityAcpHost.adopt(forkSessionId, makeOpts());
+    const oldMid = await host.send({ id: "old-middle", text: "old-middle" });
+    if (oldMid.outcome !== "turn-started") throw new Error("expected turn-started");
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await tick();
+    await host.release();
+    appendFillers(oldMid.turnId, "old-middle", 4100, "branch-a");
+    host = await AntigravityAcpHost.adopt(forkSessionId, makeOpts());
+    expect(await host.sessionMaterializationEvidence("old-middle")).toEqual({ state: "materialized" });
+    await host.release();
+
+    // 3. Restore backup JSONL (leaving delivery-acceptance.sqlite intact!) and extend longer on branch B
+    //    with `alternate-middle` + 4120 fillers (> 4100 so seq and count BOTH exceed synced_seq/synced_count).
+    fs.copyFileSync(backupFile, ledgerFile);
+    const rawEvents = ledger.load(forkSessionId);
+    const altSeqBase = rawEvents.at(-1)!.seq;
+    const altTurn = "antigravity:99-alt";
+    const altEvents = [
+      { kind: "turn-started", turnId: altTurn, seq: altSeqBase + 1 },
+      { kind: "item", turnId: altTurn, phase: "started", item: { type: "antigravity.delivery_dispatched", entryId: "alternate-middle", turnId: altTurn }, seq: altSeqBase + 2 },
+      { kind: "item", turnId: altTurn, phase: "completed", item: { type: "user.message", entryId: "alternate-middle", turnId: altTurn }, deliveryEcho: { operationId: "alternate-middle", at: new Date().toISOString() }, seq: altSeqBase + 3 },
+      { kind: "turn-ended", turnId: altTurn, status: "completed", seq: altSeqBase + 4 },
+    ];
+    fs.appendFileSync(ledgerFile, `${altEvents.map((e) => JSON.stringify(e)).join("\n")}\n`);
+    appendFillers(altTurn, "alternate-middle", 4120, "branch-b");
+
+    // 4. Adopt on branch B: SQLite index MUST remove stale `old-middle` and index `alternate-middle`!
+    host = await AntigravityAcpHost.adopt(forkSessionId, makeOpts());
+    expect((await host.sessionMaterializationEvidence("old-middle")).state).toBe("absent");
+    expect(await host.sessionMaterializationEvidence("alternate-middle")).toEqual({ state: "materialized" });
+    const promptsBefore = outboundPrompts.length;
+    const replay = await host.send({ id: "alternate-middle", text: "alternate-middle" });
+    expect(replay).toEqual({ outcome: "turn-started", turnId: altTurn });
+    expect(outboundPrompts.length - promptsBefore).toBe(0);
+    await host.release();
+  });
 });

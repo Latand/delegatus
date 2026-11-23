@@ -223,14 +223,6 @@ function deliveryRecordFromRow(row: DeliveryAcceptanceRow | null | undefined): D
   return null;
 }
 
-function sameDeliveryRecord(a: DeliveryAcceptanceRecord | null, b: DeliveryAcceptanceRecord): boolean {
-  if (!a || a.state !== b.state || a.turnId !== b.turnId) return false;
-  if (a.state === "accepted" && b.state === "accepted") return a.acceptedAt === b.acceptedAt;
-  if (a.state === "failed" && b.state === "failed") return a.reason === b.reason;
-  if (a.state === "unavailable" && b.state === "unavailable") return a.reason === b.reason;
-  return true;
-}
-
 /** Durable O(1) keyed index of Antigravity delivery acceptance facts by
     `(session_id, delivery_id)`, confined inside `<antigravityHome>`.
     All SQL uses SQLite 3.39-safe syntax (macOS system SQLite compatible). */
@@ -263,31 +255,36 @@ class AntigravityDeliveryIndex {
     }
     const db = new sqlite.Database(dbPath, readonly ? { readonly: true } : { create: true });
     try {
+      // Never block the event loop waiting on another process's write lock:
+      // fail fast on SQLITE_BUSY and fall back cleanly to the JSONL ledger.
+      db.exec("PRAGMA busy_timeout=0;");
       if (!readonly) {
         try { fs.chmodSync(dbPath, 0o600); } catch { /* best effort */ }
-        db.exec(
-          "PRAGMA busy_timeout=5000;"
-          + "PRAGMA journal_mode=WAL;"
-          + "PRAGMA synchronous=NORMAL;"
-          + "CREATE TABLE IF NOT EXISTS antigravity_delivery_acceptance ("
-          + "  session_id TEXT NOT NULL,"
-          + "  delivery_id TEXT NOT NULL,"
-          + "  state TEXT NOT NULL,"
-          + "  turn_id TEXT NOT NULL,"
-          + "  accepted_at TEXT,"
-          + "  reason TEXT,"
-          + "  seq INTEGER NOT NULL,"
-          + "  PRIMARY KEY (session_id, delivery_id)"
-          + ");"
-          + "CREATE TABLE IF NOT EXISTS antigravity_delivery_ledger_sync ("
-          + "  session_id TEXT PRIMARY KEY,"
-          + "  synced_seq INTEGER NOT NULL,"
-          + "  synced_count INTEGER NOT NULL,"
-          + "  max_delivery_seq INTEGER NOT NULL"
-          + ");",
-        );
-      } else {
-        db.exec("PRAGMA busy_timeout=5000;");
+        const existingTables = db.query<{ count: number }, []>(
+          "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('antigravity_delivery_acceptance', 'antigravity_delivery_ledger_sync')",
+        ).get()?.count ?? 0;
+        if (existingTables < 2) {
+          db.exec(
+            "PRAGMA journal_mode=WAL;"
+            + "PRAGMA synchronous=NORMAL;"
+            + "CREATE TABLE IF NOT EXISTS antigravity_delivery_acceptance ("
+            + "  session_id TEXT NOT NULL,"
+            + "  delivery_id TEXT NOT NULL,"
+            + "  state TEXT NOT NULL,"
+            + "  turn_id TEXT NOT NULL,"
+            + "  accepted_at TEXT,"
+            + "  reason TEXT,"
+            + "  seq INTEGER NOT NULL,"
+            + "  PRIMARY KEY (session_id, delivery_id)"
+            + ");"
+            + "CREATE TABLE IF NOT EXISTS antigravity_delivery_ledger_sync ("
+            + "  session_id TEXT PRIMARY KEY,"
+            + "  synced_seq INTEGER NOT NULL,"
+            + "  synced_count INTEGER NOT NULL,"
+            + "  max_delivery_seq INTEGER NOT NULL"
+            + ");",
+          );
+        }
       }
       return new AntigravityDeliveryIndex(db);
     } catch (error) {
@@ -315,36 +312,18 @@ class AntigravityDeliveryIndex {
     >(
       "SELECT synced_seq, synced_count, max_delivery_seq FROM antigravity_delivery_ledger_sync WHERE session_id = ?",
     ).get(sessionId);
+    const hasRows = this.db.query<{ found: number }, [string]>(
+      "SELECT 1 AS found FROM antigravity_delivery_acceptance WHERE session_id = ? LIMIT 1",
+    ).get(sessionId) !== null;
 
-    let firstKey: string | undefined;
-    let firstVal: { record: DeliveryAcceptanceRecord; seq: number } | undefined;
-    let lastKey: string | undefined;
-    let lastVal: { record: DeliveryAcceptanceRecord; seq: number } | undefined;
-    for (const [k, v] of entries) {
-      if (firstKey === undefined) { firstKey = k; firstVal = v; }
-      lastKey = k;
-      lastVal = v;
-    }
-
-    const spotOk = (firstKey === undefined || sameDeliveryRecord(this.get(sessionId, firstKey), firstVal!.record))
-      && (lastKey === undefined || lastKey === firstKey || sameDeliveryRecord(this.get(sessionId, lastKey), lastVal!.record));
-
-    if (
-      syncRow
-      && syncRow.synced_seq === ledgerTailSeq
-      && syncRow.synced_count === entries.size
-      && syncRow.max_delivery_seq === maxDeliverySeq
-      && spotOk
-    ) {
+    if (entries.size === 0 && !syncRow && !hasRows) {
       return;
     }
 
-    const rebuild = !syncRow
-      || ledgerTailSeq < syncRow.synced_seq
-      || entries.size < syncRow.synced_count
-      || maxDeliverySeq < syncRow.max_delivery_seq
-      || (firstKey !== undefined && firstVal!.seq <= syncRow.synced_seq && !sameDeliveryRecord(this.get(sessionId, firstKey), firstVal!.record));
-
+    // Reconcile the entire session atomically against the canonical ledger
+    // snapshot already loaded by `restore()`. An incremental skip based on
+    // seq/count alone can leave stale entries behind or miss altered middle
+    // entries when an older backup of the JSONL ledger is restored and extended.
     const upsert = this.db.query(
       "INSERT OR REPLACE INTO antigravity_delivery_acceptance (session_id, delivery_id, state, turn_id, accepted_at, reason, seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
     );
@@ -354,12 +333,17 @@ class AntigravityDeliveryIndex {
     const deleteSession = this.db.query(
       "DELETE FROM antigravity_delivery_acceptance WHERE session_id = ?",
     );
+    const deleteSync = this.db.query(
+      "DELETE FROM antigravity_delivery_ledger_sync WHERE session_id = ?",
+    );
 
     this.db.transaction(() => {
-      if (rebuild) deleteSession.run(sessionId);
-      const minSeq = rebuild ? 0 : syncRow!.synced_seq;
+      deleteSession.run(sessionId);
+      if (entries.size === 0) {
+        deleteSync.run(sessionId);
+        return;
+      }
       for (const [deliveryId, entry] of entries) {
-        if (!rebuild && entry.seq <= minSeq) continue;
         const rec = entry.record;
         upsert.run(
           sessionId,
