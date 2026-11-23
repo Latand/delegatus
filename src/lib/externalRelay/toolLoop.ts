@@ -6,6 +6,7 @@ import { isOwnerTool, ownerRateLimitSchema, relayToolAudience, RELAY_OWNER_TOOLS
 import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
+import { redactRequesterCodeText } from "./requesterEnrolmentContract";
 import { ACTION_VERIFICATION_MS, ACTION_VERIFICATION_READS, actionOutcomeReads, establishActionOutcome, verificationFailed, type ActionOutcome, type ActionResolution } from "./actionOutcome";
 
 export const RELAY_TOOL_ROUNDS = 8;
@@ -396,7 +397,9 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       const raw = value.result;
       const page = "page" in value ? value.page as PageReadResult | undefined : undefined;
       const withheld = !!raw && !mayQuote(raw.audience);
-      let output = withheld ? "" : value.outcome === "verification_failed" ? value.output ?? "" : raw?.output ?? page?.output ?? value.output ?? "";
+      // Service text can quote chat history, so pending enrolment codes never
+      // reach an agent, its transcript or its report through a tool result.
+      let output = redactRequesterCodeText(withheld ? "" : value.outcome === "verification_failed" ? value.output ?? "" : raw?.output ?? page?.output ?? value.output ?? "");
       let code = withheld && !action ? "not_permitted" : raw?.code ?? page?.code ?? value.code;
       let status = withheld && !action ? "denied" : raw?.status ?? page?.status ?? ("unknown" in value && value.unknown ? "outcome_unknown" : local ? "denied" : "error");
       if (withheld && action) terminal = true;
@@ -422,7 +425,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         ...(action && raw && "unknown" in value && value.unknown ? { execution_unknown: true as const } : {}),
         ...(action && raw?.delivered ? { delivered: true as const } : {}),
         ...(action && !withheld && raw?.status === "confirmation_pending" ? {
-          ...(raw.summary !== undefined ? { summary: raw.summary } : {}),
+          ...(raw.summary !== undefined ? { summary: redactRequesterCodeText(raw.summary) } : {}),
           ...(raw.expires_at ? { expires_in_s: Math.max(0, Math.ceil((Date.parse(raw.expires_at) - now()) / 1000)) } : {}),
         } : {}),
         ...(!action && !withheld && raw?.cursor ? { next_cursor: raw.cursor } : {}),

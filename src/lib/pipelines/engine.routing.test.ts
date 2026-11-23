@@ -1,4 +1,12 @@
 import { expect, spyOn, test, crypto, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
+
+function expectRestartHandoverCause(prompt: string, expected: string): void {
+  const start = prompt.indexOf("\n\nThis is a fresh attempt");
+  expect(start).toBeGreaterThanOrEqual(0);
+  const handover = prompt.slice(start);
+  expect(handover).toContain(expected);
+  if (!expected.includes("Delegatus restart")) expect(handover).not.toContain("interrupted by a Delegatus restart");
+}
 import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
 import { spawn as spawnChild, spawnSync } from "node:child_process";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
@@ -1762,7 +1770,7 @@ test.each([
   expect(replaced.stateDetail).toBe(`stage attempt 1 ${detail}${exit}; fresh attempt 2 is starting`);
   expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: interruption === "dead" ? "host-lost" : "engine-stop" });
   await tickPipelines([], sameBoot);
-  expect(h.spawnInputs[1]!.prompt).toContain(`stage attempt 1 ${detail}.`);
+  expectRestartHandoverCause(h.spawnInputs[1]!.prompt, `stage attempt 1 ${detail}.`);
 
   await tickPipelines([entry(attempt.agentPath!)], sameBoot);
   const again = loadPipelines()[0]!;
@@ -1794,7 +1802,7 @@ test("a replacement recorded before causes were told apart is described without 
   delete replaced.runs[0]!.attempts[1]!.restartContext!.cause;
   savePipelines([replaced]);
   await tickPipelines([], h.ports);
-  expect(h.spawnInputs[1]!.prompt).toContain("stage attempt 1 was interrupted. Continue the same stage input");
+  expectRestartHandoverCause(h.spawnInputs[1]!.prompt, "stage attempt 1 was interrupted.");
 });
 
 test("a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write", async () => {
@@ -2056,7 +2064,7 @@ test("an attempt that worked on after a restart and is stopped for silence later
   expect(replaced.stateDetail).toBe("stage attempt 1 was stopped by Delegatus after its turn went silent; fresh attempt 2 is starting");
   expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "engine-stop" });
   await tickPipelines([], h.ports);
-  expect(h.spawnInputs[1]!.prompt).toContain("was stopped by Delegatus after its turn went silent");
+  expectRestartHandoverCause(h.spawnInputs[1]!.prompt, "was stopped by Delegatus after its turn went silent");
 });
 
 test("an attempt that worked on after a restart and whose host is found gone later is not called a restart", async () => {
@@ -2068,7 +2076,7 @@ test("an attempt that worked on after a restart and whose host is found gone lat
   expect(replaced.stateDetail).toBe("stage attempt 1 lost its host while its turn was open (exit: status unavailable; no Delegatus stop recorded); fresh attempt 2 is starting");
   expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "host-lost" });
   await tickPipelines([], h.ports);
-  expect(h.spawnInputs[1]!.prompt).toContain("lost its host while its turn was open");
+  expectRestartHandoverCause(h.spawnInputs[1]!.prompt, "lost its host while its turn was open");
 });
 
 test("an attempt whose transcript did not grow after the restart is still called a restart", async () => {

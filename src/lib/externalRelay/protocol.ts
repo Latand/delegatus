@@ -232,7 +232,7 @@ const answerRequestSchema = z.object({
   liveness: livenessSchema,
   // The chat key of §A.8, kept for the member limit and the records. A
   // malformed one is dropped, as an unknown field would be.
-  chat: z.object({ key: chatKey }).optional().catch(undefined),
+  chat: z.object({ key: chatKey, title: boundedString(200).optional().catch(undefined) }).optional().catch(undefined),
   input: inputSchema,
   answer: z.object({
     attachments: relayAttachmentLimitsSchema.optional().catch(undefined),

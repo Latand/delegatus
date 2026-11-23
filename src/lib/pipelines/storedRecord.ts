@@ -137,6 +137,7 @@ function isProviderWait(value: unknown): boolean {
     && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
     && (wait.actionAt === undefined || dated(wait.actionAt))
     && (wait.continuationRequestedAt === undefined || dated(wait.continuationRequestedAt))
+    && (wait.receiptWaitStartedAt === undefined || dated(wait.receiptWaitStartedAt))
     && (wait.capacityProbes === undefined || Number.isSafeInteger(wait.capacityProbes) && Number(wait.capacityProbes) >= 0)
     && (wait.retryCancelled === undefined || typeof wait.retryCancelled === "boolean")
     && (wait.stageRetry === undefined || (

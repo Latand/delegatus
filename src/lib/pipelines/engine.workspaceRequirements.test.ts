@@ -1,6 +1,6 @@
 import { pipelineStageRead } from "@/lib/mcp/compactAnswers";
 import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
-import { expect, test, loadPipelines, savePipelines, providerRecoveryHarness, readFixtures, SPARE_ACCOUNT, stageTranscript, tickPipelines } from "./engine.fixture";
+import { expect, test, loadPipelines, savePipelines, providerRecoveryHarness, readFixtures, SPARE_ACCOUNT, stageTranscript, tickPipelines, entry } from "./engine.fixture";
 import { recoverPipelineProviderTurn } from "./engine";
 
 const workspaceError = "failed to load workspace requirements: invalid data";
@@ -126,6 +126,7 @@ test.each(["delivered", "pre-execution-refused"] as const)("a newer cut charges 
   attempt.providerRecoveryBudget = { tries: 0, startedAt: new Date(oldCut).toISOString(), engine: "codex" };
   savePipelines([pipeline]);
   f.h.ports.conversationDeliveryCompleted = (_conversationId, key) => receipt === "delivered" && key.endsWith(`-${oldCut}`);
+  f.h.ports.conversationDeliveryRetryable = async (_conversationId, key) => receipt === "pre-execution-refused" && key.endsWith(`-${oldCut}`);
 
   f.advance(1_000);
   f.cut();
@@ -138,4 +139,59 @@ test.each(["delivered", "pre-execution-refused"] as const)("a newer cut charges 
     resumeAt: new Date(f.now() + 60_000 * 2 ** tries).toISOString(),
   });
   expect(next.providerRecoveryBudget).toMatchObject({ tries, startedAt: new Date(oldCut).toISOString() });
+});
+
+test.each(["ordinary tick", "provider observer"] as const)("a delayed continuation receipt is retained and the %s parks after three deliveries", async entrypoint => {
+  const f = await providerRecoveryHarness("codex", "other", workspaceError);
+  const initial = loadPipelines()[0]!;
+  const attempt = initial.runs[0]!.attempts[0]!;
+  const transcriptPath = attempt.agentPath!;
+  let preAcknowledgement: ReturnType<typeof loadPipelines> | undefined;
+  const available = new Set<string>();
+  const sent: string[] = [];
+  f.h.ports.resumeSeveredTurn = async input => {
+    sent.push(input.clientMessageId);
+    preAcknowledgement = structuredClone(loadPipelines());
+    f.h.setConversationActive(true);
+    return true;
+  };
+  f.h.ports.conversationDeliveryCompleted = (_id, key) => available.has(key);
+  f.h.ports.conversationDeliveryRetryable = async () => false;
+  const process = async () => {
+    if (entrypoint === "ordinary tick") await tickPipelines([entry(transcriptPath)], { ...f.h.ports });
+    else await recoverPipelineProviderTurn(initial.id, { ...f.h.ports });
+  };
+
+  await process();
+  f.advance(60_000);
+  await process();
+  expect(sent).toHaveLength(1);
+
+  for (let delivered = 1; delivered <= 3; delivered += 1) {
+    expect(preAcknowledgement).toBeDefined();
+    savePipelines(preAcknowledgement!);
+    f.h.setConversationActive(false);
+    f.advance(1_000);
+    f.cut();
+    const cutTs = f.now();
+    await process();
+    let current = loadPipelines()[0]!;
+    expect(current.runs[0]!.attempts[0]!.providerWait).toMatchObject({ tries: delivered - 1, receiptWaitStartedAt: expect.any(String) });
+    expect(current.runs[0]!.attempts[0]!.providerWait!.turnTs).not.toBe(cutTs);
+    expect(sent).toHaveLength(delivered);
+
+    available.add(sent[delivered - 1]!);
+    await process();
+    current = loadPipelines()[0]!;
+    if (delivered === 3) {
+      expect(current).toMatchObject({ state: "needs_decision", stateDetail: `stage cut by workspace requirements failure after 3 tries; last: ${workspaceError}` });
+      expect(current.runs[0]!.attempts[0]!.providerWait).toMatchObject({ tries: 3 });
+      expect(sent).toHaveLength(3);
+      break;
+    }
+    expect(current.runs[0]!.attempts[0]!.providerWait).toMatchObject({ tries: delivered, turnTs: cutTs });
+    f.advance(60_000 * 2 ** delivered);
+    await process();
+    expect(sent).toHaveLength(delivered + 1);
+  }
 });

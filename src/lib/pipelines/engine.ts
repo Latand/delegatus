@@ -3778,16 +3778,43 @@ function providerContinuationKey(pipeline: Pipeline, stage: PipelineStage, attem
     Reconcile that durable receipt while the old wait still identifies its cut,
     before a later provider error replaces the key-bearing wait. */
 async function reconcileDeliveredProviderContinuation(pipeline: Pipeline, stage: PipelineStage,
-  attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<void> {
+  attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<ProviderContinuationReceipt> {
   const wait = attempt.providerWait;
-  if (!wait?.continuationRequestedAt || wait.actionAt || !attempt.conversationId
-    || ports.conversationDeliveryCompleted?.(attempt.conversationId, providerContinuationKey(pipeline, stage, attempt)) !== true) return;
-  const startedAt = providerBackoffStartedAt(attempt, wait.continuationRequestedAt);
-  wait.actionAt = wait.continuationRequestedAt;
-  wait.tries += 1;
-  attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: Math.max(attempt.providerRecoveryBudget?.tries ?? 0, wait.tries), startedAt };
-  recordProviderRecovery(attempt, "continue", wait.condition,
-    `continuing after ${wait.condition.label} (${wait.tries} of 3); last: ${wait.text}`, wait.continuationRequestedAt);
+  if (!wait?.continuationRequestedAt || wait.actionAt || !attempt.conversationId) return "none";
+  const key = providerContinuationKey(pipeline, stage, attempt);
+  if (ports.conversationDeliveryCompleted?.(attempt.conversationId, key) === true) {
+    const startedAt = providerBackoffStartedAt(attempt, wait.continuationRequestedAt);
+    wait.actionAt = wait.continuationRequestedAt;
+    wait.tries += 1;
+    delete wait.receiptWaitStartedAt;
+    attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: Math.max(attempt.providerRecoveryBudget?.tries ?? 0, wait.tries), startedAt };
+    recordProviderRecovery(attempt, "continue", wait.condition,
+      `continuing after ${wait.condition.label} (${wait.tries} of 3); last: ${wait.text}`, wait.continuationRequestedAt);
+    return "delivered";
+  }
+  if (await ports.conversationDeliveryRetryable?.(attempt.conversationId, key) === true) {
+    delete wait.receiptWaitStartedAt;
+    return "refused";
+  }
+  return "unknown";
+}
+
+type ProviderContinuationReceipt = "delivered" | "refused" | "unknown" | "none";
+
+const PROVIDER_RECEIPT_RECONCILIATION_MS = 10 * 60_000;
+
+async function deferProviderReceiptReconciliation(pipeline: Pipeline, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void | Promise<void>): Promise<void> {
+  const wait = attempt.providerWait!;
+  const now = ports.now();
+  wait.receiptWaitStartedAt ??= now;
+  if (unixMs(now) - unixMs(wait.receiptWaitStartedAt) >= PROVIDER_RECEIPT_RECONCILIATION_MS) {
+    await park(pipeline, `provider continuation receipt remained unresolved for 10 minutes after ${wait.condition.label}; waiting for operator decision`, attempt);
+  } else {
+    pipeline.stateDetail = `waiting for the prior ${wait.condition.label} continuation receipt before processing a newer cut`;
+    ports.scheduleTick?.(1_000);
+  }
+  await persist();
 }
 
 function providerCutNotice(engine: FlowEngine, message: NonNullable<StageTurnEvidence["terminalProviderMessage"]>, onlyOutput = false) {
@@ -3954,7 +3981,11 @@ async function recoverProviderCut(
     return true;
   }
   if (notice && shouldOpenProviderWait(wait, notice)) {
-    await reconcileDeliveredProviderContinuation(pipeline, stage, attempt, ports);
+    const receipt = await reconcileDeliveredProviderContinuation(pipeline, stage, attempt, ports);
+    if (receipt === "unknown") {
+      await deferProviderReceiptReconciliation(pipeline, attempt, ports, persist);
+      return true;
+    }
     wait = openProviderWait(stage, attempt, notice, ports);
     await persist();
   }
@@ -14404,7 +14435,11 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
         && durable?.promptHistoryComplete !== false && !newerExternalProviderPrompt(attempt, durable)
         && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) <= (durable?.firstProviderCutAt ?? notice.ts)) {
         if (opensWait) {
-          await reconcileDeliveredProviderContinuation(pipeline, stage, attempt, lanePorts);
+          const receipt = await reconcileDeliveredProviderContinuation(pipeline, stage, attempt, lanePorts);
+          if (receipt === "unknown") {
+            await deferProviderReceiptReconciliation(pipeline, attempt, lanePorts, checkpoint);
+            return;
+          }
           openProviderWait(stage, attempt, notice, lanePorts);
         }
         const wait = attempt.providerWait!;

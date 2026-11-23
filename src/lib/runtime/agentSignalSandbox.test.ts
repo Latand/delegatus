@@ -39,6 +39,28 @@ test.skipIf(process.platform !== "linux")("a missing namespace marker never prov
   expect(cpuOwnerExited(foreign, { NODE_ENV: "test" })).toBeFalse();
 });
 
+test.skipIf(process.platform !== "linux")("headless launches route explicit versioned Bun admission through the installed helper", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-gate-routing-"));
+  const nativeBun = path.join(root, "bun-1.4.0"), output = path.join(root, "routed-bun");
+  fs.symlinkSync(process.execPath, nativeBun);
+  const env = fallbackEnv(root, { LLV_GATE_BUN: nativeBun, LLV_GATE_LOCK_DIR: root, LLV_GATE_SLOTS: "1",
+    LLV_GATE_SLOT_LEASE: "fixture-lease", PATH: process.env.PATH ?? "" });
+  let child: ChildProcess | undefined;
+  try {
+    child = spawnHeadlessSignalSandbox("/bin/sh", ["-c", 'printf "%s" "$LLV_GATE_BUN" > "$FIXTURE_ROUTED_BUN"'],
+      { env: { ...env, FIXTURE_ROUTED_BUN: output }, stdio: "ignore" });
+    expect(await exited(child)).toBe(0);
+    const routed = fs.readFileSync(output, "utf8");
+    expect(routed).not.toBe(nativeBun);
+    const result = spawnSync(routed, ["--version"], { env: { ...process.env, ...env } });
+    expect(result.status, result.stderr.toString()).toBe(0);
+    expect(result.stdout.toString()).toMatch(/^\d+\.\d+/);
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function domain(): AgentSignalDomain {
   const identity = (pid: number) => ({ pid, startIdentity: `${pid}:100`, bootEpoch: systemBootEpoch() });
   return { policyVersion: 1, monitor: identity(51001), bubblewrap: identity(51004), init: identity(51002), native: identity(51003),
@@ -745,7 +767,7 @@ test.skipIf(process.platform !== "linux")("a structured host records the boundar
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-host-off-"));
   const bin = path.join(root, "bin"); fs.mkdirSync(bin);
   fs.symlinkSync(Bun.which("python3")!, path.join(bin, "python3"));
-  fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
+  fs.symlinkSync("/usr/bin/git", path.join(bin, "git"));
   const binary = path.join(root, "copilot-fixture");
   fs.writeFileSync(binary, `#!${Bun.which("python3")}\nimport json,sys\n` + String.raw`
 for line in sys.stdin:
