@@ -116,8 +116,8 @@ export interface StructuredRecoveryRequest {
 
 /** No successor receipt exists yet; callers keep the original message queued. */
 export class StructuredRecoveryHeldForUpdateError extends Error {
-  constructor(message = "new autonomous recovery is held for the automatic update") {
-    super(message);
+  constructor(message = "new autonomous recovery is held for the automatic update", options?: ErrorOptions) {
+    super(message, options);
     this.name = "StructuredRecoveryHeldForUpdateError";
   }
 }
