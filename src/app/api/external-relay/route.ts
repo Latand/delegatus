@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { guardRelayRoute } from "@/lib/externalRelay/routeGuard";
+import { selectOwnerDestination } from "@/lib/externalRelay/ownerDestination";
 import {
   externalRelayRows,
   refreshTargetsForRead,
@@ -16,8 +17,13 @@ export async function GET(req: NextRequest) {
   if (denied) return denied;
   await refreshTargetsForRead();
   const store = readRelayStore();
+  const destination = selectOwnerDestination(store.relays);
   return NextResponse.json({
     relays: store.relays.map(publicRelay),
+    reviewDestination: destination.reason ? { reason: destination.reason } : {
+      targetName: destination.relay.targets.find(target => target.id === destination.targetId)!.name,
+      installationOwner: destination.installationOwner,
+    },
     pending: store.pending.map(publicPending),
     status: externalRelayRows(),
   });

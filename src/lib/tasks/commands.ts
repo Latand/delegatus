@@ -5,7 +5,9 @@ import crypto from "node:crypto";
 import { readFindingKey } from "./finding";
 import { canonicalProject } from "@/lib/projects/aliases";
 
-import { validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
+import { holdParks, validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
+import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
+import { resolvedPrototypeSummary } from "@/lib/prototypeReview/read";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { taskMutationView } from "./mutationView";
@@ -49,6 +51,7 @@ export const BOARD_TASKS_PER_PROJECT_LIMIT = 300;
 export const RECENT_CREATES_CAP = 100;
 
 export type TaskRefusal = { ok: false; error: string; status: number; code?: string; field?: string };
+const WAITING_OPERATOR_NOTE = 'Waiting is for operator actions. Use hold kind "operator" and name the action the operator needs to take.';
 
 export type TaskCommandResult =
   /* `notes` says what a write normalized instead of refusing. */
@@ -68,6 +71,7 @@ export type CreateTaskResult =
   | TaskRefusal;
 
 export interface CreateTaskInput {
+  status?: unknown;
   accounting?: unknown;
   /** Integer estimate from 0 to 100; null leaves it absent. */
   progress?: unknown;
@@ -540,7 +544,10 @@ export function createTask(
 
   const holdError = validateTaskHoldInput(input.hold);
   if (holdError) return holdError;
-  const hold = readTaskHold(input.hold, now, deps.actor ?? "operator", undefined, deps.conversationId, notes);
+  const hold = readTaskHold(input.hold ?? (input.status === "blocked" ? { kind: "unstated" } : undefined),
+    now, deps.actor ?? "operator", undefined, deps.conversationId, notes);
+  const parks = hold && holdParks(hold);
+  if (input.status === "blocked" && !parks && deps.actor === "agent") notes.push(WAITING_OPERATOR_NOTE);
   const declaration = taskDeclaration(input.accounting, project, now, hold, existing, canonicalProject);
   if (!declaration.ok) return declaration;
   const id = deps.id?.() ?? crypto.randomUUID();
@@ -555,7 +562,7 @@ export function createTask(
       count: 1, lastSeenAt: now,
       ...(previous ? { previousTaskId: previous.id } : {}),
     } } : {}),
-    status: hold ? "blocked" : "inbox",
+    status: parks ? "blocked" : "inbox",
     ...(progress.progress ? { progress: progress.progress } : {}),
     ...(deps.statusActor ? { statusBy: { actor: structuredClone(deps.statusActor), from: null, at: now } } : {}),
     ...(hold ? { hold } : {}),
@@ -746,29 +753,56 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (!status) return { ok: false, error: "invalid task status", status: 400 };
     patch.status = status;
   }
-  if (Object.hasOwn(input, "restoreHold")) {
+  const restoringHold = Object.hasOwn(input, "restoreHold");
+  const writingHold = Object.hasOwn(input, "hold");
+  const ownerColumn = (): TaskStatus => task.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state)) ? "assigned" : "inbox";
+  const hasCurrentDecision = (writingHold || patch.status === "blocked")
+    && (task.prototypeReviews?.length || task.prototypeReviewReplica || task.prototypeReview)
+    && prototypeWaitsOnOperator(resolvedPrototypeSummary(task), task);
+  if (restoringHold) {
     if (options.actor !== "operator" || Object.hasOwn(input, "hold")) return { ok: false, status: 400, error: "restoreHold is reserved for fenced operator undo" };
     patch.hold = storedTaskHold(input.restoreHold, notes);
     if (input.restoreHold !== null && !patch.hold) return { ok: false, status: 400, error: "invalid hold snapshot" };
+    // Undo restores provenance and hold data; it cannot restore a Waiting
+    // placement for work whose next action belongs to the seat or an agent.
+    if (patch.status === "blocked" && (!patch.hold || !(holdParks(patch.hold) || hasCurrentDecision))) patch.status = ownerColumn();
   }
-  if (Object.hasOwn(input, "hold")) {
+  if (writingHold) {
     const holdError = validateTaskHoldInput(input.hold);
     if (holdError) return holdError;
     patch.hold = readTaskHold(input.hold, now, options.actor ?? "operator", task.hold, options.conversationId, notes);
-    if (patch.hold) patch.status = "blocked";
-    else if (!Object.hasOwn(input, "status") && task.status === "blocked") {
-      patch.status = task.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state)) ? "assigned" : "inbox";
+    // A new operator action must not inherit the age of a form already answered.
+    if (patch.hold?.kind === "operator" && (task.hold?.kind !== "operator" || patch.hold.note !== task.hold.note)) {
+      patch.hold.since = now;
     }
-  } else if (patch.status === "blocked" && !task.hold && !Object.hasOwn(input, "restoreHold")) {
-    patch.hold = readTaskHold({ kind: "unstated" }, now, options.actor ?? "operator", undefined, options.conversationId);
+    if (patch.hold?.kind === "operator" && !patch.hold.note.trim() && !hasCurrentDecision
+      && (patch.status === "blocked" || !patch.status && task.status === "blocked")) {
+      patch.status = ownerColumn();
+      notes.push(WAITING_OPERATOR_NOTE);
+    }
+  } else if (patch.status === "blocked" && !restoringHold) {
+    const hold = task.hold;
+    if (hold && (holdParks(hold) || options.actor === "agent")) patch.hold = hold;
+    else patch.hold = readTaskHold(hold ?? { kind: "unstated" }, now, options.actor ?? "operator", hold, options.conversationId);
+  }
+  if (!restoringHold && patch.status !== "done") {
+    const parks = patch.hold && (holdParks(patch.hold) || patch.hold.kind === "operator" && hasCurrentDecision);
+    if (patch.status === "blocked" && !parks) {
+      patch.status = ownerColumn();
+      if (options.actor === "agent") notes.push(WAITING_OPERATOR_NOTE);
+    } else if (writingHold && parks) {
+      patch.status = "blocked";
+    } else if (writingHold && !patch.status && task.status === "blocked") {
+      patch.status = ownerColumn();
+    }
   }
   if (Object.hasOwn(input, "steps")) {
     const steps = readTaskSteps(input.steps, now, options.actor ?? "operator", options.conversationId, task.steps, notes);
     if (!steps.ok) return steps;
     patch.steps = steps.steps;
   }
-  // A move away from Waiting clears the old reason.
-  if (patch.status && patch.status !== "blocked") patch.hold = undefined;
+  if ((patch.status ?? task.status) === "done" ||
+    (patch.status && patch.status !== "blocked" && !Object.hasOwn(patch, "hold"))) patch.hold = undefined;
   if (Object.hasOwn(input, "pos")) {
     const pos = normalizePos(input.pos);
     if (!pos) return positionError(input.pos);

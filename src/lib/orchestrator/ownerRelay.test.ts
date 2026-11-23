@@ -116,8 +116,9 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
 
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
 const { procBackend } = await import("@/lib/proc");
-const { reserveRun, changeRun, updateRelayStore } = await import("@/lib/externalRelay/store");
+const { reserveRun, changeRun, dropRun, updateRelayStore } = await import("@/lib/externalRelay/store");
 const { liveOwnerRelayConversation } = await import("@/lib/externalRelay/ownerAuthority");
+const { endRequesterLease, openRequesterLease, requesterLeaseWriter } = await import("@/lib/externalRelay/requesterLease");
 const { ownerTierFor } = await import("@/lib/externalRelay/profile");
 const { runOwnerAgent } = await import("@/lib/externalRelay/ownerRun");
 const { requestSchema } = await import("@/lib/externalRelay/protocol");
@@ -137,7 +138,7 @@ function ownerRun(sender: ReturnType<typeof actor>, isOwner = true, switchOn = t
   const owner = ownerTierFor({ ownerTier: switchOn }, request);
   updateRelayStore(store => ({ ...store, relays: [{
     id: "paired", api_base: "http://127.0.0.1:1/v1", credential: "fixture-credential", name: "Relay", origin: "http://127.0.0.1:1", description: "Fixture", pairedAt: "2026-10-01T00:00:00Z", paused: false,
-    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null },
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: switchOn, engine: "codex", model: "auto", effort: "low", project: null, concurrency: 1, hardCapMinutes: 3 }],
   }] }));
@@ -200,6 +201,100 @@ test("verified owner turn reaches the designated seat through MCP and HTTP with 
   expect(response.status).toBe(200);
   expect(delivered[1].origin).toEqual(delivered[0].origin);
   expect(delivered[1].text).toBe(delivered[0].text);
+});
+
+async function requesterRun(sender: ReturnType<typeof actor>) {
+  ownerRun(sender);
+  const addedAt = "2026-10-01T00:00:00.000Z";
+  const entry = { id: "requester", kind: "requester" as const, key: "u1", project: "project-b",
+    label: "Trusted person", addedAt, source: "board" as const };
+  updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, targets: relay.targets.map(target => ({
+    ...target, ownerTier: undefined, project: entry.project, requesters: { revision: 1, entries: [entry] },
+  })) })) }));
+  const deadlineAt = Date.now() + 60_000;
+  const runDir = await fs.promises.mkdtemp(path.join(root, "requester-lease-"));
+  const lease = { requestId: "owner-request", leaseId: "lease", relayId: "paired", targetId: "target", runDir, deadlineAt, stallMs: 45_000 };
+  await openRequesterLease(lease);
+  requesterLeaseWriter(lease).acknowledge(Date.now());
+  changeRun("owner-request", row => ({ ...row, runDir, ownerTurn: { ...row.ownerTurn!, leaseDeadlineAt: deadlineAt, entry: {
+    id: entry.id, kind: entry.kind, project: entry.project, label: entry.label, tier: "requester",
+  } } }));
+  return lease;
+}
+
+function revokeRequester() {
+  updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, targets: relay.targets.map(target => ({
+    ...target, requesters: { revision: 2, entries: [] },
+  })) })) }));
+}
+
+test("trusted requester handoffs are delivered to the granted project on the MCP and HTTP paths", async () => {
+  const sender = actor(); const own = actor("project-b"); const other = actor("project-a");
+  await requesterRun(sender);
+  const tools = toolsFor(sender);
+  expect(await tools.service.callTool("send_message_to_orchestrator", { ...relayArgs("cross-project"), project: "project-a" }))
+    .toMatchObject({ ok: false, code: "trusted_requester_project_refused" });
+  const rejected = await orchestratorPOST(request(sender.capability, {
+    ...relayArgs(), project: "project-a", conversationId: other.id, clientMessageId: "cross-project-http",
+  }));
+  expect(rejected.status).toBe(403);
+  expect(delivered).toHaveLength(0);
+  expect(await tools.service.callTool("send_message_to_orchestrator", relayArgs("own-project")))
+    .toMatchObject({ ok: true, conversationId: own.id });
+  const accepted = await orchestratorPOST(request(sender.capability, {
+    ...relayArgs(), conversationId: own.id, clientMessageId: "own-project-http",
+  }));
+  expect(accepted.status).toBe(200);
+  expect(delivered).toHaveLength(2);
+  for (const delivery of delivered) expect(delivery.text).toContain("Trusted person");
+  designate("project-a", sender.id);
+  expect(await tools.service.callTool("send_message_to_orchestrator", { ...relayArgs("seat-cross-project"), project: "project-a" }))
+    .toMatchObject({ ok: false, code: "trusted_requester_project_refused" });
+  expect((await orchestratorPOST(request(sender.capability, {
+    ...relayArgs(), project: "project-a", clientMessageId: "seat-cross-project-http",
+  }))).status).toBe(403);
+  expect(delivered).toHaveLength(2);
+});
+
+test.each(["grant revoked", "lease lost"] as const)("requester custody suppresses seat authority until stop settles (%s)", async reason => {
+  const sender = actor("project-a"); actor("project-b"); const lease = await requesterRun(sender);
+  const tools = toolsFor(sender);
+  if (reason === "grant revoked") revokeRequester();
+  else endRequesterLease(lease);
+  for (const phase of ["revoked", "stopping"]) {
+    if (phase === "stopping") changeRun("owner-request", row => ({ ...row,
+      ownerTurn: { ...row.ownerTurn!, cancel: "interrupt" } }));
+    expect(await tools.service.callTool("send_message_to_orchestrator", relayArgs(phase)))
+      .toMatchObject({ ok: false, code: "orchestrator_relay_refused" });
+    for (const route of [orchestratorPOST, POST]) {
+      const response = await route(request(sender.capability, {
+        ...relayArgs(), orchestratorRelayProject: "project-b", clientMessageId: `revoked-${phase}`,
+      }));
+      expect(response.status).toBe(403);
+    }
+    expect(delivered).toEqual([]);
+  }
+  dropRun("owner-request");
+  expect(await tools.service.callTool("send_message_to_orchestrator", relayArgs("new-seat-send")))
+    .toMatchObject({ ok: true });
+  expect(delivered[0].origin).toMatchObject({ role: "orchestrator" });
+});
+
+test("an MCP requester send cannot become a seat send after the requester turn settles in transit", async () => {
+  const sender = actor("project-a"); actor("project-b"); await requesterRun(sender);
+  let dispatches = 0;
+  const tools = toolsFor(sender, { post: async (_pathname, body, headers) => {
+    dispatches++;
+    revokeRequester();
+    dropRun("owner-request");
+    const response = await orchestratorPOST(request(undefined, body, headers));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "orchestrator_relay_refused", admission: "refused" });
+    throw new Error("relay send refused");
+  } });
+  expect(await tools.service.callTool("send_message_to_orchestrator", relayArgs("settles-in-transit"))).toMatchObject({ ok: false });
+  expect(dispatches).toBe(1);
+  expect(delivered).toEqual([]);
 });
 
 test("an owner report reply carries verbatim approval and stored report only to its source seat", async () => {
@@ -371,11 +466,12 @@ test("owner relay cannot send remotely as a shared project's seat or forge a voi
   expect(delivered).toEqual([]);
 });
 
-function realAdmission() {
+function realAdmission(afterRead?: () => void) {
   const client = {
     readSession: async ({ conversationId }: { conversationId: string }) => {
       const conversation = registry.conversation(conversationId as `conversation_${string}`)!;
       const generation = conversation.generations.at(-1)!;
+      afterRead?.();
       return { conversationId, sessionKey: { engine: conversation.engine, sessionId: generation.id },
         hostKind: conversation.engine === "claude" ? "claude-broker" : "codex-app-server", host: "hosted", turn: "busy", provenance: "structured", revision: 1,
         artifactPath: generation.path, cwd: root, activeTurnId: "fixture-turn", attentionIds: [], recentReceipts: [],
@@ -398,6 +494,21 @@ function realAdmission() {
     recordOperatorRequest: () => null,
   });
 }
+
+test("HTTP rechecks a requester's grant after reading the recipient session", async () => {
+  const sender = actor("project-a"); actor("project-b"); await requesterRun(sender);
+  let reads = 0;
+  realAdmission(() => {
+    if (++reads === 1) revokeRequester();
+  });
+  const response = await orchestratorPOST(request(sender.capability, {
+    ...relayArgs(), clientMessageId: "revoke-during-recipient-read",
+  }));
+  expect(reads).toBeGreaterThan(0);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ code: "orchestrator_relay_refused", admission: "refused" });
+  expect(delivered).toEqual([]);
+});
 
 test("owner HTTP receipts retain their quoted payload and original seat through rotation", async () => {
   const sender = actor(); const first = actor("project-b"); ownerRun(sender); realAdmission();

@@ -482,7 +482,7 @@ interface RegistryFileReaders {
   entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
   coldKey: WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>;
   endedOwner: WeakMap<RegistryFile, (since: string, page?: { limit: number; after?: string }) => string[]>;
-  startupSelection: WeakMap<RegistryFile, () => boolean>;
+  startupSelection: WeakMap<RegistryFile, () => StartupSelectionProof | null>;
   projection: WeakMap<object, ProjectionReader>;
   liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
   retiredHosts?: WeakMap<object, (limit: number, cutBoundary?: string) => RetiredHostSelection>;
@@ -890,10 +890,20 @@ export function archivedOwnersEndedSince(file: RegistryFile, since: string, page
     Unrelated host progress does not change a selection. A missing or capped
     journal proves nothing, so the caller must prepare another view. */
 export function registryStartupSelectionUnchanged(file: RegistryFile): boolean | undefined {
+  const proof = registryStartupSelectionProof(file);
+  return proof === undefined ? undefined : proof?.changes.length === 0;
+}
+
+const startupSelectionCollections = ["entries", "conversations", "receipts", "memberships", "conversationAliases"] as const;
+type StartupSelectionChange = { collection: typeof startupSelectionCollections[number]; key: string };
+type StartupSelectionProof = { identity: string | null; revision: number; changes: StartupSelectionChange[] };
+
+/** Deltas against an immutable selection, at the returned journal revision.
+    Null means the change journal cannot prove the delta. */
+export function registryStartupSelectionProof(file: RegistryFile): StartupSelectionProof | null | undefined {
   return startupSelectionReaders.get(file)?.();
 }
 
-const startupSelectionCollections = new Set(["entries", "conversations", "receipts", "memberships", "conversationAliases"]);
 function startupSelectionFacts(collection: string, row: unknown): string {
   if (row === undefined) return "absent";
   if (collection === "memberships" || collection === "conversationAliases") return JSON.stringify(row);
@@ -902,12 +912,28 @@ function startupSelectionFacts(collection: string, row: unknown): string {
     const host = value.structuredHost as { kind?: unknown } | null;
     const legacyHost = value.host as { kind?: unknown } | null;
     const key = value.key as { engine?: unknown; sessionId?: unknown } | null;
-    return JSON.stringify([host?.kind, legacyHost?.kind, key?.engine, key?.sessionId]);
+    return JSON.stringify([host?.kind, legacyHost?.kind, key?.engine, key?.sessionId, value.artifactPath]);
   }
   if (collection === "conversations") return JSON.stringify([value.id, value.engine,
-    (value.generations as Array<{ id: unknown }> | undefined)?.map(generation => generation.id)]);
+    (value.generations as Array<{ id: unknown; path: unknown }> | undefined)?.map(generation => [generation.id, generation.path])]);
   const pending = ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"].includes(String(value.state));
   return JSON.stringify(pending ? [value.conversationId] : []);
+}
+
+/** JSON snapshots are immutable and have no change journal. Compare the
+    inputs shared with the SQLite proof before reusing a startup projection. */
+export function registryStartupSnapshotChanges(previous: RegistryFile, current: RegistryFile): StartupSelectionChange[] {
+  const changes: StartupSelectionChange[] = [];
+  for (const collection of startupSelectionCollections) {
+    const before = previous[collection] as Record<string, unknown>;
+    const after = current[collection] as Record<string, unknown>;
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (before[key] !== after[key] && startupSelectionFacts(collection, before[key]) !== startupSelectionFacts(collection, after[key])) {
+        changes.push({ collection, key });
+      }
+    }
+  }
+  return changes;
 }
 
 /** Whether entry-key lookups on this file read the generation identity index. */
@@ -4265,36 +4291,35 @@ export class SqliteAgentRegistryStore {
   private bindReadOnlyReaders(file: RegistryFile, snapshot: StampedSnapshot, coldGrantChangeId: number,
     identity: string | null, coldIds: Map<RowCollection, Map<string, number>>, coldKeys: Map<RowCollection, Set<string>>): StampedSnapshot {
     let startupSelectionChecked = coldGrantChangeId;
-    let startupSelectionRefused = false;
     if (this.changesReady) startupSelectionReaders.set(file, () => {
-      if (startupSelectionRefused) return false;
-      if (databaseFileIdentity(this.filename) !== identity) return false;
+      if (databaseFileIdentity(this.filename) !== identity) return null;
       try {
-        const current = this.db.transaction(() => {
+        return this.db.transaction(() => {
           const last = this.changeId();
           const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
-          if (last < startupSelectionChecked || first > startupSelectionChecked + 1) return false;
-          if (last === startupSelectionChecked) return true;
+          if (last < startupSelectionChecked || first > startupSelectionChecked + 1) return null;
+          if (last === startupSelectionChecked) return { identity, revision: last, changes: [] };
           // Progress can rewrite one host many times while a view prepares.
           // Bound the rows to revalidate after deduplicating their journal events.
-          const changes = this.db.query<{ collection: RowCollection; row_key: string }, [number]>(
-            "SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>? LIMIT 129").all(startupSelectionChecked);
-          if (changes.length > 128) return false;
+          const changes = this.db.query<{ collection: StartupSelectionChange["collection"]; row_key: string }, [number, ...string[]]>(
+            `SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>? AND collection IN
+              (${startupSelectionCollections.map(() => "?").join(",")}) LIMIT 129`).all(startupSelectionChecked, ...startupSelectionCollections);
+          if (changes.length > 128) return null;
           const read = this.db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`);
+          const changed: StartupSelectionChange[] = [];
           for (const change of changes) {
-            if (!startupSelectionCollections.has(change.collection)) continue;
             const raw = read.get(change.collection,change.row_key);
             this.onRowPayloadRead?.(change.collection,raw ? 1 : 0);
             const current = raw ? parseSqliteJson(raw.value_json,this.db) : undefined;
             const previous = (file[change.collection] as Record<string, unknown>)[change.row_key];
-            if (startupSelectionFacts(change.collection,current) !== startupSelectionFacts(change.collection,previous)) return false;
+            if (startupSelectionFacts(change.collection,current) !== startupSelectionFacts(change.collection,previous)) {
+              changed.push({ collection: change.collection, key: change.row_key });
+            }
           }
-          startupSelectionChecked = last;
-          return true;
+          if (changed.length === 0) startupSelectionChecked = last;
+          return { identity, revision: last, changes: changed };
         })();
-        if (!current) startupSelectionRefused = true;
-        return current;
-      } catch { startupSelectionRefused = true; return false; } // Unreadable evidence never validates a selection.
+      } catch { return null; } // Unreadable evidence never validates a selection.
     });
     const pinnedReceipts = this.changesReady ? this.pinnedRowKeys(file, "receipts", coldGrantChangeId, identity, this.collectionOrders.get("receipts")?.orders) : null;
     const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;

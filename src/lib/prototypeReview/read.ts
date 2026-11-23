@@ -1,7 +1,7 @@
 import { nativeAssociationDecisionApproves } from "@/lib/attention/nativeAssociationForm";
 import { nativeAssociationCurrent } from "@/lib/attention/nativeCallerSources";
 import fs from "node:fs";
-import { attentionDismissalIndex, type AttentionDismissalV1 } from "@/lib/attention/dismissals";
+import { attentionDismissalIndex, readExistingAttentionDismissals, type AttentionDismissalV1 } from "@/lib/attention/dismissals";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import type { BoardTask } from "@/lib/tasks/types";
 import { prototypeRoot, storedMediaPath } from "./store";
@@ -13,17 +13,23 @@ import { loadSeatRounds } from "./seatRounds";
 import type { OperatorDecisionView, OperatorDecisionsRead, PrototypeReviewNotice, PrototypeReviewRead, PrototypeMediaView, PrototypeReviewRound, PrototypeReviewSummary, PrototypeRoundRead, PrototypeRoundView } from "./types";
 import { currentPrototypeSummary, prototypeDeliveryPhase, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded, prototypeWaitsOnOperator, seatRoundNotice } from "./model";
 export { prototypeReviewSummary, prototypeReviewNotices } from "./model";
+export function resolvedPrototypeSummary(task: BoardTask, index: ReadonlyMap<string, AttentionDismissalV1> = prototypeDismissals(), now = Date.now()): PrototypeReviewSummary | undefined {
+  const { prototypeReviews, prototypeReviewReplica } = task;
+  const summary = currentPrototypeSummary(prototypeReviewSummary(prototypeReviews ?? []) ?? prototypeReviewReplica?.summary ?? task.prototypeReview);
+  if (!summary) return undefined;
+  const record = summary.waitingReviewId ? index.get(`prototype:${summary.waitingReviewId}`) : undefined;
+  const { waitingDismissal: _held, ...current } = summary;
+  /* Only this installation drives a decision's delivery, so only its own rounds say how it goes. */
+  const held = prototypeReviews?.at(-1)?.decision;
+  return { ...current, ...(current.decision && held ? { decision: { ...current.decision, phase: prototypeDeliveryPhase(held.delivery, now) } } : {}),
+    ...(prototypeReviews ? { undelivered: prototypeReviews.filter(round => round.decision && !index.has(`prototype:${round.id}`) && prototypeDeliveryPhase(round.decision.delivery, now) === "attention").map(round => ({ reviewId: round.id, title: round.title, at: round.decision!.at })) } : {}),
+    ...(record?.kind === "prototype" && record.taskId === task.id ? { waitingDismissal: { at: record.at, by: record.by } } : {}) };
+}
+
 export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonly T[], index: ReadonlyMap<string, AttentionDismissalV1> = prototypeDismissals(), now = Date.now()): Array<Omit<T, "prototypeReviews" | "prototypeReviewReplica"> & { prototypeReview?: PrototypeReviewSummary }> {
   return tasks.map(({ prototypeReviews, prototypeReviewReplica, ...task }) => {
-    const summary = currentPrototypeSummary(prototypeReviewSummary(prototypeReviews ?? []) ?? prototypeReviewReplica?.summary ?? task.prototypeReview);
-    const record = summary?.waitingReviewId ? index.get(`prototype:${summary.waitingReviewId}`) : undefined;
-    if (!summary) return task;
-    const { waitingDismissal: _held, ...current } = summary;
-    /* Only this installation drives a decision's delivery, so only its own rounds say how it goes. */
-    const held = prototypeReviews?.at(-1)?.decision;
-    return { ...task, prototypeReview: { ...current, ...(current.decision && held ? { decision: { ...current.decision, phase: prototypeDeliveryPhase(held.delivery, now) } } : {}),
-      ...(prototypeReviews ? { undelivered: prototypeReviews.filter(round => round.decision && !index.has(`prototype:${round.id}`) && prototypeDeliveryPhase(round.decision.delivery, now) === "attention").map(round => ({ reviewId: round.id, title: round.title, at: round.decision!.at })) } : {}),
-      ...(record?.kind === "prototype" && record.taskId === task.id ? { waitingDismissal: { at: record.at, by: record.by } } : {}) } };
+    const prototypeReview = resolvedPrototypeSummary({ ...task, prototypeReviews, prototypeReviewReplica }, index, now);
+    return prototypeReview ? { ...task, prototypeReview } : task;
   });
 }
 /** What a caller that names itself with a capability gets on a shared board
@@ -164,5 +170,5 @@ function isActiveNativeApproval(round: PrototypeReviewRound): boolean {
 }
 
 function prototypeDismissals(): ReadonlyMap<string, AttentionDismissalV1> {
-  try { return attentionDismissalIndex(); } catch { return new Map(); }
+  try { return attentionDismissalIndex(readExistingAttentionDismissals()); } catch { return new Map(); }
 }
