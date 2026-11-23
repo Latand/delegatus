@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { normalizeRegistry, type DeliveryOperationOwner, type RegistryFile } from "./registry";
@@ -245,4 +245,80 @@ test("read-only store falls back cleanly when the partial pending-owner index is
   const view = legacyReader.readOnlySnapshot().file;
   expect(registryRowsMatching(view, "deliveryOperationOwners", "custodyState", "pending").map(row => row.command.operationId))
     .toEqual(["op-pending-1", "op-pending-2", "op-pending-3"]);
+});
+
+test("bounded pending deliveryOperationOwners queries preserve row_order early stop while unbounded queries use the partial index", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pending-owners-bounded-"));
+  roots.push(root);
+  const owners: Record<string, DeliveryOperationOwner> = {};
+  for (let index = 0; index < 2_000; index += 1) {
+    const id = `op-pending-${String(index).padStart(5, "0")}`;
+    owners[id] = makeOwner(id, `conversation_live_${index % 50}`, false);
+  }
+  const initial: RegistryFile = normalizeRegistry({
+    version: 2,
+    entries: {},
+    receipts: {},
+    conversations: {},
+    deliveryOperationOwners: owners,
+  });
+  const filename = path.join(root, "registry.sqlite");
+  const store = new SqliteAgentRegistryStore(filename, {
+    initialSnapshot: initial,
+    normalize: normalizeRegistry,
+  });
+  stores.push(store);
+  await store.prepareRecoveryIndexes();
+  await store.prepareReadOnlySnapshot();
+
+  // Capture the exact SQL statements issued by the bounded vs unbounded paths.
+  const executedSql: string[] = [];
+  const origQuery = Database.prototype.query;
+  const querySpy = spyOn(Database.prototype, "query").mockImplementation((function (this: Database, sql: string) {
+    if (sql.includes("FROM registry_rows")) executedSql.push(sql);
+    return origQuery.call(this, sql);
+  }) as typeof Database.prototype.query);
+
+  const view = store.readOnlySnapshot().file;
+  try {
+    executedSql.length = 0;
+    const boundedOne = registryKeysMatchingBounded(view, "deliveryOperationOwners", [{ field: "custodyState", value: "pending" }], 1);
+    const boundedOneSql = executedSql.find((sql) => sql.includes("ORDER BY row_order LIMIT ?"));
+    expect(boundedOne).toEqual(["op-pending-00000"]);
+    expect(boundedOneSql).toBeDefined();
+    expect(boundedOneSql).not.toContain("registry_pending_delivery_owner_origin");
+
+    executedSql.length = 0;
+    const boundedTen = registryKeysMatchingBounded(view, "deliveryOperationOwners", [{ field: "custodyState", value: "pending" }], 10);
+    const boundedTenSql = executedSql.find((sql) => sql.includes("ORDER BY row_order LIMIT ?"));
+    expect(boundedTen).toEqual(Array.from({ length: 10 }, (_, idx) => `op-pending-${String(idx).padStart(5, "0")}`));
+    expect(boundedTenSql).toBeDefined();
+    expect(boundedTenSql).not.toContain("registry_pending_delivery_owner_origin");
+
+    executedSql.length = 0;
+    const unbounded = registryKeysMatching(view, "deliveryOperationOwners", "custodyState", "pending");
+    const unboundedSql = executedSql.find((sql) => sql.includes("ORDER BY row_order LIMIT ?"));
+    expect(unbounded.length).toBe(2_000);
+    expect(unboundedSql).toContain("INDEXED BY registry_pending_delivery_owner_origin");
+
+    // Verify EXPLAIN QUERY PLAN on the exact SQL statements from both paths.
+    querySpy.mockRestore();
+    const inspect = new Database(filename, { readonly: true });
+    try {
+      const boundedPlan = inspect.query<{ detail: string }, (string | number)[]>(
+        `EXPLAIN QUERY PLAN ${boundedOneSql!}`,
+      ).all("deliveryOperationOwners", "pending", 3).map((row) => row.detail).join(" | ");
+      expect(boundedPlan).toContain("registry_rows_collection_order");
+      expect(boundedPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
+      const unboundedPlan = inspect.query<{ detail: string }, [number]>(
+        `EXPLAIN QUERY PLAN ${unboundedSql!}`,
+      ).all(Number.MAX_SAFE_INTEGER).map((row) => row.detail).join(" | ");
+      expect(unboundedPlan).toContain("registry_pending_delivery_owner_origin");
+    } finally {
+      inspect.close();
+    }
+  } finally {
+    querySpy.mockRestore();
+  }
 });

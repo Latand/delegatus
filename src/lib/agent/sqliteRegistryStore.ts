@@ -4551,7 +4551,7 @@ export class SqliteAgentRegistryStore {
 
   /** The callback must finish inside the transaction; no lazy object escapes. */
   private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[], exactSpawnAttempt = false): string[] {
-    if (field === "custodyState" || field === "migration.custodyState") return this.matchingRowKeysBounded(collection, [{ field, value: values }], Number.MAX_SAFE_INTEGER);
+    if (field === "custodyState" || field === "migration.custodyState") return this.matchingRowKeysBounded(collection, [{ field, value: values }], Number.MAX_SAFE_INTEGER, true);
     const distinct = [...new Set(values)];
     if (!distinct.length) return [];
     const jsonPath = LOOKUP_PATHS[field];
@@ -4601,7 +4601,7 @@ export class SqliteAgentRegistryStore {
 
   /** A bounded indexed selection used where even counting retained rows must
    * stop at the caller's refusal threshold. It reads row keys only. */
-  private matchingRowKeysBounded(collection: RowCollection, filters: readonly RegistryKeyFilter[], limit: number): string[] {
+  private matchingRowKeysBounded(collection: RowCollection, filters: readonly RegistryKeyFilter[], limit: number, unbounded = false): string[] {
     if (limit <= 0) return [];
     const clauses = filters.map(({ field, value }) => {
       const values = typeof value === "string" ? [value] : [...new Set(value)];
@@ -4612,7 +4612,9 @@ export class SqliteAgentRegistryStore {
     // Express the null predicate directly so SQLite can use the partial index.
     if (collection === "deliveryOperationOwners"
       && clauses.some(({ field, values }) => field === "custodyState" && values.length === 1 && values[0] === "pending")) {
-      if (clauses.length === 1 && this.pendingDeliveryOwnerOriginIndexReady) {
+      // Only use the conversationId-leading partial index for unbounded pending scans:
+      // bounded queries need the row_order index for early stop without a temp B-tree sort.
+      if (unbounded && clauses.length === 1 && this.pendingDeliveryOwnerOriginIndexReady) {
         return this.db.query<{ row_key: string }, [number]>(`SELECT row_key FROM registry_rows INDEXED BY registry_pending_delivery_owner_origin
           WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IS NULL
           ORDER BY row_order LIMIT ?`).all(limit).map(row => row.row_key);
