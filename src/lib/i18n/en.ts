@@ -590,6 +590,7 @@ export const en = {
   "externalRelay.requesters.error": "The action could not be confirmed. Reopen the target settings and check the current state.",
   "externalRelay.requesters.history": "Requester history",
   "externalRelay.requesters.saved": "Change saved.",
+  "externalRelay.requesters.proposedBy": "An agent asks you to confirm this",
   "externalRelay.requesters.action.start_enrolment": "Add person",
   "externalRelay.requesters.action.confirm": "Confirm requester",
   "externalRelay.requesters.action.decline": "Decline enrolment",

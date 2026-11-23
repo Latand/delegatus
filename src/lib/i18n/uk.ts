@@ -589,6 +589,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.requesters.error": "Не вдалося підтвердити дію. Відкрийте налаштування цілі знову й перевірте поточний стан.",
   "externalRelay.requesters.history": "Історія довірених запитувачів",
   "externalRelay.requesters.saved": "Зміну збережено.",
+  "externalRelay.requesters.proposedBy": "Агент просить вас підтвердити цю дію",
   "externalRelay.requesters.action.start_enrolment": "Додати людину",
   "externalRelay.requesters.action.confirm": "Підтвердити запитувача",
   "externalRelay.requesters.action.decline": "Відхилити реєстрацію",

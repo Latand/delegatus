@@ -47098,9 +47098,9 @@ describe("relay requester enrolment on the board", () => {
     const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
     const readings: { frame: string; width: number; overflow: boolean; shortControls: number; splitTimes: number }[] = [];
     try {
-      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+      for (const width of [1440, 1000, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         const phone = width === 390;
-        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 },
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : width === 1000 ? 700 : 900 },
           colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
         try {
           await context.addInitScript(locale => {
@@ -47178,6 +47178,9 @@ describe("relay requester enrolment on the board", () => {
                 .filter(time => time.getClientRects().length !== 1).length,
             }), phone);
             expect(measurement).toEqual({ overflow: false, shortControls: 0, splitTimes: 0 });
+            // A time reads as date and hour:minute, never with seconds.
+            const times = await shown.locator("[data-requester-time]").allTextContents();
+            for (const text of times) expect(text).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
             await shown.screenshot({ path: path.join(out, filename) });
             readings.push({ frame: filename, width, ...measurement });
           };
@@ -47189,6 +47192,13 @@ describe("relay requester enrolment on the board", () => {
           await panel.getByRole("button", { name: action("start_enrolment") }).click();
           await panel.getByRole("alertdialog").getByRole("button", { name: action("start_enrolment") }).click();
           await panel.locator("[data-requester-code]").waitFor();
+          // The code is the emphasised element of its box, and a copy control sits beside it, 44 px on a phone.
+          const code = panel.locator("[data-requester-code]");
+          expect(await code.evaluate(element => parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.closest("[data-requester-pending]")!).fontSize)
+            && parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.previousElementSibling ?? element.parentElement!).fontSize))).toBe(true);
+          const copy = panel.locator("[data-requester-code] + button");
+          expect(await copy.count()).toBe(1);
+          if (phone) expect((await copy.boundingBox())!.height).toBeGreaterThanOrEqual(44);
           await frame("2-code");
           status = "candidate";
           await panel.getByText("Demo participant", { exact: false }).waitFor();
@@ -47201,6 +47211,10 @@ describe("relay requester enrolment on the board", () => {
           await frame("4-entries");
           await panel.getByRole("button", { name: action("remove") }).click();
           await panel.locator('[data-requester-confirm="remove"]').waitFor();
+          // One Remove button, no add form, and the confirmation sits inside the entry it removes.
+          expect(await panel.getByRole("button", { name: action("remove") }).count()).toBe(1);
+          expect(await panel.getByRole("textbox").count()).toBe(0);
+          expect(await panel.locator('li [data-requester-confirm="remove"]').count()).toBe(1);
           await frame("5-remove-confirmation");
           await panel.getByRole("alertdialog").getByRole("button", { name: action("remove") }).click();
           await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
@@ -47219,11 +47233,12 @@ describe("relay requester enrolment on the board", () => {
           expect(await dialog.locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
           await dialog.getByText(translate(lang, "externalRelay.requesters.verify"), { exact: true }).waitFor();
           await dialog.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          await dialog.getByText(translate(lang, "externalRelay.requesters.proposedBy"), { exact: true }).waitFor();
           await frame("7-proposal-confirm", proposed);
         } finally { await context.close(); }
       }
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
-      expect(readings).toHaveLength(56);
+      expect(readings).toHaveLength(84);
     } finally {
       await browser.close();
       server.stop();

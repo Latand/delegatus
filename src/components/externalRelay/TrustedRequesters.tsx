@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "@/lib/i18n";
 import type { RequesterOperation, RequesterProposalView, RequesterView } from "@/lib/externalRelay/requesterEnrolmentContract";
 import type { RelayGrantStatus } from "@/lib/externalRelay/settingsView";
+import { CopyButton } from "@/components/feed/CopyButton";
 import { FOCUS, PRIMARY, QUIET } from "./relayUi";
 
 const endpoint = "/api/external-relay/trusted-requesters";
@@ -22,7 +23,10 @@ function IssuedCode({ value }: { value: Code }) {
   const { t, locale } = useLocale();
   return <div className="space-y-1 text-ui">
     <p>{t("externalRelay.requesters.share")}</p>
-    <code data-requester-code="" className="inline-block select-all rounded-control bg-sunken px-2 py-1 text-primary">{value.code}</code>
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      <code data-requester-code="" className="select-all break-all rounded-control bg-canvas px-2 py-1 font-mono text-title font-bold tracking-wide text-primary">{value.code}</code>
+      <CopyButton text={value.code} />
+    </div>
     <p className="text-caption text-muted">{t("externalRelay.requesters.expires", { time: new Date(value.expiresAt).toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" }) })}</p>
   </div>;
 }
@@ -30,17 +34,18 @@ function IssuedCode({ value }: { value: Code }) {
 /** A date and time never wraps inside itself, even in a narrow panel. */
 function When({ time }: { time: string }) {
   const { locale } = useLocale();
-  return <span data-requester-time="" className="whitespace-nowrap">{new Date(time).toLocaleString(locale)}</span>;
+  return <span data-requester-time="" className="whitespace-nowrap">{new Date(time).toLocaleString(locale, { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>;
 }
 
-function Confirm({ action, label, target, project, candidate = null, busy, accept, cancel }: {
+function Confirm({ action, label, target, project, candidate = null, proposed = false, busy, accept, cancel }: {
   action: RequesterOperation["action"]; label: string; target: string; project: string | null;
-  candidate?: Candidate; busy: boolean; accept: () => void; cancel: () => void;
+  candidate?: Candidate; proposed?: boolean; busy: boolean; accept: () => void; cancel: () => void;
 }) {
   const { t } = useLocale();
   const heading = t(`externalRelay.requesters.action.${action}`);
   return <div role="alertdialog" aria-label={heading} data-requester-confirm={action}
     className="space-y-2 rounded-control border border-warning bg-warning-soft p-2.5 text-ui text-primary">
+    {proposed && <p data-requester-proposed="" className="break-words text-caption text-muted">{t("externalRelay.requesters.proposedBy")}</p>}
     <p className="break-words font-semibold">{heading} · {label}</p>
     <p className="break-words">{target} · {project ?? t("externalRelay.requesters.unassigned")}</p>
     {candidate && <p data-requester-candidate="" className="break-words">{[candidate.name, candidate.chatTitle].filter(Boolean).join(" · ")} · <When time={candidate.at} /></p>}
@@ -97,6 +102,11 @@ export function TrustedRequesters({ relay, target, project, grantStatus }: { rel
     <span data-external-relay-grant-status={grantStatus}>{t(`externalRelay.target.grant.${grantStatus}`)}</span>
   </div>;
   const pending = view.pending;
+  // An open confirmation takes the place of the control that asked for it, so it sits directly under its own entry.
+  const action = confirm?.operation.action;
+  const entryId = confirm && "entryId" in confirm.operation ? confirm.operation.entryId : undefined;
+  const inPlace = action === "remove" ? view.entries.some(entry => entry.id === entryId)
+    : action === "start_enrolment" ? !pending : Boolean(pending);
   function ask(operation: RequesterOperation, subject: string, subjectProject = view!.project) {
     setError(false);
     setConfirm({ operation, label: subject, viewed: view!, subjectProject });
@@ -118,6 +128,9 @@ export function TrustedRequesters({ relay, target, project, grantStatus }: { rel
       if (fresh) setView(fresh);
     } finally { setBusy(false); }
   }
+  const confirmation = confirm && <Confirm action={confirm.operation.action} label={confirm.label} target={confirm.viewed.targetName} project={confirm.subjectProject}
+    candidate={confirm.operation.action === "confirm" || confirm.operation.action === "decline" ? confirm.viewed.pending?.candidate : null}
+    busy={busy} accept={() => void apply()} cancel={() => setConfirm(null)} />;
   return <section data-trusted-requesters="" className="space-y-2 border-t border-border py-2">
     <h4 className="text-ui font-semibold text-primary">{t("externalRelay.target.grant.label")}</h4>
     {view.entries.length === 0 ? <p className="text-caption text-muted">{t("externalRelay.requesters.empty")}</p> :
@@ -130,8 +143,9 @@ export function TrustedRequesters({ relay, target, project, grantStatus }: { rel
               t(`externalRelay.requesters.state.${entry.active ? "active" : "suspended"}`), entry.project,
             ].filter(Boolean).join(" · ")} · <When time={entry.addedAt} /></p>
           </div>
-          <button type="button" className={QUIET} disabled={busy} onClick={() => ask({ action: "remove", relay, target, entryId: entry.id }, entry.label, entry.project)}>
-            {t("externalRelay.requesters.action.remove")}</button>
+          {!confirm && <button type="button" className={QUIET} disabled={busy} onClick={() => ask({ action: "remove", relay, target, entryId: entry.id }, entry.label, entry.project)}>
+            {t("externalRelay.requesters.action.remove")}</button>}
+          {action === "remove" && entryId === entry.id && <div className="basis-full">{confirmation}</div>}
         </li>)}
       </ul>}
     {pending ? <div data-requester-pending={pending.status} className="space-y-2 rounded-control border border-border p-2">
@@ -139,23 +153,21 @@ export function TrustedRequesters({ relay, target, project, grantStatus }: { rel
       {issued && pending.status === "waiting" && <IssuedCode value={issued} />}
       {pending.candidate && <p className="break-words text-ui">{[pending.candidate.name, pending.candidate.chatTitle].filter(Boolean).join(" · ")} · <When time={pending.candidate.at} /></p>}
       {pending.status === "candidate" && <p className="text-ui">{t("externalRelay.requesters.verify")}</p>}
-      <div className="flex flex-wrap gap-3">
+      {action && action !== "remove" ? confirmation : <div className="flex flex-wrap gap-3">
         {pending.status === "candidate" && view.canStart && <button type="button" className={PRIMARY} disabled={busy}
           onClick={() => ask({ action: "confirm", relay, target, entryId: pending.id }, pending.label)}>{t("externalRelay.requesters.action.confirm")}</button>}
         <button type="button" className={QUIET} disabled={busy} onClick={() => ask({ action: "decline", relay, target, entryId: pending.id }, pending.label)}>
           {t("externalRelay.requesters.action.decline")}</button>
-      </div>
-    </div> : view.otherSession ? <p data-requester-pending="other-session" className="text-ui text-muted">
+      </div>}
+    </div> : action === "start_enrolment" ? confirmation : view.otherSession ? <p data-requester-pending="other-session" className="text-ui text-muted">
       {t("externalRelay.requesters.otherSession", { time: new Date(view.otherSession.expiresAt).toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" }) })}
-    </p> : view.project && view.canStart ? <form className="flex flex-wrap items-center gap-2"
+    </p> : confirm ? null : view.project && view.canStart ? <form className="flex flex-wrap items-center gap-2"
       onSubmit={event => { event.preventDefault(); if (label.trim()) ask({ action: "start_enrolment", relay, target, label: label.trim() }, label.trim()); }}>
       <input className={`min-h-9 min-w-0 flex-1 rounded-control border border-border bg-canvas px-2 text-ui max-sm:min-h-11 ${FOCUS}`} aria-label={t("externalRelay.requesters.label")} placeholder={t("externalRelay.requesters.label")}
         maxLength={128} value={label} disabled={busy} onChange={event => setLabel(event.target.value)} />
       <button type="submit" className={PRIMARY} disabled={busy || !label.trim()}>{t("externalRelay.requesters.action.start_enrolment")}</button>
     </form> : <p className="text-caption text-muted">{t(view.project ? "externalRelay.requesters.signIn" : "externalRelay.requesters.noProject")}</p>}
-    {confirm && <Confirm action={confirm.operation.action} label={confirm.label} target={confirm.viewed.targetName} project={confirm.subjectProject}
-      candidate={confirm.operation.action === "confirm" || confirm.operation.action === "decline" ? confirm.viewed.pending?.candidate : null}
-      busy={busy} accept={() => void apply()} cancel={() => setConfirm(null)} />}
+    {!inPlace ? confirmation : null}
     {error && <p role="alert" className="text-ui text-warning">{t("externalRelay.requesters.error")}</p>}
     {view.history.length > 0 && <details className="text-caption text-muted">
       <summary className="cursor-pointer">{t("externalRelay.requesters.history")}</summary>
@@ -194,7 +206,7 @@ export function TrustedRequesterProposal({ id, close }: { id: string; close: () 
 
   return <section className="space-y-2" data-requester-proposal="">
     {proposal && !saved && <Confirm action={proposal.operation.action} label={proposal.label} target={proposal.targetName}
-      project={proposal.project} candidate={proposal.candidate} busy={busy} accept={() => void accept()} cancel={close} />}
+      project={proposal.project} candidate={proposal.candidate} proposed busy={busy} accept={() => void accept()} cancel={close} />}
     {saved && (issued ? <IssuedCode value={issued} /> : <p role="status">{t("externalRelay.requesters.saved")}</p>)}
     {error && <p role="alert" className="text-ui text-warning">{t("externalRelay.requesters.error")}</p>}
   </section>;
