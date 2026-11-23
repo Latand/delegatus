@@ -1642,6 +1642,10 @@ export async function bindStructuredDeliveryQueue(
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
   let guarding: Promise<void> | null = null;
+  let diagnosedGuard: Promise<void> | null = null;
+  let nextGuardLogAt = 0;
+  let suppressedGuardFailures = 0;
+  const guardFailures = new WeakSet<object>();
   const guardHosts = () => {
     if (!registry.quotaObservations("codex").some(row => accountCreditGuardBlock("codex", row.accountId, row.limits))) {
       guardHostPage.reset();
@@ -1669,11 +1673,32 @@ export async function bindStructuredDeliveryQueue(
       guarding = null;
       if (guardHostPage.pending && !stopped && state.activeQueue === queue) scheduleDrain();
     });
+  const enforceGuardWithDiagnostic = (onlyIfChanged = false): Promise<void> => {
+    if (diagnosedGuard) return diagnosedGuard;
+    const run = Promise.resolve().then(() => enforceGuard(onlyIfChanged)).then(() => {
+      nextGuardLogAt = 0;
+      suppressedGuardFailures = 0;
+    }, error => {
+      if ((typeof error === "object" && error !== null) || typeof error === "function") guardFailures.add(error as object);
+      if (!stopped && state.activeQueue === queue) {
+        const now = performance.now();
+        if (nextGuardLogAt === 0 || now >= nextGuardLogAt) {
+          controllerDiagnosticError("[structured delivery] paid-credit guard retry pending",
+            nextGuardLogAt === 0 ? error : { suppressedFailures: suppressedGuardFailures });
+          nextGuardLogAt = now + GUARD_RETRY_LOG_INTERVAL_MS;
+          suppressedGuardFailures = 0;
+        } else suppressedGuardFailures++;
+      }
+      throw error;
+    }).finally(() => { if (diagnosedGuard === run) diagnosedGuard = null; });
+    diagnosedGuard = run;
+    return run;
+  };
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
   const drainWithRetry = async (afterAdmission = false, freshAdmission = false, conversationId?: string): Promise<void> => {
     if (stopped) return;
     try {
-      if (!startupPending) await enforceGuard();
+      if (!startupPending) await enforceGuardWithDiagnostic();
       if (freshAdmission && conversationId) await queue.drainFreshAdmission(conversationId);
       else if (afterAdmission) await queue.drainAfterAdmission(freshAdmission);
       else await queue.drain();
@@ -1689,12 +1714,14 @@ export async function bindStructuredDeliveryQueue(
       if (retryScheduled && (!freshAdmission || !conversationId)) {
         drainBackoffMs = Math.min(retryMs * 2, DELIVERY_DRAIN_MAX_BACKOFF_MS);
       }
-      controllerDiagnosticError(
-        retryScheduled
-          ? "[structured delivery] queue drain failed; retry scheduled"
-          : "[structured delivery] queue drain failed; retry already pending",
-        error,
-      );
+      const isGuardFailure = ((typeof error === "object" && error !== null) || typeof error === "function")
+        && guardFailures.has(error as object);
+      if (!isGuardFailure) controllerDiagnosticError(
+          retryScheduled
+            ? "[structured delivery] queue drain failed; retry scheduled"
+            : "[structured delivery] queue drain failed; retry already pending",
+          error,
+        );
     }
   };
   requestDrain = () => {
@@ -2327,9 +2354,9 @@ export async function bindStructuredDeliveryQueue(
     return freshAdmission && conversationId ? drainWithRetry(true, true, conversationId) : generalDrain(true, freshAdmission);
   }, async () => {
     if (stopped) return;
-    if (!startupPending) await enforceGuard();
+    if (!startupPending) await enforceGuardWithDiagnostic();
     // A shared guard may have begun before this cycle's quota observation.
-    if (!startupPending && !stopped) await enforceGuard(true);
+    if (!startupPending && !stopped) await enforceGuardWithDiagnostic(true);
     if (!stopped && state.activeQueue === queue) scheduleDrain();
   });
   state.stopActive = () => {
@@ -2523,27 +2550,14 @@ export async function bindStructuredDeliveryQueue(
   const watchdogMs = dependencies.watchdogIntervalMs ?? DELIVERY_WATCHDOG_MS;
   if (watchdogMs > 0) {
     let watchingGuard = false;
-    let nextGuardLogAt = 0;
-    let suppressedFailures = 0;
     const watchGuard = async () => {
       // Several ticks can share one in-flight guard pass. Report its result once.
       if (watchingGuard) return;
       watchingGuard = true;
       try {
-        await enforceGuard(true);
-        nextGuardLogAt = 0;
-        suppressedFailures = 0;
-      } catch (error) {
-        if (stopped || state.activeQueue !== queue) return;
-        const now = performance.now();
-        if (now < nextGuardLogAt) {
-          suppressedFailures++;
-          return;
-        }
-        controllerDiagnosticError("[structured delivery] paid-credit guard retry pending",
-          nextGuardLogAt === 0 ? error : { suppressedFailures });
-        nextGuardLogAt = now + GUARD_RETRY_LOG_INTERVAL_MS;
-        suppressedFailures = 0;
+        await enforceGuardWithDiagnostic(true);
+      } catch {
+        // Guard failures remain pending for the next watchdog or drain attempt.
       } finally {
         watchingGuard = false;
       }

@@ -217,6 +217,7 @@ test("the delivery watchdog bounds guard logs while pending work retries during 
     now = ms;
     const calls = quota.mock.calls.length;
     tick!();
+    await Promise.resolve();
     if (quota.mock.calls.length > calls) {
       // Join the real in-flight pass, including any asynchronous store work.
       await enforceAccountCreditGuard(f.registry, [], async () => true, async () => false, async () => null)
@@ -252,6 +253,37 @@ test("the delivery watchdog bounds guard logs while pending work retries during 
     expect(guardLogs()).toEqual([[message, fault], [message, { suppressedFailures: 59 }], [message, fault]]);
   } finally {
     quota.mockRestore(); logs.mockRestore(); clock.mockRestore(); capture.mockRestore();
+    await f.cleanup();
+  }
+});
+
+test("post-startup drain retries share the guard log budget and recover pending guard work", async () => {
+  const f = migrationDeliveryFixture();
+  const store = interruptionObligationStore(interruptionObligationDirectory(f.registry.filename));
+  const pending = store.record({ ...cut(1), conversationId: f.conversation.id,
+    hostKey: `codex:${f.key.sessionId}`, path: f.conversation.generations.at(-1)!.path,
+    seat: { project: "rotated-seat", seatEpoch: 1 } }).obligation;
+  const message = "[structured delivery] paid-credit guard retry pending";
+  const logs = spyOn(console, "error").mockImplementation(() => {});
+  const quota = spyOn(f.registry, "quotaObservations").mockImplementation(() => { throw new Error("quota unavailable"); });
+  try {
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    await kickStructuredDeliveryQueue();
+    await new Promise(resolve => setTimeout(resolve, 450));
+    expect(quota.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(logs.mock.calls.filter(([label]) => label === message)).toHaveLength(1);
+    expect(logs.mock.calls.some(([label]) => label === "[structured delivery] queue drain failed; retry scheduled")).toBe(false);
+    expect(store.list().find(row => row.id === pending.id)?.state).toBe("owed");
+
+    quota.mockRestore();
+    await kickStructuredDeliveryQueue();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(logs.mock.calls.filter(([label]) => label === message)).toHaveLength(1);
+    expect(store.list().find(row => row.id === pending.id)?.state).toBe("discharged");
+  } finally {
+    logs.mockRestore();
+    await bindStructuredDeliveryQueue([], { client: null });
     await f.cleanup();
   }
 });

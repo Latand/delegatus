@@ -257,7 +257,11 @@ function recipientCutSource(directory: string): CutSource {
 function readRecipientInterruptionEvidence(directory: string, conversationIds: Iterable<string>) {
   const source = recipientCutSource(directory);
   const pending = `${directory}.pending.jsonl`;
-  if (fileStamp(pending) !== source.pendingStamp) throw new RecipientInterruptionEvidenceError("pending journal changed");
+  const pendingStamp = () => {
+    try { return fileStamp(pending); }
+    catch (cause) { throw new RecipientInterruptionEvidenceError("pending journal changed", { cause }); }
+  };
+  if (pendingStamp() !== source.pendingStamp) throw new RecipientInterruptionEvidenceError("pending journal changed");
   let records: InterruptionObligation[];
   try {
     records = withCutRows(directory, rows => rows.interruptionRecipients([...new Set(conversationIds)], RECIPIENT_RECORD_LIMIT));
@@ -265,7 +269,7 @@ function readRecipientInterruptionEvidence(directory: string, conversationIds: I
   if (JSON.stringify(recipientCutSource(directory)) !== JSON.stringify(source)) {
     throw new RecipientInterruptionEvidenceError("source marker missing or mismatched");
   }
-  if (fileStamp(pending) !== source.pendingStamp) throw new RecipientInterruptionEvidenceError("pending journal changed");
+  if (pendingStamp() !== source.pendingStamp) throw new RecipientInterruptionEvidenceError("pending journal changed");
   return { records, revision: digest(JSON.stringify([source.epoch, source.databaseIdentity, records])) };
 }
 
@@ -275,7 +279,7 @@ export function recipientInterruptionEvidence(directory: string, conversationIds
       readRecipientInterruptionEvidence(directory, conversationIds));
   } catch (cause) {
     if (cause instanceof RecipientInterruptionEvidenceError) throw cause;
-    if (cause instanceof FileTransactionAdmissionError) {
+    if (cause instanceof FileTransactionAdmissionError || cause instanceof Error) {
       throw new RecipientInterruptionEvidenceError("journal lock busy", { cause });
     }
     throw new Error(INCOMPLETE_RECIPIENT_EVIDENCE, { cause });

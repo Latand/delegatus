@@ -15,6 +15,8 @@ setDefaultTimeout(60_000);
 
 for (const [fault, category] of [
   ["lock", "journal lock busy"],
+  ["pending journal symlink loop", "pending journal changed"],
+  ["lock queue path is a file", "journal lock busy"],
   ["missing marker", "source marker missing or mismatched"],
   ["mismatched marker", "source marker missing or mismatched"],
   ["journal", "pending journal changed"],
@@ -33,6 +35,14 @@ for (const [fault, category] of [
       if (fault === "missing marker") fs.unlinkSync(obligations);
       if (fault === "mismatched marker") fs.writeFileSync(obligations, "unreadable marker payload");
       if (fault === "journal") fs.appendFileSync(pending, "changed journal payload\n");
+      if (fault === "pending journal symlink loop") {
+        fs.unlinkSync(pending);
+        fs.symlinkSync(path.basename(pending), pending);
+      }
+      if (fault === "lock queue path is a file") {
+        fs.rmSync(`${pending}.write-locks`, { recursive: true, force: true });
+        fs.writeFileSync(`${pending}.write-locks`, "not a directory");
+      }
       if (fault === "index") {
         const db = new Database(path.join(directory, "state.sqlite"));
         try { db.exec("DROP INDEX state_rows_interruption_recipient_v3"); } finally { db.close(); }
@@ -49,6 +59,8 @@ for (const [fault, category] of [
           const cause = result.cause as Error;
           expect(cause.message).toBe(message);
           if (fault === "lock") expect(cause.cause).toBeInstanceOf(FileTransactionAdmissionError);
+          if (fault === "pending journal symlink loop") expect((cause.cause as NodeJS.ErrnoException).code).toBe("ELOOP");
+          if (fault === "lock queue path is a file") expect((cause.cause as NodeJS.ErrnoException).code).toBe("EEXIST");
           if (fault === "mismatched marker") expect(cause.cause).toBeInstanceOf(SyntaxError);
           if (fault === "index") expect((cause.cause as Error).message).toBe("interruption source index is incomplete or incompatible");
         }
