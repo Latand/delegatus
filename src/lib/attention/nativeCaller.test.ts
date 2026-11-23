@@ -112,7 +112,7 @@ test("an unscanned session is retryable and admitted once scanned", () => {
 
 test("incomplete native artifact evidence stays fail-closed and tells the caller to retry", () => {
   const f = fixture();
-  f.snapshot.nativeHostsIncomplete = true;
+  Object.assign(f.snapshot, { nativeHostsIncomplete: true });
   refused(f.sources, "evidence-incomplete");
   expect(nativeAdmissionMessage({ reason: "evidence-incomplete", retryable: true })).toContain("Repeat the same request");
 });
