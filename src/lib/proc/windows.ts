@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 
 import type { ProcBackend, ProcessMemory, ProcSnapshotEntry, SystemMemory } from "./types";
@@ -103,6 +103,40 @@ function runSnapshotCommand(timeoutMs: number): WindowsSnapshotCommandResult {
   };
 }
 
+function runSnapshotCommandAsync(timeoutMs: number): Promise<WindowsSnapshotCommandResult> {
+  return new Promise((resolve) => {
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShellCommand(WINDOWS_PROCESS_SNAPSHOT_SCRIPT)], { windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    let bytes = 0;
+    let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => {
+      child.kill();
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 500);
+      killTimer.unref();
+    }, timeoutMs);
+    timer.unref();
+    const finish = (result: WindowsSnapshotCommandResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      resolve(result);
+    };
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { bytes += Buffer.byteLength(chunk); if (bytes <= MAX_BUFFER) stdout += chunk; else child.kill(); });
+    child.stderr.on("data", (chunk: string) => { if (stderr.length < 64 * 1024) stderr += chunk; });
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      finish({ stdout: "", stderr: "", status: null, signal: null, error: `${error.code ?? error.name}: ${error.message}` });
+    });
+    child.once("close", (status, signal) => {
+      finish({ stdout: bytes <= MAX_BUFFER ? stdout : "", stderr, status, signal, error: bytes <= MAX_BUFFER ? null : "output-limit" });
+    });
+  });
+}
+
 interface Snapshot {
   at: number;
   data: WindowsSnapshot;
@@ -111,11 +145,13 @@ interface Snapshot {
 }
 
 let snapshotMemo: Snapshot | null = null;
+let resourceSnapshotMemo: { at: number; data: Promise<WindowsSnapshot> } | null = null;
 
 /** Test seam: forces the next read to take a fresh snapshot rather than one up
     to five seconds old, so a test that just spawned a child can see it. */
 export function resetWindowsSnapshotForTests(): void {
   snapshotMemo = null;
+  resourceSnapshotMemo = null;
 }
 
 /** Take a fresh command result and populate the same cache every backend reader
@@ -216,6 +252,10 @@ function systemMemory(): SystemMemory | null {
   return { ramTotal, ramAvailable: Math.min(os.freemem(), ramTotal), swapTotal: 0, swapUsed: 0 };
 }
 
+async function resourceSystemMemory(): Promise<SystemMemory | null> {
+  return systemMemory();
+}
+
 function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
   const rows = snapshot().data.rows;
   const map = new Map<number, ProcessMemory>();
@@ -229,6 +269,34 @@ function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
 
 function ppidMap(): Map<number, number> {
   return new Map(snapshot().data.ppids);
+}
+
+async function resourceSnapshot(): Promise<WindowsSnapshot> {
+  const now = Date.now();
+  if (resourceSnapshotMemo && now - resourceSnapshotMemo.at < SNAPSHOT_TTL_MS) return resourceSnapshotMemo.data;
+  const data = runSnapshotCommandAsync(RUN_TIMEOUT_MS)
+    .then((command) => parseWindowsProcessSnapshot(command.error ? "" : command.stdout));
+  resourceSnapshotMemo = { at: now, data };
+  try {
+    return await data;
+  } catch (error) {
+    if (resourceSnapshotMemo?.data === data) resourceSnapshotMemo = null;
+    throw error;
+  }
+}
+
+async function resourcePpidMap(): Promise<Map<number, number>> {
+  return new Map((await resourceSnapshot()).ppids);
+}
+
+async function resourceProcessMemory(pids: Iterable<number>): Promise<Map<number, ProcessMemory>> {
+  const rows = (await resourceSnapshot()).rows;
+  const map = new Map<number, ProcessMemory>();
+  for (const pid of pids) {
+    const row = rows.get(pid);
+    if (Number.isInteger(pid) && pid > 0 && row) map.set(pid, { rssBytes: row.workingSetBytes, swapBytes: 0 });
+  }
+  return map;
 }
 
 /**
@@ -260,6 +328,9 @@ export const windowsBackend: ProcBackend = {
   readEnvVar,
   listProcesses,
   systemMemory,
+  resourceSystemMemory,
+  resourcePpidMap,
+  resourceProcessMemory,
   processMemory,
   ppidMap,
   scanFdTargetsUnder,

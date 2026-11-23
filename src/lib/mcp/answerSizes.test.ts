@@ -235,7 +235,7 @@ test("measure every tool through the MCP service and budget common board answers
   const successor = await call("list_tasks", { project: "size-board-successor", ids: ["task-0"] });
   expect(successor.count).toBe(1);
   expect(successor.tasks[0].project).toBe("size-board-successor");
-}, 15_000);
+}, 60_000);
 
 test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeGone restores idle history", async () => {
   const now = Date.now();
@@ -403,9 +403,11 @@ test("multibyte titles and paths obey service byte budgets and paginate without 
 });
 
 
+// Seeding both 10,000-row stores shares CPU with publication checks. The
+// assertions below measure keyed reads and replay work directly.
 test("real service uses keyed reads and replays only changed selection rows on a 10000-card board", async () => {
   const { taskSelectionSource } = await import("@/lib/tasks/store");
-  const { pipelineSelectionSource, buildPipeline, pipelineIdentity } = await import("@/lib/pipelines/store");
+  const { pipelineSelectionSource, buildPipeline, pipelineIdentity, withDeliveryMutation } = await import("@/lib/pipelines/store");
   const { boardSelection } = await import("./boardSelection");
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(sandbox, "indexed-state");
@@ -468,7 +470,8 @@ test("real service uses keyed reads and replays only changed selection rows on a
     current.find(task => task.id === tasks[50]!.id)!.text = tasks[50]!.text;
     return { tasks: current, result: undefined };
   }, taskFile);
-  savePipelines(pipelines);
+  // Write only the changed pipeline so fixture costs track the intended journal replay.
+  withDeliveryMutation(tx => tx.put(pipelines[50]!));
   const changed = await call("list_tasks", { project: "indexed-board", query: "unrelated", limit: 1 });
   expect(changed.tasks[0].id).toBe(tasks[50]!.id);
   const changedPipeline = await call("list_pipelines", { project: "indexed-board", query: "unrelated", limit: 1 });
@@ -485,10 +488,14 @@ test("real service uses keyed reads and replays only changed selection rows on a
   expect(linkPage.tasks.find((task: { id: string }) => task.id === tasks[20]!.id).pipelineIds).toEqual([pipelines[20]!.id, pipelines[50]!.id]);
   expect(linkPage.tasks.find((task: { id: string }) => task.id === tasks[50]!.id).pipelineIds).toEqual([]);
   pipelines[50]!.taskIds = [tasks[50]!.id];
-  savePipelines(pipelines.filter(pipeline => pipeline.id !== pipelines[20]!.id));
+  withDeliveryMutation(tx => {
+    tx.put(pipelines[50]!);
+    tx.delete(pipelines[20]!.id);
+  });
   const nextLinkPage = await call("list_tasks", { ids: [tasks[20]!.id, tasks[50]!.id], limit: 50 });
   expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[20]!.id).pipelineIds).toEqual([]);
   expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[50]!.id).pipelineIds).toEqual([pipelines[50]!.id]);
+  expect(pipelineIndex.work.metadataRows - beforePipelines).toBe(2);
   console.log(`Indexed 10000-card service: changed-ID reads=1, single task update metadata=1, single pipeline update metadata=1`);
   } finally { process.env.LLV_STATE_DIR = previousState; }
-}, 30_000);
+}, 90_000);

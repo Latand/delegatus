@@ -698,39 +698,49 @@ test("the member limit shows the default, saves a number on leaving the field, a
 });
 
 
-test("owner tier defaults off, patches in place and has a folded caption in en and uk", async () => {
+test("the settings render server-derived grant status and review destination without a grant switch", async () => {
   accounts({ codex: [signedIn("work")] });
-  let current = relay({ targets: [target({ engine: "codex", model: "gpt-6-astra" })] });
-  answers.relay = { relays: [current], pending: [], status: [] };
-  route((url, init) => {
-    if (url === "/api/external-relay/relays/relay-1" && init?.method === "PATCH") {
-      const body = JSON.parse(String(init.body));
-      current = { ...current, targets: [{ ...current.targets[0], ...body.target }] };
-      answers.relay = { relays: [current], pending: [], status: [] };
-      return jsonResponse({ relay: current });
-    }
-    return undefined;
-  });
+  answers.relay = { relays: [relay({ targets: [
+    target({ grantStatus: "active" }),
+    target({ id: "bot-2", name: "Other bot", grantStatus: "suspended" }),
+    target({ id: "bot-3", grantStatus: "none" }),
+  ] })], pending: [], status: [], reviewDestination: { targetName: "Other bot", installationOwner: false } };
+  route();
   const host = await mount(<ExternalRelaySection />);
-  const row = host.querySelector("[data-external-relay-target]")!;
-  await unfold(row);
-  const control = row.querySelector("[data-external-relay-owner-tier]")!;
-  expect(control.getAttribute("aria-checked")).toBe("false");
-  expect(row.textContent).toContain("Full agent for the owner");
-  await click(control);
-  expect(harness.calls.filter(c => c.method === "PATCH").at(-1)?.body).toEqual({ target: { id: "bot-1", ownerTier: true } });
-  expect(control.getAttribute("aria-checked")).toBe("true");
-  await click(row.querySelector("[data-external-relay-target-fold]"));
-  expect(row.querySelector("[data-external-relay-owner-tier-caption]")?.textContent).toContain("full agent for the owner");
+  expect(host.querySelector("[data-external-relay-review-destination]")?.textContent)
+    .toBe("Prototype reviews go to the pairing owner’s private chat with Other bot.");
+  const rows = Array.from(host.querySelectorAll("[data-external-relay-target]"));
+  const statuses = async () => {
+    const rendered = [];
+    for (const row of rows) {
+      await unfold(row);
+      rendered.push(row.querySelector("[data-external-relay-grant-status]")?.textContent);
+    }
+    return rendered;
+  };
+  expect(rows[0]?.querySelector("[data-external-relay-grant-caption]")?.textContent).toBe("Active grants");
+  expect(await statuses()).toEqual(["Active grants", "Suspended grants", "No grants"]);
+  expect(host.querySelectorAll('[role="switch"]')).toHaveLength(rows.length);
   try {
-    await act(async () => setLocale("uk")); await unfold(row);
-    expect(row.textContent).toContain("Повний агент для власника");
-    expect(row.textContent).toContain("Хто власник, повідомляє сервіс");
-    await click(row.querySelector("[data-external-relay-owner-tier]"));
-    expect(row.querySelector("[data-external-relay-owner-tier]")?.getAttribute("aria-checked")).toBe("false");
+    await act(async () => setLocale("uk"));
+    expect(host.querySelector("[data-external-relay-review-destination]")?.textContent)
+      .toBe("Рев’ю прототипів надходять у приватний чат власника підключення з Other bot.");
+    expect(await statuses()).toEqual(["Дозволи діють", "Дозволи призупинено", "Дозволів немає"]);
   } finally { await act(async () => setLocale("en")); }
 });
 
+test("the selected installation owner's review destination is described in both languages", async () => {
+  answers.relay = { relays: [relay()], pending: [], status: [],
+    reviewDestination: { targetName: "Installation bot", installationOwner: true } };
+  route();
+  const host = await mount(<ExternalRelaySection />);
+  const notice = host.querySelector("[data-external-relay-review-destination]")!;
+  expect(notice.textContent).toBe("Prototype reviews go to the installation owner’s private chat with Installation bot.");
+  try {
+    await act(async () => setLocale("uk"));
+    expect(notice.textContent).toBe("Рев’ю прототипів надходять у приватний чат власника інсталяції з Installation bot.");
+  } finally { await act(async () => setLocale("en")); }
+});
 
 for (const locale of ["en", "uk"] as const) test(`an unresolved owner stop stays visible in relay settings (${locale})`, async () => {
   accounts({ claude: [signedIn("main")] });

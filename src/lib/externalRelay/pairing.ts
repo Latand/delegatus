@@ -2,6 +2,7 @@ import { sweepConversationsAsync } from "./conversations";
 import { randomUUID } from "node:crypto";
 import { forgetRelayActivity } from "./activity";
 import { discoverRelay, ExternalRelayError, relayCall } from "./client";
+import { revokeOwnerRuns } from "./ownerRun";
 import { refreshRelayTargets } from "./poller";
 import {
   pairingConfirmedSchema,
@@ -13,7 +14,7 @@ import {
   publicPending,
   publicRelay,
   readRelayStore,
-  updateRelayStore,
+  updateRelayStoreAsync,
   type PairedRelay,
   type PendingRelay,
 } from "./store";
@@ -36,7 +37,7 @@ export async function startRelayPairing(url: string, label?: string) {
     limits: descriptor.limits,
     ...started,
   };
-  updateRelayStore((current) => ({
+  await updateRelayStoreAsync((current) => ({
     ...current,
     pending: [
       ...current.pending.filter((item) => item.origin !== origin),
@@ -61,7 +62,7 @@ export async function checkRelayPairing(id: string) {
   );
   const status = pairingStatusSchema.parse(result.body);
   if (status.status === "awaiting_install")
-    updateRelayStore((store) => ({
+    await updateRelayStoreAsync((store) => ({
       ...store,
       pending: store.pending.map((item) =>
         item.id === id
@@ -72,7 +73,7 @@ export async function checkRelayPairing(id: string) {
   // A pairing the service ended cannot be resumed, so its entry and poll
   // secret go now; the returned status still tells the UI why it ended.
   else if (status.status !== "pending")
-    updateRelayStore((store) => ({
+    await updateRelayStoreAsync((store) => ({
       ...store,
       pending: store.pending.filter((item) => item.id !== id),
     }));
@@ -81,7 +82,7 @@ export async function checkRelayPairing(id: string) {
 export async function confirmRelayPairing(
   id: string,
   ownerId: string,
-): Promise<Omit<PairedRelay, "credential">> {
+): Promise<ReturnType<typeof publicRelay>> {
   const pending = pendingById(id);
   if (!pending.owner || pending.owner.id !== ownerId)
     throw new ExternalRelayError("owner_changed", 409);
@@ -113,11 +114,12 @@ export async function confirmRelayPairing(
     limits: pending.limits,
     targets: confirmed.targets.map(newTargetSettings),
   };
-  updateRelayStore((store) => ({
+  await updateRelayStoreAsync((store) => ({
     ...store,
     relays: [...store.relays.filter((item) => item.id !== id), relay],
     pending: store.pending.filter((item) => item.id !== id),
   }));
+  await revokeOwnerRuns();
   // A service can confirm before the owner's targets are linked to the
   // pairing; ask once for the list it holds now, so the caller (the setup
   // step's default engine among them) sees the targets that exist.
@@ -137,7 +139,7 @@ export async function cancelRelayPairing(id: string): Promise<void> {
     undefined,
     pending.poll_secret,
   );
-  updateRelayStore((store) => ({
+  await updateRelayStoreAsync((store) => ({
     ...store,
     pending: store.pending.filter((item) => item.id !== id),
   }));
@@ -157,10 +159,11 @@ export async function unpairRelay(id: string): Promise<{ warned: boolean }> {
   } catch {
     warned = true;
   }
-  updateRelayStore((store) => ({
+  await updateRelayStoreAsync((store) => ({
     ...store,
     relays: store.relays.filter((item) => item.id !== id),
   }));
+  await revokeOwnerRuns();
   await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000, undefined, id);
   forgetRelayActivity(id);
   return { warned };

@@ -5321,6 +5321,29 @@ test.each(["live", "unknown", "unreadable", "publishing", "first-prompt", "journ
     } finally { identityRead?.mockRestore(); registry.close(); setSystemTime(); }
   });
 
+
+test.each(["waiting-turn", "requested", "preparing"] as const)("a Codex send held behind a running turn explains the boundary in its immediate answer (%s)", async phase => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const generation = conversation.generations.at(-1)!;
+  const entry = registry.readOnlySnapshot().entries[`codex:${generation.id}`]!;
+  registry.upsert({ ...entry, status: "live", structuredHost: { ...entry.structuredHost!, activeTurnRef: "working-turn" } });
+  registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual", requestId: "busy-switch",
+    expectedRevision: registry.engineRouting("codex").revision });
+  registry.setConversationMigration(conversation.id, { ...registry.conversation(conversation.id)!.migration!, phase });
+  const state = snapshot(conversation.id);
+  state.sessions[0]!.turn = "running";
+  state.sessions[0]!.activeTurnId = "working-turn";
+  const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    text: "new requirement", hasImages: false, clientMessageId: "busy-switch-message" }, {
+    enabled: () => true, registry: () => registry,
+    client: () => ({ readSession: sessionReader(async () => state) } as RuntimeHostClient),
+    kick: () => {}, requestMigrationTick: () => {},
+  });
+  expect(result).toMatchObject({ ok: true, outcome: "held", waitReason: phase === "waiting-turn" ? "switch-after-turn" : "switching-accounts",
+    detail: expect.stringContaining("current turn ends"), deadlineAt: expect.any(String) });
+});
+
 /* A busy Claude agent outlived the Viewer that owned its stdio
    across a release. Its row still named that gone Viewer as claim owner and a
    running engine as its process, so recovery handed it back as live, and the
