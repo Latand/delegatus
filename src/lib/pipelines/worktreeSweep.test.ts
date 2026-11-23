@@ -1234,6 +1234,7 @@ test("the Viewer's listing keeps a removed lane's conversations under the parent
     "claude-tasks": path.join(caseDir, "claude-tasks"),
     "openclaw-sessions": path.join(caseDir, "openclaw"),
     "copilot-sessions": path.join(caseDir, "copilot-sessions"),
+    "antigravity-sessions": path.join(caseDir, "antigravity-sessions"),
   };
   for (const directory of Object.values(roots)) fs.mkdirSync(directory, { recursive: true });
   /* A stage conversation that ran in the lane, and one in a subdirectory of it. */

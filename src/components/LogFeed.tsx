@@ -1734,7 +1734,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       const withAnswers = mergeAssistantRows<ConversationRow>(rows, liveTail.handoff, ({ key, live }) => ({
         kind: "item", key, anchorKey: key, live,
         item: { kind: "prose", ts: live.startedAt ?? live.completedAt, text: live.text,
-          engine: file?.engine === "codex" ? "codex" : file?.engine === "copilot" ? "copilot" : "claude",
+          engine: file?.engine === "codex" ? "codex" : file?.engine === "copilot" ? "copilot" : file?.engine === "antigravity" ? "antigravity" : "claude",
           ...(live.itemId ? { sourceId: live.itemId } : {}) },
       }), row => row.kind === "message"
         ? row.entry?.at ?? rowInstants.get(row.anchorKey ?? row.key) ?? null

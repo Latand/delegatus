@@ -477,6 +477,48 @@ test("a Copilot session from a deleted worktree still groups under its parent re
   expect(projectForCwd(repo)).toBe(described.project);
 });
 
+test("an Antigravity session from a deleted worktree still groups under its parent repo", () => {
+  /* docs/design/antigravity-engine.md 3.5: an Antigravity transcript's cwd is
+     `session.start.data.cwd`, routed through `projectInfoFromCwd` so live and
+     deleted checkouts resolve to the exact same parent repository project. */
+  useStateDirectory("deleted-antigravity-state");
+  const repo = path.join(SANDBOX, "deleted-antigravity-main");
+  const identity = createRepository(repo);
+  const deadWorktree = path.join(repo, ".worktrees", "antigravity-lane");
+  expect(fs.existsSync(deadWorktree)).toBe(false);
+  const root = path.join(SANDBOX, "antigravity-home", "sessions");
+  const sessionId = crypto.randomUUID();
+  const transcript = path.join(root, sessionId, "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, [
+    {
+      type: "session.start",
+      data: {
+        sessionId,
+        cwd: deadWorktree,
+        model: "gemini-4-neon",
+        baseModel: "gemini-4-neon",
+        effort: "xhigh",
+        agyVersion: "1.5.13",
+      },
+      timestamp: "2026-11-23T20:00:00.000Z",
+    },
+    { type: "user.message", data: { content: "Investigate worktree grouping" }, timestamp: "2026-11-23T20:00:01.000Z" },
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+
+  const described = describe("antigravity-sessions", root, transcript, fs.statSync(transcript));
+  expect(described).toMatchObject({
+    engine: "antigravity",
+    fmt: "antigravity",
+    kind: "session",
+    cwd: deadWorktree,
+    project: identity.project,
+    worktree: "antigravity-lane",
+    title: "Investigate worktree grouping",
+  });
+  expect(projectForCwd(repo)).toBe(described.project);
+});
+
 test("conversation metadata carries the exact cwd and its canonical project root", () => {
   const repo = path.join(SANDBOX, "cwd-project");
   const cwd = path.join(repo, ".worktrees", "issue-173");

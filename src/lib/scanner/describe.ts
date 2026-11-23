@@ -1033,6 +1033,8 @@ function cwdFromLines(lines: string[]): string | null {
       const record = recordValue(parsed);
       const cwd = stringValue(record?.cwd)
         ?? stringValue(recordValue(record?.payload)?.cwd)
+        /* Antigravity: `session.start` / `session.resume` carry `data.cwd`. */
+        ?? stringValue(recordValue(record?.data)?.cwd)
         /* Copilot: `session.start` / `session.resume` carry `data.context.cwd`. */
         ?? stringValue(recordValue(recordValue(record?.data)?.context)?.cwd);
       if (cwd) return cwd;
@@ -1049,7 +1051,7 @@ function goodTitle(text: unknown): string | null {
 }
 
 function userPromptFromRecord(obj: Record<string, unknown>, engine: TranscriptEngine): string | null {
-  if (engine === "copilot") {
+  if (engine === "copilot" || engine === "antigravity") {
     /* `data.content` is what the operator typed; `transformedContent` adds
        the CLI's own datetime preamble and is not the prompt. */
     if (obj.type !== "user.message") return null;
@@ -1417,6 +1419,29 @@ function deriveTranscriptMetadata(
       title = titleRead.value;
     }
     title ??= "Copilot session";
+  } else if (rootName === "antigravity-sessions") {
+    /* Host-written Antigravity `events.jsonl`: `session.start.data.cwd` names
+       the workspace and `user.message.data.content` supplies the fallback title. */
+    const cwdRead = complete
+      ? transcriptCwd(pathname, st)
+      : { value: null, complete: false, headPreserved: false };
+    complete &&= cwdRead.complete;
+    cwdComplete = cwdRead.complete;
+    cwd = cwdRead.value ?? undefined;
+    if (complete) {
+      const startedAtRead = transcriptStartedAt(pathname, st);
+      complete &&= startedAtRead.complete;
+      sessionStartedAt = startedAtRead.value;
+    }
+    engine = "antigravity";
+    kind = "session";
+    fmt = "antigravity";
+    if (complete) {
+      const titleRead = scanJsonlTitle(pathname, st, "antigravity");
+      complete &&= titleRead.complete;
+      title = titleRead.value;
+    }
+    title ??= "Antigravity session";
   } else if (rootName === "claude-tasks") {
     engine = "shell";
     kind = "background";
@@ -1468,9 +1493,9 @@ function resolveProjectOverlay(
       ?? (worktreeInfo
         ? aliasedProjectInfo(worktreeInfo.project, worktreeInfo.worktree, worktreeInfo.repo)
         : aliasedProjectInfo(projectFromSlug(slug)));
-  } else if (rootName === "copilot-sessions") {
-    /* The same one algorithm as every other engine: a Copilot session started
-       in a worktree groups under its parent repository. */
+  } else if (rootName === "copilot-sessions" || rootName === "antigravity-sessions") {
+    /* The same one algorithm as every other engine: a Copilot or Antigravity
+       session started in a live or deleted worktree groups under its parent repository. */
     info = (cwd ? projectInfoFromCwd(cwd, stateKey) : null) ?? projectInfoFromTranscript(pathname, stateKey);
   } else if (rootName === "openclaw-sessions") {
     /* The workspace recognizer inside `projectInfoFromCwd` is what gives an

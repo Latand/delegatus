@@ -6,7 +6,7 @@ import path from "node:path";
 import { codexSessionRoots } from "@/lib/accounts/codex";
 import { claudeProjectRoots } from "@/lib/accounts/claude";
 import { copilotSessionRoots, legacyCopilotHome } from "@/lib/accounts/copilot";
-import { antigravitySessionRoots } from "@/lib/accounts/antigravity";
+import { antigravityDefaultSessionsDir, antigravitySessionRoots } from "@/lib/accounts/antigravity";
 
 import type { RootKey } from "../types";
 import { DEFAULT_SCHEME_CARDS_PER_PROJECT, DEFAULT_SCHEME_PROJECT_CAP } from "./schemeWindow";
@@ -76,6 +76,8 @@ export const ROOTS: Record<RootKey, string> = {
   /* The legacy Copilot home's transcripts; every managed account adds its own
      `<home>/session-state` through `copilotSessionRoots()`. */
   "copilot-sessions": path.join(legacyCopilotHome(), "session-state"),
+  /* Host-written Antigravity ACP transcripts under the default account root. */
+  "antigravity-sessions": antigravityDefaultSessionsDir(),
 };
 
 /** Every scanner root, including all account homes, with real-path dedupe. */
@@ -86,6 +88,7 @@ export function scanRootEntries(): [RootKey, string][] {
     ["claude-tasks", ROOTS["claude-tasks"]],
     ...openclawSessionRoots().map((root): [RootKey, string] => ["openclaw-sessions", root]),
     ...copilotSessionRoots().map((root): [RootKey, string] => ["copilot-sessions", root]),
+    ...antigravitySessionRoots().map((root): [RootKey, string] => ["antigravity-sessions", root]),
   ];
   const seen = new Set<string>();
   return entries.filter(([, root]) => { const real = realpathSafe(root) ?? path.resolve(root); if (seen.has(real)) return false; seen.add(real); return true; });
@@ -128,7 +131,7 @@ export function pathAllowedWithRoots(candidate: string, roots?: readonly [RootKe
   if (!real || candidate.split(path.sep).some(isRelayConversationDir) || real.split(path.sep).some(isRelayConversationDir)) return false;
   const allowedRoots = roots
     ? roots.map(([, root]) => root)
-    : [...scanRootEntries().map(([, root]) => root), ...antigravitySessionRoots()];
+    : scanRootEntries().map(([, root]) => root);
   return allowedRoots.some((root) => {
     const rootReal = realpathSafe(root);
     return rootReal !== null && real.startsWith(rootReal + path.sep);

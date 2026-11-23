@@ -51,7 +51,7 @@ export interface TranscriptSearchItem {
   byteOffset: number;
   lineNumber: number;
   project: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   matched?: string[];
   missing?: string[];
   fragments?: Array<Pick<TranscriptSearchItem, "snippet" | "speaker" | "timestamp" | "byteOffset" | "lineNumber">>;
@@ -131,7 +131,7 @@ type HitRow = [
 
 type TranscriptFileRow = {
   project: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   mtime_ms: number;
 };
 
@@ -155,7 +155,7 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
   return sqlite.Database;
 }
 
-const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 5;
+const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 6;
 const TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE = 256;
 const scheduledSearchIndexes = new Set<string>();
 const readySearchDatabases = new WeakSet<Database>();
@@ -182,7 +182,8 @@ function hasBodyHashColumn(db: Database): boolean {
 function migrateSearchSchema(db: Database): void {
   const currentVersion = schemaVersion(db);
   if (currentVersion >= TRANSCRIPT_SEARCH_SCHEMA_VERSION && hasBodyHashColumn(db)) return;
-  if (currentVersion < 4) db.exec("PRAGMA foreign_keys = OFF");
+  const needsTableRebuild = currentVersion < 6;
+  if (needsTableRebuild) db.exec("PRAGMA foreign_keys = OFF");
   db.exec("BEGIN IMMEDIATE");
   try {
     if (!hasBodyHashColumn(db)) db.exec("ALTER TABLE transcript_messages ADD COLUMN body_hash TEXT");
@@ -205,7 +206,7 @@ function migrateSearchSchema(db: Database): void {
       // belongs to background work; readers use timestamp/file time meanwhile.
       db.exec("ALTER TABLE transcript_messages ADD COLUMN sort_timestamp REAL");
     }
-    if (currentVersion < 4) {
+    if (needsTableRebuild) {
       // Table replacement invalidates its old descriptor checkpoint as well.
       db.exec("DROP TABLE IF EXISTS transcript_checkpoints");
       db.exec(`
@@ -216,11 +217,12 @@ function migrateSearchSchema(db: Database): void {
           size INTEGER NOT NULL,
           mtime_ms REAL NOT NULL,
           project TEXT NOT NULL,
-          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot', 'antigravity')),
           messages_count INTEGER NOT NULL,
           indexed_at INTEGER NOT NULL
         );
-        INSERT INTO transcript_files SELECT * FROM transcript_files_previous;
+        INSERT INTO transcript_files (path, size, mtime_ms, project, engine, messages_count, indexed_at)
+        SELECT path, size, mtime_ms, project, engine, messages_count, indexed_at FROM transcript_files_previous;
         CREATE TABLE transcript_messages (
           id INTEGER PRIMARY KEY,
           transcript_path TEXT NOT NULL,
@@ -235,7 +237,8 @@ function migrateSearchSchema(db: Database): void {
           UNIQUE(transcript_path, message_index),
           FOREIGN KEY(transcript_path) REFERENCES transcript_files(path) ON DELETE CASCADE
         );
-        INSERT INTO transcript_messages SELECT * FROM transcript_messages_previous;
+        INSERT INTO transcript_messages (id, transcript_path, message_index, speaker, timestamp, byte_offset, line_number, body, body_hash, sort_timestamp)
+        SELECT id, transcript_path, message_index, speaker, timestamp, byte_offset, line_number, body, body_hash, sort_timestamp FROM transcript_messages_previous;
         DROP TABLE transcript_messages_previous;
         DROP TABLE transcript_files_previous;
         UPDATE transcript_messages
@@ -253,10 +256,10 @@ function migrateSearchSchema(db: Database): void {
       PRAGMA user_version = ${Math.max(currentVersion, TRANSCRIPT_SEARCH_SCHEMA_VERSION)};
       COMMIT;
     `);
-    if (currentVersion < 4) db.exec("PRAGMA foreign_keys = ON");
+    if (needsTableRebuild) db.exec("PRAGMA foreign_keys = ON");
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ }
-    if (currentVersion < 4) db.exec("PRAGMA foreign_keys = ON");
+    if (needsTableRebuild) db.exec("PRAGMA foreign_keys = ON");
     throw error;
   }
 }
@@ -298,7 +301,7 @@ function openWriterDatabase(): Database {
         size INTEGER NOT NULL,
         mtime_ms REAL NOT NULL,
         project TEXT NOT NULL,
-        engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+        engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot', 'antigravity')),
         messages_count INTEGER NOT NULL,
         indexed_at INTEGER NOT NULL
       );
@@ -495,10 +498,10 @@ function messageFromRecord(
   source: TranscriptIndexSource,
   byteOffset: number,
   lineNumber: number,
-): (ParsedTranscriptMessage & { representation: "claude" | "response" | "event" | "copilot" }) | null {
+): (ParsedTranscriptMessage & { representation: "claude" | "response" | "event" | "copilot" | "antigravity" }) | null {
   let speaker: "user" | "assistant" | null = null;
   let body = "";
-  let representation: "claude" | "response" | "event" | "copilot" = "claude";
+  let representation: "claude" | "response" | "event" | "copilot" | "antigravity" = "claude";
   if (source.engine === "claude" && (parsed.type === "user" || parsed.type === "assistant")) {
     speaker = parsed.type;
     body = textContent(record(parsed.message)?.content);
@@ -522,8 +525,8 @@ function messageFromRecord(
       speaker = "assistant";
       body = typeof payload.message === "string" ? payload.message.trim() : "";
     }
-  } else if (source.engine === "copilot" && (parsed.type === "user.message" || parsed.type === "assistant.message")) {
-    representation = "copilot";
+  } else if ((source.engine === "copilot" || source.engine === "antigravity") && (parsed.type === "user.message" || parsed.type === "assistant.message")) {
+    representation = source.engine;
     speaker = parsed.type === "user.message" ? "user" : "assistant";
     body = textContent(record(parsed.data)?.content);
   }
@@ -641,7 +644,7 @@ async function* readTranscriptMessages(
   }
 }
 
-type RecentMessage = { representation: "response" | "event" | "copilot"; timestamp: number | null; lineNumber: number };
+type RecentMessage = { representation: "response" | "event" | "copilot" | "antigravity"; timestamp: number | null; lineNumber: number };
 type TranscriptCheckpoint = {
   byteOffset: number;
   lineNumber: number;
@@ -668,7 +671,7 @@ function readCheckpoint(row: CheckpointRow | null, current: FileIdentityRow | nu
       || !Array.isArray(cursor.recent) || cursor.recent.length > 8) return null;
     for (const entry of cursor.recent) {
       if (!entry || typeof entry.key !== "string" || !/^[a-f0-9]{64}$/.test(entry.key)
-        || !entry.message || !["response", "event", "copilot"].includes(entry.message.representation)
+        || !entry.message || !["response", "event", "copilot", "antigravity"].includes(entry.message.representation)
         || !(entry.message.timestamp === null || Number.isFinite(entry.message.timestamp))
         || !Number.isSafeInteger(entry.message.lineNumber) || entry.message.lineNumber < 1
         || entry.message.lineNumber >= cursor.lineNumber) return null;
@@ -929,7 +932,7 @@ function transcriptFiles(db: Database, paths: ReadonlySet<string>): Map<string, 
     return files;
   }
   const rows = db.query("SELECT path, project, engine, mtime_ms FROM transcript_files").values() as Array<
-    [string, string, "claude" | "codex" | "copilot", number]
+    [string, string, "claude" | "codex" | "copilot" | "antigravity", number]
   >;
   for (const [pathname, project, engine, mtime_ms] of rows) {
     if (paths.has(pathname)) files.set(pathname, { project, engine, mtime_ms });
@@ -1039,7 +1042,7 @@ export interface TranscriptActivityRead {
   /** False when no index exists yet: nothing has been scanned. */
   available: boolean;
   rows: TranscriptActivityRow[];
-  files: Map<string, { project: string; engine: "claude" | "codex" | "copilot" }>;
+  files: Map<string, { project: string; engine: "claude" | "codex" | "copilot" | "antigravity" }>;
   /** When the newest transcript was indexed, in milliseconds. */
   indexedAtMs: number | null;
 }
@@ -1071,7 +1074,7 @@ export function readTranscriptActivity(fromSec: number, toSec: number): Transcri
         rows.push({ transcriptPath, speaker, atMs: timestamp * 1_000, seq: id });
         paths.add(transcriptPath);
       }
-      const files = new Map<string, { project: string; engine: "claude" | "codex" | "copilot" }>();
+      const files = new Map<string, { project: string; engine: "claude" | "codex" | "copilot" | "antigravity" }>();
       for (const [pathname, file] of transcriptFiles(db, paths)) files.set(pathname, { project: file.project, engine: file.engine });
       const newest = db.query<{ newest: number | null }, []>("SELECT MAX(indexed_at) AS newest FROM transcript_files").get()?.newest ?? null;
       return { available: true, rows, files, indexedAtMs: newest === null ? null : newest * 1_000 };

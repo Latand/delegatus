@@ -30,7 +30,7 @@ const previousEnvironment = {
   TMPDIR: process.env.TMPDIR,
 };
 
-function source(pathname: string, engine: "claude" | "codex" | "copilot", project: string): TranscriptIndexSource {
+function source(pathname: string, engine: "claude" | "codex" | "copilot" | "antigravity", project: string): TranscriptIndexSource {
   const stat = fs.statSync(pathname);
   return { path: pathname, engine, project, size: stat.size, mtimeMs: stat.mtimeMs };
 }
@@ -167,6 +167,176 @@ test("production scanner feed publishes Copilot transcripts for body indexing", 
     expect.objectContaining({ speaker: "assistant", engine: "copilot", transcriptPath: transcript }),
   ]);
   expect(searchTranscripts({ query: "feed_copilot_private_model_marker" }).total).toBe(0);
+});
+
+test("indexes only Antigravity user and assistant message content", async () => {
+  const transcript = path.join(sandbox, "antigravity-session.jsonl");
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ type: "session.start", timestamp: "2026-11-23T11:00:00.000Z", data: { sessionId: "s1", cwd: "/srv/fixture/repo", model: "gemini-4-neon" } }),
+    JSON.stringify({ type: "user.message", timestamp: "2026-11-23T11:00:01.000Z", data: { content: "antigravity user cobalt marker" } }),
+    JSON.stringify({ type: "tool.execution_start", timestamp: "2026-11-23T11:00:02.000Z", data: { toolCallId: "t1", toolName: "bash", arguments: { command: "echo hidden_antigravity_tool_marker" } } }),
+    JSON.stringify({ type: "assistant.message", timestamp: "2026-11-23T11:00:03.000Z", data: { content: "antigravity assistant cobalt marker" } }),
+    JSON.stringify({ type: "session.error", timestamp: "2026-11-23T11:00:04.000Z", data: { message: "hidden_antigravity_error_marker" } }),
+  ].join("\n") + "\n");
+
+  await indexTranscriptSources([source(transcript, "antigravity", "antigravity-project")], { complete: true });
+
+  const indexed = searchTranscripts({ query: "cobalt" });
+  expect(indexed.total).toBe(2);
+  expect(indexed.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ speaker: "user", engine: "antigravity", transcriptPath: transcript }),
+    expect.objectContaining({ speaker: "assistant", engine: "antigravity", transcriptPath: transcript }),
+  ]));
+  expect(searchTranscripts({ query: "hidden_antigravity_tool_marker" }).total).toBe(0);
+  expect(searchTranscripts({ query: "hidden_antigravity_error_marker" }).total).toBe(0);
+});
+
+test("production scanner feed publishes Antigravity transcripts for body indexing", async () => {
+  const transcript = path.join(sandbox, "antigravity-catalog-session", "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ type: "user.message", timestamp: "2026-11-23T12:00:00.000Z", data: { content: "feed_antigravity_user_marker" } }),
+    JSON.stringify({ type: "tool.execution_complete", timestamp: "2026-11-23T12:00:01.000Z", data: { toolCallId: "t1", output: "feed_antigravity_tool_marker" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: "2026-11-23T12:00:02.000Z", data: { content: "feed_antigravity_assistant_marker" } }),
+  ].join("\n") + "\n");
+  const catalog: ConversationCatalogEntry[] = [{
+    path: transcript, root: "antigravity-sessions", name: "events.jsonl", project: "antigravity-feed",
+    title: "Antigravity fixture", firstPrompt: "feed_antigravity_user_marker", engine: "antigravity",
+    kind: "session", fmt: "antigravity", mtime: Date.parse("2026-11-23T12:00:02.000Z") / 1_000,
+    size: fs.statSync(transcript).size,
+  }];
+  publishTranscriptIndexFeed(catalog, true, beginProjectCatalogScan(false), undefined,
+    (feed) => scheduleTranscriptIndex(feed, { force: true }));
+  await waitForTranscriptIndexIdleForTests();
+
+  expect(searchTranscripts({ query: "feed_antigravity_user_marker" }).items).toMatchObject([
+    expect.objectContaining({ speaker: "user", engine: "antigravity", transcriptPath: transcript }),
+  ]);
+  expect(searchTranscripts({ query: "feed_antigravity_assistant_marker" }).items).toMatchObject([
+    expect.objectContaining({ speaker: "assistant", engine: "antigravity", transcriptPath: transcript }),
+  ]);
+  expect(searchTranscripts({ query: "feed_antigravity_tool_marker" }).total).toBe(0);
+});
+
+test("migrates a v5 database to v6 transactionally, admits Antigravity, and stays consistent under concurrent writes, a second SQLite connection, and caller mutation", async () => {
+  const filename = statePath("transcript-search.sqlite");
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  const claudeTranscript = path.join(sandbox, "v5-legacy-claude.jsonl");
+  fs.writeFileSync(claudeTranscript, JSON.stringify({
+    type: "user",
+    timestamp: "2026-11-20T08:00:00.000Z",
+    message: { content: "v5_preserved_claude_marker" },
+  }) + "\n");
+  const claudeStat = fs.statSync(claudeTranscript);
+  const v5 = new Database(filename, { create: true, strict: true });
+  v5.exec(`
+    PRAGMA journal_mode = WAL;
+    CREATE TABLE transcript_files (
+      path TEXT PRIMARY KEY,
+      size INTEGER NOT NULL,
+      mtime_ms REAL NOT NULL,
+      project TEXT NOT NULL,
+      engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+      messages_count INTEGER NOT NULL,
+      indexed_at INTEGER NOT NULL
+    );
+    CREATE TABLE transcript_messages (
+      id INTEGER PRIMARY KEY,
+      transcript_path TEXT NOT NULL,
+      message_index INTEGER NOT NULL,
+      speaker TEXT NOT NULL CHECK(speaker IN ('user', 'assistant')),
+      timestamp INTEGER,
+      byte_offset INTEGER NOT NULL,
+      line_number INTEGER NOT NULL,
+      body TEXT NOT NULL,
+      body_hash TEXT NOT NULL,
+      sort_timestamp REAL,
+      UNIQUE(transcript_path, message_index),
+      FOREIGN KEY(transcript_path) REFERENCES transcript_files(path) ON DELETE CASCADE
+    );
+    CREATE VIRTUAL TABLE transcript_messages_fts USING fts5(
+      body,
+      tokenize = "unicode61 remove_diacritics 0 tokenchars '#_'"
+    );
+    CREATE TABLE transcript_search_sequence (
+      singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+      last_id INTEGER NOT NULL
+    );
+    PRAGMA user_version = 5;
+  `);
+  const body = "v5_preserved_claude_marker";
+  const bodyHash = "a".repeat(64);
+  v5.query(`INSERT INTO transcript_files VALUES (?, ?, ?, 'legacy-proj', 'claude', 1, 1700000000)`).run(claudeTranscript, claudeStat.size, claudeStat.mtimeMs);
+  v5.query(`INSERT INTO transcript_messages VALUES (1, ?, 0, 'user', 1763625600, 0, 1, ?, ?, 1763625600)`).run(claudeTranscript, body, bodyHash);
+  v5.query(`INSERT INTO transcript_messages_fts(rowid, body) VALUES (1, ?)`).run(body);
+  v5.query(`INSERT INTO transcript_search_sequence VALUES (1, 1)`).run();
+  v5.close();
+
+  const agyA = path.join(sandbox, "v6-concurrent-agy-a.jsonl");
+  const agyB = path.join(sandbox, "v6-concurrent-agy-b.jsonl");
+  fs.writeFileSync(agyA, [
+    JSON.stringify({ type: "user.message", timestamp: "2026-11-23T13:00:00.000Z", data: { content: "v6_antigravity_alpha_marker" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: "2026-11-23T13:00:01.000Z", data: { content: "v6_antigravity_alpha_reply" } }),
+  ].join("\n") + "\n");
+  fs.writeFileSync(agyB, [
+    JSON.stringify({ type: "user.message", timestamp: "2026-11-23T13:01:00.000Z", data: { content: "v6_antigravity_beta_marker" } }),
+  ].join("\n") + "\n");
+
+  /* Two concurrent OS-process writers race across the v5 → v6 schema rebuild and insert Antigravity rows. */
+  const peerScript = `
+    import fs from "node:fs";
+    import { indexTranscriptSources } from ${JSON.stringify(path.resolve(import.meta.dir, "transcriptSearch.ts"))};
+    const pathname = process.env.TEST_AGY_PATH!;
+    const stat = fs.statSync(pathname);
+    const result = await indexTranscriptSources([{ path: pathname, engine: "antigravity", project: "agy-proj", size: stat.size, mtimeMs: stat.mtimeMs }]);
+    if (result.failures.length) {
+      console.error(JSON.stringify(result.failures));
+      process.exit(1);
+    }
+  `;
+  const peer = Bun.spawn([process.execPath, "-e", peerScript], {
+    env: { ...process.env, TEST_AGY_PATH: agyB },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [resA, peerExit] = await Promise.all([
+    indexTranscriptSources([source(claudeTranscript, "claude", "legacy-proj"), source(agyA, "antigravity", "agy-proj")]),
+    peer.exited,
+  ]);
+  const peerStderr = await new Response(peer.stderr).text();
+  expect(resA.failures).toEqual([]);
+  expect({ peerExit, peerStderr }).toEqual({ peerExit: 0, peerStderr: "" });
+
+  /* Independent second SQLite connection observes v6 schema and both legacy + Antigravity rows. */
+  const observer = new Database(filename, { readonly: true, strict: true });
+  try {
+    expect(observer.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(6);
+    const engines = observer.query<{ engine: string }, []>("SELECT engine FROM transcript_files ORDER BY path").all().map((row) => row.engine);
+    expect(engines).toContain("claude");
+    expect(engines.filter((engine) => engine === "antigravity")).toHaveLength(2);
+    expect(observer.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM transcript_messages").get()?.count).toBe(4);
+  } finally {
+    observer.close();
+  }
+
+  /* Caller mutation of returned search items cannot corrupt subsequent reads. */
+  const firstRead = searchTranscripts({ query: "v6_antigravity_alpha_marker" });
+  expect(firstRead.items).toHaveLength(1);
+  expect(firstRead.items[0]).toMatchObject({ engine: "antigravity", speaker: "user", transcriptPath: agyA });
+  firstRead.items[0]!.snippet = "mutated-by-caller";
+  firstRead.items[0]!.project = "mutated-project";
+  firstRead.items.push({ ...firstRead.items[0]!, transcriptPath: "/mutated" });
+
+  const secondRead = searchTranscripts({ query: "v6_antigravity_alpha_marker" });
+  expect(secondRead.items).toHaveLength(1);
+  expect(secondRead.items[0]!.project).toBe("agy-proj");
+  expect(secondRead.items[0]!.snippet).not.toBe("mutated-by-caller");
+  expect(searchTranscripts({ query: "v5_preserved_claude_marker" }).items).toMatchObject([
+    expect.objectContaining({ engine: "claude", transcriptPath: claudeTranscript }),
+  ]);
+  expect(searchTranscripts({ query: "v6_antigravity_beta_marker" }).items).toMatchObject([
+    expect.objectContaining({ engine: "antigravity", transcriptPath: agyB }),
+  ]);
 });
 
 test("matches Cyrillic hashtags and underscore tags as exact FTS tokens", async () => {
@@ -486,7 +656,7 @@ test("migrates a version-one index in bounded batches without reopening unchange
   }
 
   const migrated = new Database(filename, { readonly: true, strict: true });
-  expect(migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(5);
+  expect(migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(6);
   expect(migrated.query<{ count: number }, []>(
     "SELECT COUNT(*) AS count FROM transcript_messages WHERE body_hash IS NULL OR length(body_hash) != 64",
   ).get()?.count).toBe(0);
@@ -519,7 +689,7 @@ test("upgrades version two with file-time fallbacks and a persistent ID watermar
   expect(searchTranscripts({ query: "beryl" }).items[0].timestamp).toBe(12.345);
   const upgraded = new Database(filename, { readonly: true });
   try {
-    expect(upgraded.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
+    expect(upgraded.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
     expect(upgraded.query("SELECT last_id FROM transcript_search_sequence").get()).toEqual({ last_id: 1 });
   } finally { upgraded.close(); }
 });
@@ -1513,7 +1683,7 @@ test.skipIf(!process.env.LLV_TRANSCRIPT_STANDALONE_DIR)("the real standalone wor
       probe.exec("PRAGMA busy_timeout = 5000");
       ready = Boolean(probe.query("SELECT 1 FROM sqlite_master WHERE name='transcript_messages_body_hash'").get());
       if (ready) {
-        expect(probe.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
+        expect(probe.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
         expect(probe.query("SELECT id, body_hash FROM transcript_messages ORDER BY id").values()).toEqual(before);
         expect(probe.query("SELECT rowid, body FROM transcript_messages_fts ORDER BY rowid").values()).toEqual(fts);
         expect(probe.query("SELECT COUNT(*) AS n FROM transcript_messages_vocab").get()).toMatchObject({ n: expect.any(Number) });

@@ -68,6 +68,8 @@ describe("readSession", () => {
         ordinary: { type: "assistant", timestamp: "t1", message: { content: [{ type: "text", text: "  Звичайний 😀\nreply  " }] } } },
       { engine: "copilot", line: `{"type":"assistant.message","data":{"toolRequests":[{"name":"tool","arguments":${nestedObject}}]}}`,
         ordinary: { type: "assistant.message", timestamp: "t1", data: { content: "  Звичайний 😀\nreply  " } } },
+      { engine: "antigravity", line: `{"type":"tool.execution_start","data":{"toolCallId":"c1","toolName":"bash","arguments":${nestedObject}}}`,
+        ordinary: { type: "assistant.message", timestamp: "t1", data: { content: "  Звичайний 😀\nreply  " } } },
     ] as const;
     for (const [index, { engine, line, ordinary }] of cases.entries()) {
       const normalized = normalizeSessionLine(engine, JSON.parse(line));
@@ -133,6 +135,38 @@ describe("readSession", () => {
     const result = readSession(pathname, "claude");
     expect(result.messages.map((item) => item.text)).toEqual(["Create a task"]);
     expect(result.tools.map((item) => item.text)).toEqual(["implement this from command output"]);
+  });
+
+  test("reads Antigravity messages, normalized Viewer MCP tools, and terminal stop traces", () => {
+    const pathname = writeJsonl("antigravity.jsonl", [
+      { type: "session.start", timestamp: "t0", data: { sessionId: "s1", cwd: "/srv/fixture/repo", model: "gemini-4-neon", effort: "xhigh" } },
+      { type: "user.message", timestamp: "t1", data: { content: "List open tasks" } },
+      { type: "assistant.turn_start", timestamp: "t2", data: { turnId: "turn-1" } },
+      { type: "tool.execution_start", timestamp: "t3", data: { toolCallId: "tc-1", toolName: "mcp_viewer_list_tasks", arguments: { openOnly: true } } },
+      { type: "tool.execution_complete", timestamp: "t4", data: { toolCallId: "tc-1", toolName: "mcp_viewer_list_tasks", status: "completed", isError: false, output: "No open tasks." } },
+      { type: "assistant.message", timestamp: "t5", data: { content: "There are no open tasks.", turnId: "turn-1" } },
+      { type: "assistant.turn_end", timestamp: "t6", data: { turnId: "turn-1", stopReason: "end_turn" } },
+      { type: "session.quota_exhausted", timestamp: "t7", data: { message: "RESOURCE_EXHAUSTED: Individual quota reached", resetsAt: 1_800_000_000 } },
+      { type: "session.error", timestamp: "t8", data: { message: "upstream timeout" } },
+      { type: "abort", timestamp: "t9", data: { reason: "user_initiated" } },
+    ]);
+    const result = readSession(pathname, "antigravity");
+    expect(result.engine).toBe("antigravity");
+    expect(result.messages.map((item) => [item.role, item.text])).toEqual([
+      ["user", "List open tasks"],
+      ["assistant", "There are no open tasks."],
+    ]);
+    expect(result.tools.map((item) => [item.kind, item.name])).toEqual([
+      ["tool_call", "mcp__viewer__list_tasks"],
+      ["tool_result", "mcp__viewer__list_tasks"],
+    ]);
+    expect(result.tools[1]!.text).toBe("No open tasks.");
+    expect(result.traces.map((item) => item.name)).toEqual(["session.quota_exhausted", "session.error", "abort"]);
+    expect(normalizeSessionLine("antigravity", {
+      type: "tool.execution_start",
+      timestamp: "t3",
+      data: { toolCallId: "tc-2", toolName: "viewer-get_task", arguments: { id: "t-1" } },
+    })[0]?.call).toMatchObject({ id: "tc-2", server: "viewer", tool: "get_task" });
   });
 
   test("reads Codex event messages separately from traces", () => {

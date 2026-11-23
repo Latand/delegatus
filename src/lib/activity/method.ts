@@ -69,7 +69,7 @@ export type RangeKey = "today" | "7d" | "30d";
 export const RANGE_KEYS: readonly RangeKey[] = ["today", "7d", "30d"];
 const RANGE_DAYS: Record<RangeKey, number> = { today: 1, "7d": 7, "30d": 30 };
 
-export type AgentEngine = "claude" | "codex" | "copilot";
+export type AgentEngine = "claude" | "codex" | "copilot" | "antigravity";
 /** A conversation the registry does not know. */
 export const UNREGISTERED_ROLE = "unregistered";
 /** A registered conversation launched with no role preset. */
