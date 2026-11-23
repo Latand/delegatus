@@ -15,6 +15,11 @@ encountered, separately for each memory slice and overall.
 
 ## Scope and presentation
 
+> Superseded on 2026-11-20 by the levels-left, rules-right layout of
+> [the S7 build brief](redesign-2026-11/s7-build-brief.md): the profile and the
+> rules are one view, the levels list on the left and the chosen level's rules
+> on the right. The text below stays as history.
+
 The existing learned-rules entry opens its existing window on the profile.
 The overall headline, prose and “What the agents ran into” come first. Below
 are cards for each active role scope in this project, each active role scope
