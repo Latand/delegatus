@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import dns from "node:dns/promises";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { NextRequest } from "next/server";
@@ -28,7 +29,7 @@ import * as cloud from "./cloud";
 import * as ownerRun from "./ownerRun";
 import { relayAnswerOp } from "./ownerAnswer";
 import { readAnswerRecord } from "./answers";
-import { endRequesterLease, openRequesterLease, requesterLeaseWriter } from "./requesterLease";
+import { endRequesterLease, openRequesterLease, requesterLeaseActive, requesterLeaseWriter } from "./requesterLease";
 import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayHandoff, ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized, ownerRelayTargetMatches } from "./ownerAuthority";
 import { openOwnerServiceTools, relayServiceToolsOp } from "./ownerServiceTools";
 import { refreshRelayTargets } from "./poller";
@@ -39,11 +40,13 @@ import { elevatedRequesterFor } from "./profile";
 import { contextRequest } from "./request.fixture";
 import { richRequest } from "./rich.fixture";
 import { runClaimedRequest } from "./runner";
+import { ownerRunRoot } from "./runDirectory";
 import { setRelaySwitch } from "./switches";
 import * as relayStore from "./store";
 import { addPairedOwnerRequester, addTrustedRequester, removeTrustedRequester, trustedRequesterAuditFile } from "./trustedRequesterStore";
 import { changeRun, dropRun, externalRelayFile, readRunLedger, readRelayStore, reserveRun, updateRelayStore, updateRelayStoreAsync, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
 import { startTestRelay } from "./testRelay";
+import { x1Results } from "./toolLoop.fixture";
 
 const addedAt = "2026-09-28T12:00:00Z";
 const project = `dir-${"1".repeat(32)}`;
@@ -170,6 +173,37 @@ test("only the bound key on its target launches a local elevated run", async () 
     else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
     dropRun("trusted");
     picked.mockRestore(); wire.mockRestore(); restricted.mockRestore(); environment.mockRestore(); cloudRun.mockRestore();
+  }
+});
+
+test("unavailable elevated-run storage still permits an unlisted requester's restricted answer", async () => {
+  const relay = paired([granted]);
+  setRelays(relay);
+  const raw = request("restricted_without_elevated_storage");
+  raw.input.requester.key = "u2";
+  raw.input.conversation[0]!.author.key = "u2";
+  const mkdir = fs.promises.mkdir;
+  const storage = spyOn(fs.promises, "mkdir").mockImplementation((async (...args: Parameters<typeof mkdir>) => {
+    if (args[0] === ownerRunRoot()) throw new Error("elevated-run storage unavailable");
+    return mkdir(...args);
+  }) as typeof mkdir);
+  const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" } } });
+  const wire = spyOn(client, "relayCall").mockResolvedValue({ status: 200, body: { status: "ok" } } as never);
+  const restricted = spyOn(ephemeral, "runEphemeralAgent").mockResolvedValue({ pid: null, identity: null, cancel() {},
+    done: Promise.resolve({ status: "done", answer: { action: "reply", text: "Restricted reply", reply_to: "m1" },
+      code: 0, signal: null, durationMs: 0 }) });
+  const launch = mock(async () => { throw new Error("unexpected elevated launch"); });
+  try {
+    expect(await runClaimedRequest(relay, raw, undefined, { leaseWorker: false, ownerPorts: {
+      launch, observe: async () => ({ state: "failed" }), stop: async () => {},
+    } })).toMatchObject({ outcome: "answered", answer: { text: "Restricted reply" } });
+    expect(restricted).toHaveBeenCalledTimes(1);
+    expect(restricted.mock.calls[0]?.[0].webSearch).toBe(true);
+    expect(launch).not.toHaveBeenCalled();
+    expect(storage.mock.calls.some(([directory]) => directory === ownerRunRoot())).toBe(false);
+  } finally {
+    storage.mockRestore(); select.mockRestore(); wire.mockRestore(); restricted.mockRestore();
   }
 });
 
@@ -602,6 +636,81 @@ test("an async MCP call rechecks its grant after awaiting acknowledgement", asyn
     await fs.promises.rm(run.runDir, { recursive: true, force: true });
   }
 });
+
+test.each(["unchanged", "grant removed", "cancelled", "cutoff changed"] as const)(
+  "service tool dispatch rechecks authority after reading the lease receipt (%s)", async change => {
+    const claim = request("final_tool_check");
+    claim.input.tools = [{ name: "lookup_notes", summary: "Look up notes", mode: "direct", effect: "read", parameters: { type: "object" } }];
+    const requests: unknown[] = [];
+    const service = await startTestRelay((req, body) => {
+      if (!req.url?.endsWith("/tool-calls")) return { status: 404 };
+      requests.push(body);
+      return { body: { ...x1Results.ok, ...(body as object) } };
+    });
+    const relay = { ...paired([granted]), api_base: service.origin.replace("127.0.0.1", "relay-fixture.invalid") + "/v1" };
+    setRelays(relay);
+    const conversationId = "conversation_final_tool_check";
+    const run = { requestId: claim.request_id, leaseId: claim.lease_id, relayId: relay.id, targetId: target.id,
+      ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
+      runDir: await fs.promises.mkdtemp(`${process.env.TMPDIR}/requester-final-tool-`), startedAt: addedAt, conversationId,
+      ownerTurn: { clientAttemptId: "relay-owner-final-tool-check", entry: snapshot, leaseDeadlineAt: Date.now() + 60_000 },
+    };
+    const lease = leaseFixture(run);
+    await openRequesterLease(lease);
+    requesterLeaseWriter(lease).acknowledge(Date.now());
+    reserveRun(run, 1);
+    let resolvedDestination = false;
+    let heldReceipt = false;
+    const paused = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const lookup = spyOn(dns, "lookup").mockImplementation((async () => {
+      resolvedDestination = true;
+      return [{ address: "127.0.0.1", family: 4 }];
+    }) as unknown as typeof dns.lookup);
+    const readFile = fs.promises.readFile;
+    const reader = spyOn(fs.promises, "readFile").mockImplementation((async (...args: Parameters<typeof readFile>) => {
+      const content = await readFile(...args);
+      if (resolvedDestination && !heldReceipt && String(args[0]) === `${run.runDir}/requester-lease/receipt.json`) {
+        heldReceipt = true;
+        paused.resolve();
+        await resume.promise;
+      }
+      return content;
+    }) as typeof readFile);
+    const adapter = openOwnerServiceTools(relay, granted, claim, [], {
+      signal: new AbortController().signal, lose() {}, ack: async () => true,
+    }, {}, () => ownerRelayAuthorizedAsync(relay.id, target.id, claim.request_id));
+    adapter.bindConversation(conversationId);
+    const pending = relayServiceToolsOp(conversationId, { op: "call", calls: [{ tool: "lookup_notes", arguments: {} }] });
+    try {
+      await Promise.race([paused.promise, pending.then(() => { throw new Error("tool call did not reach its final lease check"); })]);
+      expect(requests).toHaveLength(0);
+      if (change === "grant removed") setRelays({ ...relay, targets: [{ ...target, requesters: { revision: 2, entries: [] } }] });
+      if (change === "cancelled" || change === "cutoff changed") changeRun(run.requestId, row => ({
+        ...row, ownerTurn: { ...row.ownerTurn!, ...(change === "cancelled" ? { cancel: "interrupt" as const } : { leaseDeadlineAt: 0 }) },
+      }));
+      expect(requesterLeaseActive(lease)).toBe(true);
+      resume.resolve();
+      const result = await pending;
+      if (change === "unchanged") {
+        expect(requests).toHaveLength(1);
+        expect(result).toMatchObject({ status: "completed", results: [{ status: "ok" }] });
+      } else {
+        expect(requests).toHaveLength(0);
+        expect(result).toMatchObject({ status: "relay_tools_unavailable", results: [] });
+      }
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([pending]);
+      await adapter.dispose();
+      reader.mockRestore();
+      lookup.mockRestore();
+      dropRun(claim.request_id);
+      await fs.promises.rm(run.runDir, { recursive: true, force: true });
+      await service.close();
+    }
+  },
+);
 
 test("separate pairing owners and an unreadable team store cannot use the install-owner tier", async () => {
   const a = paired([{ ...target, ownerTier: true }]);

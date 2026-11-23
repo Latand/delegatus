@@ -57,17 +57,19 @@ export function endRequesterLease(lease: LeaseScope): void {
   }
 }
 
-function receiptAllows(scope: LeaseScope, text: string): boolean {
+function receiptUntil(scope: LeaseScope, text: string): number | null {
   const receipt = JSON.parse(text);
-  return receipt.scope === scopeKey(scope) && Number.isFinite(receipt.until) && Date.now() < receipt.until;
+  return receipt.scope === scopeKey(scope) && Number.isFinite(receipt.until) ? receipt.until : null;
 }
 
 export function requesterLeaseActive(scope: LeaseScope): boolean {
-  try { return receiptAllows(scope, fs.readFileSync(receiptPath(scope.runDir), "utf8")); }
-  catch { return false; }
+  try {
+    const until = receiptUntil(scope, fs.readFileSync(receiptPath(scope.runDir), "utf8"));
+    return until !== null && Date.now() < until;
+  } catch { return false; }
 }
 
-export async function requesterLeaseActiveAsync(scope: LeaseScope): Promise<boolean> {
-  try { return receiptAllows(scope, await fs.promises.readFile(receiptPath(scope.runDir), "utf8")); }
-  catch { return false; }
+export async function requesterLeaseUntilAsync(scope: LeaseScope): Promise<number | null> {
+  try { return receiptUntil(scope, await fs.promises.readFile(receiptPath(scope.runDir), "utf8")); }
+  catch { return null; }
 }

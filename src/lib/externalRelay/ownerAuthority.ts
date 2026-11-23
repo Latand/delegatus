@@ -9,7 +9,7 @@ import { externalRelayFile, runHoldsConversation, type PairedRelay, type RunLedg
 import type { ExternalRelayCompletion } from "./protocol";
 import { isOwnerRequestTimeoutReply } from "./requestTimeout";
 import { bindRequesterEntry, canonicalRelayProject, legacyRequesterId, pairedOwnerTier, requesterEntries } from "./trustedRequesters";
-import { requesterLeaseActive, requesterLeaseActiveAsync } from "./requesterLease";
+import { requesterLeaseActive, requesterLeaseUntilAsync } from "./requesterLease";
 
 function currentRunEntry(run: RunRecord, relay: PairedRelay, relays: readonly PairedRelay[]) {
   const target = relay.targets.find(item => item.id === run.targetId);
@@ -209,21 +209,34 @@ function ownerRelayReplyAuthorized(relayId: string, targetId: string, requestId:
   } catch { return false; }
 }
 
+async function readToolAuthority(relayId: string, targetId: string, requestId: string) {
+  const [storeText, ledgerText] = await Promise.all([
+    fs.promises.readFile(externalRelayFile("relays"), "utf8"),
+    fs.promises.readFile(externalRelayFile("runs"), "utf8"),
+  ]);
+  const store = JSON.parse(storeText) as RelayStore;
+  const ledger = JSON.parse(ledgerText) as RunLedger;
+  const run = ledger.runs.find(row => row.requestId === requestId && row.relayId === relayId && row.targetId === targetId);
+  const turn = run?.ownerTurn;
+  if (store.v !== 1 || ledger.v !== 1 || !run || !turn || turn.cancel || turn.quarantinedAt) return null;
+  return { run, turn, tier: configuredRunTier(run, store) };
+}
+
 /** Async request-bound check for the inline MCP adapter. Its live owner lease
  * supplies process custody; this check reads current persisted revocation state
  * without blocking the Viewer loop or probing process identity synchronously. */
 export async function ownerRelayAuthorizedAsync(relayId: string, targetId: string, requestId: string): Promise<boolean> {
   try {
-    const [storeText, ledgerText] = await Promise.all([
-      fs.promises.readFile(externalRelayFile("relays"), "utf8"),
-      fs.promises.readFile(externalRelayFile("runs"), "utf8"),
-    ]);
-    const store = JSON.parse(storeText) as RelayStore;
-    const ledger = JSON.parse(ledgerText) as RunLedger;
-    const run = ledger.runs.find(row => row.requestId === requestId && row.relayId === relayId && row.targetId === targetId);
-    if (store.v !== 1 || ledger.v !== 1 || !run?.ownerTurn || run.ownerTurn.cancel) return false;
-    const tier = configuredRunTier(run, store);
-    return tier === "owner" || tier === "requester" && await requesterLeaseActiveAsync(run) && requesterDeadlineAllows(run);
+    const prior = await readToolAuthority(relayId, targetId, requestId);
+    if (prior?.tier !== "requester") return prior?.tier === "owner";
+    if (!requesterDeadlineAllows(prior.run)) return false;
+    const receiptUntil = await requesterLeaseUntilAsync(prior.run);
+    if (receiptUntil === null || Date.now() >= receiptUntil) return false;
+    // Grant removal and cancellation can commit while the receipt read is in flight.
+    const current = await readToolAuthority(relayId, targetId, requestId);
+    return current?.tier === "requester" && current.run.leaseId === prior.run.leaseId && current.run.runDir === prior.run.runDir
+      && current.turn.clientAttemptId === prior.turn.clientAttemptId && current.turn.entry?.id === prior.turn.entry?.id
+      && Date.now() < receiptUntil && requesterDeadlineAllows(prior.run) && requesterDeadlineAllows(current.run);
   } catch { return false; }
 }
 

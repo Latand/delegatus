@@ -711,7 +711,27 @@ export async function runClaimedRequest(
       if (frame.phase === "failed" && frame.code === "unknown_feature")
         void runtime?.onUnknownFeature?.().finally(firstBeat.resolve);
     };
-    if (!recovery && request.input.requester && (target.ownerTier || target.requesters)) {
+    const requester = request.input.requester;
+    // Guest delivery stays in the closed, request-local answer profile.
+    const ownerMessage = ownerTierFor({ ownerTier: true }, request);
+    const ownerPrototype = () => {
+      if (!ownerMessage) return null;
+      const previousAnswer = readAnswerRecord(relay.id, target.id, requestId);
+      const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
+        && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
+      const trigger = request.input.conversation.find(message => message.id === ownerMessage.messageId);
+      const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
+      return matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text);
+    };
+    const elevationSettings = () => target.ownerTier || target.requesters || recovery ? readRelayStore() : null;
+    const matchingElevation = (current: ReturnType<typeof elevationSettings>) => {
+      if (!current) return null;
+      const paired = current.relays.find(item => item.id === relay.id && item.credential === relay.credential);
+      const currentTarget = paired?.targets.find(item => item.id === target.id);
+      return paired && currentTarget && canonicalRelayProject(currentTarget.project) === canonicalRelayProject(target.project)
+        ? elevatedRequesterFor(paired, currentTarget, request, current.relays) : null;
+    };
+    if (!recovery && requester && matchingElevation(elevationSettings())?.entry.tier === "requester" && !ownerPrototype()) {
       runDir = await createOwnerRunDirectory();
       requesterLease = { requestId, leaseId, relayId: relay.id, targetId: target.id, runDir, stallMs, deadlineAt: serviceDeadline.at };
       await openRequesterLease(requesterLease);
@@ -754,7 +774,6 @@ export async function runClaimedRequest(
     if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
     // The member limit (§B.8): a member past it is declined, and the service's
     // fallback setting decides whether its own agent answers instead.
-    const requester = request.input.requester;
     const limit = memberLimitFor(target);
     const memberDecline = (): ExternalRelayCompletion | null => {
       if (!requester || limit === null || exemptFromMemberLimit(requester)) return null;
@@ -767,23 +786,12 @@ export async function runClaimedRequest(
     const earlyMemberDecline = memberDecline();
     if (earlyMemberDecline) return await finish(earlyMemberDecline);
     const profile = answerProfileFor(requester);
-    // Third-party context stays in the closed, request-local answer profile.
-    // Owner authority must never launch a general session for guest delivery.
-    const ownerMessage = ownerTierFor({ ownerTier: true }, request);
-    const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
-    const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
-      && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
-    const trigger = request.input.conversation.find(message => message.id === ownerMessage?.messageId);
-    const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
-    const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
+    const prototype = ownerPrototype();
     const prototypeGrant = prototype && requesterEntries(relay, target).find(entry => entry.kind === "paired-owner"
       && entry.source === "earlier-switch" && canonicalRelayProject(entry.project) === canonicalRelayProject(target.project));
-    const current = target.ownerTier || target.requesters || recovery ? readRelayStore() : null;
-    const paired = current?.relays.find(item => item.id === relay.id && item.credential === relay.credential);
-    const currentTarget = paired?.targets.find(item => item.id === target.id);
-    const elevation = !prototype && current && paired && currentTarget
-      && canonicalRelayProject(currentTarget.project) === canonicalRelayProject(target.project)
-      ? elevatedRequesterFor(paired, currentTarget, request, current.relays) : null;
+    // Settings can change while the transport starts and waits for a heartbeat.
+    const current = elevationSettings();
+    const elevation = prototype ? null : matchingElevation(current);
     if (!prototype && !elevation && current && elevatedRequesterFor(relay, target, request, current.relays))
       return await finish(failed(leaseId, "cancelled"));
     owner = prototype ? ownerMessage : elevation?.instruction ?? null;
@@ -1052,7 +1060,8 @@ export async function runClaimedRequest(
           async () => {
             const registry = cloud && localOwnerConversationId
               ? await (await import("@/lib/agent/registry")).prepareAgentRegistry() : null;
-            if (!await ownerRelayAuthorizedAsync(relay.id, target.id, requestId)) return false;
+            if (!await ownerRelayAuthorizedAsync(relay.id, target.id, requestId)
+              || requesterTier && Date.now() >= executionDeadline) return false;
             if (registry && localOwnerConversationId) {
               // Binding can precede continuation admission. A foreign conversation
               // must not borrow this request's tools while that admission awaits.
