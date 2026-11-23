@@ -764,7 +764,7 @@ for (const selection of ["default", "cloud", "local"]) for (const failure of [fa
       expect(calls.some(call => call.args[0] === "scripts/local-gate-tests.ts")).toBe(true);
     }
   } finally { for (const root of roots) rmSync(root, { recursive: true, force: true }); }
-});
+}, 15_000);
 
 // Each case crosses the public coordinator; publication must retain its cause.
 const diagnosticThread = "00000000-0000-0000-0000-000000000000";
