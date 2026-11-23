@@ -31,7 +31,7 @@ const command = path.join(root, "answer-stub");
 fs.writeFileSync(command, `#!/usr/bin/env bun\nconst a=process.argv;await Bun.stdin.text();console.log(JSON.stringify({type:'thread.started',thread_id:crypto.randomUUID()}));await Bun.write(a[a.indexOf('--output-last-message')+1], JSON.stringify({action:'reply',text:'Done',reply_to:'m1'}));`); fs.chmodSync(command, 0o700);
 function paired(api_base: string): PairedRelay {
   return { id: "hold-relay", origin: api_base.replace(/\/v1$/, ""), api_base, name: "Test", description: "Test", credential: "x".repeat(43),
-    features: ["progress_steps"], owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(),
+    features: ["progress_steps"], owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(),
     paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, engine: "codex", model: "gpt-6-sol", effort: "low", project: null, concurrency: 1, hardCapMinutes: 1, memberLimitPerHour: 0 }] };
 }

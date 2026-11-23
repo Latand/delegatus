@@ -14,6 +14,7 @@ export type CloudRequest = {
   schema?: object;
   effort?: string | null;
   timeoutMs: number;
+  leaseDeadlineAt?: number;
   signal: AbortSignal;
   authorize?(): void;
   onProviderOpen?: (open: ProviderOpen) => void;
@@ -22,6 +23,9 @@ export type CloudRequest = {
 /** A rejected call is safe to retry locally only when no Cloud turn remains running. */
 export class CloudFailure extends Error {
   constructor(public readonly confirmed: boolean) { super("Codex Cloud unavailable"); }
+}
+export class CloudLeaseUnsupported extends CloudFailure {
+  constructor() { super(true); }
 }
 /** Decoder exceptions may include private model output. Never retain their cause. */
 export class CloudAnswerError extends Error {
@@ -39,6 +43,10 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
   resolveEnvironment: (request: CloudRequest) => Promise<string> = request => resolveHostedCloudEnvironment(request.environmentId,
     { token: process.env.LLV_CODEX_CLOUD_TOKEN ?? "" }, { signal: request.signal, assertCurrent: () => request.signal.throwIfAborted() })): CloudTransport {
   return async request => {
+    // The provider accepts an interrupt request without promising to end
+    // execution by a deadline. A lease-bound turn needs a provider guarantee
+    // before any remote execution can be admitted.
+    if (request.leaseDeadlineAt !== undefined) throw new CloudLeaseUnsupported();
     const model = request.model ?? CLOUD_MODEL;
     if (!CODEX_CLOUD_MODEL_IDS.includes(model)) throw new CloudFailure(true);
     const endpoint = process.env.LLV_CODEX_CLOUD_URL;
@@ -169,6 +177,7 @@ export function runCloudRelay(input: Omit<CloudRequest, "signal"> & {
       catch { throw new CloudAnswerError(); }
       return { status: "done", answer, providerOpens, durationMs: Date.now() - started, code: null, signal: null };
     } catch (error) {
+      if (error instanceof CloudLeaseUnsupported) throw error;
       if (abort.signal.aborted) return { status: "cancelled", answer: null, durationMs: Date.now() - started, code: null, signal: null };
       if (!(error instanceof CloudFailure) || !error.confirmed) throw error;
       if (providerOpens.length) return { status: "violation", answer: null, providerOpens, durationMs: Date.now() - started, code: null, signal: null };
