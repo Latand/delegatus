@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { modelDisplayName } from "@/lib/agent/models";
 import { roleNameById } from "@/components/builderCopy";
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -15,8 +15,8 @@ const BUTTON = "min-h-8 rounded-lg px-3 text-[12px] font-semibold focus-visible:
 const SOLID = "bg-accent text-white disabled:opacity-60";
 const OUTLINE = "border border-border text-accent hover:bg-sunken disabled:opacity-60";
 
-/** The last 28 px of a scroller fade out over 28 px of padding, so the last row is whole at the end and a row cut by the edge reads as continuing. */
-export const SCROLL_FADE = "pb-7 [-webkit-mask-image:linear-gradient(to_bottom,#000_calc(100%_-_28px),transparent)] [mask-image:linear-gradient(to_bottom,#000_calc(100%_-_28px),transparent)]";
+/** The last 28 px of a scroller fade out over 28 px of padding, so the last row is whole at the end and a row cut by the edge reads as continuing. The same 28 px is the scroller's bottom scroll padding, so a row brought into view lands above the fade. */
+export const SCROLL_FADE = "pb-7 scroll-pb-7 [-webkit-mask-image:linear-gradient(to_bottom,#000_calc(100%_-_28px),transparent)] [mask-image:linear-gradient(to_bottom,#000_calc(100%_-_28px),transparent)]";
 
 /** The profile hook's answer, as the window hands it to the left column. */
 export type ProfileState = ReturnType<typeof useMemoryProfile>;
@@ -105,9 +105,13 @@ export function MemoryProfile({ rules, profile, levels, selected, mobile, onSele
   const reading = !loaded && (!countKnown || count > 0);
   const pending = count > 0 && running && !overall;
   const quiet = !!overall && !code && !view?.stale && !running;
+  /* A chosen row comes into view above the fade; a click leaves a row under it where it was, since a click scrolls nothing. */
+  const root = useRef<HTMLDivElement>(null);
+  const chosen = !selected ? "" : selected.kind === "level" ? `level:${selected.scope}` : `topic:${selected.scope ?? ""}:${selected.index ?? ""}`;
+  useEffect(() => { if (!mobile && chosen) root.current?.querySelector<HTMLElement>("[aria-current=true]")?.scrollIntoView({ block: "nearest" }); }, [chosen, mobile, levels.length]);
   const row = mobile ? ROW.replace("py-1.5", "py-3") : ROW;
   const chevron = mobile ? <ChevronRight className="h-4 w-4 shrink-0 self-center text-muted" aria-hidden /> : null;
-  return <div data-memory-profile="" aria-busy={running || reading} className={`flex min-h-0 flex-col gap-4 overflow-y-auto px-4 pt-3 ${SCROLL_FADE} ${mobile ? "min-w-0 flex-1" : "w-[300px] shrink-0 border-r border-border md:w-[380px]"}`}>
+  return <div ref={root} data-memory-profile="" aria-busy={running || reading} className={`flex min-h-0 flex-col gap-4 overflow-y-auto px-4 pt-3 ${SCROLL_FADE} ${mobile ? "min-w-0 flex-1" : "w-[300px] shrink-0 border-r border-border md:w-[380px]"}`}>
     <section data-profile-ready={overall ? "" : undefined} className="min-w-0">
       <div className="flex items-start gap-3">
         <h3 role={reading ? "status" : undefined} className="m-0 min-w-0 flex-1 text-[15px] font-semibold [overflow-wrap:anywhere]">{overall?.answer.headline ?? t(reading ? "memoryProfile.reading" : !countKnown ? "memoryProfile.profile" : !count ? "memoryProfile.emptyTitle" : pending ? "memoryProfile.runningTitle" : "memoryProfile.noneTitle")}</h3>

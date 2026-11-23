@@ -475,7 +475,7 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
         {matching.map(scope => <RuleSection key={scope.scope} kind={scope.kind} title={levelLabel(t, scope)} scope={{ ...scope, chars: 0, active: scope.active.filter(rule => current.ids.includes(rule.id)), left: [] }} {...shared} />)}
       </>;
     }
-    return <div key={currentKey} data-level-pane={current.kind === "level" ? current.scope : "topic"} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pt-1 ${SCROLL_FADE}`}>
+    return <div key={currentKey} data-level-pane={current.kind === "level" ? current.scope : "topic"} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pt-1 ${mobile ? "px-1 " : ""}${SCROLL_FADE}`}>
       {mobile ? <div className="px-3 pt-1"><button type="button" data-level-back="" onClick={back} className="min-h-8 rounded-lg px-0 text-[12px] font-semibold text-accent hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11">← {t("memoryProfile.back")}</button></div> : null}
       {body}
     </div>;

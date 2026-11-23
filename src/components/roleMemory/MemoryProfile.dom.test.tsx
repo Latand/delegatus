@@ -158,6 +158,35 @@ test("the chosen row is current and carries the accent; a phone draws no row as 
   }
 });
 
+test("choosing a row brings it into view on the desktop and does not move a phone's list", async () => {
+  setLocale("en");
+  const originalFetch = globalThis.fetch;
+  const originalScroll = dom.HTMLElement.prototype.scrollIntoView;
+  const rules = sampleMemory();
+  const base = profileView(rules, "en", "sample", null);
+  globalThis.fetch = (async () => Response.json(base)) as unknown as typeof fetch;
+  const scrolled: { row: string | null; options: unknown }[] = [];
+  dom.HTMLElement.prototype.scrollIntoView = function (this: HTMLElement, options?: unknown) { scrolled.push({ row: this.getAttribute("data-profile-level"), options }); };
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    flushSync(() => root.render(<Column rules={rules} selected={{ kind: "level", scope: "machine" }} />));
+    await tick(); await tick();
+    expect(scrolled).toEqual([{ row: "machine", options: { block: "nearest" } }]);
+    flushSync(() => root.render(<Column rules={rules} selected={{ kind: "level", scope: "project:garden" }} />));
+    await tick();
+    expect(scrolled.map(entry => entry.row)).toEqual(["machine", "project:garden"]);
+    scrolled.length = 0;
+    flushSync(() => root.render(<Column rules={rules} mobile />));
+    await tick();
+    expect(scrolled).toEqual([]);
+  } finally {
+    flushSync(() => root.unmount());
+    globalThis.fetch = originalFetch;
+    dom.HTMLElement.prototype.scrollIntoView = originalScroll;
+  }
+});
+
 for (const [model, name] of [["claude-opus-5-5", "Opus 5.5"], ["claude-haiku-5-5", "Haiku 5.5"]]) {
   test(`profile footer names the stored ${name} model`, async () => {
     setLocale("en");

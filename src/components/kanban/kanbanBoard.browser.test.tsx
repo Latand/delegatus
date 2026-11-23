@@ -4474,7 +4474,7 @@ const S7_STATES: S7State[] = [
     await page.evaluate(() => { const pane = document.querySelector<HTMLElement>("[data-level-pane]")!; pane.scrollTop += document.querySelector("[data-rules-history]")!.getBoundingClientRect().top - pane.getBoundingClientRect().top; });
   } },
   { id: "archived-only", define: () => ["[data-level-pane] h3", "[data-rules-history]"], act: async (page, { openLevel }) => { await openLevel(S7_ARCHITECT); } },
-  { id: "empty-level", define: () => ["[data-level-pane] h3", "[data-level-pane] p"], act: async (page, { openLevel }) => { await openLevel("machine"); } },
+  { id: "empty-level", endScroll: true, define: () => ["[data-level-pane] h3", "[data-level-pane] p"], act: async (page, { openLevel }) => { await openLevel("machine"); } },
   { id: "long", edge: true, define: () => ['[data-learned-rule="b-long"]', '[data-learned-rule="b-path"]'], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); } },
   { id: "long-open", edge: true, define: () => ['[data-learned-rule="b-long"][data-open]', '[data-learned-rule="b-path"][data-open]'], act: async (page, { openLevel }) => {
     await openLevel(S7_BUILDER);
@@ -4509,7 +4509,7 @@ const S7_STATES: S7State[] = [
 /** Reads one frame: every violation the variant's gates name, as short strings. */
 const measureS7 = (page: Page, args: { phone: boolean; scopes: Record<string, { active: string[]; left: string[] }>; total: number; topicIds?: string[]; endScroll: boolean; cold: boolean; expectCurrent: boolean }) => page.evaluate((args) => {
   const out: string[] = [];
-  const checked = { texts: 0, scrollers: 0, rules: 0, removes: 0, rows: 0, levelGaps: 0, departedTone: 0, emptySaid: 0 };
+  const checked = { texts: 0, scrollers: 0, rules: 0, removes: 0, rows: 0, levelGaps: 0, departedTone: 0, emptySaid: 0, insets: 0 };
   const win = document.querySelector<HTMLElement>("[data-rules-window]")!;
   const box = win.getBoundingClientRect();
   const clips = (element: Element) => { const found: HTMLElement[] = []; for (let node = element.parentElement; node; node = node.parentElement) if (getComputedStyle(node).overflowX !== "visible") found.push(node); return found; };
@@ -4611,6 +4611,24 @@ const measureS7 = (page: Page, args: { phone: boolean; scopes: Record<string, { 
     const pane = win.querySelector<HTMLElement>("[data-level-pane]")?.textContent?.toLowerCase().replace(/[.\s]+/g, " ") ?? "";
     checked.emptySaid = 1;
     if (said && pane.includes(said.replace(/[.\s]+/g, " ").trim())) out.push("empty-said-twice");
+  }
+  /* A selected level or focused rule lands above its scroller's bottom fade: the fade is the last 28 px of the scroller. */
+  for (const scroller of scrollers) {
+    const band = scroller.getBoundingClientRect();
+    for (const row of scroller.querySelectorAll<HTMLElement>("[aria-current=true], [data-focused]")) {
+      const rect = row.getBoundingClientRect();
+      if (rect.height && rect.bottom > band.bottom - 28 + 1 && rect.top < band.bottom) out.push(`under-fade:${row.getAttribute("data-profile-level") ?? row.getAttribute("data-profile-topic") ?? row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule") ?? "row"}:${Math.round(rect.bottom - (band.bottom - 28))}`);
+    }
+  }
+  /* On the phone the back link, the heading and the first rule's dot start where the curator line does. */
+  if (args.phone) {
+    const edge = (element: Element | null | undefined) => { if (!element) return null; const range = document.createRange(); range.selectNodeContents(element); return range.getClientRects()[0]?.left ?? null; };
+    const reference = win.querySelector("[data-curation-history] summary")?.getBoundingClientRect().left ?? null, rulesPane = win.querySelector<HTMLElement>("[data-level-pane]");
+    if (reference !== null && rulesPane) {
+      const readings: [string, number | null][] = [["back", edge(rulesPane.querySelector("[data-level-back]"))], ["heading", edge(rulesPane.querySelector("h3"))], ["dot", rulesPane.querySelector("[data-learned-rule] > span[aria-hidden]")?.getBoundingClientRect().left ?? null]];
+      checked.insets = readings.length;
+      for (const [name, left] of readings) if (left !== null && Math.abs(left - reference) > 1) out.push(`inset:${name}:${left.toFixed(1)}/${reference.toFixed(1)}`);
+    }
   }
   if (document.documentElement.scrollWidth > innerWidth) out.push("page-overflow");
   const title = document.getElementById("rules-window-title")!, titleBox = title.getBoundingClientRect();
@@ -4740,8 +4758,10 @@ describe("memory profile window: levels on the left, rules on the right", () => 
       ];
       /* S7_SMOKE=1 renders a handful of states in one pair, to read the gates before the full matrix runs. */
       const smoke = process.env.S7_SMOKE === "1";
+      /* S7_FRAMES=state@width,… renders only those states at those widths, in every pair the plan gives that width. */
+      const wanted = process.env.S7_FRAMES ? new Set(process.env.S7_FRAMES.split(",")) : null;
       const smokeStates = ["default", "earlier", "archived", "many-end", "topic", "undo", "profile-reading", "profile-cold"];
-      for (const { width, height, pairs: sets, only } of smoke ? plan.slice(0, 2).map(entry => ({ ...entry, pairs: [["en", "light"]] as const })) : plan) for (const [lang, scheme] of sets) for (const state of S7_STATES.filter(item => (!only || only(item)) && (!smoke || smokeStates.includes(item.id)))) {
+      for (const { width, height, pairs: sets, only } of smoke ? plan.slice(0, 2).map(entry => ({ ...entry, pairs: [["en", "light"]] as const })) : plan) for (const [lang, scheme] of sets) for (const state of S7_STATES.filter(item => (!only || only(item)) && (!wanted || wanted.has(`${item.id}@${width}`)) && (!smoke || smokeStates.includes(item.id)))) {
         const phone = width === 390;
         mode.data = state.data ?? "rich"; mode.profile = state.profile ?? "ready"; mode.lang = lang; mode.rules = dataOf(mode.data);
         let release = () => {};
