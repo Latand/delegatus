@@ -39,8 +39,9 @@ test.skipIf(process.platform !== "linux")("installed admission routing without a
     const bin = path.join(f.dir, "caller-bin");
     fs.mkdirSync(bin);
     fs.copyFileSync(process.execPath, path.join(bin, "bun"), fs.constants.COPYFILE_FICLONE);
-    const PATH = [bin, ...(f.env.PATH ?? "").split(path.delimiter).filter(entry => entry && !fs.existsSync(path.join(entry, "bun")))].join(path.delimiter);
-    const env: NodeJS.ProcessEnv = { ...f.env, PATH, LLV_GATE_RUNNER: "off" };
+    const inherited: NodeJS.ProcessEnv = f.env;
+    const PATH = [bin, ...(inherited.PATH ?? "").split(path.delimiter).filter((entry: string) => entry && !fs.existsSync(path.join(entry, "bun")))].join(path.delimiter);
+    const env: NodeJS.ProcessEnv = { ...inherited, PATH, LLV_GATE_RUNNER: "off" };
     delete env.LLV_GATE_BUN;
     const routed = installedGateAdmissionEnv(env);
     expect(fs.readFileSync(routed.LLV_GATE_BUN!, "utf8")).not.toContain(process.execPath);

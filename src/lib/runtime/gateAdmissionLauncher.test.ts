@@ -48,7 +48,7 @@ function pathWithBunCopy() {
   return { bun: path.join(bin, "bun"), PATH: [bin, ...rest].join(path.delimiter) };
 }
 
-function routedFrom(release: string, source: NodeJS.ProcessEnv) {
+function routedFrom(release: string, source: Partial<NodeJS.ProcessEnv>) {
   const previous = process.cwd();
   process.chdir(release);
   try { return installedGateAdmissionEnv(source); } finally { process.chdir(previous); }
@@ -73,9 +73,9 @@ test.skipIf(process.platform !== "linux")("a bridged agent's routed launcher run
 test.skipIf(process.platform !== "linux")("routing keys the recorded interpreter, so releases at different paths share one check key", () => {
   setEnv("LLV_DOCKER_NSENTER_SHIMS", undefined);
   const first = installedRelease("scripts"), second = installedRelease("scripts");
-  const base: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" };
+  const base: Partial<NodeJS.ProcessEnv> = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" };
   for (const interpreter of [undefined, process.execPath]) {
-    const source: NodeJS.ProcessEnv = { ...base, ...(interpreter ? { LLV_GATE_BUN: interpreter } : {}) };
+    const source: Partial<NodeJS.ProcessEnv> = { ...base, ...(interpreter ? { LLV_GATE_BUN: interpreter } : {}) };
     const a = routedFrom(first, source), b = routedFrom(second, source);
     expect(a.LLV_GATE_BUN).toBeDefined();
     expect(b.LLV_GATE_BUN).toBeDefined();
@@ -98,7 +98,7 @@ test.skipIf(process.platform !== "linux")("Cloud publication inputs under routin
   setEnv("LLV_DOCKER_NSENTER_SHIMS", undefined);
   const release = installedRelease("scripts");
   const publication = createHookFixture(repository, roots);
-  const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" };
+  const env: Partial<NodeJS.ProcessEnv> = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" };
   const routed = { ...env, ...routedFrom(release, env) };
   expect(routed.LLV_GATE_BUN).toBeDefined();
   expect(cloudCheckInputs(publication.dir, routed)).toEqual(cloudCheckInputs(publication.dir, env));

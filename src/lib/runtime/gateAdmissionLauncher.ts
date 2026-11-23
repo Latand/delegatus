@@ -25,8 +25,8 @@ export function gateAdmissionInterpreter(value: string | undefined): string | nu
 export function withoutGateAdmissionLauncher<T extends Partial<NodeJS.ProcessEnv>>(env: T): T {
   const interpreter = gateAdmissionInterpreter(env.LLV_GATE_BUN);
   if (interpreter === undefined) return env;
-  const result = { ...env };
+  const result: Partial<NodeJS.ProcessEnv> = { ...env };
   if (interpreter === null) delete result.LLV_GATE_BUN;
   else result.LLV_GATE_BUN = interpreter;
-  return result;
+  return result as T;
 }
