@@ -6256,6 +6256,7 @@ export const en = {
   "seatTick.release.wait.tick": "Waiting for orchestrator wakes to be turned on.",
   "seatTick.release.wait.merge": "Waiting for automatic merging to be turned on.",
   "seatTick.release.wait.flight": "A release is already in progress.",
+  "seatTick.release.wait.versionMismatch": "The version on main differs from the latest tag. The orchestrator must reconcile the release before starting another.",
   "seatTick.release.wait.checks": "Waiting for required checks to pass.",
   "seatTick.release.wait.rollback": "A production rollback still needs a deployed fix.",
   "seatTick.release.wait.hold": "A release hold is active.",
