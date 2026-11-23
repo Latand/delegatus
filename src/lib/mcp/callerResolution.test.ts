@@ -65,6 +65,24 @@ test("one caller resolution serves a mutating tool's policy and binding", async 
   expect(resolutions).toBe(2);
 });
 
+test.skipIf(process.platform !== "linux")("an unwatchable retained host path leaves the Viewer available and native verification closed", async () => {
+  const { prepareRegistryForNativeCallers } = await import("@/lib/viewerInstrumentation");
+  const { registry, sqliteFilename } = fixture(0);
+  const artifact = path.join(path.dirname(sqliteFilename), "native-caller.jsonl");
+  fs.writeFileSync(artifact, "");
+  const db = new Database(sqliteFilename);
+  try {
+    db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.engine','claude','$.generations[0].path',?) WHERE collection='conversations' AND row_key=?").run(artifact, id);
+    db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.artifactPath',?) WHERE collection='entries' AND row_key=?")
+      .run("/proc/self/fixture-host.jsonl", `codex:${session}`);
+  } finally {
+    db.close();
+  }
+
+  await prepareRegistryForNativeCallers(registry, new AbortController().signal);
+  expect(registry.mcpNativeCallerSnapshot(session, null).snapshot?.nativeHostsIncomplete).toBe(true);
+});
+
 test("every mutating tool resolves its policy caller once, including concurrent calls", async () => {
   const snapshot = fixture(0).registry.readOnlySnapshot();
   let resolutions = 0;

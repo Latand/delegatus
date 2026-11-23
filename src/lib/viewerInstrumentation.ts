@@ -1084,13 +1084,12 @@ export async function registerViewerRuntime(): Promise<void> {
     await startupBarrier.run(() => settleInterruptedTransfers());
     startup.begin("registry");
     const { prepareAgentRegistry } = await import("@/lib/agent/registry");
-    const registry = await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", async () => {
+    await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", async () => {
       const registry = await prepareAgentRegistry(startupAbort.signal);
       // The snapshot also prepares recovery indexes and backfills endings.
       // The first authorized native caller needs the complete artifact index;
       // its synchronous lookup intentionally advances only one bounded batch.
       await prepareRegistryForNativeCallers(registry, startupAbort.signal);
-      return registry;
     }));
     assertStartupActive();
     startup.begin("activation");
@@ -1133,10 +1132,14 @@ export async function registerViewerRuntime(): Promise<void> {
           // This legacy repair considers only removed checkout paths from
           // retained history, so its full catalog/evidence walk can refine
           // those records after controllers and readiness are available.
-          const { runWorktreeRecoveryAtStartup } = await import("@/lib/projects/worktreeBackfill");
-          let refreshWorktreeCatalog: (() => Promise<void>) | undefined;
-          await runWorktreeRecoveryAtStartup(console.error, undefined, refresh => { refreshWorktreeCatalog = refresh; });
-          await refreshWorktreeCatalog?.();
+          const { recoverWorktreesInWorker } = await import("@/lib/state/durability");
+          assertStartupActive();
+          try {
+            await recoverWorktreesInWorker(hotStateDirectory, startupAbort.signal);
+          } catch {
+            assertStartupActive();
+            console.error("[worktree recovery] startup worker failed; the next startup or full catalog scan retries");
+          }
           assertStartupActive();
           const { prepareBoardSummary } = await import("@/app/api/files/operatorProjection");
           assertStartupActive();

@@ -12,6 +12,7 @@ import { projectCatalogSnapshotFromRaw } from "@/lib/scanner/projectCatalog";
 import { seedProjectCatalogForTests } from "@/lib/scanner/projectCatalogStore";
 import { stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
+import { recoverWorktreesInWorker } from "@/lib/state/durability";
 import { checkpointLegacyCollectionMirrorsForDemotion } from "@/lib/state/legacyCollections";
 import { closeStateMutationActivationForTests, withStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { completeViewerRuntimeActivation } from "@/lib/viewerInstrumentation";
@@ -280,6 +281,28 @@ test("startup folds an older directory project using only its agreeing durable m
   expect(projectInfoFromCwd(path.join(cwd, "nested"))?.project).toBe(f.identity.project);
 });
 
+
+test("the leased startup worker publishes recovery for the serving process", async () => {
+  const f = fixture();
+  const cwd = f.repo + "-review";
+  const source = directoryProjectId(cwd);
+  f.transcript(cwd, { branch: "confirmed" });
+  f.write();
+  const board = path.join(f.state, "board.json");
+  expect(patchBoard(source, 0, { manual: ["conversation_old"] }, board).ok).toBe(true);
+  expect(canonicalProject(source)).toBe(source);
+
+  const controller = new AbortController();
+  controller.abort(new Error("retired"));
+  await expect(recoverWorktreesInWorker(f.state, controller.signal)).rejects.toThrow("retired");
+  expect(readWorktreeRecoveries()).toEqual([]);
+
+  await recoverWorktreesInWorker(f.state, new AbortController().signal);
+  expect(canonicalProject(source)).toBe(f.identity.project);
+  expect(projectInfoFromCwd(cwd)?.project).toBe(f.identity.project);
+  expect(boardFor(f.identity.project, board).prefs.manual).toEqual(["conversation_old"]);
+  expect(readLifecycleJournal().events.map(event => event.seq)).toEqual([1]);
+}, 30_000);
 
 test("a failed startup catalog refresh retries on the next startup without repeating the fold", async () => {
   const f = fixture(); const cwd = f.repo + "-review";
