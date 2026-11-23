@@ -3774,6 +3774,22 @@ function providerContinuationKey(pipeline: Pipeline, stage: PipelineStage, attem
   return `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}`;
 }
 
+/** A transport can deliver before the controller persists its acknowledgement.
+    Reconcile that durable receipt while the old wait still identifies its cut,
+    before a later provider error replaces the key-bearing wait. */
+async function reconcileDeliveredProviderContinuation(pipeline: Pipeline, stage: PipelineStage,
+  attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<void> {
+  const wait = attempt.providerWait;
+  if (!wait?.continuationRequestedAt || wait.actionAt || !attempt.conversationId
+    || ports.conversationDeliveryCompleted?.(attempt.conversationId, providerContinuationKey(pipeline, stage, attempt)) !== true) return;
+  const startedAt = providerBackoffStartedAt(attempt, wait.continuationRequestedAt);
+  wait.actionAt = wait.continuationRequestedAt;
+  wait.tries += 1;
+  attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: Math.max(attempt.providerRecoveryBudget?.tries ?? 0, wait.tries), startedAt };
+  recordProviderRecovery(attempt, "continue", wait.condition,
+    `continuing after ${wait.condition.label} (${wait.tries} of 3); last: ${wait.text}`, wait.continuationRequestedAt);
+}
+
 function providerCutNotice(engine: FlowEngine, message: NonNullable<StageTurnEvidence["terminalProviderMessage"]>, onlyOutput = false) {
   return { condition: classifyProviderCondition(engine, message.errorClass
       ?? (message.usageLimit ? (engine === "claude" ? "rate_limit" : "usage_limit") : null), message.text),
@@ -3938,6 +3954,7 @@ async function recoverProviderCut(
     return true;
   }
   if (notice && shouldOpenProviderWait(wait, notice)) {
+    await reconcileDeliveredProviderContinuation(pipeline, stage, attempt, ports);
     wait = openProviderWait(stage, attempt, notice, ports);
     await persist();
   }
@@ -14386,7 +14403,10 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
         && (opensWait || notice.ts === attempt.providerWait?.turnTs && attempt.providerWait.condition.kind === "transient")
         && durable?.promptHistoryComplete !== false && !newerExternalProviderPrompt(attempt, durable)
         && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) <= (durable?.firstProviderCutAt ?? notice.ts)) {
-        if (opensWait) openProviderWait(stage, attempt, notice, lanePorts);
+        if (opensWait) {
+          await reconcileDeliveredProviderContinuation(pipeline, stage, attempt, lanePorts);
+          openProviderWait(stage, attempt, notice, lanePorts);
+        }
         const wait = attempt.providerWait!;
         if (!wait.actionAt) {
           pipeline.stateDetail = providerWaitDetail(attempt, lanePorts);

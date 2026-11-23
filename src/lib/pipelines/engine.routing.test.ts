@@ -1805,9 +1805,13 @@ test("a stage that keeps working after its turn ended keeps its host through the
      recovery tick is over. */
   const realSetTimeout = globalThis.setTimeout;
   const deferred: Array<{ run: () => void; delayMs: number }> = [];
+  let resolveCursorCheckpoint!: () => void;
+  const cursorCheckpoint = new Promise<void>(resolve => { resolveCursorCheckpoint = resolve; });
   let stop: Awaited<ReturnType<typeof f.bind>> | undefined;
   try {
-    stop = await f.bind(30_000);
+    stop = await f.bind(30_000, entry => {
+      if (entry.structuredHost?.eventCursor === 174) resolveCursorCheckpoint();
+    });
     const bound = structuredClone(f.row());
     // The turn ended: the host is idle and names no turn. The CLI then continues
     // by itself on a background-command notification: the transcript opens a
@@ -1848,8 +1852,7 @@ test("a stage that keeps working after its turn ended keeps its host through the
 
     // Thirty seconds after the first cursor-only step the deferred write fires.
     deferred[0]!.run();
-    const cursorDeadline = performance.now() + 2_000;
-    while (f.row().structuredHost?.eventCursor !== 174 && performance.now() < cursorDeadline) await Bun.sleep(10);
+    await cursorCheckpoint;
     expect(f.host.releaseCalls).toBe(0);
     expect(f.row()).toMatchObject({ status: "idle", claimOwner: f.claimOwner, structuredHost: { eventCursor: 174 } });
     const after = loadPipelines()[0]!;

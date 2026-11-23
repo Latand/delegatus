@@ -1987,7 +1987,8 @@ async function idleStageHostFixture(h: ReturnType<typeof harness>) {
   ] });
   return {
     registry, key, claimOwner, transcriptPath, attempt, host, child, hostPid: identity.pid, termination, signals, row, journal, target, snapshot,
-    bind: (cursorDebounceMs: number) => bindClaudeHostPersistence(registry, key, host as never, claimOwner, 1, "unhosted", { cursorDebounceMs }),
+    bind: (cursorDebounceMs: number, onCheckpoint?: (entry: import("@/lib/agent/registry").AgentRegistryEntry) => void) =>
+      bindClaudeHostPersistence(registry, key, host as never, claimOwner, 1, "unhosted", { cursorDebounceMs, onCheckpoint }),
     end: async () => {
       setAgentRegistryForTests(null);
       await stopFixtureProcess(child);

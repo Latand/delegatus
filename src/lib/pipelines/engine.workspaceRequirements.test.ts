@@ -6,7 +6,7 @@ import { recoverPipelineProviderTurn } from "./engine";
 const workspaceError = "failed to load workspace requirements: invalid data";
 const unrelatedError = "failed to load the session: invalid data";
 
-test.each(["success", "previous-classification", "exhausted", "unrelated"] as const)("handles a native Codex terminal provider record (%s)", async outcome => {
+test.each(["success", "previous-classification", "exhausted", "exhausted-restarts", "unrelated"] as const)("handles a native Codex terminal provider record (%s)", async outcome => {
   const error = outcome === "unrelated" ? unrelatedError : workspaceError;
   const f = await providerRecoveryHarness("codex", "other", error);
   const pipeline = () => loadPipelines()[0]!;
@@ -17,6 +17,8 @@ test.each(["success", "previous-classification", "exhausted", "unrelated"] as co
   const current = () => pipelineStageRead(pipeline(), stageId).attempt!;
   const tick = async () => { await tickPipelines([], { ...f.h.ports }); };
   const records: Record<string, unknown>[] = [];
+  const deliveredKeys = new Set<string>();
+  let preAcknowledgementSnapshot: ReturnType<typeof loadPipelines> | undefined;
   const append = (payload: Record<string, unknown>) => records.push({ type: "event_msg", timestamp: f.h.ports.now(), payload });
   const write = () => readFixtures(f.h, { [originalAttempt.agentPath!]: stageTranscript(`workspace-requirements-${outcome}`, records) });
   const fail = (message: string) => {
@@ -29,9 +31,12 @@ test.each(["success", "previous-classification", "exhausted", "unrelated"] as co
     expect(await input.continuationAllowed?.()).toBe(true);
     expect(input).toMatchObject({ conversationId: originalAttempt.conversationId, transcriptPath: originalAttempt.agentPath, cwd: original.worktreeDir, policy: "queue" });
     sends.push({ key: input.clientMessageId, at: f.h.ports.now(), text: input.text });
+    deliveredKeys.add(input.clientMessageId);
+    if (outcome === "exhausted-restarts") preAcknowledgementSnapshot = structuredClone(loadPipelines());
     f.h.setConversationActive(true);
     return true;
   };
+  f.h.ports.conversationDeliveryCompleted = (_conversationId, key) => deliveredKeys.has(key);
   f.advance(1_000);
   append({ type: "task_started" });
   f.advance(1_000);
@@ -57,7 +62,7 @@ test.each(["success", "previous-classification", "exhausted", "unrelated"] as co
   }
 
   let lastError = error;
-  const delays = outcome === "exhausted" ? [60_000, 120_000, 240_000] : [60_000];
+  const delays = outcome === "exhausted" || outcome === "exhausted-restarts" ? [60_000, 120_000, 240_000] : [60_000];
   for (const [index, delay] of delays.entries()) {
     expect(pipeline().state).toBe("running");
     expect(current().providerWait).toEqual({ tries: index, resumeAt: new Date(f.now() + delay).toISOString(), lastError });
@@ -73,7 +78,7 @@ test.each(["success", "previous-classification", "exhausted", "unrelated"] as co
     append({ type: "user_message", message: await encodeCodexStructuredUserText(sent.text, undefined, null, { kind: "agent", role: "pipeline" }) });
     append({ type: "task_started" });
     f.advance(6_000);
-    if (outcome !== "exhausted") {
+    if (outcome !== "exhausted" && outcome !== "exhausted-restarts") {
       append({ type: "agent_message", message: 'Stage completed.\n\n```json\n{"status":"pass"}\n```' });
       append({ type: "task_complete" });
       f.h.setConversationActive(false);
@@ -81,11 +86,15 @@ test.each(["success", "previous-classification", "exhausted", "unrelated"] as co
     } else {
       lastError = `${workspaceError} (retry ${index + 1})`;
       fail(lastError);
+      if (outcome === "exhausted-restarts") {
+        expect(preAcknowledgementSnapshot).toBeDefined();
+        savePipelines(preAcknowledgementSnapshot!);
+      }
     }
     await tick();
   }
 
-  if (outcome !== "exhausted") {
+  if (outcome !== "exhausted" && outcome !== "exhausted-restarts") {
     expect(current()).toMatchObject({ verdict: "pass" });
     expect(current().providerWait).toBeUndefined();
   } else {
@@ -104,4 +113,28 @@ test.each(["success", "previous-classification", "exhausted", "unrelated"] as co
   expect(f.h.spawnInputs).toHaveLength(1);
   expect(pipeline()).toMatchObject({ worktreeDir: original.worktreeDir });
   expect(pipeline().runs[0]!.attempts).toEqual([expect.objectContaining(originalAttempt)]);
+});
+
+test("a durable delivered continuation is charged before a newer cut replaces its wait", async () => {
+  const f = await providerRecoveryHarness("codex", "other", workspaceError);
+  const pipeline = loadPipelines()[0]!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  const oldCut = f.now() - 1_000;
+  attempt.providerWait = { condition: { kind: "transient", label: "workspace requirements failure", scope: null, resetLabel: null },
+    text: workspaceError, accountId: null, turnTs: oldCut, tries: 0, startedAt: new Date(oldCut).toISOString(),
+    resumeAt: new Date(oldCut).toISOString(), resetsAt: null, continuationRequestedAt: new Date(oldCut + 1).toISOString() };
+  attempt.providerRecoveryBudget = { tries: 0, startedAt: new Date(oldCut).toISOString(), engine: "codex" };
+  savePipelines([pipeline]);
+  f.h.ports.conversationDeliveryCompleted = (_conversationId, key) => key.endsWith(`-${oldCut}`);
+
+  f.advance(1_000);
+  f.cut();
+  await recoverPipelineProviderTurn(pipeline.id, { ...f.h.ports });
+
+  const next = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(next.providerWait).toMatchObject({
+    condition: { kind: "transient" }, tries: 1,
+    resumeAt: new Date(f.now() + 120_000).toISOString(),
+  });
+  expect(next.providerRecoveryBudget).toMatchObject({ tries: 1, startedAt: new Date(oldCut).toISOString() });
 });
