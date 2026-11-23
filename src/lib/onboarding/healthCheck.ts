@@ -123,14 +123,14 @@ export type HealthRun = {
 
 /* ── The cheapest runtime ─────────────────────────────────────────────── */
 
-const CHEAPEST_MODEL: Record<RoleEngine, string> = { claude: "haiku", codex: "gpt-6-luna" };
+const CHEAPEST_MODEL: Record<RoleEngine, string> = { claude: "haiku", codex: "gpt-6-luna", antigravity: "gemini-3.8-flash" };
 
 /**
  * The smallest size class among connected engines at the lowest tier of its
  * scale; Claude before Codex on a tie. Null when no engine can run a launch.
  */
-export function cheapestHealthRuntime(readiness: Record<RoleEngine, EngineReadiness>): HealthRuntime | null {
-  const candidates = (["claude", "codex"] as const)
+export function cheapestHealthRuntime(readiness: Partial<Record<RoleEngine, EngineReadiness>>): HealthRuntime | null {
+  const candidates = (["claude", "codex", "antigravity"] as const)
     .filter((engine) => readiness[engine] === "connected")
     .map((engine) => {
       const model = CHEAPEST_MODEL[engine];
@@ -144,11 +144,14 @@ export function cheapestHealthRuntime(readiness: Record<RoleEngine, EngineReadin
 
 /* ── What each row observes, as pure functions ────────────────────────── */
 
-const ENGINE_BIN: Record<RoleEngine, string> = { claude: "claude", codex: "codex" };
+const ENGINE_BIN: Record<RoleEngine, string> = { claude: "claude", codex: "codex", antigravity: "agy" };
 
 /** The values every row-1 sentence names, so no copy renders a raw `{bin}`. */
 function engineParams(runtime: HealthRuntime): Record<string, string> {
-  return { engine: runtime.engine === "claude" ? "Claude" : "Codex", bin: ENGINE_BIN[runtime.engine] };
+  return {
+    engine: runtime.engine === "claude" ? "Claude" : runtime.engine === "antigravity" ? "Antigravity" : "Codex",
+    bin: ENGINE_BIN[runtime.engine],
+  };
 }
 
 function failure(code: HealthFailureCode, detail: string, extra: Partial<Omit<HealthFailure, "code" | "detail">> = {}): HealthFailure {

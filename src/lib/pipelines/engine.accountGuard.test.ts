@@ -32,7 +32,7 @@ async function fixture() {
   h.ports.accountQuota = (engine, id, model) => accountQuotaVerdict(observations, id, now, model);
   h.ports.resolveProjectSpawn = (engine, request) => {
     const selected = selectProjectAccount({ ...request, engine, accounts, observations, now,
-      bindings: allowed.map(accountId => ({ project: lane.project!, engine, accountId, createdAt: new Date(now).toISOString() })) });
+      bindings: engine === "antigravity" ? [] : allowed.map(accountId => ({ project: lane.project!, engine, accountId, createdAt: new Date(now).toISOString() })) });
     return selected.kind === "available" ? { kind: "available", account: { engine, accountId: selected.accountId!, kind: "managed",
       home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } } : selected;
   };
@@ -386,7 +386,7 @@ async function guardedAccountClock(accountIds: string[] = ["account-a"]) {
   f.h.ports.accountQuota = (engine, id, model) => accountQuotaVerdict(f.observations, id, now, model);
   f.h.ports.resolveProjectSpawn = (engine, request) => {
     const selected = selectProjectAccount({ ...request, engine, accounts, observations: f.observations, now,
-      bindings: accountIds.map(accountId => ({ project: f.lane.project!, engine, accountId, createdAt: new Date(now).toISOString() })) });
+      bindings: engine === "antigravity" ? [] : accountIds.map(accountId => ({ project: f.lane.project!, engine, accountId, createdAt: new Date(now).toISOString() })) });
     return selected.kind === "available" ? { kind: "available", account: { engine, accountId: selected.accountId!, kind: "managed",
       home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } } : selected;
   };

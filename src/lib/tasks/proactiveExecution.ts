@@ -16,7 +16,7 @@ export interface ProactiveExecutionContext {
   phase: "create" | "prepare" | "dispatch" | "effect" | "settle";
   pipeline?: Pipeline;
   stageId?: string;
-  account?: { id: string | null; engine: "claude" | "codex"; model?: string | null };
+  account?: { id: string | null; engine: "claude" | "codex" | "antigravity"; model?: string | null };
 }
 type ExecutionContext = ProactiveExecutionContext | (() => ProactiveExecutionContext | undefined);
 
@@ -79,8 +79,8 @@ export function proactiveExecutionError(tasks: readonly BoardTask[], file = TASK
           }
         }
         if (workers.size >= limit.value) return "proactive worker capacity is exhausted";
-        if (live.account) {
-          const account = live.account;
+        const account = live.account;
+        if (account && account.engine !== "antigravity") {
           const error = proactiveAccountReserveError(account.id, allowedAccountIdsForProject(task.project, account.engine),
             agentRegistry().quotaObservations(account.engine).find(row => row.accountId === account.id), Date.now(), account.model);
           if (error) return error;
