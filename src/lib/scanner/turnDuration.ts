@@ -53,54 +53,82 @@ function visibleAssistantMessage(record: RecordLike, codex: boolean): boolean {
     stays null so the UI can tick live elapsed. Returns null when no opening
     prompt survives in the tail window. Pure for testability. */
 export function recentTurnWindowsFromRecords(records: RecordLike[], codex: boolean): TurnBoundary[] {
-  const windows: TurnBoundary[] = [];
-  let startedAt: number | null = null;
-  let open = false;
-  let failedWindow: TurnBoundary | null = null;
-  let latestTimestamp: number | null = null;
-  for (const record of records) {
-    const facts = classifyTurnRecord(record, codex);
-    latestTimestamp = facts.timestampMs ?? latestTimestamp;
+  const tracker = new TurnWindowTracker(codex);
+  for (const record of records) tracker.push(record);
+  return tracker.finish();
+}
+
+/** The same window rules, fed one record at a time, so a whole transcript can
+    be walked without holding its records. `latestTimestamp` is the newest
+    parseable record time seen, whatever the record was. */
+export class TurnWindowTracker {
+  private readonly windows: TurnBoundary[] = [];
+  private startedAt: number | null = null;
+  private open = false;
+  private failedWindow: TurnBoundary | null = null;
+  latestTimestamp: number | null = null;
+
+  constructor(private readonly codex: boolean) {}
+
+  push(record: RecordLike): void {
+    const facts = classifyTurnRecord(record, this.codex);
+    this.latestTimestamp = facts.timestampMs ?? this.latestTimestamp;
     // Failure evidence outranks the prompt shape: the interrupt sentinel is a
     // user record with real text and would otherwise register as a prompt.
     if (facts.fails) {
-      if (open && startedAt !== null) {
-        const endedAt = Math.max(facts.timestampMs ?? latestTimestamp ?? startedAt, startedAt);
-        failedWindow = { startedAt, endedAt };
-        windows.push(failedWindow);
+      if (this.open && this.startedAt !== null) {
+        const endedAt = Math.max(facts.timestampMs ?? this.latestTimestamp ?? this.startedAt, this.startedAt);
+        this.failedWindow = { startedAt: this.startedAt, endedAt };
+        this.windows.push(this.failedWindow);
       }
-      open = false;
-      continue;
+      this.open = false;
+      return;
     }
     if (facts.starts) {
       // A later steering prompt only fills in for an initiating prompt whose
       // own timestamp failed to parse — it never moves a valid boundary.
-      if (!open || startedAt === null) {
-        startedAt = facts.timestampMs;
-        failedWindow = null;
+      if (!this.open || this.startedAt === null) {
+        this.startedAt = facts.timestampMs;
+        this.failedWindow = null;
       }
-      open = true;
-      continue;
+      this.open = true;
+      return;
     }
     if (facts.closes) {
-      if (open && startedAt !== null) {
-        const endedAt = Math.max(facts.timestampMs ?? latestTimestamp ?? startedAt, startedAt);
-        windows.push({ startedAt, endedAt });
+      if (this.open && this.startedAt !== null) {
+        const endedAt = Math.max(facts.timestampMs ?? this.latestTimestamp ?? this.startedAt, this.startedAt);
+        this.windows.push({ startedAt: this.startedAt, endedAt });
       }
-      open = false;
-      failedWindow = null;
-      continue;
+      this.open = false;
+      this.failedWindow = null;
+      return;
     }
     // Assistant output after failure evidence proves the run survived it (a
     // retried API error): reopen so later prompts keep steering, not resetting.
-    if (failedWindow && facts.assistantRecord) {
-      if (windows.at(-1) === failedWindow) windows.pop();
-      failedWindow = null;
-      open = true;
+    if (this.failedWindow && facts.assistantRecord) {
+      if (this.windows.at(-1) === this.failedWindow) this.windows.pop();
+      this.failedWindow = null;
+      this.open = true;
     }
   }
-  if (open && startedAt !== null) windows.push({ startedAt, endedAt: null });
-  return windows;
+
+  /** An independent tracker holding the same state, so a read can resume from it or look ahead without disturbing it.
+      Windows are never mutated once pushed, so the copy shares them and only owns its own list. */
+  clone(): TurnWindowTracker {
+    const copy = new TurnWindowTracker(this.codex);
+    for (const window of this.windows) copy.windows.push(window);
+    copy.startedAt = this.startedAt;
+    copy.open = this.open;
+    copy.failedWindow = this.failedWindow;
+    copy.latestTimestamp = this.latestTimestamp;
+    return copy;
+  }
+
+  finish(): TurnBoundary[] {
+    const windows = this.windows.slice();
+    if (this.open && this.startedAt !== null) windows.push({ startedAt: this.startedAt, endedAt: null });
+    return windows;
+  }
 }
 
 /** Turn windows and visible assistant acknowledgements derived from one record slice. */
