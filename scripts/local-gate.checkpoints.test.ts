@@ -206,7 +206,7 @@ serviceTest("head checkpoints invalidate installed dependency bytes and the merg
   expect(run(head).match(new RegExp(checkpoint, "g"))).toHaveLength(2);
 }, 60_000);
 
-serviceTest("an aggregate deadline preserves completed files without certifying the interrupted run", () => {
+serviceTest("a short run remainder defers unstarted files and preserves the completed files", () => {
   const f = fixture();
   rmSync(path.join(f.repo, "a.test.ts")); rmSync(path.join(f.repo, "b.test.ts"));
   const files = Array.from({ length: 12 }, (_, index) => `sample-${String(index).padStart(2, "0")}.test.ts`);
@@ -218,12 +218,12 @@ serviceTest("an aggregate deadline preserves completed files without certifying 
   writeFileSync(driver, `import * as comparator from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
 import { existsSync, readFileSync } from "node:fs";
 const expires = process.argv.at(-1) === "expire";
-// A deterministic parent clock expires only after the first eight owned
-// children have started. Child checks retain their real clocks and budgets.
+// A deterministic parent clock leaves less than one full file budget after
+// the first eight children start. Their clocks and execution bounds are real.
 Object.defineProperty(performance, "now", { value: () => expires && existsSync(${JSON.stringify(marker)})
-  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? 1000000 : 0 });
+  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? 650000 : 0 });
 try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
-  { budgets: { fileMs: 300000, runMs: 15000 } }); } catch (error) {
+  { budgets: { fileMs: 300000, runMs: 900000 } }); } catch (error) {
   const ending = comparator.comparatorEnding?.(error);
   console.error(ending?.line ?? String(error)); process.exitCode = ending?.code ?? 1;
 }
@@ -232,8 +232,7 @@ try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(
     { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
   const stopped = run("expire");
   expect(stopped.status, stopped.stdout + stopped.stderr).toBe(75);
-  expect(stopped.stderr).toContain("touched-tests: no verdict: head: test run exceeded");
-  expect(stopped.stderr).toContain("test run exceeded");
+  expect(stopped.stderr).toContain("touched-tests: no verdict: head: remaining run budget cannot fit a full file and its cleanup");
   expect(Object.keys(f.samples())).toHaveLength(8);
   const resumed = run("continue");
   expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);

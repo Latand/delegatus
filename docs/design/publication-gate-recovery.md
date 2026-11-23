@@ -70,7 +70,10 @@ aggregate expiry and a clean expiry that resumes green files in a new process.
 
 Completed green head files remain reusable under the existing source,
 selection, environment, toolchain and cleanup checks. A fresh comparator
-process resumes the remaining files. Every failing file still receives the
+process resumes the remaining files. A checkpointable head run stops admitting
+files when its remaining budget cannot cover a full file and its cleanup.
+It lets the files already admitted finish and reports no verdict if the only
+interruption was the run budget. Every failing file still receives the
 existing baseline comparison and confirmation rules. Green heads retain the
 existing policy that needs no baseline sample. Selection, worker defaults,
 per-file limits, aggregate limits and confirmation limits remain unchanged.
