@@ -35,6 +35,7 @@ test("a production admission lock deadline before checks start is retryable", as
 test("a Cloud execution deadline stays retryable unless its output includes a decisive refusal", () => {
   const timeout = "pre-push: Cloud checks refused [timeout]: Cloud check deadline expired; remote cleanup confirmed; no bound command receipt";
   expect(publicationDeadlineKind(timeout)).toBe("execution");
+  expect(publicationDeadlineKind("pre-push: Cloud checks refused [timeout]: Cloud check deadline expired; remote cleanup unresolved")).toBeNull();
   expect(publicationDeadlineOnly(`${timeout}\n(fail) a.test.ts: named assertion`)).toBe(false);
   expect(publicationDeadlineOnly(`${timeout}\nowned runner: budget cleanup failed: child still running`)).toBe(false);
 });

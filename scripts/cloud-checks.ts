@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { checkEnvironment, checkInputEnvironment } from "./gate-cache";
+import { decisiveRefusal } from "../src/lib/pipelines/publication";
 import { HostedCloudError as CloudRpcError, HostedSessionTimeout, HostedRpcRefusal, HostedEnvironmentOffline, cloudDiagnosticText, hostedRpcFailure as rpcFailure } from "../src/lib/pipelines/cloudHostedErrors";
 import type { HostedCloudDependencies } from "../src/lib/pipelines/cloudHostedClient";
 import type { CloudCheckConfig } from "./cloud-check-config";
@@ -40,7 +41,9 @@ export async function runCloudChecks(job: CloudJob, transport: CloudTransport, l
     }
     report(cloudRefusalLine(result.diagnostic ?? { category: result.kind === "invalid" ? "missing receipt" : result.kind === "unavailable" ? "connect/transport" : result.kind, reason: "Cloud checks returned no valid verdict" }));
     if (result.kind === "account-limit") return 75;
-    if (result.kind === "invalid" && result.diagnostic?.category === "timeout") return 75;
+    if (result.kind === "invalid" && result.diagnostic?.category === "timeout") {
+      return /\bcleanup confirmed\b/.test(result.diagnostic.reason) ? 75 : 1;
+    }
     if (result.kind === "invalid") {
       const code = result.code;
       return typeof code === "number" && Number.isInteger(code) && code > 0 && code <= 255 ? code : 1;
@@ -332,6 +335,12 @@ export class AppServerCloudTransport implements CloudTransport {
         || !isExactCommand(item.command, command)) continue;
       const match = item.aggregatedOutput?.match(/DELEGATUS_GATE ([a-f0-9]{40}) ([a-f0-9]{40}) ([a-f0-9]{40}) ([a-f0-9]{64}) (\d+)\s*$/);
       if (item.status !== "declined" && !(item.status === "failed" && item.exitCode === 0) && match && Number(match[5]) === item.exitCode) {
+        const output = item.aggregatedOutput ?? "";
+        const deadlineExit = item.exitCode === 75
+          && /^(?:pre-push: no verdict within the push budget of \d+ s:|touched-tests: no verdict: |owned runner: (?:deadline expired|execution guard expired)|command timed out after \d+ms)/m.test(output)
+          && !output.split("\n").some(line => decisiveRefusal(line.trim()));
+        if (deadlineExit) return { kind: "invalid", code: 75,
+          diagnostic: { category: "timeout", reason: "Cloud check deadline expired; remote cleanup confirmed" } };
         // The raw command log can contain private test output; the bound exit
         // and reduced diagnostic are the publication record.
         const failedStep = item.aggregatedOutput?.match(/^pre-push: (types|eslint|touched tests|Linux tests|Linux backend|runtime verdict tests|Viewer build|MCP size budgets|Viewer runtime|runtime host|runtime negative controls|supply chain|frozen install): failed \(/m)?.[1];

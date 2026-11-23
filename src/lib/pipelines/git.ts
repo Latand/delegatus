@@ -2110,7 +2110,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
-      const preparingChecks = command === "bun" && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare";
+      const preparingChecks = command === "bun"
+        && (args[0] === "scripts/local-gate.ts" || args[0] === path.resolve(import.meta.dir, "../../../scripts/local-gate.ts"))
+        && args[1] === "pre-push" && args[2] === "--publication-prepare";
       // The push runs the repository's pre-push gates; both leave the
       // production service for a work scope. Its PID, group and the inherited
       // lock descriptor stay this command's.

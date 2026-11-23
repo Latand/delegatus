@@ -2378,6 +2378,56 @@ test.each([false, true])("a historical candidate gate uses the current checkpoin
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test("an unchanged historical candidate retries through the canonical checkpoint gate", async () => {
+  const box = await publishSandbox();
+  try {
+    const scripts = path.join(box.subject.worktreeDir, "scripts"); fs.mkdirSync(scripts);
+    fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// historical publication gate\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-tests.ts"), "// historical deferred-write comparator\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), '{"publicationPrepare":0}\n');
+    const head = await box.commit("change.txt", "accepted work\n");
+    const tree = await git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const checkpoint = path.join(box.root, "completed-file.checkpoint");
+    const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\n[ "$LLV_SKIP_HOOKS" = 1 ] || exit 91\n', { mode: 0o700 });
+    await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
+    let preparations = 0, pushes = 0, reused = false;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (command === "bun" && args[0]?.endsWith("/scripts/local-gate.ts") && args[1] === "pre-push" && args[2] === "--publication-prepare") {
+        preparations++;
+        expect(args[0]).not.toBe("scripts/local-gate.ts");
+        expect(env?.LLV_GATE_CANONICAL_TOOLS).toBe("1");
+        expect(env?.LLV_GATE_PUSH_HEAD).toBe(head);
+        if (preparations === 1) {
+          fs.writeFileSync(checkpoint, JSON.stringify({ head, tree, base: await git(box.subject.worktreeDir, "merge-base", "HEAD", "origin/main"), file: "a.test.ts", passed: true }));
+          return { code: 75, stdout: "touched-tests: no verdict: head comparison budget exhausted\n", stderr: "" };
+        }
+        const record = JSON.parse(fs.readFileSync(checkpoint, "utf8")) as { head: string; tree: string; base: string; file: string; passed: boolean };
+        reused = record.head === head && record.tree === tree && record.base === await git(box.subject.worktreeDir, "merge-base", "HEAD", "origin/main")
+          && record.file === "a.test.ts" && record.passed;
+        expect(reused).toBe(true);
+        const binding = publicationCheckBinding(env ?? {});
+        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, binding, crypto.createHash("sha256").update("same canonical checks").digest("hex"));
+        return { code: 0, stdout: "touched-tests: reused complete green head file a.test.ts\n", stderr: "" };
+      }
+      if (command === "git" && args[0] === "push") pushes++;
+      return realExec(command, args, cwd, env, options);
+    };
+    const first = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(first).toMatchObject({ ok: false, failure: { retryableDeadline: true } });
+    expect(pushes).toBe(0);
+    box.subject.publicationRecovery = { [head]: { sha: head, failures: 1, totalAttempts: 1, history: [{
+      operationId: "first-deadline", epoch: 1, at: "2026-01-01T00:00:00.000Z", retryAt: "2026-01-01T00:01:00.000Z",
+      cause: "infrastructure-deadline", detail: "a check reached its execution deadline without a verdict",
+    }] } };
+    savePipelines([box.subject]);
+    const retry = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(retry).toMatchObject({ ok: true, sha: head, remote: "published" });
+    expect([preparations, pushes, reused]).toEqual([2, 1, true]);
+    expect(await box.originHead()).toBe(head);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
+
 for (const phase of ["merge-base", "diff"] as const) test("publication rechecks the accepted head after budget " + phase, async () => {
   const box = await publishSandbox();
   try {

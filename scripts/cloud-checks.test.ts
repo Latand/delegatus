@@ -22,9 +22,20 @@ test("a Cloud deadline returns the retryable deadline status and preserves named
   let local = 0;
   const timeout: CloudResult = { kind: "invalid", diagnostic: { category: "timeout", reason: "Cloud check deadline expired; remote cleanup confirmed" } };
   expect(await runCloudChecks(job, { run: async () => timeout }, async () => { local++; return 0; })).toBe(75);
+  expect(await runCloudChecks(job, { run: async () => ({ ...timeout, diagnostic: { ...timeout.diagnostic!, reason: "Cloud check deadline expired; remote cleanup unresolved" } }) },
+    async () => { local++; return 0; })).toBe(1);
   expect(await runCloudChecks(job, { run: async () => ({ ...verdict(1), diagnostic: { category: "test failure", reason: "a named assertion failed" } }) },
     async () => { local++; return 0; })).toBe(1);
   expect(local).toBe(0);
+});
+
+test("a bound Cloud exit 75 is a deadline only with explicit no-verdict evidence", async () => {
+  const deadline = `touched-tests: no verdict: head comparison budget exhausted\nDELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 75\n`;
+  const expired = await new AppServerCloudTransport(config, async () => fakeRpc(deadline, 75, "completed").rpc).run(job);
+  expect(expired).toMatchObject({ kind: "invalid", diagnostic: { category: "timeout", reason: "Cloud check deadline expired; remote cleanup confirmed" } });
+  const assertion = `touched-tests: no verdict: head comparison budget exhausted\n(fail) a.test.ts: named assertion\nDELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 75\n`;
+  expect(await new AppServerCloudTransport(config, async () => fakeRpc(assertion, 75, "completed").rpc).run(job))
+    .toMatchObject({ kind: "verdict", code: 75, diagnostic: { category: "test failure" } });
 });
 test("a receipt for another tree cannot authorize publication", async () => {
   expect(await runCloudChecks(job, { run: async () => ({ ...verdict(0), tree: "d".repeat(40) }) }, async () => 0)).toBe(1);
@@ -104,7 +115,7 @@ function clock() {
   let now = 0;
   return { now: () => now, sleep: async (ms: number) => { now += ms; } };
 }
-function fakeRpc(output: string, code = 0) {
+function fakeRpc(output: string, code = 0, commandStatus?: "completed" | "failed") {
   const calls: { method: string; params: Record<string, unknown> }[] = [];
   let uploadCommand = "", command = "";
   const rpc: CloudRpc = {
@@ -119,7 +130,7 @@ function fakeRpc(output: string, code = 0) {
         return { turn: { id: "turn-fixture" } };
       }
       if (method === "thread/turns/list") return { data: [{ id: "other", status: "failed" }, { id: "turn-fixture", status: "completed" }] };
-      if (method === "thread/items/list") return { data: [{ turnId: params.turnId ? "turn-fixture" : "upload-turn", item: { type: "commandExecution", status: !params.turnId || code === 0 ? "completed" : "failed", command: params.turnId ? command : uploadCommand, exitCode: params.turnId ? code : 0, aggregatedOutput: params.turnId ? output : "" } }] };
+      if (method === "thread/items/list") return { data: [{ turnId: params.turnId ? "turn-fixture" : "upload-turn", item: { type: "commandExecution", status: !params.turnId ? "completed" : commandStatus ?? (code === 0 ? "completed" : "failed"), command: params.turnId ? command : uploadCommand, exitCode: params.turnId ? code : 0, aggregatedOutput: params.turnId ? output : "" } }] };
       return {};
     }, close() {},
   };
@@ -380,7 +391,7 @@ test("transport loss during the deadline interruption stays a timeout without a 
   };
   const transport = new AppServerCloudTransport(config, async () => { connects++; return fake.rpc; }, () => {}, clock());
   let result: Awaited<ReturnType<typeof transport.run>> | undefined;
-  expect(await runCloudChecks(job, { run: async (job, signal) => { runs++; return result = await transport.run(job, signal); } }, async () => { local++; return 0; }, undefined, () => {})).toBe(75);
+  expect(await runCloudChecks(job, { run: async (job, signal) => { runs++; return result = await transport.run(job, signal); } }, async () => { local++; return 0; }, undefined, () => {})).toBe(1);
   expect(result).toMatchObject({ kind: "invalid", diagnostic: { category: "timeout" } });
   expect(result!.diagnostic!.reason).toContain("cleanup unresolved");
   // The lost acknowledgement never dispatched, so cleanup asks once on its own connection.
@@ -797,7 +808,7 @@ for (const scenario of ["connect", "environment", "task", "test", "timeout", "mi
     if (scenario === "test") expect(reports[0]).toContain("exited 17 (touched tests)");
     if (scenario === "connect") expect(reports[0]).toContain("forced connect error");
     expect(local).toBe(scenario === "capacity" ? 1 : 0);
-    expect(code).toBe(scenario === "capacity" ? 0 : ["account", "cancelled", "timeout"].includes(scenario) ? 75 : scenario === "test" ? 17 : 1);
+    expect(code).toBe(scenario === "capacity" ? 0 : ["account", "cancelled"].includes(scenario) ? 75 : scenario === "test" ? 17 : 1);
   });
 }
 
