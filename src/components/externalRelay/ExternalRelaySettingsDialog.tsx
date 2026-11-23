@@ -29,8 +29,9 @@ export function ExternalRelaySettingsDialog({ onClose, proposal, clearProposal }
         <div className="space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
           {/* What a relay is matters before the first pairing; once one is paired the dialog opens on it. */}
           {relays === 0 ? <p data-external-relay-intro="" className="text-ui text-muted">{t("externalRelay.intro")}</p> : null}
-          {proposal && clearProposal ? <TrustedRequesterProposal key={proposal} id={proposal} close={clearProposal} /> : null}
-          <ExternalRelaySection key={proposal ?? "settings"} onRelays={setRelays} />
+          {/* Siblings need distinct keys: one shared proposal id duplicated stale proposal panels. */}
+          {proposal && clearProposal ? <TrustedRequesterProposal key={`proposal:${proposal}`} id={proposal} close={clearProposal} /> : null}
+          <ExternalRelaySection key={`settings:${proposal ?? ""}`} onRelays={setRelays} />
         </div>
       </section>
     </div>

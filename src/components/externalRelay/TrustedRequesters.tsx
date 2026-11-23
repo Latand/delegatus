@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "@/lib/i18n";
-import type { RequesterOperation, RequesterView } from "@/lib/externalRelay/requesterEnrolmentContract";
+import type { RequesterOperation, RequesterProposalView, RequesterView } from "@/lib/externalRelay/requesterEnrolmentContract";
 import type { RelayGrantStatus } from "@/lib/externalRelay/settingsView";
 import { FOCUS, PRIMARY, QUIET } from "./relayUi";
 
 const endpoint = "/api/external-relay/trusted-requesters";
 type Code = { code: string; expiresAt: string };
-type Proposal = { operation: RequesterOperation; targetName: string; project: string | null; label: string };
+type Candidate = NonNullable<RequesterView["pending"]>["candidate"];
 
 async function api<T>(query = "", body?: object): Promise<T> {
   const response = await fetch(endpoint + query, body ? {
@@ -33,9 +33,9 @@ function When({ time }: { time: string }) {
   return <span data-requester-time="" className="whitespace-nowrap">{new Date(time).toLocaleString(locale)}</span>;
 }
 
-function Confirm({ action, label, target, project, busy, accept, cancel }: {
+function Confirm({ action, label, target, project, candidate = null, busy, accept, cancel }: {
   action: RequesterOperation["action"]; label: string; target: string; project: string | null;
-  busy: boolean; accept: () => void; cancel: () => void;
+  candidate?: Candidate; busy: boolean; accept: () => void; cancel: () => void;
 }) {
   const { t } = useLocale();
   const heading = t(`externalRelay.requesters.action.${action}`);
@@ -43,6 +43,8 @@ function Confirm({ action, label, target, project, busy, accept, cancel }: {
     className="space-y-2 rounded-control border border-warning bg-warning-soft p-2.5 text-ui text-primary">
     <p className="break-words font-semibold">{heading} · {label}</p>
     <p className="break-words">{target} · {project ?? t("externalRelay.requesters.unassigned")}</p>
+    {candidate && <p data-requester-candidate="" className="break-words">{[candidate.name, candidate.chatTitle].filter(Boolean).join(" · ")} · <When time={candidate.at} /></p>}
+    {action === "confirm" && candidate ? <p>{t("externalRelay.requesters.verify")}</p> : null}
     {action === "confirm" ? <p>{t("externalRelay.requesters.reach")}</p> : null}
     <div className="flex flex-wrap justify-end gap-2">
       <button type="button" autoFocus disabled={busy} className={QUIET} onClick={cancel}>{t("common.cancel")}</button>
@@ -152,6 +154,7 @@ export function TrustedRequesters({ relay, target, project, grantStatus }: { rel
       <button type="submit" className={PRIMARY} disabled={busy || !label.trim()}>{t("externalRelay.requesters.action.start_enrolment")}</button>
     </form> : <p className="text-caption text-muted">{t(view.project ? "externalRelay.requesters.signIn" : "externalRelay.requesters.noProject")}</p>}
     {confirm && <Confirm action={confirm.operation.action} label={confirm.label} target={confirm.viewed.targetName} project={confirm.subjectProject}
+      candidate={confirm.operation.action === "confirm" || confirm.operation.action === "decline" ? confirm.viewed.pending?.candidate : null}
       busy={busy} accept={() => void apply()} cancel={() => setConfirm(null)} />}
     {error && <p role="alert" className="text-ui text-warning">{t("externalRelay.requesters.error")}</p>}
     {view.history.length > 0 && <details className="text-caption text-muted">
@@ -165,7 +168,7 @@ export function TrustedRequesters({ relay, target, project, grantStatus }: { rel
 
 export function TrustedRequesterProposal({ id, close }: { id: string; close: () => void }) {
   const { t } = useLocale();
-  const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [proposal, setProposal] = useState<RequesterProposalView | null>(null);
   const [issued, setIssued] = useState<Code | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -173,7 +176,7 @@ export function TrustedRequesterProposal({ id, close }: { id: string; close: () 
 
   useEffect(() => {
     let active = true;
-    void api<Proposal>(`?proposal=${encodeURIComponent(id)}`).then(result => { if (active) setProposal(result); })
+    void api<RequesterProposalView>(`?proposal=${encodeURIComponent(id)}`).then(result => { if (active) setProposal(result); })
       .catch(() => { if (active) setError(true); });
     return () => { active = false; };
   }, [id]);
@@ -191,7 +194,7 @@ export function TrustedRequesterProposal({ id, close }: { id: string; close: () 
 
   return <section className="space-y-2" data-requester-proposal="">
     {proposal && !saved && <Confirm action={proposal.operation.action} label={proposal.label} target={proposal.targetName}
-      project={proposal.project} busy={busy} accept={() => void accept()} cancel={close} />}
+      project={proposal.project} candidate={proposal.candidate} busy={busy} accept={() => void accept()} cancel={close} />}
     {saved && (issued ? <IssuedCode value={issued} /> : <p role="status">{t("externalRelay.requesters.saved")}</p>)}
     {error && <p role="alert" className="text-ui text-warning">{t("externalRelay.requesters.error")}</p>}
   </section>;

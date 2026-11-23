@@ -20,8 +20,9 @@ import { ExternalRelayError } from "./errors";
 import * as client from "./client";
 import { knownRelay } from "./knownRelays";
 import { elevatedRequesterFor } from "./profile";
-import { requesterCodeMatch, redactRequesterCodes } from "./requesterEnrolment";
-import { requesterProposalId, type RequesterView } from "./requesterEnrolmentContract";
+import { proposeRequesterOperation, requesterCodeMatch, redactRequesterCodes } from "./requesterEnrolment";
+import { requesterBrowserAuthority } from "./requesterEnrolmentHttp";
+import { requesterProposalId, type RequesterMcpInput, type RequesterView } from "./requesterEnrolmentContract";
 import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
 import { runClaimedRequest } from "./runner";
@@ -196,6 +197,44 @@ test("a fresh second message contests the candidate and the deadline refuses bin
   expect(audit.history.map((row: { action: string }) => row.action)).toEqual(["decline", "expired", "start_enrolment", "decline", "start_enrolment"]);
 });
 
+test("a proposal preview refuses a contested or expired candidate and still shows it for decline", async () => {
+  const f = fixture("preview");
+  const authorize = requesterBrowserAuthority(req(undefined, f.owner));
+  const propose = async (operation: RequesterMcpInput) => {
+    const result = await proposeRequesterOperation(operation, "fixture-conversation", authorize);
+    if (!("confirmationPath" in result)) throw new Error("Expected a requester proposal");
+    return result.confirmationPath.slice("/#relay-requester=".length);
+  };
+  const preview = (id: string) => GET(req(undefined, f.owner, `?proposal=${id}`));
+  const code = (await (await f.command(f.start)).json()).issued.code;
+  await matchRequesterCode(f.relay, claim(code, "first"), epoch + 1000);
+  const args = { ...f.scope, entryId: (await (await f.view()).json()).pending.id };
+  const candidate = { name: "Same Display Name", chatTitle: "Fixture group", at };
+  const confirm = await propose({ ...args, action: "confirm" });
+  const decline = await propose({ ...args, action: "decline" });
+  expect(await (await preview(confirm)).json()).toMatchObject({ status: "candidate", candidate });
+  await matchRequesterCode(f.relay, claim(code, "second", "clone", "u2"), epoch + 2000);
+  const contested = await preview(confirm);
+  expect(contested.status).toBe(409);
+  expect(await contested.json()).not.toHaveProperty("candidate");
+  expect(await (await preview(decline)).json()).toMatchObject({ operation: { ...args, action: "decline" }, status: "contested", candidate });
+  expect((await POST(req({ proposalId: decline, confirmed: true }, f.owner))).status).toBe(200);
+
+  const next = (await (await f.command(f.start)).json()).issued.code;
+  await matchRequesterCode(f.relay, claim(next, "third", "clone", "u3"), epoch + 3000);
+  const later = { ...f.scope, entryId: (await (await f.view()).json()).pending.id };
+  // The proposals outlive the enrolment, so only the candidate's expiry refuses them.
+  setSystemTime(epoch + 5000);
+  const late = await propose({ ...later, action: "confirm" });
+  const lateDecline = await propose({ ...later, action: "decline" });
+  setSystemTime(epoch + 600_000);
+  expect((await preview(late)).status).toBe(409);
+  expect(await (await preview(lateDecline)).json()).toMatchObject({ status: "expired",
+    candidate: { name: "Same Display Name", chatTitle: "Fixture group", at } });
+  expect((await POST(req({ proposalId: late, confirmed: true }, f.owner))).status).toBe(409);
+  expect(readRelayStore().relays[0]!.targets[0]!.requesters?.entries ?? []).toEqual([]);
+});
+
 test("an audit write failure leaves no enrolment or grant and a project change fences confirmation", async () => {
   const f = fixture("changed");
   const auditFile = trustedRequesterAuditFile();
@@ -305,8 +344,18 @@ test("MCP checks the registry origin and proposes single-use browser approval wi
   const args = { ...f.scope, entryId: pending.id };
   const confirm = await call(owner.token, { ...args, action: "confirm" });
   expect(confirm).toMatchObject({ ok: true });
-  expect(await call(owner.token, { ...args, action: "decline" })).toMatchObject({ ok: true });
+  const declined = await call(owner.token, { ...args, action: "decline" });
+  expect(declined).toMatchObject({ ok: true });
   const approve = confirmationId(confirm);
+  // The owner approving an agent's confirm sees whom the first message bound.
+  const candidate = { name: "Same Display Name", chatTitle: "Fixture group", at };
+  const previewed = await GET(req(undefined, f.owner, `?proposal=${approve}`));
+  expect(previewed.status).toBe(200);
+  expect(await previewed.json()).toEqual({ operation: { ...args, action: "confirm" }, targetName: f.target.name, project,
+    label: f.start.label, status: "candidate", candidate });
+  expect(await (await GET(req(undefined, f.owner, `?proposal=${confirmationId(declined)}`))).json())
+    .toEqual({ operation: { ...args, action: "decline" }, targetName: f.target.name, project, label: f.start.label, status: "candidate", candidate });
+  expect((await GET(req(undefined, f.browser("owner"), `?proposal=${approve}`))).status).toBe(403);
   expect((await POST(req({ proposalId: approve, confirmed: true }, f.browser("owner")))).status).toBe(403);
   expect((await f.command({ ...args, action: "confirm" })).status).toBe(200);
   expect((await POST(req({ proposalId: approve, confirmed: true }, f.owner))).status).toBe(409);

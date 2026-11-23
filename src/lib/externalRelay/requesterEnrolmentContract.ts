@@ -37,3 +37,14 @@ export type RequesterView = {
   otherSession: { expiresAt: string } | null;
   history: { time: string; action: string; label: string; approvedBy: string; surface: "board" | "mcp" }[];
 };
+
+type PendingView = NonNullable<RequesterView["pending"]>;
+/**
+ * What the owner sees before approving an agent's proposal. A confirm or
+ * decline carries the pending enrolment's state and the candidate the person's
+ * message bound, so the owner can check who it is before trusting the key.
+ */
+export type RequesterProposalView = {
+  operation: RequesterOperation; targetName: string; project: string | null; label: string;
+  status: PendingView["status"] | null; candidate: PendingView["candidate"];
+};

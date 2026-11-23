@@ -47128,6 +47128,7 @@ describe("relay requester enrolment on the board", () => {
           const at = "2026-10-01T08:00:00Z";
           const expiresAt = "2030-10-01T08:10:00Z";
           let status: "empty" | "waiting" | "candidate" | "entries" | "other-session" = "empty";
+          const proposalId = "a".repeat(48);
           await context.route("**/api/external-relay**", async route => {
             const req = route.request();
             const url = new URL(req.url());
@@ -47135,6 +47136,10 @@ describe("relay requester enrolment on the board", () => {
             if (url.pathname === "/api/external-relay") return send({ relays: [relay], pending: [], status: [] });
             if (url.pathname === "/api/external-relay/known") return send({ known: [] });
             if (url.pathname !== "/api/external-relay/trusted-requesters") return send({}, 404);
+            // An agent's confirm proposal: the owner's preview names the candidate the code bound.
+            if (url.searchParams.get("proposal") === proposalId) return send({
+              operation: { action: "confirm", ...scope, entryId: "fixture-proposed" }, targetName: target.name, project, label,
+              status: "candidate", candidate: { name: "Demo participant", chatTitle: "Workshop group", at } });
             if (req.method() === "POST") {
               const { confirmed, operation } = req.postDataJSON();
               expect(confirmed).toBe(true);
@@ -47162,9 +47167,9 @@ describe("relay requester enrolment on the board", () => {
           const row = page.locator(`[data-external-relay-target="${target.id}"]`);
           await row.locator("[data-external-relay-target-fold]").click();
           const panel = row.locator("[data-trusted-requesters]");
-          const frame = async (name: string) => {
+          const frame = async (name: string, shown = panel) => {
             const filename = `${width}-${lang}-${scheme}-${name}.png`;
-            const measurement = await panel.evaluate((element, phone) => ({
+            const measurement = await shown.evaluate((element, phone) => ({
               overflow: element.scrollWidth > element.clientWidth + 1,
               shortControls: phone ? [...element.querySelectorAll("button, input")]
                 .filter(control => control.getBoundingClientRect().height < 44).length : 0,
@@ -47173,7 +47178,7 @@ describe("relay requester enrolment on the board", () => {
                 .filter(time => time.getClientRects().length !== 1).length,
             }), phone);
             expect(measurement).toEqual({ overflow: false, shortControls: 0, splitTimes: 0 });
-            await panel.screenshot({ path: path.join(out, filename) });
+            await shown.screenshot({ path: path.join(out, filename) });
             readings.push({ frame: filename, width, ...measurement });
           };
           const action = (name: "start_enrolment" | "confirm" | "remove") =>
@@ -47190,6 +47195,7 @@ describe("relay requester enrolment on the board", () => {
           await frame("3-candidate");
           await panel.getByRole("button", { name: action("confirm") }).click();
           await panel.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          expect(await panel.getByRole("alertdialog").locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
           await panel.getByRole("alertdialog").getByRole("button", { name: action("confirm") }).click();
           await panel.getByText(label, { exact: true }).waitFor();
           await frame("4-entries");
@@ -47204,10 +47210,20 @@ describe("relay requester enrolment on the board", () => {
           await panel.locator('[data-requester-pending="other-session"]').waitFor();
           expect(await panel.getByRole("textbox").count()).toBe(0);
           await frame("6-other-session");
+          await page.evaluate(id => { window.location.hash = `relay-requester=${id}`; }, proposalId);
+          const proposed = page.locator("[data-requester-proposal]");
+          const dialog = proposed.locator('[data-requester-confirm="confirm"]');
+          await dialog.waitFor();
+          // One approval panel: the proposal and the relay settings beside it keep distinct keys.
+          expect(await proposed.count()).toBe(1);
+          expect(await dialog.locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
+          await dialog.getByText(translate(lang, "externalRelay.requesters.verify"), { exact: true }).waitFor();
+          await dialog.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          await frame("7-proposal-confirm", proposed);
         } finally { await context.close(); }
       }
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
-      expect(readings).toHaveLength(48);
+      expect(readings).toHaveLength(56);
     } finally {
       await browser.close();
       server.stop();

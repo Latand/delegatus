@@ -8,7 +8,7 @@ import { selectOwnerDestination } from "./ownerDestination";
 import { readRelayStore, withRelayStoreLock, type PairedRelay, type RelayStore } from "./store";
 import { bindRequesterEntry, canonicalRelayProject, requesterEntries, type TrustedRequesterEntry } from "./trustedRequesters";
 import { appendRequesterAudit, requesterHistory, requesterTarget, writeRequesterEntries, type EntryActor } from "./trustedRequesterStore";
-import { redactRequesterCodeText, requesterCodeWord, type RequesterMcpInput, type RequesterOperation, type RequesterView } from "./requesterEnrolmentContract";
+import { redactRequesterCodeText, requesterCodeWord, type RequesterMcpInput, type RequesterOperation, type RequesterProposalView, type RequesterView } from "./requesterEnrolmentContract";
 
 const VALID_MS = 10 * 60_000;
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -157,20 +157,28 @@ function readProposal(id: string) {
   return proposal;
 }
 
-export function previewRequesterProposal(id: string, authorize: Authorize) {
+export function previewRequesterProposal(id: string, authorize: Authorize): RequesterProposalView {
   const store = readRelayStore();
   const approval = authorize(store);
   const proposal = readProposal(id);
   const view = current(store, proposal.operation);
   if (view.revision !== proposal.revision || view.project !== proposal.project || view.relay.credential !== proposal.credential)
     throw problem("stale_revision");
-  checkedOperation(proposal.operation, view, approval, Date.now());
+  const now = Date.now();
+  checkedOperation(proposal.operation, view, approval, now);
   const operation = proposal.operation;
   const entry = operation.action === "remove" ? requesterEntries(view.relay, view.target).find(entry => entry.id === operation.entryId) : null;
   const item = pendingFor(operation, view.relay);
   const label = operation.action === "start_enrolment" ? operation.label : entry?.label ?? item!.label;
   const subjectProject = entry ? entry.project : operation.action === "decline" && item ? item.project : view.project;
-  return { operation, targetName: view.target.name, project: subjectProject, label };
+  // Confirm and decline settle the pending enrolment: show the candidate its
+  // first message bound (name, chat title, time), the owner's only check
+  // before trusting an opaque key. checkedOperation already refused a confirm
+  // whose candidate is contested, expired or stale.
+  const settles = operation.action === "confirm" || operation.action === "decline";
+  const candidate = settles && item?.candidate ? { name: item.candidate.name, chatTitle: item.candidate.chatTitle, at: item.candidate.at } : null;
+  return { operation, targetName: view.target.name, project: subjectProject, label,
+    status: settles && item ? pendingStatus(item, now, view.project, view.revision) : null, candidate };
 }
 
 type Command = { proposalId: string } | { operation: RequesterOperation; revision: number; project: string | null };
