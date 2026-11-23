@@ -5225,7 +5225,7 @@ export const en = {
   "kanban.status.done": "Done",
   "kanban.statusHint.inbox": "Not started yet",
   "kanban.statusHint.assigned": "Started tasks and work that has stopped",
-  "kanban.statusHint.blocked": "Waiting for a decision, dependency or capacity",
+  "kanban.statusHint.blocked": "Waiting for your decision, access or a setting you control",
   "kanban.statusHint.done": "Finished. History stays.",
   "kanban.empty.inbox.title": "No tasks yet",
   "kanban.empty.inbox.body": "The orchestrator adds a task here for each thing you ask.",

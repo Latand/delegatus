@@ -99,29 +99,30 @@ async function launch(id: string, body: Record<string, unknown> = {}, controls: 
   return { status: response.status, body: payload, receipt: registry.spawnReceiptForClientAttempt(id) };
 }
 
+// The first admission opens the isolated stores. Its test timeout includes
+// that cold setup as well as the drain and replay under the gate's CPU quota.
 test("an accepted disk cleaner request stays replayable when a drain starts after 202", async () => {
   let held = false;
   let deferred: (() => Promise<void>) | undefined;
   let actuations = 0;
   const cleanerSeed = await cleanerAttempt("cleaner-drain-after-acceptance");
   const id = cleanerSeed.runId;
-  const accepted = await launch(id, {}, {
-    held: () => held,
-    defer: work => { deferred = work; },
-    spawn: async input => {
-      actuations++;
-      expect(input.receipt.clientAttemptId).toBe(id);
-      expect(input.receipt.queuedPinnedSpawn?.prompt).toBeTruthy();
-      return { state: "running" } as never;
-    },
-  });
-  expect(accepted.status).toBe(202);
-  expect(accepted.receipt?.scheduledCleanerRunId).toBeUndefined();
-  expect(deferred).toBeDefined();
-  const payload = accepted.receipt!.queuedPinnedSpawn;
-  held = true;
-  writeDrain(drainFile(), { id: "cleaner-after-202", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 });
   try {
+    const accepted = await launch(id, {}, {
+      held: () => held,
+      defer: work => { deferred = work; },
+      spawn: async () => {
+        actuations++;
+        return { state: "running" } as never;
+      },
+    });
+    expect(accepted.status).toBe(202);
+    expect(accepted.receipt?.scheduledCleanerRunId).toBeUndefined();
+    expect(deferred).toBeDefined();
+    const payload = structuredClone(accepted.receipt!.queuedPinnedSpawn);
+    expect(payload?.prompt).toBeTruthy();
+    held = true;
+    writeDrain(drainFile(), { id: "cleaner-after-202", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 });
     await deferred!();
     const deferredReceipt = registry.spawnReceipt(accepted.receipt!.launchId)!;
     expect(deferredReceipt.state).toBe("starting");
@@ -131,22 +132,23 @@ test("an accepted disk cleaner request stays replayable when a drain starts afte
     expect(actuations).toBe(0);
     held = false;
     releaseDrain(drainFile(), "cleaner-after-202");
+    const replayed: Array<NonNullable<typeof accepted.receipt>> = [];
     await terminalizeStaleStructuredSpawns(registry, { effectBatch: async () => [], operationStatus: async () => null,
       snapshot: async () => ({ revision: 0, sessions: [] }) } as unknown as RuntimeHostClient, {
       resolveSpawnAccount: () => ({ engine: "codex", accountId: "fixture-codex", kind: "managed", home: path.join(root, "codex"),
         transcriptRoot: path.join(root, "codex", "sessions"), env: { NODE_ENV: "test" } }),
       resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
       spawnStructuredConversation: async input => {
-        actuations++;
-        expect(input.receipt.clientAttemptId).toBe(id);
-        expect(input.receipt.queuedPinnedSpawn?.prompt).toBeTruthy();
+        replayed.push(input.receipt);
         return { state: "running" } as never;
       },
     });
-    expect(actuations).toBe(1);
-    expect(registry.spawnReceiptForClientAttempt(id)?.clientAttemptId).toBe(id);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]).toMatchObject({ launchId: accepted.receipt!.launchId, clientAttemptId: id });
+    expect(replayed[0]?.queuedPinnedSpawn).toEqual(payload);
+    expect(registry.spawnReceiptForClientAttempt(id)?.launchId).toBe(accepted.receipt!.launchId);
   } finally { releaseDrain(drainFile(), "cleaner-after-202"); cleanerSeed.cleanup(); }
-});
+}, 15_000);
 
 test("manual Cleaner launch cannot claim scheduled provenance by reusing the active run id", async () => {
   const cleanerSeed = await cleanerAttempt("cleaner-provenance-shape-mismatch");

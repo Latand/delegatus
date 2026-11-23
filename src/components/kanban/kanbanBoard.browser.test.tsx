@@ -33748,6 +33748,186 @@ describe("queued hold kinds on the card", () => {
   }, 180_000);
 });
 
+describe("Waiting status hint", () => {
+  browserTest("phone Waiting hold receipt follows the saved status and Undo restores the previous row", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "hold-receipt-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await serveEvidenceFixture(scratch);
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [320, 390, 440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.locator('[data-phone-card="task:hold-editor-entry"]').click();
+          await page.locator("[data-phone-task-status-pill]").click();
+          await page.locator('[data-phone-task-status="blocked"]').click();
+          const editor = page.locator("[data-hold-editor]");
+          await editor.locator("select").selectOption("resource");
+          await editor.locator("input").fill("Wait for memory");
+          await page.evaluate(() => {
+            const state = (window as unknown as { evidence: { taskPatchGate: Promise<void> | null; releaseTaskPatch?: () => void } }).evidence;
+            state.taskPatchGate = new Promise(resolve => { state.releaseTaskPatch = resolve; });
+          });
+          await editor.locator('button[type="submit"]').click();
+          await page.waitForFunction(() => (window as unknown as { evidence: { taskPatches: unknown[] } }).evidence.taskPatches.length === 1);
+          const receipt = page.locator("[data-mobile2-receipt]");
+          expect(await receipt.count()).toBe(0);
+          await page.evaluate(() => {
+            (window as unknown as { evidence: { releaseTaskPatch: () => void } }).evidence.releaseTaskPatch();
+          });
+          await receipt.waitFor();
+          expect(await receipt.textContent()).toContain(translate(locale, "mobile2.kanban.moved", { column: translate(locale, "kanban.status.inbox") }));
+          await page.locator('[data-phone-task-status-pill="inbox"]').waitFor();
+          expect(await receipt.evaluate(node => node.getBoundingClientRect().left >= 0 && node.getBoundingClientRect().right <= innerWidth)).toBe(true);
+          if (width === 390 && process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-phone-saved-${locale}-${theme}.png`) });
+          }
+          await receipt.locator('[data-mobile2-receipt-undo="undo"]').click();
+          await page.locator('[data-phone-task-status-pill="assigned"]').waitFor();
+          await page.waitForFunction(() => (window as unknown as { evidence: { taskWrites: { answeredAt: number }[] } }).evidence.taskWrites[1]?.answeredAt > 0);
+          const undo = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: { body: unknown }[] } }).evidence.taskPatches[1]!.body);
+          expect(undo).toMatchObject({ status: "assigned", restoreHold: null, expectedRevision: expect.any(String) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("desktop Waiting editor keeps a refused clear draft and closes after a successful clear", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "hold-clear-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await serveEvidenceFixture(scratch);
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width: 1440, height: 844 }, theme, locale, "reduce");
+        try {
+          page.setDefaultTimeout(8000);
+          const row = page.locator(card("hold-slot-note"));
+          await row.waitFor({ state: "visible" });
+          await row.focus();
+          await row.press("s");
+          await page.locator('.menu [data-menu-item="hold"]').press("Enter");
+          const editor = row.locator("[data-hold-editor]");
+          const note = editor.locator("input").first();
+          await note.fill("Keep this local draft");
+          await page.evaluate(() => {
+            (window as unknown as { evidence: { refuseNextTaskPatch: boolean } }).evidence.refuseNextTaskPatch = true;
+          });
+          const clear = editor.getByRole("button", { name: translate(locale, "kanban.hold.clear") });
+          await clear.click();
+          await page.locator("[data-kanban-receipt].error").waitFor();
+          expect(await note.inputValue()).toBe("Keep this local draft");
+          expect(await row.evaluate(node => node.closest<HTMLElement>(".column")?.dataset.status)).toBe("blocked");
+          if (process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-clear-refused-${locale}-${theme}.png`) });
+          }
+          await clear.click();
+          await page.locator('.column[data-status="inbox"] .card[data-id="task:hold-slot-note"]').waitFor();
+          await editor.waitFor({ state: "detached" });
+          if (process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-clear-saved-${locale}-${theme}.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("Waiting explains the operator action on desktop and phone in both languages and themes", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "waiting-status-hint");
+    fs.mkdirSync(out, { recursive: true });
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "waiting-hint-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let browser: Browser | undefined;
+    try {
+      server = await serveEvidenceFixture(scratch);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="blocked"]').click();
+            await page.locator('[data-phone-card="task:hold-slot"]').click();
+            await page.locator("[data-phone-task-status-pill]").click();
+          } else {
+            const row = page.locator(card("hold-slot"));
+            await row.focus();
+            await row.press("s");
+          }
+          const expected = locale === "en" ? "Waiting for your decision, access or a setting you control"
+            : "Очікує на ваше рішення, доступ або налаштування";
+          const panel = page.locator(phone ? "[data-phone-task-status-sheet]" : ".kb .menu");
+          const hint = panel.getByText(expected, { exact: true });
+          await hint.waitFor({ state: "visible" });
+          expect(await hint.evaluate(node => node.scrollWidth <= node.clientWidth + 1 && node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser?.close();
+      server?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("opening the Waiting editor brings its reason and both actions into view at desktop widths", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "waiting-editor-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let browser: Browser | undefined;
+    try {
+      server = await serveEvidenceFixture(scratch);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [915, 1440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce");
+        try {
+          const collapsed = page.locator('[data-seat-collapse][aria-expanded="false"]');
+          if (await collapsed.count()) await collapsed.click();
+          const row = page.locator(card("hold-editor-entry"));
+          await row.focus();
+          await page.keyboard.press("s");
+          await page.locator('.menu [role="menuitemradio"]', { hasText: translate(locale, "kanban.status.blocked") }).click();
+          const editor = page.locator(`${card("hold-editor-entry")} [data-hold-editor]`);
+          await editor.waitFor();
+          const fields = [editor.locator("input").first(), editor.locator("button[type=submit]"), editor.getByRole("button", { name: translate(locale, "kanban.hold.cancel") })];
+          const bounds = await Promise.all(fields.map(async element => element.boundingBox()));
+          expect(bounds.every(box => !!box && box.y >= 0 && box.y + box.height <= 844)).toBe(true);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser?.close();
+      server?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
+
 describe("issue report advisory preview", () => {
   /* PR #2530: the operator decides on this message, so it has to show which
      lines become public, that approving publishes them, and what each hint

@@ -13,7 +13,7 @@ import { AgentTranscriptCache } from "@/lib/agentState/transcript";
 import { registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
-import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
+import { detachCodexHostForViewerRestart, flushStructuredHostPersistence, matchesStructuredHostCustody, structuredHostCustody, type AdoptedHostCustody } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
@@ -105,6 +105,7 @@ import {
 type ObservableEngineHost = EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
 type IdentityBoundEngineHost = ObservableEngineHost & {
   releaseIfOwned?(expected: Readonly<ProcessIdentity>): Promise<boolean>;
+  detachAfterStartupCustodyLoss?(): void;
 };
 type StructuredConversationRecovery = typeof import("./structuredRecovery")["recoverDeadStructuredConversation"];
 export interface StructuredDeliveryHost {
@@ -116,6 +117,7 @@ export interface StructuredDeliveryHost {
       outlives its claim never publishes under a successor's fence. */
   writerEpoch?: number | null;
   mcpOwner?: SeatTickConversation["viewerMcpOwner"];
+  custody?: AdoptedHostCustody | null;
 }
 
 interface HostAttachment {
@@ -123,7 +125,17 @@ interface HostAttachment {
   stopEvents: () => Promise<void>;
 }
 
-type PreparedStartupPublication = { registry: AgentRegistry; snapshot: RegistryFile };
+type PreparedStartupPublication = {
+  registry: AgentRegistry;
+  snapshot: RegistryFile;
+  ownsHost?: (item: StructuredDeliveryHost) => boolean;
+};
+
+type RegisterStructuredDeliveryHost = (
+  item: StructuredDeliveryHost,
+  ownsOperation?: () => Promise<boolean>,
+  ownsStartupHost?: () => boolean,
+) => Promise<() => Promise<void>>;
 
 /* One lifecycle per host (#1191). The seat a delivery resolves the host from
    and the registration that owns its state subscription, event pump and
@@ -132,11 +144,7 @@ type PreparedStartupPublication = { registry: AgentRegistry; snapshot: RegistryF
    successor goes live, and filled in by the registration that follows. Giving
    the seat up sets `cancelled`, which that registration can no longer commit
    past — so a host released or terminated mid-registration stays gone. */
-interface HostRegistration {
-  key: SessionKey;
-  host: ObservableEngineHost;
-  writerEpoch?: number | null;
-  mcpOwner?: SeatTickConversation["viewerMcpOwner"];
+interface HostRegistration extends StructuredDeliveryHost {
   attachment: HostAttachment | null;
   cancelled: boolean;
 }
@@ -167,11 +175,12 @@ interface ControllerState {
   activeHosts: Map<string, EngineHost> | null;
   heapCounts?: (() => { registrations: number; attachments: number; pendingPublishChains: number }) | null;
   readMcpObservation?: ((conversationId: string) => ViewerMcpObservation | undefined) | null;
-  registerActiveHost: ((item: StructuredDeliveryHost, ownsOperation?: () => Promise<boolean>) => Promise<() => Promise<void>>) | null;
+  registerActiveHost: RegisterStructuredDeliveryHost | null;
   /* The hosts this generation currently serves, as re-registrable items. A
      successor takes them over at the swap, so a rebind never leaves a
      conversation without a resolvable host (#1191). */
   activeRegistrations: (() => readonly StructuredDeliveryHost[]) | null;
+  activeRegistration?: ((key: SessionKey) => StructuredDeliveryHost | undefined) | null;
   republishActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   releaseActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>) => Promise<boolean>) | null;
@@ -276,6 +285,7 @@ function retireStructuredDeliveryPublication(): void {
   state.readMcpObservation = null;
   state.registerActiveHost = null;
   state.activeRegistrations = null;
+  state.activeRegistration = null;
   state.republishActiveHost = null;
   state.releaseActiveHost = null;
   state.terminateActiveHost = null;
@@ -1960,32 +1970,36 @@ export async function bindStructuredDeliveryQueue(
      host while the caller was told it is live (#1191). Re-drive the item
      through whoever owns the publication now; with nobody owning it, the
      caller learns the controller is unavailable and can retry. */
-  const registerThroughSuccessor = async (
-    item: StructuredDeliveryHost,
-    ownsOperation?: () => Promise<boolean>,
-  ): Promise<() => Promise<void>> => {
+  const registerThroughSuccessor: RegisterStructuredDeliveryHost = async (item, ownsOperation, ownsStartupHost) => {
     const successor = state.registerActiveHost;
     if (!successor || successor === register) throw new StructuredDeliveryControllerUnavailableError();
-    return await successor(item, ownsOperation);
+    return await successor(item, ownsOperation, ownsStartupHost);
   };
-  const register = async (
-    item: StructuredDeliveryHost,
-    ownsOperation?: () => Promise<boolean>,
-  ): Promise<() => Promise<void>> => {
-    if (superseded()) return await registerThroughSuccessor(item, ownsOperation);
-    if (ownsOperation && !await ownsOperation()) return async () => {};
+  const register: RegisterStructuredDeliveryHost = async (item, ownsOperation, ownsStartupHost) => {
+    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, ownsStartupHost);
+    if ((ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) return async () => {};
     const key = sessionKeyId(item.key);
     const current = registrations.get(key);
     const publicationEntry = entryForHost(registry, item);
     /* A carried-over seat keeps the epoch it was registered at. */
     if (item.writerEpoch === undefined) item = { ...item, writerEpoch: publicationEntry?.structuredHost?.writerClaimEpoch ?? null };
     if (item.mcpOwner === undefined) item = { ...item, mcpOwner: viewerMcpOwnerForEntry(publicationEntry ?? undefined) };
+    if (item.custody === undefined) item = { ...item, custody: structuredHostCustody(publicationEntry) };
     /* The same host under the same key either already holds a registration of
        this generation, with nothing left to do, or holds a carried-over seat
        this call is filling in. Any other host under that key is replaced. */
     const seat = current && current.host === item.host ? current : null;
     if (seat?.attachment) return async () => {};
-    if (current && !seat) await unregisterHost(key, current.host);
+    if (current && !seat) {
+      if (current.custody && item.custody && matchesStructuredHostCustody(item.custody, publicationEntry)
+        && !matchesStructuredHostCustody(current.custody, publicationEntry)) {
+        // The successor can own the same native listener. Disconnect only
+        // the predecessor adapter before removing its event subscription.
+        (current.host as IdentityBoundEngineHost).detachAfterStartupCustodyLoss?.();
+      }
+      await unregisterHost(key, current.host);
+      if (ownsStartupHost?.() === false) return async () => {};
+    }
     /* The seat was given up while this registration was in flight — released,
        terminated, replaced, or filled in by another call. Its lifecycle ended
        there, so this call must not commit: the host would come back after its
@@ -1994,7 +2008,7 @@ export async function bindStructuredDeliveryQueue(
       && (seat.cancelled || seat.attachment !== null || registrations.get(key) !== seat);
     const initialState = await item.host.health();
     if (abandoned()) return async () => {};
-    if (ownsOperation && !await ownsOperation()) return async () => {};
+    if ((ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) return async () => {};
     const publicationConversationId = publicationEntry
       ? conversationIdForEntry(registry, publicationEntry)
       : null;
@@ -2017,9 +2031,11 @@ export async function bindStructuredDeliveryQueue(
     if (abandoned()) return async () => {};
     /* The journal read above is an await of its own: the operation is asked
        again before anything about this host is projected. */
-    if (ownsOperation && !await ownsOperation()) return async () => {};
+    if ((ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) return async () => {};
     await publishHostState(client, registry, item, initialState);
-    if (abandoned() || (ownsOperation && !await ownsOperation())) {
+    // Startup custody is a keyed read. Keep it synchronous with installing
+    // the attachment so a queued replacement cannot cross the final check.
+    if (abandoned() || (ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) {
       const restoreCurrentProjection = async () => {
         await refreshCurrentProjection(publicationConversationId);
       };
@@ -2032,7 +2048,7 @@ export async function bindStructuredDeliveryQueue(
        is never handed on: the successor carried it over only if it still
        existed at the swap, and re-driving a released host would republish it. */
     if (abandoned()) return async () => {};
-    if (superseded()) return await registerThroughSuccessor(item, ownsOperation);
+    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, ownsStartupHost);
     const observable = item.host as ObservableEngineHost;
     let deliveryState = deliveryStateKey(initialState);
     let projectedState = hostProjectionKey(initialState);
@@ -2128,7 +2144,7 @@ export async function bindStructuredDeliveryQueue(
        registration of the same host sees a seat that is already filled in and
        stands down instead of installing a second subscription and pump. */
     const registration: HostRegistration = seat
-      ?? { key: item.key, host: item.host, writerEpoch: item.writerEpoch, mcpOwner: item.mcpOwner, attachment: null, cancelled: false };
+      ?? { ...item, attachment: null, cancelled: false };
     registration.writerEpoch ??= item.writerEpoch;
     registration.mcpOwner ??= item.mcpOwner;
     registry.invalidateAccountCreditGuard();
@@ -2188,7 +2204,7 @@ export async function bindStructuredDeliveryQueue(
   for (const item of inherited) {
     const id = sessionKeyId(item.key);
     if (registrations.has(id)) continue;
-    seatRegistration(id, { key: item.key, host: item.host, writerEpoch: item.writerEpoch, mcpOwner: item.mcpOwner, attachment: null, cancelled: false });
+    seatRegistration(id, { ...item, attachment: null, cancelled: false });
   }
   state.activeHosts = hosts;
   state.readMcpObservation = conversationId => {
@@ -2215,7 +2231,8 @@ export async function bindStructuredDeliveryQueue(
     for (const registration of registrations.values()) if (registration.attachment) attachments++;
     return { registrations: registrations.size, attachments, pendingPublishChains: publishChains.size };
   };
-  state.activeRegistrations = () => [...registrations.values()].map(({ key, host, writerEpoch, mcpOwner }) => ({ key, host, writerEpoch, mcpOwner }));
+  state.activeRegistrations = () => [...registrations.values()].map(({ key, host, writerEpoch, mcpOwner, custody }) => ({ key, host, writerEpoch, mcpOwner, custody }));
+  state.activeRegistration = key => registrations.get(sessionKeyId(key));
   state.republishActiveHost = async (key) => {
     const registration = registrations.get(sessionKeyId(key));
     if (!registration) return false;
@@ -2341,6 +2358,7 @@ export async function bindStructuredDeliveryQueue(
       state.readMcpObservation = null;
       state.registerActiveHost = null;
       state.activeRegistrations = null;
+      state.activeRegistration = null;
       state.republishActiveHost = null;
       state.releaseActiveHost = null;
       state.terminateActiveHost = null;
@@ -2398,7 +2416,13 @@ export async function bindStructuredDeliveryQueue(
         });
       }, assertActive);
       await phase("registering structured delivery hosts");
-      for (const item of items) await register(item);
+      for (const item of items) {
+        assertActive();
+        await register(item, undefined, prepared?.ownsHost ? () => {
+          assertActive();
+          return prepared.ownsHost!(item);
+        } : undefined);
+      }
       assertActive();
       if (superseded()) {
         const successor = state.completeActive;
@@ -2628,6 +2652,14 @@ export function hasStructuredDeliveryHost(key: SessionKey): boolean {
   return state.activeHosts?.has(sessionKeyId(key)) ?? false;
 }
 
+export function structuredDeliveryRegistration(registry: AgentRegistry, key: SessionKey): StructuredDeliveryHost | undefined {
+  return state.activeRegistry === registry ? state.activeRegistration?.(key) : undefined;
+}
+
+export function structuredDeliveryRegistrations(registry: AgentRegistry): readonly StructuredDeliveryHost[] {
+  return state.activeRegistry === registry ? state.activeRegistrations?.() ?? [] : [];
+}
+
 /** Scalar attachment counts from the current publication; reads no payload. */
 export function structuredDeliveryHeapCounts() {
   return state.activeHosts ? { hosts: state.activeHosts.size, ...state.heapCounts?.() } : { hosts: 0, registrations: 0, attachments: 0, pendingPublishChains: 0 };
@@ -2723,8 +2755,9 @@ export function retainUnpublishedStructuredLaunchHost(item: UnpublishedLaunchHos
 export async function publishStructuredDeliveryHost(
   item: StructuredDeliveryHost,
   ownsOperation?: () => Promise<boolean>,
+  ownsStartupHost?: () => boolean,
 ): Promise<() => Promise<void>> {
-  return requireStructuredDeliveryControllerPublication()(item, ownsOperation);
+  return requireStructuredDeliveryControllerPublication()(item, ownsOperation, ownsStartupHost);
 }
 
 /** Adjust one startup row without replaying historical publication or disturbing

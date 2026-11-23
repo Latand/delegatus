@@ -32,6 +32,7 @@ import { hasTaskMeta, TaskMeta } from "@/components/kanban/TaskMeta";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import { requestTaskLane } from "./taskLaneRequest";
 import { TaskStepsLine } from "@/components/kanban/TaskStepsLine";
+import { TaskHoldEditor } from "@/components/kanban/TaskHoldEditor";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAgents";
 import { useManagedOnText } from "@/components/kanban/RemoteLanes";
@@ -50,7 +51,7 @@ import { humanizeDuration } from "@/components/turnDuration";
 import { fileModelLabel } from "@/components/utils";
 import { useLocale, type MessageKey, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
-import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import type { BoardTask, TaskHold, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { BADGE_LABEL, statePhrase } from "./MobileBoard";
@@ -499,7 +500,7 @@ function RemoteCardLines({ remote, title, nowMs, withLane }: { remote: RemoteCar
   );
 }
 
-function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStage, onLongPress, lift, onDismiss, onUndo, onAnswer }: {
+function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStage, onLongPress, lift, onDismiss, onUndo, onAnswer, holdEditing, onSaveHold, onCancelHold }: {
   item: PhoneCard;
   /** The task runs on another linked machine. */
   remote: RemoteCard | null;
@@ -520,8 +521,15 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
   onUndo: (() => void) | null;
   /** «Answer» (docs/design/calm-task-cards-build.md §4.3): where the operator answers what the card asks. */
   onAnswer: ((state: CardState) => void) | null;
+  holdEditing?: boolean;
+  onSaveHold?: (hold: Partial<TaskHold> | null) => void;
+  onCancelHold?: () => void;
 }) {
   const { t } = useLocale();
+  const holdEditorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (holdEditing) requestAnimationFrame(() => holdEditorRef.current?.querySelector<HTMLElement>("[data-hold-editor]")?.scrollIntoView({ block: "center", behavior: "auto" }));
+  }, [holdEditing]);
   const { card } = item;
   const nowMs = now * 1000;
   const pending = item.kind === "task" && card.titlePending;
@@ -677,6 +685,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
         </div>
       ) : face}
     </Pressable>
+    {holdEditing && onSaveHold && onCancelHold ? <div ref={holdEditorRef} data-phone-hold-editor={item.card.task?.id ?? item.key} className="mx-2 mb-2 rounded-xl border border-border bg-card p-3"><TaskHoldEditor hold={item.card.task?.hold} onSave={onSaveHold} onCancel={onCancelHold} /></div> : null}
     {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1" data-phone-card-shell="" data-attention={item.reasons.length > 0 || item.waitsOnPrototype ? "needs" : undefined}><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
     </>
   );
@@ -976,6 +985,7 @@ export function MobileKanban(props: MobileKanbanProps) {
   const revealedMaterialized = useRef(new Set<string>());
   const materializedCreationIds = useMaterializedCreationIds();
   const [creationOpen, setCreationOpen] = useState<string | null>(null);
+  const [holdEditingKey, setHoldEditingKey] = useState<string | null>(null);
   const creationCards = [...model.unlinkedShown, ...Object.values(model.columns).flatMap(column => column.shown)]
     .flatMap(card => card.creations ?? []);
   const openedCreation = creationCards.find(creation => creation.id === creationOpen);
@@ -1076,22 +1086,35 @@ export function MobileKanban(props: MobileKanbanProps) {
     if (!task || from === to) return;
     const title = shortTitle(t, item);
     const previousHold = controller.holdFor(task) ?? null;
-    let settled: StatusMoveOutcome | null = null;
     const operation = controller.move(task, to, options);
     const undo = (outcome: StatusMoveOutcome) => {
       if (outcome.kind !== "saved") return;
       move({ ...item, card: { ...item.card, status: to } }, from, false, { fenced: true, lineage: outcome.lineage, restoreHold: previousHold });
     };
-    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => {
-      if (settled) undo(settled);
-      else void operation.then(undo);
-    } });
     void operation.then((outcome: StatusMoveOutcome) => {
-      settled = outcome;
-      if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title, error: outcome.error }), null, { error: true });
+      if (outcome.kind === "saved" && receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[outcome.task.status]) }), { kind: "undo", run: () => undo(outcome) });
+      else if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title, error: outcome.error }), null, { error: true });
       else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title, status: t(STATUS_LABEL[outcome.serverStatus]) }), null, { error: true });
     });
   }, [controller, t]);
+  const saveHold = useCallback((item: PhoneCard, hold: Partial<TaskHold> | null) => {
+    const task = item.card.task ? tasksById.current.get(item.card.task.id) ?? item.card.task : null;
+    if (!task) return;
+    const title = shortTitle(t, item);
+    void controller.move(task, "blocked", { hold }).then(outcome => {
+      if (outcome.kind === "saved") {
+        setHoldEditingKey(null);
+        showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[outcome.task.status]) }), { kind: "undo", run: () => {
+          void controller.move(outcome.task, item.card.status, { fenced: true, lineage: outcome.lineage, restoreHold: task.hold ?? null });
+        } });
+      } else if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title, error: outcome.error }), null, { error: true });
+      else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title, status: t(STATUS_LABEL[outcome.serverStatus]) }), null, { error: true });
+    });
+  }, [controller, t]);
+  const moveToColumn = useCallback((item: PhoneCard, to: TaskStatus) => {
+    if (to === "blocked") { setHoldEditingKey(item.card.task?.id ?? item.key); return; }
+    move(item, to);
+  }, [move]);
   const hide = useCallback((item: PhoneCard) => {
     const raw = item.card.task ? tasksById.current.get(item.card.task.id) : undefined;
     if (!raw) return;
@@ -1204,7 +1227,7 @@ export function MobileKanban(props: MobileKanbanProps) {
         hint: t(`kanban.statusHint.${status}`),
         icon: <Icon className="h-4 w-4" aria-hidden />,
         tone: "accent",
-        run: () => move(item, status),
+        run: () => moveToColumn(item, status),
         cell: t(STATUS_LABEL[status]),
       };
     });
@@ -1289,10 +1312,13 @@ export function MobileKanban(props: MobileKanbanProps) {
       onOpen={open(item)}
       onOpenStage={openStage}
       onLongPress={() => openSheet(item)}
-      lift={item.kind === "task" && item.card.task ? { status: item.card.status, onDrop: (to) => move(item, to) } : null}
+      lift={item.kind === "task" && item.card.task ? { status: item.card.status, onDrop: (to) => moveToColumn(item, to) } : null}
       onDismiss={item.reasons.length ? () => sendCardDismissal(item, false) : null}
       onUndo={item.cleared ? () => sendCardDismissal(item, true) : null}
       onAnswer={item.kind === "task" ? (state) => answerCard(item, state) : null}
+      holdEditing={holdEditingKey === (item.card.task?.id ?? item.key)}
+      onSaveHold={(hold) => saveHold(item, hold)}
+      onCancelHold={() => setHoldEditingKey(null)}
     />
   );
 
