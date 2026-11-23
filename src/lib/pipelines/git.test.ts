@@ -21,6 +21,7 @@ import { shortId } from "@/lib/shortIds";
 import { publicationPushBudgetMs } from "./gateBudget";
 import { recoverablePublication } from "./publicationHistory";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
+import { publicationCheckBinding, writePublicationCheckReceipt } from "../git/publicationCheckReceipt";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -2276,6 +2277,38 @@ test.each(["pure", "assertion", "privacy", "started", "cleanup"] as const)("admi
     expect(await box.originHead()).toBe("");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
+
+test("capability 1 keeps its bounded hook allowance for a second 70-second privacy scan and lands once", async () => {
+  const box = await publishSandbox();
+  const cap = path.join(box.subject.worktreeDir, "scripts"); fs.mkdirSync(cap);
+  fs.writeFileSync(path.join(cap, "local-gate.ts"), "// legacy publication gate fixture\n");
+  fs.writeFileSync(path.join(cap, "local-gate-capabilities.json"), '{"publicationPrepare":1}\n');
+  const head = await box.commit("change.txt", "accepted work\n");
+  let now = 1_800_000_000_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let pushes = 0, hookAllowance = 0;
+  const exec: ExecPort = async (command, args, cwd, env, options) => {
+    if (command === "bun" && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare") {
+      writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(env!), "a".repeat(64), {}, 1);
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (command === "git" && args[0] === "push") {
+      pushes++;
+      hookAllowance = Number(env!.LLV_GATE_PUSH_DEADLINE) - now;
+      // Model the legacy native hook's second privacy scan without sleeping.
+      now += 70_001;
+      if (now >= Number(env!.LLV_GATE_PUSH_DEADLINE)) return { code: 1, stdout: "pre-push: privacy: failed (1)", stderr: "" };
+    }
+    return realExec(command, args, cwd, env, options);
+  };
+  try {
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(result).toMatchObject({ ok: true, sha: head, remote: "published" });
+    expect(hookAllowance).toBeGreaterThan(70_001);
+    expect(pushes).toBe(1);
+    expect(await box.originHead()).toBe(head);
+  } finally { clock.mockRestore(); fs.rmSync(box.root, { recursive: true, force: true }); }
+});
 
 test.each(["pure", "admission", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {
   const box = await publishSandbox();

@@ -25,6 +25,7 @@ export function createHookFixture(root: string, roots: string[], realLint = fals
   for (const hook of ["pre-commit", "pre-push"]) copyFileSync(path.join(root, ".githooks", hook), path.join(dir, ".githooks", hook));
   symlinkSync(path.join(root, "scripts/local-gate.ts"), path.join(dir, "scripts/local-gate.ts"));
   copyFileSync(path.join(root, "scripts/local-gate-capabilities.json"), path.join(dir, "scripts/local-gate-capabilities.json"));
+  copyFileSync(path.join(root, "scripts/privacy-known-value-fingerprints.json"), path.join(dir, "scripts/privacy-known-value-fingerprints.json"));
   if (realLint) {
     symlinkSync(path.join(root, "scripts/eslint-changes.ts"), path.join(dir, "scripts/eslint-changes.ts"));
     symlinkSync(path.join(root, "eslint.config.mjs"), path.join(dir, "eslint.config.mjs"));

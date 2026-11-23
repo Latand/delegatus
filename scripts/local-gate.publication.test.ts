@@ -32,7 +32,7 @@ test("a configured privacy source missing at snapshot time is refused before sca
   const prepared = f.run(true);
   expect(prepared.status, prepared.stderr).not.toBe(0);
   expect(prepared.stderr).toContain("configured source is missing: LLV_PRIVACY_KNOWN_VALUES_FILE");
-  expect(f.calls().some(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toBeFalse();
+  expect(fs.existsSync(path.join(f.dir, ".git", "commands.jsonl"))).toBeFalse();
   expect(fs.existsSync(f.receipt)).toBeFalse();
   fs.writeFileSync(known, "late synthetic privacy source\n");
   const transport = f.run(false);
@@ -175,7 +175,9 @@ test.each(["unrelated", "newly private", "missing"])("fresh transport privacy ch
   const before = f.calls().length;
   const transported = f.run(false);
   expect(transported.status, transported.stderr).not.toBe(0);
-  expect(transported.stderr).toContain("publication check inputs changed; changed components: privacy files");
+  expect(transported.stderr).toContain(change === "missing"
+    ? "configured source is missing: LLV_PRIVACY_KNOWN_VALUES_FILE"
+    : "publication check inputs changed; changed components: privacy files");
   expect(f.calls()).toHaveLength(before);
   expect(fs.existsSync(f.receipt)).toBeFalse();
 }, 60_000);

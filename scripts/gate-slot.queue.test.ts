@@ -748,7 +748,7 @@ test.skipIf(process.platform !== "linux")("publication bounds admission while a 
     finally { reader.releaseLock(); }
     const refused = await realExec(process.execPath, ["-e", caller], process.cwd(), env, { timeoutMs: 10_000 });
     expect(refused.code, refused.stderr).toBe(75);
-    expect(refused.stderr).toContain("pre-push: CPU admission deadline exceeded after 1500 ms; checks did not start");
+    expect(refused.stderr).toContain("pre-push: CPU admission deadline exceeded after 1500 ms; publication checks did not start");
     expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
     expect(Bun.spawnSync(["flock", "-n", lock, "true"]).exitCode).toBe(1);
     holder.stdin.write("release\n");
