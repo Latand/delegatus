@@ -14,6 +14,7 @@ export interface SpawnRequestIdentity {
   role: string | null;
   title: string;
   allowSubagents?: boolean;
+  ownerRelayHandoffOnly?: boolean;
   mcpServers: string[];
   plugins?: string[];
   /** Explicit operator project ownership; absent for cwd-attributed spawns. */

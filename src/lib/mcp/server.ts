@@ -779,7 +779,7 @@ export interface McpRequestBindingInput {
   downstreamKey: string;
   /** Relay admission's server-derived text and author, captured before dispatch
       so recovery verifies the actual durable payload after rotation/restart. */
-  sendPayload?: { text: string; origin: MessageOrigin };
+  sendPayload?: { text: string; origin: MessageOrigin; requesterRequestId?: string };
   /** Sender outbox CAS fence carried only by a safe same-key retry. */
   seatMessageFence?: string;
 }
@@ -1139,7 +1139,8 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   if (typeof value.clientRequestId !== "string" || (requestId !== undefined && value.clientRequestId !== requestId)) return false;
   if (typeof value.downstreamKey !== "string" || !value.downstreamKey) return false;
   if (value.sendPayload !== undefined && (!isRecord(value.sendPayload)
-    || typeof value.sendPayload.text !== "string" || !parseMessageOrigin(value.sendPayload.origin))) return false;
+    || typeof value.sendPayload.text !== "string" || !parseMessageOrigin(value.sendPayload.origin)
+    || value.sendPayload.requesterRequestId !== undefined && typeof value.sendPayload.requesterRequestId !== "string")) return false;
   if (typeof value.claimedAt !== "string") return false;
   const { caller, target, owner } = value;
   if (!isRecord(caller) || !["root", "worker", "unidentified"].includes(String(caller.kind))
@@ -4170,6 +4171,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
   send_message_to_orchestrator: [
     "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. A live owner-tier relay verified by the paired service may also hand the owner's request to a designated seat with operator authority; the server quotes the original owner request and retains agent authorship. A resolved Telegram report reply includes the stored report and is bound to its project and source seat; forward the approval verbatim. Ask one short question for an unresolved ambiguous approval before creating work. Other workers, non-owner relays, pipeline stages, deputies and unidentified callers are refused. If a handoff fails, carry on with your available tools or explain the failure and the owner's concrete next action. Owner relay board tasks default to assigned so the seat tick can wake on unstarted-task; report the task and project, checking that a seat and its tick are enabled. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
+    "Only a live owner-tier relay may omit project. The Viewer uses the project configured for the relay target and requires its designated seat. For explicit cross-project requests or report replies, pass the intended project. When the project cannot be resolved, ask the owner which project should receive the request.",
     "For a shared project, pass machine as the linked machine label, install id or prefix; get_orchestrator names linkedSeats. Both machines must support seat messages. Unshared, revoked, unreachable and older peers are refused with project_not_linked, link_revoked, peer_unreachable or peer_cannot_relay. Only the shared project's seat sends remotely. Replies use the same tool back to the sending machine. A remote operationId has prefix seatmsg_; message_receipt reports queued, accepted or refused.",
     "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. A message still queued when the seat rotates is carried to the new seat; recovery under the same key never sends twice. The answer reports acceptance: ask message_receipt what became of the operationId.",
     RECOVERY_CONTRACT_DESCRIPTION,
@@ -5111,7 +5113,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   send_message_to_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
     recoveryOnly: recoveryOnlySchema,
-    project: z.string().min(1).describe("Known project key, display name or repository name whose selected orchestrator receives the message. Case and surrounding whitespace are ignored; ambiguous and unknown names refuse immediately with candidates or close matches."),
+    project: z.string().min(1).optional().describe("Project key, display name or repository name. Required except on a verified owner relay using its configured project. Ambiguous or unknown projects are refused."),
     machine: z.string().min(1).optional().describe("Linked machine label, install id or 8-hex prefix for this shared project; omit for the local seat."),
     text: z.string().min(1).describe("The message. The recipient is resolved server-side; a dead session is resumed, a missing one created first."),
   }).passthrough(),

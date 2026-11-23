@@ -37657,7 +37657,7 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
  */
 describe("Celestia clone creation in the relay card", () => {
   browserTest("empty, list, form, waiting and created states on desktop and phone, light and dark, uk and en", async () => {
-    const out = path.resolve(".artifacts/celestia-clone-create");
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "celestia-clone-create");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
@@ -37745,7 +37745,7 @@ describe("Celestia clone creation in the relay card", () => {
               return win;
             }) as unknown as typeof window.open;
             Object.assign(window, { cloneFake: {
-              withClones: () => { fake.relay.targets = [target("league", names[0]!), target("beta", names[1]!, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null })]; },
+              withClones: () => { fake.relay.targets = [target("league", names[0]!, { grantStatus: "suspended" }), target("beta", names[1]!, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, grantStatus: "active" })]; },
               create: (name: string) => {
                 fake.relay.targets = [...fake.relay.targets, target("fresh", name, { engine: null, model: null, effort: null, answered_by: "install" })];
                 fake.status = { status: "created", target_id: "fresh", username: (fake.relay.cloneRequest as { username?: string } | undefined)?.username };
@@ -37794,10 +37794,10 @@ describe("Celestia clone creation in the relay card", () => {
           expect(await card.locator("[data-external-relay-target='beta']").textContent()).toContain("Codex Cloud · GPT-6.1-Sol");
           expect(await card.locator("[data-clone-open]").textContent()).toBe(translate(lang, "externalRelay.clone.create"));
 
-          for (const [id, key] of [["beta", "externalRelay.target.ownerTierCloudHint"], ["league", "externalRelay.target.ownerTierHint"]] as const) {
+          for (const [id, status] of [["beta", "active"], ["league", "suspended"]] as const) {
             const target = card.locator(`[data-external-relay-target='${id}']`);
             await target.locator("[data-external-relay-target-fold]").click();
-            expect(await target.locator("[data-external-relay-owner-tier-hint]").textContent()).toBe(translate(lang, key));
+            expect(await target.locator(`[data-external-relay-grant-status='${status}']`).textContent()).toBe(translate(lang, `externalRelay.target.grant.${status}`));
             await frame(`${id === "beta" ? "cloud" : "local"}-settings`, `[data-external-relay-target='${id}'][data-open]`);
             await target.locator("[data-external-relay-target-fold]").click();
           }

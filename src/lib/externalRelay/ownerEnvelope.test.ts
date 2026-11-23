@@ -47,7 +47,7 @@ const target = { id: "target_1", name: "Target", answered_by: "install", fallbac
 
 function pairedRelay(origin: string): PairedRelay {
   return { id: "relay_envelope", origin: origin, api_base: origin + "/v1", name: "Test", description: "Test",
-    credential: "x".repeat(43), owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    credential: "x".repeat(43), owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     pairedAt: at, paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: [{ ...target }] };
 }
 beforeEach(() => { process.env.LLV_STATE_DIR = path.join(root, `case-${++caseNumber}`); });
@@ -596,12 +596,13 @@ test(`mandatory refusal has a readable ${language} answer and numeric diagnostic
 });
 
 for (const status of ["ok", "outcome_unknown", "confirmation_pending"] as const)
-test(`Cloud overflow fallback answers with the prior ${status} action result without repeating it`, async () => {
-  let posts = 0, cloud = 0, launches = 0;
+test(`Cloud settles the ${status} action result before repeating any work`, async () => {
+  let cloud = 0, launches = 0;
+  const actionIds: string[] = [];
   const service = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/tool-calls")) {
-      posts++;
       const call = body as { call_id: string; tool: string };
+      actionIds.push(call.call_id);
       return { body: { call_id: call.call_id, tool: call.tool, status, output: "<".repeat(6000), truncated: false,
         effect: "action", delivered: false, replayed: false, calls_remaining: 15,
         ...(status === "confirmation_pending" ? { confirmation_id: "fixture-confirmation", expires_at: "2099-01-01T00:00:00Z" } : {}) } };
@@ -642,8 +643,18 @@ test(`Cloud overflow fallback answers with the prior ${status} action result wit
         return { status: 202, body: { conversationId: "conversation_cloud_context", initialMessage: "delivered" } };
       }, observe: async () => ({ state: "ended", finalText: `Prior action: ${status}.` }), stop: async () => {}, pollMs: 1 },
     });
-    expect(result).toMatchObject({ outcome: "answered", answer: { text: `Prior action: ${status}.` } });
-    expect({ posts, cloud, launches }).toEqual({ posts: 1, cloud: 1, launches: 1 });
-    expect(fs.existsSync(path.dirname(contextFile))).toBe(false);
+    expect(cloud).toBe(1);
+    expect([...new Set(actionIds)]).toEqual([expect.any(String)]);
+    if (status === "ok") {
+      expect(result).toMatchObject({ outcome: "answered", answer: { text: "Prior action: ok." } });
+      expect(actionIds).toHaveLength(1);
+      expect(launches).toBe(1);
+      expect(fs.existsSync(path.dirname(contextFile))).toBe(false);
+    } else {
+      expect(launches).toBe(0);
+      expect(result).toMatchObject({ outcome: "answered", answer: { text: status === "outcome_unknown"
+        ? "The outcome of write_note remains unknown."
+        : "A confirmation for write_note was posted in the chat. Its eventual outcome is not visible to me." } });
+    }
   } finally { account.mockRestore(); resetProjectDirectoryCacheForTests(); await service.close(); }
 });

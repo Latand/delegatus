@@ -363,6 +363,85 @@ export function hostTurnRecordIdentity(
   }
 }
 
+const CODEX_RETIREMENT_LEDGER_BYTES = 128 * 1024;
+
+/** Corroborate a native terminal against the bounded, contiguous suffix of the
+ * same host ledger cursor that published idle status and cleared its active ref. */
+export async function readCodexRetirementTurnLedger(threadId: string, turnId: string, cursor: number,
+  directory: string = statePath("structured-host-events")): Promise<{
+  identity: string;
+  mtimeMs: number;
+  status: "completed" | "interrupted" | "error";
+} | null> {
+  const filename = hostLedgerFilename(threadId, directory);
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    const stats = await handle.stat();
+    if (!stats.isFile() || !Number.isSafeInteger(stats.size) || stats.size === 0) return null;
+    const before = ledgerIdentity(stats);
+    const bytes = Buffer.alloc(Math.min(before.size, CODEX_RETIREMENT_LEDGER_BYTES));
+    const start = before.size - bytes.length;
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, start + offset);
+      if (bytesRead === 0) return null;
+      offset += bytesRead;
+    }
+    if (bytes.at(-1) !== 10) return null;
+    const first = start === 0 ? 0 : bytes.indexOf(10) + 1;
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    let status: "completed" | "interrupted" | "error" | null = null;
+    let idleCheckpoint = false;
+    let newestStatus = true;
+    let expected = cursor;
+    let anchored = false;
+    for (let end = bytes.length - 1; end >= first;) {
+      const previous = end > 0 ? bytes.lastIndexOf(10, end - 1) : -1;
+      const line = bytes.subarray(Math.max(first, previous + 1), end);
+      end = previous;
+      const event: unknown = JSON.parse(decoder.decode(line));
+      if (!validEvent(event) || event.seq !== expected) return null;
+      expected--;
+      if (event.kind === "turn-started") {
+        if (!status || !idleCheckpoint || event.turnId !== turnId) return null;
+        anchored = true;
+        break;
+      }
+      if (event.kind === "session-status") {
+        // Codex can publish idle before turn completion, with the registry
+        // cursor landing on turn-ended. The matching idle checkpoint may
+        // therefore be on either side of the terminal in sequence order. An
+        // active status older than the newest idle status belongs to the
+        // settled turn; only the newest status can indicate current activity.
+        if (newestStatus) {
+          if (event.status !== "idle") return null;
+          newestStatus = false;
+          idleCheckpoint = true;
+        } else if (status && (event.status === "active" || event.status === "idle")) {
+          continue;
+        } else {
+          return null;
+        }
+        continue;
+      }
+      if (status) continue;
+      if (event.kind === "turn-ended") {
+        if (event.turnId !== turnId) return null;
+        status = event.status;
+      } else if (event.kind !== "limits" && event.kind !== "attention-resolved") return null;
+    }
+    // The idle checkpoint can precede or follow the terminal. A complete
+    // ledger with no start is still ambiguous; only a truncated suffix with
+    // the matching checkpoint can anchor it.
+    if (!status || !idleCheckpoint || !(anchored || start > 0)) return null;
+    const after = ledgerIdentity(await handle.stat());
+    if (!sameLedgerIdentity(before, after) || !sameLedgerIdentity(after, ledgerIdentity(await stat(filename)))) return null;
+    return { identity: ledgerIdentityStamp(before), mtimeMs: before.mtimeMs, status };
+  } catch { return null; }
+  finally { await handle?.close(); }
+}
+
 /** When a session's ledger file was last written, without reading it:
     `absent` when there is no file, `unknown` when it cannot be stat'ed. */
 export function hostTurnRecordModifiedAt(

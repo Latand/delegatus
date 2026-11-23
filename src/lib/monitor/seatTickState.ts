@@ -269,6 +269,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
   const empty = emptySeatTickState();
   if (!value || typeof value !== "object" || Array.isArray(value)) return empty;
   const raw = value as Record<string, unknown>;
+  const lastTaskWakeAt = isoOrNull(raw.lastTaskWakeAt);
   const wakesWithoutChange: Partial<Record<SeatTickWakeReasonKind, number>> = {};
   const counters = (raw.wakesWithoutChange ?? {}) as Record<string, unknown>;
   for (const kind of SEAT_TICK_WAKE_REASON_KINDS) {
@@ -325,6 +326,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
         covers: conversationIds((raw.catchUpProgress as Record<string, unknown>).covers),
         ...(typeof (raw.catchUpProgress as Record<string, unknown>).after === "string" ? { after: String((raw.catchUpProgress as Record<string, unknown>).after) } : {}) } } : {}),
     lastWakeAt: isoOrNull(raw.lastWakeAt),
+    ...(lastTaskWakeAt ? { lastTaskWakeAt } : {}),
     lastWakeReasons: (Array.isArray(raw.lastWakeReasons) ? raw.lastWakeReasons : [])
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
     wakesWithoutChange,
@@ -456,6 +458,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     eventsThrough: row.eventsThrough,
     localFinishedLaneCursor: row.localFinishedLaneCursor ?? null,
     lastWakeAt: row.lastWakeAt,
+    ...(row.lastTaskWakeAt ? { lastTaskWakeAt: row.lastTaskWakeAt } : {}),
     ...(row.formPageAfter ? { formPageAfter: row.formPageAfter } : {}),
     ...(row.deployResumeThrough ? { deployResumeThrough: row.deployResumeThrough } : {}),
     ...(row.itemsShown?.some(isReminderVersion) ? { itemsShown: row.itemsShown.filter(isReminderVersion) } : {}),

@@ -15,7 +15,7 @@ const flush = () => { jest.advanceTimersByTime(1); return fs.promises.stat(proce
 
 function setupRelay(): PairedRelay {
   const relay: PairedRelay = { id: "owner_lifecycle", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1",
-    name: "Fixture", description: "", credential: "fixture", owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    name: "Fixture", description: "", credential: "fixture", owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     pairedAt: new Date().toISOString(), paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, engine: "codex", model: "auto", effort: "low", project: null, concurrency: 1, hardCapMinutes: 30, ownerTier: true }] };
   updateRelayStore(store => ({ ...store, relays: [relay] }));
