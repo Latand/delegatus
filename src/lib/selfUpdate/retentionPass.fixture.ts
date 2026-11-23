@@ -24,6 +24,10 @@ await serveRetentionPass({
     return result;
   },
   bytes: async root => retentionBytes(root),
-  close: async () => {},
+  close: async () => {
+    if (mode !== "close-pending") return;
+    fs.writeFileSync(path.join(directory, "inspection-close-started"), "yes");
+    while (!fs.existsSync(path.join(directory, "allow-inspection-close"))) await new Promise(resolve => setTimeout(resolve, 10));
+  },
 });
 process.exit(0);
