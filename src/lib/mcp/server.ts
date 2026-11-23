@@ -156,6 +156,7 @@ export const MCP_TOOL_NAMES = [
   "telegram_bot_send_document",
   "telegram_bot_messages",
   "relay_owner_history",
+  "relay_trusted_requesters",
   "relay_answer",
   "relay_service_tools",
   "issue_report",
@@ -254,11 +255,12 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
 ]);
 
 /** Private request data is never receipted. Service actions use the relay call id for idempotency. */
-export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history", "relay_answer", "relay_service_tools"]);
+export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history", "relay_answer", "relay_service_tools", "relay_trusted_requesters"]);
 
 /** Explicit allowlist: read-like tools with durable effects still need keys. */
 export const OPTIONAL_READ_KEY_TOOLS = new Set<McpToolName>([
   "relay_owner_history",
+  "relay_trusted_requesters",
   "relay_answer",
   "relay_service_tools",
   "read_prototype_review",
@@ -2965,7 +2967,7 @@ export function createMcpToolService(
         // The consumer must receive the exact bytes the custody ledger stores.
         // Media SHA-256 is content verification data used by the caller.
         const exactHistoryMedia = typedTool === "relay_service_tools" || typedTool === "relay_owner_history" && effectiveArgs.action === "media";
-        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
+        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && typedTool !== "relay_trusted_requesters" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }
@@ -4249,6 +4251,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   relay_answer: relayAnswerDescription,
   relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Ready photos and video frames include image content beside metadata; in code mode, forward image blocks with image(block). Reuse unexpired photo refs as seed_media_refs only on generate_image or update_self_profile_photo. Video frames cannot be seeds. relay_answer attachments can select media_ref from this request. Refused in any other conversation and once answered.",
+  relay_trusted_requesters: "Manage trusted requesters for one relay target. The installation operator's own conversation can list entries and propose start_enrolment, confirm, decline or remove. Use the exact entry id from list. A proposal returns a single-use path to open on the Delegatus board. The signed-in owner reviews and approves it there. The enrolment code is shown in the owner browser after approval.",
   relay_owner_history: [
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. editsReported says whether the service reports edits; editedAt marks one. Media includes kind, fileName, mimeType, size, duration, dimensions and fetch availability when the service supplies them. Older services cannot report edits or all media facts. Telegram-side deletions may remain stored. Author ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
     "action media takes chat, messageId and optional directory: pass your LLV_EVIDENCE_DIR, an existing directory under the installation's evidence root; the default is evidence/relay-media. It streams one photo, document or video through the paired service, up to 2 GiB, and returns done with path, kind, mimeType, size and SHA-256 only after verification. Repeat the identical call on in_progress to join the same job. not_offered means the paired service must implement relay_owner_media first; too_large names the limit and how to lift it. Files, their contents and original names stay private to this conversation: never copy them into reports, messages to other agents, tasks, commits, pull requests, issues, lessons, Telegram hand-off folders or other chats.",
@@ -5287,6 +5290,13 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   relay_answer: relayAnswerSchema,
   relay_service_tools: relayServiceToolsSchema,
+  relay_trusted_requesters: z.strictObject({
+    action: z.enum(["list", "start_enrolment", "confirm", "decline", "remove"]),
+    relay: z.string().min(1).max(128), target: z.string().min(1).max(128),
+    label: z.string().max(128).optional().describe("Required for start_enrolment."),
+    entryId: z.string().max(128).optional().describe("Required for confirm, decline and remove. Use the id returned by list."),
+    clientRequestId: clientRequestIdSchema.optional(),
+  }),
   relay_owner_history: z.object({
     action: z.enum(["groups", "messages", "media"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),
     messageId: z.number().int().min(1).max(2147483647).optional(), directory: z.string().max(4096).optional(),

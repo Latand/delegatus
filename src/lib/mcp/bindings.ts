@@ -9492,6 +9492,14 @@ export function viewerMcpBindings(
       if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });
       return result;
     },
+    relay_trusted_requesters: (args, context) => {
+      context?.signal?.throwIfAborted();
+      context?.assertCaller?.();
+      const { clientRequestId: _clientRequestId, ...operation } = args;
+      const control = viewerControlForCall(controlDependencies, context);
+      const send = operation.action === "list" ? control.post : dispatchControl(control);
+      return send("/api/external-relay/trusted-requesters/proposal", operation, callerCapabilityHeaders(), context);
+    },
     relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     github_app_connect: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {

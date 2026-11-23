@@ -1,3 +1,4 @@
+import { requesterCodeMatch, redactRequesterCodes } from "./requesterEnrolment";
 import { safeRelayHttpReason } from "./httpDiagnostics";
 import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
@@ -200,7 +201,7 @@ export async function runClaimedRequest(
     const invalid = raw as Record<string, unknown>;
     if (typeof invalid.request_id !== "string" || typeof invalid.lease_id !== "string") return null;
     const recorder = answerRecorder({ requestId: invalid.request_id, relayId: relay.id, targetId: invalid.target_id,
-      targetName: null, claimedAt: invalid.claimed_at, input: invalid.input });
+      targetName: null, claimedAt: invalid.claimed_at, input: redactRequesterCodes(invalid.input) });
     const body = declined(invalid.lease_id, "invalid_request");
     recorder?.finish({ outcome: "declined:invalid_request", answer: null, delivery: "unconfirmed" });
     const sent = await completeRelayRequest(relay, invalid.request_id, body, () => deadline.at,
@@ -212,7 +213,8 @@ export async function runClaimedRequest(
   const refusalDetail = parsed.success
     ? ownerBindingRefusal(relay, parsed.data)
     : parsed.error.issues.find(issue => issue.message === INVALID_REQUESTER_DETAIL)?.message ?? null;
-  const request = parsed.success && !refusalDetail ? parsed.data : null;
+  const verified = parsed.success && !refusalDetail ? parsed.data : null;
+  const request = verified ? { ...verified, input: redactRequesterCodes(verified.input) } : null;
   const caps = request ? answerCapabilities(request, relay.targets.find(t => t.id === request.target_id)?.engine ?? "") : null;
   const rawId =
     raw && typeof raw === "object"
@@ -257,7 +259,8 @@ export async function runClaimedRequest(
   };
   const rawRequest = raw as Record<string, unknown>;
   const targetId = request?.target_id ?? rawRequest.target_id;
-  const recorder = answerRecorder({
+  const codeMatch = verified && !recovery && deadline.fallback !== "past" ? requesterCodeMatch(relay, verified, deadline.at) : undefined;
+  const recorder = codeMatch ? null : answerRecorder({
     requestId,
     relayId: relay.id,
     targetId,
@@ -265,7 +268,7 @@ export async function runClaimedRequest(
     claimedAt: rawRequest.claimed_at,
     chatKey: request?.chat?.key ?? null,
     requester: request?.input.requester ?? null,
-    input: refusalDetail ? null : rawRequest.input,
+    input: refusalDetail ? null : redactRequesterCodes(rawRequest.input),
     ...(request?.features ? { features: request.features } : {}),
   });
   inflight.add(requestId);
@@ -662,7 +665,7 @@ export async function runClaimedRequest(
   };
   try {
     let newestProgress: ExternalRelayProgress | null = null;
-    const steps = request.delivery === "guest" ? null : createRelaySteps(relay.features);
+    const steps = codeMatch || request.delivery === "guest" ? null : createRelaySteps(relay.features);
     let progressSeq = 0;
     let stepLog: string | null = null;
     let pendingServiceTools = 0;
@@ -731,7 +734,7 @@ export async function runClaimedRequest(
       return paired && currentTarget && canonicalRelayProject(currentTarget.project) === canonicalRelayProject(target.project)
         ? elevatedRequesterFor(paired, currentTarget, request, current.relays) : null;
     };
-    if (!recovery && requester && matchingElevation(elevationSettings())?.entry.tier === "requester" && !ownerPrototype()) {
+    if (!codeMatch && !recovery && requester && matchingElevation(elevationSettings())?.entry.tier === "requester" && !ownerPrototype()) {
       runDir = await createOwnerRunDirectory();
       requesterLease = { requestId, leaseId, relayId: relay.id, targetId: target.id, runDir, stallMs, deadlineAt: serviceDeadline.at };
       await openRequesterLease(requesterLease);
@@ -772,6 +775,17 @@ export async function runClaimedRequest(
     }, 1000);
     heartbeatTimer.unref();
     if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
+    if (codeMatch) {
+      // A fixed reply uses the acknowledged lease, without creating a profile,
+      // recorder, agent or service-tool grant.
+      const leaseHeld = () => acked && !leaseUnavailable && !releaseRequested && Date.now() < deadline.at;
+      if (!leaseHeld()) return await finish(declined(leaseId, "busy"));
+      const reply = await codeMatch(leaseHeld).catch(() => null);
+      if (!reply || !leaseHeld()) return await finish(declined(leaseId, "busy"));
+      return await finish({ lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - deadline.receivedAt,
+        answer: { action: "reply", text: reply.text, reply_to: reply.message,
+          ...(caps?.rich ? { format: "plain", buttons: [], attachments: [] } : {}) } });
+    }
     // The member limit (§B.8): a member past it is declined, and the service's
     // fallback setting decides whether its own agent answers instead.
     const limit = memberLimitFor(target);

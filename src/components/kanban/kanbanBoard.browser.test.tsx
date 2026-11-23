@@ -47086,3 +47086,123 @@ describe("Relay targets answered by another install", () => {
     } finally { await browser.close(); server.stop(); sockets.close(); }
   }, 300_000);
 });
+
+describe("relay requester enrolment on the board", () => {
+  browserTest("renders the five enrolment states at desktop and phone widths", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "relay-requester-enrolment");
+    fs.mkdirSync(out, { recursive: true });
+    const build = fs.mkdtempSync(path.join(os.tmpdir(), "requester-board-"));
+    const server = await serveEvidenceFixture(build);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: { frame: string; width: number; overflow: boolean; shortControls: number }[] = [];
+    try {
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 },
+          colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(locale => {
+            localStorage.setItem("llv_lang", locale);
+            const network = window.fetch.bind(window);
+            let fetcher = network;
+            Object.defineProperty(window, "fetch", {
+              configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => {
+                  const url = new URL(input instanceof Request ? input.url : String(input), location.origin);
+                  return url.pathname.startsWith("/api/external-relay") ? network(input, init) : next(input, init);
+                }) as typeof fetch;
+              },
+            });
+          }, lang);
+          const project = "Workshop";
+          const label = lang === "uk" ? "Рецензент збірки" : "Build reviewer";
+          const scope = { relay: "fixture-relay", target: "fixture-clone" };
+          const target = { id: scope.target, name: "Workshop clone", answered_by: "install", fallback: "none",
+            enabled: true, engine: "codex", model: "gpt-5.4", effort: null, project, concurrency: 1, hardCapMinutes: 30 };
+          const relay = { id: scope.relay, origin: "https://relay.example", name: "Chat relay", description: "",
+            owner: { namespace: "telegram", id: "owner", display_name: "Owner", handle: null }, paused: false, targets: [target] };
+          const at = "2026-10-01T08:00:00Z";
+          const expiresAt = "2030-10-01T08:10:00Z";
+          let status: "empty" | "waiting" | "candidate" | "entries" = "empty";
+          await context.route("**/api/external-relay**", async route => {
+            const req = route.request();
+            const url = new URL(req.url());
+            const send = (json: unknown, status = 200) => route.fulfill({ status, json });
+            if (url.pathname === "/api/external-relay") return send({ relays: [relay], pending: [], status: [] });
+            if (url.pathname === "/api/external-relay/known") return send({ known: [] });
+            if (url.pathname !== "/api/external-relay/trusted-requesters") return send({}, 404);
+            if (req.method() === "POST") {
+              const { confirmed, operation } = req.postDataJSON();
+              expect(confirmed).toBe(true);
+              if (operation.action === "start_enrolment") {
+                expect(operation.label).toBe(label);
+                status = "waiting";
+                return send({ issued: { code: "SAMPLE-ONLY", expiresAt } });
+              }
+              if (operation.action === "confirm") status = "entries";
+              if (operation.action === "remove") status = "empty";
+              return send({ issued: null });
+            }
+            return send({ ...scope, targetName: target.name, project, revision: status === "entries" ? 1 : 0, canStart: true,
+              entries: status === "entries" ? [{ id: "fixture-entry", label, kind: "requester", tier: "requester", project, active: true, addedAt: at }] : [],
+              pending: status === "waiting" || status === "candidate" ? { id: "fixture-entry", label, status, expiresAt,
+                candidate: status === "candidate" ? { name: "Demo participant", chatTitle: "Workshop group", at } : null } : null,
+              history: [],
+            });
+          });
+          const page = await context.newPage();
+          await page.goto(server.base);
+          await page.locator(phone ? "[data-mobile2-shell], [data-mobile-shell], [data-phone-card]" : "[data-kanban-board]").first().waitFor();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const row = page.locator(`[data-external-relay-target="${target.id}"]`);
+          await row.locator("[data-external-relay-target-fold]").click();
+          const panel = row.locator("[data-trusted-requesters]");
+          const frame = async (name: string) => {
+            const filename = `${width}-${lang}-${scheme}-${name}.png`;
+            const measurement = await panel.evaluate((element, phone) => ({
+              overflow: element.scrollWidth > element.clientWidth + 1,
+              shortControls: phone ? [...element.querySelectorAll("button, input")]
+                .filter(control => control.getBoundingClientRect().height < 44).length : 0,
+            }), phone);
+            expect(measurement).toEqual({ overflow: false, shortControls: 0 });
+            await panel.screenshot({ path: path.join(out, filename) });
+            readings.push({ frame: filename, width, ...measurement });
+          };
+          const action = (name: "start_enrolment" | "confirm" | "remove") =>
+            translate(lang, `externalRelay.requesters.action.${name}`);
+          await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+          await frame("1-empty");
+          await panel.getByRole("textbox").fill(label);
+          await panel.getByRole("button", { name: action("start_enrolment") }).click();
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("start_enrolment") }).click();
+          await panel.locator("[data-requester-code]").waitFor();
+          await frame("2-code");
+          status = "candidate";
+          await panel.getByText("Demo participant", { exact: false }).waitFor();
+          await frame("3-candidate");
+          await panel.getByRole("button", { name: action("confirm") }).click();
+          await panel.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("confirm") }).click();
+          await panel.getByText(label, { exact: true }).waitFor();
+          await frame("4-entries");
+          await panel.getByRole("button", { name: action("remove") }).click();
+          await panel.locator('[data-requester-confirm="remove"]').waitFor();
+          await frame("5-remove-confirmation");
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("remove") }).click();
+          await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+      expect(readings).toHaveLength(40);
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(build, { recursive: true, force: true });
+    }
+  }, 180_000);
+});

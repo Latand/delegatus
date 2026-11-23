@@ -6,11 +6,12 @@ import { X } from "lucide-react";
 import { Z } from "@/components/layers";
 import { useLocale } from "@/lib/i18n";
 
+import { TrustedRequesterProposal } from "./TrustedRequesters";
 import { ExternalRelaySection } from "./ExternalRelaySection";
 import { OPEN_EXTERNAL_RELAY_SETTINGS_EVENT } from "./openExternalRelaySettings";
 
 /** The external relay's settings (docs/design/relay.md §B.9), in the shell the linked-installs settings use. */
-export function ExternalRelaySettingsDialog({ onClose }: { onClose: () => void }) {
+export function ExternalRelaySettingsDialog({ onClose, proposal, clearProposal }: { onClose: () => void; proposal?: string; clearProposal?: () => void }) {
   const { t } = useLocale();
   const [relays, setRelays] = useState<number | null>(null);
   useEffect(() => {
@@ -28,7 +29,8 @@ export function ExternalRelaySettingsDialog({ onClose }: { onClose: () => void }
         <div className="space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
           {/* What a relay is matters before the first pairing; once one is paired the dialog opens on it. */}
           {relays === 0 ? <p data-external-relay-intro="" className="text-ui text-muted">{t("externalRelay.intro")}</p> : null}
-          <ExternalRelaySection onRelays={setRelays} />
+          {proposal && clearProposal ? <TrustedRequesterProposal key={proposal} id={proposal} close={clearProposal} /> : null}
+          <ExternalRelaySection key={proposal ?? "settings"} onRelays={setRelays} />
         </div>
       </section>
     </div>
@@ -37,10 +39,24 @@ export function ExternalRelaySettingsDialog({ onClose }: { onClose: () => void }
 
 export function ExternalRelaySettingsHost() {
   const [open, setOpen] = useState(false);
+  const [proposal, setProposal] = useState<string>();
   useEffect(() => {
     const onOpen = () => setOpen(true);
+    const openProposal = () => {
+      const match = /^#relay-requester=([a-f0-9]{48})$/.exec(window.location.hash);
+      if (!match) return;
+      setProposal(match[1]);
+      setOpen(true);
+      window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+    };
+    openProposal();
     window.addEventListener(OPEN_EXTERNAL_RELAY_SETTINGS_EVENT, onOpen);
-    return () => window.removeEventListener(OPEN_EXTERNAL_RELAY_SETTINGS_EVENT, onOpen);
+    window.addEventListener("hashchange", openProposal);
+    return () => {
+      window.removeEventListener(OPEN_EXTERNAL_RELAY_SETTINGS_EVENT, onOpen);
+      window.removeEventListener("hashchange", openProposal);
+    };
   }, []);
-  return open ? <ExternalRelaySettingsDialog onClose={() => setOpen(false)} /> : null;
+  return open ? <ExternalRelaySettingsDialog proposal={proposal} clearProposal={() => setProposal(undefined)}
+    onClose={() => { setOpen(false); setProposal(undefined); }} /> : null;
 }
