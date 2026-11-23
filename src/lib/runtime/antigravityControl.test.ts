@@ -345,6 +345,14 @@ describe("Antigravity Slice 2 conversation control", () => {
             activePromptId = id;
             const blocks = (msg.params as { prompt?: Array<{ text?: string }> }).prompt ?? [];
             sentPrompts.push({ id, text: blocks.map((b) => b.text ?? "").join("") });
+            api.sendToHost({
+              jsonrpc: "2.0",
+              method: "session/update",
+              params: {
+                sessionId,
+                update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "working" } },
+              },
+            });
           } else if (method === "session/cancel") {
             cancelCount += 1;
             if (activePromptId !== null) {
@@ -717,6 +725,705 @@ describe("Antigravity Slice 2 conversation control", () => {
     } finally {
       registry.close();
       journal.close();
+    }
+  });
+
+  it("defers delivered until ACP confirms acceptance and handles rejections, mid-turn rejections, lost replies, and deliveryEcho EIO", async () => {
+    const scenarios = ["positive", "rejection", "mid-positive", "mid-rejection", "lost", "eio"] as const;
+    for (const scenario of scenarios) {
+      const subRoot = fs.mkdtempSync(path.join(root, `scenario-${scenario}-`));
+      const subState = path.join(subRoot, "state");
+      const subHome = path.join(subRoot, "antigravity");
+      fs.mkdirSync(subState, { recursive: true });
+      fs.mkdirSync(subHome, { recursive: true });
+      process.env.LLV_STATE_DIR = subState;
+
+      const sessionId = crypto.randomUUID();
+      const eventStore = new FileRuntimeEventStore(path.join(subState, "structured-host-events"));
+      const registry = new AgentRegistry(path.join(subState, "agent-registry.json"), undefined, undefined, {
+        sqliteMode: "sqlite",
+        sqliteFilename: path.join(subState, "agent-registry.sqlite"),
+      });
+      const journal = new RuntimeJournal(path.join(subState, "runtime.sqlite"), { structuredHosts: true });
+
+      let fake!: ReturnType<typeof makeFakeAcpChild>;
+      let lastPromptId = 0;
+      let cancels = 0;
+      let echoFailed = 0;
+      let targetOpId = "";
+      const prompts: string[] = [];
+
+      const spawnFake = () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          else if (method === "session/new" || method === "session/resume") api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+          else if (method === "session/set_config_option" || method === "session/close") api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          else if (method === "session/prompt" && id !== undefined) {
+            lastPromptId = id;
+            const text = ((msg.params as { prompt?: Array<{ text?: string }> }).prompt ?? []).map((b) => b.text ?? "").join("");
+            prompts.push(text);
+            if (text === "hold turn") {
+              api.sendToHost({
+                jsonrpc: "2.0",
+                method: "session/update",
+                params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "holding" } } },
+              });
+            }
+          } else if (method === "session/cancel") {
+            cancels += 1;
+            api.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "cancelled" } });
+          }
+        });
+        return fake.child;
+      };
+
+      const rawAppend = eventStore.append.bind(eventStore);
+      eventStore.append = (sid, event) => {
+        if (scenario === "eio" && targetOpId && event.kind === "item" && event.deliveryEcho?.operationId === targetOpId) {
+          echoFailed += 1;
+          throw Object.assign(new Error("fixture lost deliveryEcho"), { code: "EIO" });
+        }
+        rawAppend(sid, event);
+      };
+
+      let host: AntigravityAcpHost | null = await AntigravityAcpHost.start({
+        cwd,
+        antigravityHome: subHome,
+        accountId: "default",
+        model: "gemini-3.8-flash",
+        effort: "low",
+        allowAll: true,
+        viewerMcpServer: null,
+        eventStore,
+        shutdownGraceMs: 40,
+        interruptTimeoutMs: 500,
+        processIdentity: () => `start-${scenario}`,
+        signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+        spawnProcess: spawnFake,
+      });
+
+      const conv = registry.ensureConversation("antigravity", host.identity.path, "default");
+
+      const inProcessClient = {
+        command: async (command: RuntimeOperationCommand) => journal.executeOperation(command),
+        operationStatus: async (operationId: string) => journal.operationResult(operationId),
+        readSession: async (target: { conversationId?: string }) => journal.readSession(target),
+        transitionOperation: async (
+          id: string,
+          status: Exclude<RuntimeReceiptStatus, "pending">,
+          details?: RuntimeTransitionDetails,
+          options?: RuntimeTransitionOptions,
+        ) => journal.transitionOperation(id, status, details, options),
+      } as unknown as RuntimeHostClient;
+
+      journal.append({
+        scope: { type: "session", id: conv.id },
+        kind: "session-status",
+        payload: {
+          conversationId: conv.id,
+          sessionKey: { engine: "antigravity", sessionId },
+          hostKind: "antigravity-acp",
+          host: "hosted",
+          turn: "idle",
+          activeTurnId: null,
+          writerClaim: `claim-${scenario}:1`,
+          provenance: "structured",
+          capabilities: { steer: false, steerMode: "interrupt", structuredAttention: true },
+        },
+      });
+
+      const queue = new StructuredDeliveryQueue(journalPort(journal, `claim-${scenario}:1`), () => host);
+      const { enqueueStructuredMessage } = await import("./structuredMessageDelivery");
+      const ports = {
+        registry: () => registry,
+        client: () => inProcessClient,
+        kick: () => {},
+        republish: async () => true,
+      };
+
+      try {
+        let interruptedTurnId: string | null = null;
+        if (scenario.startsWith("mid-")) {
+          const parent = await enqueueStructuredMessage({
+            conversationId: conv.id,
+            path: host.identity.path,
+            clientMessageId: `parent-${scenario}`,
+            text: "hold turn",
+            policy: "interrupt-active",
+          }, ports);
+          expect(parent?.ok).toBe(true);
+          await queue.drain({ freshAdmission: true });
+          interruptedTurnId = (await host.health()).activeTurnRef;
+          expect(interruptedTurnId).toBeTruthy();
+        }
+
+        const admitted = await enqueueStructuredMessage({
+          conversationId: conv.id,
+          path: host.identity.path,
+          clientMessageId: `key-${scenario}`,
+          text: "target followup",
+          policy: "interrupt-active",
+        }, ports);
+        expect(admitted?.ok).toBe(true);
+        targetOpId = admitted && admitted.ok ? admitted.operationId : "";
+        expect(targetOpId).toBeTruthy();
+
+        await queue.drain({ freshAdmission: true });
+
+        // BEFORE ACP replies: MUST NOT be terminal `delivered`.
+        const beforeReceipt = await resolveSendReceipt(targetOpId, { registry, client: inProcessClient });
+        expect(beforeReceipt?.state).toBe("in-flight");
+        expect(journal.operationResult(targetOpId)?.receipt.status).toBe("delivering");
+
+        // Trigger the ACP outcome.
+        if (scenario === "rejection" || scenario === "mid-rejection") {
+          fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, error: { code: -32000, message: "explicit decline" } });
+        } else if (scenario === "lost") {
+          fake.closeChild(1);
+        } else {
+          fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+        }
+        await new Promise((r) => setTimeout(r, 40));
+
+        const ownerEvidence = (await host.sessionMaterializationEvidence(targetOpId)).state;
+        const afterReceipt = await resolveSendReceipt(targetOpId, { registry, client: inProcessClient });
+        const runtimeStatus = journal.operationResult(targetOpId)?.receipt.status;
+        const echoes = eventStore.load(sessionId).filter((e) => e.kind === "item" && e.deliveryEcho?.operationId === targetOpId).length;
+
+        await host.release();
+        host = await AntigravityAcpHost.adopt(sessionId, {
+          cwd,
+          antigravityHome: subHome,
+          accountId: "default",
+          eventStore,
+          viewerMcpServer: null,
+          shutdownGraceMs: 40,
+          processIdentity: () => `adopted-${scenario}`,
+          signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+          spawnProcess: spawnFake,
+        });
+        const adoptedEvidence = (await host.sessionMaterializationEvidence(targetOpId)).state;
+
+        // Replay under same idempotency key never dispatches a second native prompt.
+        const replay = await enqueueStructuredMessage({
+          conversationId: conv.id,
+          path: host.identity.path,
+          clientMessageId: `key-${scenario}`,
+          text: "target followup",
+          policy: "interrupt-active",
+        }, ports);
+        if (scenario === "positive" || scenario === "mid-positive") {
+          expect(replay).toMatchObject({ ok: true, operationId: targetOpId });
+        } else if (scenario === "lost" || scenario === "eio") {
+          expect(replay).toMatchObject({ ok: false, status: 409 });
+          if (replay && "operationId" in replay && replay.operationId) {
+            expect(replay.operationId).toBe(targetOpId);
+          }
+        } else {
+          expect(replay && "operationId" in replay ? replay.operationId : "").toBe(targetOpId);
+        }
+        await queue.drain({ freshAdmission: true });
+        expect(prompts.filter((p) => p === "target followup")).toHaveLength(1);
+
+        if (scenario === "positive" || scenario === "mid-positive") {
+          expect(ownerEvidence).toBe("materialized");
+          expect(adoptedEvidence).toBe("materialized");
+          expect(echoes).toBe(1);
+          expect(runtimeStatus).toBe("delivered");
+          expect(afterReceipt?.state).toBe("delivered");
+          if (scenario === "mid-positive") {
+            expect(cancels).toBe(1);
+            expect(afterReceipt?.delivery).toBe("interrupt-then-turn-started");
+            expect(afterReceipt?.interruptedTurnId).toBe(interruptedTurnId ?? undefined);
+          }
+        } else if (scenario === "rejection" || scenario === "mid-rejection") {
+          expect(ownerEvidence).toBe("failed");
+          expect(adoptedEvidence).toBe("failed");
+          expect(echoes).toBe(0);
+          expect(runtimeStatus).toBe("failed");
+          expect(afterReceipt?.state).toBe("failed");
+          expect(afterReceipt?.delivery).toBeUndefined();
+          expect(afterReceipt?.interruptedTurnId).toBeUndefined();
+        } else {
+          // `lost` and `eio` remain uncertain: NEVER delivered, NEVER safe blind resend.
+          expect(ownerEvidence).toBe("unavailable");
+          expect(adoptedEvidence).toBe("unavailable");
+          expect(echoes).toBe(0);
+          if (scenario === "eio") expect(echoFailed).toBe(1);
+          expect(runtimeStatus).toBe("uncertain");
+          expect(afterReceipt?.state).toBe("failed");
+          expect(afterReceipt?.resend).toBe("verify-first");
+          expect(afterReceipt?.duplicateRisk).toBe(true);
+        }
+      } finally {
+        if (host) await host.release();
+        registry.close();
+        journal.close();
+      }
+    }
+    process.env.LLV_STATE_DIR = stateDir;
+  });
+
+  it("reconciles an accepted Antigravity delivery via confirmedSend when a predecessor loses its final journal transition", async () => {
+    const sessionId = crypto.randomUUID();
+    const eventStore = new FileRuntimeEventStore(path.join(stateDir, "structured-host-events"));
+    const registry = new AgentRegistry(path.join(stateDir, "agent-registry.json"), undefined, undefined, {
+      sqliteMode: "sqlite",
+      sqliteFilename: path.join(stateDir, "agent-registry.sqlite"),
+    });
+    const journal = new RuntimeJournal(path.join(stateDir, "runtime.sqlite"), { structuredHosts: true });
+
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+    let lastPromptId = 0;
+    const prompts: string[] = [];
+    const spawnFake = () => {
+      fake = makeFakeAcpChild((msg, api) => {
+        const id = msg.id as number | undefined;
+        const method = msg.method as string | undefined;
+        if (method === "initialize") api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+        else if (method === "session/new" || method === "session/resume") api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+        else if (method === "session/set_config_option" || method === "session/close") api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+        else if (method === "session/prompt" && id !== undefined) {
+          lastPromptId = id;
+          prompts.push(((msg.params as { prompt?: Array<{ text?: string }> }).prompt ?? []).map((b) => b.text ?? "").join(""));
+        }
+      });
+      return fake.child;
+    };
+
+    let host = await AntigravityAcpHost.start({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      model: "gemini-3.8-flash",
+      effort: "low",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore,
+      shutdownGraceMs: 40,
+      processIdentity: () => "start-handoff",
+      signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+      spawnProcess: spawnFake,
+    });
+
+    const conv = registry.ensureConversation("antigravity", host.identity.path, "default");
+
+    const inProcessClient = {
+      command: async (command: RuntimeOperationCommand) => journal.executeOperation(command),
+      operationStatus: async (operationId: string) => journal.operationResult(operationId),
+      readSession: async (target: { conversationId?: string }) => journal.readSession(target),
+      transitionOperation: async (
+        id: string,
+        status: Exclude<RuntimeReceiptStatus, "pending">,
+        details?: RuntimeTransitionDetails,
+        options?: RuntimeTransitionOptions,
+      ) => journal.transitionOperation(id, status, details, options),
+    } as unknown as RuntimeHostClient;
+
+    journal.append({
+      scope: { type: "session", id: conv.id },
+      kind: "session-status",
+      payload: {
+        conversationId: conv.id,
+        sessionKey: { engine: "antigravity", sessionId },
+        hostKind: "antigravity-acp",
+        host: "hosted",
+        turn: "idle",
+        activeTurnId: null,
+        writerClaim: "predecessor:1",
+        provenance: "structured",
+        capabilities: { steer: false, steerMode: "interrupt", structuredAttention: true },
+      },
+    });
+
+    const { enqueueStructuredMessage } = await import("./structuredMessageDelivery");
+    const { readConfirmedSendEvidence } = await import("./confirmedSend");
+
+    try {
+      const admitted = await enqueueStructuredMessage({
+        conversationId: conv.id,
+        path: host.identity.path,
+        clientMessageId: "handoff-op-key",
+        text: "handoff message",
+        policy: "interrupt-active",
+      }, { registry: () => registry, client: () => inProcessClient, kick: () => {}, republish: async () => true });
+      expect(admitted?.ok).toBe(true);
+      const opId = admitted && admitted.ok ? admitted.operationId : "";
+
+      // Predecessor queue drops the final `delivered` journal transition after ACP accepted + wrote deliveryEcho.
+      const predecessor = new StructuredDeliveryQueue({
+        ...journalPort(journal, "predecessor:1"),
+        transition: async (id, status, details, options) => {
+          if (id === opId && status === "delivered") {
+            throw new Error("fixture predecessor crash before final delivered transition");
+          }
+          journal.transitionOperation(id, status, details, options);
+        },
+      }, () => host);
+
+      await predecessor.drain({ freshAdmission: true });
+      fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+      await new Promise((r) => setTimeout(r, 40));
+
+      expect(journal.operationResult(opId)?.receipt.status).toBe("delivering");
+      expect((await host.sessionMaterializationEvidence(opId)).state).toBe("materialized");
+
+      const proof = await readConfirmedSendEvidence(registry.readOnlySnapshot(), opId, true);
+      expect(proof).toMatchObject({ source: "antigravity-ledger", sessionId });
+      expect(proof?.turnId).toBeTruthy();
+
+      await host.release();
+      host = await AntigravityAcpHost.adopt(sessionId, {
+        cwd,
+        antigravityHome,
+        accountId: "default",
+        eventStore,
+        viewerMcpServer: null,
+        shutdownGraceMs: 40,
+        processIdentity: () => "successor-handoff",
+        signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+        spawnProcess: spawnFake,
+      });
+
+      const successor = new StructuredDeliveryQueue({
+        ...journalPort(journal, "successor:2"),
+        confirmedDelivery: (id) => readConfirmedSendEvidence(registry.readOnlySnapshot(), id, true),
+      }, () => host);
+      await successor.drain({ freshAdmission: true });
+
+      expect(journal.operationResult(opId)?.receipt.status).toBe("delivered");
+      const receipt = await resolveSendReceipt(opId, { registry, client: inProcessClient });
+      expect(receipt?.state).toBe("delivered");
+      expect(prompts).toEqual(["handoff message"]);
+      expect(eventStore.load(sessionId).filter((e) => e.kind === "item" && e.deliveryEcho?.operationId === opId)).toHaveLength(1);
+    } finally {
+      await host.release();
+      registry.close();
+      journal.close();
+    }
+  });
+
+  it("applies idle Antigravity reconfigure in place without restarting, rolls back on ACP refusal, and falls back to restart when unhosted", async () => {
+    const sessionId = crypto.randomUUID();
+    const eventStore = new FileRuntimeEventStore(path.join(stateDir, "structured-host-events"));
+    const registry = new AgentRegistry(path.join(stateDir, "agent-registry.json"), undefined, undefined, {
+      sqliteMode: "sqlite",
+      sqliteFilename: path.join(stateDir, "agent-registry.sqlite"),
+    });
+    const journal = new RuntimeJournal(path.join(stateDir, "runtime.sqlite"), { structuredHosts: true });
+
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+    let starts = 0;
+    let resumes = 0;
+    let releases = 0;
+    let rejectNextConfig = false;
+    const configCalls: Array<{ configId: string; value: string }> = [];
+
+    const spawnFake = () => {
+      starts += 1;
+      fake = makeFakeAcpChild((msg, api) => {
+        const id = msg.id as number | undefined;
+        const method = msg.method as string | undefined;
+        if (method === "initialize") api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+        else if (method === "session/new") api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+        else if (method === "session/resume") { resumes += 1; api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } }); }
+        else if (method === "session/set_config_option") {
+          const params = msg.params as { configId: string; value: string };
+          if (rejectNextConfig) {
+            rejectNextConfig = false;
+            api.sendToHost({ jsonrpc: "2.0", id, error: { code: -32602, message: "unsupported model" } });
+            return;
+          }
+          configCalls.push({ configId: params.configId, value: params.value });
+          api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+        } else if (method === "session/close") api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+      });
+      return fake.child;
+    };
+
+    let liveHost: AntigravityAcpHost | null = await AntigravityAcpHost.start({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      model: "gemini-3.8-flash",
+      effort: "low",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore,
+      shutdownGraceMs: 40,
+      processIdentity: () => "reconf-init",
+      signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+      spawnProcess: spawnFake,
+    });
+    const begun = registry.beginSpawnRequest({
+      engine: "antigravity",
+      cwd,
+      transport: "structured",
+      accountId: "default",
+      launchProfile: { title: "Antigravity reconfigure fixture", model: "gemini-3.8-flash", effort: "low", fast: false },
+    });
+    if (begun.kind !== "created") throw new Error("reconfigure fixture spawn admission failed");
+    const convId = begun.receipt.conversationId;
+    const startHost = (resume: boolean) => {
+      const opts: AntigravityAcpHostOptions = {
+        cwd,
+        antigravityHome,
+        accountId: "default",
+        model: registry.conversation(convId)?.generations.at(-1)?.launchProfile?.model ?? "gemini-3.8-flash",
+        effort: registry.conversation(convId)?.generations.at(-1)?.launchProfile?.effort ?? "low",
+        allowAll: true,
+        viewerMcpServer: null,
+        eventStore,
+        shutdownGraceMs: 40,
+        processIdentity: () => `reconf-${starts}`,
+        signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+        spawnProcess: spawnFake,
+      };
+      return resume ? AntigravityAcpHost.adopt(sessionId, opts) : AntigravityAcpHost.start(opts);
+    };
+    const transcriptPath = liveHost.identity.path;
+    registry.completeSpawn(begun.receipt.launchId, {
+      key: { engine: "antigravity", sessionId },
+      artifactPath: transcriptPath,
+      cwd,
+      accountId: "default",
+      launchProfile: begun.receipt.launchProfile,
+      status: "live",
+      host: null,
+      structuredHost: {
+        kind: "antigravity-acp",
+        endpoint: "stdio:12346",
+        process: { pid: 12346, startIdentity: "reconf-init", bootEpoch: "test" },
+        protocolVersion: "1.5.14",
+        writerClaimEpoch: 1,
+        eventCursor: 2,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 1,
+      claimOwner: "reconf:1",
+      pendingAction: null,
+    });
+
+    const inProcessClient = {
+      command: async (cmd: RuntimeOperationCommand) => journal.executeOperation(cmd),
+      operationStatus: async (id: string) => journal.operationResult(id),
+      effectBatch: async (kinds: readonly string[], afterSeq: number) => journal.effectBatch(100, kinds, afterSeq),
+      readSession: async (target: { conversationId?: string }) => journal.readSession(target),
+    } as unknown as RuntimeHostClient;
+
+    journal.append({
+      scope: { type: "session", id: convId },
+      kind: "session-status",
+      payload: {
+        conversationId: convId,
+        sessionKey: { engine: "antigravity", sessionId },
+        hostKind: "antigravity-acp",
+        host: "hosted",
+        turn: "idle",
+        activeTurnId: null,
+        writerClaim: "reconf:1",
+        provenance: "structured",
+        capabilities: { steer: false, steerMode: "interrupt", structuredAttention: true },
+      },
+    });
+
+    const queue = new StructuredDeliveryQueue(
+      journalPort(journal, "reconf:1"),
+      () => liveHost,
+      undefined,
+      () => {},
+      null,
+      (effect, ownership) => applyStructuredReconfigure(effect, {
+        registry,
+        ownsOperation: ownership.isCurrent,
+        carriedSends: ownership.carriedSends,
+        pipelineSwitch: async () => null,
+        releaseHost: async () => {
+          releases += 1;
+          if (liveHost) { await liveHost.release(); liveHost = null; return true; }
+          return false;
+        },
+        recover: (async () => {
+          liveHost = await startHost(true);
+          return { ok: true, spawned: true, reconnected: false, conversationId: convId, path: liveHost.identity.path };
+        }) as unknown as NonNullable<Parameters<typeof applyStructuredReconfigure>[1]>["recover"],
+      }),
+    );
+
+    const admitReconfigure = async (operationId: string, model: string, effort: string) => {
+      const res = await dispatchStructuredControl({
+        path: transcriptPath,
+        conversationId: convId,
+        action: "reconfigure",
+        operationId,
+        reconfiguration: { model, effort },
+      }, { registry, client: inProcessClient, enabled: () => true, kick: () => {} });
+      expect(res?.status).toBe(202);
+    };
+
+    try {
+      // 1. Live idle reconfigure -> 0 releases, 0 restarts, 0 resumes!
+      const startsBeforeLive = starts;
+      configCalls.length = 0;
+      const opLive = `op-reconf-live-${crypto.randomUUID().slice(0, 8)}`;
+      await admitReconfigure(opLive, "gemini-4-neon", "high");
+      await queue.drain({ freshAdmission: true });
+      expect(journal.operationResult(opLive)?.receipt).toMatchObject({ status: "applied" });
+      expect(registry.conversation(convId)?.reconfigure?.status).toBe("applied");
+      expect(registry.conversation(convId)?.generations.at(-1)?.launchProfile).toMatchObject({ model: "gemini-4-neon", effort: "high" });
+      expect(releases).toBe(0);
+      expect(starts - startsBeforeLive).toBe(0);
+      expect(resumes).toBe(0);
+      expect(configCalls).toEqual([
+        { configId: "model", value: "gemini-4-neon" },
+        { configId: "thought_level", value: "high" },
+      ]);
+
+      // 2. Explicit ACP refusal on live idle host -> fails, rolls back launchProfile, 0 restarts!
+      rejectNextConfig = true;
+      const opBad = `op-reconf-bad-${crypto.randomUUID().slice(0, 8)}`;
+      await admitReconfigure(opBad, "gemini-4-argon", "medium");
+      await queue.drain({ freshAdmission: true });
+      expect(journal.operationResult(opBad)?.receipt.status).toBe("failed");
+      expect(registry.conversation(convId)?.reconfigure?.status).toBe("failed");
+      expect(registry.conversation(convId)?.generations.at(-1)?.launchProfile).toMatchObject({ model: "gemini-4-neon", effort: "high" });
+      expect(releases).toBe(0);
+      expect(starts - startsBeforeLive).toBe(0);
+
+      // 3. Stopped / unhosted conversation -> falls back to recovery with session/resume!
+      await liveHost!.release();
+      liveHost = null;
+      registry.terminateStructuredHost({ engine: "antigravity", sessionId });
+      journal.append({
+        scope: { type: "session", id: convId },
+        kind: "session-status",
+        payload: {
+          conversationId: convId,
+          sessionKey: { engine: "antigravity", sessionId },
+          hostKind: "antigravity-acp",
+          host: "unhosted",
+          turn: "idle",
+          activeTurnId: null,
+          writerClaim: "reconf:1",
+          provenance: "structured",
+          capabilities: { steer: false, steerMode: "interrupt", structuredAttention: true },
+        },
+      });
+      const startsBeforeRestart = starts;
+      configCalls.length = 0;
+      const opRestart = `op-reconf-restart-${crypto.randomUUID().slice(0, 8)}`;
+      await admitReconfigure(opRestart, "gemini-4-argon", "medium");
+      await queue.drain({ freshAdmission: true });
+      expect(journal.operationResult(opRestart)?.receipt).toMatchObject({ status: "applied" });
+      expect(registry.conversation(convId)?.generations.at(-1)?.launchProfile).toMatchObject({ model: "gemini-4-argon", effort: "medium" });
+      expect(starts - startsBeforeRestart).toBe(1);
+      expect(resumes).toBe(1);
+    } finally {
+      if (liveHost) await liveHost.release();
+      registry.close();
+      journal.close();
+    }
+  });
+
+  it("keeps host agentState promptOrdinal aligned with AgentTranscriptCache across rejected prompts and adopt()", async () => {
+    const { AgentTranscriptCache } = await import("@/lib/agentState/transcript");
+    const sessionId = crypto.randomUUID();
+    const eventStore = new FileRuntimeEventStore(path.join(stateDir, "events-ordinal"));
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+    let promptHandler: ((id: number, api: { sendToHost: (msg: JsonObject) => void }) => void) | null = null;
+
+    const makeOpts = (): AntigravityAcpHostOptions => ({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      model: "gemini-3.8-flash",
+      effort: "low",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore,
+      shutdownGraceMs: 40,
+      processIdentity: () => "start-ordinal",
+      signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+      spawnProcess: () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          else if (method === "session/new" || method === "session/resume") api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+          else if (method === "session/set_config_option" || method === "session/close") api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          else if (method === "session/prompt" && id !== undefined) promptHandler?.(id, api);
+        });
+        return fake.child;
+      },
+    });
+
+    const tick = () => new Promise((r) => setTimeout(r, 25));
+    const cache = new AgentTranscriptCache();
+    let host = await AntigravityAcpHost.start(makeOpts());
+    const compare = async (id: string) => {
+      const h = await host.health();
+      const proof = await cache.acquire({
+        engine: "antigravity",
+        path: host.identity.path,
+        revision: `rev-${id}`,
+        localRef: h.activeTurnRef,
+        observedAt: Date.now(),
+        anchor: h.agentStateNativePromptAnchor,
+      });
+      return {
+        memory: host.agentStateMemory().promptOrdinal,
+        health: h.agentStateNativePromptOrdinal,
+        cachedOrdinal: proof.turn.determined ? proof.turn.value.promptOrdinal : null,
+      };
+    };
+
+    try {
+      let frame = 0;
+      promptHandler = (id, api) => {
+        frame = id;
+        api.sendToHost({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "first" } } } });
+      };
+      await host.send({ id: "ord-1", text: "first prompt" });
+      await tick();
+      expect(await compare("ord-1")).toEqual({ memory: 1, health: 1, cachedOrdinal: 1 });
+      fake.sendToHost({ jsonrpc: "2.0", id: frame, result: { stopReason: "end_turn" } });
+      await tick();
+
+      // Explicit ACP rejection MUST NOT advance confirmed promptOrdinal.
+      promptHandler = (id, api) => api.sendToHost({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture rejection" } });
+      await host.send({ id: "ord-rejected", text: "rejected prompt" });
+      await tick();
+
+      promptHandler = (id, api) => {
+        frame = id;
+        api.sendToHost({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "second" } } } });
+      };
+      await host.send({ id: "ord-2", text: "accepted after refusal" });
+      await tick();
+      expect(await compare("ord-2")).toEqual({ memory: 2, health: 2, cachedOrdinal: 2 });
+      fake.sendToHost({ jsonrpc: "2.0", id: frame, result: { stopReason: "end_turn" } });
+      await tick();
+
+      // Across adopt() (session/resume), readNativePromptAnchor anchors at the
+      // current transcript EOF so both host memory and AgentTranscriptCache count
+      // confirmed starts after that anchor (starting at 1 for the first resumed turn).
+      await host.release();
+      host = await AntigravityAcpHost.adopt(sessionId, makeOpts());
+      promptHandler = (id, api) => {
+        frame = id;
+        api.sendToHost({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "third" } } } });
+      };
+      await host.send({ id: "ord-3", text: "after adopt" });
+      await tick();
+      expect(await compare("ord-3")).toEqual({ memory: 1, health: 1, cachedOrdinal: 1 });
+      fake.sendToHost({ jsonrpc: "2.0", id: frame, result: { stopReason: "end_turn" } });
+      await tick();
+    } finally {
+      await host.release();
     }
   });
 });

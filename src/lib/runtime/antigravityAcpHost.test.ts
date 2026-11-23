@@ -741,6 +741,7 @@ describe("AntigravityAcpHost", () => {
     let host = await AntigravityAcpHost.start(makeOpts());
     const firstReceipt = await host.send({ id: "delivery-one", text: "First message" });
     expect(firstReceipt.outcome).toBe("turn-started");
+    if (firstReceipt.outcome !== "turn-started") throw new Error("expected turn-started");
     expect((await host.sessionMaterializationEvidence("delivery-one")).state).toBe("absent");
     fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
     await new Promise((r) => setTimeout(r, 20));
@@ -754,7 +755,7 @@ describe("AntigravityAcpHost", () => {
     expect((await host.sessionMaterializationEvidence("delivery-two")).state).toBe("absent");
     const promptsBeforeRetry = outboundPrompts.length;
     const retryReceipt = await host.send({ id: "delivery-one", text: "First message" });
-    expect(retryReceipt).toEqual(firstReceipt);
+    expect(retryReceipt).toEqual({ outcome: "turn-started", turnId: firstReceipt.turnId });
     await new Promise((r) => setTimeout(r, 20));
     expect(outboundPrompts.length - promptsBeforeRetry).toBe(0);
     const echoesForOne = eventStore.load(mintedSessionId)
@@ -962,7 +963,7 @@ describe("AntigravityAcpHost", () => {
     expect((await host.sessionMaterializationEvidence("edge-never-sent")).state).toBe("absent");
     const promptsBeforeRetentionRetry = outboundPrompts.length;
     const retentionRetry = await host.send(firstEntry);
-    expect(retentionRetry).toEqual(firstReceipt);
+    expect(retentionRetry).toEqual({ outcome: "turn-started", turnId: firstReceipt.turnId });
     expect(outboundPrompts.length - promptsBeforeRetentionRetry).toBe(0);
 
     // Cold send after eviction: 0 ledger scans, 0 full loads.
@@ -1127,7 +1128,7 @@ describe("AntigravityAcpHost", () => {
     expect(await host.sessionMaterializationEvidence(raceEntry.id)).toEqual({ state: "materialized" });
     const promptsBeforeSameHostRetry = outboundPrompts.length;
     const sameHostRetry = await host.send(raceEntry);
-    expect(sameHostRetry).toEqual(initial);
+    expect(sameHostRetry).toEqual({ outcome: "turn-started", turnId: initial.turnId });
     expect(outboundPrompts.length - promptsBeforeSameHostRetry).toBe(0);
     await host.release();
 
@@ -1135,7 +1136,7 @@ describe("AntigravityAcpHost", () => {
     expect(await host.sessionMaterializationEvidence(raceEntry.id)).toEqual({ state: "materialized" });
     const promptsBeforeAdoptRetry = outboundPrompts.length;
     const adoptRetry = await host.send(raceEntry);
-    expect(adoptRetry).toEqual(initial);
+    expect(adoptRetry).toEqual({ outcome: "turn-started", turnId: initial.turnId });
     expect(outboundPrompts.length - promptsBeforeAdoptRetry).toBe(0);
 
     // B. Paired control: ACP explicitly answers stopReason="cancelled" before any updates -> failed, retry allowed.

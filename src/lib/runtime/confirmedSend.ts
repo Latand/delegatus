@@ -108,7 +108,7 @@ async function legacyConfirmedSend(file: RegistryFile, operationId: string, cons
 
 /** One reader owns both arrival evidence and its terminal turn association. */
 export interface ConfirmedSendEvidence {
-  source: "canonical" | "claude-native-result" | "claude-native-input";
+  source: "canonical" | "claude-native-result" | "claude-native-input" | "antigravity-ledger";
   turnId: string | null;
   sessionId?: string;
   inputUuid?: string;
@@ -125,6 +125,16 @@ export async function readConfirmedSendEvidence(file: RegistryFile, operationId:
   const generationId = owner.targetGenerationId ?? file.heldDeliveries[owner.deliveryId]?.generationId;
   const generation = conversation?.generations.find(candidate => candidate.id === generationId);
   if (!generation) return null;
+  if (conversation.engine === "antigravity") {
+    if (owner.batchId) return null;
+    try {
+      const { readAntigravityConfirmedDelivery } = await import("./antigravityAcpHost");
+      const proof = await readAntigravityConfirmedDelivery(generation.id, operationId);
+      return proof ? { source: "antigravity-ledger", turnId: proof.turnId, sessionId: generation.id } : null;
+    } catch {
+      return null;
+    }
+  }
   if (conversation.engine === "claude") {
     try {
       const { FileClaudeDeliveryLedger } = await import("./claudeStreamBrokerHost");
