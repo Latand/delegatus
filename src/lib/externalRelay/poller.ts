@@ -446,8 +446,11 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
     return "failed";
   }
 }
+/** Enable only after the paired service releases guest-only isolated routing. */
+export const ISOLATED_GUEST_REQUESTERS_ENABLED = false;
 /** What this install implements of the optional parts of v1 (§A.2 rule 11). */
-export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers", "relay_isolated_requesters"];
+export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers",
+  ...(ISOLATED_GUEST_REQUESTERS_ENABLED ? ["relay_isolated_requesters"] : [])];
 export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
   const switches = readRelaySwitches();
   const rich = switches.rich_media && relay?.features?.includes("relay_rich_messages");

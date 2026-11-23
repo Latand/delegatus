@@ -224,8 +224,8 @@ test("ordinary non-owner claims use the existing restricted member path", () => 
   expect(callableTools(request)).toEqual([]);
 });
 
-for (const [isOwner, descriptorOffersRouting] of [[true, false], [true, true], [false, false]] as const)
-test(`guest history reaches the native runner with is_owner=${isOwner}, descriptor routing offer=${descriptorOffersRouting}`, async () => {
+for (const [isOwner, descriptorOffersGuestAnswers] of [[true, false], [true, true], [false, false]] as const)
+test(`guest history reaches the native runner with is_owner=${isOwner}, descriptor guest offer=${descriptorOffersGuestAnswers}`, async () => {
   const sharp = (await import("sharp")).default;
   const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
   const request = guest();
@@ -258,7 +258,7 @@ test(`guest history reaches the native runner with is_owner=${isOwner}, descript
   });
   const relay = paired(server.origin);
   relay.features!.push("relay_media_in");
-  if (descriptorOffersRouting) relay.features!.push("relay_isolated_requesters");
+  if (descriptorOffersGuestAnswers) relay.features!.push("relay_guest_answers");
   updateRelayStore(s => ({ ...s, relays: [relay] }));
   const capture = path.join(root, "guest-media-input.json"), command = path.join(root, "guest-media-agent");
   fs.writeFileSync(command, `#!${process.execPath}
@@ -270,7 +270,8 @@ console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{a
   try {
     const claimed = await relayCall<{ request: unknown }>(relay.api_base, "/requests/claim", "POST", relayClaimBody(relay), relay.credential);
     expect(claims).toHaveLength(1);
-    expect((claims[0] as { features: string[] }).features).toContain("relay_isolated_requesters");
+    expect((claims[0] as { features: string[] }).features).toContain("relay_guest_answers");
+    expect((claims[0] as { features: string[] }).features).not.toContain("relay_isolated_requesters");
     const result = await runClaimedRequest(relay, claimed.body!.request, undefined, { leaseWorker: false, command });
     expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Done.", reply_to: null } });
     expect(completions).toEqual([result]);

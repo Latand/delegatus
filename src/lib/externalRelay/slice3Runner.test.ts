@@ -34,7 +34,7 @@ const rows = () => fs.readFileSync(seenFile, "utf8").trim().split("\n").map((lin
 test("claims list no conversation feature, including when the legacy key is stored true", () => {
   fs.mkdirSync(path.join(root, "state/external-relay"), { recursive: true });
   fs.writeFileSync(path.join(root, "state/external-relay/switches.json"), JSON.stringify({ v: 1, chat_conversations: true, chain_conversations: true, compact: true }));
-  expect(relayClaimCapabilities()).toEqual({ kinds: ["answer", "compact"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers", "relay_isolated_requesters"] });
+  expect(relayClaimCapabilities()).toEqual({ kinds: ["answer", "compact"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers"] });
   setRelaySwitch("compact", false); expect(relayClaimCapabilities().kinds).toEqual(["answer"]);
 });
 

@@ -1576,13 +1576,15 @@ For guest delivery, the service supplies the chat's context in
 adds that conversation and any supplied `input.short_term_memory` to the
 guest turn for either requester. An absent or null memory field adds no
 memory section. The same guest media policy applies to each requester.
-The install returns `relay_isolated_requesters` on every claim alongside
-`relay_guest_answers` and `requester_context`, including when the service
-descriptor omits it. This is the service's routing signal for non-owner guest
-requests. Guest claims use the guest path for either requester. A private
-request arriving without guest delivery uses the existing restricted member
-path, with no owner tier or owner-only tools. Owner guest requests keep the
-same guest path and behavior.
+The install returns `relay_guest_answers` and `requester_context` on every
+claim, including when the service descriptor omits them. Non-owner guest
+execution is ready on the same guest path as owner guest execution, with the
+same context and media handling. It remains inactive until the paired service
+releases its guest-only `relay_isolated_requesters` routing; that flag must no
+longer route non-owner private chats to the owner's agent. The install keeps
+advertising this flag disabled by default in
+`ISOLATED_GUEST_REQUESTERS_ENABLED` until that release. Owner guest requests
+keep the same guest path and behavior.
 
 - `mode: "direct"` names a tool the install could call itself once a later
   feature negotiates reads (`relay_tool_calls`, slice 2); `"handoff"` names
