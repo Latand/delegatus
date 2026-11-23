@@ -728,10 +728,31 @@ slot lock. The new wrapper waits for that pool to drain before its first
 claim. It checks the kernel's process view for wrappers that have consumed
 their tickets, owned runners and their cleanup supervisors. Signal-sandboxed
 callers use the verified host process view. A waiting shell still has its
-ticket and does not keep the pool from draining. A held slot whose admission
-already passed the drain check carries that proof forward. The same final
-claim transaction rejects a drain observation if another caller admitted
-work during the check.
+ticket. The pre-commit hook and publication preparer bootstrap an owned copy
+before heavy admission. Their original hook process identifies the cleanup
+client and service so they can wait for their own nested gate. A held slot
+whose admission already passed the drain check carries that proof forward.
+The same final claim transaction rejects a drain observation if another caller
+admitted work during the check.
+
+Managed Linux stages supply the installed gate helper through a host-local Bun
+launcher in `LLV_GATE_BUN`. The launcher retains an explicit interpreter;
+without one it runs `bun` from the caller's `PATH`, as gate-slot does, so a
+host agent bridged from the image never receives the container-only
+interpreter. Ordinary hook commands resolve Bun through their own `PATH`.
+Check keys and Cloud check inputs read the interpreter the launcher recorded,
+never its per-release path, so routing neither refuses Cloud publication nor
+changes a check's reuse key across releases. Wrappers send
+both readiness and final claim through the installed helper, including from
+older checkouts. Each new engine launch receives this routing automatically.
+An already-running waiter keeps its launch environment and completes under the
+helper it started with. Slotless wrappers retain their original claim format.
+Wrappers from #3353 up to #4174 pass their queue start after
+`--wait key pid`; the helper reads a fourth argument as a slot only on
+`--claim`, so those waits keep working under routing. A fixture that starts
+its own gates (`withoutInheritedGate`) replaces a routed `LLV_GATE_BUN` with
+the interpreter the launcher recorded, so a test of a changed helper runs the
+checkout's own `cpu-admission.ts`.
 
 Older installed and checkout wrappers can keep polling during the transition.
 After reaching the wait bound, a current ticket can pass older pressure-only

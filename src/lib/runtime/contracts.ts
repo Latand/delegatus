@@ -23,33 +23,45 @@ export interface RuntimeScope {
 export type RuntimeScopeString = `${RuntimeScopeKind}:${string}`;
 export type RuntimeScopeInput = RuntimeScope | RuntimeScopeString;
 
-export type RuntimeEngine = "codex" | "claude" | "copilot";
-export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "unhosted";
+export type RuntimeEngine = "codex" | "claude" | "copilot" | "antigravity";
+export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "antigravity-acp" | "unhosted";
 
 /** The structured host kind each engine runs under. */
-export function runtimeHostKindForEngine(engine: RuntimeEngine): Extract<RuntimeHostKind, "codex-app-server" | "claude-broker" | "copilot-acp"> {
-  return engine === "codex" ? "codex-app-server" : engine === "copilot" ? "copilot-acp" : "claude-broker";
+export function runtimeHostKindForEngine(
+  engine: RuntimeEngine,
+): Extract<RuntimeHostKind, "codex-app-server" | "claude-broker" | "copilot-acp" | "antigravity-acp"> {
+  if (engine === "codex") return "codex-app-server";
+  if (engine === "copilot") return "copilot-acp";
+  if (engine === "antigravity") return "antigravity-acp";
+  return "claude-broker";
 }
 
 /** Whether a host kind is a structured (pane-less) engine host. */
-export function isStructuredHostKind(kind: string | null | undefined): kind is "codex-app-server" | "claude-broker" | "copilot-acp" {
-  return kind === "codex-app-server" || kind === "claude-broker" || kind === "copilot-acp";
+export function isStructuredHostKind(
+  kind: string | null | undefined,
+): kind is "codex-app-server" | "claude-broker" | "copilot-acp" | "antigravity-acp" {
+  return kind === "codex-app-server" || kind === "claude-broker" || kind === "copilot-acp" || kind === "antigravity-acp";
 }
 
 /** The engine a structured host kind belongs to, or null for a non-structured one. */
 export function runtimeEngineForHostKind(kind: string | null | undefined): RuntimeEngine | null {
-  return kind === "codex-app-server" ? "codex" : kind === "copilot-acp" ? "copilot" : kind === "claude-broker" ? "claude" : null;
+  if (kind === "codex-app-server") return "codex";
+  if (kind === "copilot-acp") return "copilot";
+  if (kind === "antigravity-acp") return "antigravity";
+  if (kind === "claude-broker") return "claude";
+  return null;
 }
 
 /**
- * How a message for a running turn reaches this engine (docs/design/copilot-engine.md 3.4).
- * Codex steers into the turn. Copilot's ACP has no steer, so a steer is
- * delivered by interrupt-and-resend. Claude's broker declares neither and
- * refuses a steer.
+ * How a message for a running turn reaches this engine (docs/design/copilot-engine.md 3.4,
+ * docs/design/antigravity-engine.md 3.3).
+ * Codex steers into the turn. Copilot and Antigravity ACP have no documented steer,
+ * so a steer is delivered by interrupt-and-resend. Claude's broker declares neither
+ * and refuses a steer.
  */
 export function runtimeSteerCapability(engine: RuntimeEngine): { steer: boolean; steerMode?: "interrupt" } {
   if (engine === "codex") return { steer: true };
-  if (engine === "copilot") return { steer: false, steerMode: "interrupt" };
+  if (engine === "copilot" || engine === "antigravity") return { steer: false, steerMode: "interrupt" };
   return { steer: false };
 }
 export type RuntimeHostAxis = "registering" | "hosted" | "recovering" | "unhosted" | "conflict" | "dead";
@@ -567,8 +579,8 @@ export interface RuntimeControlCapability {
  * button that lies about the engine.
  */
 export function runtimeCompactCapability(engine: RuntimeEngine): RuntimeControlCapability {
-  if (engine === "copilot") {
-    return { control: "compact", engine, supported: false, reason: "the Copilot ACP host exposes no compact control" };
+  if (engine === "copilot" || engine === "antigravity") {
+    return { control: "compact", engine, supported: false, reason: `the ${engine === "antigravity" ? "Antigravity" : "Copilot"} ACP host exposes no compact control` };
   }
   return engine === "codex"
     ? { control: "compact", engine, supported: true, confirmation: "observed" }
@@ -1132,7 +1144,7 @@ export interface RuntimeSocketRequest {
   /** Opt in to serial reuse; older listeners close after the answer. */
   keepAlive?: boolean;
   id: string;
-  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-transition-pristine" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "files-revision" | "session-read" | "startup-session-evidence" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-transition-pristine" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 
@@ -1278,4 +1290,14 @@ export function assertRuntimeEvent(input: RuntimeEventInput): void {
 export interface RuntimeSessionRead {
   conversationId?: string;
   artifactPath?: string;
+}
+
+export const STARTUP_SESSION_VERSION_BATCH = 128;
+export type StartupRuntimeSession = Pick<RuntimeSession, "conversationId" | "host" | "turn" | "recentReceipts">;
+export interface RuntimeStartupSessionEvidence {
+  generation: string;
+  version: string;
+  effectsVersion: string;
+  sessions: (number | null)[];
+  evidence?: StartupRuntimeSession | null;
 }

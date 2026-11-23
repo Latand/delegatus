@@ -21,7 +21,7 @@ function catalog(snapshot: RoleRegistrySnapshot) {
     health: snapshot.health,
     /* The launch catalogue and per-model reasoning ladders also drive the
        maintainer picker. Role runtimes stay in the same registry row. */
-    launchChoices: (["claude", "codex"] as const).map(engine => ({
+    launchChoices: (["claude", "codex", "antigravity"] as const).map(engine => ({
       engine,
       models: ENGINE_MODELS[engine].map(model => ({ ...model, efforts: effortScale(engine, model.id)! })),
     })),
@@ -74,7 +74,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse> {
   for (const override of Object.values(patch)) {
     for (const config of [override.config, ...Object.values(override.variants ?? {})]) {
       if (!config) continue;
-      if (config.engine !== "claude" && config.engine !== "codex") return NextResponse.json({ error: "role engine must be claude or codex" }, { status: 400 });
+      if (config.engine !== "claude" && config.engine !== "codex" && config.engine !== "antigravity") return NextResponse.json({ error: "role engine must be claude, codex or antigravity" }, { status: 400 });
       const model = validateLaunchModel(config.engine, config.model);
       if ("error" in model) return NextResponse.json({ error: model.error }, { status: 400 });
     }

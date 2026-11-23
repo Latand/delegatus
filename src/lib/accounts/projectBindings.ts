@@ -546,7 +546,7 @@ export function accountsHiddenFromMember(project: string | null | undefined, eng
  * accounts exist. Capacity and availability read the same: it carries no id,
  * label, count, catalog or limit window, and none that tells the two apart.
  */
-export function hiddenAccountsSelectionRefusal(engine: BindingEngine, project: string): string {
+export function hiddenAccountsSelectionRefusal(engine: BindingEngine | "antigravity", project: string): string {
   return `no ${engine} account can take work for project ${project} right now`;
 }
 
@@ -586,7 +586,7 @@ export function projectAllowsAccount(
  */
 export function projectAccountRefusalDetail(
   resolution: Exclude<ProjectSpawnResolution, { kind: "available" }>,
-  engine: BindingEngine,
+  engine: BindingEngine | "antigravity",
   project: string,
 ): string {
   const allowed = resolution.allowedAccountIds.length

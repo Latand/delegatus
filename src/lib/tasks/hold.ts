@@ -6,6 +6,13 @@ const sentence = (value: unknown): string => typeof value === "string" ? value.r
 export const TASK_HOLD_NOTE_LIMIT = 200;
 export const TASK_HOLD_REF_LIMIT = 500;
 
+/** The Waiting column records a next step reserved for the operator. */
+export const holdParks = (hold: TaskHold): boolean => hold.kind === "operator" && !!sentence(hold.note);
+
+export function normalizeHoldKind(kind: unknown): unknown {
+  return typeof kind === "string" ? kind.trim().toLowerCase() : kind;
+}
+
 /** New authoritative input is refused before any task or step is persisted. */
 export function validateTaskHoldInput(value: unknown, field = "hold"): { ok: false; error: string; status: 400; code: "TASK_INVALID_FIELD"; field: string } | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -23,7 +30,7 @@ export function validateTaskHoldInput(value: unknown, field = "hold"): { ok: fal
 export function readTaskHold(value: unknown, now: string, by: TaskHold["by"], previous?: TaskHold, conversationId?: string, notes?: string[]): TaskHold | undefined {
   if (value === null || value === undefined) return undefined;
   const raw = typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  const normalized = typeof raw.kind === "string" ? raw.kind.trim().toLowerCase() : raw.kind;
+  const normalized = normalizeHoldKind(raw.kind);
   const known = (TASK_HOLD_KINDS as readonly unknown[]).includes(normalized);
   const kind: TaskHoldKind = known ? normalized as TaskHoldKind : "unstated";
   if (!known && raw.kind !== undefined) notes?.push(`Unknown hold kind ${JSON.stringify(raw.kind)} normalized to unstated.`);

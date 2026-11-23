@@ -102,7 +102,7 @@ export interface SnapshotSpawnStub {
     state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
     error: string | null;
     retrySafe: boolean;
-    engine: Extract<Engine, "claude" | "codex" | "copilot">;
+    engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">;
     cwd: string;
     createdAt: string;
   };

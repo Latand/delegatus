@@ -77,7 +77,7 @@ export type ForgeRepositoryEntry = {
   /** When the last successful sweep started, which the next one's page must
       reach back to. */
   lastSweepAt: string | null;
-  /** When a sweep was last tried, successful or not. */
+  /** When the latest PR sweep finished. Older cache entries record its start. */
   lastAttemptAt: string | null;
   /** Coarse, as githubEvidence.ts reports it: never gh's stderr. */
   lastError: ForgeSweepError | null;

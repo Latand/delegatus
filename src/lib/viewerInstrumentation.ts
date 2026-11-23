@@ -28,7 +28,7 @@ import {
 } from "@/lib/state/hotStateAuthority";
 import { initializeStateCollectionsAsync as initializeStateCollections, markStateSqliteCutoverReady } from "@/lib/state/sqliteStateStore";
 import { openStateMutationActivation } from "@/lib/state/stateMutationBarrier";
-import { markStructuredHostStartupFailed, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
+import { markStructuredHostStartupFailed, markStructuredHostStartupReady, markStructuredHostStartupRetryStarted } from "@/lib/runtime/startupStatus";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
 import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 import { readAuto } from "@/lib/selfUpdate/auto";
@@ -722,7 +722,7 @@ const TRANSIENT_IO_CODES = new Set([
   "ENOENT",
 ]);
 
-function startupErrorField(error: unknown, field: "code" | "name" | "message" | "hostKey"): string {
+function startupErrorField(error: unknown, field: "code" | "name" | "message" | "hostKey" | "deadline"): string {
   if (typeof error !== "object" || error === null || !(field in error)) return "";
   const value = error[field as keyof typeof error];
   return typeof value === "string" ? value : "";
@@ -768,7 +768,7 @@ export function classifyStructuredHostStartupError(
       action: "Retry after the process controller publication becomes visible.",
     };
   }
-  if (code === "ETIMEDOUT" || /\btimed out\b/i.test(message)) {
+  if (code === "ETIMEDOUT" || /\b(?:timed out|deadline exceeded)\b/i.test(message)) {
     return {
       disposition: "recoverable",
       category: "timeout",
@@ -828,6 +828,7 @@ export async function runStructuredHostStartup(
     if (running || finished) return;
     running = true;
     attempts += 1;
+    markStructuredHostStartupRetryStarted();
     try {
       options.signal?.throwIfAborted();
       await adopt();
@@ -845,12 +846,14 @@ export async function runStructuredHostStartup(
         throw error;
       }
       const classification = classifyStructuredHostStartupError(error);
-      markStructuredHostStartupFailed(classification.category);
       const diagnostic = {
         message: redactBounded(startupErrorField(error, "message") || String(error), 1_000),
-        hostKey: startupErrorField(error, "hostKey") || null,
+        hostKey: redactBounded(startupErrorField(error, "hostKey"), 160) || null,
       };
+      const deadline = redactBounded(startupErrorField(error, "deadline"), 160)
+        || (classification.category === "timeout" ? diagnostic.message : null);
       if (classification.disposition === "terminal") {
+        markStructuredHostStartupFailed(classification.category, { deadline, hostKey: diagnostic.hostKey, nextRetryAt: null });
         finished = true;
         options.signal?.removeEventListener("abort", aborted);
         log("[structured hosts] startup adoption failed", {
@@ -867,6 +870,9 @@ export async function runStructuredHostStartup(
       const delayMs = Math.min(maxRetryMs, Math.max(0, Math.round(retryMs * jitter)));
       retryMs = Math.min(retryMs * 2, maxRetryMs);
       retryPending = true;
+      markStructuredHostStartupFailed(classification.category, {
+        deadline, hostKey: diagnostic.hostKey, nextRetryAt: new Date(Date.now() + delayMs).toISOString(),
+      });
       log("[structured hosts] startup adoption failed; retry scheduled", {
         ...diagnostic,
         category: classification.category, attempt: attempts, retryInMs: delayMs,

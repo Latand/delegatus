@@ -86,6 +86,19 @@ function nativeQueueReceipt(entry: NativeQueueRecord): NonNullable<RuntimeOperat
     dispatchedRevision: entry.dispatchedRevision, profilePolicy: entry.profilePolicy };
 }
 
+const STARTUP_EFFECT_REVISION = "startup_effect_revision";
+const startupEffectWriteTriggers = [
+  ["outbox_insert", "AFTER INSERT ON outbox WHEN NEW.state = 'pending'"],
+  ["outbox_update", "AFTER UPDATE ON outbox WHEN OLD.state = 'pending' OR NEW.state = 'pending'"],
+  ["outbox_delete", "AFTER DELETE ON outbox WHEN OLD.state = 'pending'"],
+  ["operation_insert", `AFTER INSERT ON operations WHEN EXISTS (
+    SELECT 1 FROM outbox WHERE id = 'effect:' || NEW.operation_id AND state = 'pending')`],
+  ["operation_update", `AFTER UPDATE OF receipt_json, operation_id ON operations WHEN EXISTS (
+    SELECT 1 FROM outbox WHERE id IN ('effect:' || OLD.operation_id, 'effect:' || NEW.operation_id) AND state = 'pending')`],
+  ["operation_delete", `AFTER DELETE ON operations WHEN EXISTS (
+    SELECT 1 FROM outbox WHERE id = 'effect:' || OLD.operation_id AND state = 'pending')`],
+] as const;
+
 export class RuntimeJournalFault extends RuntimeDataCorruptionError {}
 
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
@@ -313,7 +326,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
   return {
     conversationId: typeof payload.conversationId === "string" ? payload.conversationId : id,
     sessionKey: {
-      engine: key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex",
+      engine: key.engine === "claude" || key.engine === "copilot" || key.engine === "antigravity" ? key.engine : "codex",
       sessionId: typeof key.sessionId === "string" ? key.sessionId : id,
     },
     hostKind: isStructuredHostKind(storedKind) ? storedKind as RuntimeSession["hostKind"] : "unhosted",
@@ -349,7 +362,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
       } } : {}),
       imageInput: capabilities.imageInput && typeof capabilities.imageInput === "object"
         ? capabilities.imageInput as RuntimeSession["capabilities"]["imageInput"]
-        : runtimeImageCapability(key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex", false),
+        : runtimeImageCapability(key.engine === "claude" || key.engine === "copilot" || key.engine === "antigravity" ? key.engine : "codex", false),
     },
     ...(payload.diagnostics && typeof payload.diagnostics === "object" ? { diagnostics: {
       executable: typeof record(payload.diagnostics).executable === "string" ? String(record(payload.diagnostics).executable).split(/[\\/]/).at(-1)!.slice(0, 80) : "unknown",
@@ -631,6 +644,7 @@ export class RuntimeJournal {
     yield* this.verify();
     if (!this.fault) {
       sessionArtifactIndexes.install(this.db, dirname(this.db.filename));
+      if (this.structuredHosts) this.installStartupEffectRevision();
       this.sessionHostMetadata.start();
       this.liveTurnCompaction.start();
     }
@@ -2323,6 +2337,45 @@ export class RuntimeJournal {
   effectPageVersion(): string {
     const peer = this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
     return `${this.effectReaderGeneration}:${this.totalChanges()}:${peer}`;
+  }
+
+  /** Every writer of a pending effect participates, including a predecessor
+      connection and operation receipts that change effect visibility. Live
+      session writes leave this witness alone, so they do not rewind paging. */
+  private installStartupEffectRevision(): void {
+    const exists = this.db.query<{ name: string }, [string]>("SELECT name FROM sqlite_master WHERE type='trigger' AND name=?");
+    const missing = startupEffectWriteTriggers.filter(([name]) => !exists.get(`startup_effect_${name}`));
+    if (!missing.length && this.metaOr(STARTUP_EFFECT_REVISION, "")) return;
+    assertStateStartupMutation(dirname(this.db.filename), "runtime journal startup effect tracking");
+    this.db.transaction(() => {
+      this.metaSetDefault(STARTUP_EFFECT_REVISION, "0");
+      for (const [name, definition] of missing) {
+        this.db.exec(`CREATE TRIGGER IF NOT EXISTS startup_effect_${name} ${definition}
+          BEGIN UPDATE journal_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = '${STARTUP_EFFECT_REVISION}'; END`);
+      }
+    }).immediate();
+  }
+
+  startupSessionEvidence(conversationIds: readonly string[], includeEvidence = false) {
+    this.assertHealthy();
+    // Existing rows with no write tick predate the tracking schema.
+    const read = this.db.query<{ stamp: number }, [string]>(`
+      SELECT COALESCE(t.tick, 0) AS stamp FROM entities AS e
+      LEFT JOIN entity_write_ticks AS t ON t.kind=e.kind AND t.id=e.id
+      WHERE e.kind='session' AND e.id=?`);
+    return this.db.transaction(() => {
+      const effectsVersion = `${this.effectReaderGeneration}:${this.meta(STARTUP_EFFECT_REVISION)}`;
+      const version = this.effectPageVersion();
+      const sessions = conversationIds.map(id => read.get(id)?.stamp ?? null);
+      const result = { generation: this.effectReaderGeneration, version, effectsVersion, sessions };
+      if (!includeEvidence) return result;
+      const session = this.entity<RuntimeSession>("session", conversationIds[0]!, false);
+      const evidence = session && {
+        conversationId: session.conversationId, host: session.host, turn: session.turn,
+        recentReceipts: visibleReceipts(session.recentReceipts).map(runtimePresentationReceipt).map(receipt => this.presentReceipt(receipt)),
+      };
+      return { ...result, evidence };
+    })();
   }
 
   effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0, conversationId?: string): Array<RuntimeEffect & { eventSeq: number }> {

@@ -56,7 +56,7 @@ export function DraftRuntimePill({ launch, disabled = false, projectAccounts }: 
      pool holds an account of each, and only the draft's own engine shows until the pool has been read.
      Copilot has no pool, so a member is never offered it; a draft already on it keeps its own row until it moves. */
   const offered = useCallback((entry: LaunchEngine) => !member
-    || (entry === "copilot" ? entry === engine : projectAccounts ? engineOffered(projectAccounts.engines[entry]) : entry === engine), [member, projectAccounts, engine]);
+    || (entry === "copilot" || entry === "antigravity" ? entry === engine : projectAccounts ? engineOffered(projectAccounts.engines[entry]) : entry === engine), [member, projectAccounts, engine]);
   const modelOptions = useMemo(() => AGENT_LAUNCH_ENGINES.filter(offered).flatMap((entry) => listedModels(entry, entry === engine ? launch.model : null).map((model) => ({
     ...model, id: entry === engine ? model.id : foreignModel(entry, model.id), label: `${launchEngineLabel(entry)} · ${model.label}`,
   }))), [engine, launch.model, offered]);
@@ -113,15 +113,15 @@ export function DraftRuntimePill({ launch, disabled = false, projectAccounts }: 
     return () => observer.disconnect();
   }, [open, panel, isMobile, place]);
 
-  /* Copilot's accounts come from the draft's catalog, the ones that can take a launch; with none listed
+  /* Copilot and Antigravity accounts come from the draft's catalog, the ones that can take a launch; with none listed
      there is nothing to choose and the launch runs on the CLI's own profile. */
-  const ownAccounts = useMemo(() => (engine === "copilot"
+  const ownAccounts = useMemo(() => (engine === "copilot" || engine === "antigravity"
     ? accounts.filter((account) => account.authPresent && !account.signedOut).map(({ id, label }) => ({ id, label }))
     : member ? memberPoolRows(projectAccounts, engine) : null), [engine, accounts, member, projectAccounts]);
   /* A member picks among the accounts the pool lists. With no pool, or before it is read, there is nothing to
      pick and the account chip is not offered. */
-  const memberPool = member && engine !== "copilot" ? projectAccounts?.engines[engine] : undefined;
-  const noChoice = engine === "copilot" ? !ownAccounts?.length : member && memberPool?.pool !== "set";
+  const memberPool = member && engine !== "copilot" && engine !== "antigravity" ? projectAccounts?.engines[engine] : undefined;
+  const noChoice = engine === "copilot" || engine === "antigravity" ? !ownAccounts?.length : member && memberPool?.pool !== "set";
   const accountChoice: AccountChoice | null = noChoice ? null : {
     runsOn: launch.launchAccountId,
     next: launch.launchAccountId,
@@ -135,7 +135,7 @@ export function DraftRuntimePill({ launch, disabled = false, projectAccounts }: 
   const panelProps = {
     t, engine, modelOptions, account: launch.launchAccountId, nameOf, accountChoice, ownAccounts, efforts,
     accountStart: launch.launchAccountId ? t("draft.accountStartsOn", { account: nameOf(launch.launchAccountId) })
-      : !member || engine === "copilot" ? ""
+      : !member || engine === "copilot" || engine === "antigravity" ? ""
         : memberPool?.pool === "set" ? t(memberPool.accounts.some((account) => account.signedIn) ? "draft.accountFromList" : "draft.accountNoneSignedIn")
           : memberPool?.pool === "none" ? t("draft.accountNoList") : "",
     menuLabel: t("draft.runtimePill"),

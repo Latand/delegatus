@@ -163,7 +163,7 @@ for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pin
         requestedId: input.requestedAccountId, model: input.role.model, now: f.now(),
         requireCapacity: input.requireAccountCapacity, unavailableIds: input.unavailableAccountIds,
         accounts: [LIMITED_ACCOUNT, SPARE_ACCOUNT].map(id => ({ id, authPresent: true })),
-        bindings: [{ engine: input.role.engine, accountId: LIMITED_ACCOUNT,
+        bindings: input.role.engine === "antigravity" ? [] : [{ engine: input.role.engine, accountId: LIMITED_ACCOUNT,
           project: input.project, createdAt: f.h.ports.now() }], observations: [] });
       expect(selected.kind).not.toBe("available");
       if (selected.kind !== "available") {
@@ -179,7 +179,7 @@ for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pin
     if (pendingAdmission && admission === "unreadable") throw new Error("account selection unavailable");
     const selected = selectProjectAccount({ ...request, engine, now: f.now(),
       accounts: [LIMITED_ACCOUNT, SPARE_ACCOUNT].map(id => ({ id, authPresent: true })),
-      bindings: (pendingAdmission && admission === "revoked" ? [LIMITED_ACCOUNT] : [LIMITED_ACCOUNT, SPARE_ACCOUNT])
+      bindings: engine === "antigravity" ? [] : (pendingAdmission && admission === "revoked" ? [LIMITED_ACCOUNT] : [LIMITED_ACCOUNT, SPARE_ACCOUNT])
         .map(accountId => ({ engine, accountId, project: lane.project, createdAt: f.h.ports.now() })),
       observations: [],
     });

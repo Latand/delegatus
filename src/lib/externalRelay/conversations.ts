@@ -11,7 +11,10 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import type { ExternalRelayRequester, ExternalRelayRequest } from "./protocol";
 import { externalRelayFile, runHoldsConversation, withFileLock, withFileLockAsync, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
 import { relayRequestInFlight } from "./activity";
-export type ConversationAuthority = "member" | "admin" | "owner" | "owner-tier";
+import type { RelayRunEntry } from "./trustedRequesters";
+export type ConversationAuthority = "member" | "admin" | "owner" | "owner-tier" | `trusted:${string}`;
+export const elevatedConversationAuthority = (authority: unknown): authority is "owner-tier" | `trusted:${string}` =>
+  authority === "owner-tier" || typeof authority === "string" && /^trusted:[A-Za-z0-9_-]{1,128}$/.test(authority);
 export type RelayConversation = {
   id: string; relayId: string; targetId: string; chatKey: string; requesterKey: string; authority: ConversationAuthority; anchors: string[]; conversationId: string | null;
   engine: "claude" | "codex"; sessionId: string | null; accountId: string | null; cwd: string | null;
@@ -167,9 +170,9 @@ function rowsFromValue(input: unknown, migrate = false): RelayConversation[] {
   if (!value || ![1, 2].includes(version as number) || !Array.isArray(conversations) || conversations.some((item: unknown) => {
     const r = item as RelayConversation;
     return !r || typeof r.id !== "string" || !/^[0-9a-f-]{36}$/.test(r.id) ||
-    (r.authority === "owner-tier" ? r.cwd !== null : typeof r.cwd !== "string" || path.basename(r.cwd) !== `llv-relay-conv-${r.id}`) ||
+    (elevatedConversationAuthority(r.authority) ? r.cwd !== null : typeof r.cwd !== "string" || path.basename(r.cwd) !== `llv-relay-conv-${r.id}`) ||
     !["claude", "codex"].includes(r.engine) || !["running", "idle", "broken"].includes(r.state) || !Array.isArray(r.seen) ||
-    version === 2 && (typeof r.requesterKey !== "string" || !["member", "admin", "owner", "owner-tier"].includes(r.authority) ||
+    version === 2 && (typeof r.requesterKey !== "string" || !elevatedConversationAuthority(r.authority) && !["member", "admin", "owner"].includes(r.authority) ||
       !Array.isArray(r.anchors) || r.anchors.length > 200 || r.seen.length > 200 ||
       [...r.anchors, ...r.seen].some(id => typeof id !== "string") ||
       r.answerWitness !== undefined && (!r.answerWitness || typeof r.answerWitness.conversationId !== "string" ||
@@ -217,14 +220,16 @@ export function readConversations(): RelayConversation[] { return withViewerOper
 function change<T>(action: (rows: RelayConversation[]) => T): T {
   return withViewerOperation("external-relay.chains", () => withFileLock(file(), () => { const rows = readConversationRows(true); const result = action(rows); writeRelayFile(file(), { v: 2, conversations: rows }); rememberConversationRows(rows); return result; }));
 }
-export function conversationAuthority(requester?: ExternalRelayRequester | null, ownerTier = false): ConversationAuthority | null {
-  return !requester ? null : ownerTier ? "owner-tier" : requester.is_owner ? "owner" : requester.is_admin ? "admin" : "member";
+export function conversationAuthority(requester?: ExternalRelayRequester | null, elevated: boolean | RelayRunEntry = false): ConversationAuthority | null {
+  if (!requester) return null;
+  if (elevated) return typeof elevated !== "boolean" && elevated.tier === "requester" ? `trusted:${elevated.id}` : "owner-tier";
+  return requester.is_owner ? "owner" : requester.is_admin ? "admin" : "member";
 }
 const encodedCwd = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
 export { isRelayConversationDir } from "./conversationPrivacy";
 export const conversationCodexHome = (record: RelayConversation) => statePath(`external-relay/conversations/${record.id}/codex`);
 export function deleteConversationFiles(record: RelayConversation) {
-  if (record.authority === "owner-tier") return;
+  if (elevatedConversationAuthority(record.authority)) return;
   // Only the reserved directories minted by this module may be removed.
   if (!/^[0-9a-f-]{36}$/.test(record.id) || path.basename(record.cwd!) !== `llv-relay-conv-${record.id}`) throw new Error("invalid conversation directory");
   fs.rmSync(record.cwd!, { recursive: true, force: true });
@@ -232,7 +237,7 @@ export function deleteConversationFiles(record: RelayConversation) {
   for (const root of claudeProjectRoots()) fs.rmSync(path.join(root, encodedCwd(record.cwd!)), { recursive: true, force: true });
 }
 async function deleteConversationFilesAsync(record: RelayConversation): Promise<void> {
-  if (record.authority === "owner-tier") return;
+  if (elevatedConversationAuthority(record.authority)) return;
   if (!/^[0-9a-f-]{36}$/.test(record.id) || path.basename(record.cwd!) !== `llv-relay-conv-${record.id}`) throw new Error("invalid conversation directory");
   await Promise.all([
     fs.promises.rm(record.cwd!, { recursive: true, force: true }),
@@ -353,7 +358,7 @@ function reservation(relay: PairedRelay, target: RelayTargetSettings, request: E
       const temporary = path.resolve(os.tmpdir()); const home = path.resolve(os.homedir());
       record = { id, relayId: relay.id, targetId: target.id, chatKey: request.chat!.key, requesterKey: request.input.requester!.key,
         authority, anchors: [], conversationId: null, engine: target.engine === "codex-cloud" ? "codex" : target.engine!, sessionId: null, accountId: null,
-        cwd: authority === "owner-tier" ? null : path.join(temporary === home || temporary.startsWith(home + path.sep) ? "/tmp" : temporary, `llv-relay-conv-${id}`),
+        cwd: elevatedConversationAuthority(authority) ? null : path.join(temporary === home || temporary.startsWith(home + path.sep) ? "/tmp" : temporary, `llv-relay-conv-${id}`),
         turns: 0, turnsSinceCompaction: 0, createdAt: now, lastTurnAt: now, seen: [], staticDigest: null, lastPromptTokens: null, compactions: 0, state: "idle", runningRequestId: null };
       rows.push(record);
     }
@@ -382,7 +387,7 @@ function reservationAsync(relay: PairedRelay, target: RelayTargetSettings, reque
       const temporary = path.resolve(os.tmpdir()); const home = path.resolve(os.homedir());
       record = { id, relayId: relay.id, targetId: target.id, chatKey: request.chat!.key, requesterKey: request.input.requester!.key,
         authority, anchors: [], conversationId: null, engine: target.engine === "codex-cloud" ? "codex" : target.engine!, sessionId: null, accountId: null,
-        cwd: authority === "owner-tier" ? null : path.join(temporary === home || temporary.startsWith(home + path.sep) ? "/tmp" : temporary, `llv-relay-conv-${id}`),
+        cwd: elevatedConversationAuthority(authority) ? null : path.join(temporary === home || temporary.startsWith(home + path.sep) ? "/tmp" : temporary, `llv-relay-conv-${id}`),
         turns: 0, turnsSinceCompaction: 0, createdAt: now, lastTurnAt: now, seen: [], staticDigest: null, lastPromptTokens: null, compactions: 0, state: "idle", runningRequestId: null };
       rows.push(record); changed = true;
     }
@@ -454,7 +459,7 @@ export function prepareConversationAccount(record: RelayConversation, account: A
   fs.mkdirSync(record.cwd!, { recursive: true, mode: 0o700 });
 }
 function transcriptBytes(record: RelayConversation): number {
-  if (record.authority === "owner-tier") return 0;
+  if (elevatedConversationAuthority(record.authority)) return 0;
   function size(directory: string): number {
     try { return fs.readdirSync(directory, { withFileTypes: true }).reduce((sum, item) => sum + (item.isDirectory() ? size(path.join(directory, item.name)) : item.isFile() ? fs.statSync(path.join(directory, item.name)).size : 0), 0); }
     catch { return 0; }
@@ -462,7 +467,7 @@ function transcriptBytes(record: RelayConversation): number {
   return record.engine === "codex" ? size(conversationCodexHome(record)) : claudeProjectRoots().reduce((sum, root) => sum + size(path.join(root, encodedCwd(record.cwd!))), 0);
 }
 async function transcriptBytesAsync(record: RelayConversation): Promise<number> {
-  if (record.authority === "owner-tier") return 0;
+  if (elevatedConversationAuthority(record.authority)) return 0;
   async function size(directory: string): Promise<number> {
     let entries: fs.Dirent[];
     try { entries = await fs.promises.readdir(directory, { withFileTypes: true }); } catch { return 0; }
