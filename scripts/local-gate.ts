@@ -1016,7 +1016,7 @@ function publicationPrivacyFiles(env: NodeJS.ProcessEnv): Record<string, string>
     ["LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE", env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE ?? path.join(import.meta.dir, "privacy-known-value-fingerprints.json")],
   ];
   return Object.fromEntries(sources.filter((entry): entry is [string, string] => !!entry[1]).map(([name, file]) => {
-      if (!existsSync(file)) return [name, "missing"];
+      if (!existsSync(file)) throw new Error(`publication privacy inputs cannot be certified; configured source is missing: ${name}`);
       try { return [name, createHash("sha256").update(readSafeRegularFile(file)).digest("hex")]; }
       catch { throw new Error(`publication privacy inputs cannot be certified; changed components: privacy files (${name})`); }
     }));
@@ -1031,7 +1031,7 @@ export function snapshotPublicationPrivacyFiles(env: NodeJS.ProcessEnv, director
   ] as const;
   for (const [name, source] of sources) {
     if (!source) continue;
-    if (!existsSync(source)) { hashes[name] = "missing"; continue; }
+    if (!existsSync(source)) throw new Error(`publication privacy inputs cannot be safely snapshotted; configured source is missing: ${name}`);
     try {
       const bytes = readSafeRegularFile(source);
       const copy = path.join(directory, `${name.toLowerCase()}.snapshot`);

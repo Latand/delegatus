@@ -2528,7 +2528,11 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
       const checkReceipt = readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
       phaseTimings = { preparationMs: Math.max(0, preparationElapsed - (checkReceipt.checksMs ?? preparationElapsed)),
         checksMs: checkReceipt.checksMs ?? preparationElapsed, transportMs: 0 };
-      transportBudgetMs = Math.min(budget.ms, PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS);
+      // Capability 1 still performs the privacy scan in its native hook. Keep
+      // its established bounded hook/push allowance; capability 2 consumes the
+      // sealed receipt and can use the short fixed transport window.
+      transportBudgetMs = preparation === 1 ? budget.ms
+        : Math.min(budget.ms, PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS);
       // An older or failed gate cannot turn an exit code into a check receipt.
       const current = await currentPipelineBranchHead(pipeline, exec);
       if (!current.ok) return current;

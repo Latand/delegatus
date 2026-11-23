@@ -21,9 +21,11 @@ export function publicationPrivacyRefusal(line: string): boolean {
 
 export function publicationPrivacyDrift(output: string): boolean {
   const lines = output.split("\n").map(line => line.trim());
-  const drift = lines.filter(line => /^(?:pre-push: )?publication check inputs changed; changed components: privacy files \(LLV_PRIVACY_(?:KNOWN_VALUES_FILE|KNOWN_VALUE_FINGERPRINTS_FILE)\)(?:, privacy files \(LLV_PRIVACY_(?:KNOWN_VALUES_FILE|KNOWN_VALUE_FINGERPRINTS_FILE)\))*(?:; gate failed)?$/.test(line));
+  const drift = lines.filter(line => /^(?:pre-push: )?publication (?:check inputs changed|inputs changed during (?:checks|transport)); changed components: (?:[a-z][a-z ]{0,63}|privacy files \(LLV_PRIVACY_(?:KNOWN_VALUES_FILE|KNOWN_VALUE_FINGERPRINTS_FILE)\))(?:, (?:[a-z][a-z ]{0,63}|privacy files \(LLV_PRIVACY_(?:KNOWN_VALUES_FILE|KNOWN_VALUE_FINGERPRINTS_FILE)\)))*(?:; gate failed)?$/.test(line));
   if (!drift.length) return false;
   return lines.every(line => drift.includes(line) || line === "pre-push: privacy"
+    || line === "PRIVACY GATE: PASS"
+    || line === "Delegatus App push: fresh installation token verified"
     || /^error: failed to push some refs to '.+'$/.test(line));
 }
 

@@ -25,6 +25,21 @@ test("publication scans keep the safely read privacy bytes when the source chang
   expect(captured.hashes.LLV_PRIVACY_KNOWN_VALUES_FILE).toBe(createHash("sha256").update(original).digest("hex"));
 });
 
+test("a configured privacy source missing at snapshot time is refused before scanning or transport", () => {
+  const f = fixture();
+  const known = path.join(f.dir, ".git", "late-known-values.txt");
+  f.env.LLV_PRIVACY_KNOWN_VALUES_FILE = known;
+  const prepared = f.run(true);
+  expect(prepared.status, prepared.stderr).not.toBe(0);
+  expect(prepared.stderr).toContain("configured source is missing: LLV_PRIVACY_KNOWN_VALUES_FILE");
+  expect(f.calls().some(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toBeFalse();
+  expect(fs.existsSync(f.receipt)).toBeFalse();
+  fs.writeFileSync(known, "late synthetic privacy source\n");
+  const transport = f.run(false);
+  expect(transport.status, transport.stderr).not.toBe(0);
+  expect(fs.existsSync(f.receipt)).toBeFalse();
+});
+
 test("prepared checks are consumed once by the native hook without a second privacy scan or admission", () => {
   const f = fixture();
   const prepared = f.run(true);

@@ -3,7 +3,7 @@ import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFai
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
-import { recoverablePublication } from "./publicationHistory";
+import { publicationPrivacyDrift, recoverablePublication, recordPublicationFailure } from "./publicationHistory";
 
 test.each(["remote: fatal error in commit_refs_rules", "! [remote rejected] HEAD -> lane (pre-receive hook declined)"])(
   "a remote ref refusal retains its diagnostic: %s", async line => {
@@ -47,6 +47,26 @@ test("external privacy catalog drift is eligible for a fresh preparation on the 
     outputTail: "pre-push: privacy\npublication check inputs changed; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE)",
     retryablePrivacyDrift: true as const, changedFiles: 2 };
   expect(recoverablePublication({ error: "privacy inputs changed", failure })).toBe(true);
+});
+
+test.each(["checks", "transport"] as const)("raw %s catalog drift with a real App mint settles as a bounded retry", phase => {
+  const drift = `publication inputs changed during ${phase}; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE)`;
+  const output = `pre-push: privacy\n${FORGE_PUSH_MINT_MARKER}\n${drift}\nerror: failed to push some refs to 'https://example.invalid/repo.git'`;
+  expect(publicationPrivacyDrift(output)).toBe(true);
+  const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 70_000,
+    outputTail: output, retryablePrivacyDrift: true as const, changedFiles: 1 };
+  expect(recoverablePublication({ error: drift, failure })).toBe(true);
+
+  const subject = pipeline();
+  subject.delivery!.operation = { id: `drift-${phase}`, sha: "a".repeat(40), state: "settled", epoch: 1,
+    result: { ok: false, error: drift, failure } } as NonNullable<Pipeline["delivery"]>["operation"];
+  const at = "2026-11-24T10:00:00.000Z";
+  const recorded = recordPublicationFailure(subject, undefined, { operationId: `drift-${phase}`, epoch: 1, at,
+    cause: "check-failure", detail: drift, recoverable: true }, [60_000, 300_000, 900_000]);
+  expect(recorded.retryAt).toBe("2026-11-24T10:01:00.000Z");
+  const decisive = { ...failure, outputTail: `${output}\npre-push: types: failed (1)` };
+  expect(publicationPrivacyDrift(decisive.outputTail)).toBe(false);
+  expect(recoverablePublication({ error: drift, failure: decisive })).toBe(false);
 });
 
 test("the publication admission deadline retains the hook's reason", async () => {
