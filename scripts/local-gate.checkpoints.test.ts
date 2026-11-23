@@ -32,7 +32,7 @@ test("the shared role-memory dispatch fixture selects every test group", () => {
   const tests = ["src/lib/pipelines/engine.roleMemoryDispatch.test.ts", "src/lib/pipelines/engine.roleMemoryDispatch.recovery.test.ts",
     "src/lib/pipelines/engine.roleMemoryDispatch.custody.test.ts"];
   const context: PlanEnvironment = { base: "base", existing: new Set([fixture]),
-    tests: [...tests, "src/lib/pipelines/engine.roleMemory.test.ts"], linux: false, runtime: false, native: false, nativeTests: [], linuxTests: [], codexVersions: [] };
+    tests: [...tests, "src/lib/pipelines/engine.roleMemory.test.ts"], linux: false, runtime: false, native: false, linuxTests: [], codexVersions: [] };
   const selected = plan("pre-push", [fixture], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
   expect(selected).toEqual(tests.map(file => `./${file}`).sort());
 });

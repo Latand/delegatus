@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { RoleMemoryChanged } from "@/lib/memory/privacy";
-import { loadPipelines, savePipelines, tickPipelines } from "./engine.fixture";
+import { defaultPipelinePorts, loadPipelines, savePipelines, tickPipelines } from "./engine.fixture";
 
 afterEach(cleanupRoleMemoryDispatch);
 
