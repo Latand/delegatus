@@ -470,6 +470,8 @@ function lookupSql(field: LookupField): string {
 type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
 type BoundedKeyReader = (collection: RowCollection, filters: readonly { field: LookupField; value: LookupValue }[], limit: number) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
+type RetiredHostSelection = { keys: string[]; overflow: boolean; assertCurrent?: () => void };
+
 interface RegistryFileReaders {
   keyed: WeakMap<object, KeyedReader>;
   bounded: WeakMap<object, BoundedKeyReader>;
@@ -483,6 +485,7 @@ interface RegistryFileReaders {
   startupSelection: WeakMap<RegistryFile, () => boolean>;
   projection: WeakMap<object, ProjectionReader>;
   liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
+  retiredHosts?: WeakMap<object, (limit: number, cutBoundary?: string) => RetiredHostSelection>;
   structuredProcess?: WeakMap<object, (pids: readonly number[]) => boolean>;
 }
 /* Next standalone evaluates instrumentation and route handlers in separate
@@ -496,10 +499,11 @@ interface RegistryFileReaders {
    registry itself does. */
 const readerState = process as typeof process & { __llvRegistryFileReaders?: RegistryFileReaders };
 const fileReaders = readerState.__llvRegistryFileReaders ??= {
-  keyed: new WeakMap(), bounded: new WeakMap(), path: new WeakMap(), entryKey: new WeakMap(), coldKey: new WeakMap(), endedOwner: new WeakMap(), startupSelection: new WeakMap(), projection: new WeakMap(), liveness: new WeakMap(),
+  keyed: new WeakMap(), bounded: new WeakMap(), path: new WeakMap(), entryKey: new WeakMap(), coldKey: new WeakMap(), endedOwner: new WeakMap(), startupSelection: new WeakMap(), projection: new WeakMap(), liveness: new WeakMap(), retiredHosts: new WeakMap(),
 };
 const keyedReaders = fileReaders.keyed;
 const boundedReaders = fileReaders.bounded;
+const retiredHostReaders = fileReaders.retiredHosts ??= new WeakMap();
 const deliveryPredecessorReaders = fileReaders.deliveryPredecessor ??= new WeakMap();
 const openDeliveryReaders = fileReaders.openDelivery ??= new WeakMap();
 const pageReaders = fileReaders.page ??= new WeakMap();
@@ -675,6 +679,8 @@ class RegistryReaderViews {
     if (entryKeys) entryKeyReaders.set(frozen, entryKeys);
     const projections = projectionReaders.get(file);
     if (projections) projectionReaders.set(frozen, projections);
+    const retiredHosts = retiredHostReaders.get(file);
+    if (retiredHosts) retiredHostReaders.set(frozen, retiredHosts);
     return frozen;
   }
 
@@ -738,6 +744,24 @@ export function registryRowsMatching<C extends RowCollection>(file: Pick<Registr
 export function registryLivenessRows(file: RegistryFile): { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] } {
   const read = livenessReaders.get(file);
   return read ? read() : { entries: Object.values(file.entries ?? {}), receipts: Object.values(file.receipts ?? {}) };
+}
+
+/** Bounded retired-host candidates for deploy-cut reconciliation. SQLite
+ * selects keys before registry payloads are decoded, so unrelated terminal
+ * history does not add work to a census. The extra row makes overflow explicit. */
+export function registryRetiredHostRows(file: RegistryFile, limit: number, cutBoundary?: string): { entries: AgentRegistryEntry[]; overflow: boolean } {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("retired host limit must be positive");
+  const reader = retiredHostReaders.get(file);
+  const selected: RetiredHostSelection = reader ? reader(limit, cutBoundary) : (() => {
+    const cutoff = cutBoundary && Number.isFinite(Date.parse(cutBoundary)) ? cutBoundary : "";
+    const entries = Object.entries(file.entries).filter(([, entry]) => entry.hostExitProcess != null
+      && typeof entry.updatedAt === "string" && entry.updatedAt >= cutoff)
+      .slice(0, limit + 1);
+    return { keys: entries.map(([key]) => key), overflow: entries.length > limit };
+  })();
+  const entries = selected.keys.slice(0, limit).map(key => file.entries[key]!).filter(Boolean);
+  selected.assertCurrent?.();
+  return { entries, overflow: selected.overflow };
 }
 
 /** Whether this view can select rows without expanding the whole collection. */
@@ -4390,6 +4414,56 @@ export class SqliteAgentRegistryStore {
       }
       const receipts = [...receiptKeys].map(key => file.receipts[key]).filter((row): row is RegistryFile["receipts"][string] => !!row);
       return { entries, receipts };
+    });
+    retiredHostReaders.set(file, (limit, cutBoundary) => {
+      // Only rows written during this cut can be its retired-host receipts.
+      // The partial hot/archive indexes keep old payloads out of candidate
+      // discovery before the bound is applied.
+      const cutoff = cutBoundary && Number.isFinite(Date.parse(cutBoundary)) ? cutBoundary : "";
+      const assertCurrent = () => {
+        if (this.changeId() !== coldGrantChangeId)
+          throw new DatabaseReplacedError("registry view changed during retired-host selection; request a fresh snapshot");
+      };
+      const standaloneMerger = (entry: string) => `EXISTS (
+        SELECT 1 FROM registry_generation_identities i
+          JOIN registry_records conversation ON conversation.collection='conversations' AND conversation.row_key=i.conversation_id
+          WHERE i.entry_key=${entry}.row_key AND i.path=json_extract(${entry}.value_json,'$.artifactPath')
+            AND (json_extract(conversation.value_json,'$.agentRole')='merger'
+              OR (json_extract(conversation.value_json,'$.agentRole') IS NULL AND EXISTS (
+                SELECT 1 FROM registry_records receipt
+                  WHERE receipt.collection='receipts'
+                    AND json_extract(receipt.value_json,'$.conversationId')=i.conversation_id
+                    AND json_extract(receipt.value_json,'$.state')='completed'
+                    AND json_extract(receipt.value_json,'$.agentRole')='merger'
+                    AND json_extract(receipt.value_json,'$.key.engine')=json_extract(${entry}.value_json,'$.key.engine')
+                    AND json_extract(receipt.value_json,'$.key.sessionId')=json_extract(${entry}.value_json,'$.key.sessionId')
+                    AND json_extract(receipt.value_json,'$.artifactPath')=i.path
+              )))
+            AND NOT EXISTS (
+              SELECT 1 FROM registry_records membership,json_each(membership.value_json) member
+                WHERE membership.collection='memberships' AND membership.row_key=i.conversation_id
+                  AND json_extract(member.value,'$.kind') IN ('pipeline','flow')
+            )
+      )`;
+      assertCurrent();
+      const rows = this.db.query<{ row_key: string }, [string, string, number]>(
+        `SELECT row_key FROM (
+          SELECT r.row_key,r.row_order FROM registry_rows r INDEXED BY registry_hot_retired_host_cut
+            WHERE r.collection='entries'
+              AND NOT EXISTS (SELECT 1 FROM registry_cold hot WHERE hot.collection='entries' AND hot.row_key=r.row_key)
+              AND json_extract(r.value_json,'$.hostExitProcess.pid') IS NOT NULL
+              AND json_extract(r.value_json,'$.updatedAt')>=?
+              AND ${standaloneMerger("r")}
+          UNION ALL
+          SELECT c.row_key,a.row_order FROM registry_archive a INDEXED BY registry_archive_retired_host_cut
+            JOIN registry_cold c ON a.id=c.archive_id AND a.collection=c.collection AND a.row_key=c.row_key
+            WHERE c.collection='entries' AND a.collection='entries'
+              AND json_extract(a.value_json,'$.hostExitProcess.pid') IS NOT NULL
+              AND json_extract(a.value_json,'$.updatedAt')>=?
+              AND ${standaloneMerger("a")}
+        ) ORDER BY row_order DESC LIMIT ?`).all(cutoff, cutoff, limit + 1);
+      assertCurrent();
+      return { keys: rows.slice(0, limit).map(row => row.row_key), overflow: rows.length > limit, assertCurrent };
     });
     const ids = coldIds;
     const keys = coldKeys;
