@@ -31,6 +31,7 @@ import { openStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { markStructuredHostStartupFailed, markStructuredHostStartupReady, markStructuredHostStartupRetryStarted } from "@/lib/runtime/startupStatus";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
 import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
+import type { AgentRegistry } from "@/lib/agent/registry";
 import { readAuto } from "@/lib/selfUpdate/auto";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { markViewerHttpReady, viewerStartupPhases } from "@/lib/viewerReadiness";
@@ -133,7 +134,6 @@ interface CurrentReleaseControllerLoaders {
 interface ViewerRuntimeActivationSteps {
   initializeOperatorCapability: () => Promise<void>;
   runIdentityMigration?: () => Promise<void> | void;
-  runWorktreeRecovery?: () => Promise<void>;
   runClaudeLoginRecovery?: () => Promise<void>;
   startStructuredHosts: (() => void) | null;
   startControllers: () => Promise<void>;
@@ -912,7 +912,6 @@ export async function completeViewerRuntimeActivation(
   await steps.runIdentityMigration?.();
   steps.publishHotStateActivation();
   await steps.runClaudeLoginRecovery?.();
-  await steps.runWorktreeRecovery?.();
   const { retireLegacyCodexMemoryHooksAtStartup } = await import("@/lib/memory/hookMigration");
   await retireLegacyCodexMemoryHooksAtStartup();
   steps.startStructuredHosts?.();
@@ -923,6 +922,16 @@ export async function completeViewerRuntimeActivation(
   void steps.refineBoard?.().catch(error => {
     console.error("[attention reconcile] startup refinement failed", error instanceof Error ? error.name : "unknown");
   });
+}
+
+/** Registry artifacts are part of first-caller readiness: native caller
+    admission performs one bounded index slice and refuses incomplete proofs. */
+export async function prepareRegistryForNativeCallers(
+  registry: Pick<AgentRegistry, "prepareReadOnlySnapshot" | "prepareNativeCallerArtifacts">,
+  signal: AbortSignal,
+): Promise<void> {
+  await registry.prepareReadOnlySnapshot(signal);
+  await registry.prepareNativeCallerArtifacts(signal);
 }
 
 /** Check every state database before a store opens one (#1870 slice 10):
@@ -1078,7 +1087,9 @@ export async function registerViewerRuntime(): Promise<void> {
     const registry = await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", async () => {
       const registry = await prepareAgentRegistry(startupAbort.signal);
       // The snapshot also prepares recovery indexes and backfills endings.
-      await registry.prepareReadOnlySnapshot(startupAbort.signal);
+      // The first authorized native caller needs the complete artifact index;
+      // its synchronous lookup intentionally advances only one bounded batch.
+      await prepareRegistryForNativeCallers(registry, startupAbort.signal);
       return registry;
     }));
     assertStartupActive();
@@ -1092,18 +1103,8 @@ export async function registerViewerRuntime(): Promise<void> {
     const { retireSeatRecoveryPlaceholdersAtStartup } = await import("@/lib/tasks/seatRecoveryCleanup");
     await startupBarrier.run(() => retireSeatRecoveryPlaceholdersAtStartup(undefined, assertStartupActive));
     assertStartupActive();
-    let refreshWorktreeCatalog: (() => Promise<void>) | undefined;
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
-      runWorktreeRecovery: async () => {
-        const { runWorktreeRecoveryAtStartup } = await import("@/lib/projects/worktreeBackfill");
-        // Commit canonical mappings before controllers resolve project keys.
-        // The full rescan updates their catalog representation afterwards.
-        await startupBarrier.run(() => {
-          assertStartupActive();
-          return runWorktreeRecoveryAtStartup(console.error, undefined, refresh => { refreshWorktreeCatalog = refresh; });
-        });
-      },
       runClaudeLoginRecovery: async () => {
         const { recoverClaudeLoginsAtStartup } = await import("@/lib/accounts/claudeLogin");
         await recoverClaudeLoginsAtStartup();
@@ -1128,6 +1129,13 @@ export async function registerViewerRuntime(): Promise<void> {
         await new Promise<void>(resolve => setImmediate(resolve));
         assertStartupActive();
         await startupBarrier.run(async () => {
+          // Live worktree resolutions are persisted as they are observed.
+          // This legacy repair considers only removed checkout paths from
+          // retained history, so its full catalog/evidence walk can refine
+          // those records after controllers and readiness are available.
+          const { runWorktreeRecoveryAtStartup } = await import("@/lib/projects/worktreeBackfill");
+          let refreshWorktreeCatalog: (() => Promise<void>) | undefined;
+          await runWorktreeRecoveryAtStartup(console.error, undefined, refresh => { refreshWorktreeCatalog = refresh; });
           await refreshWorktreeCatalog?.();
           assertStartupActive();
           const { prepareBoardSummary } = await import("@/app/api/files/operatorProjection");
@@ -1162,12 +1170,7 @@ export async function registerViewerRuntime(): Promise<void> {
     assertStartupActive();
     startup.finish();
     markViewerHttpReady();
-    // Native lookups can advance and validate this cache themselves.
     setImmediate(() => {
-      void startupBarrier.run(() => {
-        assertStartupActive();
-        return registry.prepareNativeCallerArtifacts();
-      }).catch(error => console.error("[registry] native caller cache preparation failed", error instanceof Error ? error.name : "unknown"));
       void Promise.all([
         import("@/lib/telemetry/sender"), import("@/lib/selfUpdate/mode"), import("@/lib/runtime/client"),
       ]).then(([{ startInstallPing }, { productionModePorts }, { runtimeHostClient }]) => {

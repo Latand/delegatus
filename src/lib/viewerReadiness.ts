@@ -1,8 +1,10 @@
 // Instrumentation and the route can load in separate Next bundle realms.
 const viewer = process as typeof process & { __llvReadyRevision?: string };
+declare const __DELEGATUS_BUILD_REVISION__: string;
 
-export function markViewerHttpReady(): void {
-  const revision = process.env.LLV_DIAGNOSTIC_REVISION;
+export function markViewerHttpReady(buildRevision: string | null =
+  typeof __DELEGATUS_BUILD_REVISION__ === "string" ? __DELEGATUS_BUILD_REVISION__ : null): void {
+  const revision = buildRevision;
   if (revision && /^[a-f0-9]{40}$/.test(revision)) viewer.__llvReadyRevision = revision;
 }
 

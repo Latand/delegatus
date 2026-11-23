@@ -7370,9 +7370,9 @@ export class AgentRegistry {
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
   }
 
-  async prepareNativeCallerArtifacts(): Promise<void> {
+  async prepareNativeCallerArtifacts(signal?: AbortSignal): Promise<void> {
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
-      await this.sqliteStore?.prepareNativeCallerArtifacts();
+      await this.sqliteStore?.prepareNativeCallerArtifacts(signal);
     }
   }
 

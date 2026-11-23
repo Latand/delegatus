@@ -440,7 +440,9 @@ export async function waitForViewerReadiness(port, {
   let endpoint = revision ? READY_ROUTE : LEGACY_READY_ROUTE;
   while (now() < deadline) {
     assertChildRunning();
-    const probeHeaders = endpoint === READY_ROUTE ? headers() : {};
+    // Legacy candidates still pass through their release's access perimeter.
+    // Keep the launcher's probe credentials on the fallback request too.
+    const probeHeaders = headers();
     if (now() >= deadline) break;
     onPhase({ phase: "files", status: "running", endpoint });
     const started = now();
@@ -453,12 +455,15 @@ export async function waitForViewerReadiness(port, {
       : endpoint === READY_ROUTE && httpStatus === 200 && result.revision !== revision ? "revision-mismatch" : undefined);
     const ready = !error && (endpoint === READY_ROUTE
       ? httpStatus === 200
-      : httpStatus >= 200 && httpStatus < 500);
+      : httpStatus >= 200 && httpStatus < 400);
     onPhase({ phase: "files", status: ready ? "ready" : "failed", endpoint, httpStatus, error, elapsedMs,
       detail: error ?? (ready ? null : "http-status") });
     assertChildRunning();
     if (ready) return true;
-    if (endpoint === READY_ROUTE && httpStatus === 404) {
+    // A legacy build's proxy can deny an unknown route before Next can return
+    // 404. Only those perimeter statuses identify the old protocol; 409/503
+    // from a present endpoint remain decisive readiness refusals.
+    if (endpoint === READY_ROUTE && [401, 403, 404].includes(httpStatus)) {
       endpoint = LEGACY_READY_ROUTE;
       continue;
     }

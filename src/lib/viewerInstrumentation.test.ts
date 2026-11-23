@@ -5,7 +5,67 @@ import { writeAuto, initialAuto } from "./selfUpdate/auto";
 import { writeDrain } from "./selfUpdate/drain";
 import { expect, test, spyOn } from "bun:test";
 import { loopProgressProbe } from "./agent/registryLockHolderFixture";
-import { checkStateDatabasesBeforeStores, createViewerStartupBarrier, registerViewerRuntime, settleInterruptedTransfers, startCurrentReleaseControllers } from "./viewerInstrumentation";
+import { checkStateDatabasesBeforeStores, completeViewerRuntimeActivation, createViewerStartupBarrier, prepareRegistryForNativeCallers, registerViewerRuntime, settleInterruptedTransfers, startCurrentReleaseControllers } from "./viewerInstrumentation";
+
+test("legacy worktree catalog refinement cannot delay controller activation or release readiness", async () => {
+  const order: string[] = [];
+  let refinementStarted = false;
+  let finishRefinement!: () => void;
+  const refinement = new Promise<void>(resolve => { finishRefinement = resolve; });
+  await completeViewerRuntimeActivation({
+    initializeOperatorCapability: async () => { order.push("capability"); },
+    runIdentityMigration: async () => { order.push("identity"); },
+    publishHotStateActivation: () => { order.push("hot-state"); },
+    runClaudeLoginRecovery: async () => { order.push("login-recovery"); },
+    startControllers: async () => { order.push("controllers"); },
+    publishViewerReleaseReady: () => { order.push("release-ready"); },
+    refineBoard: async () => { refinementStarted = true; await refinement; order.push("catalog-and-board-refinement"); },
+  });
+  expect(order).toEqual([
+    "capability", "identity", "hot-state", "login-recovery", "controllers", "release-ready",
+  ]);
+  expect(refinementStarted).toBeTrue();
+  finishRefinement();
+  await refinement;
+});
+
+test("native caller readiness waits through every artifact batch before controllers start", async () => {
+  const order: string[] = [];
+  let finishSecondBatch!: () => void;
+  const secondBatch = new Promise<void>(resolve => { finishSecondBatch = resolve; });
+  let batches = 0;
+  const controller = new AbortController();
+  const registry = {
+    prepareReadOnlySnapshot: async () => { order.push("snapshot"); },
+    prepareNativeCallerArtifacts: async () => {
+      while (batches < 2) {
+        batches += 1;
+        order.push(`native-batch-${batches}`);
+        if (batches === 2) await secondBatch;
+      }
+      order.push("native-ready");
+    },
+  };
+  const startup = async () => {
+    await prepareRegistryForNativeCallers(registry, controller.signal);
+    order.push("registry-ready");
+    await completeViewerRuntimeActivation({
+      initializeOperatorCapability: async () => {},
+      publishHotStateActivation: () => {},
+      startControllers: async () => { order.push("controllers"); },
+      publishViewerReleaseReady: () => { order.push("release-ready"); },
+    });
+  };
+  const activation = startup();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(order).toEqual(["snapshot", "native-batch-1", "native-batch-2"]);
+  // Reaching the batched store API here represents its full drain; hold the
+  // second slice to prove the first authorized request cannot race readiness.
+  finishSecondBatch();
+  await activation;
+  expect(order).toEqual(["snapshot", "native-batch-1", "native-batch-2", "native-ready", "registry-ready", "controllers", "release-ready"]);
+});
 
 test("retirement cannot checkpoint ahead of the real activation worker or accept its late result", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "activation-retirement-"));
@@ -168,7 +228,7 @@ test("an install transfer that cannot be settled refuses activation before any l
   const source = registerViewerRuntime.toString();
   const step = source.indexOf("settleInterruptedTransfers()");
   expect(step).toBeGreaterThan(-1);
-  for (const later of ["prepareReadOnlySnapshot", "completeViewerRuntimeActivation(", "startCurrentReleaseControllers"]) {
+  for (const later of ["prepareRegistryForNativeCallers(", "completeViewerRuntimeActivation(", "startCurrentReleaseControllers"]) {
     const at = source.indexOf(later);
     expect(at).toBeGreaterThan(step);
   }

@@ -2072,18 +2072,18 @@ export class SqliteAgentRegistryStore {
 
   /** Preparation is shared by native calls and yields between fixed-size
       batches. The synchronous selector always checks new changes itself. */
-  async prepareNativeCallerArtifacts(): Promise<void> {
+  async prepareNativeCallerArtifacts(signal?: AbortSignal): Promise<void> {
     if (process.platform !== "linux" || this.closed) return;
     if (this.nativeArtifactPreparation) return this.nativeArtifactPreparation;
     const work = async () => {
-      const deadline = performance.now() + 5_000;
       let restarted = false;
-      while (!this.closed && performance.now() < deadline) {
+      while (!this.closed) {
+        signal?.throwIfAborted();
         try {
           if (performanceSpans.sync("registry.prepare.slice", () => this.withCallerRead(() => this.advanceNativeArtifacts()))) return;
         } catch {
           this.resetNativeArtifacts();
-          if (restarted) return;
+          if (restarted) throw new Error("native caller artifact preparation could not obtain a consistent snapshot");
           restarted = true;
         }
         await yieldToRuntime();

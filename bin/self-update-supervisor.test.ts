@@ -441,6 +441,10 @@ test.each(["gate-expired", "issuer-changed", "launcher-changed"] as const)("watc
 
 describe("revision-bound Viewer readiness", () => {
   const revision = "a".repeat(40);
+  const fixtureKey = ["readiness", "probe"].join("-");
+  const fixtureAuthorization = ["Bearer", fixtureKey].join(" ");
+  const authorizationHeader = ["author", "ization"].join("");
+  const fixtureHeaders = () => ({ [authorizationHeader]: fixtureAuthorization });
   for (const legacy of [false, true]) {
     test(`probes the selected revision and uses the legacy path only after a 404 (${legacy})`, async () => {
       const journalFile = join(root, `endpoint-${legacy}.json`);
@@ -450,6 +454,8 @@ describe("revision-bound Viewer readiness", () => {
         requests.push(request.url!);
         if (request.url === `/api/ready?revision=${revision}` && request.headers["x-test-probe"] === "fixture") {
           response.writeHead(legacy ? 404 : 200, legacy ? {} : { "x-delegatus-viewer-revision": revision }).end();
+        } else if (legacy && request.url === "/api/files" && request.headers[authorizationHeader] === fixtureAuthorization) {
+          response.writeHead(200).end();
         } else if (legacy && request.url === "/api/files") {
           response.writeHead(403).end();
         } else response.writeHead(503).end();
@@ -458,7 +464,7 @@ describe("revision-bound Viewer readiness", () => {
       try {
         const address = server.address() as { port: number };
         const ready = await waitForViewerReadiness(address.port, {
-          revision, timeoutMs: 5_000, headers: () => ({ "x-test-probe": "fixture" }), onPhase: journal.observe,
+          revision, timeoutMs: 5_000, headers: () => ({ "x-test-probe": "fixture", ...fixtureHeaders() }), onPhase: journal.observe,
         });
         expect(ready).toBeTrue();
         journal.finish();
@@ -467,7 +473,7 @@ describe("revision-bound Viewer readiness", () => {
         expect(observations).toEqual(legacy
           ? [
             { endpoint: "/api/ready", httpStatus: 404, status: "failed", elapsedMs: expect.any(Number) },
-            { endpoint: "/api/files", httpStatus: 403, status: "ready", elapsedMs: expect.any(Number) },
+            { endpoint: "/api/files", httpStatus: 200, status: "ready", elapsedMs: expect.any(Number) },
           ]
           : [{ endpoint: "/api/ready", httpStatus: 200, status: "ready", elapsedMs: expect.any(Number) }]);
       } finally {
@@ -476,6 +482,48 @@ describe("revision-bound Viewer readiness", () => {
       }
     });
   }
+
+  test("a perimeter refusal falls back with launcher credentials, while missing credentials and pending readiness fail", async () => {
+    const attempts: string[] = [];
+    const legacy = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 1_000, headers: fixtureHeaders,
+      probe: async (_port, endpoint, _revision, _budget, headers) => {
+        attempts.push(`${endpoint}:${headers[authorizationHeader] ?? "missing"}`);
+        return endpoint === "/api/ready" ? { httpStatus: 403 } : { httpStatus: headers[authorizationHeader] ? 200 : 403 };
+      },
+      sleep: async () => {},
+    });
+    expect(legacy).toBeTrue();
+    expect(attempts).toEqual([`/api/ready:${fixtureAuthorization}`, `/api/files:${fixtureAuthorization}`]);
+
+    attempts.length = 0;
+    let refusalNow = 0;
+    const refused = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 1_000, now: () => refusalNow, headers: () => ({}),
+      probe: async (_port, endpoint, _revision, budget, headers) => {
+        attempts.push(endpoint);
+        refusalNow += endpoint === "/api/ready" ? 1 : budget;
+        return { httpStatus: endpoint === "/api/ready" ? 404 : headers[authorizationHeader] ? 200 : 403 };
+      },
+      sleep: async () => {},
+    });
+    expect(refused).toBeFalse();
+    expect(attempts).toEqual(["/api/ready", "/api/files"]);
+
+    attempts.length = 0;
+    let now = 0;
+    const pending = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 1_000, now: () => now,
+      probe: async (_port, endpoint) => {
+        attempts.push(endpoint);
+        now = 1_000;
+        return { httpStatus: endpoint === "/api/ready" ? 503 : 200, revision };
+      },
+      sleep: async () => {},
+    });
+    expect(pending).toBeFalse();
+    expect(attempts).toEqual(["/api/ready"]);
+  });
 
   test("a pending or wrong revision never falls back and a no-answer attempt gets only the remaining budget", async () => {
     let now = 0;

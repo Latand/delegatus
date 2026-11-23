@@ -63,7 +63,7 @@ function durableBytes(directory: string) {
   return Object.fromEntries(Object.entries(bytes(directory)).filter(([name]) => name !== "state.sqlite-shm"));
 }
 
-test.each(["widgets", longRepositoryName])("Viewer activation recovers %s after hot-state activation and before controllers, once without replay writes", async repositoryName => {
+test.each(["widgets", longRepositoryName])("Viewer activation defers removed-checkout recovery for %s until after readiness", async repositoryName => {
   const f = fixture(false, repositoryName);
   const cwd = f.repo + "-review";
   f.transcript(cwd, { repository_url: f.remote }); f.write();
@@ -73,20 +73,36 @@ test.each(["widgets", longRepositoryName])("Viewer activation recovers %s after 
   const order: string[] = [];
   let scans = 0;
   let refreshCatalog: (() => Promise<void>) | undefined;
+  let releaseRecovery!: () => void;
+  const recoveryGate = new Promise<void>(resolve => { releaseRecovery = resolve; });
+  let finishRecovery!: () => void;
+  const recoveryFinished = new Promise<void>(resolve => { finishRecovery = resolve; });
   const startup = () => runWorktreeRecoveryAtStartup(message => { throw Error(String(message)); },
     async () => { scans++; await f.scan(); }, refresh => { refreshCatalog = refresh; });
   await completeViewerRuntimeActivation({
     initializeOperatorCapability: async () => { order.push("capability"); },
     publishHotStateActivation: () => { order.push("fence"); },
-    runWorktreeRecovery: async () => { order.push("recovery"); await startup(); },
     startStructuredHosts: null, startControllers: async () => {
-      expect(canonicalProject(source)).toBe(f.identity.project); order.push("controllers");
+      // The live checkout path mapping is already persisted by the scanner;
+      // this pending repair targets only retained rows from a removed checkout.
+      expect(canonicalProject(source)).toBe(source); order.push("controllers");
     }, publishViewerReleaseReady: () => { order.push("ready"); },
+    refineBoard: async () => {
+      await recoveryGate;
+      order.push("recovery");
+      await startup();
+      expect(canonicalProject(source)).toBe(f.identity.project);
+      await refreshCatalog?.();
+      finishRecovery();
+    },
   });
-  expect(order).toEqual(["capability", "fence", "recovery", "controllers", "ready"]);
+  expect(order).toEqual(["capability", "fence", "controllers", "ready"]);
   expect(scans).toBe(0);
+  expect(canonicalProject(source)).toBe(source);
+  releaseRecovery();
+  await recoveryFinished;
+  expect(order).toEqual(["capability", "fence", "controllers", "ready", "recovery"]);
   expect(refreshCatalog).toBeDefined();
-  await refreshCatalog!();
   expect(scans).toBe(1);
   expect(boardFor(f.identity.project, board).prefs.manual).toEqual(["conversation_old"]);
   expect(projectInfoFromCwd(cwd)?.project).toBe(f.identity.project);
