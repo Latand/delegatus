@@ -306,7 +306,8 @@ export class AgentStateService {
         ?? (previous?.facts.turn.determined && previous.facts.turn.value.localRef === memory.activeTurnRef ? previous.facts.turn.value.at : null)
         ?? Date.parse(entry.updatedAt);
       const nativeOpening = native.turn.determined && native.turn.value.state === "open" && (entry.key.engine === "claude"
-        ? native.turn.value.nativeId === memory.nativeTurnId : entry.key.engine === "copilot" ? native.turn.value.promptOrdinal === memory.promptOrdinal : true);
+        ? native.turn.value.nativeId === memory.nativeTurnId
+        : (entry.key.engine === "copilot" || entry.key.engine === "antigravity") ? native.turn.value.promptOrdinal === memory.promptOrdinal : true);
       const provisional = memory.activeTurnRef !== null && entry.key.engine !== "codex" && !nativeOpening;
       turn = fact({ state: memory.activeTurnRef ? "open" : "closed", nativeId: entry.key.engine === "codex" ? memory.activeTurnRef : memory.nativeTurnId ?? null,
         localRef: memory.activeTurnRef, opening: provisional ? "accepted" : nativeOpening && native.turn.determined ? native.turn.value.opening : null,
@@ -338,7 +339,7 @@ export class AgentStateService {
           && native.turn.value.promptOrdinal === entry.structuredHost!.agentStateNativePromptOrdinal);
     const currentMemoryBoundary = !memory || entry.key.engine === "codex"
       || entry.key.engine === "claude" && (memory.nativeTurnId != null && native.turn.determined && native.turn.value.nativeId === memory.nativeTurnId)
-      || entry.key.engine === "copilot" && (memory.promptOrdinal != null && native.turn.determined && native.turn.value.promptOrdinal === memory.promptOrdinal);
+      || (entry.key.engine === "copilot" || entry.key.engine === "antigravity") && (memory.promptOrdinal != null && native.turn.determined && native.turn.value.promptOrdinal === memory.promptOrdinal);
     // An idle Claude broker clears both turn references. Keep its held-owner
     // evidence alongside the generation-bound native terminal, so retirement
     // can distinguish completion from a memory-only idle observation. Any

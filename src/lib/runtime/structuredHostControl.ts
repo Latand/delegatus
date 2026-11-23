@@ -62,7 +62,7 @@ export function readStructuredHostRecords(dependencies: {
     for (const id of sessionIds) {
       // Keep the inventory's existing raw-session matching and last-owner
       // precedence across engines; the index itself uses qualified keys.
-      for (const engine of ["claude", "codex", "copilot"] as const) {
+      for (const engine of ["claude", "codex", "copilot", "antigravity"] as const) {
         for (const conversation of registryConversationsForEntryKey(file, `${engine}:${id}`)) {
           selected.set(conversation.id, conversation);
         }
@@ -186,7 +186,7 @@ export function structuredHostKillRefFromRegistry(
   if (!entry) return { ok: false, error: "the registry has no row for this session", owner };
   const process = recordedScopeProcess(entry.structuredHost);
   if (!process) return { ok: false, error: "the registry row names no host process", owner };
-  if (key.engine !== "claude" && key.engine !== "codex") {
+  if (key.engine !== "claude" && key.engine !== "codex" && key.engine !== "copilot" && key.engine !== "antigravity") {
     return { ok: false, error: `a ${key.engine} session has no structured host to end`, owner };
   }
   if (typeof process.startIdentity !== "string" || process.startIdentity.length === 0) {

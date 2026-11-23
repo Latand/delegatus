@@ -347,7 +347,7 @@ interface ControlEffect {
   attentionId?: string;
   resolution?: unknown;
   turnId?: string | null;
-  sessionKey?: { engine: "codex" | "claude"; sessionId: string };
+  sessionKey?: { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string };
   pendingSendIds?: string[];
   eventSeq: number;
 }
@@ -366,7 +366,7 @@ export interface StructuredReconfigureEffect {
   operationId: string;
   conversationId: string;
   kind: "reconfigure";
-  sessionKey?: { engine: "codex" | "claude" | "copilot"; sessionId: string };
+  sessionKey?: { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string };
   model: string;
   effort: string;
   fast: boolean | null;
@@ -575,7 +575,8 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
     const key = effect.payload.sessionKey;
     if (!key || typeof key !== "object" || Array.isArray(key)) return null;
     const candidate = key as Record<string, unknown>;
-    if ((candidate.engine !== "codex" && candidate.engine !== "claude") || typeof candidate.sessionId !== "string") return null;
+    if ((candidate.engine !== "codex" && candidate.engine !== "claude" && candidate.engine !== "copilot" && candidate.engine !== "antigravity")
+      || typeof candidate.sessionId !== "string") return null;
     const pendingSendIds = effect.payload.pendingSendIds;
     if (pendingSendIds !== undefined && (!Array.isArray(pendingSendIds)
       || pendingSendIds.some(id => typeof id !== "string" || !id || id.length > 200))) return null;
@@ -950,7 +951,7 @@ export class StructuredDeliveryQueue {
     private readonly resolveHost: StructuredHostResolver,
     private readonly terminateHost: (
       conversationId: string,
-      sessionKey: { engine: "codex" | "claude"; sessionId: string },
+      sessionKey: { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string },
       onlyIfIdle?: import("./contracts").RuntimeIdleKillFence,
       authority?: { operationId: string; claim: RuntimeRetirementClaim },
       providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef,

@@ -317,7 +317,7 @@ function readRetirementCursor(): string | null {
 function parseRetirementCursor(value: unknown): string | null {
   const cursor = value as { version?: unknown; afterKey?: unknown } | null;
   if (cursor?.version !== 1 || !(cursor.afterKey === null
-    || typeof cursor.afterKey === "string" && /^(claude|codex|copilot):[0-9a-f-]{36}$/i.test(cursor.afterKey))) {
+    || typeof cursor.afterKey === "string" && /^(claude|codex|copilot|antigravity):[0-9a-f-]{36}$/i.test(cursor.afterKey))) {
     throw new Error("retirement cursor is invalid");
   }
   return cursor.afterKey;

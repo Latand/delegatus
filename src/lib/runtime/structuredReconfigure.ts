@@ -176,6 +176,9 @@ export async function applyStructuredReconfigure(
   if (engine === "copilot" && switchingAccount) {
     throw new Error("a Copilot session stays in its account's COPILOT_HOME; account changes require a new conversation");
   }
+  if (engine === "antigravity" && switchingAccount) {
+    throw new Error("an Antigravity session uses the host's signed-in account; account changes are not supported");
+  }
   const ownsOperation = dependencies.ownsOperation ?? (async () => true);
   const release = (key: SessionKey, assertCurrent?: () => void) => withHostStopOrigin({ path: "structured-reconfigure", operationId: effect.operationId }, () => {
     assertCurrent?.();
