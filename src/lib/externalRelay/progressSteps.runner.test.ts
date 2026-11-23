@@ -28,7 +28,7 @@ function relay(origin: string, features?: string[]): PairedRelay {
   return {
     id: "relay_progress", origin, api_base: `${origin}/v1`, name: "Fixture", description: "Fixture",
     credential: randomBytes(32).toString("base64url"), features,
-    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null },
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     pairedAt: new Date().toISOString(), paused: false,
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true,

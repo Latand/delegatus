@@ -1959,6 +1959,188 @@ describe("board timeline manager view", () => {
   }, 900_000);
 });
 
+/*
+ * Attempt rows of the chart open their conversation and say how long the agent worked
+ * (Build 7 … Build 11 of one stage: a 25-hour calendar span that holds under an hour of turns,
+ * a stage whose transcript cannot be read, and one working now). The work-time route answers from
+ * the table below, never from the chart; the expectations read the same table.
+ */
+describe("board timeline attempt rows: open the conversation, show real working time", () => {
+  const NOW = Date.parse("2026-11-22T10:30:00Z");
+  const H = 3_600_000, MIN = 60_000;
+  const ago = (hours: number) => NOW - hours * H;
+  // Attempt number → calendar span in hours before the clock, and the turn windows its transcript holds (null: no readable transcript).
+  const ATTEMPTS: Array<{ n: number; from: number; to: number | null; turns: Array<[number, number | null]> | null }> = [
+    { n: 7, from: 53, to: 51, turns: [[52.9, 52.5], [52.2, 51.9]] },
+    { n: 8, from: 49, to: 23.9, turns: [[48.9, 48.65], [30, 29.5], [24.2, 24]] },
+    { n: 9, from: 22, to: 19, turns: null },
+    { n: 10, from: 17, to: 8, turns: [[16.9, 12.4], [11, 9.5]] },
+    { n: 11, from: 1.5, to: null, turns: [[1.4, null]] },
+  ];
+  const workMs = (spec: (typeof ATTEMPTS)[number]) => spec.turns?.reduce((sum, [from, to]) => sum + (ago(to ?? 0) - ago(from)), 0) ?? null;
+  const conversationOf = (n: number) => `conversation_build_${n}`;
+
+  async function records(lang: "en" | "uk") {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const title = lang === "uk" ? "Графік: рядки спроб відкривають розмову" : "Chart: attempt rows open the conversation";
+    const role = { roleId: "builder" as const };
+    const resolved = resolvePipelineRole({ role, engine: "codex", model: "gpt-6.2-astra", effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
+    if (!resolved.role) throw new Error(resolved.error);
+    const lane = buildPipeline({ id: "attempt-lane", task: title, taskIds: ["attempt-task"], project: "atlas", repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(ago(54)),
+      stages: [{ id: "build", kind: "run", role, effectiveRole: resolved.role, next: null, prompt: "{{task}}" }] });
+    lane.state = "running"; lane.createdAt = iso(ago(54));
+    lane.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+    const file = { path: "/fixture/build-11.jsonl", conversationId: conversationOf(11), project: "atlas", projectName: "Atlas", root: "codex-sessions", name: "build-11.jsonl", title: "Build 11", kind: "session", fmt: "codex",
+      parent: null, engine: "codex", model: "gpt-6.2-astra", mtime: NOW / 1000, size: 100, proc: "running", activity: "live", pendingQuestion: null, waitingInput: null,
+      lastTurn: { startedAt: ago(1.4), endedAt: null }, agentActivity: { lastRecordAt: NOW, checking: false, check: null } } as unknown as FileEntry;
+    for (const spec of ATTEMPTS) {
+      lane.runs[0]!.attempts.push({ n: spec.n, state: spec.to === null ? "running" : "passed", effectiveRole: structuredClone(resolved.role), launchId: null, conversationId: conversationOf(spec.n), sessionId: null,
+        agentPath: `/fixture/build-${spec.n}.jsonl`, paneId: null, flowId: null, startedAt: iso(ago(spec.from)), completedAt: spec.to === null ? null : iso(ago(spec.to)), input: null, output: null, activatedBy: null, verdict: null, error: null } as unknown as Pipeline["runs"][number]["attempts"][number]);
+    }
+    const task = { id: "attempt-task", project: "atlas", text: title, status: "assigned", placement: "unplaced", createdAt: iso(ago(55)), updatedAt: iso(ago(1)),
+      dueAt: iso(NOW + 8 * H), dueTz: "UTC", assignments: [{ path: file.path, conversationId: file.conversationId, panePid: null, state: "linked", error: null, at: iso(ago(1.5)) }] } as unknown as BoardTask;
+    return { payload: { ...filesReadSummary([], [lane]), files: [file], tasks: [task], pipelines: [lane], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 1, smt: NOW / 1000 }], projectCwds: { atlas: "/fixture/atlas" } }, task, lane };
+  }
+
+  browserTest("a stage row opens its conversation, and its working time is the sum of its turns, with the calendar span labelled apart; 1440 and 390, uk and en", async () => {
+    const { timelineDuration } = await import("@/lib/board/taskTimelineView");
+    const out = path.join(os.tmpdir(), `llv-attempt-rows-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-timeline-attempt-rows"); fs.mkdirSync(evidence, { recursive: true });
+    let current = await records("en");
+    const asked: string[] = [];
+    const served = await serveEvidenceFixture(out, undefined, {
+      "/api/files": () => Response.json(current.payload),
+      "/api/tasks": () => Response.json({ tasks: current.payload.tasks }),
+      "/api/board/work-time": (request: Request) => {
+        const id = new URL(request.url).searchParams.get("conversationId") ?? "";
+        asked.push(id);
+        const spec = ATTEMPTS.find(candidate => conversationOf(candidate.n) === id);
+        const work = spec?.turns ? { windows: spec.turns.map(([from, to]) => [ago(from), to === null ? null : ago(to)]), lastRecordAt: NOW, complete: true } : null;
+        return Response.json({ work: { [id]: work } });
+      },
+    });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await records(lang);
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+        for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+          const tag = `${width}-${lang}-${theme}`;
+          const phone = width === 390;
+          asked.length = 0;
+          const opened = await openFixture(browser, "about:blank", { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date(NOW));
+          const { page, context, pageErrors } = opened;
+          try {
+            await context.addInitScript(({ stored }) => {
+              localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+              localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+            }, { stored: { view: "timeline", hours: 72, expanded: { "attempt-task": true } } });
+            await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+            await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+            await page.locator("[data-timeline-attempt]").first().waitFor();
+            await page.waitForFunction(() => document.querySelectorAll("[data-timeline-work-time='loading']").length === 0);
+            const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-timeline-attempt]")].map(row => {
+              const label = row.querySelector<HTMLElement>(".bt-label")!, box = label.getBoundingClientRect();
+              const bar = row.querySelector<HTMLElement>("[data-timeline-bar]");
+              const work = [...row.querySelectorAll<HTMLElement>("[data-timeline-work]")].reduce((sum, node) => sum + node.offsetWidth, 0);
+              return { key: row.dataset.timelineAttempt!, openable: row.dataset.openable ?? null, role: label.getAttribute("role"), tabindex: label.tabIndex, height: box.height, width: box.width,
+                work: row.querySelector("[data-timeline-work-time]")?.textContent ?? "", state: row.querySelector("[data-timeline-work-time]")?.getAttribute("data-timeline-work-time") ?? "",
+                wall: row.querySelector("[data-timeline-wall]")?.textContent ?? "", fills: row.querySelectorAll("[data-timeline-work]").length, fillWidth: work, barWidth: bar?.offsetWidth ?? 0 };
+            }));
+            check(rows.length === ATTEMPTS.length, `${tag}: ${rows.length} attempt rows, ${ATTEMPTS.length} expected`);
+            for (const [index, spec] of ATTEMPTS.entries()) {
+              const row = rows[index];
+              if (!row) continue;
+              const ms = workMs(spec);
+              const expectedWork = ms === null ? t("timeline.workUnknown") : t("timeline.worked", { duration: timelineDuration(ms, lang, t as never) });
+              check(row.work === expectedWork, `${tag}: attempt ${spec.n} work «${row.work}», expected «${expectedWork}»`);
+              check(row.state === (ms === null ? "unknown" : "known"), `${tag}: attempt ${spec.n} state ${row.state}`);
+              const wall = t("timeline.elapsed", { duration: spec.to === null ? timelineDuration(NOW - ago(spec.from), lang, t as never) : timelineDuration((spec.from - spec.to) * H, lang, t as never) });
+              check(row.wall === wall, `${tag}: attempt ${spec.n} calendar span «${row.wall}», expected «${wall}»`);
+              check(!row.wall.includes(t("timeline.worked", { duration: "" }).trim()) && !row.work.includes(t("timeline.elapsed", { duration: "" }).trim()), `${tag}: attempt ${spec.n} mixes the two figures`);
+              check(row.openable === "1" && row.role === "button" && row.tabindex === 0, `${tag}: attempt ${spec.n} is not a control (${row.openable}, ${row.role}, ${row.tabindex})`);
+              check(row.height >= (phone ? 44 : 24), `${tag}: attempt ${spec.n} target ${row.width}×${row.height}`);
+              check(ms === null ? row.fills === 0 : row.fills > 0, `${tag}: attempt ${spec.n} draws ${row.fills} work fills`);
+              // The fill is the turn time, not the calendar span: a 25 h attempt of under an hour of turns fills a sliver of its bar.
+              if (spec.n === 8) check(row.barWidth > 0 && row.fillWidth / row.barWidth < 0.1, `${tag}: attempt 8 fill ${row.fillWidth} of ${row.barWidth}`);
+            }
+            check(ATTEMPTS.every(spec => asked.includes(conversationOf(spec.n))), `${tag}: work-time asked for ${asked.join(",")}`);
+            const geometry = await timelineGeometry(page.locator("[data-board-timeline]"));
+            check(geometry.failures.length === 0, `${tag}: text cut by an edge: ${JSON.stringify(geometry.failures.slice(0, 5))}`);
+            check(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+            const scroller = page.locator("[data-timeline-scroll]");
+            await page.screenshot({ path: path.join(evidence, `${tag}-rows.png`) });
+            // Every row shows its open cue at rest, and on a desktop all five rows are one height (the calendar span stays on the meta line; the phone sets name and state on one line).
+            const cues = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-timeline-attempt]")].map(row => {
+              const cue = row.querySelector<SVGElement>("[data-timeline-open-cue]"), box = cue?.getBoundingClientRect(), name = row.querySelector(".bt-stage-name span")!.getBoundingClientRect();
+              return { shown: !!box && box.width > 0 && box.height > 0, afterName: !!box && box.left >= name.right - 0.5, height: row.querySelector(".bt-label")!.getBoundingClientRect().height };
+            }));
+            check(cues.length === ATTEMPTS.length && cues.every(cue => cue.shown && cue.afterName), `${tag}: open cue at rest ${JSON.stringify(cues)}`);
+            check(phone || new Set(cues.map(cue => Math.round(cue.height))).size === 1, `${tag}: stage row heights ${cues.map(cue => cue.height).join(",")}`);
+            // A hover tint (a pointer) and a pressed tint (any input) wash the row; the press ends off the row so it opens nothing.
+            const stage = scroller.locator(`[data-timeline-attempt*="9]"]`);
+            const tint = () => stage.evaluate(node => getComputedStyle(node).backgroundColor);
+            const rest = await tint();
+            if (!phone) {
+              await stage.hover();
+              const hovered = await tint();
+              check(hovered !== rest, `${tag}: hover leaves the row at ${hovered}`);
+              await page.screenshot({ path: path.join(evidence, `${tag}-hover.png`) });
+            }
+            const box = (await stage.boundingBox())!;
+            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+            await page.mouse.down();
+            const pressed = await tint();
+            check(pressed !== rest, `${tag}: press leaves the row at ${pressed}`);
+            await page.screenshot({ path: path.join(evidence, `${tag}-pressed.png`) });
+            await page.mouse.move(box.x + box.width / 2, Math.max(1, box.y - 40));
+            await page.mouse.up();
+            await page.mouse.move(1, 1);
+            // The legend names the outline as the stage's calendar span and the fill as the agent's working time, whole at this width.
+            const legend = page.locator(".bt-legend");
+            await legend.scrollIntoViewIfNeeded();
+            const legendRead = await legend.evaluate(node => {
+              const range = document.createRange(); range.selectNodeContents(node);
+              const box = range.getBoundingClientRect(), host = node.getBoundingClientRect();
+              return { text: node.textContent ?? "", whole: box.left >= host.left - 0.5 && box.right <= host.right + 0.5 && box.right <= window.innerWidth && box.bottom <= window.innerHeight + 0.5 };
+            });
+            check(legendRead.text === t("timeline.legend"), `${tag}: legend «${legendRead.text}»`);
+            check(legendRead.text.includes(lang === "uk" ? "товста лінія — етапи йшли (календарний час)" : "Thick line: stages ran (calendar time)"), `${tag}: legend does not name the thick task segment`);
+            check(legendRead.whole, `${tag}: legend cut by an edge`);
+            await legend.screenshot({ path: path.join(evidence, `${tag}-legend.png`) });
+            readings.push({ name: tag, rows, legend: legendRead, failures: geometry.failures });
+            // A tap on a bar opens the conversation the attempt recorded (no card holds it, so the board addresses it by its link).
+            await scroller.locator(`[data-timeline-attempt*="8]"] [data-timeline-bar]`).click();
+            await page.waitForFunction(id => decodeURIComponent(location.hash).includes(id), conversationOf(8));
+            await page.screenshot({ path: path.join(evidence, `${tag}-opened-recorded.png`) });
+            await page.evaluate(() => { location.hash = "#p=atlas"; });
+            // The live attempt's conversation is on the board: its window opens, and the keyboard does the same.
+            await page.locator(`[data-timeline-attempt*="11]"] .bt-label`).focus();
+            await page.keyboard.press("Enter");
+            // The board holds this conversation, so it opens it itself (the agent window on a desktop, the phone's own surface otherwise).
+            await page.waitForFunction(id => document.body.outerHTML.includes(id), conversationOf(11));
+            await page.waitForTimeout(600);
+            await page.screenshot({ path: path.join(evidence, `${tag}-opened-live.png`) });
+          } catch (error) {
+            failures.push(`${tag}: ${error instanceof Error ? error.message : String(error)}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify(readings, null, 1));
+    } finally {
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
 /* The «Графік» toggle is the last segment of the header's panel group: Orchestrator, the recent
    agents' clock and the chart read as one segmented control, pressed or not. Every frame is the
    header at the exact width, in both languages and themes, with the chart shown and hidden, and
@@ -33566,6 +33748,186 @@ describe("queued hold kinds on the card", () => {
   }, 180_000);
 });
 
+describe("Waiting status hint", () => {
+  browserTest("phone Waiting hold receipt follows the saved status and Undo restores the previous row", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "hold-receipt-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await serveEvidenceFixture(scratch);
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [320, 390, 440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.locator('[data-phone-card="task:hold-editor-entry"]').click();
+          await page.locator("[data-phone-task-status-pill]").click();
+          await page.locator('[data-phone-task-status="blocked"]').click();
+          const editor = page.locator("[data-hold-editor]");
+          await editor.locator("select").selectOption("resource");
+          await editor.locator("input").fill("Wait for memory");
+          await page.evaluate(() => {
+            const state = (window as unknown as { evidence: { taskPatchGate: Promise<void> | null; releaseTaskPatch?: () => void } }).evidence;
+            state.taskPatchGate = new Promise(resolve => { state.releaseTaskPatch = resolve; });
+          });
+          await editor.locator('button[type="submit"]').click();
+          await page.waitForFunction(() => (window as unknown as { evidence: { taskPatches: unknown[] } }).evidence.taskPatches.length === 1);
+          const receipt = page.locator("[data-mobile2-receipt]");
+          expect(await receipt.count()).toBe(0);
+          await page.evaluate(() => {
+            (window as unknown as { evidence: { releaseTaskPatch: () => void } }).evidence.releaseTaskPatch();
+          });
+          await receipt.waitFor();
+          expect(await receipt.textContent()).toContain(translate(locale, "mobile2.kanban.moved", { column: translate(locale, "kanban.status.inbox") }));
+          await page.locator('[data-phone-task-status-pill="inbox"]').waitFor();
+          expect(await receipt.evaluate(node => node.getBoundingClientRect().left >= 0 && node.getBoundingClientRect().right <= innerWidth)).toBe(true);
+          if (width === 390 && process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-phone-saved-${locale}-${theme}.png`) });
+          }
+          await receipt.locator('[data-mobile2-receipt-undo="undo"]').click();
+          await page.locator('[data-phone-task-status-pill="assigned"]').waitFor();
+          await page.waitForFunction(() => (window as unknown as { evidence: { taskWrites: { answeredAt: number }[] } }).evidence.taskWrites[1]?.answeredAt > 0);
+          const undo = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: { body: unknown }[] } }).evidence.taskPatches[1]!.body);
+          expect(undo).toMatchObject({ status: "assigned", restoreHold: null, expectedRevision: expect.any(String) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("desktop Waiting editor keeps a refused clear draft and closes after a successful clear", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "hold-clear-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await serveEvidenceFixture(scratch);
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width: 1440, height: 844 }, theme, locale, "reduce");
+        try {
+          page.setDefaultTimeout(8000);
+          const row = page.locator(card("hold-slot-note"));
+          await row.waitFor({ state: "visible" });
+          await row.focus();
+          await row.press("s");
+          await page.locator('.menu [data-menu-item="hold"]').press("Enter");
+          const editor = row.locator("[data-hold-editor]");
+          const note = editor.locator("input").first();
+          await note.fill("Keep this local draft");
+          await page.evaluate(() => {
+            (window as unknown as { evidence: { refuseNextTaskPatch: boolean } }).evidence.refuseNextTaskPatch = true;
+          });
+          const clear = editor.getByRole("button", { name: translate(locale, "kanban.hold.clear") });
+          await clear.click();
+          await page.locator("[data-kanban-receipt].error").waitFor();
+          expect(await note.inputValue()).toBe("Keep this local draft");
+          expect(await row.evaluate(node => node.closest<HTMLElement>(".column")?.dataset.status)).toBe("blocked");
+          if (process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-clear-refused-${locale}-${theme}.png`) });
+          }
+          await clear.click();
+          await page.locator('.column[data-status="inbox"] .card[data-id="task:hold-slot-note"]').waitFor();
+          await editor.waitFor({ state: "detached" });
+          if (process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-clear-saved-${locale}-${theme}.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("Waiting explains the operator action on desktop and phone in both languages and themes", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "waiting-status-hint");
+    fs.mkdirSync(out, { recursive: true });
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "waiting-hint-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let browser: Browser | undefined;
+    try {
+      server = await serveEvidenceFixture(scratch);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="blocked"]').click();
+            await page.locator('[data-phone-card="task:hold-slot"]').click();
+            await page.locator("[data-phone-task-status-pill]").click();
+          } else {
+            const row = page.locator(card("hold-slot"));
+            await row.focus();
+            await row.press("s");
+          }
+          const expected = locale === "en" ? "Waiting for your decision, access or a setting you control"
+            : "Очікує на ваше рішення, доступ або налаштування";
+          const panel = page.locator(phone ? "[data-phone-task-status-sheet]" : ".kb .menu");
+          const hint = panel.getByText(expected, { exact: true });
+          await hint.waitFor({ state: "visible" });
+          expect(await hint.evaluate(node => node.scrollWidth <= node.clientWidth + 1 && node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser?.close();
+      server?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("opening the Waiting editor brings its reason and both actions into view at desktop widths", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "waiting-editor-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let browser: Browser | undefined;
+    try {
+      server = await serveEvidenceFixture(scratch);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [915, 1440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce");
+        try {
+          const collapsed = page.locator('[data-seat-collapse][aria-expanded="false"]');
+          if (await collapsed.count()) await collapsed.click();
+          const row = page.locator(card("hold-editor-entry"));
+          await row.focus();
+          await page.keyboard.press("s");
+          await page.locator('.menu [role="menuitemradio"]', { hasText: translate(locale, "kanban.status.blocked") }).click();
+          const editor = page.locator(`${card("hold-editor-entry")} [data-hold-editor]`);
+          await editor.waitFor();
+          const fields = [editor.locator("input").first(), editor.locator("button[type=submit]"), editor.getByRole("button", { name: translate(locale, "kanban.hold.cancel") })];
+          const bounds = await Promise.all(fields.map(async element => element.boundingBox()));
+          expect(bounds.every(box => !!box && box.y >= 0 && box.y + box.height <= 844)).toBe(true);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser?.close();
+      server?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
+
 describe("issue report advisory preview", () => {
   /* PR #2530: the operator decides on this message, so it has to show which
      lines become public, that approving publishes them, and what each hint
@@ -37295,7 +37657,7 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
  */
 describe("Celestia clone creation in the relay card", () => {
   browserTest("empty, list, form, waiting and created states on desktop and phone, light and dark, uk and en", async () => {
-    const out = path.resolve(".artifacts/celestia-clone-create");
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "celestia-clone-create");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
@@ -37383,7 +37745,7 @@ describe("Celestia clone creation in the relay card", () => {
               return win;
             }) as unknown as typeof window.open;
             Object.assign(window, { cloneFake: {
-              withClones: () => { fake.relay.targets = [target("league", names[0]!), target("beta", names[1]!, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null })]; },
+              withClones: () => { fake.relay.targets = [target("league", names[0]!, { grantStatus: "suspended" }), target("beta", names[1]!, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, grantStatus: "active" })]; },
               create: (name: string) => {
                 fake.relay.targets = [...fake.relay.targets, target("fresh", name, { engine: null, model: null, effort: null, answered_by: "install" })];
                 fake.status = { status: "created", target_id: "fresh", username: (fake.relay.cloneRequest as { username?: string } | undefined)?.username };
@@ -37432,10 +37794,10 @@ describe("Celestia clone creation in the relay card", () => {
           expect(await card.locator("[data-external-relay-target='beta']").textContent()).toContain("Codex Cloud · GPT-6.1-Sol");
           expect(await card.locator("[data-clone-open]").textContent()).toBe(translate(lang, "externalRelay.clone.create"));
 
-          for (const [id, key] of [["beta", "externalRelay.target.ownerTierCloudHint"], ["league", "externalRelay.target.ownerTierHint"]] as const) {
+          for (const [id, status] of [["beta", "active"], ["league", "suspended"]] as const) {
             const target = card.locator(`[data-external-relay-target='${id}']`);
             await target.locator("[data-external-relay-target-fold]").click();
-            expect(await target.locator("[data-external-relay-owner-tier-hint]").textContent()).toBe(translate(lang, key));
+            expect(await target.locator(`[data-external-relay-grant-status='${status}']`).textContent()).toBe(translate(lang, `externalRelay.target.grant.${status}`));
             await frame(`${id === "beta" ? "cloud" : "local"}-settings`, `[data-external-relay-target='${id}'][data-open]`);
             await target.locator("[data-external-relay-target-fold]").click();
           }
