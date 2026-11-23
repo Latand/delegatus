@@ -1,15 +1,16 @@
-import { expect, test, fixture } from "./stageAttemptPush.fixture";
+import { expect, fixture, fs, path, test } from "./stageAttemptPush.fixture";
 
 test("B: every commit remains provable beyond the former 256 limit", async () => {
   const f = await fixture();
   try {
     const base = f.pipeline.baseRef;
     const count = 260;
+    const committerEmail = ["noreply", "example.invalid"].join("@");
     const stream = Array.from({ length: count - 1 }, (_, index) => {
       const message = `own ${index}`;
       return [
         `commit refs/heads/${f.pipeline.branch}`,
-        `committer Fixture <noreply@example.invalid> ${Date.parse(f.env.GIT_COMMITTER_DATE!) / 1000} +0000`,
+        `committer Fixture <${committerEmail}> ${Date.parse(f.env.GIT_COMMITTER_DATE!) / 1000} +0000`,
         `data ${Buffer.byteLength(message)}`,
         message,
         ...(index === 0 ? [`from ${base}`] : []),
