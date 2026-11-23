@@ -282,13 +282,13 @@ function EarlierTexts({ rule, onRevert }: { rule: RuleView; onRevert?: (id: stri
   </details>;
 }
 
-function LeftRow({ rule, onRestore, counterpart, onFocus, onRevert, focused }: { rule: RuleView; onRestore: (rule: RuleView) => void; counterpart?: RuleView; onFocus?: (id: string) => void; onRevert?: (id: string) => void; focused?: boolean }) {
+function LeftRow({ rule, kind, onRestore, counterpart, onFocus, onRevert, focused }: { rule: RuleView; kind: ScopeKind; onRestore: (rule: RuleView) => void; counterpart?: RuleView; onFocus?: (id: string) => void; onRevert?: (id: string) => void; focused?: boolean }) {
   const { t } = useLocale();
   const reason: `roleMemory.left.${NonNullable<RuleView["reason"]> | "merged"}` = rule.state === "merged" ? "roleMemory.left.merged" : `roleMemory.left.${rule.reason ?? "budget"}`;
   const row = useRef<HTMLLIElement>(null);
   useEffect(() => { if (focused) row.current?.scrollIntoView({ block: "nearest" }); }, [focused]);
   return (
-    <li ref={row} title={rule.note} data-left-rule={rule.id} data-focused={focused ? "" : undefined} className={`flex items-start gap-2 rounded-[8px] px-2 py-1 ${focused ? "bg-sunken" : ""}`}>
+    <li ref={row} title={rule.note} data-left-rule={rule.id} data-focused={focused ? "" : undefined} className={`flex items-start gap-2 rounded-[8px] px-2 py-1 ${focused ? KIND_TONE[kind].soft : ""}`}>
       <span className="min-w-0 flex-1">
         <span className="text-[11.5px] leading-4 text-muted line-through line-clamp-2 [overflow-wrap:anywhere]">{rule.rule}</span>
         <span className="block text-[10.5px] leading-4 text-muted [overflow-wrap:anywhere]">{t(reason)}{rule.where ? ` · ${rule.where}` : ""}</span>
@@ -319,8 +319,10 @@ function UndoRow({ onUndo }: { onUndo: () => void }) {
 const NEAR_BOUND = 0.8;
 
 /** One level's rules, drawn flat: its heading in the text colour with its count when it has rules, its subtitle and `below`, its rows, what left it behind one toggle, and its size once it nears its bound. It never scrolls itself; the pane that holds it does. An empty level says so once, in its body. */
-export function RuleSection({ kind, title, subtitle, below, scope, focusRule, removed, onDelete, onRestore, onRevert, allRules, onFocus }: {
+export function RuleSection({ kind, title, subtitle, below, scope, focusRule, removed, onDelete, onRestore, onRevert, allRules, onFocus, emptyShown = true }: {
   allRules?: RuleView[]; onFocus?: (id: string) => void;
+  /** False where the window already says in view that no level holds a rule, so the level does not say it again. */
+  emptyShown?: boolean;
   kind: ScopeKind; title: ReactNode; subtitle?: ReactNode; below?: ReactNode; scope: ScopeView | null; focusRule?: string; removed?: Removed | null;
   onDelete: (rule: RuleView) => void; onRestore: (rule: RuleView) => void; onRevert?: (id: string) => void;
 }) {
@@ -352,14 +354,14 @@ export function RuleSection({ kind, title, subtitle, below, scope, focusRule, re
         {below}
       </header>
       <div className="px-1 pb-1">
-        {rows.length ? <ol className="m-0 flex list-none flex-col p-0">{rows}</ol> : <p className="m-0 px-2 py-1.5 text-[11.5px] text-muted">{t("roleMemory.empty")}</p>}
+        {rows.length ? <ol className="m-0 flex list-none flex-col p-0">{rows}</ol> : emptyShown ? <p className="m-0 px-2 py-1.5 text-[11.5px] text-muted">{t("roleMemory.empty")}</p> : null}
         {left > 0 ? (
           <div className="border-t border-border pt-0.5">
             <button type="button" data-rules-history={kind} aria-expanded={history} onClick={() => setHistoryChoice(!history)}
               className="flex h-7 w-full items-center gap-1 rounded-[6px] px-2 text-left text-[11px] font-semibold text-secondary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               <span className="flex-1">{t("roleMemory.history")} · {left}</span><span aria-hidden>{history ? "▴" : "▾"}</span>
             </button>
-            {history ? <ul className="m-0 list-none p-0">{scope!.left.map((rule) => <LeftRow key={rule.id} rule={rule} focused={rule.id === focusRule} onRestore={onRestore} counterpart={allRules?.find(r => r.id === (rule.against ?? rule.mergedInto))} onFocus={onFocus} onRevert={onRevert} />)}</ul> : null}
+            {history ? <ul className="m-0 list-none p-0">{scope!.left.map((rule) => <LeftRow key={rule.id} rule={rule} kind={kind} focused={rule.id === focusRule} onRestore={onRestore} counterpart={allRules?.find(r => r.id === (rule.against ?? rule.mergedInto))} onFocus={onFocus} onRevert={onRevert} />)}</ul> : null}
           </div>
         ) : null}
       </div>
@@ -402,6 +404,7 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
     return () => clearTimeout(timer);
   }, [undo]);
   const scopes = view?.scopes ?? [];
+  const total = scopes.reduce((sum, scope) => sum + scope.active.length, 0);
   /* Only a change to the rules themselves asks for a new profile; a re-read of the same rules does not. */
   const revision = useMemo(() => view?.scopes.map(scope => `${scope.scope}:${scope.active.map(rule => `${rule.id}@${rule.changedAt}`).join(",")}`).join("|") ?? "", [view]);
   const profile = useMemoryProfile(project, locale, revision);
@@ -459,7 +462,7 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
       if (scope) body = <RuleSection key={scope.scope} kind={scope.kind} title={levelLabel(t, scope)}
         subtitle={summary?.answer.text ?? (scope.kind === "project" ? t("roleMemory.projectSubtitle") : scope.kind === "machine" ? t("roleMemory.machineSubtitle") : undefined)}
         below={summary ? <SliceTopics part={summary} disabled={false} onPick={topic => select({ kind: "topic", title: topic.title, text: topic.text, ids: topic.ruleIds, scope: scope.scope })} /> : null}
-        scope={scope} {...shared} />;
+        scope={scope} emptyShown={mobile || total > 0} {...shared} />;
     } else {
       /* A level stays in the pane while it holds the undo of a topic rule just removed, or the undo would leave with the row's section. */
       const matching = scopes.filter(scope => (!current.scope || scope.scope === current.scope)

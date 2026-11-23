@@ -4213,7 +4213,7 @@ const S7_STATES: S7State[] = [
 /** Reads one frame: every violation the variant's gates name, as short strings. */
 const measureS7 = (page: Page, args: { phone: boolean; scopes: Record<string, { active: string[]; left: string[] }>; total: number; topicIds?: string[]; endScroll: boolean; cold: boolean; expectCurrent: boolean }) => page.evaluate((args) => {
   const out: string[] = [];
-  const checked = { texts: 0, scrollers: 0, rules: 0, removes: 0, rows: 0, levelGaps: 0 };
+  const checked = { texts: 0, scrollers: 0, rules: 0, removes: 0, rows: 0, levelGaps: 0, departedTone: 0, emptySaid: 0 };
   const win = document.querySelector<HTMLElement>("[data-rules-window]")!;
   const box = win.getBoundingClientRect();
   const clips = (element: Element) => { const found: HTMLElement[] = []; for (let node = element.parentElement; node; node = node.parentElement) if (getComputedStyle(node).overflowX !== "visible") found.push(node); return found; };
@@ -4282,18 +4282,39 @@ const measureS7 = (page: Page, args: { phone: boolean; scopes: Record<string, { 
     const lines = [...range.getClientRects()], last = lines[lines.length - 1]!, at = count.getBoundingClientRect();
     if (Math.abs(at.left - last.right) > 12 || at.top < last.top - 2 || at.bottom > last.bottom + 2) out.push("count-detached");
   }
-  /* On the phone, every level row without a summary leaves the same room under its last line as above its label. */
+  /* On the phone, the room between one level row's last line and the next row's label is one, whether the row carries a summary line or not. */
   if (args.phone) {
-    const plain = [...win.querySelectorAll<HTMLElement>("[data-profile-level]:not([data-profile-ready])")];
+    const rows = [...win.querySelectorAll<HTMLElement>("[data-profile-level]")];
     const gaps: number[] = [];
-    for (const row of plain) {
-      const label = row.querySelector<HTMLElement>("span > span"), next = row.parentElement?.nextElementSibling?.querySelector<HTMLElement>("[data-profile-level] span > span");
-      if (!label || !next) continue;
-      const a = document.createRange(), b = document.createRange(); a.selectNodeContents(label); b.selectNodeContents(next);
+    for (const [index, row] of rows.entries()) {
+      const next = rows[index + 1];
+      if (!next) continue;
+      const lines = [...row.querySelectorAll<HTMLElement>("span.min-w-0 > span")].filter(line => line.textContent?.trim());
+      const label = next.querySelector<HTMLElement>("span.min-w-0 > span");
+      if (!lines.length || !label) continue;
+      const a = document.createRange(), b = document.createRange(); a.selectNodeContents(lines[lines.length - 1]!); b.selectNodeContents(label);
       const rects = [...a.getClientRects()]; gaps.push(b.getClientRects()[0]!.top - rects[rects.length - 1]!.bottom);
     }
     checked.levelGaps = gaps.length;
     if (gaps.length > 1 && Math.max(...gaps) - Math.min(...gaps) > 2) out.push(`level-gaps:${gaps.map(gap => Math.round(gap)).join(",")}`);
+  }
+  /* A rule that has left and is the one asked about stands out from its neighbours in the history. */
+  const departed = [...win.querySelectorAll<HTMLElement>("[data-left-rule]")], chosen = departed.find(row => row.hasAttribute("data-focused"));
+  if (chosen) {
+    const others = departed.filter(row => row !== chosen).map(row => getComputedStyle(row).backgroundColor);
+    checked.departedTone = others.length;
+    /* The hover tint is what a pointer passing over any row leaves; the chosen row has to read as more than that. */
+    const hover = document.createElement("span"); hover.className = "bg-sunken"; document.body.append(hover);
+    const hoverTone = getComputedStyle(hover).backgroundColor; hover.remove();
+    const tone = getComputedStyle(chosen).backgroundColor;
+    if (others.includes(tone) || tone === hoverTone) out.push("departed-focus-unmarked");
+  }
+  /* A profile with no rules says so once: the pane beside the list stays quiet where the list already says it. */
+  if (!args.phone && args.total === 0) {
+    const said = win.querySelector("[data-memory-profile] h3")?.textContent?.trim().toLowerCase() ?? "";
+    const pane = win.querySelector<HTMLElement>("[data-level-pane]")?.textContent?.toLowerCase().replace(/[.\s]+/g, " ") ?? "";
+    checked.emptySaid = 1;
+    if (said && pane.includes(said.replace(/[.\s]+/g, " ").trim())) out.push("empty-said-twice");
   }
   if (document.documentElement.scrollWidth > innerWidth) out.push("page-overflow");
   const title = document.getElementById("rules-window-title")!, titleBox = title.getBoundingClientRect();

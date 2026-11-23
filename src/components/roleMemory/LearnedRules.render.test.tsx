@@ -371,6 +371,30 @@ test("on a desktop the window opens with the first level selected and swaps its 
   });
 });
 
+test("a profile with no rule at all says so once on a desktop and in the level's own screen on a phone", async () => {
+  const bare = (): RoleMemoryProjectView => ({ project: "atlas", enabled: true, scopes: [levelScope("project:atlas", "project", null, []), levelScope("machine", "machine", null, [])] });
+  await withWindow({ view: bare() }, async ({ dom }) => {
+    expect(dom.document.querySelector("[data-memory-profile] h3")!.textContent).toBe("No rules yet");
+    expect(dom.document.querySelector("[data-level-pane] h3")).not.toBeNull();
+    expect(dom.document.querySelector("[data-level-pane]")!.textContent).not.toContain("No rules yet");
+  });
+  await withWindow({ view: bare(), phone: true }, async ({ dom, act }) => {
+    await act(async () => press(dom, '[data-profile-level="project:atlas"]'));
+    expect(dom.document.querySelector("[data-level-pane]")!.textContent!.split("No rules yet.").length - 1).toBe(1);
+  });
+});
+
+test("the departed rule the window was opened on carries its level's focus tone and its neighbours none", async () => {
+  const view = levelsView();
+  const reviewer = view.scopes.find(entry => entry.scope === "role:atlas:reviewer")!;
+  reviewer.left.push({ ...rule("rv2", "Another reviewer rule that left."), state: "archived", reason: "stale" });
+  await withWindow({ view, focusRule: "rv1" }, async ({ dom }) => {
+    const rows = (id: string) => dom.document.querySelector(`[data-left-rule="${id}"]`)!.className;
+    expect(rows("rv1")).toContain("bg-accent-soft");
+    expect(rows("rv2")).not.toContain("bg-");
+  });
+});
+
 test("a level with no rules says so once in its pane, and its history keeps the way back", async () => {
   await withWindow({ view: levelsView() }, async ({ dom, act, posts }) => {
     await act(async () => press(dom, '[data-profile-level="machine"]'));

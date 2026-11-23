@@ -105,6 +105,7 @@ export function MemoryProfile({ rules, profile, levels, selected, mobile, onSele
   const reading = !loaded && (!countKnown || count > 0);
   const pending = count > 0 && running && !overall;
   const quiet = !!overall && !code && !view?.stale && !running;
+  const row = mobile ? ROW.replace("py-1.5", "py-3") : ROW;
   const chevron = mobile ? <ChevronRight className="h-4 w-4 shrink-0 self-center text-muted" aria-hidden /> : null;
   return <div data-memory-profile="" aria-busy={running || reading} className={`flex min-h-0 flex-col gap-4 overflow-y-auto px-4 pt-3 ${SCROLL_FADE} ${mobile ? "min-w-0 flex-1" : "w-[300px] shrink-0 border-r border-border md:w-[380px]"}`}>
     <section data-profile-ready={overall ? "" : undefined} className="min-w-0">
@@ -126,15 +127,15 @@ export function MemoryProfile({ rules, profile, levels, selected, mobile, onSele
         {levels.map(level => {
           /* A level's own topic keeps its level chosen. */
           const current = !!selected && selected.scope === level.scope && (selected.kind === "level" || selected.index === undefined);
-          /* A row with no summary line has the same padding on both sides of its label, so a wrapped label leaves the gap a one-line label does. */
-          const plain = !level.summary && !running && !reading;
+          /* A summary-less row on the phone reaches the 44 px target through its own padding, so every row there has that padding and the room between rows is one. */
+          const plain = !level.summary && !running && !reading && mobile;
           return <li key={level.scope}>
-            <button type="button" data-profile-level={level.scope} data-profile-ready={level.summary ? "" : undefined} disabled={!rules} aria-current={current ? "true" : undefined} onClick={() => onSelect({ kind: "level", scope: level.scope })} className={`${plain && mobile ? ROW.replace("py-1.5", "py-3") : ROW} ${plain && mobile ? "items-center" : "items-start"} ${current ? "bg-accent-soft" : "enabled:hover:bg-sunken"}`}>
+            <button type="button" data-profile-level={level.scope} data-profile-ready={level.summary ? "" : undefined} disabled={!rules} aria-current={current ? "true" : undefined} onClick={() => onSelect({ kind: "level", scope: level.scope })} className={`${row} ${plain ? "items-center" : "items-start"} ${current ? "bg-accent-soft" : "enabled:hover:bg-sunken"}`}>
               <span className="min-w-0 flex-1">
                 <span className={`block text-[12.5px] font-semibold [overflow-wrap:anywhere] ${current ? "text-accent" : "text-primary"}`}>{levelLabel(t, level)}</span>
                 {level.summary ? <span className="block text-[11.5px] leading-4 text-muted [overflow-wrap:anywhere]">{level.summary.answer.headline}</span> : running || reading ? <Placeholder lines={1} className="mt-1.5" /> : null}
               </span>
-              <span className={`shrink-0 text-[11.5px] tabular-nums text-muted ${plain && mobile ? "" : "pt-0.5"}`}>{level.count}</span>
+              <span className={`shrink-0 text-[11.5px] tabular-nums text-muted ${plain ? "" : "pt-0.5"}`}>{level.count}</span>
               {mobile ? <ChevronRight className={`${plain ? "" : "mt-px "}h-4 w-4 shrink-0 text-muted`} aria-hidden /> : null}
             </button>
           </li>;
@@ -147,7 +148,7 @@ export function MemoryProfile({ rules, profile, levels, selected, mobile, onSele
         {overall.answer.topics.map((topic, index) => {
           const current = selected?.kind === "topic" && selected.index === index;
           return <li key={index}>
-            <button type="button" data-profile-topic={index} disabled={!rules || !topic.ruleIds.length} aria-current={current ? "true" : undefined} onClick={() => onSelect({ kind: "topic", title: topic.title, text: topic.text, ids: topic.ruleIds, index })} className={`${ROW} items-baseline ${current ? "bg-accent-soft" : "enabled:hover:bg-sunken"}`}>
+            <button type="button" data-profile-topic={index} disabled={!rules || !topic.ruleIds.length} aria-current={current ? "true" : undefined} onClick={() => onSelect({ kind: "topic", title: topic.title, text: topic.text, ids: topic.ruleIds, index })} className={`${row} items-baseline ${current ? "bg-accent-soft" : "enabled:hover:bg-sunken"}`}>
               <span className="min-w-0 flex-1">
                 <span className={`block text-[12.5px] font-semibold [overflow-wrap:anywhere] ${current ? "text-accent" : "text-primary"}`}>{topic.title}</span>
                 {topic.text ? <span className="block text-[11.5px] leading-4 text-muted [overflow-wrap:anywhere]">{topic.text}</span> : null}
