@@ -141,7 +141,8 @@ export function TrustedRequesters({ relay, target, project, grantStatus }: { rel
             <p className="break-words text-caption text-muted">{[
               t(`externalRelay.requesters.kind.${entry.kind}`), t(`externalRelay.requesters.tier.${entry.tier}`),
               t(`externalRelay.requesters.state.${entry.active ? "active" : "suspended"}`), entry.project,
-            ].filter(Boolean).join(" · ")} · <When time={entry.addedAt} /></p>
+            ].filter(Boolean).join(" · ")}</p>
+            <p className="text-caption text-muted"><When time={entry.addedAt} /></p>
           </div>
           {!confirm && <button type="button" className={QUIET} disabled={busy} onClick={() => ask({ action: "remove", relay, target, entryId: entry.id }, entry.label, entry.project)}>
             {t("externalRelay.requesters.action.remove")}</button>}

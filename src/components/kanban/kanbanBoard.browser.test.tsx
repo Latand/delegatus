@@ -47176,8 +47176,27 @@ describe("relay requester enrolment on the board", () => {
               // A date and time renders as one line box, never split across lines.
               splitTimes: [...element.querySelectorAll("[data-requester-time]")]
                 .filter(time => time.getClientRects().length !== 1).length,
+              // No rendered line ends in a separator dot: a wrap never strands a "·" before the next line.
+              danglingSeparators: (() => {
+                const glyphs: { block: Element; char: string; top: number; left: number; right: number }[] = [];
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                  const text = node.textContent ?? "";
+                  const block = node.parentElement?.closest("p, li, summary, div") ?? element;
+                  for (let index = 0; index < text.length; index += 1) {
+                    if (/\s/.test(text[index]!)) continue;
+                    const range = document.createRange();
+                    range.setStart(node, index);
+                    range.setEnd(node, index + 1);
+                    const rect = range.getBoundingClientRect();
+                    if (rect.width > 0) glyphs.push({ block, char: text[index]!, top: Math.round(rect.top), left: rect.left, right: rect.right });
+                  }
+                }
+                return glyphs.filter(dot => dot.char === "·"
+                  && !glyphs.some(other => other.block === dot.block && other.top === dot.top && other.left >= dot.right - 0.5)).length;
+              })(),
             }), phone);
-            expect(measurement).toEqual({ overflow: false, shortControls: 0, splitTimes: 0 });
+            expect(measurement).toEqual({ overflow: false, shortControls: 0, splitTimes: 0, danglingSeparators: 0 });
             // A time reads as date and hour:minute, never with seconds.
             const times = await shown.locator("[data-requester-time]").allTextContents();
             for (const text of times) expect(text).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
