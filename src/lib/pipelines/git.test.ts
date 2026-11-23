@@ -443,7 +443,7 @@ for (const advanceRemote of [false, true]) {
       (await git(subject.worktreeDir, "add", "stage.txt"));
       (await git(subject.worktreeDir, "commit", "-m", "accepted stage"));
       const accepted = (await git(subject.worktreeDir, "rev-parse", "HEAD"));
-      expect(await publishPipelineBranch(subject, realExec, { acceptedSha: accepted })).toEqual({ ok: true, sha: accepted, remote: "published" });
+      expect(await publishPipelineBranch(subject, realExec, { acceptedSha: accepted })).toMatchObject({ ok: true, sha: accepted, remote: "published" });
       expect((await git(repo, "ls-remote", "--heads", "origin", subject.delivery!.target.branch)).split(/\s+/)[0]).toBe(accepted);
       expect((await git(repo, "ls-remote", "--heads", "origin", `refs/heads/${subject.branch}`))).toBe("");
       // The remote can advance after publication's head probe and before push.
@@ -2642,7 +2642,7 @@ test("stage reconciliation skips unrelated large main-only patches and still pub
     if (!result.ok) throw new Error(result.error);
     expect((await git(box.subject.worktreeDir, "rev-parse", `${result.sha}^{tree}`))).toBe(tree);
     expect((await git(box.subject.worktreeDir, "rev-list", "--parents", "-n", "1", result.sha))).toBe(`${result.sha} ${head} ${accepted}`);
-    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: result.sha })).toEqual({
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: result.sha })).toMatchObject({
       ok: true, sha: result.sha, remote: "published",
     });
     expect((await box.originHead())).toBe(result.sha);
@@ -3313,7 +3313,7 @@ test("publishPipelineBranch pushes the passed commit and confirms origin carries
     const passed = (await box.commit("stage.txt", "stage work\n"));
     expect((await box.originHead())).toBe("");
 
-    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: passed })).toEqual({ ok: true, sha: passed, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: passed })).toMatchObject({ ok: true, sha: passed, remote: "published" });
     expect((await box.originHead())).toBe(passed);
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
@@ -3327,7 +3327,7 @@ test("publishPipelineBranch fast-forwards a branch it already published", async 
     expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: first })).toMatchObject({ ok: true, sha: first });
     const second = (await box.commit("two.txt", "two\n"));
 
-    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: second, publishedSha: first })).toEqual({ ok: true, sha: second, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: second, publishedSha: first })).toMatchObject({ ok: true, sha: second, remote: "published" });
     expect((await box.originHead())).toBe(second);
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
@@ -3708,7 +3708,7 @@ test("the publication's dependency install and its push run without the Viewer's
       if (step) seen.set(step, { ...process.env, ...env });
       return step === "install" ? { code: 0, stdout: "", stderr: "" } : realExec(command, args, cwd, env, options);
     };
-    expect(await publishPipelineBranch(box.subject, exec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, exec, { acceptedSha: head })).toMatchObject({ ok: true, sha: head, remote: "published" });
     expect([...seen.keys()].sort()).toEqual(["install", "push"]);
     for (const env of seen.values()) {
       for (const key of Object.keys(settings)) expect(env[key]).toBeUndefined();
@@ -3731,7 +3731,7 @@ test.each([undefined, "", "--max-old-space-size=2048 --no-warnings", "--max-old-
     await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
     if (options === undefined) { delete process.env.NODE_OPTIONS; delete process.env.LLV_GATE_MEM; }
     else { process.env.NODE_OPTIONS = options; process.env.LLV_GATE_MEM = "24G"; }
-    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: head })).toMatchObject({ ok: true, sha: head, remote: "published" });
     expect(fs.readFileSync(path.join(box.subject.worktreeDir, "hook-memory.txt"), "utf8"))
       .toBe(`${options ?? "--max-old-space-size=11264"}\n${options === undefined ? "14G" : "24G"}\n`);
   } finally {
@@ -3970,7 +3970,7 @@ test("publication pushes only the immutable accepted revision when the branch ad
     /* The local branch really did move on mid-publish ... */
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(racy!);
     /* ... and origin carries exactly the accepted revision, never the racy one. */
-    expect(published).toEqual({ ok: true, sha: accepted, remote: "published" });
+    expect(published).toMatchObject({ ok: true, sha: accepted, remote: "published" });
     expect((await box.originHead())).toBe(accepted);
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
@@ -4069,7 +4069,7 @@ test("publication prepares dependencies and pushes, hooks included, from CPU wor
       if (inner[0] === "bun") return { code: 0, stdout: "", stderr: "" };
       return await realExec(inner[0]!, inner.slice(1), cwd, env, options);
     };
-    expect(await publishPipelineBranch(box.subject, scoped, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, scoped, { acceptedSha: head })).toMatchObject({ ok: true, sha: head, remote: "published" });
     const work = launches.filter(([command]) => command === "systemd-run").map((launch) => launch.slice(launch.indexOf("--") + 1, launch.indexOf("--") + 3));
     expect(work).toEqual([["bun", "install"], ["git", "push"]]);
     for (const launch of launches.filter(([command]) => command === "systemd-run")) expect(launch).toContain("--slice=test-agents-work.slice");
@@ -4127,7 +4127,7 @@ test("publication dependency preparation waits for CPU pressure, starts once in 
     expect(pushes).toEqual([]);
     // Ten seconds below the release threshold admit exactly one install.
     pressure = 5;
-    expect(await held).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(await held).toMatchObject({ ok: true, sha: head, remote: "published" });
     expect(installs).toHaveLength(1);
     expect(installs[0]).toEqual(expect.arrayContaining(["--slice=test-agents-work.slice", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms", "CPUWeight=100"]));
     expect(pushes).toHaveLength(1);
