@@ -156,6 +156,7 @@ export const MCP_TOOL_NAMES = [
   "telegram_bot_send_document",
   "telegram_bot_messages",
   "relay_owner_history",
+  "relay_trusted_requesters",
   "relay_answer",
   "relay_service_tools",
   "issue_report",
@@ -254,11 +255,12 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
 ]);
 
 /** Private request data is never receipted. Service actions use the relay call id for idempotency. */
-export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history", "relay_answer", "relay_service_tools"]);
+export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history", "relay_answer", "relay_service_tools", "relay_trusted_requesters"]);
 
 /** Explicit allowlist: read-like tools with durable effects still need keys. */
 export const OPTIONAL_READ_KEY_TOOLS = new Set<McpToolName>([
   "relay_owner_history",
+  "relay_trusted_requesters",
   "relay_answer",
   "relay_service_tools",
   "read_prototype_review",
@@ -2965,7 +2967,7 @@ export function createMcpToolService(
         // The consumer must receive the exact bytes the custody ledger stores.
         // Media SHA-256 is content verification data used by the caller.
         const exactHistoryMedia = typedTool === "relay_service_tools" || typedTool === "relay_owner_history" && effectiveArgs.action === "media";
-        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
+        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && typedTool !== "relay_trusted_requesters" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }
@@ -4171,6 +4173,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
   send_message_to_orchestrator: [
     "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. A live owner-tier relay verified by the paired service may also hand the owner's request to a designated seat with operator authority; the server quotes the original owner request and retains agent authorship. A resolved Telegram report reply includes the stored report and is bound to its project and source seat; forward the approval verbatim. Ask one short question for an unresolved ambiguous approval before creating work. Other workers, non-owner relays, pipeline stages, deputies and unidentified callers are refused. If a handoff fails, carry on with your available tools or explain the failure and the owner's concrete next action. Owner relay board tasks default to assigned so the seat tick can wake on unstarted-task; report the task and project, checking that a seat and its tick are enabled. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
+    "Only a live owner-tier relay may omit project. The Viewer uses the project configured for the relay target and requires its designated seat. For explicit cross-project requests or report replies, pass the intended project. When the project cannot be resolved, ask the owner which project should receive the request.",
     "For a shared project, pass machine as the linked machine label, install id or prefix; get_orchestrator names linkedSeats. Both machines must support seat messages. Unshared, revoked, unreachable and older peers are refused with project_not_linked, link_revoked, peer_unreachable or peer_cannot_relay. Only the shared project's seat sends remotely. Replies use the same tool back to the sending machine. A remote operationId has prefix seatmsg_; message_receipt reports queued, accepted or refused.",
     "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. A message still queued when the seat rotates is carried to the new seat; recovery under the same key never sends twice. The answer reports acceptance: ask message_receipt what became of the operationId.",
     RECOVERY_CONTRACT_DESCRIPTION,
@@ -4249,6 +4252,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   relay_answer: relayAnswerDescription,
   relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Ready photos and video frames include image content beside metadata; in code mode, forward image blocks with image(block). Reuse unexpired photo refs as seed_media_refs only on generate_image or update_self_profile_photo. Video frames cannot be seeds. relay_answer attachments can select media_ref from this request. Refused in any other conversation and once answered.",
+  relay_trusted_requesters: "Manage trusted requesters for one relay target. The installation operator's own conversation can list entries and propose start_enrolment, confirm, decline or remove. Use the exact entry id from list. A proposal returns a single-use path to open on the Delegatus board. The signed-in owner reviews and approves it there. The enrolment code is shown in the owner browser after approval.",
   relay_owner_history: [
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. editsReported says whether the service reports edits; editedAt marks one. Media includes kind, fileName, mimeType, size, duration, dimensions and fetch availability when the service supplies them. Older services cannot report edits or all media facts. Telegram-side deletions may remain stored. Author ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
     "action media takes chat, messageId and optional directory: pass your LLV_EVIDENCE_DIR, an existing directory under the installation's evidence root; the default is evidence/relay-media. It streams one photo, document or video through the paired service, up to 2 GiB, and returns done with path, kind, mimeType, size and SHA-256 only after verification. Repeat the identical call on in_progress to join the same job. not_offered means the paired service must implement relay_owner_media first; too_large names the limit and how to lift it. Files, their contents and original names stay private to this conversation: never copy them into reports, messages to other agents, tasks, commits, pull requests, issues, lessons, Telegram hand-off folders or other chats.",
@@ -4349,7 +4353,7 @@ const pipelineStageSchema = z.object({
       .describe("Values for the role's declared parameters, substituted into its scaffold. Only the role's own keys, validated against the registry."),
   }).strict().optional()
     .describe("Role reference ONLY. Runtime overrides do not go here — put engine/model/effort/access on the stage itself."),
-  engine: z.enum(["claude", "codex"]).optional()
+  engine: z.enum(["claude", "codex", "antigravity"]).optional()
     .describe("Stage-level engine override; defaults to the role's registry engine."),
   model: z.string().nullable().optional()
     .describe("Stage-level model override, or null to inherit the role default. Must be a model the stage engine supports."),
@@ -4477,8 +4481,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
        own named violation, so that schema leaves the entries to it. */
     taskId: z.string().refine((value) => value.trim().length > 0, { message: "taskId must name a board task; omit the field to launch without one" }).optional()
       .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. The task must belong to the project resolved from cwd after project aliases are resolved; a task from another project is refused before any request is claimed or dispatched. Use a task on the target project's board, or omit taskId. Omitting it, the launch joins every task held by the parent this call names (parentConversationId, src or parent — this tool never infers one from the caller) and by the conversation it reviews; when the call names neither, or neither holds a task, it is given a named task of its own, which is a duplicate card. A reviewer that names a parent therefore joins that parent's card beside the reviewed work's, so pass taskId on reviewer spawns too — an explicit id wins over inheritance."),
-    engine: z.enum(["claude", "codex", "copilot"]).optional()
-      .describe("Agent CLI. copilot runs the GitHub Copilot CLI over ACP on the structured transport; its account is named or the selected one (no automatic pick), model auto or an id the account offers, effort none…max."),
+    engine: z.enum(["claude", "codex", "copilot", "antigravity"]).optional()
+      .describe("Agent CLI. copilot runs the GitHub Copilot CLI over ACP on the structured transport; antigravity runs the Antigravity CLI (`agy acp`) over ACP on the structured transport with models from `agy models` and effort low…max."),
     account: z.string().nullable().optional()
       .describe("Account this agent runs on, including role-preset spawns, or null to let the project's own selection choose. Honored only when the target project allows that account; an account outside the project's allowed set is refused with the allowed ones named. A project with no binding allows every account. The launch receipt records the account used."),
     model: z.string().optional(),
@@ -5112,7 +5116,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   send_message_to_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
     recoveryOnly: recoveryOnlySchema,
-    project: z.string().min(1).describe("Known project key, display name or repository name whose selected orchestrator receives the message. Case and surrounding whitespace are ignored; ambiguous and unknown names refuse immediately with candidates or close matches."),
+    project: z.string().min(1).optional().describe("Project key, display name or repository name. Required except on a verified owner relay using its configured project. Ambiguous or unknown projects are refused."),
     machine: z.string().min(1).optional().describe("Linked machine label, install id or 8-hex prefix for this shared project; omit for the local seat."),
     text: z.string().min(1).describe("The message. The recipient is resolved server-side; a dead session is resumed, a missing one created first."),
   }).passthrough(),
@@ -5287,6 +5291,13 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   relay_answer: relayAnswerSchema,
   relay_service_tools: relayServiceToolsSchema,
+  relay_trusted_requesters: z.strictObject({
+    action: z.enum(["list", "start_enrolment", "confirm", "decline", "remove"]),
+    relay: z.string().min(1).max(128), target: z.string().min(1).max(128),
+    label: z.string().max(128).optional().describe("Required for start_enrolment."),
+    entryId: z.string().max(128).optional().describe("Required for confirm, decline and remove. Use the id returned by list."),
+    clientRequestId: clientRequestIdSchema.optional(),
+  }),
   relay_owner_history: z.object({
     action: z.enum(["groups", "messages", "media"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),
     messageId: z.number().int().min(1).max(2147483647).optional(), directory: z.string().max(4096).optional(),

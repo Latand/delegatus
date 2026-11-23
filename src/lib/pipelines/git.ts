@@ -35,6 +35,7 @@ import { recordWorktreeProvenance } from "./worktreeProvenance";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
 import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
+import { installedGateAdmissionEnv } from "@/lib/runtime/agentSignalSandbox";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
@@ -2110,9 +2111,10 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
+      const canonicalGateEntry = path.resolve(process.cwd(), "scripts/local-gate.ts");
       const preparingChecks = command === "bun"
-        && (args[0] === "scripts/local-gate.ts" || args[0] === path.resolve(import.meta.dir, "../../../scripts/local-gate.ts"))
-        && args[1] === "pre-push" && args[2] === "--publication-prepare";
+        && (args[0] === "scripts/local-gate.ts" || args[0] === canonicalGateEntry)
+        && args.length === 3 && args[1] === "pre-push" && args[2] === "--publication-prepare";
       // The push runs the repository's pre-push gates; both leave the
       // production service for a work scope. Its PID, group and the inherited
       // lock descriptor stay this command's.
@@ -2479,7 +2481,8 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   /* The hook is handed the moment it must be done by, a minute before this
      limit for git to send the pack, so it ends with its own verdict or with
      a named missing one instead of being killed (scripts/local-gate.ts). */
-  const pushEnv: ReturnType<typeof pipelinePublicationHookEnv> & { LLV_GATE_CANONICAL_TOOLS?: string; LLV_SKIP_HOOKS?: string } = { ...pipelinePublicationHookEnv(), ...lessons, ...engineForgeWriteEnv(),
+  const forgeEnv = engineForgeWriteEnv();
+  const pushEnv: ReturnType<typeof pipelinePublicationHookEnv> & { LLV_GATE_CANONICAL_TOOLS?: string; LLV_SKIP_HOOKS?: string } = { ...pipelinePublicationHookEnv(), ...lessons, ...forgeEnv, ...installedGateAdmissionEnv({ ...process.env, ...forgeEnv }),
     // Older branches run their own hook scripts, so supply the gate's current
     // memory defaults here as well. Explicit caller settings remain authoritative.
     NODE_OPTIONS: process.env.NODE_OPTIONS ?? "--max-old-space-size=11264",

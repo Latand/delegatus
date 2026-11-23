@@ -305,6 +305,25 @@ for (const status of ["ok", "denied", "confirmation_pending", "outcome_unknown"]
     } finally { await server.close(); }
   });
 
+test("service text never carries a pending enrolment code into a read output or a confirmation summary", async () => {
+  const code = "DLG-0A1B2C3D4E5F";
+  const { loop, server } = await actionLoopCase((_req, body) => {
+    const call = body as ReturnType<typeof callBody>;
+    const action = "tool" in call && call.tool === "react_to_message";
+    return { body: action
+      ? { ...x1Results.action_ok, call_id: call.call_id, status: "confirmation_pending", output: `queued ${code.toLowerCase()}`,
+        summary: `React to "@clone ${code}"`, expires_at: "2026-10-07T12:10:00Z" }
+      : { ...x1Results.ok, call_id: call.call_id, tool: "search_docs", output: `[1] @clone ${code}\n[2] my code is${code}ok` } };
+  }, undefined, { now: () => Date.parse("2026-10-07T12:00:00Z") });
+  try {
+    await loop.runCalls([actionCall("search_docs", { query: "clone" })], 1);
+    await loop.runCalls([actionCall()], 2);
+    expect(loop.results[0]).toMatchObject({ status: "ok", output: "[1] @clone [enrolment code]\n[2] my code is[enrolment code]ok" });
+    expect(loop.results[1]).toMatchObject({ status: "confirmation_pending", output: "queued [enrolment code]", summary: 'React to "@clone [enrolment code]"' });
+    expect(JSON.stringify([loop.results, loop.records])).not.toMatch(/DLG-/i);
+  } finally { await server.close(); }
+});
+
 test("an action over the cumulative output budget keeps status and code", async () => {
   const { loop, server } = await actionLoopCase((_req, body) => {
     const call = body as ReturnType<typeof callBody>;

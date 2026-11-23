@@ -1,5 +1,7 @@
 "use client";
 
+import { TrustedRequesters } from "./TrustedRequesters";
+
 import { AlertTriangle, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, Pause, Play, RotateCcw, Unplug } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
@@ -558,11 +560,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
             <MemberLimitField target={target} actions={actions} />
           </SettingLine>
           <p className="text-caption leading-4 text-muted">{t("externalRelay.target.memberLimitHint")}</p>
-          <SettingLine label={t("externalRelay.target.grant.label")}>
-            <span data-external-relay-grant-status={target.grantStatus ?? "none"} className="text-caption text-muted">
-              {t(`externalRelay.target.grant.${target.grantStatus ?? "none"}`)}
-            </span>
-          </SettingLine>
+          <TrustedRequesters relay={relay.id} target={target.id} project={target.project} grantStatus={target.grantStatus ?? "none"} />
           {noAccount ? (
             <p data-external-relay-no-account="" className="flex items-start gap-1.5 text-caption leading-4 text-warning">
               <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />

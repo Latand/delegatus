@@ -6,14 +6,79 @@ import { Window } from "happy-dom";
 import { installActEnv } from "@/test-helpers/actEnv";
 
 import { setLocale, translate } from "@/lib/i18n";
-import { ROLE_MEMORY_BOUND, type RuleView, type ScopeView } from "@/lib/memory/roleTypes";
+import { profileView } from "@/lib/memory/profile";
+import type { MemoryProfileView } from "@/lib/memory/profileTypes";
+import { ROLE_MEMORY_BOUND, type RoleMemoryProjectView, type RuleView, type ScopeView } from "@/lib/memory/roleTypes";
 
-import { RuleSection, RulesWindow } from "./LearnedRules";
+import { predictedRules, RuleSection, RulesWindow } from "./LearnedRules";
 
 /* The operator asked for little text in the rules window, so a scope's size
    against its bound is shown only once the scope nears it. */
 
 const scope = (chars: number): ScopeView => ({ scope: "project:atlas", kind: "project", roleId: null, revision: 1, chars, bound: ROLE_MEMORY_BOUND, addedToday: 0, active: [], left: [] });
+const rule = (id: string, text = `Rule ${id} keeps its own words.`, roleId: string | null = "builder"): RuleView => ({ id, rule: text, why: `Why ${id} was left.`, state: "active", hints: [], roleId, fixRound: false, stageId: "build", fresh: false, createdAt: "2026-10-08T00:00:00.000Z", changedAt: "2026-10-08T00:00:00.000Z" });
+const levelScope = (name: string, kind: ScopeView["kind"], roleId: string | null, active: RuleView[], left: RuleView[] = []): ScopeView => ({ ...scope(100), scope: name, kind, roleId, active, left });
+
+type Mounted = { dom: Window; act: typeof act; posts: unknown[]; closed: number[]; key: (key: string, options?: { shiftKey?: boolean }) => Promise<void>; text: (selector: string) => string };
+
+/** Mounts the real window over `view` in its own DOM, as a desktop or as a phone, and answers its fetches. */
+async function withWindow(options: { view: RoleMemoryProjectView; project?: string; phone?: boolean; focusRule?: string; applyPosts?: boolean; profile?: (base: MemoryProfileView) => MemoryProfileView }, check: (mounted: Mounted) => Promise<void>) {
+  const dom = new Window();
+  dom.HTMLElement.prototype.scrollIntoView = () => {};
+  (dom as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({ matches: !!options.phone, media: query, addEventListener() {}, removeEventListener() {} });
+  const globals = { window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement };
+  const prior = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, globals);
+  installActEnv();
+  const oldFetch = globalThis.fetch;
+  const posts: unknown[] = [];
+  let served = options.view;
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { action: Parameters<typeof predictedRules>[1]; ruleId: string };
+      posts.push(body);
+      /* A server that keeps what it was told: the next reading carries the removal or the restore. */
+      if (options.applyPosts) served = predictedRules(served, body.action, body.ruleId, "2026-10-16T12:00:00.000Z");
+      return Response.json(served);
+    }
+    if (String(input).startsWith("/api/role-memory/profile")) {
+      const base = profileView(options.view, "en", "sample", null);
+      return Response.json(options.profile ? options.profile(base) : base);
+    }
+    return Response.json(served);
+  }) as unknown as typeof fetch;
+  const host = dom.document.createElement("div"); dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  const closed: number[] = [];
+  const project = options.project ?? options.view.project;
+  try {
+    setLocale("en");
+    await act(async () => { root.render(<RulesWindow project={project} focusRule={options.focusRule} onClose={() => closed.push(1)} />); await new Promise(resolve => setTimeout(resolve, 0)); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    await check({ dom, act, posts, closed,
+      key: (key, init) => act(async () => { dom.window.dispatchEvent(new dom.KeyboardEvent("keydown", { key, ...init })); }),
+      text: selector => dom.document.querySelector(selector)?.textContent ?? "" });
+  } finally {
+    await act(() => root.unmount());
+    globalThis.fetch = oldFetch; setLocale("en");
+    for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
+    await dom.happyDOM.close();
+  }
+}
+const press = (dom: Window, selector: string) => (dom.document.querySelector(selector) as unknown as HTMLElement).click();
+const paneIds = (dom: Window) => [...dom.document.querySelectorAll("[data-level-pane] [data-learned-rule]")].map(row => row.getAttribute("data-learned-rule"));
+
+/* Two roles, a swarm level, the project and an empty machine; the reviewer holds only a departed rule. */
+const levelsView = (): RoleMemoryProjectView => ({ project: "atlas", enabled: true, scopes: [
+  levelScope("role:atlas:builder", "role", "builder", [rule("b1"), rule("b2")]),
+  levelScope("role:*:builder", "role", "builder", [rule("be1")]),
+  levelScope("role:atlas:reviewer", "role", "reviewer", [], [{ ...rule("rv1", "A reviewer rule that left."), state: "archived", reason: "deleted" }]),
+  levelScope("swarm:builder", "swarm", "builder", [rule("sw1", "Read the instruction files first.")]),
+  levelScope("project:atlas", "project", null, [rule("p1")], [{ ...rule("p0", "A project rule that merged."), state: "merged", mergedInto: "p1" }]),
+  levelScope("machine", "machine", null, []),
+] });
+
 const section = (chars: number) => renderToStaticMarkup(
   <RuleSection kind="project" title="Project" subtitle="Every role in this project" scope={scope(chars)} onDelete={() => {}} onRestore={() => {}} />,
 );
@@ -27,14 +92,6 @@ test("a scope near its bound shows its fill", () => {
   setLocale("en");
   expect(section(ROLE_MEMORY_BOUND * 0.8)).toContain("data-rules-size");
   expect(section(ROLE_MEMORY_BOUND)).toContain(`${ROLE_MEMORY_BOUND.toLocaleString("en-US")} / ${ROLE_MEMORY_BOUND.toLocaleString("en-US")}`);
-});
-
-test("a section whose picker carries the counts shows none of its own", () => {
-  setLocale("en");
-  const withPicker = renderToStaticMarkup(
-    <RuleSection kind="role" title="Role" subtitle="Only the chosen role in this project" scope={{ ...scope(0), kind: "role", roleId: "builder" }} picker={<div />} onDelete={() => {}} onRestore={() => {}} />,
-  );
-  expect(withPicker).not.toContain("data-rules-count");
 });
 
 test("an empty kind says it is empty once; a kind with rules shows its count once", () => {
@@ -51,11 +108,11 @@ test("an empty kind says it is empty once; a kind with rules shows its count onc
 });
 
 
-test("both role levels and earlier text render with a return control", () => {
+test("a role level's rules and earlier text render with a return control", () => {
   setLocale("en");
   const rule: RuleView = { id: "one", rule: "Validate persisted ownership before replaying operations.", why: "An owner had changed before a replay.", state: "active", hints: [], roleId: "builder", fixRound: false, stageId: "build", fresh: false, createdAt: "today", changedAt: "today", versions: [{ id: "earlier", rule: "Check the owner before replay.", why: "A replay used an old owner.", hints: [], createdAt: "yesterday" }] };
-  const markup = renderToStaticMarkup(<RuleSection kind="role" title="Role" subtitle="Chosen role" scope={{ ...scope(100), kind: "role", roleId: "builder", active: [rule] }} additionalScope={{ ...scope(100), scope: "role:*:builder", active: [{ ...rule, id: "every" }] }} focusRule="one" onDelete={() => {}} onRestore={() => {}} onRevert={() => {}} />);
-  for (const text of ["This project", "Every project", "Earlier text · 1", "Check the owner before replay.", 'data-rule-revert="earlier"', "awaiting curator"]) expect(markup).toContain(text);
+  const markup = renderToStaticMarkup(<RuleSection kind="role" title="Role" subtitle="Chosen role" scope={{ ...scope(100), kind: "role", roleId: "builder", active: [rule, { ...rule, id: "second" }] }} focusRule="one" onDelete={() => {}} onRestore={() => {}} onRevert={() => {}} />);
+  for (const text of ["Earlier text · 1", "Check the owner before replay.", 'data-rule-revert="earlier"', "awaiting curator"]) expect(markup).toContain(text);
   expect(markup).toMatch(/data-rules-count=""[^>]*>2</);
   const rewritten = { ...rule, curatedAt: "2026-10-11T00:00:00.000Z", revisedBy: { by: "agent" as const, at: "2026-10-11T00:01:00.000Z", roleId: "builder" } };
   const revised = renderToStaticMarkup(<RuleSection kind="role" title="Role" subtitle="Chosen role" scope={{ ...scope(100), kind: "role", roleId: "builder", active: [rewritten] }} focusRule="one" onDelete={() => {}} onRestore={() => {}} />);
@@ -117,53 +174,45 @@ test("the provenance line shows recurring tasks in both shipped languages", asyn
 });
 
 
-test("orchestrator and maintainer rules have named tabs and rows in both languages", async () => {
-  const dom = new Window();
-  dom.HTMLElement.prototype.scrollIntoView = () => {};
-  const globals = { window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement };
-  const prior = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
-  Object.assign(globalThis, globals);
-  installActEnv();
-  const oldFetch = globalThis.fetch;
+test("each role level opens its rules in both languages", async () => {
   const roles = ["orchestrator", "maintainer"];
-  const view = { project: "seat-window", enabled: true, scopes: roles.map(roleId => ({ ...scope(100), scope: `role:seat-window:${roleId}`, kind: "role", roleId, active: [{ id: roleId, rule: `Inspect settled evidence before the ${roleId} reports progress.`, why: "A report missed a completion proof.", state: "active", hints: [], roleId: "orchestrator", fixRound: false, stageId: "seat", fresh: false, createdAt: "today", changedAt: "today" }] })) };
-  globalThis.fetch = (async () => Response.json(view)) as unknown as typeof fetch;
-  const host = dom.document.createElement("div"); dom.document.body.append(host);
-  const root = createRoot(host as unknown as HTMLElement);
-  try {
+  const view = { project: "seat-window", enabled: true, scopes: roles.map(roleId => ({ ...scope(100), scope: `role:seat-window:${roleId}`, kind: "role" as const, roleId, active: [rule(roleId, `Inspect settled evidence before the ${roleId} reports progress.`, "orchestrator")] })) };
+  await withWindow({ view, project: "seat-window" }, async ({ dom, act }) => {
     for (const locale of ["en", "uk"] as const) {
       await act(() => setLocale(locale));
-      await act(async () => { root.render(<RulesWindow project="seat-window" onClose={() => {}} />); await new Promise(resolve => setTimeout(resolve, 0)); });
-      // The window opens on Profile; exercise its real navigation to the rules.
-      const allRules = [...dom.document.querySelectorAll("button")].find(button => button.textContent === translate(locale, "memoryProfile.allRules"))!;
-      await act(() => allRules.click());
       const names = locale === "en" ? ["Orchestrator", "Maintainer"] : ["Оркестратор", "Доглядач дошки"];
       for (const [index, role] of roles.entries()) {
-        const tab = dom.document.querySelector(`[data-rules-role="${role}"]`)!;
-        expect(tab.textContent).toContain(names[index]!);
-        await act(() => (tab as unknown as HTMLElement).click());
+        const row = dom.document.querySelector(`[data-profile-level="role:seat-window:${role}"]`)!;
+        expect(row.textContent).toContain(names[index]!);
+        await act(() => (row as unknown as HTMLElement).click());
         expect(dom.document.querySelector(`[data-learned-rule="${role}"]`)?.textContent).toContain(`the ${role} reports progress`);
       }
     }
-  } finally {
-    await act(() => root.unmount());
-    globalThis.fetch = oldFetch; setLocale("en");
-    for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
-    await dom.happyDOM.close();
-  }
+  });
 });
 
-test("the swarm scope follows role-wide guidance and offers no local mutation controls", () => {
+test("a swarm level says it is read only and offers no local mutation controls", () => {
   const rule: RuleView = { id: "r_public", rule: "Read the project instruction files before changing code.", why: "", state: "active", hints: [], roleId: "builder", fixRound: false, stageId: "", fresh: false, createdAt: "2026-10-23", changedAt: "2026-10-23" };
   const swarm: ScopeView = { ...scope(80), scope: "swarm:builder", kind: "swarm", roleId: "builder", bound: 4000, active: [rule] };
   setLocale("en");
-  const markup = renderToStaticMarkup(<RuleSection kind="role" title="Role" scope={null} additionalScope={{ ...scope(0), scope: "role:*:builder", kind: "role", roleId: "builder" }} swarm={swarm} focusRule={rule.id} onDelete={() => { throw Error("public rule mutation"); }} onRestore={() => {}} />);
-  expect(markup.indexOf("data-rules-every-project")).toBeLessThan(markup.indexOf("data-rules-swarm"));
+  const markup = renderToStaticMarkup(<RuleSection kind="swarm" title="Swarm rules · Builder on every install" scope={swarm} focusRule={rule.id} onDelete={() => { throw Error("public rule mutation"); }} onRestore={() => {}} />);
   expect(markup).toContain("Swarm rules · Builder on every install");
+  expect(markup.split("Public rules shipped with Delegatus.").length - 1).toBe(1);
   expect(markup).toContain("Read only");
   expect(markup).toContain(rule.rule);
   expect(markup).not.toContain("data-learned-rule-delete");
   expect(markup).not.toContain("data-rule-revert");
+});
+
+test("an opened swarm rule's detail line starts with its first provenance word, and a role rule's with its reason", () => {
+  const rule: RuleView = { id: "r_public", rule: "Name the file a change reaches.", why: "A change outside it surprises the reviewer.", state: "active", hints: [], roleId: "builder", fixRound: false, stageId: "", fresh: false, createdAt: "2026-10-23", changedAt: "2026-10-23", awaitingCuration: true };
+  setLocale("en");
+  const provenance = (kind: "swarm" | "role") => {
+    const markup = renderToStaticMarkup(<RuleSection kind={kind} title="Rules" scope={{ ...scope(80), scope: kind === "swarm" ? "swarm:builder" : "role:atlas:builder", kind, roleId: "builder", bound: 4000, active: [rule] }} focusRule={rule.id} onDelete={() => {}} onRestore={() => {}} />);
+    return markup.match(/data-rule-provenance=""[^>]*>([\s\S]*?)<\/span><\/span>/)?.[1]?.replace(/<[^>]+>/g, "") ?? "";
+  };
+  expect(provenance("swarm")).toBe(translate("en", "roleMemory.unreviewed"));
+  expect(provenance("role")).toBe(` · ${translate("en", "roleMemory.unreviewed")}`);
 });
 
 /* Audit B26: delete leaves at once, a refusal puts the rule back with the
@@ -206,7 +255,6 @@ test("a delete leaves the list at once while the write is held, and a refusal br
 });
 
 test("the predicted reading restores a left rule and reverts a rule's text to the chosen version", async () => {
-  const { predictedRules } = await import("./LearnedRules");
   const left = { id: "r_left", rule: "Old wording.", why: "w", state: "archived", reason: "deleted", hints: [], roleId: null, fixRound: false, stageId: "seat", fresh: false, createdAt: "today", changedAt: "today", versions: [{ id: "v_one", rule: "First wording.", why: "first why", hints: [] }] } as unknown as RuleView;
   const view = { project: "p", enabled: true, scopes: [{ ...scope(100), left: [left] }] };
   const restored = predictedRules(view, "restore", "r_left", "2026-10-16T12:00:00.000Z");
@@ -302,4 +350,191 @@ for (const cause of ["memorySource", "override"] as const) test(`rules stopped b
     for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
     await dom.happyDOM.close();
   }
+});
+
+test("on a desktop the window opens with the first level selected and swaps its pane on a press; no tab bar or role chips remain", async () => {
+  await withWindow({ view: levelsView() }, async ({ dom, act }) => {
+    const rows = [...dom.document.querySelectorAll("[data-profile-level]")].map(row => row.getAttribute("data-profile-level"));
+    expect(rows).toEqual(["role:atlas:builder", "role:*:builder", "role:atlas:reviewer", "swarm:builder", "project:atlas", "machine"]);
+    expect(dom.document.querySelector("[aria-current]")?.getAttribute("data-profile-level")).toBe("role:atlas:builder");
+    expect(dom.document.querySelector("[data-level-pane]")?.getAttribute("data-level-pane")).toBe("role:atlas:builder");
+    expect(paneIds(dom).sort()).toEqual(["b1", "b2"]);
+    expect(dom.document.querySelector("[data-level-back]")).toBeNull();
+    await act(async () => press(dom, '[data-profile-level="project:atlas"]'));
+    expect(paneIds(dom)).toEqual(["p1"]);
+    expect(dom.document.querySelector("[aria-current]")?.getAttribute("data-profile-level")).toBe("project:atlas");
+    expect(dom.document.querySelectorAll("[data-memory-profile]")).toHaveLength(1);
+    for (const gone of ["nav", "[data-rules-role]", "[role=tablist]", "[data-rules-every-project]", "[data-rules-swarm]", "[data-profile-slice]"]) expect(dom.document.querySelector(gone)).toBeNull();
+    expect(dom.document.body.textContent).not.toContain("All rules");
+    expect(dom.document.querySelector("#rules-window-title")!.textContent).toBe("Memory profile · atlas");
+    expect(dom.document.querySelector("[data-rules-starts]")!.textContent).toBe(translate("en", "roleMemory.startsWithSwarm"));
+  });
+});
+
+test("a profile with no rule at all says so once on a desktop and in the level's own screen on a phone", async () => {
+  const bare = (): RoleMemoryProjectView => ({ project: "atlas", enabled: true, scopes: [levelScope("project:atlas", "project", null, []), levelScope("machine", "machine", null, [])] });
+  await withWindow({ view: bare() }, async ({ dom }) => {
+    expect(dom.document.querySelector("[data-memory-profile] h3")!.textContent).toBe("No rules yet");
+    expect(dom.document.querySelector("[data-level-pane] h3")).not.toBeNull();
+    expect(dom.document.querySelector("[data-level-pane]")!.textContent).not.toContain("No rules yet");
+  });
+  await withWindow({ view: bare(), phone: true }, async ({ dom, act }) => {
+    await act(async () => press(dom, '[data-profile-level="project:atlas"]'));
+    expect(dom.document.querySelector("[data-level-pane]")!.textContent!.split("No rules yet.").length - 1).toBe(1);
+  });
+});
+
+test("the departed rule the window was opened on carries its level's focus tone and its neighbours none", async () => {
+  const view = levelsView();
+  const reviewer = view.scopes.find(entry => entry.scope === "role:atlas:reviewer")!;
+  reviewer.left.push({ ...rule("rv2", "Another reviewer rule that left."), state: "archived", reason: "stale" });
+  await withWindow({ view, focusRule: "rv1" }, async ({ dom }) => {
+    const rows = (id: string) => dom.document.querySelector(`[data-left-rule="${id}"]`)!.className;
+    expect(rows("rv1")).toContain("bg-accent-soft");
+    expect(rows("rv2")).not.toContain("bg-");
+  });
+});
+
+test("a level with no rules says so once in its pane, and its history keeps the way back", async () => {
+  await withWindow({ view: levelsView() }, async ({ dom, act, posts }) => {
+    await act(async () => press(dom, '[data-profile-level="machine"]'));
+    expect(dom.document.querySelector("[data-level-pane]")!.textContent!.split("No rules yet.").length - 1).toBe(1);
+    expect(dom.document.querySelector("[data-rules-count]")).toBeNull();
+    await act(async () => press(dom, '[data-profile-level="role:atlas:reviewer"]'));
+    expect(paneIds(dom)).toEqual([]);
+    await act(async () => press(dom, "[data-rules-history]"));
+    await act(async () => press(dom, '[data-left-rule-restore="rv1"]'));
+    expect(posts).toEqual([{ project: "atlas", action: "restore", ruleId: "rv1" }]);
+  });
+});
+
+test("a swarm level draws its rules read only, under one read-only line", async () => {
+  await withWindow({ view: levelsView() }, async ({ dom, act }) => {
+    await act(async () => press(dom, '[data-profile-level="swarm:builder"]'));
+    const pane = dom.document.querySelector("[data-level-pane]")!;
+    expect(pane.textContent!.split("Public rules shipped with Delegatus.").length - 1).toBe(1);
+    expect(pane.querySelector("[data-learned-rule-delete]")).toBeNull();
+    expect(pane.querySelector('[data-learned-rule="sw1"]')).not.toBeNull();
+  });
+});
+
+test("on a phone the list is the first screen, a row opens its level behind a back control, and back restores the list's place and focus", async () => {
+  await withWindow({ view: levelsView(), phone: true }, async ({ dom, act }) => {
+    expect(dom.document.querySelector("[data-level-pane]")).toBeNull();
+    expect(dom.document.querySelector("[data-memory-profile]")).not.toBeNull();
+    expect(dom.document.querySelector("[aria-current]")).toBeNull();
+    (dom.document.querySelector("[data-memory-profile]") as unknown as HTMLElement).scrollTop = 120;
+    await act(async () => press(dom, '[data-profile-level="project:atlas"]'));
+    expect(dom.document.querySelector("[data-memory-profile]")).toBeNull();
+    expect(paneIds(dom)).toEqual(["p1"]);
+    expect(dom.document.activeElement === dom.document.querySelector("[data-level-back]")).toBe(true);
+    expect(dom.document.querySelector("[data-rules-window-close]")).not.toBeNull();
+    await act(async () => press(dom, "[data-level-back]"));
+    expect(dom.document.querySelector("[data-level-pane]")).toBeNull();
+    expect((dom.document.querySelector("[data-memory-profile]") as unknown as HTMLElement).scrollTop).toBe(120);
+    expect(dom.document.activeElement === dom.document.querySelector('[data-profile-level="project:atlas"]')).toBe(true);
+  });
+});
+
+test("opened on a rule, the window lands on that rule's level and opens it; a rule that has left opens its level's history", async () => {
+  await withWindow({ view: levelsView(), focusRule: "be1" }, async ({ dom }) => {
+    expect(dom.document.querySelector("[aria-current]")?.getAttribute("data-profile-level")).toBe("role:*:builder");
+    expect(dom.document.querySelector('[data-level-pane] [data-learned-rule="be1"]')?.hasAttribute("data-open")).toBe(true);
+  });
+  await withWindow({ view: levelsView(), focusRule: "rv1" }, async ({ dom }) => {
+    expect(dom.document.querySelector("[aria-current]")?.getAttribute("data-profile-level")).toBe("role:atlas:reviewer");
+    expect(dom.document.querySelector("[data-rules-history]")?.getAttribute("aria-expanded")).toBe("true");
+    expect(dom.document.querySelector('[data-left-rule="rv1"]')?.hasAttribute("data-focused")).toBe(true);
+  });
+  await withWindow({ view: levelsView(), focusRule: "p1", phone: true }, async ({ dom }) => {
+    expect(dom.document.querySelector("[data-memory-profile]")).toBeNull();
+    expect(dom.document.querySelector("[data-level-pane]")?.getAttribute("data-level-pane")).toBe("project:atlas");
+    expect(dom.document.querySelector('[data-learned-rule="p1"]')?.hasAttribute("data-open")).toBe(true);
+  });
+});
+
+test("the counterpart link of a rule that left selects the counterpart's level and focuses that rule", async () => {
+  await withWindow({ view: levelsView(), focusRule: "p0" }, async ({ dom, act }) => {
+    expect(dom.document.querySelector("[aria-current]")?.getAttribute("data-profile-level")).toBe("project:atlas");
+    await act(async () => press(dom, '[data-profile-level="machine"]'));
+    await act(async () => press(dom, '[data-profile-level="project:atlas"]'));
+    /* The focus is still on the departed rule, so its level opens its history again. */
+    expect(dom.document.querySelector("[data-rules-history]")?.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => press(dom, '[data-rule-counterpart="p1"]'));
+    expect(dom.document.querySelector('[data-learned-rule="p1"]')?.hasAttribute("data-focused")).toBe(true);
+  });
+  const crossing = levelsView();
+  crossing.scopes[4]!.left = [{ ...rule("p0", "A project rule that merged."), state: "merged", mergedInto: "b1" }];
+  await withWindow({ view: crossing, focusRule: "p0" }, async ({ dom, act }) => {
+    await act(async () => press(dom, '[data-rule-counterpart="b1"]'));
+    expect(dom.document.querySelector("[aria-current]")?.getAttribute("data-profile-level")).toBe("role:atlas:builder");
+    expect(dom.document.querySelector('[data-learned-rule="b1"]')?.hasAttribute("data-focused")).toBe(true);
+  });
+});
+
+type Topics = NonNullable<NonNullable<MemoryProfileView["slices"][number]["summary"]>["answer"]["topics"]>;
+
+test("an overall topic names itself once over one section per level with only its rules; a level's pill does the same for that level", async () => {
+  const part = (scope: string, topics: Topics) => ({ scope, createdAt: "2026-10-08T10:00:00Z", durationMs: 1, model: "sample", promptVersion: 1, stale: false, answer: { headline: `Headline of ${scope}`, text: `Text of ${scope}.`, topics } });
+  const profile = (base: MemoryProfileView): MemoryProfileView => ({ ...base,
+    overall: part("overall", [{ title: "Colour checks", text: "Colours are checked before saving.", ruleIds: ["b1", "p1"] }]),
+    slices: base.slices.map(slice => slice.scope === "role:atlas:builder" ? { ...slice, summary: part(slice.scope, [{ title: "Builder pill", ruleIds: ["b2"] }]) } : slice) });
+  await withWindow({ view: levelsView(), profile }, async ({ dom, act }) => {
+    await act(async () => press(dom, '[data-profile-topic="0"]'));
+    const pane = dom.document.querySelector('[data-level-pane="topic"]')!;
+    expect(pane.textContent!.split("Colour checks").length - 1).toBe(1);
+    expect(pane.textContent).toContain("Colours are checked before saving.");
+    expect([...pane.querySelectorAll("[data-rules-section]")].map(section => section.getAttribute("data-rules-scope-page"))).toEqual(["role:atlas:builder", "project:atlas"]);
+    expect([...pane.querySelectorAll("[data-learned-rule]")].map(row => row.getAttribute("data-learned-rule"))).toEqual(["b1", "p1"]);
+    expect(pane.querySelector("[data-rules-history]")).toBeNull();
+    expect(dom.document.querySelector("[aria-current]")?.getAttribute("data-profile-topic")).toBe("0");
+    await act(async () => press(dom, '[data-profile-level="role:atlas:builder"]'));
+    await act(async () => press(dom, "[data-profile-pill]"));
+    const pill = dom.document.querySelector('[data-level-pane="topic"]')!;
+    expect(pill.textContent!.split("Builder pill").length - 1).toBe(1);
+    expect([...pill.querySelectorAll("[data-learned-rule]")].map(row => row.getAttribute("data-learned-rule"))).toEqual(["b2"]);
+    expect(dom.document.querySelector("[aria-current]")?.getAttribute("data-profile-level")).toBe("role:atlas:builder");
+  });
+});
+
+test("in a topic pane a removal keeps the undo when it takes a level's only topic rule or the topic's last rule", async () => {
+  const part = (scope: string, topics: Topics) => ({ scope, createdAt: "2026-10-08T10:00:00Z", durationMs: 1, model: "sample", promptVersion: 1, stale: false, answer: { headline: `Headline of ${scope}`, text: `Text of ${scope}.`, topics } });
+  for (const ids of [["b1", "p1"], ["p1"]]) {
+    const profile = (base: MemoryProfileView): MemoryProfileView => ({ ...base, overall: part("overall", [{ title: "Colour checks", ruleIds: ids }]) });
+    await withWindow({ view: levelsView(), profile, applyPosts: true }, async ({ dom, act, posts }) => {
+      await act(async () => press(dom, '[data-profile-topic="0"]'));
+      await act(async () => press(dom, '[data-learned-rule-delete="p1"]'));
+      expect(posts).toEqual([{ project: "atlas", action: "delete", ruleId: "p1" }]);
+      const pane = dom.document.querySelector('[data-level-pane="topic"]')!;
+      expect(pane.querySelectorAll("[data-rules-undo]")).toHaveLength(1);
+      expect(pane.querySelector('[data-learned-rule="p1"]')).toBeNull();
+      await act(async () => press(dom, "[data-level-pane=topic] [data-rules-undo-button]"));
+      expect(posts.at(-1)).toEqual({ project: "atlas", action: "restore", ruleId: "p1" });
+      expect(dom.document.querySelector('[data-level-pane="topic"] [data-learned-rule="p1"]')).not.toBeNull();
+      expect(dom.document.querySelector("[data-rules-undo]")).toBeNull();
+    });
+  }
+});
+
+test("a removal draws the undo in the row's place inside the pane", async () => {
+  await withWindow({ view: levelsView() }, async ({ dom, act, posts }) => {
+    await act(async () => press(dom, '[data-learned-rule-delete="b2"]'));
+    expect(posts).toEqual([{ project: "atlas", action: "delete", ruleId: "b2" }]);
+    expect(dom.document.querySelector("[data-level-pane] [data-rules-undo]")).not.toBeNull();
+  });
+});
+
+test("the window is a modal: Tab wraps within it and Escape closes it once", async () => {
+  await withWindow({ view: levelsView() }, async ({ dom, act, key, closed }) => {
+    const frame = dom.document.querySelector("[data-rules-window]")!;
+    const controls = ([...frame.querySelectorAll("button")] as unknown as HTMLButtonElement[]).filter(control => !control.disabled);
+    expect(controls[0]!.hasAttribute("data-rules-window-close")).toBe(true);
+    await act(async () => controls.at(-1)!.focus());
+    await key("Tab");
+    expect((dom.document.activeElement as unknown) === controls[0]).toBe(true);
+    await key("Tab", { shiftKey: true });
+    expect((dom.document.activeElement as unknown) === controls.at(-1)).toBe(true);
+    await key("Escape");
+    expect(closed).toHaveLength(1);
+  });
 });

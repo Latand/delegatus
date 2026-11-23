@@ -432,7 +432,9 @@ test.each(["configured", "no environment", "oversized context", "owner"] as cons
       expect(directory).not.toHaveBeenCalled();
     }
     expect(localLaunch).not.toHaveBeenCalled();
-    expect(account).not.toHaveBeenCalled();
+    // Only the machine owner can select an account for the handoff intent probe.
+    if (scenario === "owner") expect(account).toHaveBeenCalledTimes(1);
+    else expect(account).not.toHaveBeenCalled();
     expect(posts.some(route => route.endsWith("/send"))).toBe(false);
     expect(readRunLedger().runs.find(run => run.requestId === raw.request_id)).toBeUndefined();
   } finally { cloudRun.mockRestore(); environment.mockRestore(); directory.mockRestore(); account.mockRestore(); wire.mockRestore(); }

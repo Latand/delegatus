@@ -256,11 +256,10 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
 // resume can retain its event cursor without a domain. Neither released
 // record represents custody once the process, scope and claims are cleared.
 // A failed resume can still have a recorded process exit to reconcile.
-const nativeCallerHostIndex = "registry_caller_native_host_artifact";
+const nativeCallerHostV1Index = "registry_caller_native_host_artifact";
+const nativeCallerHostIndex = "registry_caller_native_host_artifact_v2";
 const nativeCallerHostPath = "json_extract(value_json,'$.artifactPath')";
-const nativeCallerHost = `collection='entries'
-  AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp')
-  AND NOT COALESCE((
+const nativeCallerHostCustodyFilter = `AND NOT COALESCE((
     json_extract(value_json,'$.status')='dead'
     AND json_extract(value_json,'$.structuredHost.endpoint')='stdio:released'
     AND (
@@ -281,6 +280,16 @@ const nativeCallerHost = `collection='entries'
     AND json_extract(value_json,'$.pendingAction') IS NULL
     AND COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)=0
   ),0)`;
+// Keep the v1 partial index intact so rolling back to the previous release
+// still satisfies `INDEXED BY registry_caller_native_host_artifact`.
+const nativeCallerHostV1 = `collection='entries'
+  AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp')
+  ${nativeCallerHostCustodyFilter}`;
+const nativeCallerHost = `collection='entries'
+  AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp','antigravity-acp')
+  ${nativeCallerHostCustodyFilter}`;
+const NATIVE_CALLER_ARTIFACTS_V1_VERSION = "1";
+const NATIVE_CALLER_ARTIFACTS_REVISION = "2";
 const registryCallerIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_caller_roots_latest ON registry_caller_roots(updated_at DESC,row_order DESC)",
   "CREATE INDEX IF NOT EXISTS registry_caller_structured_pid ON registry_rows(collection,json_extract(value_json,'$.structuredHost.process.pid'),row_order)",
@@ -306,13 +315,13 @@ function installNativeCallerArtifacts(db: BunDatabase): void {
   const remove = `DELETE FROM registry_native_host_paths WHERE path=${pathFrom("OLD")} AND ${eligible("OLD")}
     AND NOT EXISTS (SELECT 1 FROM registry_rows INDEXED BY ${nativeCallerHostIndex}
       WHERE ${nativeCallerHost} AND ${nativeCallerHostPath}=${pathFrom("OLD")});`;
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS ${nativeCallerHostIndex} ON registry_rows(${nativeCallerHostPath}) WHERE ${nativeCallerHost};
-    CREATE TABLE registry_native_host_paths (path TEXT PRIMARY KEY) WITHOUT ROWID;
-    CREATE TABLE registry_native_host_path_changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL);
-    INSERT INTO registry_native_host_paths
-      SELECT DISTINCT ${nativeCallerHostPath} FROM registry_rows INDEXED BY ${nativeCallerHostIndex}
-      WHERE ${nativeCallerHost} AND json_type(value_json,'$.artifactPath')='text' AND ${nativeCallerHostPath}<>'';
+  const hadV1 = db.query<{ value: string }, []>(
+    "SELECT value FROM registry_meta WHERE key='native_caller_artifacts_version'",
+  ).get()?.value === NATIVE_CALLER_ARTIFACTS_V1_VERSION;
+  const backfill = `INSERT OR IGNORE INTO registry_native_host_paths
+    SELECT DISTINCT ${nativeCallerHostPath} FROM registry_rows INDEXED BY ${nativeCallerHostIndex}
+    WHERE ${nativeCallerHost} AND json_type(value_json,'$.artifactPath')='text' AND ${nativeCallerHostPath}<>'';`;
+  const triggers = `
     CREATE TRIGGER registry_native_host_paths_insert AFTER INSERT ON registry_rows WHEN ${eligible("NEW")} BEGIN ${add} END;
     CREATE TRIGGER registry_native_host_paths_delete AFTER DELETE ON registry_rows WHEN ${eligible("OLD")} BEGIN ${remove} END;
     CREATE TRIGGER registry_native_host_paths_update AFTER UPDATE ON registry_rows
@@ -324,7 +333,25 @@ function installNativeCallerArtifacts(db: BunDatabase): void {
         INSERT INTO registry_native_host_path_changes(path) VALUES (${event === "INSERT" ? "NEW" : "OLD"}.path);
         DELETE FROM registry_native_host_path_changes WHERE seq <= last_insert_rowid()-${NATIVE_ARTIFACT_JOURNAL_LIMIT};
       END;`).join("\n")}
-    INSERT INTO registry_meta(key,value) VALUES ('native_caller_artifacts_version','1');
+  `;
+  // Keep native_caller_artifacts_version='1' untouched for rollback safety:
+  // the previous release checks `!== '1'` and runs non-IF-NOT-EXISTS DDL.
+  // Track this schema revision separately under native_caller_artifacts_revision.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS ${nativeCallerHostV1Index} ON registry_rows(${nativeCallerHostPath}) WHERE ${nativeCallerHostV1};
+    CREATE INDEX IF NOT EXISTS ${nativeCallerHostIndex} ON registry_rows(${nativeCallerHostPath}) WHERE ${nativeCallerHost};
+    CREATE TABLE IF NOT EXISTS registry_native_host_paths (path TEXT PRIMARY KEY) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS registry_native_host_path_changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL);
+    DROP TRIGGER IF EXISTS registry_native_host_paths_insert;
+    DROP TRIGGER IF EXISTS registry_native_host_paths_delete;
+    DROP TRIGGER IF EXISTS registry_native_host_paths_update;
+    DROP TRIGGER IF EXISTS registry_native_host_path_changes_insert;
+    DROP TRIGGER IF EXISTS registry_native_host_path_changes_delete;
+    ${hadV1 ? `${triggers}\n${backfill}` : `${backfill}\n${triggers}`}
+    INSERT INTO registry_meta(key,value) VALUES ('native_caller_artifacts_version','${NATIVE_CALLER_ARTIFACTS_V1_VERSION}')
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+    INSERT INTO registry_meta(key,value) VALUES ('native_caller_artifacts_revision','${NATIVE_CALLER_ARTIFACTS_REVISION}')
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value;
   `);
 }
 
@@ -1925,10 +1952,14 @@ export class SqliteAgentRegistryStore {
     if (!this.imported()) this.importFirstBoot(options.initialSnapshot, options.verifyImport);
     if (options.allowArchiveMigration !== false) {
       this.prepareCallerIndexes();
-      if (this.meta("native_caller_artifacts_version") !== "1") {
+      if (this.meta("native_caller_artifacts_version") !== NATIVE_CALLER_ARTIFACTS_V1_VERSION
+        || this.meta("native_caller_artifacts_revision") !== NATIVE_CALLER_ARTIFACTS_REVISION) {
         assertStateStartupMutation(path.dirname(filename), "native MCP caller artifacts");
         withStartupTransaction(this.db, () => {
-          if (this.meta("native_caller_artifacts_version") !== "1") installNativeCallerArtifacts(this.db);
+          if (this.meta("native_caller_artifacts_version") !== NATIVE_CALLER_ARTIFACTS_V1_VERSION
+            || this.meta("native_caller_artifacts_revision") !== NATIVE_CALLER_ARTIFACTS_REVISION) {
+            installNativeCallerArtifacts(this.db);
+          }
         });
       }
     }
@@ -2133,11 +2164,14 @@ export class SqliteAgentRegistryStore {
         return snapshot;
       }
       const spellings = new Set([artifact, canonical, ...(aliases ?? [])]);
+      const useV2NativeHostIndex = this.meta("native_caller_artifacts_revision") === NATIVE_CALLER_ARTIFACTS_REVISION;
+      const activeIndex = useV2NativeHostIndex ? nativeCallerHostIndex : nativeCallerHostV1Index;
+      const activePredicate = useV2NativeHostIndex ? nativeCallerHost : nativeCallerHostV1;
       // registry_rows retains the current version of every archived entry.
       const hosts = this.db.query<{ row_key: string; value_json: string }, [string, number]>(`
         SELECT row_key,value_json FROM json_each(?) AS alias
-        CROSS JOIN registry_rows INDEXED BY ${nativeCallerHostIndex}
-        WHERE ${nativeCallerHost} AND ${nativeCallerHostPath}=alias.value
+        CROSS JOIN registry_rows INDEXED BY ${activeIndex}
+        WHERE ${activePredicate} AND ${nativeCallerHostPath}=alias.value
         LIMIT ?`).all(JSON.stringify([...spellings]), MCP_CALLER_CANDIDATE_LIMIT + 1);
       this.onRowPayloadRead?.("entries", hosts.length);
       if (hosts.length > MCP_CALLER_CANDIDATE_LIMIT) {

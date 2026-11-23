@@ -21,12 +21,26 @@ export function ownerBindingRefusal(relay: Pick<PairedRelay, "owner">, request: 
   return null;
 }
 
-/** Only a verified ordinary owner trigger grants host access. */
-export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, request: ExternalRelayRequest): OwnerInstruction | null {
-  if (target.ownerTier !== true || request.delivery === "guest") return null;
+/** Guest owner authority is available only to the restricted handoff path. */
+export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, request: ExternalRelayRequest,
+  options?: { guestHandoff: true }): OwnerInstruction | null {
+  if (target.ownerTier !== true || request.delivery === "guest" && !options?.guestHandoff) return null;
   const message = ownerRequesterTrigger(request.input);
   if (!message) return null;
   return { messageId: message.id, text: message.text, requestText: request.input.request_text };
+}
+
+/** Guest delivery has one owner-only exception: a classified project-seat handoff. */
+export function ownerHandoffFor(relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest, relays: readonly PairedRelay[]): OwnerInstruction | null {
+  if (request.delivery !== "guest" || relay.paused !== false || target.enabled !== true || request.target_id !== target.id) return null;
+  const message = ownerRequesterTrigger(request.input);
+  if (!message) return null;
+  const matched = requesterEntries(relay, target).find(entry => entry.kind === "paired-owner"
+    && canonicalRelayProject(entry.project) === canonicalRelayProject(target.project));
+  if (!matched) return null;
+  const entry = bindRequesterEntry(relay, matched, relays);
+  if (entry.tier !== "owner") return null;
+  return { messageId: message.id, text: message.text, requestText: request.input.request_text, entry };
 }
 
 export function elevatedRequesterFor(relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest, relays: readonly PairedRelay[]) {

@@ -36,6 +36,7 @@ import {
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
 import type { CopilotAcpHost } from "./copilotAcpHost";
+import type { AntigravityAcpHost } from "./antigravityAcpHost";
 import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost";
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
@@ -47,6 +48,7 @@ import { registryConversationsForEntryKey, registryKeysMatchingBounded, registry
 import { entryRevision, readAgentProjection, subjectId as agentStateSubjectId } from "@/lib/agentState/store";
 import { cachedAgentObservationForRevision } from "@/lib/agentState/projectionCache";
 import { fileSignature } from "@/lib/agentState/transcript";
+import { hostTurnRecordIdentity } from "./eventStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 import { recoverMemberAdoption } from "./memberAdoptionRecovery";
@@ -189,6 +191,31 @@ export function copilotHostColumns(state: HostState, writerClaimEpoch: number): 
   return {
     ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
     kind: "copilot-acp",
+    endpoint: state.endpoint,
+    process: registryProcess(state),
+    eventCursor: state.eventCursor,
+    protocolVersion: state.protocolVersion,
+    writerClaimEpoch,
+    activeTurnRef: state.activeTurnRef,
+    attentionVerified: true,
+    ...(state.agentStateAttention ? { agentStateAttention: state.agentStateAttention } : {}),
+    agentStateTurnStartedAt: state.agentStateTurnStartedAt ?? null,
+    agentStateNativeTurnId: state.agentStateNativeTurnId ?? null,
+    agentStateNativePromptOrdinal: state.agentStateNativePromptOrdinal ?? null,
+    agentStateNativePromptAnchor: state.agentStateNativePromptAnchor ?? null,
+    pendingAttention: state.pendingAttention,
+    ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.scope ? { scope: state.scope } : {}),
+    ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
+    ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
+    activeFlags: state.activeFlags,
+  };
+}
+
+export function antigravityHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
+  return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
+    kind: "antigravity-acp",
     endpoint: state.endpoint,
     process: registryProcess(state),
     eventCursor: state.eventCursor,
@@ -739,6 +766,27 @@ export async function bindCopilotHostPersistence(
   );
 }
 
+export async function bindAntigravityHostPersistence(
+  registry: AgentRegistry,
+  key: SessionKey,
+  host: AntigravityAcpHost,
+  claimOwner: string,
+  writerClaimEpoch: number,
+  releasedStatus: "unhosted" | "dead" = "unhosted",
+  options: StructuredHostPersistenceOptions = {},
+): Promise<StructuredHostPersistenceStop> {
+  return bindStructuredHostPersistence(
+    registry,
+    key,
+    host,
+    claimOwner,
+    writerClaimEpoch,
+    releasedStatus,
+    antigravityHostColumns,
+    options,
+  );
+}
+
 export interface AdoptedHostCustody {
   claimOwner: AgentRegistryEntry["claimOwner"];
   claimEpoch: number;
@@ -934,6 +982,7 @@ function settledOrphanWithPendingDelivery(registry: AgentRegistry, entry: AgentR
   if (!fresh || !proc.determined || proc.value.status !== "alive" || !sameRecordedProcessIdentity(proc.value.identity, process)
     || !owner.determined || owner.value !== "absent" || !turn.determined || turn.value.state === "open"
     || !attention.determined || attention.value.length !== 0 || !transcript.determined || !obligations.determined) return false;
+  if (turn.evidence.source === "operation-ledger" && hostTurnRecordIdentity(entry.key.sessionId) !== turn.evidence.ref) return false;
   const expectedProcessSignature = (() => {
     try { return fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })); } catch { return null; }
   })();
@@ -1028,7 +1077,7 @@ async function endRecordedStructuredTree(
   const { startIdentity, bootEpoch } = processIdentity;
   if (!startIdentity || !bootEpoch) return false;
   const engine = key.engine;
-  if (engine !== "claude" && engine !== "codex" && engine !== "copilot") return false;
+  if (engine !== "claude" && engine !== "codex" && engine !== "copilot" && engine !== "antigravity") return false;
   const root: ProcessIdentity = { pid: processIdentity.pid, startIdentity, bootEpoch };
   const targetScope = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
   const recordedDomain = startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost?.signalDomain;

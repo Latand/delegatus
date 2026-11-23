@@ -249,6 +249,17 @@ test("confirmation pending preserves summary and expiry, stops further calls loc
   }, { now: () => Date.parse("2026-10-17T12:00:00Z") });
 });
 
+test("an owner read quoting chat history returns no pending enrolment code to the agent", async () => {
+  const code = "DLG-ABCDEF012345";
+  await withAdapter("enrolment-redaction", (_req, body) => ({ body: okResult(body, { ...x1Results.ok!, status: "ok",
+    output: `@clone ${code} (and ${code.toLowerCase()} quoted)` }) }), async ({ own }) => {
+    const reply = await own.relay_service_tools(args("search_chat_messages", { keywords: ["clone"] }));
+    expect(reply).toMatchObject({ results: [{ tool: "search_chat_messages", status: "ok",
+      output: "@clone [enrolment code] (and [enrolment code] quoted)" }] });
+    expect(JSON.stringify(reply)).not.toMatch(/DLG-/i);
+  });
+});
+
 test("other conversations, deputies and absent callers cannot borrow the owner's adapter", async () => {
   let posts = 0;
   await withAdapter("callers", (_req, body) => { posts++; return { body: okResult(body, { ...x1Results.action_ok!, effect: "read" }) }; }, async ({ own }) => {

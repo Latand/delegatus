@@ -1,11 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
 import { headFileCache } from "./local-gate-tests";
-import { createHookFixture } from "./local-gate.fixture";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -15,7 +14,7 @@ const serviceTest = test.skipIf(process.platform !== "linux"
 test("shared comparator inputs retain every split test group in publication selection", () => {
   const groups = ["scripts/local-gate-tests.test.ts", "scripts/local-gate-tests.retry.test.ts", "scripts/local-gate-tests.recovery.test.ts", "scripts/local-gate-tests.teardown.test.ts",
     "scripts/local-gate-tests.rendezvous.test.ts", "scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate-tests.dependencies.test.ts"];
-  const checkpointFiles = ["scripts/local-gate.checkpoints.test.ts", "scripts/local-gate.checkpoints-retry.test.ts"];
+  const checkpointFiles = ["scripts/local-gate.checkpoints.test.ts", "scripts/local-gate.checkpoints-retry.test.ts", "scripts/local-gate.checkpoints.hook.test.ts"];
   const publication = ["scripts/local-gate.runtime.test.ts", "scripts/local-gate.execution.test.ts", "scripts/local-gate.groups.test.ts", "scripts/local-gate.invalidation.test.ts", "scripts/local-gate.git.test.ts", "scripts/local-gate.lint.test.ts", "scripts/local-gate.native.test.ts", "scripts/local-gate.binding.test.ts", "scripts/local-gate.hooks.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.native.test.ts", "scripts/local-gate.transport.budget.test.ts", "scripts/local-gate.transport.custody.test.ts"];
   const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/local-gate-tests.fixture.ts", "scripts/local-gate-tests.ts", "scripts/gate-cache.ts"]),
     tests: [...groups, ...publication, ...checkpointFiles, "scripts/unrelated.test.ts"],

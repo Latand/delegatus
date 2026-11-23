@@ -16,10 +16,12 @@ const context = { chat_id: -1000000000101, reply_to_message_id: 51, message_thre
 const body = { lease_id: "fixture", outcome: "answered" as const,
   answer: { action: "reply" as const, text: "Answer <with> & text", reply_to: "opaque_trigger" }, duration_ms: 121000 };
 
-test("owner recovery requires the saved claim to identify the same owner trigger", () => {
-  const raw = requestSchema.parse({ ...contextRequest, input: {
-    ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
-  } });
+for (const delivery of [undefined, "guest"] as const)
+test(`owner recovery requires the saved claim to identify the same owner trigger (${delivery ?? "ordinary"})`, () => {
+  const raw = requestSchema.parse({ ...contextRequest, delivery,
+    answer: { ...contextRequest.answer, progress: "none" },
+    input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } },
+  });
   const relay = clonePairing("http://127.0.0.1:1");
   const run = {
     requestId: raw.request_id, leaseId: raw.lease_id, targetId: raw.target_id, relayId: relay.id,

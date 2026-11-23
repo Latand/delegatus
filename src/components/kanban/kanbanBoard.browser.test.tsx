@@ -45,7 +45,8 @@ import { measureStageChain, stageChainFailures, wideStageChainFailures, type Sta
 import { sampleAnswer, sampleMemory, sampleRule, sampleScope } from "@/lib/memory/profile.fixture";
 import { createProfileService } from "@/lib/memory/profileService";
 import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
-import type { RoleMemoryProjectView, RuleRevisionView, RuleView } from "@/lib/memory/roleTypes";
+import { PROFILE_PROMPT_VERSION, profileView } from "@/lib/memory/profile";
+import type { RoleMemoryProjectView, RuleRevisionView, RuleView, ScopeView } from "@/lib/memory/roleTypes";
 import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
 
 /*
@@ -68,6 +69,8 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+/** Where a memory-profile block keeps its frames: under MEMORY_PROFILE_OUT when set, otherwise under .artifacts. */
+const memoryOut = (name: string) => process.env.MEMORY_PROFILE_OUT ? path.resolve(process.env.MEMORY_PROFILE_OUT, name) : path.resolve(".artifacts", name);
 
 describe("accepted queued creation continuity", () => {
   browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
@@ -3891,7 +3894,7 @@ describe("telemetry opt-outs", () => {
 
 describe("swarm release rules", () => {
   browserTest("consent, refused save and read-only scope fit both languages, themes and viewports", async () => {
-    const out = path.resolve(".artifacts/swarm-rules"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("swarm-rules"); fs.mkdirSync(out, { recursive: true });
     let receiving = false, refuse = false;
     const rules = sampleMemory();
     const publicRule = { ...rules.scopes[0].active[0], id: "r_0000000000000088", rule: "Read the project instruction files before changing code.", why: "" };
@@ -3961,19 +3964,19 @@ describe("swarm release rules", () => {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
           await toggle.waitFor(); expect(await toggle.isChecked()).toBe(true);
           await page.goto(`${server.base}?scenario=memory-profile&rolememory=1`);
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-          const swarm = page.locator('[data-rules-swarm="swarm:builder"]');
+          /* The swarm level is a row of its own, after the role's other rows; its pane is read only. */
+          await page.locator('[data-profile-level="swarm:builder"]').waitFor();
+          const order = await page.locator("[data-profile-level]").evaluateAll(rows => { const scopes = rows.map(row => row.getAttribute("data-profile-level")); const at = scopes.indexOf("swarm:builder"); return at > scopes.indexOf("role:*:builder") && at > scopes.indexOf("role:garden:builder"); });
+          expect(order).toBe(true);
+          await page.locator('[data-profile-level="swarm:builder"]').click();
+          const swarm = page.locator('[data-rules-section="swarm"]');
           await swarm.waitFor(); await swarm.scrollIntoViewIfNeeded();
           expect(await swarm.innerText()).toContain(publicRule.rule);
+          expect(await swarm.innerText()).toContain(translate(lang, "roleMemory.swarmPublic"));
           expect(await swarm.locator("[data-learned-rule-delete]").count()).toBe(0);
-          const order = await page.locator('[data-rules-section="role"]').evaluate(element => {
-            const local = element.querySelector("[data-rules-every-project]")!, shared = element.querySelector("[data-rules-swarm]")!;
-            return !!(local.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING);
-          });
-          expect(order).toBe(true);
           await page.screenshot({ path: path.join(out, `rules-${tag}.png`) });
           expect(pageErrors).toEqual([]);
-          readings.push({ lang, theme, width, ...geometry, refusedVisible, order, readOnly: true, openingScroll: "dialog starts at top; swarm setting scrolled into view", rulesScroll: "All rules; swarm section scrolled into view" });
+          readings.push({ lang, theme, width, ...geometry, refusedVisible, order, readOnly: true, openingScroll: "dialog starts at top; swarm setting scrolled into view", rulesScroll: "swarm level selected; its pane at the top" });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/swarm-rules", { recursive: true });
@@ -3990,7 +3993,7 @@ describe("memory profile", () => {
   browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("CLI timings reach the visible page", async () => {
     // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
     const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView };
-    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile"); fs.mkdirSync(out, { recursive: true });
     const rows = new Map<string, ProfileRow>();
     const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: prepareProfileCaller });
     const server = await serveEvidenceFixture(out, undefined, {
@@ -4036,7 +4039,7 @@ describe("memory profile", () => {
     } finally { await browser.close(); server.stop(); }
   });
   browserTest("summary, slices and states render at desktop and phone widths in both locales and schemes", async () => {
-    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile"); fs.mkdirSync(out, { recursive: true });
     const rules = sampleMemory();
     const rows = new Map<string, ProfileRow>();
     let calls = 0;
@@ -4086,25 +4089,29 @@ describe("memory profile", () => {
           const geometry = await page.evaluate(() => {
             const profile = document.querySelector<HTMLElement>("[data-memory-profile]")!;
             const window = document.querySelector<HTMLElement>("[data-rules-window]")!;
-            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] > h3")!;
+            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] h3")!;
             const summarize = profile.querySelector<HTMLElement>("[data-profile-summarize]")!;
-            const headlineRect = headline.getBoundingClientRect();
-            const card = headline.parentElement!.getBoundingClientRect();
-            const chipHeights = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill]")].map(chip => Math.round(chip.getBoundingClientRect().height));
+            const headlineRect = headline.getBoundingClientRect(), column = profile.getBoundingClientRect();
             const summarizeRect = summarize.getBoundingClientRect();
-            const pills = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill] > span")];
-            return { overflow: profile.scrollWidth - profile.clientWidth, fullWidthHeadline: Math.abs(headlineRect.left - (card.left + 17)) <= 1 && Math.abs(headlineRect.right - (card.right - 17)) <= 1, maxChipHeight: Math.max(...chipHeights), left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
-              headlineButtonOverlap: headlineRect.left < summarizeRect.right && headlineRect.right > summarizeRect.left && headlineRect.top < summarizeRect.bottom && headlineRect.bottom > summarizeRect.top,
-              truncatedPills: pills.filter(pill => pill.scrollWidth > pill.clientWidth).length, pills: pills.map(pill => ({ width: pill.getBoundingClientRect().width, maxWidth: getComputedStyle(pill).maxWidth })) };
+            return { overflow: profile.scrollWidth - profile.clientWidth, headlineWithinColumn: headlineRect.left >= column.left && headlineRect.right <= column.right, left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
+              headlineButtonOverlap: headlineRect.left < summarizeRect.right && headlineRect.right > summarizeRect.left && headlineRect.top < summarizeRect.bottom && headlineRect.bottom > summarizeRect.top };
           });
           expect(geometry.overflow).toBeLessThanOrEqual(1); expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
           expect(geometry.headlineButtonOverlap).toBe(false);
-          expect(geometry.fullWidthHeadline).toBe(true);
-          expect(geometry.maxChipHeight).toBeLessThanOrEqual(30);
-          expect(geometry.truncatedPills).toBeGreaterThan(0);
-          readings.push({ width, scheme, lang, geometry });
-          await page.locator("[data-profile-slice] button").last().scrollIntoViewIfNeeded();
-          await page.locator("[data-profile-slice] button").last().click();
+          expect(geometry.headlineWithinColumn).toBe(true);
+          /* A level's pills live under its subtitle in the pane; the first level opens beside the list, or behind a row on a phone. */
+          if (width === 390) await page.locator("[data-profile-level]").first().click();
+          await page.locator("[data-profile-pill]").first().waitFor();
+          const pills = await page.evaluate(() => {
+            const spans = [...document.querySelectorAll<HTMLElement>("[data-level-pane] [data-profile-pill] > span")];
+            return { maxChipHeight: Math.max(...[...document.querySelectorAll<HTMLElement>("[data-level-pane] [data-profile-pill]")].map(chip => Math.round(chip.getBoundingClientRect().height))), truncated: spans.filter(span => span.scrollWidth > span.clientWidth).length };
+          });
+          expect(pills.maxChipHeight).toBeLessThanOrEqual(30);
+          expect(pills.truncated).toBeGreaterThan(0);
+          readings.push({ width, scheme, lang, geometry, pills });
+          if (width === 390) await page.locator("[data-level-back]").click();
+          await page.locator("[data-profile-level]").last().scrollIntoViewIfNeeded();
+          await page.locator("[data-profile-level]").last().click();
           await page.locator("[data-rules-section]").waitFor();
           await page.screenshot({ path: path.join(out, `rules-${width}-${scheme}-${lang}.png`) });
           expect(pageErrors).toEqual([]);
@@ -4132,8 +4139,8 @@ describe("memory profile", () => {
 });
 
 describe("memory profile window: one top, whole rows, level order, named topic", () => {
-  browserTest("the window top and header hold across Profile and All rules, no rule row is cut, levels keep the All rules order, a topic drill names its topic", async () => {
-    const out = path.resolve(".artifacts/memory-profile-window"); fs.mkdirSync(out, { recursive: true });
+  browserTest("the window top, header and height hold across levels, no rule row is cut and nothing inside a pane scrolls, levels keep their order, a topic names itself once", async () => {
+    const out = memoryOut("memory-profile-window"); fs.mkdirSync(out, { recursive: true });
     const rules = sampleMemory();
     /* The store lists every-project first; the page must put this project's level ahead of it. */
     rules.scopes = [rules.scopes[1]!, rules.scopes[0]!, ...rules.scopes.slice(2)];
@@ -4187,33 +4194,41 @@ describe("memory profile window: one top, whole rows, level order, named topic",
             seen.push({ state: next, top: profile.top, header: profile.header });
             await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-${next}.png`) });
             if (next === "ready") {
-              const names = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-profile-slice") + ":" + node.querySelector("p, h4")!.textContent));
+              /* The levels keep the order the rules page used, whatever order the store lists them in. */
+              const order = await page.locator("[data-profile-level]").evaluateAll(rows => rows.map(row => row.getAttribute("data-profile-level")));
+              expect(order).toEqual(["role:garden:builder", "role:*:builder", "project:garden", "machine"]);
+              const names = await page.locator("[data-profile-level]").evaluateAll(rows => rows.map(row => row.querySelector("span span")!.textContent ?? ""));
               expect(names[0]).toContain(translate(lang, "memoryProfile.thisProject")); expect(names[1]).toContain(translate(lang, "memoryProfile.everyProject"));
-              expect(names.slice(2).map(name => name.split(":")[0])).toEqual(["project", "machine"]);
-              await page.locator("[data-profile-pill], [data-memory-profile] section > div button").first().scrollIntoViewIfNeeded();
-              await page.getByText(lang === "uk" ? "Ізольовані тести" : "Isolated tests", { exact: false }).first().click();
-              const heading = await page.locator("[data-rules-section] h3").first().innerText();
+              /* A topic names itself once, over one section per level. */
+              await page.locator('[data-profile-topic="0"]').scrollIntoViewIfNeeded();
+              await page.locator('[data-profile-topic="0"]').click();
+              const heading = await page.locator('[data-level-pane="topic"] h3').first().innerText();
               expect(heading).toBe(lang === "uk" ? "Ізольовані тести" : "Isolated tests");
+              expect(await page.locator('[data-level-pane="topic"]').innerText()).toContain(heading);
+              expect((await page.locator('[data-level-pane="topic"]').innerText()).split(heading).length - 1).toBe(1);
               await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-topic.png`) });
-              await page.getByRole("button", { name: new RegExp(translate(lang, "memoryProfile.back")) }).click();
+              if (phone) await page.locator("[data-level-back]").click();
             }
-            await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-            await page.locator("[data-rules-section]").first().waitFor();
+            /* A level's rules: one pane beside the list, or one screen behind a row. */
+            await page.locator("[data-profile-level]").first().click();
+            await page.locator("[data-level-pane] [data-rules-section]").waitFor();
             const rulesPage = await measureWindow(page);
-            seen.push({ state: `${next}:rules`, top: rulesPage.top, header: rulesPage.header });
+            seen.push({ state: `${next}:level`, top: rulesPage.top, header: rulesPage.header });
             if (!phone) {
-              expect(rulesPage.top).toBe(profile.top); expect(rulesPage.header).toBe(profile.header);
-              await page.locator("[data-learned-rule]").first().locator("button").first().click();
-              await page.locator("[data-rule-versions] summary").first().click();
-              /* With a rule and its earlier text open, each card shows its rows whole from the top: none starts above or ends below the card's edge. */
-              const sliced = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rules-section] > div")].flatMap(scroller => {
-                scroller.scrollTop = 0;
-                const band = scroller.getBoundingClientRect();
-                return [...scroller.querySelectorAll<HTMLElement>("[data-learned-rule]")].filter(row => { const r = row.getBoundingClientRect(); return r.top < band.top - 1 || (r.top < band.bottom && r.bottom > band.bottom + 1 && scroller.scrollHeight <= scroller.clientHeight + 1); }).map(row => row.getAttribute("data-learned-rule"));
-              }));
-              expect(sliced).toEqual([]);
+              /* Choosing a level moves none of the window's edges. */
+              expect(rulesPage.top).toBe(profile.top); expect(rulesPage.header).toBe(profile.header); expect(rulesPage.bottom).toBe(profile.bottom);
             }
-            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules-${next}.png`) });
+            await page.locator("[data-learned-rule]").first().locator("button").first().click();
+            await page.locator("[data-rule-versions] summary").first().click();
+            /* With a rule and its earlier text open, the pane shows its rows whole from the top, and nothing inside it scrolls on its own. */
+            const sliced = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-level-pane]")].flatMap(scroller => {
+              scroller.scrollTop = 0;
+              const band = scroller.getBoundingClientRect();
+              const nested = [...scroller.querySelectorAll<HTMLElement>("*")].filter(node => /auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1).map(node => `nested:${node.tagName}`);
+              return [...nested, ...[...scroller.querySelectorAll<HTMLElement>("[data-learned-rule]")].filter(row => { const r = row.getBoundingClientRect(); return r.top < band.top - 1 || (r.top < band.bottom && r.bottom > band.bottom + 1 && scroller.scrollHeight <= scroller.clientHeight + 1); }).map(row => row.getAttribute("data-learned-rule")!)];
+            }));
+            expect(sliced).toEqual([]);
+            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-level-${next}.png`) });
             expect(pageErrors).toEqual([]);
           } finally { await context.close(); }
         }
@@ -4242,7 +4257,7 @@ function richMemory(): RoleMemoryProjectView {
 
 describe("memory profile window: opening under slow data", () => {
   browserTest("a cached profile is readable while the first full rules response is still held", async () => {
-    const out = path.resolve(".artifacts/memory-profile-cold-open"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile-cold-open"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
     let releaseRules!: () => void;
     let gate = Promise.resolve();
@@ -4274,23 +4289,26 @@ describe("memory profile window: opening under slow data", () => {
           expect(await topic.isDisabled()).toBe(true);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
           await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-before-rules.png`) });
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          /* The levels and the topic are held with the rules; the window says why. */
           await page.locator("[data-rules-window-loading]").waitFor();
+          expect(await page.locator("[data-profile-level]").evaluateAll(rows => rows.length > 0 && rows.every(row => (row as HTMLButtonElement).disabled))).toBe(true);
+          expect(await page.locator("[data-level-pane]").count()).toBe(0);
           releaseRules();
-          await page.locator("[data-rules-section]").first().waitFor();
-          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-all-rules.png`) });
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.profile"), exact: true }).click();
-          await page.locator("[data-profile-ready]").waitFor();
+          await page.waitForFunction(() => document.querySelector("[data-profile-level]") && !document.querySelector("[data-profile-level]:disabled"));
           expect(await topic.isDisabled()).toBe(false);
           expect(await page.locator("[data-profile-summarize]").count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-after-rules.png`) });
+          if (width === 390) await page.locator("[data-profile-level]").first().click();
+          await page.locator("[data-level-pane] [data-rules-section]").waitFor();
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-level.png`) });
           expect(posts).toBe(0); expect(pageErrors).toEqual([]);
         } finally { releaseRules(); await context.close(); }
       }
     } finally { releaseRules?.(); await browser.close(); await server.stop(); }
   }, 60_000);
 
-  browserTest("the first slow rules answer opens both tabs after a poll tick", async () => {
-    const out = path.resolve(".artifacts/memory-profile-slow-first"); fs.mkdirSync(out, { recursive: true });
+  browserTest("the first slow rules answer draws the list and the selected level after a poll tick", async () => {
+    const out = memoryOut("memory-profile-slow-first"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
     let answeredFirst!: () => void;
     let began!: () => void;
@@ -4326,8 +4344,8 @@ describe("memory profile window: opening under slow data", () => {
           expect(reads).toBe(1);
           expect(await page.locator("[data-rules-window-loading]").count()).toBe(0);
           await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile.png`) });
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-          await page.locator("[data-rules-section]").first().waitFor();
+          if (width === 390) await page.locator("[data-profile-level]").first().click();
+          await page.locator("[data-level-pane] [data-rules-section]").first().waitFor();
           await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-rules.png`) });
           expect(posts).toBe(0); expect(pageErrors).toEqual([]);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -4337,7 +4355,7 @@ describe("memory profile window: opening under slow data", () => {
   }, 60_000);
 
   browserTest("opened from the menu row with the rules already read, the body draws before the held rules and profile answers, one profile request goes out and Summarize waits for its answer, with each role's costume beside its name in every state", async () => {
-    const out = path.resolve(".artifacts/memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
     let rulesReads = 0, rulesAnswered = 0, profileAnswered = 0;
     const profileReads: string[] = [];
@@ -4377,7 +4395,7 @@ describe("memory profile window: opening under slow data", () => {
           release();
           await page.locator("[data-profile-summarize]").waitFor();
           expect(profileReads).toEqual(["GET"]);
-          const slices = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-profile-slice"), label: node.querySelector("h4, p")!.textContent ?? "", costume: node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null })));
+          const slices = await page.locator("[data-profile-level]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-profile-level")!.split(":")[0]!, label: node.querySelector("span span")!.textContent ?? "", costume: node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null })));
           for (const slice of slices) expect(slice.costume !== null).toBe(slice.kind === "role" || slice.kind === "swarm");
           /* Repeated roles across scopes each wear their own costume. */
           const byRole = slices.filter(slice => slice.kind === "role" || slice.kind === "swarm").map(slice => slice.costume);
@@ -4385,13 +4403,17 @@ describe("memory profile window: opening under slow data", () => {
           for (const id of ["merger", "orchestrator"]) expect(byRole.filter(costume => costume === id).length).toBe(2);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
           await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-loaded.png`) });
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-          await page.locator("[data-rules-section]").first().waitFor();
-          /* The curator's history summary and each pass wear the curator; the swarm heading wears its role. */
+          /* A level opens beside the list, or on its own screen on a phone. */
+          const openLevel = async (scope: string) => {
+            if (await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
+            await page.locator(`[data-profile-level="${scope}"]`).click();
+            await page.locator("[data-level-pane] [data-rules-section]").first().waitFor();
+          };
+          await openLevel("role:garden:builder");
+          /* The curator's history summary and each pass wear the curator. */
           await page.locator("[data-curation-history] summary").click();
           expect(await costumes(page, "[data-curation-history] summary")).toEqual(["curator"]);
           expect(await costumes(page, "[data-curation-pass]")).toEqual(["curator", "curator"]);
-          expect(await costumes(page, "[data-rules-swarm]")).toEqual(["builder"]);
           for (const row of await page.locator("[data-learned-rule] button[aria-expanded]").all()) await row.click();
           for (const summary of await page.locator("[data-rule-versions] summary").all()) await summary.click();
           const provenance = await page.locator("[data-rule-provenance]").evaluateAll(nodes => nodes.flatMap(node => [...node.querySelectorAll("img[data-role-avatar]")].map(img => img.getAttribute("data-role-avatar"))));
@@ -4400,12 +4422,397 @@ describe("memory profile window: opening under slow data", () => {
           expect(provenance).toEqual(expect.arrayContaining(["architect", "curator"]));
           expect(earlierLines.sort()).toEqual(["curator", "merger"]);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules.png`) });
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-level.png`) });
+          /* The swarm heading wears its role. */
+          await openLevel("swarm:builder");
+          expect(await costumes(page, '[data-rules-section="swarm"] h3')).toEqual(["builder"]);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-swarm.png`) });
           expect(pageErrors).toEqual([]);
         } finally { release(); await context.close(); }
       }
     } finally { await browser.close(); server.stop(); }
   });
+});
+
+/* S7: the memory profile window as variant 5 draws it, the levels on the left and the chosen level's rules on the right, on the real window and
+   the real components. Each state is rendered at desktop and phone widths in both languages and themes; every frame is read by `measureS7` and
+   written to manifest.json beside the frames. */
+type S7Data = "rich" | "many" | "empty" | "paused-source" | "paused-override";
+type S7Profile = "ready" | "none" | "running" | "error" | "stale" | "reading";
+type S7State = {
+  id: string; data?: S7Data; profile?: S7Profile; focus?: string; coldRules?: boolean; endScroll?: boolean; edge?: boolean; wide?: boolean;
+  /* Elements that name the state: each is whole inside the window and inside its scroller on the first screen. `last:` takes the last match. */
+  define: (phone: boolean) => string[];
+  act?: (page: Page, helpers: { phone: boolean; openLevel: (scope: string) => Promise<void> }) => Promise<void>;
+  topicIds?: string[];
+};
+const S7_BUILDER = "role:garden:builder", S7_EVERY = "role:*:builder", S7_REVIEWER = "role:garden:reviewer", S7_ARCHITECT = "role:garden:architect", S7_SWARM = "swarm:builder", S7_PROJECT = "project:garden";
+const S7_TOPIC_IDS = ["b-a", "p-1"];
+const HEADLINES: Record<string, [string, string]> = {
+  [S7_BUILDER]: ["Builders prove each change with a named check", "Білдери доводять кожну зміну названою перевіркою"], [S7_EVERY]: ["Habits that hold in every repository: name the check, keep the evidence beside the finding, and say which readers no check reached", "Звички, що працюють у кожному репозиторії: назвати перевірку, тримати докази поруч із зауваженням і сказати, яких читачів жодна перевірка не охопила"],
+  [S7_REVIEWER]: ["Reviewers hold the evidence to one bar", "Рев’юери тримають докази на одній планці"], [S7_SWARM]: ["Public guidance shipped with the product", "Публічні поради, що йдуть разом із продуктом"],
+  [S7_PROJECT]: ["How this project is tested", "Як тестують цей проєкт"], machine: ["How this machine runs checks", "Як ця машина запускає перевірки"],
+};
+const scrollPaneToRow = (page: Page, row: "middle" | "end") => page.evaluate((target) => {
+  const pane = document.querySelector<HTMLElement>("[data-level-pane]")!;
+  if (target === "end") { pane.scrollTop = pane.scrollHeight; return; }
+  const rows = [...pane.querySelectorAll<HTMLElement>("[data-learned-rule]")];
+  pane.scrollTop += rows[Math.floor(rows.length / 2)]!.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+}, row);
+const S7_STATES: S7State[] = [
+  { id: "default", edge: true, wide: true, define: phone => phone ? ["[data-memory-profile] [data-profile-ready] h3", `[data-profile-level="${S7_BUILDER}"]`] : ["[data-memory-profile] [data-profile-ready] h3", "[data-level-pane] h3", "[data-level-pane] [data-rules-count]"] },
+  { id: "level", define: () => ["[data-level-pane] h3", "[data-level-pane] [data-rules-count]"], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); } },
+  { id: "earlier", wide: true, define: () => ['[data-rule-versions="b-export-format"][open] summary', "[data-rule-revert]"], act: async (page, { openLevel }) => {
+    await openLevel(S7_BUILDER);
+    await page.locator('[data-learned-rule="b-export-format"] > div > button').first().click();
+    await page.locator('[data-rule-versions="b-export-format"] summary').click();
+  } },
+  { id: "archived", wide: true, define: () => ["[data-rules-history]", '[data-left-rule="r-merged"] [data-rule-counterpart]', '[data-left-rule-restore="r-budget"]'], act: async (page, { openLevel }) => {
+    await openLevel(S7_REVIEWER);
+    await page.locator("[data-rules-history]").click();
+    await page.locator("[data-left-rule]").nth(3).waitFor();
+    await page.evaluate(() => { const pane = document.querySelector<HTMLElement>("[data-level-pane]")!; pane.scrollTop += document.querySelector("[data-rules-history]")!.getBoundingClientRect().top - pane.getBoundingClientRect().top; });
+  } },
+  { id: "archived-only", define: () => ["[data-level-pane] h3", "[data-rules-history]"], act: async (page, { openLevel }) => { await openLevel(S7_ARCHITECT); } },
+  { id: "empty-level", endScroll: true, define: () => ["[data-level-pane] h3", "[data-level-pane] p"], act: async (page, { openLevel }) => { await openLevel("machine"); } },
+  { id: "long", edge: true, define: () => ['[data-learned-rule="b-long"]', '[data-learned-rule="b-path"]'], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); } },
+  { id: "long-open", edge: true, define: () => ['[data-learned-rule="b-long"][data-open]', '[data-learned-rule="b-path"][data-open]'], act: async (page, { openLevel }) => {
+    await openLevel(S7_BUILDER);
+    for (const id of ["b-long", "b-path"]) await page.locator(`[data-learned-rule="${id}"] > div > button`).first().click();
+  } },
+  { id: "many-rest", data: "many", wide: true, define: phone => phone ? ["[data-profile-ready] h3", `[data-profile-level="${S7_BUILDER}"]`] : ["[data-level-pane] h3", "[data-level-pane] [data-rules-count]"] },
+  { id: "many-middle", data: "many", define: () => ["[data-level-pane] ol > li:nth-child(21)"], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); await scrollPaneToRow(page, "middle"); } },
+  { id: "many-end", data: "many", endScroll: true, define: () => ["last:[data-level-pane] ol > li"], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); await scrollPaneToRow(page, "end"); } },
+  { id: "many-list-end", data: "many", endScroll: true, define: () => ["last:[data-memory-profile] [data-profile-level]"], act: async (page) => {
+    await page.evaluate(() => { const list = document.querySelector<HTMLElement>("[data-memory-profile]")!; list.scrollTop = list.scrollHeight; });
+  } },
+  { id: "topic", topicIds: S7_TOPIC_IDS, define: () => ['[data-level-pane="topic"] h3', '[data-level-pane="topic"] [data-rules-section]'], act: async (page) => { await page.locator('[data-profile-topic="0"]').click(); await page.locator('[data-level-pane="topic"]').waitFor(); await page.evaluate(() => { for (const scroller of document.querySelectorAll<HTMLElement>("[data-memory-profile], [data-level-pane]")) scroller.scrollTop = 0; }); } },
+  { id: "focus", focus: "b-export-format", define: () => ['[data-learned-rule="b-export-format"][data-open][data-focused]'] },
+  { id: "focus-departed", focus: "r-merged", define: () => ['[data-left-rule="r-merged"][data-focused]', '[data-rules-history][aria-expanded="true"]'] },
+  { id: "swarm", define: () => ["[data-level-pane] h3", '[data-learned-rule="sw-1"]'], act: async (page, { openLevel }) => { await openLevel(S7_SWARM); } },
+  { id: "undo", define: () => ["[data-rules-undo]", "[data-rules-undo-button]"], act: async (page, { openLevel }) => {
+    await openLevel(S7_BUILDER);
+    await page.locator('[data-learned-rule-delete="b-a"]').click();
+    await page.locator("[data-rules-undo]").waitFor();
+  } },
+  { id: "profile-reading", profile: "reading", define: () => ["[data-memory-profile] h3[role=status]"] },
+  { id: "profile-none", profile: "none", define: () => ["[data-memory-profile] h3", "[data-profile-summarize]"] },
+  { id: "profile-running", profile: "running", define: () => ["[data-memory-profile] h3", "p[role=status]"] },
+  { id: "profile-error", profile: "error", define: () => ["[data-memory-profile] [role=alert]", "[data-profile-summarize]"] },
+  { id: "profile-stale", profile: "stale", define: () => ["[data-profile-stale]", "[data-profile-summarize]"] },
+  { id: "profile-empty", data: "empty", define: () => ["[data-memory-profile] h3", `[data-profile-level="${S7_PROJECT}"]`] },
+  { id: "profile-paused-source", data: "paused-source", define: () => ["[data-rules-window-off]", "[data-memory-profile] h3"] },
+  { id: "profile-paused-override", data: "paused-override", define: () => ["[data-rules-window-off]", "[data-memory-profile] h3"] },
+  { id: "profile-cold", coldRules: true, define: () => ["[data-rules-window-loading]", "[data-profile-ready] h3", "[data-profile-level]"] },
+];
+
+/** Reads one frame: every violation the variant's gates name, as short strings. */
+const measureS7 = (page: Page, args: { phone: boolean; scopes: Record<string, { active: string[]; left: string[] }>; total: number; topicIds?: string[]; endScroll: boolean; cold: boolean; expectCurrent: boolean }) => page.evaluate((args) => {
+  const out: string[] = [];
+  const checked = { texts: 0, scrollers: 0, rules: 0, removes: 0, rows: 0, levelGaps: 0, departedTone: 0, emptySaid: 0, insets: 0 };
+  const win = document.querySelector<HTMLElement>("[data-rules-window]")!;
+  const box = win.getBoundingClientRect();
+  const clips = (element: Element) => { const found: HTMLElement[] = []; for (let node = element.parentElement; node; node = node.parentElement) if (getComputedStyle(node).overflowX !== "visible") found.push(node); return found; };
+  /* Text cut sideways by a clipping ancestor or the viewport, except where the text is drawn with an ellipsis. */
+  const walker = document.createTreeWalker(win, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const parent = node.parentElement, text = (node.textContent ?? "").trim();
+    if (!parent || !text || parent.closest("svg") || getComputedStyle(parent).textOverflow === "ellipsis" || parent.closest("[class*=truncate]")) continue;
+    const range = document.createRange(); range.selectNodeContents(node);
+    checked.texts++;
+    const limits = [...clips(parent).map(ancestor => ancestor.getBoundingClientRect()), { left: 0, right: innerWidth }];
+    for (const rect of range.getClientRects()) if (rect.width > 1 && limits.some(limit => rect.left < limit.left - 1 || rect.right > limit.right + 1)) { out.push(`cut:${text.slice(0, 30)}`); break; }
+  }
+  const scrollers = [...win.querySelectorAll<HTMLElement>("[data-memory-profile], [data-level-pane]")];
+  checked.scrollers = scrollers.length;
+  /* A word cut through by the top of its scroller. */
+  if (!args.endScroll) for (const scroller of scrollers) {
+    const band = scroller.getBoundingClientRect(), texts = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+      if (!(node.textContent ?? "").trim() || node.parentElement?.closest("svg")) continue;
+      const range = document.createRange(); range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.height > 1 && rect.width > 1 && rect.top < band.top - 1 && rect.bottom > band.top + 1) { out.push(`cut-top:${(node.textContent ?? "").trim().slice(0, 24)}`); break; }
+    }
+  }
+  if (!args.endScroll) for (const scroller of scrollers) {
+    const band = scroller.getBoundingClientRect();
+    for (const row of scroller.querySelectorAll<HTMLElement>("[data-learned-rule], [data-left-rule], [data-profile-level], [data-profile-topic], [data-rules-undo]")) {
+      const rect = row.getBoundingClientRect();
+      if (rect.height && rect.top < band.top - 1 && rect.bottom > band.top + 1) out.push(`slice:${row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule") ?? row.getAttribute("data-profile-level") ?? "row"}`);
+    }
+  }
+  const seen = new Set<string>();
+  for (const row of win.querySelectorAll<HTMLElement>("[data-learned-rule]")) {
+    const id = row.getAttribute("data-learned-rule")!;
+    checked.rules++;
+    const text = row.querySelector("button > span")?.textContent ?? "";
+    if (seen.has(text)) out.push(`repeat:${id}`); seen.add(text);
+    const remove = row.querySelector("[data-learned-rule-delete]"), label = row.querySelector("button > span");
+    if (!remove || !label) continue;
+    const range = document.createRange(); range.selectNodeContents(label);
+    const line = range.getClientRects()[0], at = remove.getBoundingClientRect();
+    checked.removes++;
+    if (line && Math.abs(at.top + at.height / 2 - (line.top + line.height / 2)) > 2) out.push(`x:${id}`);
+  }
+  /* A closed rule keeps to two lines, and an archived one too: the clamp is the closed row's defining element in the `long` state. */
+  for (const [selector, label, lineHeight] of [["[data-learned-rule]:not([data-open])", "button > span", 17], ["[data-left-rule]", ":scope > span > span", 16]] as const) {
+    for (const row of win.querySelectorAll<HTMLElement>(selector)) {
+      const text = row.querySelector<HTMLElement>(label);
+      if (!text) continue;
+      const lines = Math.round(text.getBoundingClientRect().height / lineHeight);
+      if (text.getBoundingClientRect().height > lineHeight * 2 + 1) out.push(`clamp:${row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule")}:${lines}`);
+    }
+  }
+  /* The header's sentence shows whole: no ellipsis, and its text range stays inside the line and clear of the × beside it. */
+  const starts = win.querySelector<HTMLElement>("[data-rules-starts]"), closeBox = win.querySelector<HTMLElement>("[data-rules-window-close]")?.getBoundingClientRect();
+  if (starts) {
+    const range = document.createRange(); range.selectNodeContents(starts);
+    if (getComputedStyle(starts).textOverflow === "ellipsis" || starts.scrollWidth > starts.clientWidth + 1) out.push("starts-cut");
+    for (const line of range.getClientRects()) if (closeBox && line.right > closeBox.left + 0.5 && line.bottom > closeBox.top && line.top < closeBox.bottom) out.push("starts-under-close");
+  }
+  /* A heading that wraps keeps its count on the line of its last word. */
+  for (const heading of win.querySelectorAll<HTMLElement>("[data-rules-section] h3")) {
+    const count = heading.parentElement?.querySelector<HTMLElement>("[data-rules-count]");
+    if (!count) continue;
+    const range = document.createRange(); range.selectNodeContents(heading);
+    const lines = [...range.getClientRects()], last = lines[lines.length - 1]!, at = count.getBoundingClientRect();
+    if (Math.abs(at.left - last.right) > 12 || at.top < last.top - 2 || at.bottom > last.bottom + 2) out.push("count-detached");
+  }
+  /* On the phone, the room between one level row's last line and the next row's label is one, whether the row carries a summary line or not. */
+  if (args.phone) {
+    const rows = [...win.querySelectorAll<HTMLElement>("[data-profile-level]")];
+    const gaps: number[] = [];
+    for (const [index, row] of rows.entries()) {
+      const next = rows[index + 1];
+      if (!next) continue;
+      const lines = [...row.querySelectorAll<HTMLElement>("span.min-w-0 > span")].filter(line => line.textContent?.trim());
+      const label = next.querySelector<HTMLElement>("span.min-w-0 > span");
+      if (!lines.length || !label) continue;
+      const a = document.createRange(), b = document.createRange(); a.selectNodeContents(lines[lines.length - 1]!); b.selectNodeContents(label);
+      const rects = [...a.getClientRects()]; gaps.push(b.getClientRects()[0]!.top - rects[rects.length - 1]!.bottom);
+    }
+    checked.levelGaps = gaps.length;
+    if (gaps.length > 1 && Math.max(...gaps) - Math.min(...gaps) > 2) out.push(`level-gaps:${gaps.map(gap => Math.round(gap)).join(",")}`);
+  }
+  /* A rule that has left and is the one asked about stands out from its neighbours in the history. */
+  const departed = [...win.querySelectorAll<HTMLElement>("[data-left-rule]")], chosen = departed.find(row => row.hasAttribute("data-focused"));
+  if (chosen) {
+    const others = departed.filter(row => row !== chosen).map(row => getComputedStyle(row).backgroundColor);
+    checked.departedTone = others.length;
+    /* The hover tint is what a pointer passing over any row leaves; the chosen row has to read as more than that. */
+    const hover = document.createElement("span"); hover.className = "bg-sunken"; document.body.append(hover);
+    const hoverTone = getComputedStyle(hover).backgroundColor; hover.remove();
+    const tone = getComputedStyle(chosen).backgroundColor;
+    if (others.includes(tone) || tone === hoverTone) out.push("departed-focus-unmarked");
+  }
+  /* A profile with no rules says so once: the pane beside the list stays quiet where the list already says it. */
+  if (!args.phone && args.total === 0) {
+    const said = win.querySelector("[data-memory-profile] h3")?.textContent?.trim().toLowerCase() ?? "";
+    const pane = win.querySelector<HTMLElement>("[data-level-pane]")?.textContent?.toLowerCase().replace(/[.\s]+/g, " ") ?? "";
+    checked.emptySaid = 1;
+    if (said && pane.includes(said.replace(/[.\s]+/g, " ").trim())) out.push("empty-said-twice");
+  }
+  /* A selected level or focused rule lands above its scroller's bottom fade: the fade is the last 28 px of the scroller. */
+  for (const scroller of scrollers) {
+    const band = scroller.getBoundingClientRect();
+    for (const row of scroller.querySelectorAll<HTMLElement>("[aria-current=true], [data-focused]")) {
+      const rect = row.getBoundingClientRect();
+      if (rect.height && rect.bottom > band.bottom - 28 + 1 && rect.top < band.bottom) out.push(`under-fade:${row.getAttribute("data-profile-level") ?? row.getAttribute("data-profile-topic") ?? row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule") ?? "row"}:${Math.round(rect.bottom - (band.bottom - 28))}`);
+    }
+  }
+  /* On the phone the back link, the heading and the first rule's dot start where the curator line does. */
+  if (args.phone) {
+    const edge = (element: Element | null | undefined) => { if (!element) return null; const range = document.createRange(); range.selectNodeContents(element); return range.getClientRects()[0]?.left ?? null; };
+    const reference = win.querySelector("[data-curation-history] summary")?.getBoundingClientRect().left ?? null, rulesPane = win.querySelector<HTMLElement>("[data-level-pane]");
+    if (reference !== null && rulesPane) {
+      const readings: [string, number | null][] = [["back", edge(rulesPane.querySelector("[data-level-back]"))], ["heading", edge(rulesPane.querySelector("h3"))], ["dot", rulesPane.querySelector("[data-learned-rule] > span[aria-hidden]")?.getBoundingClientRect().left ?? null]];
+      checked.insets = readings.length;
+      for (const [name, left] of readings) if (left !== null && Math.abs(left - reference) > 1) out.push(`inset:${name}:${left.toFixed(1)}/${reference.toFixed(1)}`);
+    }
+  }
+  if (document.documentElement.scrollWidth > innerWidth) out.push("page-overflow");
+  const title = document.getElementById("rules-window-title")!, titleBox = title.getBoundingClientRect();
+  if (title.scrollWidth > title.clientWidth + 1 || titleBox.left < 0 || titleBox.right > innerWidth || titleBox.top < 0 || titleBox.bottom > innerHeight) out.push("title");
+  for (const scroller of scrollers) for (const node of scroller.querySelectorAll<HTMLElement>("*")) if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) out.push(`nested:${node.tagName.toLowerCase()}`);
+  const pane = win.querySelector<HTMLElement>("[data-level-pane]"), key = pane?.getAttribute("data-level-pane");
+  if (pane && key && !args.cold) {
+    const held = args.scopes[key];
+    for (const row of pane.querySelectorAll("[data-learned-rule]")) if (!(key === "topic" ? args.topicIds ?? [] : held?.active ?? []).includes(row.getAttribute("data-learned-rule")!)) out.push(`foreign:${row.getAttribute("data-learned-rule")}`);
+    for (const row of pane.querySelectorAll("[data-left-rule]")) if (!(held?.left ?? []).includes(row.getAttribute("data-left-rule")!)) out.push(`foreign-left:${row.getAttribute("data-left-rule")}`);
+  }
+  const rows = [...win.querySelectorAll<HTMLElement>("[data-profile-level]")];
+  checked.rows = rows.length;
+  if (!args.cold && rows.length) {
+    let sum = 0;
+    for (const row of rows) {
+      const scope = row.getAttribute("data-profile-level")!, count = Number(row.querySelector("span.tabular-nums")?.textContent);
+      sum += count;
+      if (count !== args.scopes[scope]?.active.length) out.push(`count:${scope}`);
+      if (key === scope) { const heading = pane?.querySelector("[data-rules-count]"); if (Number(heading?.textContent ?? 0) !== count) out.push(`heading-count:${scope}`); }
+    }
+    if (sum !== args.total) out.push(`total:${sum}/${args.total}`);
+  }
+  if (!args.phone && args.expectCurrent && win.querySelectorAll("[data-memory-profile] [aria-current=true]").length !== 1) out.push("current");
+  if (args.phone) {
+    for (const row of win.querySelectorAll<HTMLElement>("[data-profile-level], [data-profile-topic]")) {
+      if (!row.querySelector("svg")) out.push(`chevron:${row.getAttribute("data-profile-level") ?? row.getAttribute("data-profile-topic")}`);
+      if (row.getBoundingClientRect().height < 44 - 0.5) out.push(`target:${row.getAttribute("data-profile-level") ?? row.getAttribute("data-profile-topic")}`);
+    }
+    const back = win.querySelector<HTMLElement>("[data-level-back]"), heading = pane?.querySelector("h3");
+    if (back && heading) {
+      const a = document.createRange(), b = document.createRange(); a.selectNodeContents(back); b.selectNodeContents(heading);
+      if (Math.abs(a.getClientRects()[0]!.left - b.getClientRects()[0]!.left) > 1) out.push("back-align");
+    }
+  }
+  return { violations: out, checked, top: Math.round(box.top), height: Math.round(box.height), header: Math.round(win.querySelector("header")!.getBoundingClientRect().height) };
+}, args);
+
+describe("memory profile window: levels on the left, rules on the right", () => {
+  browserTest("every state at desktop and phone widths in both languages and themes keeps whole rows, one scroller per pane and the window's edges", async () => {
+    const out = memoryOut("s7-levels"); fs.mkdirSync(out, { recursive: true });
+    const at = "2026-10-11T00:01:00.000Z";
+    const rule = (id: string, text: string, roleId: string | null = "builder", extra: Partial<RuleView> = {}): RuleView => ({ ...sampleRule(id, text), roleId, ...extra });
+    const gone = (id: string, text: string, reason: NonNullable<RuleView["reason"]>, roleId = "reviewer", extra: Partial<RuleView> = {}): RuleView => ({ ...rule(id, text, roleId), state: "archived", reason, ...extra });
+    const scopeOf = (scope: string, active: RuleView[], left: RuleView[] = []): ScopeView => ({ ...sampleScope(scope, active), left });
+    const longText = "Before a change reaches review, name the check that proves it and run that check on the base and on the branch with the same isolation, so that a red result on one side and a green one on the other is a finding and never a guess. Keep both results next to the finding they belong to, record which reader of the stored scope each result covers, and say plainly which readers no check reached. When the change touches a write path, list every producer, consumer, copy and default that reaches it, and name what each of them passes, because a check on the submitted values alone misses the defaults, the copies and the parent paths that carry the same data to the same record by another route.";
+    const pathText = `src/lib/memory/${"a-very-long-directory-name-without-spaces/".repeat(3)}final-file.test.ts`;
+    const earlier = (id: string, text: string, revisedBy: RuleRevisionView) => ({ id, rule: text, why: "An earlier write placed guidance with the wrong readers.", hints: [], createdAt: "2026-01-01", revisedBy });
+    const curation = { lastAt: at, nextAt: null, newLessons: 0, passes: [{ id: "pass-1", state: "succeeded" as const, claimedAt: at, endedAt: at, failure: null, counts: { calls: 1, changed: 2, rewritten: 1, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } }] };
+    const rich = (): RoleMemoryProjectView => ({ project: "garden", enabled: true, curation, scopes: [
+      /* The store lists a level's rules oldest first and the pane shows them newest first, so the rule the frames open is last here. */
+      scopeOf(S7_BUILDER, [
+        rule("b-a", "Run each touched test file by path under isolated state."), rule("b-b", "Read the current scope revision before proposing a stored rewrite."),
+        rule("b-long", longText), rule("b-path", pathText),
+        rule("b-export-format", "Name the export format in the first line of the report.", "builder", { revisedBy: { by: "curator", at }, versions: [earlier("b-export-format-v1", "State the export format in the report.", { by: "curator", at }), earlier("b-export-format-v2", "Mention the export format.", { by: "agent", at, roleId: "reviewer" })] }),
+      ]),
+      scopeOf(S7_EVERY, [rule("be-1", "Keep a fix round to the handed findings."), rule("be-2", "Give a browser started from a stage a short temporary directory.")]),
+      scopeOf(S7_REVIEWER, [rule("r-1", "Judge the 390 px Ukrainian frame first.", "reviewer"), rule("r-2", "Check that a test turns red with the bug put back.", "reviewer")], [
+        gone("r-del", "A rule the operator removed.", "deleted"), gone("r-merged", "A rule that merged into another one.", "deleted", "reviewer", { state: "merged", reason: undefined, mergedInto: "r-1" }),
+        gone("r-task", "A rule that recorded one completed task.", "task-specific", "reviewer", { where: "this project" }), gone("r-budget", "A rule that left when the scope reached its bound.", "budget"),
+      ]),
+      scopeOf(S7_ARCHITECT, [], [gone("a-gone", "A design rule the curator archived.", "stale", "architect")]),
+      { ...scopeOf(S7_SWARM, [rule("sw-1", "Name the file a change reaches before changing it.")]), kind: "swarm", roleId: "builder" },
+      scopeOf(S7_PROJECT, [rule("p-1", "Run the test files you touched by path.", null)], [gone("p-0", "A project rule the curator archived.", "task-specific", "builder")]),
+      scopeOf("machine", []),
+    ] });
+    const ROLES = ["builder", "reviewer", "architect", "merger", "orchestrator", "maintainer", "verifier", "visual-critic", "curator", "deployer"];
+    const many = (): RoleMemoryProjectView => ({ project: "garden", enabled: true, curation, scopes: [
+      ...ROLES.flatMap(roleId => [
+        scopeOf(`role:garden:${roleId}`, roleId === "builder" ? Array.from({ length: 40 }, (_, index) => rule(`m-${index}`, `Rule ${index + 1} of 40: name the check that proves a change before writing the change itself.`)) : [rule(`${roleId}-here`, `A ${roleId} rule for this project.`, roleId)]),
+        scopeOf(`role:*:${roleId}`, [rule(`${roleId}-all`, `A ${roleId} rule for every project.`, roleId)]),
+      ]).map(entry => ({ ...entry, kind: "role" as const, roleId: entry.scope.split(":")[2]! })),
+      scopeOf(S7_PROJECT, [rule("p-1", "Run the test files you touched by path.", null)]), scopeOf("machine", [rule("mc-1", "Give a browser a short temporary directory.", null)]),
+    ] });
+    const empty = (): RoleMemoryProjectView => ({ project: "garden", enabled: true, curation, scopes: [scopeOf(S7_PROJECT, []), scopeOf("machine", [])] });
+    const dataOf = (kind: S7Data): RoleMemoryProjectView => kind === "many" ? many() : kind === "empty" ? empty() : kind === "rich" ? rich() : { ...rich(), enabled: false, ...(kind === "paused-source" ? { pausedBy: "memorySource" as const } : {}) };
+    /* The profile as the service stores it: one overall summary and one per level that holds rules, topics pointing at rules by their place in the basis. */
+    const profileOf = (view: RoleMemoryProjectView, lang: "en" | "uk", kind: S7Profile): MemoryProfileView => {
+      const T = (english: string, ukrainian: string) => lang === "uk" ? ukrainian : english;
+      const active = view.scopes.filter(entry => entry.active.length);
+      const ids = active.flatMap(entry => entry.active.map(item => item.id));
+      const basisOf = (rules: RuleView[]) => rules.map(({ id, changedAt }) => ({ id, changedAt }));
+      const part = (scope: string, basis: RuleView[], headline: string, text: string, topics: { title: string; text?: string; rules: number[] }[]) => ({ scope, model: "sample", promptVersion: PROFILE_PROMPT_VERSION, hash: scope, basis: basisOf(basis), createdAt: at, durationMs: 1, answer: { headline, text, topics } });
+      const place = (...names: string[]) => names.map(name => ids.indexOf(name) + 1).filter(Boolean);
+      const row: ProfileRow = { project: "garden", locale: lang, model: "sample", promptVersion: PROFILE_PROMPT_VERSION, parts: active.length ? [
+        part("overall", active.flatMap(entry => entry.active), T("Agents check before they change", "Агенти перевіряють, перш ніж змінювати"), T("Builders prove each change with a named check, reviewers hold the evidence to the same bar, and every level keeps its rules short and checkable.", "Білдери доводять кожну зміну названою перевіркою, рев’юери тримають докази на тій самій планці, а кожен рівень зберігає короткі й перевірні правила."), [
+          { title: T("Isolated tests", "Ізольовані тести"), text: T("Tests run apart from live state.", "Тести йдуть окремо від живого стану."), rules: place("b-a", "p-1") },
+          { title: T("Review evidence", "Докази для рев’ю"), text: T("A finding keeps the proof beside it.", "Зауваження зберігає доказ поруч."), rules: place("r-1", "r-2", "b-b") },
+          { title: T("Shared wording", "Спільні формулювання"), rules: place("be-1") },
+        ]),
+        ...active.map(entry => { const [headline, headlineUk] = HEADLINES[entry.scope] ?? [`Rules of ${entry.scope}`, `Правила рівня ${entry.scope}`]; return part(entry.scope, entry.active, T(headline, headlineUk), T("What this level keeps, in one short paragraph for the pane's subtitle.", "Що зберігає цей рівень, одним коротким абзацом для підзаголовка панелі."), [{ title: T("A pill topic", "Тема-пігулка"), rules: [1] }]); }),
+      ] : [] };
+      const view2 = profileView({ project: "garden", enabled: view.enabled, scopes: view.scopes }, lang, "sample", row);
+      if (kind === "none") { view2.overall = null; view2.slices.forEach(slice => { slice.summary = null; }); view2.run = null; }
+      if (kind === "running") { view2.overall = null; view2.slices.forEach(slice => { slice.summary = null; }); view2.run = { state: "running", startedAt: at, errors: [] }; }
+      if (kind === "error") view2.run = { state: "failed", startedAt: at, errors: [{ scope: "overall", code: "account" }] };
+      if (kind === "stale") { view2.stale = true; view2.changes = { added: 2, rewritten: 1, removed: 1 }; }
+      return view2;
+    };
+    const mode = { data: "rich" as S7Data, profile: "ready" as S7Profile, lang: "en" as "en" | "uk", rules: rich(), profileGate: Promise.resolve(), rulesGate: Promise.resolve() };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async (request: Request) => {
+        await mode.rulesGate;
+        if (request.method === "POST") {
+          const body = await request.json() as { action: string; ruleId: string };
+          if (body.action === "delete") mode.rules = { ...mode.rules, scopes: mode.rules.scopes.map(entry => { const found = entry.active.find(item => item.id === body.ruleId); return found ? { ...entry, active: entry.active.filter(item => item !== found), left: [{ ...found, state: "archived" as const, reason: "deleted" as const }, ...entry.left] } : entry; }) };
+        }
+        return Response.json(mode.rules);
+      },
+      "/api/role-memory/profile": async (request: Request) => {
+        await mode.profileGate;
+        if (request.method !== "GET") return Response.json({}, { status: 405 });
+        const lang = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        return Response.json(profileOf(mode.rules, lang, mode.profile));
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const frames: unknown[] = [], failures: string[] = [], edges = new Map<string, Set<string>>();
+    const pairs = [["en", "light"], ["en", "dark"], ["uk", "light"], ["uk", "dark"]] as const;
+    try {
+      /* Desktop, 1000 px and phone widths take every state in every pair; the widths between them take the states that carry their own layout, in two pairs. */
+      const plan: { width: number; height: number; pairs: readonly (readonly ["en" | "uk", "light" | "dark"])[]; only?: (state: S7State) => boolean }[] = [
+        { width: 1440, height: 900, pairs }, { width: 390, height: 844, pairs },
+        { width: 1000, height: 700, pairs },
+        { width: 768, height: 800, pairs: [["uk", "light"], ["en", "dark"]], only: state => !!state.edge },
+        { width: 640, height: 800, pairs: [["uk", "light"], ["en", "dark"]], only: state => !!state.edge },
+      ];
+      /* S7_SMOKE=1 renders a handful of states in one pair, to read the gates before the full matrix runs. */
+      const smoke = process.env.S7_SMOKE === "1";
+      /* S7_FRAMES=state@width,… renders only those states at those widths, in every pair the plan gives that width. */
+      const wanted = process.env.S7_FRAMES ? new Set(process.env.S7_FRAMES.split(",")) : null;
+      const smokeStates = ["default", "earlier", "archived", "many-end", "topic", "undo", "profile-reading", "profile-cold"];
+      for (const { width, height, pairs: sets, only } of smoke ? plan.slice(0, 2).map(entry => ({ ...entry, pairs: [["en", "light"]] as const })) : plan) for (const [lang, scheme] of sets) for (const state of S7_STATES.filter(item => (!only || only(item)) && (!wanted || wanted.has(`${item.id}@${width}`)) && (!smoke || smokeStates.includes(item.id)))) {
+        const phone = width === 390;
+        mode.data = state.data ?? "rich"; mode.profile = state.profile ?? "ready"; mode.lang = lang; mode.rules = dataOf(mode.data);
+        let release = () => {};
+        mode.profileGate = Promise.resolve(); mode.rulesGate = Promise.resolve();
+        if (state.profile === "reading") mode.profileGate = new Promise<void>(resolve => { release = resolve; });
+        if (state.coldRules) mode.rulesGate = new Promise<void>(resolve => { release = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1${state.focus ? `&focus=${state.focus}` : ""}`, { width, height }, scheme, lang, "reduce", phone);
+        try {
+          await page.locator("[data-rules-window]").waitFor();
+          if (state.coldRules) await page.locator("[data-rules-window-loading]").waitFor();
+          else if (state.profile === "reading") await page.locator("[data-memory-profile] h3[role=status]").waitFor();
+          /* A phone opened on a rule lands on that level's screen, with no list mounted. */
+          else if (phone && state.focus) await page.locator("[data-level-pane] [data-rules-section]").waitFor();
+          else await page.locator("[data-profile-level]:not(:disabled)").first().waitFor();
+          const openLevel = async (scope: string) => {
+            if (phone && await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
+            await page.locator(`[data-profile-level="${scope}"]`).click();
+            await page.locator(`[data-level-pane="${scope}"]`).waitFor();
+          };
+          await state.act?.(page, { phone, openLevel });
+          await page.waitForTimeout(250);
+          const scopes = Object.fromEntries(mode.rules.scopes.map(entry => [entry.scope, { active: entry.active.map(item => item.id), left: entry.left.map(item => item.id) }]));
+          const read = await measureS7(page, { phone, scopes, total: mode.rules.scopes.reduce((sum, entry) => sum + entry.active.length, 0), topicIds: state.topicIds, endScroll: !!state.endScroll, cold: !!state.coldRules, expectCurrent: !state.coldRules });
+          const defining = await page.evaluate((selectors) => selectors.map(selector => {
+            const last = selector.startsWith("last:"), query = last ? selector.slice(5) : selector;
+            const found = [...document.querySelectorAll<HTMLElement>(query)], element = last ? found.at(-1) : found[0];
+            if (!element) return { selector, whole: false };
+            const rect = element.getBoundingClientRect(), win = document.querySelector("[data-rules-window]")!.getBoundingClientRect();
+            const scroller = element.closest("[data-level-pane], [data-memory-profile]")?.getBoundingClientRect();
+            const within = (outer: { top: number; bottom: number; left: number; right: number }) => rect.top >= outer.top - 1 && rect.bottom <= outer.bottom + 1 && rect.left >= outer.left - 1 && rect.right <= outer.right + 1;
+            return { selector, whole: rect.height > 0 && within(win) && within({ top: 0, bottom: innerHeight, left: 0, right: innerWidth }) && (!scroller || within(scroller)) };
+          }), state.define(phone));
+          const frame = `${state.id}-${width}-${lang}-${scheme}.png`;
+          await page.screenshot({ path: path.join(out, frame) });
+          const issues = [...read.violations, ...defining.filter(item => !item.whole).map(item => `defining:${item.selector}`), ...pageErrors.map(error => `pageerror:${error}`)];
+          /* The modal keeps keyboard focus inside the window. */
+          for (let press = 0; press < 30; press++) await page.keyboard.press("Tab");
+          if (!await page.evaluate(() => !!document.activeElement && !!document.activeElement.closest("[data-rules-window]"))) issues.push("modal");
+          const edge = `${width}`; if (!phone) { (edges.get(edge) ?? edges.set(edge, new Set()).get(edge)!).add(`${read.top}/${read.height}/${read.header}`); }
+          frames.push({ file: frame, state: state.id, width, height, lang, theme: scheme, window: { top: read.top, height: read.height, header: read.header }, checked: read.checked, defining: state.define(phone), violations: issues });
+          if (issues.length) failures.push(`${frame}: ${issues.join(", ")}`);
+        } finally { release(); await context.close(); }
+      }
+      /* One top, one height and one header height at a width, whatever state or level is shown. */
+      for (const [width, readings] of edges) if (readings.size !== 1) failures.push(`window edges differ at ${width}: ${[...readings].join(" | ")}`);
+    } finally {
+      fs.writeFileSync(path.join(out, "manifest.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "memory profile window: levels on the left, rules on the right", states: S7_STATES.map(state => state.id), frames, failures }, null, 2) + "\n");
+      await browser.close(); server.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 3_600_000);
 });
 
 describe("finding recurrence (#2648)", () => {
@@ -47085,4 +47492,184 @@ describe("Relay targets answered by another install", () => {
       fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
     } finally { await browser.close(); server.stop(); sockets.close(); }
   }, 300_000);
+});
+
+describe("relay requester enrolment on the board", () => {
+  browserTest("renders the enrolment states at desktop and phone widths", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "relay-requester-enrolment");
+    fs.mkdirSync(out, { recursive: true });
+    const build = fs.mkdtempSync(path.join(os.tmpdir(), "requester-board-"));
+    const server = await serveEvidenceFixture(build);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: { frame: string; width: number; overflow: boolean; shortControls: number; splitTimes: number; danglingSeparators: number }[] = [];
+    try {
+      for (const width of [1440, 1000, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : width === 1000 ? 700 : 900 },
+          colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(locale => {
+            localStorage.setItem("llv_lang", locale);
+            const network = window.fetch.bind(window);
+            let fetcher = network;
+            Object.defineProperty(window, "fetch", {
+              configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => {
+                  const url = new URL(input instanceof Request ? input.url : String(input), location.origin);
+                  return url.pathname.startsWith("/api/external-relay") ? network(input, init) : next(input, init);
+                }) as typeof fetch;
+              },
+            });
+          }, lang);
+          const project = "Workshop";
+          const label = lang === "uk" ? "Рецензент збірки" : "Build reviewer";
+          const scope = { relay: "fixture-relay", target: "fixture-clone" };
+          const target = { id: scope.target, name: "Workshop clone", answered_by: "install", fallback: "none",
+            enabled: true, engine: "codex", model: "gpt-5.4", effort: null, project, concurrency: 1, hardCapMinutes: 30 };
+          const relay = { id: scope.relay, origin: "https://relay.example", name: "Chat relay", description: "",
+            owner: { namespace: "telegram", id: "owner", display_name: "Owner", handle: null }, paused: false, targets: [target] };
+          const at = "2026-10-01T08:00:00Z";
+          const expiresAt = "2030-10-01T08:10:00Z";
+          let status: "empty" | "waiting" | "candidate" | "entries" | "other-session" = "empty";
+          const proposalId = "a".repeat(48);
+          await context.route("**/api/external-relay**", async route => {
+            const req = route.request();
+            const url = new URL(req.url());
+            const send = (json: unknown, status = 200) => route.fulfill({ status, json });
+            if (url.pathname === "/api/external-relay") return send({ relays: [relay], pending: [], status: [] });
+            if (url.pathname === "/api/external-relay/known") return send({ known: [] });
+            if (url.pathname !== "/api/external-relay/trusted-requesters") return send({}, 404);
+            // An agent's confirm proposal: the owner's preview names the candidate the code bound.
+            if (url.searchParams.get("proposal") === proposalId) return send({
+              operation: { action: "confirm", ...scope, entryId: "fixture-proposed" }, targetName: target.name, project, label,
+              status: "candidate", candidate: { name: "Demo participant", chatTitle: "Workshop group", at } });
+            if (req.method() === "POST") {
+              const { confirmed, operation } = req.postDataJSON();
+              expect(confirmed).toBe(true);
+              if (operation.action === "start_enrolment") {
+                expect(operation.label).toBe(label);
+                status = "waiting";
+                return send({ issued: { code: "SAMPLE-ONLY", expiresAt } });
+              }
+              if (operation.action === "confirm") status = "entries";
+              if (operation.action === "remove") status = "empty";
+              return send({ issued: null });
+            }
+            return send({ ...scope, targetName: target.name, project, revision: status === "entries" ? 1 : 0, canStart: true,
+              entries: status === "entries" ? [{ id: "fixture-entry", label, kind: "requester", tier: "requester", project, active: true, addedAt: at }] : [],
+              pending: status === "waiting" || status === "candidate" ? { id: "fixture-entry", label, status, expiresAt,
+                candidate: status === "candidate" ? { name: "Demo participant", chatTitle: "Workshop group", at } : null } : null,
+              otherSession: status === "other-session" ? { expiresAt } : null,
+              history: [],
+            });
+          });
+          const page = await context.newPage();
+          await page.goto(server.base);
+          await page.locator(phone ? "[data-mobile2-shell], [data-mobile-shell], [data-phone-card]" : "[data-kanban-board]").first().waitFor();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const row = page.locator(`[data-external-relay-target="${target.id}"]`);
+          await row.locator("[data-external-relay-target-fold]").click();
+          const panel = row.locator("[data-trusted-requesters]");
+          const frame = async (name: string, shown = panel) => {
+            const filename = `${width}-${lang}-${scheme}-${name}.png`;
+            const measurement = await shown.evaluate((element, phone) => ({
+              overflow: element.scrollWidth > element.clientWidth + 1,
+              shortControls: phone ? [...element.querySelectorAll("button, input")]
+                .filter(control => control.getBoundingClientRect().height < 44).length : 0,
+              // A date and time renders as one line box, never split across lines.
+              splitTimes: [...element.querySelectorAll("[data-requester-time]")]
+                .filter(time => time.getClientRects().length !== 1).length,
+              // No rendered line ends in a separator dot: a wrap never strands a "·" before the next line.
+              danglingSeparators: (() => {
+                const glyphs: { block: Element; char: string; top: number; left: number; right: number }[] = [];
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                  const text = node.textContent ?? "";
+                  const block = node.parentElement?.closest("p, li, summary, div") ?? element;
+                  for (let index = 0; index < text.length; index += 1) {
+                    if (/\s/.test(text[index]!)) continue;
+                    const range = document.createRange();
+                    range.setStart(node, index);
+                    range.setEnd(node, index + 1);
+                    const rect = range.getBoundingClientRect();
+                    if (rect.width > 0) glyphs.push({ block, char: text[index]!, top: Math.round(rect.top), left: rect.left, right: rect.right });
+                  }
+                }
+                return glyphs.filter(dot => dot.char === "·"
+                  && !glyphs.some(other => other.block === dot.block && other.top === dot.top && other.left >= dot.right - 0.5)).length;
+              })(),
+            }), phone);
+            expect(measurement).toEqual({ overflow: false, shortControls: 0, splitTimes: 0, danglingSeparators: 0 });
+            // A time reads as date and hour:minute, never with seconds.
+            const times = await shown.locator("[data-requester-time]").allTextContents();
+            for (const text of times) expect(text).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
+            await shown.screenshot({ path: path.join(out, filename) });
+            readings.push({ frame: filename, width, ...measurement });
+          };
+          const action = (name: "start_enrolment" | "confirm" | "remove") =>
+            translate(lang, `externalRelay.requesters.action.${name}`);
+          await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+          await frame("1-empty");
+          await panel.getByRole("textbox").fill(label);
+          await panel.getByRole("button", { name: action("start_enrolment") }).click();
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("start_enrolment") }).click();
+          await panel.locator("[data-requester-code]").waitFor();
+          // The code is the emphasised element of its box, and a copy control sits beside it, 44 px on a phone.
+          const code = panel.locator("[data-requester-code]");
+          expect(await code.evaluate(element => parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.closest("[data-requester-pending]")!).fontSize)
+            && parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.previousElementSibling ?? element.parentElement!).fontSize))).toBe(true);
+          const copy = panel.locator("[data-requester-code] + button");
+          expect(await copy.count()).toBe(1);
+          if (phone) expect((await copy.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+          await frame("2-code");
+          status = "candidate";
+          await panel.getByText("Demo participant", { exact: false }).waitFor();
+          await frame("3-candidate");
+          await panel.getByRole("button", { name: action("confirm") }).click();
+          await panel.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          expect(await panel.getByRole("alertdialog").locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("confirm") }).click();
+          await panel.getByText(label, { exact: true }).waitFor();
+          await frame("4-entries");
+          await panel.getByRole("button", { name: action("remove") }).click();
+          await panel.locator('[data-requester-confirm="remove"]').waitFor();
+          // One Remove button, no add form, and the confirmation sits inside the entry it removes.
+          expect(await panel.getByRole("button", { name: action("remove") }).count()).toBe(1);
+          expect(await panel.getByRole("textbox").count()).toBe(0);
+          expect(await panel.locator('li [data-requester-confirm="remove"]').count()).toBe(1);
+          await frame("5-remove-confirmation");
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("remove") }).click();
+          await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+          status = "other-session";
+          await row.locator("[data-external-relay-target-fold]").click();
+          await row.locator("[data-external-relay-target-fold]").click();
+          await panel.locator('[data-requester-pending="other-session"]').waitFor();
+          expect(await panel.getByRole("textbox").count()).toBe(0);
+          await frame("6-other-session");
+          await page.evaluate(id => { window.location.hash = `relay-requester=${id}`; }, proposalId);
+          const proposed = page.locator("[data-requester-proposal]");
+          const dialog = proposed.locator('[data-requester-confirm="confirm"]');
+          await dialog.waitFor();
+          // One approval panel: the proposal and the relay settings beside it keep distinct keys.
+          expect(await proposed.count()).toBe(1);
+          expect(await dialog.locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
+          await dialog.getByText(translate(lang, "externalRelay.requesters.verify"), { exact: true }).waitFor();
+          await dialog.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          await dialog.getByText(translate(lang, "externalRelay.requesters.proposedBy"), { exact: true }).waitFor();
+          await frame("7-proposal-confirm", proposed);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+      expect(readings).toHaveLength(84);
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(build, { recursive: true, force: true });
+    }
+  }, 180_000);
 });

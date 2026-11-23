@@ -16,7 +16,11 @@ const relay: PairedRelay = { id: "cloud_custody", origin: "http://127.0.0.1:1", 
     engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
 updateRelayStore(store => ({ ...store, relays: [relay] }));
 let cloud = 0, local = 0, stops = 0;
-const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation(() => { local++; throw Error("unexpected local admission"); });
+const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation(() => {
+  local++;
+  throw Error("unexpected local admission");
+});
+if (tier === "owner" && mode !== "redeliver") selection.mockReturnValueOnce({ kind: "unavailable" });
 const wire = spyOn(client, "relayCall").mockImplementation(async (_base, route) => {
   if (mode === "refused" && route.endsWith("/complete")) throw new client.ExternalRelayError("lease_lost", 409);
   if (mode === "completed" && route.endsWith("/complete")) { process.send?.({ type: "started" }); await new Promise(() => {}); }

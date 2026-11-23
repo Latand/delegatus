@@ -49,7 +49,7 @@ import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal, type Na
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
-import { hasRequesterRelayCustody, liveOwnerRelayConversation, ownerRelayHandoff, ownerRelayProjectMatches, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { hasRequesterRelayCustody, liveOwnerRelayProject, ownerRelayHandoffOnlyGrant, recordOwnerRelayHandoffOutcome, liveOwnerRelayConversation, ownerRelayHandoff, ownerRelayProjectMatches, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageMachineAddress, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
@@ -1660,11 +1660,11 @@ function text(value: unknown): string {
 function validateExplicitMcpLaunchModel(args: McpToolArgs, fallbackRole?: string): void {
   const model = text(args.model);
   if (!model) return;
-  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot") return;
+  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot" && args.engine !== "antigravity") return;
   const roleId = text(args.role) || fallbackRole;
   const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams, confirm: args.confirm }) : null;
-  let engine: "claude" | "codex" | "copilot" | null = null;
-  if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot") engine = args.engine;
+  let engine: "claude" | "codex" | "copilot" | "antigravity" | null = null;
+  if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot" || args.engine === "antigravity") engine = args.engine;
   else if (role?.ok && role.value) engine = role.value.config.engine;
   if (!engine) return;
   const validation = validateLaunchModel(engine, model);
@@ -3862,7 +3862,7 @@ async function conversationMessages(
 
   let transcriptPath = requestedPath;
   let conversationId: string | null = null;
-  let engine: "claude" | "codex" | "copilot" | null = null;
+  let engine: "claude" | "codex" | "copilot" | "antigravity" | null = null;
   if (requestedId) {
     const target = selectedConversationTarget({ conversationId: requestedId }, selectedDependencies);
     transcriptPath = target.path!;
@@ -3954,7 +3954,7 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   conversationId: string | null,
   transcriptPath: string,
   records: T[],
-  source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot"; redactText?: (text: string) => string },
+  source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot" | "antigravity"; redactText?: (text: string) => string },
 ): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
   if (!records.some((record) => record.role === "user")) return records;
   const context = readMessageAuthorContext(source, records);
@@ -6208,7 +6208,8 @@ async function sendMessageToOrchestrator(
   context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
   requireOrchestratorRelayCaller(dependencies);
-  const project = context?.binding?.target.project ?? await resolveOrchestratorToolProject(required(args, "project"), dependencies);
+  const project = context?.binding?.target.project ?? resolveOrchestratorToolProject(
+    orchestratorSendProject(args, ownerRelayCaller(dependencies) ? attributionOf(dependencies).conversationId : null), dependencies);
   requiredMessageText(args);
   const key = requestId(args);
   const bound = context?.binding;
@@ -8492,6 +8493,12 @@ export function viewerMcpToolPolicy(
   );
   return {
     permit: (tool, args) => {
+      if (!hostHealthProbe && tool !== "send_message_to_orchestrator" && typeof domainDependencies.attentionAuthority === "function") {
+        const caller = authorityOf(domainDependencies);
+        if (caller.kind === "worker" && ownerRelayHandoffOnlyGrant(caller.conversationId)) {
+          return { allowed: false, code: "tool_not_permitted", error: "Guest-origin owner relays may use Viewer only for the verified project-seat handoff." };
+        }
+      }
       // An admitted agent's read surface is independent of role/seat identity.
       // Resolve authority only where the policy uses it. Bindings still verify
       // their own operation authority and recoverable receipts before dispatch.
@@ -8586,9 +8593,33 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
+function orchestratorSendProject(args: McpToolArgs, ownerConversationId: string | null): string {
+  if (args.project !== undefined || !ownerConversationId) return required(args, "project");
+  const project = text(liveOwnerRelayProject(ownerConversationId));
+  if (project) return project;
+  throw new McpToolRefusal("This relay target has no configured project. Ask which project should receive the request.", {
+    code: "project_required", outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false,
+  });
+}
+
 async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
+  try { return await bindOrchestratorSendCore(args, dependencies, forRecovery); }
+  catch (error) {
+    const attribution = attributionOf(dependencies);
+    if (!forRecovery && ownerRelayCaller(dependencies) && attribution.conversationId) {
+      const details = error && typeof error === "object" ? (error as { details?: { code?: unknown } }).details : undefined;
+      await recordOwnerRelayHandoffOutcome(attribution.conversationId, {
+        status: error instanceof McpDispatchUncertainError ? "uncertain" : "refused",
+        project: typeof args.project === "string" ? args.project : liveOwnerRelayProject(attribution.conversationId),
+        code: typeof details?.code === "string" ? details.code : null,
+      }).catch(() => false);
+    }
+    throw error;
+  }
+}
+
+async function bindOrchestratorSendCore(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
-  const named = required(args, "project");
   const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
@@ -8604,7 +8635,10 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
       code: "orchestrator_relay_refused", retryable: false,
     });
   }
-  const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
+  const ownerConversationId = !seat && owner && !owner.requesterRequestId ? attribution.conversationId : null;
+  // An original claim already froze its project, including a default from the relay target.
+  if (forRecovery && (args.project !== undefined || !ownerConversationId)) required(args, "project");
+  const project = forRecovery ? null : await resolveOrchestratorToolProject(orchestratorSendProject(args, ownerConversationId), dependencies);
   if (!seat && owner && project && !ownerRelayTargetMatches(attribution.conversationId!, project, orchestratorSeatFor(project).active?.conversationId, owner.requesterRequestId)) {
     if (owner.requesterRequestId) throw new McpToolRefusal("the trusted requester's handoff must stay within its granted project", { code: "trusted_requester_project_refused", retryable: false });
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
@@ -9452,7 +9486,32 @@ export function viewerMcpBindings(
     voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),
-    send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
+    send_message_to_orchestrator: async (args, context) => {
+      const attribution = attributionOf(domainDependencies);
+      const ownerConversationId = ownerRelayCaller(domainDependencies) ? attribution.conversationId : null;
+      try {
+        const result = await sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context);
+        if (ownerConversationId) {
+          const value = objectRecord(result) ? result : {};
+          await recordOwnerRelayHandoffOutcome(ownerConversationId, {
+            status: value.ok === true || value.state === "queued" || value.outcome === "queued" ? "accepted" : value.ok === false ? "refused" : "uncertain",
+            project: typeof value.project === "string" ? value.project : typeof args.project === "string" ? args.project : liveOwnerRelayProject(ownerConversationId),
+            code: typeof value.code === "string" ? value.code : null,
+          }).catch(() => false);
+        }
+        return result;
+      } catch (error) {
+        if (ownerConversationId) {
+          const details = error && typeof error === "object" ? (error as { details?: { code?: unknown } }).details : undefined;
+          await recordOwnerRelayHandoffOutcome(ownerConversationId, {
+            status: error instanceof McpDispatchUncertainError ? "uncertain" : "refused",
+            project: typeof args.project === "string" ? args.project : liveOwnerRelayProject(ownerConversationId),
+            code: typeof details?.code === "string" ? details.code : null,
+          }).catch(() => false);
+        }
+        throw error;
+      }
+    },
     ask_orchestrator_in_parallel: orchestratorProjectBinding(domainDependencies, (args, context) => askOrchestratorInParallelTool(args, viewerControlForCall(controlDependencies, context))),
     rotate_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies)),
     telegram_bot_chats: (args, context) => telegramBotChats(args, viewerControlForCall(controlDependencies, context)),
@@ -9491,6 +9550,14 @@ export function viewerMcpBindings(
         ? await relayServiceToolsOp(caller.conversationId, args) : null;
       if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });
       return result;
+    },
+    relay_trusted_requesters: (args, context) => {
+      context?.signal?.throwIfAborted();
+      context?.assertCaller?.();
+      const { clientRequestId: _clientRequestId, ...operation } = args;
+      const control = viewerControlForCall(controlDependencies, context);
+      const send = operation.action === "list" ? control.post : dispatchControl(control);
+      return send("/api/external-relay/trusted-requesters/proposal", operation, callerCapabilityHeaders(), context);
     },
     relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
