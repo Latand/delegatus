@@ -1216,6 +1216,8 @@ export interface SeatTickProjectState {
   checkErrorAlarmVersion?: number;
   catchUpProgress?: Omit<SeatTickCatchUp, "pending"> | null;
   lastWakeAt: string | null;
+  /** Task-page cadence. Legacy rows use lastWakeAt until the next landing. */
+  lastTaskWakeAt?: string;
   lastWakeReasons: SeatTickWakeReasonKind[];
   /** Consecutive wakes carrying this reason that changed nothing. */
   wakesWithoutChange: Partial<Record<SeatTickWakeReasonKind, number>>;
