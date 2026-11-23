@@ -137,7 +137,7 @@ function fixture(count = 8) {
     throw new Error(`unexpected Git command: ${args.join(" ")}`);
   };
   const inputs: RetentionInputs = {};
-  const ports: RetentionPorts = { maxCandidates: 128, git, scan: () => EMPTY, mountPoints: () => [], now: () => now, env: {},
+  const ports: RetentionPorts = { platform: "linux", maxCandidates: 128, git, scan: () => EMPTY, mountPoints: () => [], now: () => now, env: {},
     lockHead: () => () => {}, reportFile: path.join(root, "state/retention.json") };
   return { root, dirs, shas, record, inputs, ports, commands, locked, now, run: () => retainReleases(record, inputs, ports) };
 }
@@ -193,6 +193,22 @@ test.each(["releases", "journal"])("a missing process inventory still refuses a 
   expect(report.removed).toEqual([]);
   expect(report.reclaimedCacheBytes).toBe(0);
   if (state === "journal") expect(fs.readFileSync(path.join(path.dirname(h.ports.reportFile!), "package-trash-pending.json"), "utf8")).toBe("{}");
+});
+
+test("Darwin keeps generated checkout files and records why an old release was kept", async () => {
+  const h = fixture(6);
+  h.ports.platform = "darwin";
+  h.ports.scan = () => retentionProcessScan(h.record.releasesDir, path.join(h.root, "absent-proc"));
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(report.reclaimedCacheBytes).toBe(0);
+  expect(report.kept).toContainEqual({ dir: h.dirs[1], reason: "process-inventory-unavailable:darwin", bytes: 0 });
+  for (const dir of h.dirs) {
+    expect(fs.readFileSync(path.join(dir, ".next/cache/webpack/cache"), "utf8")).toBe("fixture data");
+    expect(exists(path.join(dir, ".next/DELEGATUS_RELEASE_READY"))).toBeTrue();
+  }
+  expect(fs.readdirSync(path.dirname(h.ports.reportFile!))).toEqual(["retention.json"]);
 });
 
 test("a releases path that is a file still reports an inspection error", async () => {

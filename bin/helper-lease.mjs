@@ -36,6 +36,7 @@ const KILL_MS = 1_000;
 const POLL_MS = 25;
 const OWNER_POLL_MS = 1_000;
 const RELEASE_POLL_MS = 2_000;
+const procIdentity = process.platform === "linux";
 
 const separator = process.argv.indexOf("--", 3);
 const name = process.argv[2];
@@ -55,6 +56,7 @@ for (const key of Object.keys(env)) if (key.startsWith("LLV_HELPER_LEASE_")) del
 /* `<pid>:<start ticks>`, as src/lib/proc/linux.ts reads it; null where the
    platform has no /proc or the process is gone or a zombie. */
 function identity(pid) {
+  if (!procIdentity) return null;
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
@@ -67,6 +69,7 @@ function identity(pid) {
 /* The process group this guardian was started in: its Viewer's generation
    (bin/viewer-helpers-retire.mjs), however deep in that Viewer's tree. */
 function processGroup(pid) {
+  if (!procIdentity) return undefined;
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const group = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);
@@ -212,7 +215,6 @@ process.stdin.resume();
 /* A Viewer already gone before the lease was read, or one that left its
    stdin open somewhere, is caught by its identity on Linux and by the
    re-parenting of this process everywhere. */
-const procIdentity = process.platform === "linux";
 const ownerGone = () => process.ppid !== ownerPid || (procIdentity && (!ownerIdentity || identity(ownerPid) !== ownerIdentity));
 const ownerTimer = setInterval(() => { if (ownerGone()) void end(); }, OWNER_POLL_MS);
 const releaseTimer = setInterval(() => { if (!ownsRelease()) void end(); }, RELEASE_POLL_MS);

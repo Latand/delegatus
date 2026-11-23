@@ -371,6 +371,16 @@ check. On the busiest recent day there were eight deploys, so 24 hours plus
 three covers any stage that lives less than a day past the deploy that
 superseded its release.
 
+On macOS, the available process tools cannot establish a complete inventory of
+release holders. The pass keeps releases and generated files. It records known
+holds such as the active and rollback releases, and records
+`process-inventory-unavailable:darwin` when process evidence is missing.
+Recovery keeps journals and their quarantined trees in place, including closed
+gates. When the recovery budget is reached, the report records a
+`process-inventory-unavailable:darwin:recovery-backlog` hold at the release root
+with the count of unvisited journals. Reported reclamation is zero, so the usual
+disk-usage bound below applies only where the pass can prove a release is unused.
+
 **Bound.** Retained releases = protected ∪ recent ∪ newest K. With eight
 deploys a day that is about ten directories. After cache reclamation each is
 about 0.9 GB (sources, `node_modules`, `.next` without `cache/webpack`, `dist`),
@@ -441,7 +451,7 @@ state refuses the retry and preserves the directory.
 | Situation | Outcome |
 |---|---|
 | Tree unreadable, too large, mounted under, changing during inspection | kept, `held` with reason and bytes |
-| Process scan unavailable (no `/proc`, scan throws) | temp sweep: falls back to the portable scan as today; release retention: removes nothing, records `scan-unavailable` |
+| Process scan unavailable outside the macOS release rule in §6.3 | The temp sweep falls back to the portable scan. Release retention keeps the releases and records the scan failure. |
 | Rename fails | kept, error recorded |
 | Remove of a trash path fails partway | trash stays and is finished next sweep; error recorded |
 | Holder found after rename | renamed back, kept `inUse` |
