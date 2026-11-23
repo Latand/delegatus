@@ -78,7 +78,10 @@ test.each([0, 267])("an outstanding stage Git command copies no retained history
   expect(JSON.stringify(loadPipelines().filter(row => row.id !== owner.id))).toBe(before);
 });
 
-test.each(["authority", "progress", "removed"] as const)("a peer %s change during Git preserves ownership cancellation", async (change) => {
+test.each([
+  ["authority", true], ["removed", true], ["progress", true],
+  ["authority", false], ["removed", false], ["progress", false],
+] as const)("the Git watchdog revalidates %s changes with a colliding peer: %s", async (change, collides) => {
   const h = harness();
   await create(h.ports, BUILD_ONLY as never);
   await tickPipelines([], h.ports);
@@ -93,7 +96,10 @@ test.each(["authority", "progress", "removed"] as const)("a peer %s change durin
   peer.state = "closed";
   peer.closedAt = "2026-10-14T00:00:00.000Z";
   peer.cursor = null;
-  peer.delivery = undefined;
+  peer.delivery = collides ? {
+    target: owner.delivery?.target ?? { repository: "fixture-repo", remote: "origin", branch: `refs/heads/${owner.branch}` },
+    disposition: "comparison", publish: "disabled", active: false, ownerId: owner.id, epoch: owner.delivery?.epoch ?? 1, journal: [],
+  } : undefined;
   peer.publication = "internal";
   peer.runs = peer.runs.map(run => ({ ...run, attempts: [] }));
   savePipelines([owner, peer]);
@@ -139,6 +145,6 @@ test.each(["authority", "progress", "removed"] as const)("a peer %s change durin
     await settlement;
   }
   expect(held).toBe(true);
-  expect(aborted).toBe(change !== "progress");
+  expect(aborted).toBe(collides && change !== "progress");
   expect(failures).toEqual([]);
 });
