@@ -30,7 +30,7 @@ let browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
   newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
   viewerServerBunRuntime, viewerExitStatus, runtimeHostStartupProgress, waitForRuntimeHostStartup;
 let createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
-  waitForViewerReadiness, waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests, runtimeHostStartIdentity;
+  waitForViewerReadiness, releaseHasRevisionReadiness, accessKeyCanRoundTrip, waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests, runtimeHostStartIdentity;
 let probeHeadersFrom, viewerBootGateKey, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
 let createRelaunch, relaunch;
 let assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost;
@@ -1192,9 +1192,9 @@ async function main() {
        fetch: its header error would include the rejected value. */
     const childEnv = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
     const key = viewerBootGateKey({ ...childEnv, LLV_STATE_DIR: childEnv.LLV_STATE_DIR || runtimeHostConfig.stateDirectory });
-    const value = typeof key === "string" ? key.trim() : "";
+    const value = typeof key === "string" ? key : "";
     const headers = probeHeadersFrom(runtimeHostConfig.stateDirectory);
-    const accessKeyUnsendable = Boolean(key) && (!value || /[^\t\x20-\x7e]/.test(value));
+    const accessKeyUnsendable = Boolean(key) && !accessKeyCanRoundTrip(value);
     if (value && !accessKeyUnsendable) headers.authorization = `Bearer ${value}`;
     return { headers, accessKeyUnsendable };
   };
@@ -1353,9 +1353,10 @@ async function main() {
     record.started("web", handle.child, release);
     return handle;
   };
-  const waitForReadiness = async (timeoutMs, { child, state, readiness }, revision) => {
+  const waitForReadiness = async (timeoutMs, { child, state, readiness }, release) => {
     const ready = await waitForViewerReadiness(options.port, {
-      revision, timeoutMs, probeAccess, onPhase: readiness.observe,
+      revision: release.sha, timeoutMs, allowLegacyFallback: !releaseHasRevisionReadiness(release),
+      probeAccess, onPhase: readiness.observe,
       assertChildRunning: () => {
         if (state.spawnError) throw new Error(`could not start (${state.spawnError.message})`);
         if (child.exitCode !== null || child.signalCode !== null) {
@@ -1379,7 +1380,7 @@ async function main() {
 
   const { readiness } = serverProcess;
   try {
-    await waitForReadiness(relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess, serverRef.release.sha);
+    await waitForReadiness(relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess, serverRef.release);
     if (relaunch.isReplacementStart()) {
       const page = await waitForPageAndChunk(options.port, { headers: probeHeaders(), onPhase: readiness.observe });
       if (page) throw new Error(page);
@@ -1457,7 +1458,7 @@ async function main() {
       const handle = launchWeb(release, true);
       const { readiness } = handle;
       try {
-        await waitForReadiness(RESTART_READINESS_TIMEOUT_MS, handle, release.sha);
+        await waitForReadiness(RESTART_READINESS_TIMEOUT_MS, handle, release);
         if (verifyPage) {
           const page = await waitForPageAndChunk(options.port, { headers: probeHeaders(), onPhase: readiness.observe });
           if (page && keepWhenRefused && /^GET \/ answered 40[13]$/.test(page)) {
@@ -1845,7 +1846,7 @@ async function checkoutLauncher() {
     viewerServerBunRuntime, viewerExitStatus, runtimeHostStartupProgress, waitForRuntimeHostStartup } = runtime);
   runtime.discardUnsupportedApiCredentials();
   ({ createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
-    waitForViewerReadiness, waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests, runtimeHostStartIdentity } = await import("./self-update-supervisor.mjs"));
+    waitForViewerReadiness, releaseHasRevisionReadiness, accessKeyCanRoundTrip, waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests, runtimeHostStartIdentity } = await import("./self-update-supervisor.mjs"));
   ({ probeHeadersFrom } = await import("./internalService.mjs"));
   ({ viewerBootGateKey } = await import("./viewerGateKey.mjs").catch(() => ({ viewerBootGateKey: (environment) => environment.LLV_TOKEN || null })));
   ({ findLegacySystemdUnits, legacySystemdNotice } = await import("./legacySystemd.mjs"));

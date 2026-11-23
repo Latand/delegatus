@@ -58,7 +58,7 @@ export function workspaceGuardedBindings(bindings: McpToolBindings): McpToolBind
 export function withWorkspaceMcpFence(
   service: McpToolService,
   dependencies: ViewerMcpDomainDependencies,
-  prepareNativeCaller?: () => Promise<void>,
+  prepareNativeCaller?: (signal?: AbortSignal) => Promise<void>,
 ): McpToolService {
   return { async callTool(tool, input, context) {
     // The native proof must be in scope before resolving the caller, just as it
@@ -67,7 +67,7 @@ export function withWorkspaceMcpFence(
       const { nativeCallerProof, ...args } = input;
       const caller = currentMcpHttpCaller();
       if (prepareNativeCaller && (!caller || caller.nativePeer)) {
-        try { await prepareNativeCaller(); }
+        try { await prepareNativeCaller(context?.signal); }
         catch { /* The verifier will assess whether caller evidence is available. */ }
       }
       return runWithNativeCallProof(nativeCallerProof, tool, args, () => this.callTool(tool, args, context));

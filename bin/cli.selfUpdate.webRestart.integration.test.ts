@@ -165,10 +165,10 @@ for (const tokenSource of KEY_SOURCES) {
 /* A key no header can carry: the probe goes out without it and is refused.
    The process that refused it is up and gating, so the restart ends with the
    release that served before still serving, never with no web. */
-for (const invalidCharacter of ["\n", "\r", "\u0100", "\u0436", "\u00e9"] as const) {
+for (const invalidCharacter of [" ", "\n", "\r", "\u0100", "\u0436", "\u00e9"] as const) {
   test(`a key the probe cannot send keeps the previous release serving and stays out of diagnostics (${JSON.stringify(invalidCharacter)})`, async () => {
     const fixture = install({ tokenProtected: true });
-    const token = `fixture-prefix${invalidCharacter}fixture-suffix`;
+    const token = invalidCharacter === " " ? `fixture-prefix${invalidCharacter}` : `fixture-prefix${invalidCharacter}fixture-suffix`;
     fixture.env.LLV_TOKEN = token;
     /* The dialog shows this record's text as written, so the launcher writes
        it in the operator's language. */

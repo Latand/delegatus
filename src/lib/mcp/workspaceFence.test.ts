@@ -1198,6 +1198,18 @@ test("an agent author's project label never refuses a permitted transcript, and 
   expect(await leaking.callTool("conversation_messages", { clientRequestId: "leak", transcriptPath: "conversation_member.jsonl" })).toMatchObject(REFUSED);
 });
 
+test("the first native MCP call passes its cancellation signal into evidence preparation", async () => {
+  const controller = new AbortController();
+  let preparedWith: AbortSignal | undefined;
+  const fenced = withWorkspaceMcpFence({ callTool: async tool => ({ ok: true, toolName: tool,
+    clientRequestId: null, replayed: false }) } as McpToolService, {} as ViewerMcpDomainDependencies,
+  async signal => { preparedWith = signal; });
+  await runAsMcpHttpCaller({ nativePeer: {} as never }, () => fenced.callTool(
+    "get_task", { nativeCallerProof: "a".repeat(43) }, { signal: controller.signal },
+  ));
+  expect(preparedWith).toBe(controller.signal);
+});
+
 
 test.each(["read", "publish"] as const)("implicit pipeline-task %s receipts replay before workspace admission", async mode => {
   designateCaller({ memberId: member.id, workspaceId: W1 });

@@ -31,6 +31,22 @@ test("legacy worktree catalog refinement cannot delay controller activation or r
   await refinement;
 });
 
+test("seat tick actions wait for committed worktree recovery without blocking controller activation", async () => {
+  let finishRecovery!: () => void;
+  const recovery = new Promise<void>(resolve => { finishRecovery = resolve; });
+  let tickStarted = false;
+  await startCurrentReleaseControllers({}, {
+    loadFlowPipelineController: async () => ({ startFlowPipelineController: () => {} }),
+    loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
+    loadSeatTick: async () => ({ startSeatTick: () => { tickStarted = true; return true; } }),
+  }, { beforeSeatTick: recovery });
+  expect(tickStarted).toBeFalse();
+  finishRecovery();
+  await recovery;
+  await Promise.resolve();
+  expect(tickStarted).toBeTrue();
+});
+
 test("native caller readiness waits through every artifact batch before controllers start", async () => {
   const order: string[] = [];
   let finishSecondBatch!: () => void;

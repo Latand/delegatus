@@ -9,6 +9,8 @@ import { pathToFileURL } from "node:url";
 import {
   createLauncherRecord,
   createReadinessJournal,
+  accessKeyCanRoundTrip,
+  releaseHasRevisionReadiness,
   TERMINAL_BOOTSTRAP_TIMEOUT_MS,
   waitForViewerReadiness,
   waitForPageAndChunk,
@@ -464,7 +466,8 @@ describe("revision-bound Viewer readiness", () => {
       try {
         const address = server.address() as { port: number };
         const ready = await waitForViewerReadiness(address.port, {
-          revision, timeoutMs: 5_000, probeAccess: () => ({ headers: { "x-test-probe": "fixture", ...fixtureHeaders() } }), onPhase: journal.observe,
+          revision, timeoutMs: 5_000, allowLegacyFallback: legacy,
+          probeAccess: () => ({ headers: { "x-test-probe": "fixture", ...fixtureHeaders() } }), onPhase: journal.observe,
         });
         expect(ready).toBeTrue();
         journal.finish();
@@ -486,7 +489,7 @@ describe("revision-bound Viewer readiness", () => {
   test("a perimeter refusal falls back with launcher credentials, while missing credentials and pending readiness fail", async () => {
     const attempts: string[] = [];
     const legacy = await waitForViewerReadiness(43123, {
-      revision, timeoutMs: 1_000, probeAccess: () => ({ headers: fixtureHeaders() }),
+      revision, timeoutMs: 1_000, allowLegacyFallback: true, probeAccess: () => ({ headers: fixtureHeaders() }),
       probe: async (_port, endpoint, _revision, _budget, headers) => {
         attempts.push(`${endpoint}:${headers[authorizationHeader] ?? "missing"}`);
         return endpoint === "/api/ready" ? { httpStatus: 403 } : { httpStatus: headers[authorizationHeader] ? 200 : 403 };
@@ -500,7 +503,7 @@ describe("revision-bound Viewer readiness", () => {
       attempts.length = 0;
       let refusalNow = 0;
       const refused = await waitForViewerReadiness(43123, {
-        revision, timeoutMs: 1_000, now: () => refusalNow, probeAccess: () => ({ headers }),
+        revision, timeoutMs: 1_000, allowLegacyFallback: true, now: () => refusalNow, probeAccess: () => ({ headers }),
         probe: async (_port, endpoint, _revision, budget) => {
           attempts.push(endpoint);
           refusalNow += endpoint === "/api/ready" ? 1 : budget;
@@ -525,6 +528,41 @@ describe("revision-bound Viewer readiness", () => {
     });
     expect(pending).toBeFalse();
     expect(attempts).toEqual(["/api/ready"]);
+  });
+
+  test("a stale build under a newer expected revision cannot use legacy fallback", async () => {
+    const attempts: string[] = [];
+    let now = 0;
+    const ready = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 1_000, allowLegacyFallback: false, now: () => now,
+      probe: async (_port, endpoint) => {
+        attempts.push(endpoint);
+        now = 1_000;
+        return { httpStatus: endpoint === "/api/ready" ? 404 : 200 };
+      }, sleep: async () => {},
+    });
+    expect(ready).toBeFalse();
+    expect(attempts).toEqual(["/api/ready"]);
+  });
+
+  test("protocol is selected from the release artifact and keys must round-trip exactly", () => {
+    const dir = join(root, "protocol-release");
+    const route = join(dir, ".next/server/app/api/ready/route.js");
+    const source = join(dir, "src/app/api/ready/route.ts");
+    mkdirSync(join(dir, ".next/server/app/api/ready"), { recursive: true });
+    mkdirSync(join(dir, "src/app/api/ready"), { recursive: true });
+    writeFileSync(source, "export {};\n");
+    // The source revision is readiness-capable even when the retained build
+    // artifact was made before the route existed.
+    expect(releaseHasRevisionReadiness({ dir })).toBeTrue();
+    rmSync(source);
+    expect(releaseHasRevisionReadiness({ dir })).toBeFalse();
+    writeFileSync(route, "export {};\n");
+    expect(releaseHasRevisionReadiness({ dir })).toBeTrue();
+    rmSync(route);
+    expect(releaseHasRevisionReadiness({ dir })).toBeFalse();
+    expect(accessKeyCanRoundTrip("fixture-roundtrip-value")).toBeTrue();
+    expect(accessKeyCanRoundTrip("fixture-roundtrip-value ")).toBeFalse();
   });
 
   test("a pending or wrong revision never falls back and a no-answer attempt gets only the remaining budget", async () => {

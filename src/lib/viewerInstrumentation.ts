@@ -421,6 +421,7 @@ export async function startCurrentReleaseControllers(
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
     loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
   },
+  options: { beforeSeatTick?: Promise<unknown> } = {},
 ): Promise<void> {
   /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
      once, by the release that owns traffic, before its controller launches
@@ -520,7 +521,11 @@ export async function startCurrentReleaseControllers(
      durable stamps rather than from a timer that happened to survive. */
   try {
     const seatTick = await loaders.loadSeatTick?.();
-    seatTick?.startSeatTick();
+    if (options.beforeSeatTick) {
+      void options.beforeSeatTick.then(() => seatTick?.startSeatTick()).catch(error => {
+        console.error("[seat tick] project recovery is incomplete; actions remain held", error instanceof Error ? error.name : "unknown");
+      });
+    } else seatTick?.startSeatTick();
   } catch (error) {
     console.error("[seat tick] start failed", error instanceof Error ? error.name : "unknown");
   }
@@ -1032,6 +1037,8 @@ export async function registerViewerRuntime(): Promise<void> {
   const releaseRevision = () => hotStateWriterRevision(hotStateDirectory);
   let activatedReleaseRevision: string | null = null;
   const startupAbort = new AbortController();
+  let finishWorktreeRecovery!: () => void;
+  const worktreeRecoveryCommitted = new Promise<void>(resolve => { finishWorktreeRecovery = resolve; });
   const startupBarrier = createViewerStartupBarrier(startupAbort);
   const quiesceStartup = async () => {
     await startupBarrier.quiesce(new Error("structured startup retired by release handover"));
@@ -1136,6 +1143,7 @@ export async function registerViewerRuntime(): Promise<void> {
           assertStartupActive();
           try {
             await recoverWorktreesInWorker(hotStateDirectory, startupAbort.signal);
+            finishWorktreeRecovery();
           } catch {
             assertStartupActive();
             console.error("[worktree recovery] startup worker failed; the next startup or full catalog scan retries");
@@ -1152,7 +1160,7 @@ export async function registerViewerRuntime(): Promise<void> {
         }));
       },
       startControllers: async () => {
-        await startCurrentReleaseControllers();
+        await startCurrentReleaseControllers(process.env, undefined, { beforeSeatTick: worktreeRecoveryCommitted });
         const { startRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
         await startRecordedCheckObserver();
       },

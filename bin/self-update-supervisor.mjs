@@ -410,6 +410,24 @@ const READY_ROUTE = "/api/ready";
 const LEGACY_READY_ROUTE = "/api/files";
 const readinessSleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+/** The selected build itself declares the protocol, independent of the
+ * revision the launcher expected when it started. */
+export function releaseHasRevisionReadiness(release) {
+  if (!release?.dir) return false;
+  // Source proves the selected checkout's protocol even when its retained
+  // build output predates that source. Compiled route output covers packaged
+  // releases that omit the source tree.
+  return existsSync(join(release.dir, "src/app/api/ready/route.ts"))
+    || existsSync(join(release.dir, ".next/server/app/api/ready/route.js"));
+}
+
+/** Authorization values must survive both header construction and parsing
+ * byte-for-byte, since the Viewer compares against the stored key verbatim. */
+export function accessKeyCanRoundTrip(value) {
+  return typeof value === "string" && value.length > 0
+    && value.trim() === value && !/[^\t\x20-\x7e]/.test(value);
+}
+
 function probeViewer(port, endpoint, revision, timeoutMs, headers) {
   return new Promise(resolve => {
     const suffix = endpoint === READY_ROUTE ? `?revision=${encodeURIComponent(revision)}` : "";
@@ -426,13 +444,13 @@ function probeViewer(port, endpoint, revision, timeoutMs, headers) {
   }).catch(error => ({ error: readinessError(error) }));
 }
 
-/** The release is fixed for this child's lifetime. A 404 or a perimeter
- * refusal switches to the legacy probe within the same budget.
+/** The release is fixed for this child's lifetime. Only an artifact that
+ * lacks the readiness route may use the legacy probe within the same budget.
  * @param {number} port
- * @param {{ revision: string | null, timeoutMs: number, assertChildRunning?: () => void, probeAccess?: () => { headers: Record<string, string>, accessKeyUnsendable?: boolean }, onPhase?: (event: ReadinessPhase) => void, now?: () => number, sleep?: (ms: number) => Promise<void>, probe?: typeof probeViewer }} options
+ * @param {{ revision: string | null, timeoutMs: number, allowLegacyFallback?: boolean, assertChildRunning?: () => void, probeAccess?: () => { headers: Record<string, string>, accessKeyUnsendable?: boolean }, onPhase?: (event: ReadinessPhase) => void, now?: () => number, sleep?: (ms: number) => Promise<void>, probe?: typeof probeViewer }} options
  */
 export async function waitForViewerReadiness(port, {
-  revision, timeoutMs, assertChildRunning = () => {},
+  revision, timeoutMs, allowLegacyFallback = !revision, assertChildRunning = () => {},
   probeAccess = () => ({ headers: {}, accessKeyUnsendable: false }), onPhase = () => {},
   now = () => performance.now(), sleep = readinessSleep, probe = probeViewer,
 }) {
@@ -463,10 +481,10 @@ export async function waitForViewerReadiness(port, {
       detail: error ?? (ready ? null : "http-status") });
     assertChildRunning();
     if (ready) return true;
-    // A legacy build's proxy can deny an unknown route before Next can return
-    // 404. Only those perimeter statuses identify the old protocol; 409/503
-    // from a present endpoint remain decisive readiness refusals.
-    if (endpoint === READY_ROUTE && (httpStatus === 404 || accessRefused)) {
+    // A known legacy build's perimeter can deny an unknown route before Next
+    // returns 404. The selected artifact, rather than this status, establishes
+    // whether fallback is permitted.
+    if (endpoint === READY_ROUTE && allowLegacyFallback && (httpStatus === 404 || accessRefused)) {
       endpoint = LEGACY_READY_ROUTE;
       continue;
     }
