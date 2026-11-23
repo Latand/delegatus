@@ -3125,8 +3125,6 @@ export async function spawnStructuredConversation(
     });
     hostStartRequested = true;
     nativeSetupPending = true;
-    const pipelineMember = input.registry.conversationMemberships(input.receipt.conversationId)
-      .some(member => member.kind === "pipeline");
     const writerBudgetMs = Math.min(SETUP_WRITER_RETRY_MS, input.setupCustodyRetryMs ?? Infinity);
     let writerDeadline: number | undefined;
     let writerRefusal: RegistryWriterBusyError | undefined;
@@ -3158,8 +3156,7 @@ export async function spawnStructuredConversation(
         } catch (error) {
           // Replay only this custody write: tryWriter refused before its
           // mutation. Never recreate the host or resend its first message.
-          // Pipeline stages already own a durable retry budget in the engine.
-          if (pipelineMember || !(error instanceof RegistryWriterBusyError)
+          if (!(error instanceof RegistryWriterBusyError)
             || error.label !== "spawn.setup-custody") throw error;
           writerRefusal = error;
           writerDeadline ??= now() + writerBudgetMs;
