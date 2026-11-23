@@ -37,7 +37,7 @@ test("a refusal with no ancestry snapshot is recorded without an attributed conv
   const f = guardFixture(); fixtures.push(f);
   const previous = process.env.LLV_STATE_DIR;
   const { agentRegistry, closeAgentRegistryForTests } = await import("./registry");
-  const { readLifecycleJournal } = await import("@/lib/lifecycle/journal");
+  const { lifecycleEventId, readLifecycleJournal } = await import("@/lib/lifecycle/journal");
   closeAgentRegistryForTests(); process.env.LLV_STATE_DIR = f.state;
   const lookup = spyOn(agentRegistry(), "mcpCallerSnapshot").mockReturnValue({ snapshot: null, rootConversationId: null });
   try {
@@ -58,7 +58,7 @@ test("a refusal with no ancestry snapshot is recorded without an attributed conv
     expect(lookup).toHaveBeenCalledWith(null, [42], null);
     const events = readLifecycleJournal().events.filter(event => event.type === "destructive_refused");
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ key: "destructive-refused:ancestry-unavailable", conversationId: null });
+    expect(events[0]).toMatchObject({ id: lifecycleEventId(`destructive-refused:${row.id}`), conversationId: null });
   } finally {
     lookup.mockRestore();
     closeAgentRegistryForTests();
