@@ -234,7 +234,7 @@ function createEmptyPending(directory: string): string {
 
 const INCOMPLETE_RECIPIENT_EVIDENCE = "recipient interruption evidence is unavailable or incomplete";
 const RECIPIENT_FILESYSTEM_ERROR_CODES = new Set([
-  "EACCES", "EEXIST", "EIO", "EISDIR", "EMFILE", "ENFILE", "ENOENT", "ENOMEM", "ENOSPC", "ENOTDIR",
+  "EACCES", "EDQUOT", "EEXIST", "EIO", "EISDIR", "EMFILE", "ENFILE", "ENOENT", "ENOMEM", "ENOSPC", "ENOTDIR",
   "EPERM", "EROFS", "ETXTBSY", "ELOOP",
 ]);
 
@@ -302,12 +302,24 @@ export function recipientInterruptionEvidence(directory: string, conversationIds
  * a missing or changed witness refuses before any writer runs. */
 export function recipientInterruptionObligationStore(directory: string, conversationIds: Iterable<string>): InterruptionObligationStore {
   const ids = new Set(conversationIds);
-  const run = <T>(operation: (store: ReturnType<typeof createInterruptionObligationStore>, records: InterruptionObligation[]) => T) =>
-    withFileTransactionAttempt(`${directory}.pending.jsonl`, "recipient interruption evidence is busy", () => {
-      const { records } = readRecipientInterruptionEvidence(directory, ids);
-      const store = createInterruptionObligationStore(directory, {}, true, false, records);
-      return store.mutation(() => operation(store, records));
-    });
+  const run = <T>(operation: (store: ReturnType<typeof createInterruptionObligationStore>, records: InterruptionObligation[]) => T) => {
+    try {
+      return withFileTransactionAttempt(`${directory}.pending.jsonl`, "recipient interruption evidence is busy", () => {
+        const { records } = readRecipientInterruptionEvidence(directory, ids);
+        const store = createInterruptionObligationStore(directory, {}, true, false, records);
+        return store.mutation(() => operation(store, records));
+      });
+    } catch (cause) {
+      if (cause instanceof RecipientInterruptionEvidenceError) throw cause;
+      if (cause instanceof FileTransactionAdmissionError) {
+        throw new RecipientInterruptionEvidenceError("journal lock busy", { cause });
+      }
+      if (isRecipientFilesystemError(cause)) {
+        throw new RecipientInterruptionEvidenceError("journal lock setup failed", { cause });
+      }
+      throw new Error(INCOMPLETE_RECIPIENT_EVIDENCE, { cause });
+    }
+  };
   return {
     list: () => recipientInterruptionEvidence(directory, ids).records,
     record: input => run(store => {

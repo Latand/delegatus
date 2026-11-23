@@ -6,10 +6,11 @@ import { Database } from "bun:sqlite";
 import { savePipelines } from "@/lib/pipelines/store";
 import { FileTransactionAdmissionError, withFileTransaction } from "@/lib/state/fileTransaction";
 import * as pipelineState from "@/lib/state/sqliteStateStore";
+import * as startupActivity from "@/lib/scanner/activity";
 import { prepareStructuredStartupRecipient } from "./startup";
 import { interruptionObligationDirectory, initializeRecipientInterruptionIndex } from "./interruptionObligations";
 import { StructuredRecoveryHeldForUpdateError } from "./structuredRecovery";
-import { structuredRestartFixture, recipientDispatchPipeline, addressedRecipientSocket } from "./startupRecipient.fixture";
+import { structuredRestartFixture, recipientDispatchPipeline, addressedRecipientSocket, addStructuredRestartConversation, openTurnRecords } from "./startupRecipient.fixture";
 
 setDefaultTimeout(60_000);
 
@@ -75,6 +76,62 @@ for (const [fault, category] of [
     }
   });
 }
+
+test("recipient restart-cut mutation holds and reports a queue replacement for retry", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "recipient-mutation-evidence-"));
+  const oldState = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR = directory;
+  savePipelines([]);
+  const registry = new (await import("@/lib/agent/registry")).AgentRegistry(path.join(directory, "registry.json"));
+  const { conversation, artifactPath } = addStructuredRestartConversation(registry, directory, {
+    sessionId: "cccccccc-cccc-0ccc-0ccc-cccccccccccc", status: "live", turn: "busy",
+    transcriptRecords: openTurnRecords("codex"), transcriptSuffix: "\n",
+  });
+  const obligations = interruptionObligationDirectory(registry.filename);
+  const pending = `${obligations}.pending.jsonl`;
+  await initializeRecipientInterruptionIndex(obligations);
+  const diagnostic = spyOn(console, "error").mockImplementation(() => {});
+  const originalTail = startupActivity.readStableTailRecords;
+  let armed = false;
+  const tail = spyOn(startupActivity, "readStableTailRecords").mockImplementation(async (...args) => {
+    const result = await originalTail(...args);
+    armed = true;
+    return result;
+  });
+  const mkdir = fs.mkdirSync;
+  let postEvidenceTransactions = 0;
+  const queue = `${pending}.write-locks`;
+  const replace = spyOn(fs, "mkdirSync").mockImplementation(((folder: unknown, ...args: unknown[]) => {
+    if (armed && String(folder) === queue && ++postEvidenceTransactions === 2) {
+      fs.rmSync(queue, { recursive: true, force: true });
+      const write = fs.writeFileSync;
+      write.call(fs, queue, "replacement");
+    }
+    return Reflect.apply(mkdir, fs, [folder, ...args]);
+  }) as typeof mkdir);
+  try {
+    const result = await prepareStructuredStartupRecipient(registry, conversation.id, { orchestratorSeats: () => [] })
+      .catch((error: unknown) => error);
+    expect(result).toBeInstanceOf(StructuredRecoveryHeldForUpdateError);
+    expect((result as Error).message).toBe("recipient interruption evidence is unavailable or incomplete (journal lock setup failed)");
+    expect((result as Error).message).not.toContain(queue);
+    expect((result as Error).cause).toMatchObject({ category: "journal lock setup failed" });
+    expect(((result as Error).cause as Error).cause).toMatchObject({ code: "EEXIST" });
+    expect(interruptionObligationDirectory(registry.filename)).toBe(obligations);
+    fs.rmSync(queue, { recursive: true, force: true });
+    fs.mkdirSync(queue);
+    expect((await import("./interruptionObligations")).interruptionObligationStore(obligations).list()).toEqual([]);
+    expect(fs.readFileSync(artifactPath, "utf8")).toContain('"function_call"');
+    expect(diagnostic.mock.calls).toEqual([[
+      "[structured hosts] recipient interruption evidence is unavailable or incomplete (journal lock setup failed)",
+    ]]);
+    // The queue recognizes this held error as retryable and never reaches its terminal failure transition.
+    expect(result).not.toMatchObject({ name: "StructuredDispatchTerminalError" });
+  } finally {
+    replace.mockRestore(); tail.mockRestore(); diagnostic.mockRestore(); registry.close();
+    if (oldState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = oldState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 for (const identity of ["path", "session"] as const)
 for (const archived of [false, true])
