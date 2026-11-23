@@ -35,7 +35,7 @@ async function withWindow(options: { view: RoleMemoryProjectView; project?: stri
   let served = options.view;
   globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
     if (init?.method === "POST") {
-      const body = JSON.parse(String(init.body)) as { action: string; ruleId: string };
+      const body = JSON.parse(String(init.body)) as { action: Parameters<typeof predictedRules>[1]; ruleId: string };
       posts.push(body);
       /* A server that keeps what it was told: the next reading carries the removal or the restore. */
       if (options.applyPosts) served = predictedRules(served, body.action, body.ruleId, "2026-10-16T12:00:00.000Z");
