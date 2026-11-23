@@ -47493,3 +47493,183 @@ describe("Relay targets answered by another install", () => {
     } finally { await browser.close(); server.stop(); sockets.close(); }
   }, 300_000);
 });
+
+describe("relay requester enrolment on the board", () => {
+  browserTest("renders the enrolment states at desktop and phone widths", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "relay-requester-enrolment");
+    fs.mkdirSync(out, { recursive: true });
+    const build = fs.mkdtempSync(path.join(os.tmpdir(), "requester-board-"));
+    const server = await serveEvidenceFixture(build);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: { frame: string; width: number; overflow: boolean; shortControls: number; splitTimes: number; danglingSeparators: number }[] = [];
+    try {
+      for (const width of [1440, 1000, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : width === 1000 ? 700 : 900 },
+          colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(locale => {
+            localStorage.setItem("llv_lang", locale);
+            const network = window.fetch.bind(window);
+            let fetcher = network;
+            Object.defineProperty(window, "fetch", {
+              configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => {
+                  const url = new URL(input instanceof Request ? input.url : String(input), location.origin);
+                  return url.pathname.startsWith("/api/external-relay") ? network(input, init) : next(input, init);
+                }) as typeof fetch;
+              },
+            });
+          }, lang);
+          const project = "Workshop";
+          const label = lang === "uk" ? "Рецензент збірки" : "Build reviewer";
+          const scope = { relay: "fixture-relay", target: "fixture-clone" };
+          const target = { id: scope.target, name: "Workshop clone", answered_by: "install", fallback: "none",
+            enabled: true, engine: "codex", model: "gpt-5.4", effort: null, project, concurrency: 1, hardCapMinutes: 30 };
+          const relay = { id: scope.relay, origin: "https://relay.example", name: "Chat relay", description: "",
+            owner: { namespace: "telegram", id: "owner", display_name: "Owner", handle: null }, paused: false, targets: [target] };
+          const at = "2026-10-01T08:00:00Z";
+          const expiresAt = "2030-10-01T08:10:00Z";
+          let status: "empty" | "waiting" | "candidate" | "entries" | "other-session" = "empty";
+          const proposalId = "a".repeat(48);
+          await context.route("**/api/external-relay**", async route => {
+            const req = route.request();
+            const url = new URL(req.url());
+            const send = (json: unknown, status = 200) => route.fulfill({ status, json });
+            if (url.pathname === "/api/external-relay") return send({ relays: [relay], pending: [], status: [] });
+            if (url.pathname === "/api/external-relay/known") return send({ known: [] });
+            if (url.pathname !== "/api/external-relay/trusted-requesters") return send({}, 404);
+            // An agent's confirm proposal: the owner's preview names the candidate the code bound.
+            if (url.searchParams.get("proposal") === proposalId) return send({
+              operation: { action: "confirm", ...scope, entryId: "fixture-proposed" }, targetName: target.name, project, label,
+              status: "candidate", candidate: { name: "Demo participant", chatTitle: "Workshop group", at } });
+            if (req.method() === "POST") {
+              const { confirmed, operation } = req.postDataJSON();
+              expect(confirmed).toBe(true);
+              if (operation.action === "start_enrolment") {
+                expect(operation.label).toBe(label);
+                status = "waiting";
+                return send({ issued: { code: "SAMPLE-ONLY", expiresAt } });
+              }
+              if (operation.action === "confirm") status = "entries";
+              if (operation.action === "remove") status = "empty";
+              return send({ issued: null });
+            }
+            return send({ ...scope, targetName: target.name, project, revision: status === "entries" ? 1 : 0, canStart: true,
+              entries: status === "entries" ? [{ id: "fixture-entry", label, kind: "requester", tier: "requester", project, active: true, addedAt: at }] : [],
+              pending: status === "waiting" || status === "candidate" ? { id: "fixture-entry", label, status, expiresAt,
+                candidate: status === "candidate" ? { name: "Demo participant", chatTitle: "Workshop group", at } : null } : null,
+              otherSession: status === "other-session" ? { expiresAt } : null,
+              history: [],
+            });
+          });
+          const page = await context.newPage();
+          await page.goto(server.base);
+          await page.locator(phone ? "[data-mobile2-shell], [data-mobile-shell], [data-phone-card]" : "[data-kanban-board]").first().waitFor();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const row = page.locator(`[data-external-relay-target="${target.id}"]`);
+          await row.locator("[data-external-relay-target-fold]").click();
+          const panel = row.locator("[data-trusted-requesters]");
+          const frame = async (name: string, shown = panel) => {
+            const filename = `${width}-${lang}-${scheme}-${name}.png`;
+            const measurement = await shown.evaluate((element, phone) => ({
+              overflow: element.scrollWidth > element.clientWidth + 1,
+              shortControls: phone ? [...element.querySelectorAll("button, input")]
+                .filter(control => control.getBoundingClientRect().height < 44).length : 0,
+              // A date and time renders as one line box, never split across lines.
+              splitTimes: [...element.querySelectorAll("[data-requester-time]")]
+                .filter(time => time.getClientRects().length !== 1).length,
+              // No rendered line ends in a separator dot: a wrap never strands a "·" before the next line.
+              danglingSeparators: (() => {
+                const glyphs: { block: Element; char: string; top: number; left: number; right: number }[] = [];
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                  const text = node.textContent ?? "";
+                  const block = node.parentElement?.closest("p, li, summary, div") ?? element;
+                  for (let index = 0; index < text.length; index += 1) {
+                    if (/\s/.test(text[index]!)) continue;
+                    const range = document.createRange();
+                    range.setStart(node, index);
+                    range.setEnd(node, index + 1);
+                    const rect = range.getBoundingClientRect();
+                    if (rect.width > 0) glyphs.push({ block, char: text[index]!, top: Math.round(rect.top), left: rect.left, right: rect.right });
+                  }
+                }
+                return glyphs.filter(dot => dot.char === "·"
+                  && !glyphs.some(other => other.block === dot.block && other.top === dot.top && other.left >= dot.right - 0.5)).length;
+              })(),
+            }), phone);
+            expect(measurement).toEqual({ overflow: false, shortControls: 0, splitTimes: 0, danglingSeparators: 0 });
+            // A time reads as date and hour:minute, never with seconds.
+            const times = await shown.locator("[data-requester-time]").allTextContents();
+            for (const text of times) expect(text).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
+            await shown.screenshot({ path: path.join(out, filename) });
+            readings.push({ frame: filename, width, ...measurement });
+          };
+          const action = (name: "start_enrolment" | "confirm" | "remove") =>
+            translate(lang, `externalRelay.requesters.action.${name}`);
+          await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+          await frame("1-empty");
+          await panel.getByRole("textbox").fill(label);
+          await panel.getByRole("button", { name: action("start_enrolment") }).click();
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("start_enrolment") }).click();
+          await panel.locator("[data-requester-code]").waitFor();
+          // The code is the emphasised element of its box, and a copy control sits beside it, 44 px on a phone.
+          const code = panel.locator("[data-requester-code]");
+          expect(await code.evaluate(element => parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.closest("[data-requester-pending]")!).fontSize)
+            && parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.previousElementSibling ?? element.parentElement!).fontSize))).toBe(true);
+          const copy = panel.locator("[data-requester-code] + button");
+          expect(await copy.count()).toBe(1);
+          if (phone) expect((await copy.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+          await frame("2-code");
+          status = "candidate";
+          await panel.getByText("Demo participant", { exact: false }).waitFor();
+          await frame("3-candidate");
+          await panel.getByRole("button", { name: action("confirm") }).click();
+          await panel.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          expect(await panel.getByRole("alertdialog").locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("confirm") }).click();
+          await panel.getByText(label, { exact: true }).waitFor();
+          await frame("4-entries");
+          await panel.getByRole("button", { name: action("remove") }).click();
+          await panel.locator('[data-requester-confirm="remove"]').waitFor();
+          // One Remove button, no add form, and the confirmation sits inside the entry it removes.
+          expect(await panel.getByRole("button", { name: action("remove") }).count()).toBe(1);
+          expect(await panel.getByRole("textbox").count()).toBe(0);
+          expect(await panel.locator('li [data-requester-confirm="remove"]').count()).toBe(1);
+          await frame("5-remove-confirmation");
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("remove") }).click();
+          await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+          status = "other-session";
+          await row.locator("[data-external-relay-target-fold]").click();
+          await row.locator("[data-external-relay-target-fold]").click();
+          await panel.locator('[data-requester-pending="other-session"]').waitFor();
+          expect(await panel.getByRole("textbox").count()).toBe(0);
+          await frame("6-other-session");
+          await page.evaluate(id => { window.location.hash = `relay-requester=${id}`; }, proposalId);
+          const proposed = page.locator("[data-requester-proposal]");
+          const dialog = proposed.locator('[data-requester-confirm="confirm"]');
+          await dialog.waitFor();
+          // One approval panel: the proposal and the relay settings beside it keep distinct keys.
+          expect(await proposed.count()).toBe(1);
+          expect(await dialog.locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
+          await dialog.getByText(translate(lang, "externalRelay.requesters.verify"), { exact: true }).waitFor();
+          await dialog.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          await dialog.getByText(translate(lang, "externalRelay.requesters.proposedBy"), { exact: true }).waitFor();
+          await frame("7-proposal-confirm", proposed);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+      expect(readings).toHaveLength(84);
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(build, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
