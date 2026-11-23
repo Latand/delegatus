@@ -11,7 +11,7 @@ export { CloudRpcError, rpcFailure };
 /** Cloud and local execute the same admitted pre-push plan. Only infrastructure
  * failures permit a confirmed, single local fallback; check failures never do. */
 export type CloudCheckInputs = Record<string, string | null | { file: string }>;
-export interface CloudJob { head: string; tree: string; base: string; inputs: CloudCheckInputs; bundle: string; timeoutMs: number }
+export interface CloudJob { head: string; tree: string; base: string; inputs: CloudCheckInputs; bundle: string; timeoutMs: number; deadlineAt?: number }
 export interface CloudDiagnostic {
   category: "connect/transport" | "environment" | "task failed" | "test failure" | "timeout" | "missing receipt" | "invalid receipt" | "account-limit" | "cloud-limit" | "cancelled";
   reason: string;
@@ -40,6 +40,7 @@ export async function runCloudChecks(job: CloudJob, transport: CloudTransport, l
     }
     report(cloudRefusalLine(result.diagnostic ?? { category: result.kind === "invalid" ? "missing receipt" : result.kind === "unavailable" ? "connect/transport" : result.kind, reason: "Cloud checks returned no valid verdict" }));
     if (result.kind === "account-limit") return 75;
+    if (result.kind === "invalid" && result.diagnostic?.category === "timeout") return 75;
     if (result.kind === "invalid") {
       const code = result.code;
       return typeof code === "number" && Number.isInteger(code) && code > 0 && code <= 255 ? code : 1;
@@ -170,28 +171,35 @@ export function cloudCommand(job: CloudJob, upload?: { directory: string; source
   }).filter(Boolean).join(" ");
   const files = Object.values(job.inputs).filter((value): value is { file: string } => value !== null && typeof value === "object")
     .map(value => `test -f "$PWD"/${quote(value.file)}`).join("\n");
-  const environment = `env -i PATH="$PATH" ${inputs} HOME="$root/home" XDG_CONFIG_HOME="$root/config" TMPDIR="$root/tmp" LLV_STATE_DIR="$root/state"`;
-  const cleanup = quote("import shutil,sys; [shutil.rmtree(p) for p in sys.argv[1:]]");
+  const environment = `env -i PATH="$PATH" ${inputs} LLV_GATE_CHECKPOINT_CLEANUP=cloud-owned-runner HOME="$root/home" XDG_CONFIG_HOME="$root/config" TMPDIR="$root/tmp" LLV_STATE_DIR="$root/state"`;
+  const deadlineAt = job.deadlineAt ?? Date.now() + job.timeoutMs;
   return `set -eu
 setup_source=${upload ? quote(upload.source) : '"$PWD"'}
-root=$(mktemp -d)
-${upload ? `upload=${quote(upload.directory)}\ntrap ${quote(`python3 -c ${cleanup} "$root" "$upload"`)} EXIT` : `trap ${quote(`python3 -c ${cleanup} "$root"`)} EXIT`}
+root="$PWD/.delegatus-cloud-checks"
+umask 077
+mkdir -p "$root"
+chmod 700 "$root"
+${upload ? `upload=${quote(upload.directory)}\ntrap 'rm -rf "$upload"' EXIT` : ""}
 ${upload ? `base64 -d ${quote(`${upload.directory}/bundle`)} > "$root/source.bundle"
-git clone -q --no-hardlinks ${quote(upload.source)} "$root/repo"
+if ! git -C "$root/repo" rev-parse --git-dir >/dev/null 2>&1; then git clone -q --no-hardlinks ${quote(upload.source)} "$root/repo"; fi
 if ! git -C "$root/repo" cat-file -e ${quote(`${job.base}^{commit}`)} 2>/dev/null; then
   git -C "$root/repo" fetch -q --no-tags "$(git -C ${quote(upload.source)} remote get-url origin)" ${quote(job.base)}
 fi
 git -C "$root/repo" fetch -q "$root/source.bundle" HEAD` : `printf %s ${quote(job.bundle)} | base64 -d > "$root/source.bundle"
-git clone -q "$root/source.bundle" "$root/repo"`}
+if ! git -C "$root/repo" rev-parse --git-dir >/dev/null 2>&1; then git clone -q "$root/source.bundle" "$root/repo"; else git -C "$root/repo" fetch -q "$root/source.bundle" HEAD; fi`}
+rm -f "$root/source.bundle"
 cd "$root/repo"
+git reset --hard -q
+git clean -fdq
 git checkout -q --detach ${quote(job.head)}
 git update-ref refs/remotes/origin/main ${quote(job.base)}
 test "$(git rev-parse HEAD^{tree})" = ${quote(job.tree)}
+test "$(git status --porcelain --untracked-files=normal)" = ""
 ${files}
 mkdir -p "$root/home" "$root/config" "$root/tmp" "$root/state"
 ${environment} bun scripts/cloud-check-dependencies.ts "$setup_source"
 set +e
-${environment} LLV_SKIP_HOOKS=0 LLV_GATE_PUSH_HEAD=${quote(job.head)} LLV_GATE_RUNNER=off LLV_GATE_EXECUTION=local DELEGATUS_AGENT_CPU=off bun scripts/local-gate.ts pre-push --admitted
+${environment} LLV_SKIP_HOOKS=0 LLV_GATE_PUSH_HEAD=${quote(job.head)} LLV_GATE_PUSH_DEADLINE=${quote(String(deadlineAt))} LLV_GATE_RUNNER=off LLV_GATE_EXECUTION=local DELEGATUS_AGENT_CPU=off bun scripts/local-gate.ts pre-push --admitted
 code=$?
 set -e
 test "$(git rev-parse HEAD^{tree})" = ${quote(job.tree)}

@@ -547,6 +547,10 @@ function headCheckpointEnvironment(root: string, sandbox: string, inherited: Nod
  * local bus, manager connection and cleanup tools. */
 function serviceCleanupIdentity(root: string, isolated: NodeJS.ProcessEnv): string | undefined {
   if (process.platform !== "linux") return;
+  if (isolated.LLV_GATE_CHECKPOINT_CLEANUP === "cloud-owned-runner") {
+    return fingerprint(["cloud-owned-runner", Bun.version, process.platform, process.arch,
+      fileFingerprint(process.execPath), isolated.LLV_GATE_EXECUTION ?? null]);
+  }
   const PATH = fileRunnerPath(isolated);
   const env: NodeJS.ProcessEnv = { ...isolated, PATH };
   const search = { PATH, cwd: root };

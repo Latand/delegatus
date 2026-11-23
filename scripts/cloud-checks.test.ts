@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { runCloudChecks, type CloudJob, type CloudResult } from "./cloud-checks";
+import { cloudCommand, runCloudChecks, type CloudJob, type CloudResult } from "./cloud-checks";
 
 const job: CloudJob = { head: "a".repeat(40), tree: "b".repeat(40), base: "c".repeat(40), inputs: {}, bundle: "bundle", timeoutMs: 1000 };
 const verdict = (code: number): CloudResult => ({ kind: "verdict", head: job.head, tree: job.tree, base: job.base, inputs: cloudInputDigest(job.inputs), code });
@@ -18,6 +18,14 @@ test("account limits never trigger local fallback", async () => {
   expect(await runCloudChecks(job, { run: async () => ({ kind: "account-limit" }) }, async () => { local++; return 0; })).toBe(75);
   expect(local).toBe(0);
 });
+test("a Cloud deadline returns the retryable deadline status and preserves named check failures", async () => {
+  let local = 0;
+  const timeout: CloudResult = { kind: "invalid", diagnostic: { category: "timeout", reason: "Cloud check deadline expired; remote cleanup confirmed" } };
+  expect(await runCloudChecks(job, { run: async () => timeout }, async () => { local++; return 0; })).toBe(75);
+  expect(await runCloudChecks(job, { run: async () => ({ ...verdict(1), diagnostic: { category: "test failure", reason: "a named assertion failed" } }) },
+    async () => { local++; return 0; })).toBe(1);
+  expect(local).toBe(0);
+});
 test("a receipt for another tree cannot authorize publication", async () => {
   expect(await runCloudChecks(job, { run: async () => ({ ...verdict(0), tree: "d".repeat(40) }) }, async () => 0)).toBe(1);
 });
@@ -25,6 +33,45 @@ test("a receipt for different check inputs cannot authorize publication", async 
   let local = 0;
   expect(await runCloudChecks({ ...job, inputs: { CHECK_PROBE_FAIL: "1" } }, { run: async () => verdict(0) }, async () => { local++; return 0; })).toBe(1);
   expect(local).toBe(0);
+});
+
+test("Cloud commands keep the checkout and its verified file cache while binding the caller deadline", () => {
+  const command = cloudCommand({ ...job, deadlineAt: 1_900_000_000_000 });
+  expect(command).toContain('root="$PWD/.delegatus-cloud-checks"');
+  expect(command).toContain("LLV_GATE_PUSH_DEADLINE='1900000000000'");
+  expect(command).toContain('git clean -fdq');
+  expect(command).not.toContain('trap .*"$root"');
+});
+
+test("a second Cloud command reuses the same bounded per-file cache for its unchanged tree", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "cloud-checkpoint-retry-"));
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid",
+    GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.invalid" };
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, env, encoding: "utf8", stdio: "pipe" }).trim();
+  try {
+    git("init", "-q"); writeFileSync(path.join(root, "source"), "same tree\n");
+    git("add", "."); git("commit", "-qm", "Fixture");
+    const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
+    const bundle = path.join(root, "fixture.bundle"); git("bundle", "create", bundle, "HEAD");
+    const bin = path.join(root, "bin"); mkdirSync(bin);
+    writeFileSync(path.join(bin, "bun"), `#!/bin/sh
+if [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi
+test "$LLV_GATE_PUSH_DEADLINE" = 1900000000000 || exit 12
+cache="$(git rev-parse --git-common-dir)/delegatus-gate/head-files"
+mkdir -p "$cache"
+if [ -e "$cache/completed" ]; then echo reused-complete-file; else touch "$cache/completed"; echo completed-file; fi
+exit 0
+`, { mode: 0o700 });
+    const candidate = { ...job, head, tree, base: head, bundle: readFileSync(bundle).toString("base64"), deadlineAt: 1_900_000_000_000 };
+    const run = () => spawnSync("bash", ["-c", cloudCommand(candidate)], { cwd: root,
+      env: { ...env, PATH: `${bin}:${env.PATH}` }, encoding: "utf8" });
+    const first = run(), second = run();
+    expect(first.status, first.stderr).toBe(0);
+    expect(first.stdout).toContain("completed-file");
+    expect(second.status, second.stderr).toBe(0);
+    expect(second.stdout).toContain("reused-complete-file");
+    expect(second.stdout).toContain(`DELEGATUS_GATE ${head} ${tree} ${head}`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 test("a receipt missing its input binding cannot authorize publication", async () => {
   const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} 0\n`);
@@ -331,7 +378,7 @@ test("transport loss during the deadline interruption stays a timeout without a 
   };
   const transport = new AppServerCloudTransport(config, async () => { connects++; return fake.rpc; }, () => {}, clock());
   let result: Awaited<ReturnType<typeof transport.run>> | undefined;
-  expect(await runCloudChecks(job, { run: async (job, signal) => { runs++; return result = await transport.run(job, signal); } }, async () => { local++; return 0; }, undefined, () => {})).toBe(1);
+  expect(await runCloudChecks(job, { run: async (job, signal) => { runs++; return result = await transport.run(job, signal); } }, async () => { local++; return 0; }, undefined, () => {})).toBe(75);
   expect(result).toMatchObject({ kind: "invalid", diagnostic: { category: "timeout" } });
   expect(result!.diagnostic!.reason).toContain("cleanup unresolved");
   // The lost acknowledgement never dispatched, so cleanup asks once on its own connection.
@@ -748,7 +795,7 @@ for (const scenario of ["connect", "environment", "task", "test", "timeout", "mi
     if (scenario === "test") expect(reports[0]).toContain("exited 17 (touched tests)");
     if (scenario === "connect") expect(reports[0]).toContain("forced connect error");
     expect(local).toBe(scenario === "capacity" ? 1 : 0);
-    expect(code).toBe(scenario === "capacity" ? 0 : ["account", "cancelled"].includes(scenario) ? 75 : scenario === "test" ? 17 : 1);
+    expect(code).toBe(scenario === "capacity" ? 0 : ["account", "cancelled", "timeout"].includes(scenario) ? 75 : scenario === "test" ? 17 : 1);
   });
 }
 

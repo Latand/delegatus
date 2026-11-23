@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFailure, publicationTransportLine, pipelinePublishesRemoteBranch } from "./publication";
+import { publicationApp403, publicationDeadlineKind, publicationDeadlineOnly, publicationFrozenInstallFailure, publicationTransportLine, pipelinePublishesRemoteBranch } from "./publication";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
@@ -30,6 +30,13 @@ async function admissionFailureOutput(): Promise<string> {
 
 test("a production admission lock deadline before checks start is retryable", async () => {
   expect(publicationDeadlineOnly(await admissionFailureOutput())).toBe(true);
+});
+
+test("a Cloud execution deadline stays retryable unless its output includes a decisive refusal", () => {
+  const timeout = "pre-push: Cloud checks refused [timeout]: Cloud check deadline expired; remote cleanup confirmed; no bound command receipt";
+  expect(publicationDeadlineKind(timeout)).toBe("execution");
+  expect(publicationDeadlineOnly(`${timeout}\n(fail) a.test.ts: named assertion`)).toBe(false);
+  expect(publicationDeadlineOnly(`${timeout}\nowned runner: budget cleanup failed: child still running`)).toBe(false);
 });
 
 test.each(["types", "eslint", "touched tests", "frozen install", "touched tests: failed (1)", "Linux tests: failed (1)"])("a started %s phase prevents an admission retry", async phase => {

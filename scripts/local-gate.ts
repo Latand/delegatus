@@ -67,6 +67,8 @@ export function viewerBuildEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEn
 export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvironment): Step[] {
   const files = changedFiles.filter(file => env.existing.has(file));
   const steps: Step[] = [];
+  const comparator = process.env.LLV_GATE_CANONICAL_TOOLS === "1"
+    ? path.join(import.meta.dir, "local-gate-tests.ts") : "scripts/local-gate-tests.ts";
   if (mode === "pre-commit") steps.push({ name: "staged whitespace", command: ["git", "diff", "--cached", "--check"] });
   if (mode === "pre-push") {
     steps.push({ name: "privacy", command: ["bun", "scripts/privacy-publication-gate.ts", "--base", env.base,
@@ -115,12 +117,12 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   }
   // Both selections run the same per-file comparator against the same base.
   if (env.linux) for (const file of env.linuxTests) touched.delete(file);
-  if (touched.size) steps.push({ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
+  if (touched.size) steps.push({ name: "touched tests", command: ["bun", comparator, "--base", env.base, ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
   if (env.linux) {
     steps.push({ name: "Linux backend", command: ["bun", "scripts/verify-platform-backend.ts", "--expect", "linux"], capped: true, isolated: true });
     // The same verdict rules as touched tests: a platform test that already
     // fails on the merge base is PRE-EXISTING and never blocks this push.
-    steps.push({ name: "Linux tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...env.linuxTests.map(file => `./${file}`)], capped: true, isolated: true });
+    steps.push({ name: "Linux tests", command: ["bun", comparator, "--base", env.base, ...env.linuxTests.map(file => `./${file}`)], capped: true, isolated: true });
   }
   if (env.runtime) {
     steps.push(
@@ -1077,7 +1079,8 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   const selected = requestedStep && steps.find(step => step.name === requestedStep);
   if (requestedStep && !selected) throw new Error(`the publication plan has no independent "${requestedStep}" step for these changes`);
   if (requestedStep && !admitted) {
-    await runAdmittedChecks(["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "check-step", requestedStep, "--admitted"],
+    const gateScript = process.env.LLV_GATE_CANONICAL_TOOLS === "1" ? path.join(import.meta.dir, "local-gate.ts") : "scripts/local-gate.ts";
+    await runAdmittedChecks(["bash", "scripts/gate-slot.sh", process.execPath, gateScript, "check-step", requestedStep, "--admitted"],
       root, { ...process.env, LLV_GATE_RUNNER: "off" }, deadline);
     return;
   }
@@ -1249,7 +1252,8 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     } else if (mode === "pre-push" && !admitted) {
       const privacy = (cancel?: AbortSignal) => runSteps(mode, steps.filter(step => step.name === "privacy"), { ...options, cancel });
       const localChecks = (cancel: AbortSignal) => runAdmittedChecks(
-        ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
+        ["bash", "scripts/gate-slot.sh", process.execPath,
+          process.env.LLV_GATE_CANONICAL_TOOLS === "1" ? path.join(import.meta.dir, "local-gate.ts") : "scripts/local-gate.ts", "pre-push", "--admitted"], root,
         { ...process.env, LLV_GATE_RUNNER: "off" }, deadline, cancel);
       const privacyHead = git(root, ["rev-parse", "HEAD"]);
       const checks = async (cancel: AbortSignal) => {
@@ -1271,7 +1275,9 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
           throw new AdmittedGateFailed(1, cloudRefusalLine({ category: "environment", reason }));
         }
         let cloudRefusal: string | undefined;
-        const code = await runCloudChecks({ head, tree, base, inputs, bundle, timeoutMs: Math.max(1, (deadline?.at ?? Date.now() + 15 * 60_000) - Date.now()) },
+        const cloudDeadline = deadline?.at ?? Date.now() + 15 * 60_000;
+        const code = await runCloudChecks({ head, tree, base, inputs, bundle, deadlineAt: cloudDeadline,
+          timeoutMs: Math.max(1, cloudDeadline - Date.now()) },
           new AppServerCloudTransport(config, undefined, () => {}), async () => {
             console.error("pre-push: Cloud unavailable after confirmation; running the same checks locally once");
             await localChecks(cancel); return 0;

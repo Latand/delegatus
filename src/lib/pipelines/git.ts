@@ -2488,8 +2488,11 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // The repository's gate can finish before Git's authenticated discovery.
   // The subsequent native hook verifies this exact operation's consumed
   // inputs, with fresh privacy, under a separate bounded transport deadline.
-  const preparedGate = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
-    && supportsPublicationPreparation(pipeline.worktreeDir);
+  const candidateGate = path.join(pipeline.worktreeDir, "scripts/local-gate.ts");
+  const canonicalGate = path.resolve(import.meta.dir, "../../../scripts/local-gate.ts");
+  const canonicalPreparation = fs.existsSync(candidateGate) && !supportsPublicationPreparation(pipeline.worktreeDir)
+    && fs.existsSync(canonicalGate);
+  const preparedGate = fs.existsSync(candidateGate) && (canonicalPreparation || supportsPublicationPreparation(pipeline.worktreeDir));
   let transportBudgetMs = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
   const receiptFile = preparedGate ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
   let push: ExecResult;
@@ -2504,8 +2507,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
         LLV_GATE_PUBLICATION_REF: pipeline.delivery!.target.branch,
         LLV_GATE_PUBLICATION_REMOTE_HEAD: remoteSha || "0".repeat(40),
       });
+      if (canonicalPreparation) pushEnv.LLV_GATE_CANONICAL_TOOLS = "1";
       const checkStarted = performance.now();
-      const checked = await exec("bun", ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
+      const checked = await exec("bun", [canonicalPreparation ? canonicalGate : "scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
       if (checked.code !== 0) return failure("checking the publication before transport", checked);
       // Preparation includes privacy: its elapsed time is a conservative
       // observation even with older hooks that report no per-step timings.
@@ -2519,6 +2523,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
       if (!current.ok) return current;
       if (current.sha !== acceptedSha) return { ok: false, error: "the accepted revision changed after publication checks; nothing was published" };
       pushEnv.LLV_GATE_PUSH_DEADLINE = String(publicationHookDeadline(transportBudgetMs, Date.now()));
+      if (canonicalPreparation) pushEnv.LLV_SKIP_HOOKS = "1";
     }
     push = await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: receiptFile ? transportBudgetMs : budget.ms });
   } finally {

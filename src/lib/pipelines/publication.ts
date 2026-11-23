@@ -60,6 +60,7 @@ export function publicationDeadlineKind(output: string): "execution" | "admissio
     else if (phase && phase !== "privacy" && !phase.startsWith("branch is ")) checksStarted = true;
     if (member) checksStarted = true;
     if (/^gate-slot: CPU admission queue lock deadline exceeded after \d+ ms; checks did not start$/.test(line)) admissionExpired = true;
+    if (/^pre-push: Cloud checks refused \[timeout\]: Cloud (?:check|session) deadline expired\b/.test(line)) deadline = true;
     if (/^command timed out after \d+ms/.test(line)
       || /^pre-push: no verdict within the push budget of \d+ s:/.test(line)
       || /^owned runner: (?:deadline expired|execution guard expired)$/.test(line)

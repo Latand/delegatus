@@ -21,6 +21,7 @@ import { shortId } from "@/lib/shortIds";
 import { PUBLICATION_PACK_MARGIN_MS, publicationPushBudgetMs } from "./gateBudget";
 import { recoverablePublication } from "./publicationHistory";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
+import { publicationCheckBinding, writePublicationCheckReceipt } from "../git/publicationCheckReceipt";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -2337,6 +2338,45 @@ for (const scenario of [
     if (!scenario.unreadable && scenario.adapter) expect(observed?.ms).toBe(publicationPushBudgetMs([scenario.file], previous === "deadline"));
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
+
+test.each([false, true])("a historical candidate gate uses the current checkpoint comparator and preserves refusal=%s", async refused => {
+  const box = await publishSandbox();
+  try {
+    const scripts = path.join(box.subject.worktreeDir, "scripts"); fs.mkdirSync(scripts);
+    fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// historical publication gate\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-tests.ts"), "// historical deferred-write comparator\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), '{"publicationPrepare":0}\n');
+    const head = await box.commit("change.txt", "accepted work\n");
+    let prepared = 0, pushed = 0, observed: NodeJS.ProcessEnv | undefined;
+    const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\n[ "$LLV_SKIP_HOOKS" = 1 ] || exit 91\n', { mode: 0o700 });
+    await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (command === "bun" && args[0]?.endsWith("/scripts/local-gate.ts") && args[1] === "pre-push" && args[2] === "--publication-prepare") {
+        prepared++;
+        expect(args[0]).not.toBe("scripts/local-gate.ts");
+        expect(env?.LLV_GATE_CANONICAL_TOOLS).toBe("1");
+        if (refused) return { code: 1, stdout: "(fail) a.test.ts: named assertion", stderr: "" };
+        const binding = publicationCheckBinding(env ?? {});
+        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, binding, crypto.createHash("sha256").update("fixture inputs").digest("hex"));
+        return { code: 0, stdout: "canonical gate passed", stderr: "" };
+      }
+      if (command === "git" && args[0] === "push") { pushed++; observed = env; }
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(result.ok).toBe(!refused);
+    expect(prepared).toBe(1);
+    expect(pushed).toBe(refused ? 0 : 1);
+    if (refused) {
+      expect(JSON.stringify(result)).toContain("named assertion");
+      expect(await box.originHead()).toBe("");
+    } else {
+      expect(observed?.LLV_SKIP_HOOKS).toBe("1");
+      expect(await box.originHead()).toBe(head);
+    }
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
 
 for (const phase of ["merge-base", "diff"] as const) test("publication rechecks the accepted head after budget " + phase, async () => {
   const box = await publishSandbox();
