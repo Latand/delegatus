@@ -8475,9 +8475,11 @@ export function viewerMcpToolPolicy(
   );
   return {
     permit: (tool, args) => {
-      const caller = hostHealthProbe || tool === "send_message_to_orchestrator" ? null : authorityOf(domainDependencies);
-      if (caller?.kind === "worker" && ownerRelayHandoffOnlyGrant(caller.conversationId)) {
-        return { allowed: false, code: "tool_not_permitted", error: "Guest-origin owner relays may use Viewer only for the verified project-seat handoff." };
+      if (!hostHealthProbe && tool !== "send_message_to_orchestrator" && domainDependencies.attentionAuthority) {
+        const caller = authorityOf(domainDependencies);
+        if (caller.kind === "worker" && ownerRelayHandoffOnlyGrant(caller.conversationId)) {
+          return { allowed: false, code: "tool_not_permitted", error: "Guest-origin owner relays may use Viewer only for the verified project-seat handoff." };
+        }
       }
       // An admitted agent's read surface is independent of role/seat identity.
       // Resolve authority only where the policy uses it. Bindings still verify
