@@ -44,10 +44,10 @@ import {
  * Vocabulary (frozen)                                                 *
  * ------------------------------------------------------------------ */
 
-export type RuntimeEngine = "codex" | "claude" | "copilot";
+export type RuntimeEngine = "codex" | "claude" | "copilot" | "antigravity";
 
 /** Where a session's structured plane lives. */
-export type HostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "unhosted";
+export type HostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "antigravity-acp" | "unhosted";
 
 /** Orthogonal host axis (Sol). Never collapsed into the linear state. */
 export type HostAxis = "registering" | "hosted" | "recovering" | "unhosted" | "conflict" | "dead";

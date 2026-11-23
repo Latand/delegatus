@@ -16,12 +16,12 @@ import type { RoleConfig, RoleDefinition, RoleId, RoleRegistrySnapshot, RoleVari
    accepts any `gpt-*` id and any Claude family; a caller that cannot see the
    picker needs the launch catalogue itself, and a refusal that names it. */
 
-const MAPPING_ENGINES = ["claude", "codex"] as const;
+const MAPPING_ENGINES = ["claude", "codex", "antigravity"] as const;
 type MappingEngine = typeof MAPPING_ENGINES[number];
 
 /** Every model a role row may run on, with the efforts each accepts. */
 export function roleLaunchChoices(): Record<MappingEngine, Record<string, readonly string[]>> {
-  const choices = { claude: {}, codex: {} } as Record<MappingEngine, Record<string, readonly string[]>>;
+  const choices = { claude: {}, codex: {}, antigravity: {} } as Record<MappingEngine, Record<string, readonly string[]>>;
   for (const engine of MAPPING_ENGINES) {
     for (const model of launchModelIds(engine)) choices[engine][model] = effortScale(engine, model) ?? [];
   }

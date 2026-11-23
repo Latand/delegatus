@@ -763,7 +763,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
       "access", "account", "agentMemoryMaxBytes", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "runtime", "sandbox", "serviceTier",
     ]);
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
-    expect(stage?.engine?.enum).toEqual(["claude", "codex"]);
+    expect(stage?.engine?.enum).toEqual(["claude", "codex", "antigravity"]);
     expect(stage?.role?.properties?.roleId?.enum).toEqual([...ROLE_IDS]);
     /* #1868: the fail edge publishes what happens once its rounds are spent. */
     type EdgeSchema = { properties?: Record<string, { enum?: string[]; description?: string }>; anyOf?: EdgeSchema[] };

@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { delimiter, resolve } from "node:path";
 import { withoutUnsupportedApiCredentials } from "../src/lib/environmentIsolation";
 
 /** Raster provenance is pinned independently of the application's Bun version. */
@@ -10,7 +10,14 @@ export function privacyGeneratorRuntime(): string {
   const configured = process.env.LLV_PRIVACY_GENERATOR_BUN?.trim() || undefined;
   if (cached && cached.configured === configured) return cached.executable;
   if (!configured && Bun.version === PRIVACY_GENERATOR_BUN_VERSION) return process.execPath;
-  const found = Bun.which(configured ?? `bun-${PRIVACY_GENERATOR_BUN_VERSION}`);
+  // The Viewer has a native application Bun and a host CLI shim. A mounted
+  // Bun on PATH can supply the independent generator pin without leaving
+  // the container or using the check's isolated HOME to resolve it.
+  const mountedBun = !configured && process.execPath === "/usr/local/bin/bun-container"
+    ? (process.env.PATH ?? "").split(delimiter).filter(entry => entry && resolve(entry) !== "/usr/local/bin").join(delimiter)
+    : "";
+  const found = Bun.which(configured ?? `bun-${PRIVACY_GENERATOR_BUN_VERSION}`)
+    ?? (mountedBun ? Bun.which("bun", { PATH: mountedBun }) : null);
   const executable = found ? resolve(found) : null;
   if (executable) {
     try {

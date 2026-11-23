@@ -105,7 +105,9 @@ export async function applyConversationMigration(
     const registry = registryForCommand();
     const conversation = registry.conversation(conversationId);
     if (!conversation) return { status: 404, body: { error: "viewer conversation is unknown" } };
-    if (conversation.engine === "copilot") return { status: 409, body: { error: "account switching does not cover Copilot conversations yet" } };
+    if (conversation.engine === "copilot" || conversation.engine === "antigravity") {
+      return { status: 409, body: { error: `account switching does not cover ${conversation.engine === "antigravity" ? "Antigravity" : "Copilot"} conversations yet` } };
+    }
     const source = conversation.generations.at(-1);
     if (!source) return { status: 409, body: { error: "conversation has no current generation" } };
     if (command.path && command.path !== source.path) {
@@ -134,7 +136,9 @@ export async function applyConversationMigration(
     const registry = registryForCommand();
     const conversation = registry.conversation(conversationId);
     if (!conversation) return { status: 404, body: { error: "viewer conversation is unknown" } };
-    if (conversation.engine === "copilot") return { status: 409, body: { error: "account switching does not cover Copilot conversations yet" } };
+    if (conversation.engine === "copilot" || conversation.engine === "antigravity") {
+      return { status: 409, body: { error: `account switching does not cover ${conversation.engine === "antigravity" ? "Antigravity" : "Copilot"} conversations yet` } };
+    }
     const source = conversation.generations.at(-1);
     if (!source?.accountId) {
       return { status: 409, body: { error: "conversation has no managed account to reseat from" } };

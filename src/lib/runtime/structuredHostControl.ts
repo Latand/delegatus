@@ -50,7 +50,7 @@ export function readStructuredHostRecords(dependencies: {
   // conversation payloads, including when the inventory is empty.
   const entries = hotRegistryRows(file, "entries").map(([, entry]) => entry)
     .filter((entry) => Boolean(entry.structuredHost?.process)
-      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot"))
+      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot" || entry.key.engine === "antigravity"))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, RESOURCE_STRUCTURED_HOST_LIMIT);
   if (!entries.length) return [];
