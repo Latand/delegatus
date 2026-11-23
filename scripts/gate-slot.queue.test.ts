@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { installedGateAdmissionEnv } from "../src/lib/runtime/agentSignalSandbox";
 import { CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
 import { cpuOwnerIdentity, cpuOwnerStatus } from "../src/lib/runtime/signalSandboxContext";
 import { realExec } from "../src/lib/workflows/provision";
@@ -199,6 +200,51 @@ test.skipIf(process.platform !== "linux")("an older pressure-only head yields to
     expect(f.count()).toBe(0);
   } finally { control.abort(); await Promise.allSettled(pending); f.close(); }
 }, 45_000);
+
+// Wrappers from #3353 up to #4174 wait with `--wait key pid <queue start>`.
+// Managed callers route that call to the installed helper, which must accept
+// it and still judge the cap and the FIFO for both protocols.
+for (const revision of ["e504afa92c18033d689aeb24fb5bed0cb0719a2f", "2c7e437a553f56d81afa39e71878f60a1e6d73a3"]) test.skipIf(process.platform !== "linux")(
+  `a routed ${revision.slice(0, 10)} wrapper runs its command and keeps the cap-one FIFO`, async () => {
+    const f = fixture(), control = new AbortController();
+    const pending: ReturnType<typeof realExec>[] = [];
+    const release = path.join(f.dir, "release");
+    const output = () => fs.existsSync(f.env.CPU_QUEUE_OUTPUT) ? fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8") : "";
+    const stderr = (word: string) => path.join(f.dir, `${word}.stderr`);
+    const diagnostics = () => new Error(["holder", "current", "legacy-entrant"].map(word =>
+      `${word}: ${fs.existsSync(stderr(word)) ? fs.readFileSync(stderr(word), "utf8") : ""}`).join("\n"));
+    try {
+      const legacy = legacyGateTree(f.dir, revision);
+      expect(fs.readFileSync(path.join(legacy, "scripts/gate-slot.sh"), "utf8")).toContain('--wait "$queue_key" "$owner_pid" "$queued_at"');
+      fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+      const base: NodeJS.ProcessEnv = { ...f.env, LLV_GATE_BUN: process.execPath, LLV_GATE_RUNNER: "off", LLV_GATE_SLOTS: "1", CPU_SLOT_RELEASE: release };
+      const env = { ...base, ...installedGateAdmissionEnv(base) };
+      expect(env.LLV_GATE_BUN).not.toBe(process.execPath);
+      const gate = (word: string, cwd: string, script: string) => realExec("/bin/bash", ["-c", 'exec "$@" 2>"$GATE_STDERR"', word,
+        "scripts/gate-slot.sh", "bash", "-c", script], cwd, { ...env, GATE_STDERR: stderr(word) }, { timeoutMs: 30_000, signal: control.signal });
+      pending.push(gate("holder", legacy,
+        'echo holder >> "$CPU_QUEUE_OUTPUT"; while [[ ! -f "$CPU_SLOT_RELEASE" ]]; do sleep 0.02; done; echo released >> "$CPU_QUEUE_OUTPUT"'));
+      await until(() => output() === "holder\n", 10_000, diagnostics);
+      pending.push(gate("current", process.cwd(), 'echo current >> "$CPU_QUEUE_OUTPUT"'));
+      await until(() => f.count() === 1, 10_000, diagnostics);
+      pending.push(gate("legacy-entrant", legacy, 'echo legacy-entrant >> "$CPU_QUEUE_OUTPUT"'));
+      await until(() => f.count() === 2, 10_000, diagnostics);
+      // Both entrants poll past the shared spacing while the cap-one holder runs.
+      const polledAfter = Date.now() + CPU_QUEUE_SPACING_MS + 250;
+      await until(() => f.db.query<{ polled: number }, []>(`SELECT MIN(polled) AS polled ${queuedTickets}`).get()!.polled > polledAfter, 10_000, diagnostics);
+      expect(output(), diagnostics().message).toBe("holder\n");
+      expect(f.count()).toBe(2);
+      fs.writeFileSync(release, "release");
+      await until(() => output().includes("legacy-entrant\n"), 20_000, diagnostics);
+      const results = await Promise.all(pending);
+      expect(results.map(result => result.code), diagnostics().message).toEqual([0, 0, 0]);
+      expect(output()).toBe("holder\nreleased\ncurrent\nlegacy-entrant\n");
+      expect(fs.readFileSync(stderr("holder"), "utf8")).not.toContain("invalid heavy command slot");
+      expect(f.count()).toBe(0);
+    } finally {
+      fs.writeFileSync(release, "release"); control.abort(); await Promise.allSettled(pending); f.close();
+    }
+  }, 60_000);
 
 for (const legacyHolds of [true, false]) test.skipIf(process.platform !== "linux")(`mixed wrappers wait for a cap-one holder (legacy holds: ${legacyHolds})`, async () => {
   const f = fixture(), control = new AbortController();

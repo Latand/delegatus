@@ -14,7 +14,11 @@ import type { ProcessIdentity } from "../src/lib/processIdentity";
 
 const policy = cpuPressurePolicy();
 const pressure = new GateCpuPressure(policy ? { ...policy, releaseAfterMs: Number(process.env.LLV_GATE_PSI_RELEASE_SECONDS ?? 10) * 1000 } : null);
-const [mode, key, pid, claimSlot] = process.argv.slice(2);
+const [mode, key, pid, extra] = process.argv.slice(2);
+// Only a claim names a slot. Wrappers from #3353 up to #4174 pass their queue
+// start (epoch seconds) after `--wait key pid`; managed callers route those
+// wrappers to this helper, so a wait ignores the argument.
+const claimSlot = mode === "--claim" ? extra : undefined;
 function nativeSlotLock() {
   const errno = process.platform === "darwin" ? "__error" : "__errno_location";
   const library = dlopen(process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6", {

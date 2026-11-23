@@ -5,6 +5,9 @@ import path from "node:path";
 import { cloudCheckInputs } from "../../../scripts/cloud-checks";
 import { checkEnvironment, checkInputEnvironment, environmentFingerprint } from "../../../scripts/gate-cache";
 import { createHookFixture } from "../../../scripts/local-gate.fixture";
+import { fixture } from "../../../scripts/gate-slot.queue.fixture";
+import { withoutInheritedGate } from "../testing/inheritedGateEnv";
+import { realExec } from "../workflows/provision";
 import { installedGateAdmissionEnv } from "./agentSignalSandbox";
 import { gateAdmissionInterpreter } from "./gateAdmissionLauncher";
 import { gateToolingFiles } from "./gateTooling";
@@ -112,6 +115,41 @@ test.skipIf(process.platform !== "linux")("Cloud publication inputs under routin
   expect(() => cloudCheckInputs(publication.dir, host)).toThrow("outside tracked files");
   expect(() => cloudCheckInputs(publication.dir, { ...host, ...routedFrom(release, host) })).toThrow("outside tracked files");
 });
+
+test.skipIf(process.platform !== "linux")("a fixture gate started under a routed parent runs the checkout's own cpu-admission.ts", async () => {
+  setEnv("LLV_DOCKER_NSENTER_SHIMS", undefined);
+  // The installed release's helper answers every routed call with a refusal.
+  const release = installedRelease("scripts");
+  fs.writeFileSync(path.join(release, "scripts/cpu-admission.ts"), 'console.error("installed helper answered"); process.exit(2);\n');
+  const routed = routedFrom(release, { LLV_GATE_BUN: process.execPath });
+  const unrouted = routedFrom(release, {});
+  expect(gateAdmissionInterpreter(routed.LLV_GATE_BUN)).toBe(process.execPath);
+  expect(gateAdmissionInterpreter(unrouted.LLV_GATE_BUN)).toBeNull();
+  const quiet = (env: NodeJS.ProcessEnv) => {
+    fs.writeFileSync(env.LLV_GATE_PSI_FILE!, "some avg10=0.00 total=1\n");
+    return { ...env, LLV_GATE_RUNNER: "off", LLV_GATE_SLOTS: "1" };
+  };
+  const control = fixture();
+  try {
+    // Control: the routed value itself reaches the installed helper.
+    const reached = await realExec("bash", control.command("routed").slice(1), repository, { ...quiet(control.env), ...routed }, { signal: AbortSignal.timeout(20_000) });
+    expect(reached.code, reached.stderr).toBe(2);
+    expect(reached.stderr).toContain("installed helper answered");
+  } finally { control.close(); }
+  setEnv("LLV_GATE_BUN", routed.LLV_GATE_BUN);
+  const f = fixture();
+  try {
+    expect(f.env.LLV_GATE_BUN).toBe(process.execPath);
+    const result = await realExec("bash", f.command("own").slice(1), repository, quiet(f.env), { signal: AbortSignal.timeout(20_000) });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain("installed helper answered");
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("own\n");
+  } finally { f.close(); }
+  // A launcher that recorded no interpreter leaves the fixture on PATH's Bun;
+  // any other value is the caller's own choice and stays.
+  expect(withoutInheritedGate({ LLV_GATE_BUN: unrouted.LLV_GATE_BUN }).LLV_GATE_BUN).toBeUndefined();
+  expect(withoutInheritedGate({ LLV_GATE_BUN: "/opt/bun-1.4.0" }).LLV_GATE_BUN).toBe("/opt/bun-1.4.0");
+}, 60_000);
 
 test("only an admission launcher with its recorded interpreter is normalised", () => {
   const home = temporary("gate-admission-home-");

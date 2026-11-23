@@ -747,6 +747,12 @@ both readiness and final claim through the installed helper, including from
 older checkouts. Each new engine launch receives this routing automatically.
 An already-running waiter keeps its launch environment and completes under the
 helper it started with. Slotless wrappers retain their original claim format.
+Wrappers from #3353 up to #4174 pass their queue start after
+`--wait key pid`; the helper reads a fourth argument as a slot only on
+`--claim`, so those waits keep working under routing. A fixture that starts
+its own gates (`withoutInheritedGate`) replaces a routed `LLV_GATE_BUN` with
+the interpreter the launcher recorded, so a test of a changed helper runs the
+checkout's own `cpu-admission.ts`.
 
 Older installed and checkout wrappers can keep polling during the transition.
 After reaching the wait bound, a current ticket can pass older pressure-only

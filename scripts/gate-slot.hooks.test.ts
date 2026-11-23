@@ -379,9 +379,10 @@ for (const mode of ["portable hooks first-open", "service hooks first-open", "po
 case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
 `));
         env.LLV_GATE_BUN = process.execPath;
-        Object.assign(env, installedGateAdmissionEnv(env));
       }
       withoutInheritedGate(env, { keepSandbox: useService });
+      // The reset unroutes an inherited launcher, so route afterwards.
+      if (olderHead) Object.assign(env, installedGateAdmissionEnv(env));
       let command = ["bun", "scripts/local-gate.ts", "pre-push", "--publication-prepare"];
       if (ordinary) {
         env.LLV_GATE_PUBLICATION_RECEIPT = undefined;
