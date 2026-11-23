@@ -22,7 +22,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest as runClaimedRequestWithLeaseWorker, runningCount } from "./runner";
 import { relayActivity, relayOutcomeLabel } from "./activity";
-import { changeRun, dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
+import { changeRun, dropRun, externalRelayFile, readRelayStore, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
@@ -83,8 +83,8 @@ function relay(api_base: string): PairedRelay {
     description: "Test",
     credential: "x".repeat(43),
     owner: {
-      namespace: "test",
-      id: "owner",
+      namespace: "telegram",
+      id: "101",
       display_name: "Owner",
       handle: null,
     },
@@ -256,8 +256,8 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
-test.each(["enabled", "disabled", "long-reservation", "numbered-prose"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
-  const ownerTier = kind === "enabled";
+test.each(["enabled", "two-pairing-owners", "disabled", "long-reservation", "numbered-prose"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
+  const ownerTier = kind === "enabled" || kind === "two-pairing-owners";
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
@@ -265,7 +265,8 @@ test.each(["enabled", "disabled", "long-reservation", "numbered-prose"])("protot
     return { body: { status: "ok" } };
   });
   const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = ownerTier;
-  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const second = { ...paired, id: "other-pairing", owner: { ...paired.owner, id: "202" }, targets: [] };
+  updateRelayStore(s => ({ ...s, relays: kind === "two-pairing-owners" ? [paired, second] : [paired] }));
   let selections = 0, launches = 0;
   const previous = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
@@ -343,19 +344,21 @@ test("the claimed relay records an Other token before a recommendation marker", 
   } finally { await server.close(); }
 });
 
-for (const scenario of ["references", "lease-lost", "revoked", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
+for (const scenario of ["references", "lease-lost", "revoked", "revoked-with-two-owners", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const paired = relay("https://unused.invalid/v1"); paired.targets[0]!.ownerTier = scenario !== "disabled";
   const server = await startTestRelay((req) => {
     if (req.url?.endsWith("/heartbeat")) {
       if (scenario === "lease-lost") return { status: 409, body: { error: { code: "lease_lost", message: "gone" } } };
-      if (scenario === "revoked") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, ownerTier: false }] }] }));
+      if (scenario === "revoked" || scenario === "revoked-with-two-owners") updateRelayStore(s => ({ ...s,
+        relays: s.relays.map(relay => relay.id === paired.id ? { ...relay, targets: [{ ...paired.targets[0]!, ownerTier: false }] } : relay) }));
       if (scenario === "disabled") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, enabled: false }] }] }));
     }
     return { body: { status: "ok" } };
   });
   paired.api_base = `${server.origin}/v1`; paired.origin = server.origin;
-  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const second = { ...paired, id: "other-pairing", owner: { ...paired.owner, id: "202" }, targets: [] };
+  updateRelayStore(s => ({ ...s, relays: scenario === "revoked-with-two-owners" ? [paired, second] : [paired] }));
   const text = prototypeCopyLine(round, 2) + (scenario === "references" ? `\n${prototypeReference(round)}` : "");
   try {
     const result = await runClaimedRequest(paired, { ...contextRequest, request_id: `prototype-${scenario}`, answer: { ...contextRequest.answer, max_chars: 4000 },
@@ -1232,7 +1235,7 @@ test("a duplicate claim leaves the held lease alone", async () => {
     await server.close();
   }
 });
-test("newly confirmed targets default to a 30 minute hard cap", async () => {
+test("newly confirmed targets default to a 30 minute hard cap and have no grants", async () => {
   const owner = {
     namespace: "test", id: "owner", display_name: "Owner", handle: null,
   };
@@ -1257,6 +1260,9 @@ test("newly confirmed targets default to a 30 minute hard cap", async () => {
     }));
     const confirmed = await confirmRelayPairing("pending_cap", owner.id);
     expect(confirmed.targets[0].hardCapMinutes).toBe(30);
+    const stored = readRelayStore().relays.find(relay => relay.id === confirmed.id)!.targets[0];
+    expect(stored).not.toHaveProperty("requesters");
+    expect(stored).not.toHaveProperty("ownerTier");
   } finally {
     await server.close();
   }
@@ -1793,7 +1799,7 @@ async function runLoopCase(options: {
   response?: (body: WireCall, attempt: number) => { status?: number; body?: unknown; drop?: boolean } | Promise<{ status?: number; body?: unknown; drop?: boolean }>;
   completeResponse?: (body: unknown, attempt: number) => { status?: number; body?: unknown };
   runtime?: ToolLoopRuntime & { ownerPorts?: import("./ownerRun").OwnerRunPorts };
-  relayId?: string; ownerTier?: boolean;
+  relayId?: string; ownerTier?: boolean; owner?: PairedRelay["owner"];
   reverseReadArrival?: boolean;
   heartbeatResponse?: (seq: number) => { status?: number; body?: unknown };
   features?: string[];
@@ -1840,6 +1846,7 @@ async function runLoopCase(options: {
   });
   const paired = relay(`${server.origin}/v1`);
   if (options.features) paired.features = options.features;
+  if (options.owner) paired.owner = options.owner;
   paired.id = options.relayId ?? `loop_${crypto.randomUUID()}`;
   paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null, ...(options.ownerTier !== undefined ? { ownerTier: options.ownerTier } : {}) };
   const previousSelection = accountManager.resolveHeadlessSpawn;
@@ -2093,7 +2100,7 @@ test(`X2 is generated by the real poller and runner with X1 pending and pages ($
     const x2Rounds = fs.readFileSync(path.join(root, "x2-seen"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     const hashes = { schemas: x2Rounds.slice(-3).map((r) => hash(JSON.stringify(r.schema))),
       calls: calls.flatMap((entry) => entry.attempts.map((attempt) => hash(JSON.stringify(attempt.request)))) };
-    const hashFile = path.join(x1Dir, "actions-off-x2-2a-hashes.json");
+    const hashFile = path.join(x1Dir, "actions-off-x2-2a-guest-schema-hashes.json");
 
     const output = JSON.stringify({ x1: { revision: "a0d9245bcac2c2246f29f180f8bd21aa825d478c", claim: "claimed_tools_member.json",
       claim_sha256: createHash("sha256").update(fs.readFileSync(path.join(x1Dir, "claimed_tools_member.json"))).digest("hex") },
@@ -2276,7 +2283,7 @@ test("N1 owner switch OFF preserves v3 runner bytes with additive deadline negot
   const output = JSON.stringify(hashes, null, 2) + "\n";
   if (process.env.LLV_RELAY_CAPTURE_OWNER_N1) fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_OWNER_N1, output);
   else {
-    const expected = JSON.parse(fs.readFileSync(path.join(x1Dir, "owner-tools-off-runner-hashes.json"), "utf8"));
+    const expected = JSON.parse(fs.readFileSync(path.join(x1Dir, "owner-tools-off-runner-guest-schema-hashes.json"), "utf8"));
     const claim = JSON.parse(expected.claim);
     claim.features.push("request_deadline", "relay_guest_answers");
     expected.claim = JSON.stringify(claim);
@@ -3056,14 +3063,15 @@ test("chain switches preserve the service wire and legacy record fields", async 
   const cases = ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin", "action_react", "action_ban"];
   const surfaces: Record<string, unknown> = {};
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  const owner = { namespace: "test", id: "owner", display_name: "Owner", handle: null };
   async function replay(role: string, ownerTier?: boolean) {
     const request = x1Request(role.startsWith("action_") ? "actions_admin" : role);
-    const run = await runLoopCase({ request, ownerTier, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
+    const run = await runLoopCase({ request, owner, ownerTier, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
     const record = { ...run.record, startedAt: "time", finishedAt: "time", durationMs: 0 };
     if (record.profile) { record.profile = { ...record.profile }; delete record.profile.pageRead; }
     const view = (await import("./store")).publicRelay({ ...run.paired, origin: "https://fixture.example", api_base: "https://fixture.example/v1", pairedAt: "time" });
-    if (ownerTier !== undefined) delete view.targets[0]!.ownerTier;
-    return { calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(view)) };
+    const legacyView = { ...view, targets: view.targets.map(({ grantStatus: _status, ...target }) => target) };
+    return { calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(legacyView)) };
   }
   for (const role of cases) surfaces[role] = await replay(role);
   if (process.env.LLV_RELAY_CAPTURE_2B) { fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_2B, JSON.stringify({ ...snapshot, surfaces }, null, 2) + "\n"); return; }
@@ -3305,7 +3313,7 @@ for (const phase of ["running", "pending"] as const) test(`owner cutoff through 
     const origin = "http://127.0.0.1:8899";
     const response = await PATCH(new NextRequest(`${origin}/api/external-relay/relays/${paired.id}`, {
       method: "PATCH", headers: { cookie: `llv_operator=${soloBrowserSession()}`, origin, host: "127.0.0.1:8899", "content-type": "application/json" },
-      body: JSON.stringify({ target: { id: "target_1", ownerTier: false } }),
+      body: JSON.stringify({ target: { id: "target_1", enabled: false } }),
     }), { params: Promise.resolve({ id: paired.id }) });
     expect(response.status).toBe(200);
     if (phase === "pending") expect(readRunLedger().runs[0]?.ownerTurn).toMatchObject({ cancel: "kill" });
@@ -4420,7 +4428,9 @@ for (const leaseWorker of [false, true]) test(`long rich refusal is recorded and
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "The answer was too long to deliver after the service refused its original format. Please request a shorter answer." } });
     expect(completions).toHaveLength(2);
     const record = readAnswerRecord(paired.id, request.target_id, request.request_id);
-    expect(record).toMatchObject({ outcome: "failure_notice", delivery: "accepted", answer: { text }, completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
+    expect(record).toMatchObject({ outcome: "failure_notice", delivery: "accepted", answer: { text },
+      drops: [{ part: "answer", reason: "rich_limit_exceeded" }],
+      completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
     expect(log.mock.calls).toContainEqual(["External relay completion refused", { request: request.request_id.slice(0, 8), status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }]);
     expect(JSON.stringify(record?.completionRefusals)).not.toContain("private parser input");
   } finally { log.mockRestore(); await service.close(); }
@@ -4500,22 +4510,26 @@ test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])
     await Bun.write(${JSON.stringify(marker)},path.dirname(out));
     console.log(JSON.stringify({type:'thread.started',thread_id:'thread_image'}));
     console.log(JSON.stringify({type:'item.completed',item:{type:'image_generation_call'}}));
-    await Bun.write(out,JSON.stringify({action:${JSON.stringify(mode==="ignore"?"ignore":"reply")},text:${JSON.stringify(mode==="media_only_refused"?"":"Picture")},reply_to:'m1',format:'plain',buttons:[],attachments:[{path:${mode==="outside"?JSON.stringify(path.join(root,"outside.png")):"file"},kind:'photo',caption:'Picture'}]}));`);
+    await Bun.write(out,JSON.stringify({action:${JSON.stringify(mode==="ignore"?"ignore":"reply")},text:${JSON.stringify(mode==="media_only_refused"?"":"Picture")},reply_to:'m1',format:'plain',buttons:[],attachments:[{path:${mode==="outside"?JSON.stringify(path.join(root,"outside.png")):"file"},kind:'photo',caption:''}]}));`);
   const paired=relay(`${server.origin}/v1`);
   try {
-    const result=await runClaimedRequest(paired,request,undefined,{command});
+    const result=await runClaimedRequestWithLeaseWorker(paired,request,undefined,{command,leaseWorker:mode==="ok"});
     seenRunDir=fs.readFileSync(marker,"utf8");
     if(mode==="lease_lost") {expect(result).toBeNull();expect(sent).toEqual([]);}
     else if(mode==="media_only_refused") expect(result).toMatchObject({outcome:"failed",reason:"invalid_answer"});
     else if(mode==="ignore") expect(result).toMatchObject({outcome:"answered",answer:{action:"ignore",text:"",format:"plain",buttons:[]}});
     else if(mode==="refused") expect(result).toMatchObject({outcome:"failed",reason:"invalid_answer"});
     else if(mode==="outside") {expect(result).toMatchObject({outcome:"answered"});expect(result && "answer" in result ? result.answer.attachments??[]:[]).toEqual([]);}
-    else {expect(result).toMatchObject({outcome:"answered",answer:{attachments:[{kind:"photo",caption:"Picture"}]}});}
+    else {expect(result).toMatchObject({outcome:"answered",answer:{attachments:[{kind:"photo",caption:""}]}});}
     expect(puts).toBe(mode==="outside" || mode==="ignore"?0:1);
     expect(fs.existsSync(seenRunDir)).toBe(false);
     const record=readAnswerRecord(paired.id,request.target_id,request.request_id);
     expect(record).toHaveProperty("features",request.features);
     expect(JSON.stringify(record)).not.toContain(seenRunDir);
+    if(mode==="ok") {
+      expect(sent).toEqual([result]);
+      expect(record).toMatchObject({delivery:"accepted",drops:[],answer:{attachments:[{kind:"photo",caption:""}]}});
+    }
     if(mode==="outside") expect(record).toHaveProperty("drops",[{part:"attachment",index:0,reason:"outside_run"}]);
     if(mode.includes("refused")) expect(record).toHaveProperty("drops",[{part:"attachment",reason:"unsupported_media_type"},...(mode==="refused"?[{part:"answer",reason:"attachment_not_ready"}]:[])]);
   } finally {await server.close();}
@@ -4526,7 +4540,8 @@ test.each([["claude",false,false],["codex",false,false],["codex",true,false],["c
   const { richRequest }=await import("./rich.fixture");
   const { viewerMcpBindings, productionDomainDependencies }=await import("@/lib/mcp/bindings");
   const ownerHome=fs.mkdtempSync(path.join("/tmp","relay-rich-owner-"));
-  fs.mkdirSync(path.join(ownerHome,"handoff")); const file=path.join(ownerHome,"handoff","report.md");fs.writeFileSync(file,"# Report");
+  const handoff=path.join(ownerHome,"handoff");
+  fs.mkdirSync(handoff); let file=path.join(handoff,"report.md");fs.writeFileSync(file,"# Report");
   const oldHome=process.env.HOME, oldState=process.env.LLV_STATE_DIR; process.env.HOME=ownerHome; process.env.LLV_STATE_DIR=path.join(ownerHome,"state");
   const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}_${leaseLost}_${composed}`;
   request.input.requester={key:"u1",is_owner:true,is_admin:true,is_anonymous_admin:false,can_delete_messages:true,can_restrict_members:true};
@@ -4548,7 +4563,18 @@ test.each([["claude",false,false],["codex",false,false],["codex",true,false],["c
   const lastMessage=composed ? "Answered in the chat.\n\nSources:\n- [Source](https://example.com/source)" : text;
   try {
     const result=await runClaimedRequest(paired,request,undefined,{timeoutMs:10000,ownerPorts:{
-      launch:async body=>{expect(body.prompt).toContain("<format>");expect(body.prompt).toContain("relay_answer");return {status:202,body:{conversationId}};},
+      launch:async body=>{
+        expect(body.prompt).toContain("<format>");
+        expect(body.prompt).toContain(JSON.stringify(handoff));
+        const runDir=readRunLedger().runs.find(row=>row.requestId===request.request_id)!.runDir;
+        const outputDir=path.join(runDir,"outbox");
+        expect(body.prompt).toContain(JSON.stringify(outputDir));
+        if(composed) {
+          file=path.join(outputDir,"report.md");
+          fs.writeFileSync(file,"# Report");
+        }
+        return {status:202,body:{conversationId}};
+      },
       observe:async()=>{
         try{
           await expect(binding({deputy:"seat"}).relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
@@ -4590,7 +4616,7 @@ test("negotiated tool rounds reject plain over the cap and preserve their rich a
   expect(refused.completion).toMatchObject({outcome:"failed",reason:"invalid_answer"});
 });
 test.each([false, true])("owner reply chains reuse one conversation, learn bot answers and bind only the current authority (rich %s)", async rich => {
-  const { liveOwnerRelayConversation, ownerRelayPayload } = await import("./ownerAuthority");
+  const { liveOwnerRelayConversation, ownerRelayHandoff } = await import("./ownerAuthority");
   const { relayServiceToolsOp } = await import("./ownerServiceTools");
   const { relayAnswerOp } = await import("./ownerAnswer");
   const { formatGuide } = await import("./rich.fixture");
@@ -4621,7 +4647,7 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
       const held = registry.holdDelivery("conversation_chain_fixture", prompt, turn.clientAttemptId, "text", [], null, { operationId: turn.clientAttemptId });
       registry.recordDeliveryOutcome(held.id, "delivered");
       expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(true);
-      expect(ownerRelayPayload("context", "conversation_chain_fixture")?.text).toContain(current.endsWith("2") ? "Fixture turn turn-2" : "Fixture turn turn-3");
+      expect(ownerRelayHandoff("context", "conversation_chain_fixture").payload?.text).toContain(current.endsWith("2") ? "Fixture turn turn-2" : "Fixture turn turn-3");
       return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId };
     },
     observe: async () => {
@@ -4643,7 +4669,7 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
       }
       expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(false);
       expect(await relayServiceToolsOp("conversation_chain_fixture", { op: "list" })).toBeNull();
-      expect(ownerRelayPayload("context", "conversation_chain_fixture")).toBeNull();
+      expect(ownerRelayHandoff("context", "conversation_chain_fixture").payload).toBeNull();
       expect(await relayAnswerOp("conversation_chain_fixture", { format: "plain" })).toBeNull();
     }
     expect(launches).toBe(1); expect(readConversations()).toHaveLength(1);

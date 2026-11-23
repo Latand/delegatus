@@ -10,6 +10,43 @@ const tables = [
   "CREATE TABLE IF NOT EXISTS pipeline_evidence_rows (collection TEXT NOT NULL, row_key TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(collection,row_key))",
 ];
 const tracked = (row: string) => `${row}.collection IN ('pipelines','pipelines_archive')`;
+const taskIds = (row: string) => `CASE WHEN json_valid(${row}.value_json) THEN ${row}.value_json -> '$.taskIds' END`;
+const insertTaskMembership = (row: string) => `INSERT OR IGNORE INTO pipeline_task_membership
+  SELECT DISTINCT ${row}.collection,${row}.row_key,ids.value
+  FROM json_each(CASE WHEN json_valid(${row}.value_json) THEN ${row}.value_json ELSE '{}' END,'$.taskIds') ids
+  WHERE ${tracked(row)} AND typeof(ids.key)='integer' AND ids.type='text';`;
+const deleteTaskMembership = (row: string) => `DELETE FROM pipeline_task_membership WHERE collection=${row}.collection AND row_key=${row}.row_key;`;
+const membershipTriggers = [
+  `CREATE TRIGGER pipeline_task_membership_insert AFTER INSERT ON state_rows WHEN ${tracked("NEW")}
+    BEGIN ${insertTaskMembership("NEW")} END`,
+  `CREATE TRIGGER pipeline_task_membership_update AFTER UPDATE ON state_rows
+    WHEN (${tracked("OLD")} OR ${tracked("NEW")}) AND
+      (OLD.collection IS NOT NEW.collection OR OLD.row_key IS NOT NEW.row_key OR ${taskIds("OLD")} IS NOT ${taskIds("NEW")})
+    BEGIN ${deleteTaskMembership("OLD")} ${insertTaskMembership("NEW")} END`,
+  `CREATE TRIGGER pipeline_task_membership_delete AFTER DELETE ON state_rows WHEN ${tracked("OLD")}
+    BEGIN ${deleteTaskMembership("OLD")} END`,
+];
+export function pipelineTaskMembershipReady(names: ReadonlySet<string>): boolean {
+  return ["pipeline_task_membership", "pipeline_task_membership_lookup", "pipeline_task_membership_insert",
+    "pipeline_task_membership_update", "pipeline_task_membership_delete"].every(name => names.has(name));
+}
+
+/** Backfill scalar links once in the fenced schema transaction. Subsequent
+ * mutations, including archive moves and writes by older peers, maintain them. */
+export function installPipelineTaskMembership(db: Database, names: ReadonlySet<string>): void {
+  if (pipelineTaskMembershipReady(names)) return;
+  for (const sql of membershipTriggers) db.exec(`DROP TRIGGER IF EXISTS ${sql.split(" ")[2]}`);
+  db.exec("DROP TABLE IF EXISTS pipeline_task_membership");
+  db.exec(`CREATE TABLE pipeline_task_membership (collection TEXT NOT NULL, row_key TEXT NOT NULL, task_id TEXT NOT NULL,
+    PRIMARY KEY(collection,row_key,task_id)) WITHOUT ROWID`);
+  db.exec("CREATE INDEX pipeline_task_membership_lookup ON pipeline_task_membership(task_id,collection,row_key)");
+  db.exec(`INSERT OR IGNORE INTO pipeline_task_membership
+    SELECT r.collection,r.row_key,ids.value FROM state_rows r
+    CROSS JOIN json_each(CASE WHEN json_valid(r.value_json) THEN r.value_json ELSE '{}' END,'$.taskIds') ids
+    WHERE ${tracked("r")} AND typeof(ids.key)='integer' AND ids.type='text'`);
+  for (const sql of membershipTriggers) db.exec(sql);
+}
+
 const touch = (row: string) => `INSERT INTO pipeline_evidence_rows VALUES (${row}.collection,${row}.row_key,(SELECT revision FROM pipeline_evidence_clock WHERE id=1))
   ON CONFLICT(collection,row_key) DO UPDATE SET revision=excluded.revision;`;
 const revisionIndex = "CREATE INDEX pipeline_evidence_changed ON pipeline_evidence_rows(revision,collection,row_key)";

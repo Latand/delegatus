@@ -211,6 +211,7 @@ for (const [status, code] of [[415, "unsupported_format"], [400, "malformed"], [
 
 test("attachment removal keeps a short answer unchanged after a format refusal", async () => {
   const sent: ExternalRelayCompletion[] = [];
+  const downgrades: unknown[] = [];
   const service = await startTestRelay((_request, body) => {
     sent.push(body as ExternalRelayCompletion);
     return sent.length === 1 ? { status: 422, body: { error: { code: "attachment_not_ready" } } }
@@ -221,11 +222,16 @@ test("attachment removal keeps a short answer unchanged after a format refusal",
     answer: { action: "reply", text: "Done.", reply_to: null, format: "rich_markdown", buttons: [], attachments: [{ attachment_id: "file1", kind: "document" }] } };
   try {
     const result = await completeRelayRequest(relay, "attachment_short_answer", original, () => Date.now() + 5000,
-      undefined, undefined, 4000);
+      undefined, undefined, 4000, undefined, undefined, refusal => downgrades.push(refusal));
     expect(result).toEqual({ delivery: "accepted", body: { ...original, answer: { action: "reply", text: "Done.", reply_to: null, format: "plain", buttons: [] } } });
     expect(sent).toHaveLength(3);
     expect(sent[2]).toMatchObject({ outcome: "answered", answer: { text: "Done.", format: "plain" } });
     expect(sent[2]).not.toMatchObject({ answer: { text: answerTooLongNotice(4000) } });
+    expect(downgrades).toEqual([
+      { status: 422, code: "attachment_not_ready", reason: "attachment_not_ready" },
+      { status: 422, code: "invalid_format", reason: "unsupported_format" },
+    ]);
+    expect(result).not.toHaveProperty("downgrade");
   } finally { await service.close(); }
 });
 
@@ -260,6 +266,7 @@ for (const [status, code] of [[415, "invalid_format"], [400, "malformed"], [422,
 
 test("an empty ignore keeps its existing invalid-format behavior", async () => {
   const sent: ExternalRelayCompletion[] = [];
+  const downgrades: unknown[] = [];
   const service = await startTestRelay((_request, body) => {
     sent.push(body as ExternalRelayCompletion);
     return sent.length === 1 ? { status: 422, body: { error: { code: "invalid_format" } } } : { body: {} };
@@ -270,8 +277,9 @@ test("an empty ignore keeps its existing invalid-format behavior", async () => {
     const result = await completeRelayRequest(relay, "ignore_fixture", {
       lease_id: "fixture", outcome: "answered", duration_ms: 1,
       answer: { action: "ignore", text: "", reply_to: null, format: "rich_markdown", buttons: [] },
-    }, () => until);
+    }, () => until, undefined, undefined, 4000, undefined, undefined, refusal => downgrades.push(refusal));
     expect(result).toEqual({ body: { lease_id: "fixture", outcome: "failed", reason: "invalid_answer", detail: null }, delivery: "accepted" });
+    expect(downgrades).toEqual([{ status: 422, code: "invalid_format", reason: "invalid_format" }]);
     expect(sent).toHaveLength(2);
     expect(sent[1]).not.toHaveProperty("answer");
   } finally { await service.close(); }

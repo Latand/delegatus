@@ -154,7 +154,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   // the synthetic request it built carries no session cookie.
   const inProcessPerson = trustedActor?.kind === "operator" || trustedActor?.kind === "member";
 
-  let body: { orchestratorRelayProject?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; files?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; answer?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; accountId?: unknown };
+  let body: { orchestratorRelayProject?: unknown; requesterRequestId?: unknown; pid?: unknown; path?: unknown; conversationId?: unknown; clientMessageId?: unknown; operationId?: unknown; text?: unknown; policy?: unknown; image?: unknown; images?: unknown; files?: unknown; action?: unknown; key?: unknown; label?: unknown; question?: unknown; decision?: unknown; requestId?: unknown; answer?: unknown; target?: unknown; model?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; accountId?: unknown };
   try {
     body = (await req.json()) as {
       pid?: unknown;
@@ -206,7 +206,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       typeof body.text === "string" ? body.text : "",
       typeof body.clientMessageId === "string" ? body.clientMessageId : undefined,
       voiceBinding ? { sessionId: voiceBinding.sessionId as string, proposalId: voiceBinding.proposalId as string } : undefined,
-      inProcessPerson);
+      inProcessPerson, body.requesterRequestId);
     if (!admitted.ok) {
       return NextResponse.json({ error: admitted.error, code: admitted.code, ...(admitted.reason ? { reason: admitted.reason } : {}), admission: "refused" }, { status: admitted.status });
     }

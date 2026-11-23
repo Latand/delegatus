@@ -26,6 +26,8 @@
 .bt-label > .bt-meta > span { max-width: 100%; }
 .bt-stage .bt-label { align-items: center; padding-left: 31px; }
 .bt-stage-name { display: flex; align-items: center; gap: 6px; line-height: 18px; }
+/* On a desktop the name and the runtime keep their own lines, so every stage row is the same height whatever its figures say. */
+.board-timeline[data-phone="0"] .bt-stage-name, .board-timeline[data-phone="0"] .bt-stage .bt-runtime { flex-basis: 100%; }
 .bt-runtime { line-height: 16px; }
 .bt-lane { position: relative; flex-shrink: 0; min-height: 34px; padding-bottom: 18px; overflow: hidden; background-image: linear-gradient(to right, var(--bt-grid) 1px, transparent 1px); }
 .bt-stage-bar { position: absolute; top: 5px; bottom: 5px; border-radius: 4px; }
@@ -107,3 +109,11 @@
 .board-timeline[data-phone="1"] .bt-split { grid-column: 1 / -1; column-gap: 10px; }
 .board-timeline[data-phone="1"] .bt-legend { grid-column: 1; margin: 0; }
 .board-timeline[data-phone="1"] .bt-zoom { grid-column: 2; }
+/* A stage row with a conversation opens it: the whole row is a click target, its label the keyboard stop. */
+.bt-stage[data-openable="1"] { cursor: pointer; }
+.bt-open-cue { flex-shrink: 0; color: var(--color-secondary); }
+@media (hover: hover) { .bt-stage[data-openable="1"]:hover, .bt-stage[data-openable="1"]:hover .bt-label { background: var(--surface-well); } }
+.bt-stage[data-openable="1"]:active, .bt-stage[data-openable="1"]:active .bt-label { background: var(--color-accent-soft); }
+.bt-stage[data-openable="1"]:hover .bt-open-cue, .bt-stage[data-openable="1"]:active .bt-open-cue { color: var(--color-accent); }
+.bt-stage .bt-label[role="button"]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.board-timeline[data-phone="1"] .bt-stage .bt-label[role="button"] { min-height: 44px; }
