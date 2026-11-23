@@ -182,7 +182,9 @@ for (const scenario of ["settled", "idle-checkpoint", "ledger-limit", "open", "p
     fs.writeFileSync(entry.artifactPath!, text);
     fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
     fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
-    const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+    const ledgerDir = statePath("structured-host-events");
+    const ledgerPath = path.join(ledgerDir, `${FIXTURE_SESSION}.jsonl`);
+    const ledger = new FileRuntimeEventStore(ledgerDir);
     const writeLedger = () => {
       ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: FIXTURE_TURN_ID, seq: 1 });
       if (open) ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "newer-turn", seq: 2 });
@@ -191,9 +193,11 @@ for (const scenario of ["settled", "idle-checkpoint", "ledger-limit", "open", "p
       else ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 2 });
       ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: 3 });
       if (scenario === "idle-checkpoint") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+      const stamp = new Date(FIXTURE_NOW + 2000);
+      fs.utimesSync(ledgerPath, stamp, stamp);
     };
     if (scenario !== "retry") writeLedger();
-    const now = FIXTURE_NOW + 7 * 3_600_000;
+    const now = FIXTURE_NOW + (open || scenario === "ledger-limit" || scenario === "retry" ? 7 : 1) * 3_600_000;
     const reconcileOnce = async () => {
       const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), ""], { stdout: "pipe", stderr: "pipe" });
       identities.push(captureProcessIdentity(successor.pid));
