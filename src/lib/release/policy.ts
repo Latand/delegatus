@@ -3,7 +3,7 @@ export interface ReleaseDeployment { revision: string; at: number }
 export interface ReleaseChange { subject: string; files: string[] }
 export interface ReleaseInput {
   now: number; enabled: boolean; requested: boolean; tickEnabled: boolean; mergeEnabled: boolean;
-  live: boolean; mainVersion: string; lastTag: { name: string; version: string; at: number };
+  live: boolean; mainVersion: string; lastTag: { name: string; version: string; at: number; boundary?: string | null };
   registryHasTag: boolean; checks: "green" | "red" | "pending"; hold: string | null;
   draining: boolean; deploying: boolean; tools: string[]; minChanges: number; minGapHours: number;
   changes: ReleaseChange[]; deployments: ReleaseDeployment[];
@@ -13,6 +13,8 @@ export interface ReleaseInput {
   frozenCut?: string;
   /** The owned release PR has merged; its version bump is expected. */
   publishing?: boolean;
+  /** The exact merged release PR and commit were revalidated by production. */
+  releasePrMerged?: boolean;
 }
 export interface ReleaseDecision {
   state: "due" | "not-due" | "blocked" | "in-flight";
@@ -48,7 +50,9 @@ export async function releaseState(input: ReleaseInput): Promise<ReleaseDecision
   const answer = (state: ReleaseDecision["state"], blocker: number | null, reason: string): ReleaseDecision => ({ state, blocker, reason, cut, count });
   if (!input.tickEnabled) return answer("blocked", 2, "tick-off");
   if (!input.mergeEnabled) return answer("blocked", 3, "merge-off");
-  if (input.live || (!input.publishing && input.mainVersion !== input.lastTag.version) || !input.registryHasTag) return answer("in-flight", 4, "release-in-flight");
+  if (input.live) return answer("in-flight", 4, "release-in-flight");
+  if (!input.publishing && input.mainVersion !== input.lastTag.version) return answer("blocked", 11, "release-version-mismatch");
+  if (!input.registryHasTag && !(input.publishing && input.releasePrMerged)) return answer("in-flight", 4, "release-in-flight");
   if (input.checks !== "green") return answer("blocked", 5, input.checks === "red" ? "checks-red" : "checks-pending");
   const serving = [...input.deployments].sort((a, b) => b.at - a.at)[0];
   for (const d of input.deployments) {

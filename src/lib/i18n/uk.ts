@@ -6167,6 +6167,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.release.wait.tick": "Чекає на ввімкнення пробуджень оркестратора.",
   "seatTick.release.wait.merge": "Чекає на ввімкнення автоматичного злиття.",
   "seatTick.release.wait.flight": "Реліз уже триває.",
+  "seatTick.release.wait.versionMismatch": "Версія в main відрізняється від останнього тегу. Оркестратор має узгодити стан релізу перед запуском наступного.",
   "seatTick.release.wait.checks": "Чекає на успішні обов’язкові перевірки.",
   "seatTick.release.wait.rollback": "Після відкату потрібне розгорнуте виправлення.",
   "seatTick.release.wait.hold": "Реліз призупинено.",
