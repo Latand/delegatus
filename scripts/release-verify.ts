@@ -31,19 +31,32 @@ export function releasePublished(input: PublishedRelease): string[] {
   if (input.images.length !== 3 || new Set(input.images.map(i => i.digest)).size !== 1 || input.images.some(i => !i.digest || !["linux/amd64", "linux/arm64"].every(p => i.platforms.includes(p)))) errors.push("Docker tags/digest/platforms not verified");
   return errors;
 }
-function isReleaseTagObject(content: string, tag: string, commit: string, version: string): boolean {
-  const [headers, message] = content.split("\n\n", 2);
+function isReleaseTagObject(content: string, tag: string, commit: string, version: string, cut?: string): boolean {
+  const separator = content.indexOf("\n\n");
+  const headers = separator < 0 ? "" : content.slice(0, separator);
+  const tagMessage = separator < 0 ? "" : content.slice(separator + 2).trimEnd();
+  const validMessage = cut
+    ? tagMessage === `Delegatus ${version}\n\nRelease-Cut: ${cut}`
+    : tagMessage === `Delegatus ${version}` || new RegExp(`^Delegatus ${version}\\n\\nRelease-Cut: [a-f0-9]{40}$`).test(tagMessage);
   return !!headers && headers.split("\n").includes(`object ${commit}`)
     && headers.split("\n").includes("type commit") && headers.split("\n").includes(`tag ${tag}`)
-    && message?.trimEnd() === `Delegatus ${version}`;
+    && validMessage;
 }
-export function readmeProvenance(root: string): boolean {
+export function releaseCutFromTag(content: string): string | null {
+  const separator = content.indexOf("\n\n");
+  const message = separator < 0 ? "" : content.slice(separator + 2).trimEnd();
+  const match = /^Delegatus \d+\.\d+\.\d+\n\nRelease-Cut: ([a-f0-9]{40})$/.exec(message);
+  return match?.[1] ?? null;
+}
+export function readmeProvenance(root: string, captureInputs?: { generatorSha256: string; seedSha256: string }): boolean {
   try {
     const base = path.join(root, "docs/media/readme");
     const p = JSON.parse(fs.readFileSync(path.join(base, "provenance.json"), "utf8"));
     const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
     if (p.schemaVersion !== 1 || p.classification !== "synthetic" || p.generator !== "scripts/capture-readme-media.ts" || p.seed !== "scripts/readme-demo-state.ts"
-      || hash(path.join(root, p.generator)) !== p.generatorSha256 || hash(path.join(root, p.seed)) !== p.seedSha256) return false;
+      || (captureInputs
+        ? p.generatorSha256 !== captureInputs.generatorSha256 || p.seedSha256 !== captureInputs.seedSha256
+        : hash(path.join(root, p.generator)) !== p.generatorSha256 || hash(path.join(root, p.seed)) !== p.seedSha256)) return false;
     const files = fs.readdirSync(base).filter(f => f.endsWith(".svg")).sort();
     if (!Array.isArray(p.assets) || files.length !== 8 || p.assets.length !== 8 || new Set(p.assets.map((a: { path: string }) => a.path)).size !== 8) return false;
     return p.assets.every((a: { path: string; sha256: string }) => files.includes(a.path) && hash(path.join(base, a.path)) === a.sha256);
@@ -51,8 +64,9 @@ export function readmeProvenance(root: string): boolean {
 }
 export interface VerifyPorts {
   command: (file: string, args: string[]) => Promise<string>;
+  readFileAt?: (revision: string, file: string) => Promise<Uint8Array>;
   registry: (url: string) => Promise<Record<string, unknown> | null>;
-  provenance: () => boolean;
+  provenance: (captureInputs?: { generatorSha256: string; seedSha256: string }) => boolean;
   now: () => number; wait: () => Promise<void>;
 }
 export interface VerifyResult { errors: string[]; nextStep?: PreflightAction; tagCommit?: string }
@@ -66,7 +80,9 @@ async function readRegistry(url: string, timeout = 30_000): Promise<Record<strin
 }
 const productionPorts: VerifyPorts = {
   command: async (file, args) => (await promisify(execFile)(file, args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 })).stdout.trim(),
-  registry: readRegistry, provenance: () => readmeProvenance(process.cwd()), now: Date.now, wait: () => new Promise(resolve => setTimeout(resolve, 30_000)),
+  readFileAt: async (revision, file) => (await promisify(execFile)("git", ["--no-replace-objects", "show", `${revision}:${file}`],
+    { encoding: "buffer", timeout: 60_000, maxBuffer: 8 * 1024 * 1024 })).stdout as Buffer,
+  registry: readRegistry, provenance: captureInputs => readmeProvenance(process.cwd(), captureInputs), now: Date.now, wait: () => new Promise(resolve => setTimeout(resolve, 30_000)),
 };
 /** Read only exact-version manifests and the dedicated dist-tags endpoint. */
 async function registryView(spec: string, field: string, timeout: number): Promise<unknown> {
@@ -116,36 +132,34 @@ interface WorkflowRun { databaseId: number; headSha: string; displayTitle: strin
 export async function verifyRelease(tag: string, cut: string | null, ports: VerifyPorts = productionPorts, pullRequest?: string): Promise<VerifyResult> {
   if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error("expected a v-prefixed release version");
   const git = (...args: string[]) => ports.command("git", args);
-  const pkg = JSON.parse(await git("show", "HEAD:package.json"));
-  let registryURL = `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}`;
   const version = tag.slice(1);
   if (cut !== null) {
+    if (!pullRequest) return { errors: ["release preflight requires --pr with the merged release PR number"] };
+    if (!/^[1-9]\d*$/.test(pullRequest)) throw new Error("release PR must be a pull request number");
     if (!/^[a-f0-9]{40}$/i.test(cut)) throw new Error("cut must be an exact commit SHA");
-    await git("merge-base", "--is-ancestor", cut, "HEAD");
     const head = await git("rev-parse", "HEAD");
-    let tagCommit = head;
-    let releaseBase = cut;
-    if (pullRequest !== undefined) {
-      if (!/^[1-9]\d*$/.test(pullRequest)) throw new Error("release PR must be a pull request number");
-      const pr = JSON.parse(await ports.command("gh", ["pr", "view", pullRequest, "--json", "state,headRefOid,baseRefName,mergeCommit"]));
-      if (pr.state !== "MERGED" || pr.baseRefName !== "main" || !/^[a-f0-9]{40}$/.test(pr.mergeCommit?.oid ?? "")) {
-        return { errors: ["release PR is unmerged; merge the reviewed release PR into main before tagging, then rerun preflight"] };
-      }
-      if (pr.headRefOid !== head && pr.mergeCommit.oid !== head) return { errors: ["release PR head moved; review the new head before merging or tagging"] };
-      tagCommit = pr.mergeCommit.oid;
-      // The queue may have integrated newer main changes. Inspect only the
-      // release delta against main, while ancestry and tree checks bind HEAD.
-      releaseBase = `${tagCommit}^`;
+    const pr = JSON.parse(await ports.command("gh", ["pr", "view", pullRequest, "--json", "state,baseRefName,headRefOid,mergeCommit"]));
+    if (pr.state !== "MERGED" || pr.baseRefName !== "main" || !/^[a-f0-9]{40}$/.test(pr.mergeCommit?.oid ?? "")) {
+      return { errors: ["release PR is unmerged; merge the reviewed release PR into main before tagging, then rerun preflight"] };
     }
+    if (!/^[a-f0-9]{40}$/.test(pr.headRefOid ?? "")) return { errors: ["release PR's reviewed head is unreadable"] };
+    const tagCommit = pr.mergeCommit.oid;
+    if (head !== tagCommit) return { errors: ["release checkout differs from the PR's integrated main commit; review and check out that commit before tagging"] };
     try {
       await git("fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main");
     } catch { return { errors: ["cannot refresh origin/main; restore access and rerun release preflight before tagging"] }; }
     try {
       await git("--no-replace-objects", "merge-base", "--is-ancestor", tagCommit, "refs/remotes/origin/main");
     } catch { return { errors: ["release tag commit is not on origin/main; merge the reviewed release PR first, then rerun preflight on its merged commit"] }; }
-    if (await git("--no-replace-objects", "rev-parse", `${tagCommit}^{tree}`) !== await git("--no-replace-objects", "rev-parse", `${head}^{tree}`)) {
-      return { errors: ["merged release tree differs from the reviewed head; review the integrated tree before tagging"] };
-    }
+    await git("--no-replace-objects", "merge-base", "--is-ancestor", cut, tagCommit);
+    const captureInputs = {
+      generatorSha256: createHash("sha256").update(await (ports.readFileAt?.(pr.headRefOid, "scripts/capture-readme-media.ts")
+        ?? git("--no-replace-objects", "show", `${pr.headRefOid}:scripts/capture-readme-media.ts`))).digest("hex"),
+      seedSha256: createHash("sha256").update(await (ports.readFileAt?.(pr.headRefOid, "scripts/readme-demo-state.ts")
+        ?? git("--no-replace-objects", "show", `${pr.headRefOid}:scripts/readme-demo-state.ts`))).digest("hex"),
+    };
+    const pkg = JSON.parse(await git("--no-replace-objects", "show", `${tagCommit}:package.json`));
+    const registryURL = `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}`;
     const local = await git("for-each-ref", "--format=%(refname)", `refs/tags/${tag}`);
     let localTag: ReleasePreflight["localTag"] = "absent";
     let localObject = "";
@@ -157,7 +171,7 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
       const content = await git("cat-file", "-p", `refs/tags/${tag}`);
       const tagged = JSON.parse(await git("show", `${tag}:package.json`));
       localTag = type === "tag" && localCommit === tagCommit && tagged.version === version
-        && isReleaseTagObject(content, tag, tagCommit, version) ? "matching" : "conflict";
+        && isReleaseTagObject(content, tag, tagCommit, version, cut) ? "matching" : "conflict";
     }
     const remote = (await git("ls-remote", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`)).split("\n")
       .map(line => line.trim().split(/\s+/)).filter(parts => parts.length === 2 && parts[0]);
@@ -168,8 +182,9 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
       : localTag === "matching" && remoteObject === localObject && remoteCommit === tagCommit ? "matching" : "conflict";
     const errors = releasePreflight({ tag, version: pkg.version, localTag, remoteTag,
       npmVersion: !!await ports.registry(`${registryURL}/${version}`),
-      files: (await git("diff", "--name-only", releaseBase, "HEAD")).split("\n").filter(Boolean),
-      clean: !(await git("status", "--porcelain")), provenance: ports.provenance() });
+      // Compare the release PR's own files with its integrated first parent.
+      files: (await git("--no-replace-objects", "diff", "--no-renames", "--name-only", `${tagCommit}^1`, tagCommit)).split("\n").filter(Boolean),
+      clean: !(await git("status", "--porcelain")), provenance: ports.provenance(captureInputs) });
     if (await git("rev-parse", "HEAD") !== head) return { errors: ["release checkout head moved during preflight; review the new head before tagging"] };
     const nextStep: PreflightAction | undefined = errors.length ? undefined : remoteTag === "matching" ? "verify-remote"
       : localTag === "matching" ? "push-existing" : "create-and-push";
@@ -185,7 +200,7 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
     || !isReleaseTagObject(content, tag, sha, version)) return { errors: ["remote annotated tag differs from the local release"] };
   const tagged = JSON.parse(await git("show", `${tag}:package.json`));
   if (tagged.version !== version) return { errors: ["tag/version mismatch"] };
-  registryURL = `https://registry.npmjs.org/${encodeURIComponent(tagged.name)}`;
+  const registryURL = `https://registry.npmjs.org/${encodeURIComponent(tagged.name)}`;
   const repo = await ports.command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
   const deadline = ports.now() + 90 * 60_000;
   let errors = ["publication not observed"];
@@ -236,9 +251,9 @@ if (import.meta.main) {
     }
     const result = await verifyRelease(tag, cut, productionPorts, args.includes("--pr") ? args[args.indexOf("--pr") + 1] : undefined);
     if (result.errors.length) { console.error(result.errors.join("\n")); process.exitCode = 1; }
-    else if (result.nextStep === "create-and-push") console.log(`release preflight passed; create the approved annotated tag on verified main commit ${result.tagCommit}, then push it`);
-    else if (result.nextStep === "push-existing") console.log("release preflight passed; push the existing matching annotated tag object without retagging");
-    else if (result.nextStep === "verify-remote") console.log("remote release tag matches; perform read-only publication verification and do not push");
+    else if (result.nextStep === "create-and-push") console.log(`release preflight passed; create the approved annotated tag on verified main commit ${result.tagCommit} with message "Delegatus ${tag.slice(1)}" and "Release-Cut: ${cut}", then push it`);
+    else if (result.nextStep === "push-existing") console.log(`release preflight passed for ${result.tagCommit}; push the existing matching annotated tag object without retagging`);
+    else if (result.nextStep === "verify-remote") console.log(`remote release tag matches ${result.tagCommit}; perform read-only publication verification and do not push`);
     else console.log("npm, Docker and macOS installation verified");
   } catch (error) { console.error(error instanceof Error ? error.message : "release verification failed"); process.exitCode = 1; }
 }

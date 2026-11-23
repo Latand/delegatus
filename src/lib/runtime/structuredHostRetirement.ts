@@ -28,7 +28,7 @@ import type { StructuredHostKillRef } from "@/lib/resources";
 import { RESOURCE_STRUCTURED_HOST_LIMIT } from "@/lib/types";
 
 import { determined, mapDeterminable, undetermined, type Determinable } from "./determinable";
-import { durableRuntimeEventTailSeq } from "./eventStore";
+import { durableRuntimeEventTailSeq, hostTurnRecordIdentity } from "./eventStore";
 import type { HandoffRow } from "./handoffQueue";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
@@ -448,6 +448,7 @@ export interface StructuredHostRetirementSubject {
   structuredHostOperationReceiptState: SpawnReceipt["state"] | null;
   structuredHostOperationReceiptAbandoned: boolean;
   nativeTurnSettled?: boolean;
+  codexTurnLedger?: string;
   abandonedTurn?: boolean;
   /** Undetermined when the handoff queue could not be read: an unreadable
       queue is not a drained one. */
@@ -757,7 +758,7 @@ export interface StructuredHostRetirementRecord {
   /** Set when the host retired with events its dead owner never flushed. */
   unflushedEvents?: StructuredHostUnflushedEvents;
   key: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   sessionId: string;
   conversationId: string | null;
   title: string | null;
@@ -1184,7 +1185,7 @@ function undeliveredHandoffIndex(
     for (const row of readable) {
       const replayed = new Set(row.replayedDeliveryIds ?? []);
       if (!(row.pendingDeliveries ?? []).some((delivery) => !replayed.has(delivery.deliveryId))) continue;
-      if (row.engine === "claude" || row.engine === "codex" || row.engine === "copilot") index.addKey(`${row.engine}:${row.engineSessionId}`);
+      if (row.engine === "claude" || row.engine === "codex" || row.engine === "copilot" || row.engine === "antigravity") index.addKey(`${row.engine}:${row.engineSessionId}`);
       else index.addConversation(row.conversationId);
     }
     for (const delivery of registryRowsMatching(file, "heldDeliveries", "state", OPEN_RETIREMENT_DELIVERIES)) {
@@ -1296,7 +1297,7 @@ function deadRecordedOwner(entry: RegistryFile["entries"][string], readers: Reti
 function retirementCandidates(file: RegistryFile) {
   return registryLivenessRows(file).entries
     .filter((entry) => Boolean(recordedScopeProcess(entry.structuredHost))
-      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot"))
+      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot" || entry.key.engine === "antigravity"))
     .sort((left, right) => {
       const a = sessionKeyId(left.key), b = sessionKeyId(right.key);
       return a < b ? -1 : a > b ? 1 : 0;
@@ -1437,23 +1438,29 @@ function retirementSubject(
   let centralSettled: boolean | null = null;
   let abandonedTurn = false;
   let openNativeTurnId: string | null = null;
+  let codexTurnLedger: string | undefined;
   let currentAttention: readonly string[] | null = null;
   let centralWhy = central ? "central registry revision changed" : "central projection unavailable";
   const retainedProof = proof && central?.facts.revision === entryRevision(proof)
     && sameRetirementEvidence(entry, proof);
   if (central && (central.facts.revision === entryRevision(entry) || retainedProof)) {
     const facts = central.facts;
-    // A Codex native record too large to recover leaves the turn unknown for size
-    // alone. It may be open, so only the abandoned-turn rule below can settle
-    // it, under the same owner, silence, attention, obligation and tree checks.
+    // A missing boundary can describe abandoned work on an ownerless active
+    // row. An oversized idle checkpoint must acquire actual settlement proof.
     const unknownBySize = entry.key.engine === "codex" && !facts.turn.determined && NATIVE_SIZE_REFUSALS.has(facts.turn.why)
       && facts.turn.evidence.source === "native-transcript";
+    const oversizedIdle = unknownBySize && entry.status === "idle" && columns.activeTurnRef === null;
+    const ledger = entry.key.engine === "codex" && facts.turn.determined && facts.turn.evidence.source === "operation-ledger"
+      ? facts.turn.evidence.ref : undefined;
     if ((facts.turn.determined || unknownBySize) && facts.transcript.determined && facts.owner.determined && facts.attention.determined && facts.obligations.determined) {
       try {
         const owner = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
         const ownerValid = facts.owner.value === "held" ? hasStructuredDeliveryHost(entry.key)
           : facts.owner.value === "absent" && (entry.claimOwner === null || owner !== null && observeAgentProcess(owner) === "dead");
-        if (ownerValid && fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) === facts.transcript.value.signature) {
+        if (ledger !== undefined && (entry.status !== "idle" || columns.activeTurnRef !== null || hostTurnRecordIdentity(key.sessionId) !== ledger)) {
+          centralWhy = "Codex host ledger settlement changed";
+        } else if (ownerValid && fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) === facts.transcript.value.signature) {
+          codexTurnLedger = ledger;
           const memory = conversationId ? structuredDeliveryHostForConversation(conversationId)?.agentStateMemory?.() : null;
           const turnOpen = facts.turn.determined ? facts.turn.value.state === "open" : null;
           if (facts.turn.determined && facts.turn.value.state === "open") openNativeTurnId = facts.turn.value.nativeId;
@@ -1462,7 +1469,7 @@ function retirementSubject(
             && (!memory || memory.activeTurnRef === null);
           currentAttention = memory?.pendingAttention ?? facts.attention.value;
           if (memory?.attentionUnverified) { centralSettled = null; centralWhy = "current attention cannot be verified"; }
-          if (centralSettled === false && turnOpen !== false && facts.owner.value === "absent"
+          if (centralSettled === false && turnOpen !== false && !oversizedIdle && facts.owner.value === "absent"
             && facts.obligations.value.length === 0 && currentAttention.length === 0
             && inputs.nowMs - facts.transcript.value.mtimeMs >= AGENT_STATE_POLICY.abandonedTurnMs
             && treeHasOnlyMcpChildren(hostProcess, retainedProof ? entry.structuredTerminationSurvivors : undefined)) {
@@ -1505,8 +1512,9 @@ function retirementSubject(
     structuredHostOperationId: launchId,
     structuredHostOperationReceiptState: launchReceipt?.state ?? null,
     nativeTurnSettled: centralSettled === true && central?.facts.turn.determined === true
-      && central.facts.turn.value.state === "closed" && central.facts.turn.evidence.source === "native-transcript"
+      && central.facts.turn.value.state === "closed" && (central.facts.turn.evidence.source === "native-transcript" || codexTurnLedger !== undefined)
       && central.facts.obligations.determined && central.facts.obligations.value.length === 0,
+    ...(codexTurnLedger === undefined ? {} : { codexTurnLedger }),
     abandonedTurn,
     structuredHostOperationReceiptAbandoned: launchReceipt !== null
       && receiptAbandoned(launchReceipt.createdAt, inputs.nowMs),
@@ -1715,6 +1723,9 @@ export async function runStructuredHostRetirementSweep(
       } catch { return denied("transcript identity unavailable"); }
       const turn = conversation?.turn;
       if (!isDeepStrictEqual(turn, originalTurn)) return denied("verdict turn-settled: conversation turn changed");
+      if (originalSubject.codexTurnLedger !== undefined && hostTurnRecordIdentity(originalSubject.key.sessionId) !== originalSubject.codexTurnLedger) {
+        return denied("verdict turn-settled: Codex host ledger settlement changed");
+      }
       if (gone) {
         const originalConversation = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`);
         const generations = (value: typeof conversation) => value?.generations.map(({ id, path }) => ({ id, path }));
@@ -2053,6 +2064,10 @@ export async function runStructuredHostRetirementSweep(
     if (!isDeepStrictEqual(current.conversationsBySession.get(planning.keyId)?.turn,
       planned.conversationsBySession.get(planning.keyId)?.turn)) {
       refuse(report, subject, { retire: false, clause: "turn-settled", reason: "conversation turn changed" }, true);
+      continue;
+    }
+    if (planning.codexTurnLedger !== undefined && planning.codexTurnLedger !== subject.codexTurnLedger) {
+      refuse(report, subject, { retire: false, clause: "turn-settled", reason: "Codex host ledger settlement changed", undetermined: true }, true);
       continue;
     }
     const checkedAt = now();

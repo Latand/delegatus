@@ -864,6 +864,6 @@ export async function operatorBoardRepresentation(signal?: AbortSignal): Promise
 }
 
 /** The exact panel representation, decoded and reduced outside the Viewer. */
-export async function operatorSeatAgenda(project: string, seatConversationId?: string): Promise<import("@/lib/monitor/types").SeatTickAgendaInput> {
-  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000, undefined, seatConversationId);
+export async function operatorSeatAgenda(project: string, seatConversationId?: string, pauses?: import("@/lib/attention/seatAgenda").SeatAgendaPauses): Promise<import("@/lib/monitor/types").SeatTickAgendaInput> {
+  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000, undefined, seatConversationId, pauses);
 }

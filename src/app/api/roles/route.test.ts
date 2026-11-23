@@ -31,8 +31,8 @@ test("maintainer picker catalogue choices write the shared row and resolve for l
   const { ENGINE_MODELS } = await import("@/lib/agent/models");
   const { effortScale } = await import("@/lib/agent/efforts");
   const { resolveSpawnRole } = await import("@/lib/roles/registry");
-  const catalog = await (await GET()).json() as Catalog & { launchChoices: { engine: "claude" | "codex"; models: { id: string; efforts: string[] }[] }[] };
-  expect(catalog.launchChoices.map(c => c.engine)).toEqual(["claude", "codex"]);
+  const catalog = await (await GET()).json() as Catalog & { launchChoices: { engine: "claude" | "codex" | "antigravity"; models: { id: string; efforts: string[] }[] }[] };
+  expect(catalog.launchChoices.map(c => c.engine)).toEqual(["claude", "codex", "antigravity"]);
   for (const choice of catalog.launchChoices) {
     expect(choice.models.map(m => m.id)).toEqual(ENGINE_MODELS[choice.engine].map(m => m.id));
     for (const model of choice.models) {

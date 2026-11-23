@@ -28,7 +28,7 @@ const cwd = fs.realpathSync(directory);
 if (spawnSync("git", ["init", "-q", cwd]).status !== 0) throw new Error("fixture git init failed");
 fs.writeFileSync(path.join(stateDir(), "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd } } }));
 const relay: PairedRelay = { id: "cloud_deadline", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1", name: "Relay", description: "", credential: "fixture",
-  owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+  owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
   limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
   targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true,
     engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: projectForCwd(cwd)!, cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: budget / 60_000 }] };

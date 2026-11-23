@@ -61,6 +61,7 @@ const ENGINE_COLORS: Record<string, string> = {
   claude: "#d97757",
   openclaw: "#b3407a",
   copilot: "#1a7f37",
+  antigravity: "#6f42c1",
 };
 const NEUTRAL_COLOR = "#9a9aa4";
 const CLAUDE_MODEL_COLORS: [RegExp, string][] = [

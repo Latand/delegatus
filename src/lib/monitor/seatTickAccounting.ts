@@ -100,6 +100,8 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
         const value = state[name];
         if (value !== null && (typeof value !== "string" || !Number.isFinite(Date.parse(value)))) return null;
       }
+      if (state.lastTaskWakeAt !== undefined
+        && (!string(state.lastTaskWakeAt) || !Number.isFinite(Date.parse(state.lastTaskWakeAt)))) return null;
       if (state.wakeDecidedSince !== undefined && state.wakeDecidedSince !== null
         && (typeof state.wakeDecidedSince !== "string" || !Number.isFinite(Date.parse(state.wakeDecidedSince)))) return null;
       if (state.checkErrorAlarmPending !== undefined && typeof state.checkErrorAlarmPending !== "boolean") return null;

@@ -9,7 +9,7 @@ import type { FlowEngine } from "@/lib/flows/types";
 async function suspendedFixture(pinned = true) {
   const h = harness();
   h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6-astra", effort: "medium", serviceTier: "ultrafast", promptScaffold: "Build" });
-  const pools: Record<FlowEngine, string[]> = { codex: ["account-a"], claude: ["account-a", "account-c"] };
+  const pools: Record<FlowEngine, string[]> = { codex: ["account-a"], claude: ["account-a", "account-c"], antigravity: [] };
   const now = Date.parse("2026-10-28T09:00:00Z");
   h.ports.now = () => new Date(now).toISOString();
   const observations: DurableQuotaObservation[] = (["codex", "claude"] as const).flatMap(engine =>
@@ -25,7 +25,7 @@ async function suspendedFixture(pinned = true) {
     const selected = selectProjectAccount({ ...request, engine, now,
       accounts: observations.filter(row => row.engine === engine).map(row => ({ id: row.accountId, authPresent: true })),
       observations: observations.filter(row => row.engine === engine),
-      bindings: pools[engine].map(accountId => ({ project: request.project!, engine, accountId, createdAt: h.ports.now() })) });
+      bindings: engine === "antigravity" ? [] : pools[engine].map(accountId => ({ project: request.project!, engine, accountId, createdAt: h.ports.now() })) });
     return selected.kind === "available" ? { kind: "available", account: { engine, accountId: selected.accountId!, kind: "managed",
       home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } } : selected;
   };
