@@ -16803,11 +16803,14 @@ async function releaseParkedProviderHost(
     return refuse("The provider-cut attempt's host identity could not be verified");
   }
   const target = { stageId: stage.id, attempt: n, launchId, conversationId, agentPath, paneId: null };
-  const workHeld = () => ports.conversationDeliveryOutstanding?.(conversationId) !== false || recordedHostHeld(conversationId);
+  const workHeld = (requireDeliveryProof = true) => {
+    const outstanding = ports.conversationDeliveryOutstanding?.(conversationId);
+    return (requireDeliveryProof ? outstanding !== false : outstanding === true) || recordedHostHeld(conversationId);
+  };
   const workRefusal = () => refuse("The provider-cut attempt has pending delivery or recorded work");
-  if (workHeld()) return workRefusal();
   const resident = await ports.stageHostResident(target);
-  if (workHeld()) return workRefusal();
+  // A resident host needs positive delivery evidence before an idle stop.
+  if (workHeld(resident)) return workRefusal();
   if (!resident) return null;
 
   const read = () => ports.durableTurnEvidence(attempt.effectiveRole.engine, agentPath, undefined,
