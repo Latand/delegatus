@@ -332,3 +332,41 @@ test.each(["docx", "pptx"] as const)("%s packages that are truncated or hold mal
   }
   expect(transport.callsOf("sendDocument")).toHaveLength(before);
 });
+
+test.each([
+  ["chart-workbook.docx", (secret: string) => officeZip({ ...officeParts("docx"), "word/embeddings/Microsoft_Excel_Worksheet.xlsx": officeZip(officeParts("xlsx", secret)) })],
+  ["stored-chart-workbook.docx", (secret: string) => officeZip({ ...officeParts("docx"), "word/embeddings/Microsoft_Excel_Worksheet.xlsx": officeZip(officeParts("xlsx", secret)) }, false)],
+  ["embedded-document.pptx", (secret: string) => officeZip({ ...officeParts("pptx"), "ppt/embeddings/Microsoft_Word_Document.docx": officeZip(officeParts("docx", secret)) })],
+  ["comments.xlsx", (secret: string) => officeZip({ ...officeParts("xlsx"), "xl/comments1.xml": `<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">\n  <authors><author>Reviewer1</author></authors>\n  <commentList>\n    <comment ref="A1" authorId="0"><text>\n      <r><t>${secret.slice(0, 10)}</t></r>\n      <r><rPr><b/></rPr><t>${secret.slice(10)}</t></r>\n    </text></comment>\n  </commentList>\n</comments>` })],
+  ["second-comment.xlsx", (secret: string) => officeZip({ ...officeParts("xlsx"), "xl/comments1.xml": `<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>Reviewer</author></authors><commentList><comment ref="A1" authorId="0"><text><t>Note1</t></text></comment><comment ref="B1" authorId="0"><text><r><t>${secret.slice(0, 10)}</t></r><r><rPr><b/></rPr><t>${secret.slice(10)}</t></r></text></comment></commentList></comments>` })],
+  ["hyphen.docx", () => {
+    const [a, b, c, d] = ["sk", "ant", "api03", "Ab9".repeat(6)];
+    return officeZip({ ...officeParts("docx"), "word/document.xml": `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${a}</w:t><w:noBreakHyphen/><w:t>${b}</w:t><w:noBreakHyphen/><w:t>${c}</w:t><w:noBreakHyphen/><w:t>${d}</w:t></w:r></w:p></w:body></w:document>` });
+  }],
+] as const)("%s holding a secret needs per-send consent before any transport call", async (name, build) => {
+  const secret = ["gh", "p_", "Ab9".repeat(12)].join("");
+  const before = transport.callsOf("sendDocument").length;
+  const answer = await send(file(name, build(secret)));
+  expect(answer).toMatchObject({ ok: false, code: "document_secret", details: { confirmation: { id: expect.any(String) } } });
+  expect(transport.callsOf("sendDocument")).toHaveLength(before);
+});
+
+test("a clean embedded workbook still sends", async () => {
+  const before = transport.callsOf("sendDocument").length;
+  const bytes = officeZip({ ...officeParts("docx"), "word/embeddings/Microsoft_Excel_Worksheet.xlsx": officeZip(officeParts("xlsx")) });
+  expect(await send(file("clean-chart.docx", bytes))).toMatchObject({ ok: true });
+  expect(transport.callsOf("sendDocument")).toHaveLength(before + 1);
+});
+
+test.each([
+  ["ole.docx", () => officeZip({ ...officeParts("docx"), "word/embeddings/oleObject1.bin": Buffer.concat([Buffer.from("d0cf11e0a1b11ae1", "hex"), Buffer.alloc(504)]) })],
+  ["ole.xlsx", () => officeZip({ ...officeParts("xlsx"), "xl/embeddings/oleObject1.bin": Buffer.concat([Buffer.from("d0cf11e0a1b11ae1", "hex"), Buffer.alloc(504)]) })],
+  ["nested.pptx", () => officeZip({ ...officeParts("pptx"), "ppt/embeddings/a.docx": officeZip({ ...officeParts("docx"), "word/embeddings/b.xlsx": officeZip({ ...officeParts("xlsx"), "xl/embeddings/c.docx": officeZip(officeParts("docx")) }) }) })],
+  ["damaged-embedding.docx", () => officeZip({ ...officeParts("docx"), "word/embeddings/Sheet.xlsx": officeZip(officeParts("xlsx")).subarray(0, 64) })],
+] as const)("%s with an embedding that cannot be inspected refuses without a confirmation", async (name, build) => {
+  const before = transport.callsOf("sendDocument").length;
+  const answer = await send(file(name, build()));
+  expect(answer).toMatchObject({ ok: false, code: "document_invalid" });
+  expect(object(answer.details)).not.toHaveProperty("confirmation");
+  expect(transport.callsOf("sendDocument")).toHaveLength(before);
+});

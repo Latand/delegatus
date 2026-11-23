@@ -570,7 +570,7 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
         throw new Error("Missing Office package parts");
       }
     } catch {
-      throw new DocumentRefusal("document_invalid", "The Office package could not be fully inspected. Its ZIP or XML is damaged, unsupported, encrypted or exceeds inspection limits.");
+      throw new DocumentRefusal("document_invalid", "The Office package could not be fully inspected. Its ZIP or XML is damaged, unsupported, encrypted or exceeds inspection limits, or it embeds an object that cannot be inspected.");
     }
   }
   if (hit) {

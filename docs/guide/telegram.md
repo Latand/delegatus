@@ -24,10 +24,13 @@ server.
   detected password or key require the owner's confirmation for that exact
   file and destination. Office files are decompressed in memory and every
   entry is scanned, including the text Office shows: runs joined across
-  formatting and XML indentation, with paragraphs and cells kept apart.
-  Inspection allows up to 4096 entries and 20 MB of expanded content. An Office
-  file that cannot be fully inspected (encrypted, damaged, malformed XML or
-  unsupported) is refused. Confirmation grants no standing permission.
+  formatting and XML indentation, with paragraphs, cells and comments kept
+  apart. Embedded Office files, such as a chart's workbook, are opened and
+  scanned the same way, up to two levels deep. Inspection allows up to 4096
+  entries and 20 MB of expanded content across all levels. An Office file that
+  cannot be fully inspected (encrypted, damaged, malformed XML, unsupported, or
+  holding an embedded OLE object) is refused. Confirmation grants no standing
+  permission.
 - **Reports.** The orchestrator can send its reports to one of these chats.
   When the installation's owner replies to a report there, the reply goes to
   that project's orchestrator.
