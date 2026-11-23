@@ -3,7 +3,122 @@ import type { HostState, SeatTickOutstandingWake, SeatTickRunRecord, AgentLivene
 import { setSystemTime } from "bun:test";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { cancelSeatQuotaOnControl } from "./seatQuotaRecovery";
-import { wakeResponseEvidenceFromEvents, wakeResponseRecoveryKey, type SeatWakeResponse } from "./seatWakeResponse";
+import { captureSeatWakeResponseStart, observeSeatWakeResponse, wakeResponseEvidenceFromEvents, wakeResponseRecoveryKey, type SeatWakeResponse } from "./seatWakeResponse";
+import { fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_SESSION } from "@/lib/agentState/testFixture";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import type { RuntimeEvent } from "@/lib/runtime/engineHost";
+
+test.each(["wake", "nudge", "paged", "unknown", "unanswered", "prepared"] as const)("production tail replay reconciles a persisted hold (%s)", async mode => {
+  const previous = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(SANDBOX, "response-tail-replay-"));
+  process.env.LLV_STATE_DIR = root;
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  setAgentRegistryForTests(registry);
+  try {
+    const at = (minutes: number) => new Date(NOW + minutes * MINUTE).toISOString();
+    const fixture = fixtureRegistry(root, "codex", captureProcessIdentity(process.pid)!, null);
+    await registry.deliveryWriteOrBusy({ label: "fixture.response-tail-replay" }, () => registry.agentStateWrite(file => Object.assign(file, fixture)));
+    const seat = { conversationId: FIXTURE_CONVERSATION, seatEpoch: 7, path: fixture.conversations[FIXTURE_CONVERSATION]!.generations[0]!.path };
+    const response: SeatWakeResponse = {
+      clientMessageId: "scheduled-wake", operationId: "scheduled-operation", conversationId: FIXTURE_CONVERSATION, seatEpoch: 7,
+      generationId: FIXTURE_SESSION, turnId: "wake-turn", deliveredAt: at(-30), progressAt: at(mode === "nudge" ? -18 : -30),
+      boundMs: 10 * MINUTE, action: mode === "nudge" ? "nudged" : "pending",
+    };
+    if (mode === "nudge") {
+      response.recovery = { text: "continue the pending wake", origin: { kind: "agent", role: "seat-tick", project: PROJECT } };
+      const admitted = registry.holdDelivery(FIXTURE_CONVERSATION, response.recovery.text, wakeResponseRecoveryKey(response), "text", [], null,
+        { operationId: "nudge-operation", origin: response.recovery.origin, policy: "queue" });
+      registry.recordDeliveryOutcome(admitted.id, "delivered");
+    }
+    const events: RuntimeEvent[] = [];
+    const store = new FileRuntimeEventStore();
+    function turn(turnId: string, atMinute: number, reply: string, operationId?: string, completionPadding = "") {
+      const from = events.length;
+      events.push({ kind: "turn-started", turnId, seq: events.length + 1 });
+      if (operationId) events.push({ kind: "item", turnId, phase: "completed", item: { type: "user" },
+        deliveryEcho: { operationId, at: at(atMinute) }, seq: events.length + 1 });
+      if (reply) events.push({ kind: "item", turnId, phase: "completed", item: { type: "agentMessage", text: reply },
+        activityAt: at(atMinute + 1), seq: events.length + 1 });
+      if (completionPadding) events.push({ kind: "item", turnId, phase: "completed", item: { type: "reasoning", text: completionPadding }, seq: events.length + 1 });
+      events.push({ kind: "turn-ended", turnId, status: "completed", seq: events.length + 1 });
+      for (const event of events.slice(from)) store.append(FIXTURE_SESSION, event);
+    }
+    const stateFile = path.join(root, "tick.json");
+    if (mode === "prepared") {
+      turn("earlier-turn", -35, "prior activity".repeat(410_000));
+      const offset = fs.statSync(statePath("structured-host-events", FIXTURE_SESSION + ".jsonl")).size;
+      const prep = harness({ stateFile, pipelines: OPEN_LANE, seat,
+        deliverWith: async message => {
+          if (!message.clientMessageId) throw new Error("prepared wake has no client message id");
+          turn("prepared-turn", 0, "scheduled request answered", message.clientMessageId);
+          return { ok: true, target: "structured", outcome: "delivered", structured: true, operationId: message.clientMessageId };
+        } });
+      prep.deps.sources!.wakeResponse = observeSeatWakeResponse;
+      prep.deps.sources!.wakeResponseStart = captureSeatWakeResponseStart;
+      expect(await runSeatTickCheck(PROJECT, prep.deps)).toMatchObject({ verdict: "wake", delivery: { outcome: "delivered" } });
+      expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.scanFrom).toMatchObject({ generationId: FIXTURE_SESSION, position: { offset } });
+      const next = harness({ stateFile, seat, now: NOW + MINUTE });
+      next.deps.sources!.wakeResponse = observeSeatWakeResponse;
+      await runSeatTickCheck(PROJECT, next.deps);
+      expect(next.cards.some(({ card }) => card.ref === "seat-wake-response" && card.state === "resolved")).toBe(true);
+      expect(readSeatTickState(PROJECT, stateFile).wakeResponse).toBeUndefined();
+      return;
+    }
+
+    turn("earlier-turn", -35, "prior activity".repeat(87_000));
+    if (mode !== "unknown") turn("wake-turn", -30, mode === "wake" || mode === "paged" ? "scheduled request answered" : "", response.operationId,
+      mode === "paged" ? "during completion".repeat(200_000) : "");
+    turn("intervening-turn", -23, "intervening activity".repeat(16_000));
+    if (mode === "nudge") turn("nudge-turn", -18, "pending request answered", "nudge-operation");
+    turn("later-turn", -12, "unrelated activity".repeat(19_000));
+    const answered = mode !== "unknown" && mode !== "unanswered";
+    expect(wakeResponseEvidenceFromEvents(response, events as Record<string, unknown>[], ["nudge-operation"]).answered).toBe(answered);
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, wakeResponse: response }, stateFile);
+    const reopen = (now = NOW) => {
+      const rig = harness({ stateFile, now, pipelines: OPEN_LANE, seat,
+        seatActivity: { conversationId: FIXTURE_CONVERSATION, lifecycle: "waiting", turnState: "idle", reason: "host_alive_turn_idle" } });
+      rig.deps.sources!.wakeResponse = observeSeatWakeResponse;
+      return rig;
+    };
+    if (mode === "unanswered") {
+      const early = reopen(NOW - 25 * MINUTE);
+      expect(await runSeatTickCheck(PROJECT, early.deps)).toMatchObject({ verdict: "refused" });
+      expect(early.sent).toEqual([]);
+    }
+    const first = reopen();
+    let tick = await runSeatTickCheck(PROJECT, first.deps);
+    if (mode === "unknown" || mode === "paged") {
+      const reason = mode === "paged" ? "still being checked" : "membership or generation evidence is unavailable";
+      expect(tick).toMatchObject({ verdict: "refused", detail: expect.stringContaining(reason) });
+      expect(first.cards).toContainEqual(expect.objectContaining({ card: expect.objectContaining({
+        ref: "seat-wake-response", state: "open", detail: expect.stringContaining(reason),
+      }) }));
+      expect(first.sent).toEqual([]);
+      expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.clientMessageId).toBe(response.clientMessageId);
+      if (mode === "unknown") return;
+      expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.scan).toMatchObject([
+        { generationId: FIXTURE_SESSION, reduction: { turnId: "wake-turn", replied: true, terminal: false } },
+      ]);
+    }
+    if (mode === "unanswered") {
+      expect(first.sent.map(message => message.clientMessageId)).toEqual([wakeResponseRecoveryKey(response)]);
+      expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.action).toBe("nudged");
+      return;
+    }
+    const rig = mode === "paged" ? reopen(NOW + MINUTE) : first;
+    if (mode === "paged") tick = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(tick?.verdict).toBe("wake");
+    expect(rig.cards.some(({ card }) => card.ref === "seat-wake-response" && card.state === "resolved")).toBe(true);
+    expect(rig.sent).toHaveLength(1);
+    expect(rig.sent[0]!.clientMessageId).not.toBe(wakeResponseRecoveryKey(response));
+    expect(readSeatTickState(PROJECT, stateFile).wakeResponse?.clientMessageId).not.toBe(response.clientMessageId);
+  } finally {
+    setAgentRegistryForTests(null);
+    registry.close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
 
 test.each(["before", "observation", "admission", "reservation", "rehost", "rotation"])("operator control fences wake response recovery at %s", async boundary => {
   const previous = process.env.LLV_STATE_DIR;

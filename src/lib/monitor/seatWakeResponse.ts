@@ -1,14 +1,12 @@
 import crypto from "node:crypto";
 import { seatTickWorkSignal } from "./seatTickWork";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
-import path from "node:path";
-import { statePath } from "@/lib/configDir";
 import { agentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { lookupOriginalSend } from "@/lib/runtime/sendSettlement";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { meaningfulModelProgress, turnSilenceProgress } from "@/lib/runtime/turnSilence";
-import { readStableTailRecords } from "@/lib/scanner/activity";
+import { captureRuntimeEventPosition, normalizeRuntimeEventPosition, readRuntimeEventPage, type RuntimeEventPosition } from "@/lib/runtime/eventStore";
 
 export interface SeatWakeResponse {
   clientMessageId: string;
@@ -22,6 +20,8 @@ export interface SeatWakeResponse {
   progressAt: string;
   turnId?: string;
   generationId?: string;
+  scanFrom?: WakeResponseStart;
+  scan?: WakeResponseCheckpoint[];
   recovery?: { text: string; origin: MessageOrigin };
   action: "pending" | "nudging" | "nudged";
 }
@@ -34,7 +34,61 @@ export interface WakeResponseEvidence {
   generationId?: string;
   progressAt?: string;
   wait?: string;
+  scan?: WakeResponseCheckpoint[];
 }
+
+interface ResponseReduction {
+  turnId?: string;
+  progressAt?: string;
+  terminal: boolean;
+  continuation: boolean;
+  replied: boolean;
+  providerFailure: boolean;
+}
+
+export interface WakeResponseStart {
+  generationId: string;
+  position: RuntimeEventPosition;
+}
+
+interface WakeResponseCheckpoint extends WakeResponseStart {
+  binding: string;
+  fromPreparation: boolean;
+  reduction: ResponseReduction;
+}
+
+export function normalizeWakeResponseStart(value: unknown): WakeResponseStart | undefined {
+  const row = value as WakeResponseStart | null;
+  if (!row || typeof row.generationId !== "string" || !row.generationId) return;
+  const position = normalizeRuntimeEventPosition(row.position);
+  if (position) return { generationId: row.generationId, position };
+}
+
+function normalizeCheckpoints(value: unknown): WakeResponseCheckpoint[] | undefined {
+  if (!Array.isArray(value)) return;
+  return value.slice(0, 4).flatMap((item: WakeResponseCheckpoint | null) => {
+    const start = normalizeWakeResponseStart(item);
+    if (!start || !item || typeof item.binding !== "string" || !/^[a-f0-9]{64}$/.test(item.binding)
+      || typeof item.fromPreparation !== "boolean") return [];
+    const reduction = item.reduction;
+    if (!reduction || [reduction.terminal, reduction.continuation, reduction.replied, reduction.providerFailure].some(flag => typeof flag !== "boolean")
+      || (reduction.turnId !== undefined && (typeof reduction.turnId !== "string" || !reduction.turnId))
+      || (reduction.progressAt !== undefined && !Number.isFinite(Date.parse(reduction.progressAt)))) return [];
+    const { turnId, progressAt, terminal, continuation, replied, providerFailure } = reduction;
+    return [{ ...start, binding: item.binding, fromPreparation: item.fromPreparation,
+      reduction: { terminal, continuation, replied, providerFailure, ...(turnId ? { turnId } : {}), ...(progressAt ? { progressAt } : {}) } }];
+  });
+}
+
+export async function captureSeatWakeResponseStart(conversationId: string): Promise<WakeResponseStart | undefined> {
+  try {
+    const generation = agentRegistry().conversation(conversationId as ViewerConversationId)?.generations.at(-1);
+    if (!generation) return;
+    const position = await captureRuntimeEventPosition(generation.id);
+    if (position) return { generationId: generation.id, position };
+  } catch { seatTickWorkSignal()?.throwIfAborted(); }
+}
+
 export const seatWakeResponseBound = (checkMs: number, wakeMs: number) => Math.max(2 * checkMs, Math.min(wakeMs, 15 * 60_000));
 export const wakeResponseRecoveryKey = (row: SeatWakeResponse) => `seat-response-${crypto.createHash("sha256").update(JSON.stringify([row.conversationId, row.seatEpoch, row.clientMessageId])).digest("hex")}`;
 export function normalizeSeatWakeResponse(value: unknown): SeatWakeResponse | undefined {
@@ -48,12 +102,13 @@ export function normalizeSeatWakeResponse(value: unknown): SeatWakeResponse | un
     && (row.generationId === undefined || typeof row.generationId === "string" && !!row.generationId)
     && (row.recovery === undefined || row.recovery && typeof row.recovery.text === "string" && !!parseMessageOrigin(row.recovery.origin))
     && Number.isFinite(row.boundMs) && row.boundMs > 0 && ["pending", "nudging", "nudged"].includes(row.action)
-    ? { ...row } : undefined;
+    ? { ...row, ...(row.scanFrom === undefined ? {} : { scanFrom: normalizeWakeResponseStart(row.scanFrom) }),
+      ...(row.scan === undefined ? {} : { scan: normalizeCheckpoints(row.scan) }) } : undefined;
 }
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 
-/** Read only the bounded event tail of the delivered input's generation. An
- * exact input/turn witness is required; a newer unrelated turn grants nothing. */
+/** Replay the delivered input's own generation in bounded pages. An exact
+ * input/turn witness is required; a newer unrelated turn grants nothing. */
 export async function observeSeatWakeResponse(row: SeatWakeResponse, project?: string): Promise<WakeResponseEvidence> {
   try { return await readSeatWakeResponse(row, project); }
   catch {
@@ -88,94 +143,160 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
     || quota.original.clientMessageId === wakeResponseRecoveryKey(row)) ? findBinding(quota.id) : null;
   const recovery = row.action !== "pending" && row.recovery ? findBinding(wakeResponseRecoveryKey(row), row.recovery) : null;
   const recoveryBindings = [quotaContinuation, recovery].filter((value): value is Binding => value !== null);
-  const recoveryOperations = recoveryBindings.flatMap(binding => [binding.operationId, ...(binding.batchId ? [binding.batchId] : [])]);
   const bindings: Binding[] = [...recoveryBindings, original];
   // Keep previously proven native membership even after receipt compaction.
-  if (row.generationId && row.turnId) bindings.push({ operationId: row.operationId, generationId: row.generationId, nativeTurnId: row.turnId });
-  const generationFor = (binding: Binding) => binding.generationId
-    ? conversation.generations.find(generation => generation.id === binding.generationId) : conversation.generations.at(-1);
-  bindings.sort((left, right) => conversation.generations.indexOf(generationFor(right)!) - conversation.generations.indexOf(generationFor(left)!));
-  const continuations = bindings.flatMap(binding => [binding.operationId, ...(binding.batchId ? [binding.batchId] : [])]);
+  if (row.operationId !== original.operationId || row.generationId && row.turnId) {
+    bindings.push({ operationId: row.operationId, generationId: row.generationId ?? original.generationId,
+      nativeTurnId: row.generationId ? row.turnId : undefined });
+  }
   const client = runtimeHostClient();
-  let latest: WakeResponseEvidence | undefined;
+  const signal = seatTickWorkSignal();
+  const generations = new Map<string, ResponseMembership>();
+  let wait: string | undefined;
   for (const binding of bindings) {
-    const generation = generationFor(binding);
-    if (!generation) continue;
-    let nativeTurnId = binding.operationId === original.operationId && row.generationId === generation.id && row.turnId
-      ? row.turnId : binding.nativeTurnId;
+    const generation = binding.generationId
+      ? conversation.generations.find(candidate => candidate.id === binding.generationId) : conversation.generations.at(-1);
+    if (!generation) { wait = "Delivered input generation evidence is unavailable."; continue; }
+    let membership = generations.get(generation.id);
+    if (!membership) {
+      membership = { operations: new Map(), nativeTurns: new Map() };
+      generations.set(generation.id, membership);
+    }
+    const continuation = recoveryBindings.includes(binding);
+    for (const id of [binding.operationId, binding.batchId]) {
+      if (id) membership.operations.set(id, continuation || membership.operations.get(id) === true);
+    }
+    let nativeTurnId = binding.nativeTurnId;
     if (!nativeTurnId) try {
-      const result = await client?.operationStatus(binding.operationId);
+      const result = await client?.operationStatus(binding.operationId, { signal });
       if (result?.operationId === binding.operationId && result.receipt.conversationId === row.conversationId
         && ["delivered", "applied", "answered"].includes(result.receipt.status) && result.receipt.turnId) nativeTurnId = result.receipt.turnId;
     } catch { /* Native event membership remains independently readable. */ }
-    // A fallback native turn belongs to the retained row, and cannot prove
-    // that the separately admitted recovery reached its own native turn.
-    const nativeContinuation = nativeTurnId !== undefined && recoveryBindings.includes(binding);
-    nativeTurnId ??= row.generationId === generation.id ? row.turnId : undefined;
-    const read = await readStableTailRecords(path.join(statePath("structured-host-events"), `${encodeURIComponent(generation.id)}.jsonl`));
-    if (read.integrity !== "complete") continue;
-    const evidence = wakeResponseEvidenceFromEvents({ ...row, turnId: nativeTurnId }, read.records, continuations, nativeTurnId, nativeContinuation, recoveryOperations);
+    if (nativeTurnId) membership.nativeTurns.set(nativeTurnId, continuation || membership.nativeTurns.get(nativeTurnId) === true);
+  }
+  const scan: WakeResponseCheckpoint[] = [];
+  let latest: WakeResponseEvidence | undefined;
+  const newestFirst = [...generations].sort(([left], [right]) =>
+    conversation.generations.findIndex(generation => generation.id === right) - conversation.generations.findIndex(generation => generation.id === left));
+  for (const [generationId, membership] of newestFirst) {
+    // A changed receipt, batch, or recovery key may make earlier events
+    // relevant. Reuse reductions only for the same obligation and bindings.
+    const binding = crypto.createHash("sha256").update(JSON.stringify([row.conversationId, row.seatEpoch, row.clientMessageId,
+      [...membership.operations].sort(), [...membership.nativeTurns].sort()])).digest("hex");
+    const previous = row.scan?.find(entry => entry.generationId === generationId && entry.binding === binding);
+    const start = row.scanFrom?.generationId === generationId ? row.scanFrom.position : undefined;
+    let fromPreparation = previous?.fromPreparation ?? (start !== undefined);
+    let reduction = previous ? { ...previous.reduction } : emptyReduction();
+    let answered = false;
+    const visit = (event: Record<string, unknown>) => answered = reduceResponse(row, membership, reduction, event);
+    try {
+      signal?.throwIfAborted();
+      let page = await readRuntimeEventPage(generationId, previous?.position ?? start, visit, signal);
+      // An idempotent send can return an older receipt. If the pre-admission
+      // suffix has no witness, search the earlier prefix as for a legacy row.
+      if (!page || (fromPreparation && page.state === "current" && !reduction.turnId)) {
+        fromPreparation = false;
+        reduction = emptyReduction();
+        page = await readRuntimeEventPage(generationId, undefined, visit, signal);
+      }
+      if (!page) throw new Error("response ledger position is unavailable");
+      scan.push({ generationId, binding, position: page.position, fromPreparation, reduction });
+      if (page.state !== "current" && !answered) wait = page.state === "more"
+        ? "Delivered wake response evidence is still being checked in the host event log."
+        : "Delivered wake response evidence is incomplete in the host event log.";
+    } catch {
+      signal?.throwIfAborted();
+      wait = "Delivered wake response evidence is unreadable in the host event log.";
+      continue;
+    }
+    const evidence = responseEvidence(row, reduction, answered);
     if (!evidence.turnId) continue;
-    const progress = turnSilenceProgress(conversation.engine, generation.id, evidence.turnId);
-    const observed = { ...evidence, generationId: generation.id,
+    const progress = turnSilenceProgress(conversation.engine, generationId, evidence.turnId);
+    const observed = { ...evidence, generationId,
       ...(progress !== undefined && progress >= Date.parse(row.deliveredAt) && progress > Date.parse(evidence.progressAt ?? row.progressAt)
         ? { progressAt: new Date(progress).toISOString() } : {}) };
     if (observed.answered) return observed;
     // A failed successor cannot hide fulfillment in an older bound generation.
     latest ??= observed;
   }
-  return latest ?? { answered: false, wait: "delivered input membership or generation evidence unavailable" };
+  if (wait) return { answered: false, wait, scan };
+  return latest ? { ...latest, scan } : { answered: false, wait: "Delivered input membership or generation evidence is unavailable.", scan };
+}
+
+interface ResponseMembership {
+  operations: Map<string, boolean>;
+  nativeTurns: Map<string, boolean>;
+}
+
+function emptyReduction(): ResponseReduction {
+  return { terminal: false, continuation: false, replied: false, providerFailure: false };
+}
+
+function reduceResponse(row: SeatWakeResponse, membership: ResponseMembership, state: ResponseReduction, event: Record<string, unknown>): boolean {
+  const turnId = event.turnId;
+  if (typeof turnId !== "string") return false;
+  const native = membership.nativeTurns.get(turnId);
+  const start = event.kind === "turn-started" ? membership.operations.get(turnId) ?? native : undefined;
+  const echo = object(event.deliveryEcho);
+  let linked = false;
+  let continued = false;
+  if (event.deliveryEcho) {
+    for (const id of [echo.operationId, ...(Array.isArray(echo.memberOperationIds) ? echo.memberOperationIds : [])]) {
+      const member = typeof id === "string" ? membership.operations.get(id) : undefined;
+      linked ||= member !== undefined;
+      continued ||= member === true;
+    }
+  }
+  if (start !== undefined || turnId !== state.turnId && (linked || native !== undefined)) {
+    Object.assign(state, emptyReduction(), { turnId, progressAt: undefined, continuation: start ?? native ?? false });
+  }
+  if (turnId !== state.turnId) return false;
+  state.continuation ||= continued;
+  if (event.kind === "item") {
+    const item = object(event.item);
+    const message = object(item.message);
+    const providerFailure = item.type === "assistant" && (item.error != null || item.isApiErrorMessage === true);
+    if (providerFailure) { state.providerFailure = true; return false; }
+    const type = item.sessionUpdate ?? item.type;
+    const blocks = Array.isArray(message.content) ? message.content.map(object) : [];
+    const actual = meaningfulModelProgress(item)
+      || ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch", "imageView", "imageGeneration", "tool_call", "tool_call_update"].includes(String(type))
+        && typeof (item.toolCallId ?? item.id) === "string" && !!(item.toolCallId ?? item.id)
+      || blocks.some(block => block.type === "tool_use" && typeof block.id === "string" && !!block.id
+        || block.type === "tool_result" && typeof block.tool_use_id === "string" && !!block.tool_use_id);
+    if (actual) {
+      const at = event.accountingAt ?? event.activityAt;
+      if (typeof at === "string" && Number.isFinite(Date.parse(at)) && Date.parse(at) >= Date.parse(row.deliveredAt)) state.progressAt = at;
+    }
+    const response = type === "assistant" && blocks.some(block => block.type === "text" && typeof block.text === "string" && !!block.text.trim())
+      || ["agentMessage", "agent_message_chunk"].includes(String(type))
+        && [item.text, object(item.content).text].some(text => typeof text === "string" && !!text.trim());
+    if (response) { state.replied = true; state.providerFailure = false; }
+  }
+  if (event.kind === "delta" && typeof event.text === "string" && event.text.trim()) { state.replied = true; state.providerFailure = false; }
+  if (event.kind === "turn-ended") {
+    state.terminal = ["completed", "error", "interrupted"].includes(String(event.status));
+    return event.status === "completed" && state.replied && !state.providerFailure;
+  }
+  return false;
+}
+
+function responseEvidence(row: SeatWakeResponse, state: ResponseReduction, answered: boolean): WakeResponseEvidence {
+  const { turnId, progressAt } = state;
+  return { answered, terminal: state.terminal && (row.action !== "nudged" || state.continuation),
+    ...(turnId ? { turnId } : {}), ...(progressAt ? { progressAt } : {}),
+    ...(state.providerFailure && !answered ? { wait: "provider failure; original request awaits provider recovery", providerFailure: true } : {}),
+    ...(!turnId ? { wait: "Delivered input membership or generation evidence is unavailable." } : {}) };
 }
 
 export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Record<string, unknown>[], continuations: readonly string[] = [], nativeTurnId?: string, nativeContinuation = false, recoveryOperations: readonly string[] = continuations): WakeResponseEvidence {
-  const ids = new Set([row.operationId, ...continuations]);
-  let turn: string | null = nativeTurnId ?? row.turnId ?? null;
+  const turn = nativeTurnId ?? row.turnId;
+  const membership: ResponseMembership = {
+    operations: new Map([row.operationId, ...continuations].map(id => [id, id !== row.operationId && recoveryOperations.includes(id)])),
+    nativeTurns: new Map(turn ? [[turn, nativeContinuation]] : []),
+  };
+  const state = { ...emptyReduction(), ...(turn ? { turnId: turn, continuation: nativeContinuation } : {}) };
   let answered = false;
-  let terminal = false;
-  let continuation = nativeContinuation;
-  let replied = false;
-  let progressAt: string | undefined;
-  let failure: string | undefined;
-  for (const event of events) {
-    if (event.kind === "turn-started" && ids.has(String(event.turnId))) {
-      turn = String(event.turnId); replied = false; terminal = false; progressAt = undefined; failure = undefined;
-      continuation = turn !== row.operationId && recoveryOperations.includes(turn);
-    }
-    const echo = object(event.deliveryEcho);
-    if ((ids.has(String(echo.operationId)) || Array.isArray(echo.memberOperationIds) && echo.memberOperationIds.some(id => ids.has(String(id)))) && typeof event.turnId === "string") {
-      if (turn !== event.turnId) {
-        turn = event.turnId; replied = false; terminal = false; progressAt = undefined; failure = undefined; continuation = false;
-      }
-      continuation ||= recoveryOperations.some(id => id !== row.operationId && (echo.operationId === id
-        || Array.isArray(echo.memberOperationIds) && echo.memberOperationIds.includes(id)));
-    }
-    if (!turn || event.turnId !== turn) continue;
-    if (event.kind === "item") {
-      const item = object(event.item);
-      const message = object(item.message);
-      const providerFailure = item.type === "assistant" && (item.error != null || item.isApiErrorMessage === true);
-      if (providerFailure) { failure = "provider failure; original request awaits provider recovery"; continue; }
-      const type = item.sessionUpdate ?? item.type;
-      const blocks = Array.isArray(message.content) ? message.content.map(object) : [];
-      const actual = meaningfulModelProgress(item)
-        || ["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch", "imageView", "imageGeneration", "tool_call", "tool_call_update"].includes(String(type))
-          && typeof (item.toolCallId ?? item.id) === "string" && !!(item.toolCallId ?? item.id)
-        || blocks.some(block => block.type === "tool_use" && typeof block.id === "string" && !!block.id
-          || block.type === "tool_result" && typeof block.tool_use_id === "string" && !!block.tool_use_id);
-      if (actual) {
-        const at = event.accountingAt ?? event.activityAt;
-        if (typeof at === "string" && Number.isFinite(Date.parse(at)) && Date.parse(at) >= Date.parse(row.deliveredAt)) progressAt = at;
-      }
-      const response = type === "assistant" && blocks.some(block => block.type === "text" && typeof block.text === "string" && !!block.text.trim())
-        || ["agentMessage", "agent_message_chunk"].includes(String(type))
-          && [item.text, object(item.content).text].some(text => typeof text === "string" && !!text.trim());
-      if (response) { replied = true; failure = undefined; }
-    }
-    if (event.kind === "delta" && typeof event.text === "string" && event.text.trim()) { replied = true; failure = undefined; }
-    if (event.kind === "turn-ended") {
-      terminal = ["completed", "error", "interrupted"].includes(String(event.status));
-      if (event.status === "completed" && replied && !failure) answered = true;
-    }
-  }
-  return { answered, terminal: terminal && (row.action !== "nudged" || continuation), ...(turn ? { turnId: turn } : {}), ...(progressAt ? { progressAt } : {}), ...(failure && !answered ? { wait: failure, providerFailure: true } : {}), ...(!turn ? { wait: "delivered input membership is outside the verified event tail" } : {}) };
+  for (const event of events) answered = reduceResponse(row, membership, state, event) || answered;
+  return responseEvidence(row, state, answered);
 }

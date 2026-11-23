@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
-import { FileRuntimeEventStore } from "./eventStore";
+import { captureRuntimeEventPosition, FileRuntimeEventStore, readRuntimeEventPage } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
 
 const event = (seq: number): RuntimeEvent => ({ kind: "delta", turnId: "turn", text: "дані 🌱", seq });
@@ -103,4 +103,51 @@ test("stream read errors and the refill deadline reject without stranding the de
   fs.mkdirSync(path.join(f.directory, "directory.jsonl"));
   await expect(f.store.scan("directory", () => {})).rejects.toThrow();
   expect(await f.store.scan("thread", () => {})).toBe(1);
+});
+
+test("a page can stop at historical proof with a 100 MiB suffix and resume at its next line", async () => {
+  const f = fixture(line(1) + "\n" + line(2) + "\n");
+  try {
+    fs.truncateSync(f.filename, 100 * 1024 * 1024);
+    const seen: number[] = [];
+    const read = await readRuntimeEventPage("thread", undefined, e => {
+      seen.push(e.seq);
+      return true;
+    }, undefined, f.directory);
+    expect(seen).toEqual([1]);
+    expect(read).toMatchObject({ state: "more", position: { offset: Buffer.byteLength(line(1) + "\n"), seq: 1 } });
+    const second = await readRuntimeEventPage("thread", read!.position, e => {
+      seen.push(e.seq);
+      return true;
+    }, undefined, f.directory);
+    expect(second?.position.seq).toBe(2);
+    expect(seen).toEqual([1, 2]);
+  } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test.each(["replace", "rewrite", "append", "torn"] as const)("prepared position detects ledger changes: %s", async change => {
+  const f = fixture(line(1) + "\n");
+  try {
+    const position = await captureRuntimeEventPosition("thread", f.directory);
+    if (!position) throw new Error("expected a complete ledger position");
+    expect(position.offset).toBe(Buffer.byteLength(line(1) + "\n"));
+    if (change === "replace") {
+      const replacement = path.join(f.directory, "replacement.jsonl");
+      fs.writeFileSync(replacement, line(1) + "\n");
+      fs.renameSync(replacement, f.filename);
+    } else if (change === "rewrite") fs.writeFileSync(f.filename, line(3) + "\n" + line(4) + "\n");
+    else if (change === "append") f.store.append("thread", event(2));
+    else fs.appendFileSync(f.filename, "{partial");
+
+    const seen: RuntimeEvent[] = [];
+    const page = await readRuntimeEventPage("thread", position, e => { seen.push(e); }, undefined, f.directory);
+    if (change === "append") {
+      expect(page).toMatchObject({ state: "current", position: { seq: 2 } });
+      expect(seen).toEqual([event(2)]);
+    } else {
+      if (change === "torn") expect(page).toEqual({ state: "incomplete", position });
+      else expect(page).toBeNull();
+      expect(seen).toEqual([]);
+    }
+  } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
 });
