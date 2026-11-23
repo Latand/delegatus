@@ -584,6 +584,7 @@ async function recoverCandidate(
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
                 omitSkillsInstructions: current.spec.launchProfile?.omitSkillsInstructions === true
                   || sessionOriginFor(registry.conversation(current.conversationId) ?? {}) === "delegated",
+                ...(current.spec.launchProfile?.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
                 cwd: current.spec.cwd, codexHome: account.home,
                 mcpServers: current.spec.launchProfile?.mcpServers ?? ["viewer"],
                 plugins: current.spec.launchProfile?.plugins ?? [],

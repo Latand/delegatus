@@ -14,10 +14,11 @@ import { setCodexShellPolicyReaderForTest } from "@/lib/git/codexShellPolicy";
 import { loadRoleOverrides, saveRoleOverrides } from "@/lib/roles/store";
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "@/lib/runtime/codexAppServerHost";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
-import { defaultStartHost, structuredHostWorkingDirectory, materializeStructuredHostAccess, structuredHostAccessPolicy } from "@/lib/runtime/structuredSpawn";
+import { defaultStartHost, structuredHostWorkingDirectory, materializeStructuredHostAccess, structuredHostAccessPolicy, terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
 import { CLEANER_SANDBOX_READY } from "@/lib/runtime/cleanerSandboxProbe";
+import { procBackend } from "@/lib/proc";
+import { changeRun, reserveRun, updateRelayStore } from "@/lib/externalRelay/store";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
-import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
 import { claimCleanerRun, updateActiveCleanerRun } from "@/lib/cleaner/store";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cleaner-launch-"));
@@ -72,6 +73,7 @@ async function cleanerAttempt(episode: string) {
 }
 
 async function launch(id: string, body: Record<string, unknown> = {}, controls: {
+  autonomousStructured?: boolean;
   defer?: (work: () => Promise<void>) => void;
   held?: () => boolean;
   spawn?: (input: Parameters<NonNullable<SpawnCommandDependencies["spawnStructuredConversation"]>>[0]) => Promise<never>;
@@ -88,6 +90,7 @@ async function launch(id: string, body: Record<string, unknown> = {}, controls: 
     resolveHealthySpawnAccount: async () => account, resolveSpawnAccount: () => account,
     resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
     runtimeHostClient: () => ({} as RuntimeHostClient),
+    autonomousStructured: controls.autonomousStructured,
     // Admission persists the profile; no fixture starts a real host or a model.
     defer: controls.defer ?? (() => {}), storeImages: () => [],
     autonomousAdmissionHeld: controls.held,
@@ -98,6 +101,76 @@ async function launch(id: string, body: Record<string, unknown> = {}, controls: 
   if (response.status === 500) throw new Error(`fixture admission failed: ${JSON.stringify(payload)}`);
   return { status: response.status, body: payload, receipt: registry.spawnReceiptForClientAttempt(id) };
 }
+
+test("guest owner relay spawn is request-bound and materializes restricted read-only access", async () => {
+  const id = "relay-owner-handoff-fixture";
+  const relay = { id: "owner-handoff", api_base: "http://127.0.0.1:1/v1", credential: "x".repeat(43), name: "Fixture",
+    origin: "http://127.0.0.1:1", description: "Fixture", pairedAt: "2026-10-01T00:00:00Z", paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
+    limits: { max_response_bytes: 4096, max_wait_s: 25, max_answer_chars: 1000 },
+    targets: [{ id: "target", name: "Target", answered_by: "install" as const, fallback: "service" as const, enabled: true,
+      ownerTier: true, engine: "codex" as const, model: "auto", effort: "low", project: null, concurrency: 1, hardCapMinutes: 3 }] };
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  expect(reserveRun({ requestId: "owner-handoff-request", leaseId: "owner-handoff-lease", relayId: relay.id, targetId: "target",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid),
+    runDir: root, startedAt: "2026-10-01T00:00:00Z", ownerTurn: { clientAttemptId: id, rawRequest: { delivery: "guest" } } }, 1)).toBe("added");
+
+  expect((await launch(id, { ownerRelayHandoffOnly: true }, { autonomousStructured: true })).status).toBe(403);
+  changeRun("owner-handoff-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, seatHandoff: true,
+    rawRequest: { delivery: "guest", input: { requester: { is_owner: true, is_anonymous_admin: false } } },
+    entry: { id: "earlier-switch-target", kind: "paired-owner", tier: "owner", project: null, label: "Paired owner" } } }));
+  const rejected = await launch(`${id}-spoof`, { ownerRelayHandoffOnly: true }, { autonomousStructured: true });
+  expect(rejected.status).toBe(403);
+  for (const elevated of [
+    { allowSubagents: true },
+    { plugins: ["browser"] },
+    { mcpServers: ["viewer", "telegram"] },
+  ]) {
+    expect((await launch(`${id}-elevated-${Object.keys(elevated)[0]}`, { ownerRelayHandoffOnly: true, ...elevated }, { autonomousStructured: true })).status)
+      .toBeGreaterThanOrEqual(400);
+  }
+  const accepted = await launch(id, { ownerRelayHandoffOnly: true }, { autonomousStructured: true });
+  expect(accepted.status).toBe(202);
+  expect(accepted.receipt?.launchProfile).toMatchObject({ ownerRelayHandoffOnly: true, readOnly: true, sandbox: "restricted", permissionMode: "never", allowSubagents: false, mcpServers: ["viewer"], plugins: [] });
+  const accessPolicy = structuredHostAccessPolicy(accepted.receipt?.launchProfile);
+  expect(accessPolicy).toEqual({ readOnly: true, sandbox: "restricted", ownerRelayHandoffOnly: true });
+  const access = materializeStructuredHostAccess(accessPolicy, { HOME: env.HOME, GH_CONFIG_DIR: path.join(root, "github-config"), GH_TOKEN: "fixture-token", NODE_ENV: "test" }, null, root);
+  try {
+    expect(access.codex).toMatchObject({ permissionProfile: "llv-read-only-stage" });
+    expect(access.codex.permissionProfileConfig).toContain('extends=":read-only"');
+    expect(access.codex.permissionProfileConfig).not.toContain('extends=":workspace"');
+    expect(access.host.forwardGitHubConfig).toBe(false);
+    expect(access.env.GH_CONFIG_DIR).toBeUndefined();
+    expect(access.env.GH_TOKEN).toBeUndefined();
+    if (process.env.LLV_CLEANER_SANDBOX_TEST === "1") {
+      const executable = process.env.LLV_CLEANER_SANDBOX_BINARY ?? Bun.which("codex");
+      expect(executable).not.toBeNull();
+      const protectedFile = path.join(root, "owner-handoff-protected.txt");
+      const scratchFile = path.join(access.scratchDirectory!, "owner-handoff-scratch.txt");
+      const evidenceFile = path.join(access.env.LLV_EVIDENCE_DIR!, "owner-handoff-evidence.txt");
+      fs.writeFileSync(protectedFile, "preserved\n");
+      const child = Bun.spawn([executable!, "sandbox", "-C", accepted.receipt!.cwd, "-P", access.codex.permissionProfile!,
+        "-c", access.codex.permissionProfileConfig!, "--", "/bin/sh", "-c",
+        'printf scratch > "$2" && printf evidence > "$3" && if printf changed > "$1"; then exit 91; fi; printf checked',
+        "fixture", protectedFile, scratchFile, evidenceFile],
+      { env: { ...access.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const deadline = setTimeout(() => child.kill(), 15_000);
+      try {
+        const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+        expect(stdout, `restricted owner relay sandbox did not complete: ${stderr.trim()}`).toBe("checked");
+        expect(exit).toBe(0);
+        expect(stderr).toMatch(/Read-only file system|Permission denied|Operation not permitted/);
+        expect(fs.readFileSync(protectedFile, "utf8")).toBe("preserved\n");
+        expect(fs.readFileSync(scratchFile, "utf8")).toBe("scratch");
+        expect(fs.readFileSync(evidenceFile, "utf8")).toBe("evidence");
+      } finally {
+        clearTimeout(deadline);
+        if (child.exitCode === null) { child.kill(); await child.exited; }
+        fs.rmSync(protectedFile, { force: true });
+      }
+    }
+  } finally { access.cleanup(); }
+});
 
 // The first admission opens the isolated stores. Its test timeout includes
 // that cold setup as well as the drain and replay under the gate's CPU quota.
