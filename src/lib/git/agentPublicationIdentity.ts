@@ -56,7 +56,7 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment, cwd = sour
   };
 }
 
-export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment, cwd?: string, gateRoot?: GateCheckRoot | null): Record<string, unknown> {
+export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment, gateRoot?: GateCheckRoot | null, cwd?: string): Record<string, unknown> {
   const identity = agentPublicationIdentityEnv(source, cwd);
   const shellBindings = source.LLV_GATE_CPU_PRIORITY_SOURCE === undefined
     ? {} : { LLV_GATE_CPU_PRIORITY_SOURCE: source.LLV_GATE_CPU_PRIORITY_SOURCE };
@@ -91,7 +91,7 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
 }
 
 export function agentCodexPublicationArgs(policy: unknown, source: AgentEnvironment, cwd?: string): string[] {
-  return Object.entries(agentCodexPublicationPolicy(policy, source, cwd)).flatMap(([field, value]) =>
+  return Object.entries(agentCodexPublicationPolicy(policy, source, undefined, cwd)).flatMap(([field, value]) =>
     Array.isArray(value) ? ["-c", `shell_environment_policy.${field}=${JSON.stringify(value)}`]
       : Object.entries(value as Record<string, unknown>).flatMap(([key, item]) =>
         ["-c", `shell_environment_policy.${field}.${key}=${JSON.stringify(item)}`]));

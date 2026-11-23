@@ -1791,7 +1791,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         : null;
       // A reconnected listener keeps its verified launch root across Viewer restarts.
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy,
-        options.env ?? process.env, options.cwd, provisional.gateCheckRoot);
+        options.env ?? process.env, provisional.gateCheckRoot, options.cwd);
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;
       Object.assign(config.features as Record<string, unknown>, cleanup.features);
