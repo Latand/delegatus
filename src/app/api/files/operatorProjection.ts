@@ -659,9 +659,8 @@ function boardBootstrap(): BoardBootstrap {
   return bootstrapStore.__llvBoardBootstrap;
 }
 
-/** Registration loads this module and the saved bytes before Next accepts
- * requests, including on a passive candidate. Building a missing artifact
- * requires release ownership and runs during activation. */
+/** Read the saved bytes, or warm a missing artifact in the owning release's
+ * fenced background startup. The first board request can read on demand. */
 export async function prepareBoardSummary(buildIfMissing = false): Promise<void> {
   const saved = await boardBootstrap().read;
   if (!buildIfMissing) return;

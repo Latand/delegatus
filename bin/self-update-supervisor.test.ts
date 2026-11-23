@@ -10,6 +10,7 @@ import {
   createLauncherRecord,
   createReadinessJournal,
   TERMINAL_BOOTSTRAP_TIMEOUT_MS,
+  waitForViewerReadiness,
   waitForPageAndChunk,
   exitError,
   hostEntrypoint,
@@ -437,6 +438,77 @@ test.each(["gate-expired", "issuer-changed", "launcher-changed"] as const)("watc
   } finally { resume(); watcher.stop(); }
 });
 
+
+describe("revision-bound Viewer readiness", () => {
+  const revision = "a".repeat(40);
+  for (const legacy of [false, true]) {
+    test(`probes the selected revision and uses the legacy path only after a 404 (${legacy})`, async () => {
+      const journalFile = join(root, `endpoint-${legacy}.json`);
+      const journal = createReadinessJournal(journalFile, { revision, pid: 123 });
+      const requests: string[] = [];
+      const server = createServer((request, response) => {
+        requests.push(request.url!);
+        if (request.url === `/api/ready?revision=${revision}` && request.headers["x-test-probe"] === "fixture") {
+          response.writeHead(legacy ? 404 : 200, legacy ? {} : { "x-delegatus-viewer-revision": revision }).end();
+        } else if (legacy && request.url === "/api/files") {
+          response.writeHead(403).end();
+        } else response.writeHead(503).end();
+      });
+      await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+      try {
+        const address = server.address() as { port: number };
+        const ready = await waitForViewerReadiness(address.port, {
+          revision, timeoutMs: 5_000, headers: () => ({ "x-test-probe": "fixture" }), onPhase: journal.observe,
+        });
+        expect(ready).toBeTrue();
+        journal.finish();
+        expect(requests).toEqual([`/api/ready?revision=${revision}`, ...(legacy ? ["/api/files"] : [])]);
+        const observations = JSON.parse(readFileSync(journalFile, "utf8")).runs[0].phases.files.observations;
+        expect(observations).toEqual(legacy
+          ? [
+            { endpoint: "/api/ready", httpStatus: 404, status: "failed", elapsedMs: expect.any(Number) },
+            { endpoint: "/api/files", httpStatus: 403, status: "ready", elapsedMs: expect.any(Number) },
+          ]
+          : [{ endpoint: "/api/ready", httpStatus: 200, status: "ready", elapsedMs: expect.any(Number) }]);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    });
+  }
+
+  test("a pending or wrong revision never falls back and a no-answer attempt gets only the remaining budget", async () => {
+    let now = 0;
+    const attempts: Array<[string, number]> = [];
+    const journalFile = join(root, "pending-revision.json");
+    const journal = createReadinessJournal(journalFile, { revision, pid: 123 }, () => now);
+    const ready = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 5_000, onPhase: journal.observe,
+      now: () => now, sleep: async milliseconds => { now += milliseconds; },
+      probe: async (_port, endpoint, _revision, budget) => {
+        attempts.push([endpoint, budget]);
+        if (attempts.length === 1) { now += 10; return { httpStatus: 503 }; }
+        if (attempts.length === 2) { now += 10; return { httpStatus: 409 }; }
+        if (attempts.length === 3) { now += 10; return { httpStatus: 200, revision: "b".repeat(40) }; }
+        now += budget;
+        return { error: "deadline" };
+      },
+    });
+    expect(ready).toBeFalse();
+    expect(now).toBe(5_000);
+    expect(attempts).toEqual([["/api/ready", 5_000], ["/api/ready", 4_790], ["/api/ready", 4_580], ["/api/ready", 4_370]]);
+    journal.finish("Viewer readiness deadline expired");
+    expect(JSON.parse(readFileSync(journalFile, "utf8")).runs[0]).toMatchObject({
+      status: "failed", detail: "deadline",
+      phases: { files: { elapsedMs: 5_000, observations: [
+        { status: "failed", elapsedMs: 10, httpStatus: 503 },
+        { status: "failed", elapsedMs: 10, httpStatus: 409 },
+        { status: "failed", elapsedMs: 10, httpStatus: 200, error: "revision-mismatch" },
+        { status: "failed", elapsedMs: 4_370, error: "deadline" },
+      ] } },
+    });
+  });
+});
 
 describe("bounded page and chunk readiness", () => {
   for (const slowPhase of ["page", "html", "chunk"] as const) {

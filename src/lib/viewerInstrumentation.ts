@@ -33,6 +33,7 @@ import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
 import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 import { readAuto } from "@/lib/selfUpdate/auto";
 import { activeDrain } from "@/lib/selfUpdate/drain";
+import { markViewerHttpReady, viewerStartupPhases } from "@/lib/viewerReadiness";
 
 /*
  * The Viewer's node-side startup runtime. This module (and everything it pulls
@@ -138,7 +139,6 @@ interface ViewerRuntimeActivationSteps {
   startControllers: () => Promise<void>;
   publishHotStateActivation: () => void;
   publishViewerReleaseReady: () => void;
-  prepareBoard?: () => Promise<void>;
   refineBoard?: () => Promise<unknown>;
 }
 
@@ -916,11 +916,10 @@ export async function completeViewerRuntimeActivation(
   const { retireLegacyCodexMemoryHooksAtStartup } = await import("@/lib/memory/hookMigration");
   await retireLegacyCodexMemoryHooksAtStartup();
   steps.startStructuredHosts?.();
-  await steps.prepareBoard?.();
   await steps.startControllers();
   steps.publishViewerReleaseReady();
-  // A saved summary already makes the board readable. Fresh attention facts
-  // refine it afterwards; their scan must not delay the first document.
+  // The board can load its saved summary on demand. Its startup build and
+  // attention refinement may scan the catalog and should run in the background.
   void steps.refineBoard?.().catch(error => {
     console.error("[attention reconcile] startup refinement failed", error instanceof Error ? error.name : "unknown");
   });
@@ -1003,6 +1002,8 @@ export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
 }
 
 export async function registerViewerRuntime(): Promise<void> {
+  const startup = viewerStartupPhases();
+  startup.begin("http-ingress");
   viewerLoopMonitor.start();
   // The validated persisted catalog is prepared without contacting any server.
   void import("./voiceTools/hub").then(({ voiceToolHub }) => voiceToolHub().store.load())
@@ -1013,28 +1014,10 @@ export async function registerViewerRuntime(): Promise<void> {
   await installServingControlIngress();
   discardUnsupportedApiCredentials();
 
+  startup.begin("access");
   await installSpawnCapabilityResolverAtStartup();
   await gatePhoneAccessBeforeServing();
-  // Next loads the generated App Route separately from its userland module.
-  // Prepare that wrapper too: on a large build requirePage otherwise spends
-  // another second loading chunks on the first board request. The production
-  // launcher's cwd is the build root, as it is for the projection workers.
-  if (process.env.NODE_ENV === "production") {
-    const compiledRoute = path.join(process.cwd(), ".next/server/app/api/files/route.js");
-    // Keep this native require outside webpack's source dependency graph:
-    // the generated route only exists after that graph has been built.
-    const { createRequire } = await import(/* webpackIgnore: true */ "node:module");
-    const compiled = createRequire(path.join(process.cwd(), "package.json"))(compiledRoute) as {
-      routeModule: { ensureUserland(): Promise<void> };
-    };
-    // Next 16 loads App Route userland lazily, even after requirePage returns.
-    await compiled.routeModule.ensureUserland();
-  }
-  // Every candidate prepares the read-only board path before Next can serve
-  // it. Activation starts after the proxy appoints a release, which is too
-  // late to pay the route's module loading on its first board request.
-  const { prepareBoardSummary } = await import("@/app/api/files/operatorProjection");
-  await prepareBoardSummary();
+  startup.begin("release-authority");
   const isCurrent = () => viewerReleaseOwnsTraffic();
   const hotStateDirectory = path.dirname(statePath("state.sqlite"));
   const releaseRevision = () => hotStateWriterRevision(hotStateDirectory);
@@ -1070,6 +1053,7 @@ export async function registerViewerRuntime(): Promise<void> {
     assertStartupActive();
     const { startManagedRetirementGuard } = await import("@/lib/state/managedRetirementGuard");
     await startManagedRetirementGuard(hotStateDirectory, activatedReleaseRevision);
+    startup.begin("state-compatibility");
     const durability = await startupBarrier.run(() => checkStateDatabasesBeforeStores(hotStateDirectory));
     assertStartupActive();
     await startupBarrier.run(async () => {
@@ -1089,13 +1073,16 @@ export async function registerViewerRuntime(): Promise<void> {
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
     await startupBarrier.run(() => settleInterruptedTransfers());
+    startup.begin("registry");
     const { prepareAgentRegistry } = await import("@/lib/agent/registry");
-    await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", async () => {
+    const registry = await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", async () => {
       const registry = await prepareAgentRegistry(startupAbort.signal);
+      // The snapshot also prepares recovery indexes and backfills endings.
       await registry.prepareReadOnlySnapshot(startupAbort.signal);
-      await registry.prepareNativeCallerArtifacts();
+      return registry;
     }));
     assertStartupActive();
+    startup.begin("activation");
     const { cleanupFinishedWorkAtStartup } = await import("@/lib/attention/finishedWorkCleanup");
     await startupBarrier.run(() => cleanupFinishedWorkAtStartup(undefined, assertStartupActive));
     assertStartupActive();
@@ -1105,11 +1092,17 @@ export async function registerViewerRuntime(): Promise<void> {
     const { retireSeatRecoveryPlaceholdersAtStartup } = await import("@/lib/tasks/seatRecoveryCleanup");
     await startupBarrier.run(() => retireSeatRecoveryPlaceholdersAtStartup(undefined, assertStartupActive));
     assertStartupActive();
+    let refreshWorktreeCatalog: (() => Promise<void>) | undefined;
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
       runWorktreeRecovery: async () => {
         const { runWorktreeRecoveryAtStartup } = await import("@/lib/projects/worktreeBackfill");
-        await runWorktreeRecoveryAtStartup();
+        // Commit canonical mappings before controllers resolve project keys.
+        // The full rescan updates their catalog representation afterwards.
+        await startupBarrier.run(() => {
+          assertStartupActive();
+          return runWorktreeRecoveryAtStartup(console.error, undefined, refresh => { refreshWorktreeCatalog = refresh; });
+        });
       },
       runClaudeLoginRecovery: async () => {
         const { recoverClaudeLoginsAtStartup } = await import("@/lib/accounts/claudeLogin");
@@ -1131,17 +1124,22 @@ export async function registerViewerRuntime(): Promise<void> {
             void startup.catch((error) => console.error("[structured hosts] background startup aborted", error));
           }
         : null,
-      prepareBoard: async () => {
+      refineBoard: async () => {
+        await new Promise<void>(resolve => setImmediate(resolve));
         assertStartupActive();
-        await startupBarrier.run(() => prepareBoardSummary(true));
-        assertStartupActive();
+        await startupBarrier.run(async () => {
+          await refreshWorktreeCatalog?.();
+          assertStartupActive();
+          const { prepareBoardSummary } = await import("@/app/api/files/operatorProjection");
+          assertStartupActive();
+          await prepareBoardSummary(true);
+        });
+        await startupBarrier.run(() => viewerLoopMonitor.run("attention.reconcile", async () => {
+          const { reconcileAttentionOnce } = await import("@/lib/attention/reconcileController");
+          assertStartupActive();
+          await reconcileAttentionOnce(undefined, assertStartupActive);
+        }));
       },
-      refineBoard: () => startupBarrier.run(() => viewerLoopMonitor.run("attention.reconcile", async () => {
-        const { reconcileAttentionOnce } = await import("@/lib/attention/reconcileController");
-        assertStartupActive();
-        await reconcileAttentionOnce(undefined, assertStartupActive);
-        assertStartupActive();
-      })),
       startControllers: async () => {
         await startCurrentReleaseControllers();
         const { startRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
@@ -1161,10 +1159,22 @@ export async function registerViewerRuntime(): Promise<void> {
       },
     });
     durability.start(isCurrent);
-    const { startInstallPing } = await import("@/lib/telemetry/sender");
-    const { productionModePorts } = await import("@/lib/selfUpdate/mode");
-    const { runtimeHostClient } = await import("@/lib/runtime/client");
-    startInstallPing(productionModePorts(runtimeHostClient()));
+    assertStartupActive();
+    startup.finish();
+    markViewerHttpReady();
+    // Native lookups can advance and validate this cache themselves.
+    setImmediate(() => {
+      void startupBarrier.run(() => {
+        assertStartupActive();
+        return registry.prepareNativeCallerArtifacts();
+      }).catch(error => console.error("[registry] native caller cache preparation failed", error instanceof Error ? error.name : "unknown"));
+      void Promise.all([
+        import("@/lib/telemetry/sender"), import("@/lib/selfUpdate/mode"), import("@/lib/runtime/client"),
+      ]).then(([{ startInstallPing }, { productionModePorts }, { runtimeHostClient }]) => {
+        assertStartupActive();
+        startInstallPing(productionModePorts(runtimeHostClient()));
+      }).catch(error => console.error("[install ping] startup failed", error instanceof Error ? error.name : "unknown"));
+    });
   }, isCurrent, {
     fenceRequest: () => {
       const revision = releaseRevision();

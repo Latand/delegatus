@@ -72,7 +72,9 @@ test.each(["widgets", longRepositoryName])("Viewer activation recovers %s after 
   expect(patchBoard(source, 0, { manual: ["conversation_old"] }, board).ok).toBe(true);
   const order: string[] = [];
   let scans = 0;
-  const startup = () => runWorktreeRecoveryAtStartup(message => { throw Error(String(message)); }, async () => { scans++; await f.scan(); });
+  let refreshCatalog: (() => Promise<void>) | undefined;
+  const startup = () => runWorktreeRecoveryAtStartup(message => { throw Error(String(message)); },
+    async () => { scans++; await f.scan(); }, refresh => { refreshCatalog = refresh; });
   await completeViewerRuntimeActivation({
     initializeOperatorCapability: async () => { order.push("capability"); },
     publishHotStateActivation: () => { order.push("fence"); },
@@ -82,6 +84,9 @@ test.each(["widgets", longRepositoryName])("Viewer activation recovers %s after 
     }, publishViewerReleaseReady: () => { order.push("ready"); },
   });
   expect(order).toEqual(["capability", "fence", "recovery", "controllers", "ready"]);
+  expect(scans).toBe(0);
+  expect(refreshCatalog).toBeDefined();
+  await refreshCatalog!();
   expect(scans).toBe(1);
   expect(boardFor(f.identity.project, board).prefs.manual).toEqual(["conversation_old"]);
   expect(projectInfoFromCwd(cwd)?.project).toBe(f.identity.project);
@@ -93,7 +98,9 @@ test.each(["widgets", longRepositoryName])("Viewer activation recovers %s after 
   expect(journal.events[0]?.summary).toContain(f.identity.project);
   expect(journal.events[0]!.summary.length).toBeLessThanOrEqual(200);
   const before = bytes(f.state);
+  refreshCatalog = undefined;
   await startup();
+  expect(refreshCatalog).toBeUndefined();
   expect(scans).toBe(1);
   expect(bytes(f.state)).toEqual(before);
   expect(readLifecycleJournal()).toEqual(journal);

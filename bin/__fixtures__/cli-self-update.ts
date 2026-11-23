@@ -90,6 +90,7 @@ export const server = Bun.serve({
   port: Number(process.env.PORT ?? process.argv[process.argv.indexOf("--port") + 1]),
   fetch(request) {
     const pathname = new URL(request.url).pathname;
+    if (pathname === "/api/ready") return new Response(null, { status: 404 });
     if (${tokenProtected} && (pathname === "/" || pathname === "/api/self-update/launcher-admission")) {
       const key = gateKey();
       if (key && request.headers.get("authorization") !== "Bearer " + key) {
@@ -344,6 +345,7 @@ export async function protectedInstall(shape: "checkout" | "package", alias: "LL
       const result = proxy(new NextRequest(request));
       if (result.headers.get("x-middleware-next") !== "1") return result;
       const pathname = new URL(request.url).pathname;
+      if (pathname === "/api/ready") return new Response(null, { status: 404 });
       ${STUB_ADMISSION}
       if (pathname === "/api/self-update/launcher-admission") return Response.json({ admitted: true });
       return new Response(process.cwd());
