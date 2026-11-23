@@ -10,11 +10,11 @@ import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
 import { isReminderVersion } from "./seatTickReminders";
+import { maintenanceAnnouncements } from "./seatMaintenanceDelivery";
 
 import {
   emptySeatTickState,
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
-  SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -354,7 +354,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     announcedLanes: conversationIds(raw.announcedLanes),
     /* Absent on every row from before #2063, and absent reads as empty: a
        settled deploy nobody announced is announced. */
-    announcedMaintenance: conversationIds(raw.announcedMaintenance).slice(-SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
+    announcedMaintenance: maintenanceAnnouncements(conversationIds(raw.announcedMaintenance)),
     announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     ...(typeof raw.formPageAfter === "string" && raw.formPageAfter.length > 0 && raw.formPageAfter.length <= 500 ? { formPageAfter: raw.formPageAfter } : {}),
     ...(isoOrNull(raw.deployResumeThrough) ? { deployResumeThrough: isoOrNull(raw.deployResumeThrough)! } : {}),

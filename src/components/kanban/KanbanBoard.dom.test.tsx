@@ -1,14 +1,12 @@
 import { afterEach, expect, jest, test } from "bun:test";
 import { Window } from "happy-dom";
-import { flushSync } from "react-dom";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
-import { KanbanBoard, kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanBoardProps } from "./KanbanBoard";
+import type { KanbanBoardProps } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
-import { DWELL_MS } from "./useColumnDwell";
 import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
 import { earlierKey, timelineStorageKey } from "./boardTimelineStore";
 
@@ -22,6 +20,7 @@ setKanbanCardsOpenByDefault(true);
 const dom = new Window({ url: "http://localhost/" });
 // These interaction tests commit synchronously; animation timing has its own suite.
 Object.defineProperty(dom.HTMLElement.prototype, "animate", { configurable: true, writable: true, value: undefined });
+Object.defineProperty(dom.HTMLElement.prototype, "scrollIntoView", { configurable: true, writable: true, value: () => {} });
 Object.assign(globalThis, {
   window: dom,
   document: dom.document,
@@ -39,6 +38,12 @@ Object.assign(globalThis, {
   requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
+
+// React detects input event support when it loads.
+const { flushSync } = await import("react-dom");
+const { createRoot } = await import("react-dom/client");
+const { KanbanBoard, kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside } = await import("./KanbanBoard");
+const { DWELL_MS } = await import("./useColumnDwell");
 
 const roots: Root[] = [];
 afterEach(() => {
@@ -350,7 +355,7 @@ test("a column names its cards' status, so a card draws no status pill; S opens 
   const ports: TaskMutationPorts = {
     patch: async (id, body) => {
       patches.push({ id, body });
-      return { ok: true, task: task("a", "blocked", "Repair old links", { revision: REV(2) }) };
+      return { ok: true, task: task("a", "blocked", "Repair old links", { revision: REV(2), hold: { kind: "operator", note: "Choose the release", since: "2026-09-14T10:00:00.000Z", by: "operator" } }) };
     },
     read: async () => null,
     changed: () => {},
@@ -367,15 +372,25 @@ test("a column names its cards' status, so a card draws no status pill; S opens 
   expect(menu?.getAttribute("aria-label")).toBe("Status of «Repair old links»");
   expect([...menu!.querySelectorAll('[role="menuitemradio"]')].map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "true", "false", "false"]);
   click([...menu!.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent?.includes("Waiting")));
+  const form = host.querySelector<HTMLFormElement>("[data-hold-editor]")!;
+  expect(form).toBeTruthy();
+  expect(columnOf(host, "a")).toBe("assigned");
+  const select = form.querySelector("select")!;
+  flushSync(() => { select.value = "operator"; select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+  const field = form.querySelector<HTMLInputElement>("input")!;
+  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+  flushSync(() => { setter.call(field, "Choose the release"); field.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+  flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
   expect(columnOf(host, "a")).toBe("blocked");
   await tick();
-  expect(patches).toEqual([{ id: "a", body: { status: "blocked", expectedProject: "fixture", expectedRevision: REV(1) } }]);
+  expect(patches).toEqual([{ id: "a", body: { status: "blocked", hold: { kind: "operator", note: "Choose the release" }, expectedProject: "fixture", expectedRevision: REV(1) } }]);
   expect(document.activeElement?.getAttribute("data-id")).toBe("task:a");
 });
 
 test("a refused write returns the card to its column with an error receipt and Retry", async () => {
+  const patches: unknown[] = [];
   const ports: TaskMutationPorts = {
-    patch: async () => ({ ok: false, status: 500, error: "disk full" }),
+    patch: async (_id, body) => { patches.push(body); return { ok: false, status: 500, error: "disk full" }; },
     read: async () => null,
     changed: () => {},
   };
@@ -383,10 +398,18 @@ test("a refused write returns the card to its column with an error receipt and R
   const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
   card.focus();
   flushSync(() => card.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
+  const form = host.querySelector<HTMLFormElement>("[data-hold-editor]")!;
+  const select = form.querySelector("select")!;
+  flushSync(() => { select.value = "operator"; select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+  const field = form.querySelector<HTMLInputElement>("input")!;
+  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+  flushSync(() => { setter.call(field, "Grant deployment access"); field.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+  flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
   expect(columnOf(host, "a")).toBe("blocked");
   await tick();
   await tick();
   expect(columnOf(host, "a")).toBe("assigned");
+  expect(patches).toEqual([{ status: "blocked", hold: { kind: "operator", note: "Grant deployment access" }, expectedProject: "fixture", expectedRevision: REV(1) }]);
   expect(receiptTexts(host)).toContain("Couldn't save the status of «Repair old links»: disk full");
   expect(receiptTexts(host)).not.toContain("Moved «Repair old links» to Waiting");
   expect([...host.querySelectorAll("[data-kanban-receipt].error .act")].map((node) => node.textContent)).toEqual(["Retry"]);
