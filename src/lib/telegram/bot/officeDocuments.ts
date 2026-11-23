@@ -245,10 +245,10 @@ export function wordStyles(bytes: Buffer): WordStyles | undefined {
   const styles: WordStyles = { byId: new Map(), defaultOf: new Map() };
   const path: string[] = [];
   let entry: { basedOn?: string; vanish?: boolean } | undefined;
-  let root: SaxesTagNS | undefined;
+  const first: { tag?: SaxesTagNS } = {};
   parseOfficeXml(bytes, {
     open(tag) {
-      root ??= tag;
+      first.tag ??= tag;
       const local = WORD.has(tag.uri) ? tag.local : "";
       const parent = path.at(-1), grand = path.at(-2), great = path.at(-3);
       if (local === "style" && parent === "styles" && path.length === 1) {
@@ -266,7 +266,7 @@ export function wordStyles(bytes: Buffer): WordStyles | undefined {
     text() {},
     close() { path.pop(); },
   });
-  return root && WORD.has(root.uri) && root.local === "styles" ? styles : undefined;
+  return first.tag && WORD.has(first.tag.uri) && first.tag.local === "styles" ? styles : undefined;
 }
 
 /** A style's own `w:vanish`, or the nearest one along its `basedOn` chain. */
