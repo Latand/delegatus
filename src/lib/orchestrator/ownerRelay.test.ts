@@ -210,7 +210,7 @@ test("a native guest handoff reads its ready attachment and delivers its descrip
   const description = "The moderation panel still shows the matching post.";
   const words = "Could you have them look into this?";
   const request = requestSchema.parse({ ...contextRequest, target_id: "target", request_id: "ready_attachment_handoff", delivery: "guest",
-    features: ["requester_context", "relay_media_in"], answer: { ...contextRequest.answer, progress: "none" },
+    features: ["requester_context", "relay_media_in"], answer: { max_chars: 1000, progress: "none" },
     input: { ...contextRequest.input, respond_to: "owner-message", request_text: words,
       requester: { ...contextRequest.input.requester, is_owner: true },
       tools: contextRequest.input.tools.filter(tool => tool.mode === "handoff"),
