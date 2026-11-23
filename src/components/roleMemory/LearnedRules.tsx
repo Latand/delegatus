@@ -459,7 +459,9 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
         below={summary ? <SliceTopics part={summary} disabled={false} onPick={topic => select({ kind: "topic", title: topic.title, text: topic.text, ids: topic.ruleIds, scope: scope.scope })} /> : null}
         scope={scope} {...shared} />;
     } else {
-      const matching = scopes.filter(scope => (!current.scope || scope.scope === current.scope) && scope.active.some(rule => current.ids.includes(rule.id)));
+      /* A level stays in the pane while it holds the undo of a topic rule just removed, or the undo would leave with the row's section. */
+      const matching = scopes.filter(scope => (!current.scope || scope.scope === current.scope)
+        && (scope.active.some(rule => current.ids.includes(rule.id)) || (undo?.scope === scope.scope && current.ids.includes(undo.rule.id))));
       body = <>
         <header className="px-3 pb-1 pt-3">
           <h3 className="m-0 text-[14px] font-semibold text-primary [overflow-wrap:anywhere]">{current.title}</h3>

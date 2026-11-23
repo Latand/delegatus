@@ -10,7 +10,7 @@ import { profileView } from "@/lib/memory/profile";
 import type { MemoryProfileView } from "@/lib/memory/profileTypes";
 import { ROLE_MEMORY_BOUND, type RoleMemoryProjectView, type RuleView, type ScopeView } from "@/lib/memory/roleTypes";
 
-import { RuleSection, RulesWindow } from "./LearnedRules";
+import { predictedRules, RuleSection, RulesWindow } from "./LearnedRules";
 
 /* The operator asked for little text in the rules window, so a scope's size
    against its bound is shown only once the scope nears it. */
@@ -22,7 +22,7 @@ const levelScope = (name: string, kind: ScopeView["kind"], roleId: string | null
 type Mounted = { dom: Window; act: typeof act; posts: unknown[]; closed: number[]; key: (key: string, options?: { shiftKey?: boolean }) => Promise<void>; text: (selector: string) => string };
 
 /** Mounts the real window over `view` in its own DOM, as a desktop or as a phone, and answers its fetches. */
-async function withWindow(options: { view: RoleMemoryProjectView; project?: string; phone?: boolean; focusRule?: string; profile?: (base: MemoryProfileView) => MemoryProfileView }, check: (mounted: Mounted) => Promise<void>) {
+async function withWindow(options: { view: RoleMemoryProjectView; project?: string; phone?: boolean; focusRule?: string; applyPosts?: boolean; profile?: (base: MemoryProfileView) => MemoryProfileView }, check: (mounted: Mounted) => Promise<void>) {
   const dom = new Window();
   dom.HTMLElement.prototype.scrollIntoView = () => {};
   (dom as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({ matches: !!options.phone, media: query, addEventListener() {}, removeEventListener() {} });
@@ -32,13 +32,20 @@ async function withWindow(options: { view: RoleMemoryProjectView; project?: stri
   installActEnv();
   const oldFetch = globalThis.fetch;
   const posts: unknown[] = [];
+  let served = options.view;
   globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
-    if (init?.method === "POST") { posts.push(JSON.parse(String(init.body))); return Response.json(options.view); }
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { action: string; ruleId: string };
+      posts.push(body);
+      /* A server that keeps what it was told: the next reading carries the removal or the restore. */
+      if (options.applyPosts) served = predictedRules(served, body.action, body.ruleId, "2026-10-16T12:00:00.000Z");
+      return Response.json(served);
+    }
     if (String(input).startsWith("/api/role-memory/profile")) {
       const base = profileView(options.view, "en", "sample", null);
       return Response.json(options.profile ? options.profile(base) : base);
     }
-    return Response.json(options.view);
+    return Response.json(served);
   }) as unknown as typeof fetch;
   const host = dom.document.createElement("div"); dom.document.body.append(host);
   const root = createRoot(host as unknown as HTMLElement);
@@ -248,7 +255,6 @@ test("a delete leaves the list at once while the write is held, and a refusal br
 });
 
 test("the predicted reading restores a left rule and reverts a rule's text to the chosen version", async () => {
-  const { predictedRules } = await import("./LearnedRules");
   const left = { id: "r_left", rule: "Old wording.", why: "w", state: "archived", reason: "deleted", hints: [], roleId: null, fixRound: false, stageId: "seat", fresh: false, createdAt: "today", changedAt: "today", versions: [{ id: "v_one", rule: "First wording.", why: "first why", hints: [] }] } as unknown as RuleView;
   const view = { project: "p", enabled: true, scopes: [{ ...scope(100), left: [left] }] };
   const restored = predictedRules(view, "restore", "r_left", "2026-10-16T12:00:00.000Z");
@@ -465,6 +471,25 @@ test("an overall topic names itself once over one section per level with only it
     expect([...pill.querySelectorAll("[data-learned-rule]")].map(row => row.getAttribute("data-learned-rule"))).toEqual(["b2"]);
     expect(dom.document.querySelector("[aria-current]")?.getAttribute("data-profile-level")).toBe("role:atlas:builder");
   });
+});
+
+test("in a topic pane a removal keeps the undo when it takes a level's only topic rule or the topic's last rule", async () => {
+  const part = (scope: string, topics: Topics) => ({ scope, createdAt: "2026-10-08T10:00:00Z", durationMs: 1, model: "sample", promptVersion: 1, stale: false, answer: { headline: `Headline of ${scope}`, text: `Text of ${scope}.`, topics } });
+  for (const ids of [["b1", "p1"], ["p1"]]) {
+    const profile = (base: MemoryProfileView): MemoryProfileView => ({ ...base, overall: part("overall", [{ title: "Colour checks", ruleIds: ids }]) });
+    await withWindow({ view: levelsView(), profile, applyPosts: true }, async ({ dom, act, posts }) => {
+      await act(async () => press(dom, '[data-profile-topic="0"]'));
+      await act(async () => press(dom, '[data-learned-rule-delete="p1"]'));
+      expect(posts).toEqual([{ project: "atlas", action: "delete", ruleId: "p1" }]);
+      const pane = dom.document.querySelector('[data-level-pane="topic"]')!;
+      expect(pane.querySelectorAll("[data-rules-undo]")).toHaveLength(1);
+      expect(pane.querySelector('[data-learned-rule="p1"]')).toBeNull();
+      await act(async () => press(dom, "[data-level-pane=topic] [data-rules-undo-button]"));
+      expect(posts.at(-1)).toEqual({ project: "atlas", action: "restore", ruleId: "p1" });
+      expect(dom.document.querySelector('[data-level-pane="topic"] [data-learned-rule="p1"]')).not.toBeNull();
+      expect(dom.document.querySelector("[data-rules-undo]")).toBeNull();
+    });
+  }
 });
 
 test("a removal draws the undo in the row's place inside the pane", async () => {
