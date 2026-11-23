@@ -89,11 +89,35 @@ every clone shares a remote id. Shared recorded GitHub remotes also check the fo
 
 Run `git config core.hooksPath .githooks` once per clone. Worktrees inherit
 that config and run the hooks from their own checkout. Pre-commit runs staged
-whitespace, privacy with the committed fingerprints, and eslint. Pre-push checks
+whitespace and eslint. Pre-push scans each commit's added lines with three lines
+of context, each new binary blob, messages and identities, using the committed
+fingerprints and supplied learned-rule texts. The hosted privacy check keeps
+whole-file coverage. Pre-push checks
 commit publication, types, changed-file lint, touched tests, and scoped Linux,
 pinned Bun runtime, native Codex and supply-chain gates. Tests and builds use
 isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
-Touched tests run the branch first, up to eight explicit head files at once, each
+
+For an intermediate source export, run
+`bash scripts/gate-slot.sh bun scripts/check-source.ts -- <command> [args...]`.
+It copies current inputs, shares installed dependencies, isolates state and
+removes the export after that command and its owned descendants finish. Reuse
+this procedure for repeated builds and focused checks; leave retained evidence
+in `LLV_EVIDENCE_DIR` and avoid accumulating a new full checkout per retry.
+
+When the stage brief calls for standalone full types, run
+`bun scripts/local-gate.ts check-step types` from the candidate checkout.
+It uses the publication plan, CPU admission and isolated check environment.
+On an unchanged clean head the subsequent push reuses that exact passing step.
+The same command accepts `eslint`, `touched tests`, `Linux backend` and
+`Linux tests` when the plan includes them. Quote names containing spaces.
+
+For a manual privacy check, run
+`bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main`.
+The command defaults to the committed `scripts/privacy-known-value-fingerprints.json`
+beside the gate. `LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE` overrides that catalog;
+an empty value disables the default and still requires another known-value source.
+
+Touched tests run the branch first. Gate-harness and privacy suites use at most two file workers because they launch nested commands. Linux portable runners sharing a parent service use one. Other selections run up to eight explicit head files at once, each
 with fresh state, HOME and TMPDIR under the OS temp root. Only files failing on
 the branch are sampled on the merge base with `origin/main`, filtered to the
 failing assertions; runner errors require the full file. A green branch needs
@@ -124,16 +148,25 @@ nothing. A publication stopped only by an execution deadline retries after 1,
 5 and 15 minutes, then parks after those three retries with the cause on its
 first line. CPU admission waits do not spend the check budget, including the
 handoff into the admitted hook process. A named failing assertion, another
-failed check or failed cleanup keeps the refusal decisive. A refused
+failed check or failed cleanup keeps the refusal decisive. Comparator budget
+exhaustion retains green file checkpoints for automatic retries, and a
+privacy report containing only `configuration_error` retries as an interruption
+when changed paths are known and exclude `scripts/privacy-*` and
+`scripts/generate-privacy-*`. A refused
 publication of an unchanged head retries
 after 1, 5 and 15 minutes, then parks with the cause on its first line. A push
 interrupted by a signal or a stopped Viewer before it reached the remote is
 counted the same way, whatever the stage changed. A refusal of a
 head that changes files, or of commits privacy refused, gets one repair turn
 from the producer that wrote them; its park keeps the cause on the first line.
+After a type, lint or test refusal, a settled producer repair can return to a
+fresh producer attempt automatically. The lane permits two fresh repair
+attempts across controller restarts. `retry-stage` uses the same repair path
+once the earlier turn has settled; the original pass and accepted commits stay
+recorded. Active turns, queued deliveries and live background work fence the
+replacement. See `docs/design/publication-producer-repair.md`.
 `LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
-the branch is behind `origin/main`. Missing local media tools defer named media
-files to the required CI OCR gate. See CONTRIBUTING.md for slot settings.
+the branch is behind `origin/main`. See CONTRIBUTING.md for slot settings.
 
 ## Heavy commands may run on the gate runner
 
@@ -207,7 +240,7 @@ write into a message, a doc or a fixture, where the paragraph above still holds.
 `privacy-publication` on CI uses the committed
 `scripts/privacy-known-value-fingerprints.json` from its trusted checkout.
 The local hooks use the same fingerprints with `--require-known-values`.
-The required CI checks stay as enforcement for skipped hooks and media OCR.
+The required CI checks enforce text, metadata and provenance checks on published changes.
 Scrub before the push, and re-read every table and quote lifted out of logs.
 <!-- END:live-state-and-publication -->
 
@@ -240,10 +273,14 @@ during `verify-candidate`, so a candidate whose host cannot boot, cannot take
 the fence, or cannot hold what it took is refused before promotion rather than
 after.
 
-**Both halves run on every PR and by CI dispatch** under the pin read
-from the Dockerfile, with the stable `runtime-gate` context joining both runtime
-and native Codex verdicts. Locally they run when `Dockerfile`,
-`src/runtime-host/**` or `bin/**` changes. After this workflow lands, the seat
+**Both halves run on every PR into main and nightly on main**, under the pin
+read from the Dockerfile. CI dispatch also runs both unless
+`native_queue_campaign` is enabled. The stable `runtime-gate` context waits
+for `bun-runtime` and native Codex on the newest reviewed pin for ordinary PRs.
+For `batch/*` PRs into main, nightly runs, main pushes and dispatches without
+that campaign, it waits for `bun-runtime` and the full three-version native
+Codex window. Locally they run
+when `Dockerfile`, `src/runtime-host/**` or `bin/**` changes. After this workflow lands, the seat
 adds `runtime-gate` to main branch protection; older PRs need a new push or reopen.
 `scripts/verify-viewer-runtime.ts` loads every compiled
 server runtime, then serves the build and requires `GET /` to answer 200.

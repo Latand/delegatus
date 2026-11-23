@@ -326,12 +326,12 @@ function useBoard() {
 }
 
 /* The opened card on the desktop: the lane with three stages, one of them
-   reworking, drawn as its graph. Each control is pressed once: a second press
-   before the board redraws would fold it again. */
+   reworking, drawn as its pills; its graph is the Stages sheet's. Each
+   control is pressed once: a second press before the board redraws would
+   fold it again. */
 const OPEN_CARD = "t-rework";
 const OPEN_PRESSES = [
   `[data-kanban-card="task:${OPEN_CARD}"] button.icon-btn.fold[aria-expanded="false"]`,
-  `[data-kanban-card="task:${OPEN_CARD}"] button[data-graph-toggle="p-${OPEN_CARD}"][aria-pressed="false"]`,
 ];
 function useOpenCard() {
   useEffect(() => {

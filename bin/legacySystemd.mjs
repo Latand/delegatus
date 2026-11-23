@@ -1,4 +1,4 @@
-/* Docker is the only install (docs/docker.md). A machine set up before that
+/* The tmux-era user units are retired. A machine set up before that
    may still carry the retired systemd user units; the CLI names them once at
    start and says how to move off them, and changes nothing on its own. */
 
@@ -46,7 +46,7 @@ export function legacySystemdNotice(units, lang = "en") {
   ].join("\n");
   if (lang === "uk") {
     return [
-      "Встановлення Delegatus через systemd більше не підтримується: єдиний спосіб встановлення — Docker.",
+      "Старі юніти Delegatus більше не підтримуються. Для встановленого пакета є delegatus service install; також доступний Docker.",
       `На цій машині лишилися старі юніти: ${paths}`,
       ...(hostsTmux ? [`Зупинка ${TMUX_UNIT} закриває всі tmux-сесії, які він тримає; спершу завершіть агентів у цих панелях.`] : []),
       "Зупиніть і видаліть їх:",
@@ -55,7 +55,7 @@ export function legacySystemdNotice(units, lang = "en") {
     ].join("\n");
   }
   return [
-    "The systemd install of Delegatus is retired: Docker is the only install.",
+    "The legacy Delegatus units are retired. Use delegatus service install for a packaged install, or Docker.",
     `This machine still has the legacy units: ${paths}`,
     ...(hostsTmux ? [`Stopping ${TMUX_UNIT} ends every tmux session it hosts; finish the agents in those panes first.`] : []),
     "Stop and remove them:",

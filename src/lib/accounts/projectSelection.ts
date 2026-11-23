@@ -1,5 +1,5 @@
 import { selectHeadlessAccount } from "./headlessSelection";
-import { creditGuardBlock } from "./creditGuard";
+import { accountCreditGuardBlock } from "./creditPolicy";
 import { turboCreditExemptFor } from "./turboCreditExemption";
 import type { DurableQuotaObservation } from "./migration/contracts";
 import {
@@ -190,7 +190,7 @@ export function selectProjectAccount(input: ProjectAccountSelectionInput): Proje
   const requestedId = input.requestedId?.trim() || null;
   /* Turbo's paid-credit approval names accounts for this project only. */
   const guarded = (id: string) => {
-    const block = creditGuardBlock(input.engine, input.observations.find(item => item.accountId === id)?.limits);
+    const block = accountCreditGuardBlock(input.engine, id, input.observations.find(item => item.accountId === id)?.limits);
     return block && !turboCreditExemptFor(input.project, id, input.now) ? block : null;
   };
   const requestedGuard = requestedId && guarded(requestedId);
@@ -271,7 +271,7 @@ export interface AutomaticAccountTargetInput {
 export function admitAutomaticAccountTarget(input: AutomaticAccountTargetInput): ProjectAccountSelection {
   const allowed = allowedAccountIdsForProject(input.project, input.engine, input.bindings);
   const targetId = input.targetId.trim();
-  const blocked = creditGuardBlock(input.engine, input.observations.find(item => item.accountId === targetId)?.limits);
+  const blocked = accountCreditGuardBlock(input.engine, targetId, input.observations.find(item => item.accountId === targetId)?.limits);
   const guarded = blocked && !turboCreditExemptFor(input.project, targetId, input.now) ? blocked : null;
   if (guarded) return { kind: "exhausted", ...guarded, allowedAccountIds: allowed ?? [targetId] };
   if (allowed === null) {

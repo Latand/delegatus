@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
 
 import { detectBrowser, requestSurface } from "@/lib/view/device";
+import { publicOriginForRequest } from "@/lib/publicOrigin";
 
 import type { Member, MemberSession, SessionBrowser, SessionSurface, SignInMethod, TeamMode } from "./contract";
 import { existingTeamStore, SESSION_ABSOLUTE_MS, SESSION_IDLE_MS, type TeamStore } from "./store";
@@ -36,7 +37,7 @@ export function requestDevice(req: Pick<NextRequest, "headers">): { surface: Ses
 
 /** Whether the request arrived over HTTPS, as the perimeter cookie decides it. */
 export function requestIsHttps(req: Pick<NextRequest, "headers"> & { nextUrl?: URL }): boolean {
-  return req.headers.get("x-forwarded-proto") === "https" || req.nextUrl?.protocol === "https:";
+  return publicOriginForRequest(req) !== null || req.headers.get("x-forwarded-proto") === "https" || req.nextUrl?.protocol === "https:";
 }
 
 /** The mode this process reads right now. Never creates the store. */

@@ -171,15 +171,12 @@ test("a complete initial controller cycle yields during every cooperative phase"
           await cooperativePhase("scan");
           return { files, projectCatalog: [], complete: true };
         },
-        reconcileFlowOwnership: async () => cooperativePhase("flows"),
-        reconcileWorkflowOwnership: async () => cooperativePhase("workflows"),
         reconcileHandoffOwnership: async () => cooperativePhase("handoffs"),
         reconcileFiles: async () => cooperativePhase("file-controllers"),
         reconcileRuntime: async (currentRegistry, currentFiles) => {
           visited.push("runtime");
           await runReaperCycle({
             registry: currentRegistry,
-            hosts: [],
             files: currentFiles,
             actuation: { loadFlows: () => [] },
           });
@@ -194,8 +191,6 @@ test("a complete initial controller cycle yields during every cooperative phase"
 
     expect(visited).toEqual([
       "scan",
-      "flows",
-      "workflows",
       "handoffs",
       "file-controllers",
       "runtime",
@@ -267,7 +262,6 @@ test("authorship scanning yields while reading one large transcript", async () =
     try {
       lags = await eventLoopLagsWhile(() => probe.run(() => runReaperCycle({
         registry,
-        hosts: [],
         files: [file],
         actuation: { loadFlows: () => [] },
       })).then(() => undefined));
@@ -311,7 +305,7 @@ test("inventory acknowledgement starts fresh in each real process", async () => 
     const controller = new AccountMigrationController(registry, {tick: async () => {}}, null, {
       scan: async () => ({files: [], projectCatalog: [], complete: true}),
       reconcileInventory: async () => { batches++; return registry.readOnlySnapshot(); },
-      reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+      reconcileHandoffOwnership: async () => {},
       reconcileFiles: async () => {}, reconcileRuntime: async () => {}, reconcileTaskStore: async () => {}, syncRouting: async () => {},
       reconcileMigrationCycle: async () => {},
     });
@@ -383,7 +377,7 @@ test("idle controller tasks open no mutation", async () => {
     const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
       scan: async () => ({ files: [], projectCatalog: [], complete: true }),
       reconcileInventory: async () => registry.readOnlySnapshot(),
-      reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+      reconcileHandoffOwnership: async () => {},
       reconcileFiles: async () => {}, reconcileRuntime: async () => {}, syncRouting: async () => {}, reconcileMigrationCycle: async () => {},
     });
     await controller.poll();
@@ -440,7 +434,7 @@ test("controller task preflight preserves real changes and retries a refused wri
   }) as typeof original);
   const controller = new AccountMigrationController(registry, { tick: async () => {} }, null, {
     scan: async () => ({ files: [], projectCatalog: [], complete: true }), reconcileInventory: async () => registry.readOnlySnapshot(),
-    reconcileFlowOwnership: async () => {}, reconcileWorkflowOwnership: async () => {}, reconcileHandoffOwnership: async () => {},
+    reconcileHandoffOwnership: async () => {},
     reconcileFiles: async () => {}, reconcileRuntime: async () => {}, syncRouting: async () => {}, reconcileMigrationCycle: async () => {},
   });
   try {

@@ -322,7 +322,7 @@ export function DirectoryPicker({
         className="flex min-h-11 min-w-0 items-center gap-1.5 rounded-[6px] border border-border bg-card px-2 py-1 text-left hover:border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 sm:min-h-0"
       >
         <span className="line-clamp-2 min-w-0 flex-1 break-all font-mono text-[11px] leading-4">
-          {chosen ? <PathText dir={chosen} elide /> : <span className="text-muted">{t("dirPicker.empty")}</span>}
+          {chosen ? <PathText dir={chosen} elide /> : <span className="font-sans text-[12px] text-muted">{t("dirPicker.empty")}</span>}
         </span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
       </button>

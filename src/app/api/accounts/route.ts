@@ -171,6 +171,7 @@ export async function GET() {
     return {
       id: account.id,
       label: account.label,
+      spendCredits: account.spendCredits === true,
       ...(codexNextChosen ? { nextChosen: codexNextChosen === account.id } : {}),
       kind: account.kind,
       authPresent: account.authPresent,

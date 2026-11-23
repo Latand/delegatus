@@ -8,7 +8,7 @@ export const MCP_CURSOR_TTL_MS = 300_000;
 export const MCP_CURSOR_MAX_ENTRIES = 2048;
 export const MCP_CURSOR_MAX_BYTES = 8 * 1024 * 1024;
 export const MCP_PAGE_CURSOR_TOOLS = new Set([
-  "list_conversations", "search_transcripts", "conversation_messages", "list_flows", "list_pipelines", "list_tasks",
+  "list_conversations", "search_transcripts", "conversation_messages", "list_pipelines", "list_tasks",
   "deployment_status", "agent_fleet", "agent_activity", "dismiss_attention", "curate_rules",
   "telegram_bot_messages", "relay_owner_history", "relay_service_tools",
 ]);

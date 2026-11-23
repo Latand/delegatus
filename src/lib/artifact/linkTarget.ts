@@ -148,7 +148,9 @@ function transcriptTarget(path: string, question = false): ViewerHashTarget {
  * `http://127.0.0.1:8898/#f=…` whichever address the operator opened.
  */
 export function resolveLink(raw: string, options: { viewerHosts?: readonly string[] } = {}): LinkTarget | null {
-  const value = raw.trim().replace(/\\([()])/g, "$1");
+  // A producer emitted U+200B before the absolute slash. Keep invisible
+  // characters inside filenames, URL escapes and every other prefix intact.
+  const value = raw.trim().replace(/^\u200B+(?=\/(?!\/))/, "").replace(/\\([()])/g, "$1");
   if (!value) return null;
   if (value.startsWith("#")) return resolveHash(value);
   if (/^https?:\/\//i.test(value)) {

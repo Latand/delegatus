@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, isCloudStageAttempt,
+import { stageDigest } from "./stageDigest";
+import { describe, expect, setSystemTime, test } from "bun:test";
+import { stageExecution, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, isCloudStageAttempt,
   validCloudTaskReference, validCloudThreadReference, type CloudStageAttempt, type CloudStageClient } from "./cloudStage";
 import type { PipelineStage } from "./types";
 
@@ -116,4 +117,66 @@ test("hosted handles retain only a bounded thread and turn identity", () => {
     expect(validCloudThreadReference(value)).toBe(false);
     expect(isCloudStageAttempt({ ...reserved, ...reference, phase: "polling", thread: value })).toBe(false);
   }
+});
+
+test("claude-cloud admits Claude read-only and builder stages with a bound model, and refuses the rest", () => {
+  const role = (over: Record<string, unknown>) => ({ roleId: "reviewer", engine: "claude", model: "opus", effort: "high", access: "read-only", promptScaffold: null, ...over }) as never;
+  const stage = (over: Record<string, unknown>) => ({ runtime: "claude-cloud" as const, kind: "run" as const, model: "opus", effectiveRole: role({}), ...over });
+  for (const roleId of ["reviewer", "verifier", "architect"]) expect(cloudStageConfigurationError(stage({ effectiveRole: role({ roleId }) }))).toBeNull();
+  expect(cloudStageConfigurationError(stage({ effectiveRole: role({ roleId: "builder", access: "read-write" }) }))).toBeNull();
+  for (const refused of [stage({ effectiveRole: role({ engine: "codex" }) }), stage({ effectiveRole: role({ roleId: "deployer" }) }), stage({ effectiveRole: role({ roleId: "reviewer", access: "read-write" }) }),
+    stage({ kind: "review-loop" }), stage({ outputs: [{ path: "x" }] })]) {
+    expect(cloudStageConfigurationError(refused)).toContain("claude-cloud requires a Claude");
+  }
+  expect(cloudStageConfigurationError(stage({ model: "sonnet" }))).toContain("explicit stage model");
+  /* An architect stays out of the Codex runtime, whose admission did not change. */
+  expect(cloudStageConfigurationError({ ...stage({ effectiveRole: role({ roleId: "architect", engine: "codex" }) }), runtime: "codex-cloud" })).toContain("codex-cloud requires");
+  expect(cloudStageConfigurationError(stage({ runtime: "other-cloud" }))).toContain("stage runtime must be local, codex-cloud or claude-cloud");
+});
+
+
+test("Claude submission journals and recovery decisions round-trip through the durable reader", () => {
+  const journal = { nonce: "a".repeat(32), startedAt: Date.UTC(2026, 10, 1), sent: ["b".repeat(64)] };
+  for (const claudeSubmission of [journal, { ...journal, sessionId: "cse_fixture", sending: { digest: "c".repeat(64), token: "d".repeat(32), final: true } },
+    { ...journal, sessionId: "cse_fixture", lastToken: "d".repeat(32), complete: true }]) {
+    for (const state of ["running", "found", "absent", "unknown"]) {
+      const cloud = { ...reserved, phase: "submitting", claudeSubmission, submissionUnresolved: true,
+        submissionRecovery: { state, deadlineAt: reserved.deadlineAt }, submissionAbandoned: { at: reserved.nextPollAt, reason: "Explicit local retry" } };
+      expect(isCloudStageAttempt(JSON.parse(JSON.stringify(cloud)))).toBe(true);
+    }
+  }
+  for (const claudeSubmission of [{ ...journal, nonce: "bad" }, { ...journal, sent: ["bad"] }, { ...journal, sent: Array(101).fill("b".repeat(64)) },
+    { ...journal, startedAt: -1 }, { ...journal, sessionId: "bad" }, { ...journal, complete: true }, { ...journal, sending: { digest: "bad" } }]) {
+    expect(isCloudStageAttempt({ ...reserved, claudeSubmission })).toBe(false);
+  }
+  expect(isCloudStageAttempt({ ...reserved, submissionRecovery: { state: "retry", deadlineAt: reserved.deadlineAt } })).toBe(false);
+  expect(isCloudStageAttempt({ ...reserved, submissionAbandoned: { at: "invalid", reason: "local" } })).toBe(false);
+});
+
+test("a Cloud refusal before a task exists reports not-executed with its reason", async () => {
+  const { pipelineCorpus } = await import("./fixtures/corpus");
+  setSystemTime(new Date("2026-11-12T00:00:00Z"));
+  try {
+  const pipeline = pipelineCorpus(2)[1]!, attempt = pipeline.runs[0]!.attempts.at(-1)!;
+  attempt.definition = { boundAt: "2026-11-12T00:00:00Z", runtime: "codex-cloud", stageDigest: stageDigest(stage),
+    account: null, prompt: stage.prompt, role: stage.role ?? null, sandbox: stage.sandbox ?? null, outputs: null };
+  attempt.effectiveRole = stage.effectiveRole;
+  attempt.state = "failed"; attempt.verdict = null; attempt.error = "local setup requires an explicit runtime override";
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "not-executed", reason: attempt.error });
+  attempt.cloud = { ...reserved, phase: "polling", taskId: reference.taskId, taskUrl: reference.taskUrl };
+  attempt.state = "running"; attempt.error = null;
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "cloud", reason: null });
+  attempt.cloud = { ...reserved, phase: "submitting", submissionUnresolved: true };
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "unknown", reason: "Cloud submission outcome is unresolved" });
+  attempt.cloud.phase = "failed"; attempt.cloud.error = "submission reply lost";
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "unknown", reason: "submission reply lost" });
+  attempt.cloud.submissionUnresolved = false;
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "not-executed", reason: "submission reply lost" });
+  delete attempt.cloud.submissionUnresolved;
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "codex-cloud", executionRuntime: "unknown", reason: "submission reply lost" });
+  delete attempt.cloud; delete attempt.definition.runtime;
+  attempt.definition.stageDigest = stageDigest({ ...stage, runtime: undefined });
+  attempt.state = "passed"; attempt.verdict = { status: "pass", findings: [] }; attempt.error = null;
+  expect(stageExecution(stage, attempt)).toEqual({ requestedRuntime: "local", executionRuntime: "local", reason: null });
+  } finally { setSystemTime(); }
 });

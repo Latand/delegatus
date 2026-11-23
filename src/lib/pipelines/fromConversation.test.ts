@@ -7,6 +7,7 @@ import { projectForCwd } from "@/lib/scanner/describe";
 import { openPinnedTranscript } from "@/lib/mcp/bindings";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
+import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import * as pipelineStore from "./store";
 import * as messagePages from "@/lib/session/messagesPage";
 import { listQueuedPipelineCreations } from "./creationQueue";
@@ -17,7 +18,7 @@ import { AgentRegistry, fs, os, path, realProvisioningRepo, harness, savePipelin
 const owned: string[] = [];
 afterEach(() => { savePipelines([]); saveTasks([]); for (const dir of owned.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-async function fixture() {
+async function fixture(plain = false) {
   savePipelines([]);
   const native = await realProvisioningRepo("conversation-draft");
   owned.push(native.root);
@@ -29,6 +30,7 @@ async function fixture() {
   fs.appendFileSync(path.join(repo, "tracked.txt"), "source commit\n");
   await git(repo, "commit", "-am", "Source fixture");
   const head = await git(repo, "rev-parse", "HEAD");
+  if (plain) fs.rmSync(path.join(repo, ".git"), { recursive: true });
   const transcript = path.join(native.root, "source.jsonl");
   fs.writeFileSync(transcript, [
     { type: "session_meta", payload: { cwd: repo } },
@@ -170,7 +172,7 @@ test("Start uses commit A after the source advances to B, with one normal genera
   expect(f.spawnInputs).toHaveLength(1);
 });
 
-test.each(["tracked", "untracked", "detached", "unborn", "nonbranch", "bare", "missing", "plain", "file"])("source refusal leaves no draft or source mutation: %s", async kind => {
+test.each(["tracked", "untracked", "detached", "unborn", "nonbranch", "bare", "missing", "file"])("source refusal leaves no draft or source mutation: %s", async kind => {
   const f = await fixture();
   if (kind === "tracked") fs.appendFileSync(path.join(f.repo, "tracked.txt"), "unfinished");
   if (kind === "untracked") fs.writeFileSync(path.join(f.repo, "new.txt"), "unfinished");
@@ -181,7 +183,6 @@ test.each(["tracked", "untracked", "detached", "unborn", "nonbranch", "bare", "m
     await f.git(f.repo, "symbolic-ref", "HEAD", "refs/tags/source-tag");
   }
   if (kind === "bare") await f.git(f.repo, "config", "core.bare", "true");
-  if (kind === "plain") fs.renameSync(path.join(f.repo, ".git"), path.join(f.root, "saved-git"));
   if (kind === "missing") fs.renameSync(f.repo, path.join(f.root, "moved-repo"));
   if (kind === "file") { fs.renameSync(f.repo, path.join(f.root, "moved-repo")); fs.writeFileSync(f.repo, "regular file"); }
   if (["tracked", "untracked"].includes(kind)) {
@@ -191,7 +192,86 @@ test.each(["tracked", "untracked", "detached", "unborn", "nonbranch", "bare", "m
   } else await expect(f.preview()).rejects.toMatchObject({ code: ["detached", "unborn", "nonbranch"].includes(kind) ? "SOURCE_BRANCH_UNAVAILABLE" : "SOURCE_WORKING_COPY_UNAVAILABLE" });
   expect(loadPipelines()).toEqual([]);
   expect(f.spawnInputs).toHaveLength(0);
-  if (kind === "plain") expect(fs.existsSync(path.join(f.repo, ".git"))).toBe(false);
+});
+
+test("a plain conversation folder previews without writes and creates a baseline-pinned draft", async () => {
+  const f = await fixture(true);
+  expect(f.task.project).toStartWith("dir-");
+  f.ports.pipeline.preflightRepo = (await import("./engine")).defaultPipelinePorts().preflightRepo;
+  const preview = await f.preview();
+  expect(preview.source).toMatchObject({ canCreate: true, branch: "main", head: "",
+    repositoryInitialization: "Creating the draft will create a local Git repository." });
+  expect(fs.existsSync(path.join(f.repo, ".git"))).toBe(false);
+  const result = await createConversationDraft(f.request, { ...f.input, sourceRevision: preview.source.sourceRevision, clientRequestId: "plain-draft" }, f.ports);
+  expect(result.status).toBe(201);
+  const head = await f.git(f.repo, "rev-parse", "HEAD");
+  expect(result.pipeline).toMatchObject({ state: "draft", baseBranch: "main", baseRef: head,
+    conversationSource: { branch: "main", head } });
+  expect(await f.git(f.repo, "rev-list", "--count", "HEAD")).toBe("1");
+  expect(await f.git(f.repo, "show", "-s", "--format=%an|%cn")).toBe("Delegatus|Delegatus");
+  expect(await f.git(f.repo, "remote")).toBe("");
+  const { canonicalProject } = await import("@/lib/projects/aliases");
+  expect(canonicalProject(f.task.project)).toBe(canonicalProject(result.pipeline!.project));
+  expect(f.spawnInputs).toHaveLength(0);
+});
+
+test("plain conversation admission preserves the initialiser refusal in preview and create", async () => {
+  const f = await fixture(true);
+  for (let i = 0; i < 200; i++) fs.writeFileSync(path.join(f.repo, String(i).padStart(26, "d") + ".txt"), "document\n");
+  const refusal = { code: "SOURCE_WORKING_COPY_UNAVAILABLE", message: "project exceeds the initial commit path-list bound" };
+  await expect(f.preview()).rejects.toMatchObject(refusal);
+  await expect(createConversationDraft(f.request, { ...f.input, sourceRevision: "a".repeat(64), clientRequestId: "large-plain-draft" }, f.ports)).rejects.toMatchObject(refusal);
+  expect(fs.existsSync(path.join(f.repo, ".git"))).toBe(false);
+  expect(fs.existsSync(path.join(f.repo, ".gitignore"))).toBe(false);
+  expect(loadPipelines()).toEqual([]);
+});
+
+test("a plain folder becoming a repository after preview requires a fresh preview", async () => {
+  const f = await fixture();
+  fs.renameSync(path.join(f.repo, ".git"), path.join(f.root, "saved-git"));
+  const input = await f.createInput();
+  fs.renameSync(path.join(f.root, "saved-git"), path.join(f.repo, ".git"));
+  await expect(createConversationDraft(f.request, input, f.ports)).rejects.toMatchObject({ code: "SOURCE_CHANGED" });
+  expect(loadPipelines()).toEqual([]);
+  expect(f.spawnInputs).toHaveLength(0);
+});
+
+test("source replacement while a plain folder is initialized cannot create a draft from replacement text", async () => {
+  const f = await fixture(true);
+  const input = await f.createInput();
+  const initialize = (await import("./engine")).defaultPipelinePorts().preflightRepo;
+  f.ports.pipeline.preflightRepo = async directory => {
+    const result = await initialize(directory);
+    fs.appendFileSync(f.transcript, "\n");
+    return result;
+  };
+  await expect(createConversationDraft(f.request, input, f.ports)).rejects.toMatchObject({ code: "SOURCE_CHANGED" });
+  expect(loadPipelines()).toEqual([]);
+  expect(f.spawnInputs).toHaveLength(0);
+});
+
+test("a commit added after plain-folder initialization cannot replace the baseline pin", async () => {
+  const f = await fixture(true);
+  const input = await f.createInput();
+  const initialize = (await import("./engine")).defaultPipelinePorts().preflightRepo;
+  f.ports.pipeline.preflightRepo = async directory => {
+    const result = await initialize(directory);
+    const identity = controllerCommitIdentityEnv();
+    await f.git(directory, "-c", `user.name=${identity.GIT_AUTHOR_NAME}`, "-c", `user.email=${identity.GIT_AUTHOR_EMAIL}`,
+      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Later fixture commit");
+    return result;
+  };
+  await expect(createConversationDraft(f.request, input, f.ports)).rejects.toMatchObject({ code: "SOURCE_CHANGED" });
+  expect(loadPipelines()).toEqual([]);
+  expect(f.spawnInputs).toHaveLength(0);
+});
+
+test("an unborn conversation branch names how to make its first commit", async () => {
+  const f = await fixture();
+  await f.git(f.repo, "checkout", "--orphan", "unborn");
+  await expect(f.preview()).rejects.toMatchObject({ code: "SOURCE_BRANCH_UNAVAILABLE",
+    message: expect.stringMatching(/no commit yet.*git add.*git commit/i) });
+  expect(loadPipelines()).toEqual([]);
 });
 
 test("changed branch, transcript append and inode replacement invalidate a preview", async () => {

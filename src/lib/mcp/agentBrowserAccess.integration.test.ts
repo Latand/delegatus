@@ -53,7 +53,7 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function fixture(inExecutor = false) {
+async function fixture(inExecutor = false, scopedSeat = false) {
   const directory = fs.mkdtempSync(path.join(root, "case-"));
   Object.assign(process.env, isolatedEnvironment(directory, checkEnvironment(original)));
   if (process.platform === "win32") process.env.USERPROFILE = process.env.HOME;
@@ -74,12 +74,15 @@ async function fixture(inExecutor = false) {
   saveLogin();
   createWorkspace(store, owner.member, { id: WORKSPACE, name: "Seat workspace", projects: [PROJECT] });
   createWorkspace(store, owner.member, { id: OTHER_WORKSPACE, name: "Other workspace", projects: ["other-project"] });
+  const seatWorkspace = scopedSeat ? { memberId: other.member.id, workspaceId: WORKSPACE } : undefined;
+  if (seatWorkspace) store.putWorkspaceMember(WORKSPACE, other.member.id, "manager", owner.member.id, new Date(NOW).toISOString());
   const registry = agentRegistry();
   function launch(conversationId: `conversation_${string}`) {
     const started = registry.beginSpawnRequest({
       engine: "codex", cwd: directory, transport: "structured", conversationId, role: "builder",
       clientAttemptId: conversationId,
-      launchProfile: emptyLaunchProfile({ cwd: directory, project: PROJECT, title: "Browser access fixture", role: "worker" }),
+      launchProfile: emptyLaunchProfile({ cwd: directory, project: PROJECT, title: "Browser access fixture", role: "worker",
+        ...(seatWorkspace && conversationId === SEAT ? { workspace: seatWorkspace } : {}) }),
     });
     if (started.kind !== "created") throw new Error("fixture spawn not created");
     registry.settleSpawn(started.receipt.launchId, {
@@ -91,7 +94,8 @@ async function fixture(inExecutor = false) {
   }
   const seatCapability = launch(SEAT);
   const workerCapability = launch(WORKER);
-  beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the fixture project", clientRequestId: "browser-seat", mode: "existing", conversationId: SEAT });
+  beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the fixture project", clientRequestId: "browser-seat", mode: "existing", conversationId: SEAT,
+    ...(seatWorkspace ? { workspace: seatWorkspace } : {}) });
   completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "browser-seat", conversationId: SEAT, path: null });
   let receipts = new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite"));
   const executor = inExecutor ? (() => {
@@ -140,6 +144,19 @@ async function fixture(inExecutor = false) {
     },
     restartService: () => { receipts.close(); receipts = new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite")); service = build(); } };
 }
+
+test("a workspace-bound seat grants browser access only to its own workspace through the owned executor", async () => {
+  const f = await fixture(true, true);
+  expect(f.store.workspaceMemberships(f.other.member.id)).toMatchObject([{ workspaceId: WORKSPACE, role: "manager" }]);
+  expect(await f.call({ clientRequestId: "scoped-browser-grant" })).toMatchObject({
+    ok: true, memberId: f.browser.member.id, project: PROJECT, workspaceId: WORKSPACE, role: "member", changed: true,
+  });
+  expect(await f.call({ workspaceId: OTHER_WORKSPACE })).toMatchObject({ ok: false, code: "agent_browser_workspace_refused" });
+  expect(await f.call({}, f.workerClient)).toMatchObject({ ok: false, code: "agent_browser_seat_required" });
+  expect(await f.call({ clientRequestId: "scoped-browser-grant" })).toMatchObject({ ok: true, replayed: true, memberId: f.browser.member.id });
+  expect(f.store.workspaceMemberships(f.browser.member.id)).toMatchObject([{ workspaceId: WORKSPACE, role: "member" }]);
+  expect(f.events()).toHaveLength(1);
+});
 
 test("the owned executor grants access while a team-store lock leaves the MCP listener responsive", async () => {
   const f = await fixture(true);

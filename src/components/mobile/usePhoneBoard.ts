@@ -7,6 +7,7 @@ import { useBands, type BandsInput } from "@/components/kanban/useBands";
 import { drawnTasks, type useTaskMutations } from "@/components/kanban/useTaskMutations";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 import type { BoardTask } from "@/lib/tasks/types";
+import type { TaskWorkflowProjection } from "@/components/tasks/taskWorkflowModel";
 
 /*
  * The phone's board model, read by the status columns (#2072 slice 4) and the
@@ -30,6 +31,7 @@ export interface PhoneBoardInput extends BandsInput {
 
 export function usePhoneBoardModel(input: PhoneBoardInput, mutations: Pick<TaskMutations, "statuses" | "edits">): {
   model: KanbanModel;
+  projection: TaskWorkflowProjection;
   /** The stored tasks as the board draws them, with this device's edits. */
   allTasks: readonly BoardTask[];
   /** The model's clock, in 15 s steps. */
@@ -48,7 +50,7 @@ export function usePhoneBoardModel(input: PhoneBoardInput, mutations: Pick<TaskM
     () => buildKanbanModel({ bands, tasks: allTasks, pipelines, projection, files, flows, statusOverrides: statuses, seat: seatRefs, cardFilter, now: modelNow }),
     [buildKanbanModel, bands, allTasks, pipelines, projection, files, flows, statuses, seatRefs, cardFilter, modelNow],
   );
-  return { model, allTasks, modelNow };
+  return { model, projection, allTasks, modelNow };
 }
 
 /** The card a task draws, wherever the model put it: a column, or the hidden

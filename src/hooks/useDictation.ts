@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { KEYS_CHANGED_EVENT } from "@/components/keys/openKeys";
 
 import {
   drawMeter,
   float32ToBase64Pcm16,
-  float32ToPcm16,
   fmtElapsed,
   METER_BARS,
   METER_HEIGHT,
@@ -17,32 +17,28 @@ import { useLocale } from "@/lib/i18n";
 import { TRANSCRIPTION_LANGUAGES, transcriptionLanguage, transcriptionResult, type TranscriptionLanguage } from "@/lib/transcribe/languages";
 import { rememberMicGrant } from "@/lib/micPermission";
 import {
-  applySonioxFrame,
-  sonioxLiveInitialState,
-  sonioxStartRequest,
-  SONIOX_LIVE_WS_URL,
-  type SonioxLiveState,
-} from "@/lib/transcribe/sonioxLive";
+  openAiCommitEvent,
+  openAiTranscriptText,
+  OPENAI_TRANSCRIPTION_STOP_MS,
+  reduceOpenAiTranscript,
+  type OpenAiTranscript,
+} from "@/lib/transcribe/openaiLive";
+import { prepareDictationInput } from "@/lib/transcribe/dictationInput";
+import { DictationSession, DICTATION_BUFFER_SAMPLES, DICTATION_CONNECT_MS, DICTATION_TOKEN_MS } from "@/lib/transcribe/dictationSession";
+import { newDictationTrace, publishDictationTrace, type DictationTrace } from "@/lib/transcribe/dictationTrace";
 
 /* Re-exported so existing importers (MicButton and friends) keep resolving
    these through the hook module after the pure helpers moved to lib/audio. */
 export { drawMeter, fmtElapsed, METER_BARS, METER_HEIGHT, METER_WIDTH };
 
-/** "starting" covers the getUserMedia/permission/live-token window between the
-    mic tap and the first recorded frame — the button shows it and stays inert
-    so a second tap can't pile a recorder on top. */
+/** "starting" covers microphone permission. Capture and the recording phase
+    begin on grant, while the token and connection may still be pending. */
 export type DictationPhase = "idle" | "starting" | "rec" | "busy";
 
 const MAX_SECONDS = CAP_SECONDS;
-/* Voice mono at 32 kbps keeps a full 10-minute batch recording near ~2.4 MB —
-   well under the /api/transcribe 16 MB cap and the upstream provider limit —
-   while staying clear for speech. */
-const BATCH_BITRATE = 32_000;
 /* How long the "stopped at the cap" chip holds before the mic returns to idle,
    so an auto-stop is unmistakable even if the transcription lands instantly. */
 const CAP_HOLD_MS = 5_000;
-/* Sub-2KB blobs are a misclick, not speech — dropped without a server call. */
-const MIN_BLOB_BYTES = 2_000;
 
 /* Both realtime providers want raw 16kHz PCM. ElevenLabs commits a segment
    after this much VAD silence; Soniox marks the same boundary with its
@@ -50,6 +46,13 @@ const MIN_BLOB_BYTES = 2_000;
 const LIVE_SAMPLE_RATE = 16_000;
 const LIVE_VAD_SILENCE_SECS = "1.2";
 const LIVE_WS_URL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime";
+/* OpenAI's live transcription reaches a browser over WebRTC: the SDP offer goes
+   to this endpoint with the short-lived client secret the token route minted
+   (docs/design/openai-key-services.md, C4 and D-live). */
+const OPENAI_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
+/* The whole connect (offer, answer, data channel open) must finish within
+   this, or the press records and transcribes the clip instead. */
+const OPENAI_CONNECT_MS = DICTATION_CONNECT_MS;
 
 /* Single-use realtime tokens are minted for free, so one can be requested
    the moment a recording looks likely (composer focus, mic hover) and spent
@@ -63,26 +66,51 @@ const TOKEN_NULL_MS = 15_000;
 
 /** Which realtime provider the minted token belongs to — the socket URL, the
     handshake and the frame format all follow from it. */
-type LiveProvider = "elevenlabs" | "soniox";
+type LiveProvider = "elevenlabs" | "soniox" | "openai";
 interface LiveToken {
   token: string;
   provider: LiveProvider;
+  authority: number;
 }
+type TokenResult = LiveToken | "deadline" | null;
 
 let tokenCache: { token: LiveToken | null; expiresAt: number } | null = null;
-let tokenInflight: Promise<LiveToken | null> | null = null;
+let tokenInflight: Promise<TokenResult> | null = null;
+/* Bumped whenever a key or the dictation provider may have changed: a token
+   minted under an older value is never spent on a new press. */
+let tokenAuthority = 0;
+let authorityWindow: Window | null = null;
+
+/** Drops the warm and the pending token after a key or provider change; a session already connected keeps its own. */
+export function invalidateLiveToken(): void {
+  tokenAuthority++;
+  tokenCache = null;
+  tokenInflight = null;
+}
+
+function watchTokenAuthority(): void {
+  if (typeof window === "undefined" || authorityWindow === window) return;
+  authorityWindow?.removeEventListener(KEYS_CHANGED_EVENT, invalidateLiveToken);
+  authorityWindow = window;
+  window.addEventListener(KEYS_CHANGED_EVENT, invalidateLiveToken);
+}
 
 /* A non-200 from the token route means live mode is off (other backend, no
    key) — the caller falls back to batch without surfacing anything. */
-const mintLiveToken = async (): Promise<LiveToken | null> => {
+const mintLiveToken = async (): Promise<TokenResult> => {
+  const authority = tokenAuthority;
+  const signal = AbortSignal.timeout(DICTATION_TOKEN_MS);
   try {
-    const res = await fetch("/api/transcribe/token", { method: "POST" });
+    const res = await fetch("/api/transcribe/token", { method: "POST", signal });
     if (!res.ok) return null;
     const json = (await res.json()) as { token?: string; provider?: string };
     if (typeof json.token !== "string" || !json.token) return null;
-    return { token: json.token, provider: json.provider === "soniox" ? "soniox" : "elevenlabs" };
+    /* A token is only ever spent on the provider that minted it; one the client cannot place records instead. */
+    const provider = json.provider === "soniox" || json.provider === "openai" ? json.provider
+      : json.provider === undefined || json.provider === "elevenlabs" ? "elevenlabs" : null;
+    return provider ? { token: json.token, provider, authority } : null;
   } catch {
-    return null;
+    return signal.aborted ? "deadline" : null;
   }
 };
 
@@ -90,32 +118,67 @@ const mintLiveToken = async (): Promise<LiveToken | null> => {
     for the microphone. Free (auth-only, no audio billed); no-op while a
     fresh token or an in-flight mint is already there. */
 export function prewarmLiveToken(): void {
+  watchTokenAuthority();
   if (tokenInflight) return;
   if (tokenCache && tokenCache.expiresAt > Date.now()) return;
-  tokenInflight = mintLiveToken().then((token) => {
+  const pending: Promise<TokenResult> = mintLiveToken().then((token) => {
+    /* An invalidation meanwhile retired this mint; a newer one may own the slot. */
+    if (tokenInflight !== pending) return null;
     tokenInflight = null;
+    if (token === "deadline") return token;
     tokenCache = { token, expiresAt: Date.now() + (token ? TOKEN_FRESH_MS : TOKEN_NULL_MS) };
     return token;
   });
+  tokenInflight = pending;
 }
+
+/** The dictation provider the server resolves now; undefined when it could not be read. */
+const servedDictationProvider = async (): Promise<string | undefined> => {
+  try {
+    const res = await fetch("/api/transcribe/backend", { cache: "no-store", signal: AbortSignal.timeout(DICTATION_TOKEN_MS) });
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as { backend?: unknown };
+    return typeof json.backend === "string" ? json.backend : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /* Consume the prewarmed token (they are single-use, so a real one leaves the
    cache with its taker); a cached null is left in place — "no live mode" is
-   an answer, not a spendable resource. Cold cache mints inline. */
-const takeLiveToken = async (): Promise<LiveToken | null> => {
+   an answer, not a spendable resource. Cold cache mints inline. An OpenAI
+   client secret is minted again at the press: the key can be removed or
+   replaced on another tab or device, and only the token route reads the
+   current key and choice (docs/design/openai-key-services.md, P3). Any other
+   warm answer is spent only while the server still resolves dictation to its
+   provider: a key saved again elsewhere moves a held choice back to OpenAI
+   without an event reaching this tab. */
+const takeLiveToken = async (): Promise<TokenResult> => {
+  watchTokenAuthority();
   const inflight = tokenInflight;
-  if (inflight) {
-    const token = await inflight;
-    if (token) tokenCache = null;
-    return token;
-  }
   const cached = tokenCache;
-  if (cached && cached.expiresAt > Date.now()) {
-    if (cached.token) tokenCache = null;
-    return cached.token;
+  let warm: LiveToken | null;
+  if (inflight) {
+    const authority = tokenAuthority;
+    const result = await inflight;
+    if (authority !== tokenAuthority) return mintLiveToken();
+    if (result === "deadline") return result;
+    warm = result;
+    if (warm && tokenCache?.token === warm) tokenCache = null;
+  } else if (cached && cached.expiresAt > Date.now()) {
+    warm = cached.token;
+    if (warm) tokenCache = null;
+  } else {
+    tokenCache = null;
+    return mintLiveToken();
   }
-  tokenCache = null;
-  return mintLiveToken();
+  if (warm && (warm.provider === "openai" || warm.authority !== tokenAuthority)) return mintLiveToken();
+  const authority = tokenAuthority;
+  const served = await servedDictationProvider();
+  if (authority !== tokenAuthority) return mintLiveToken();
+  if (warm) return served === warm.provider ? warm : mintLiveToken();
+  /* A remembered "no live mode" holds only while the server still serves no live provider. */
+  return served === "elevenlabs" || served === "soniox" || served === "openai" || served === undefined ? mintLiveToken() : null;
 };
 
 interface LiveSession {
@@ -123,15 +186,94 @@ interface LiveSession {
   ctx: AudioContext;
   processor: ScriptProcessorNode;
   stream: MediaStream;
-  /* Audio captured before the socket opens; flushed on open so the first
-     words of an eager speaker are not lost to the connection handshake. Each
-     entry is already in its provider's wire form — an ElevenLabs JSON frame,
-     a raw Soniox PCM buffer — so the flush only has to send it. */
-  preOpenQueue: (string | ArrayBuffer)[];
+  /* ElevenLabs audio frames captured while its socket opens. Soniox's
+     bounded capture, connection and drain are owned by DictationSession. */
+  preOpenQueue: Array<{ frame: string; samples: number }>;
   partial: string;
-  /* Sent right before the socket closes when the provider documents a
-     graceful end of input — Soniox ends a stream with an empty frame. */
-  closeFrame?: string;
+  trace: DictationTrace;
+  connectTimer: number | null;
+  connectBegan: number;
+}
+
+/** An OpenAI live session: the microphone on a peer connection, its events on one data channel. */
+interface OpenAiSession {
+  pc: RTCPeerConnection;
+  channel: RTCDataChannel;
+  stream: MediaStream;
+  heard: OpenAiTranscript;
+  /* The item the stop's commit produced; its completed transcript ends the session. */
+  committed: string | null;
+  stopping: boolean;
+  deadline: number | null;
+  trace: DictationTrace;
+  capture: DictationSession;
+}
+
+/** Offers the microphone to OpenAI with the client secret and resolves once the data channel is open, or null on any failure. */
+async function connectOpenAiLive(stream: MediaStream, minted: LiveToken, signal: AbortSignal, trace: DictationTrace): Promise<{ pc: RTCPeerConnection; channel: RTCDataChannel } | null> {
+  const began = Date.now();
+  trace.connectOutcome = "pending";
+  let pc: RTCPeerConnection;
+  try {
+    pc = new RTCPeerConnection();
+  } catch {
+    trace.connectOutcome = "error"; trace.connectMs = Date.now() - began;
+    publishDictationTrace(trace); return null;
+  }
+  const abort = new AbortController();
+  let cancelled: (() => void) | undefined;
+  let timedOut = false;
+  let timer: number | null = null;
+  try {
+    const channel = pc.createDataChannel("oai-events");
+    for (const track of stream.getAudioTracks()) pc.addTrack(track, stream);
+    const opened = new Promise<void>((resolve, reject) => {
+      channel.addEventListener("open", () => resolve(), { once: true });
+      channel.addEventListener("close", () => reject(new Error("closed")), { once: true });
+    });
+    // A close can precede the SDP answer and therefore the await below.
+    void opened.catch(() => undefined);
+    const assertCurrent = () => { signal.throwIfAborted(); abort.signal.throwIfAborted(); };
+    const connect = (async () => {
+      const offer = await pc.createOffer();
+      assertCurrent();
+      await pc.setLocalDescription(offer);
+      assertCurrent();
+      if (minted.authority !== tokenAuthority) throw new Error("authority changed");
+      const response = await fetch(OPENAI_CALLS_URL, {
+        method: "POST",
+        body: offer.sdp,
+        headers: { authorization: `Bearer ${minted.token}`, "content-type": "application/sdp" },
+        signal: abort.signal,
+      });
+      assertCurrent();
+      if (!response.ok) throw new Error("Offer refused");
+      const sdp = await response.text();
+      assertCurrent();
+      await pc.setRemoteDescription({ type: "answer", sdp });
+      assertCurrent();
+      await opened;
+      assertCurrent();
+    })();
+    const deadline = new Promise<never>((_, reject) => { timer = window.setTimeout(() => { timedOut = true; reject(new Error("timeout")); }, OPENAI_CONNECT_MS); });
+    const cancellation = new Promise<never>((_, reject) => {
+      cancelled = () => { abort.abort(); reject(new Error("Retired connection")); };
+      if (signal.aborted) cancelled(); else signal.addEventListener("abort", cancelled, { once: true });
+    });
+    await Promise.race([connect, deadline, cancellation]);
+    trace.connectOutcome = "ok";
+    return { pc, channel };
+  } catch {
+    trace.connectOutcome = timedOut ? "deadline" : "error";
+    abort.abort();
+    try { pc.close(); } catch { /* already closed */ }
+    return null;
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
+    if (cancelled) signal.removeEventListener("abort", cancelled);
+    trace.connectMs = Date.now() - began;
+    publishDictationTrace(trace);
+  }
 }
 
 export interface UseDictationOptions {
@@ -170,11 +312,10 @@ export interface UseDictationResult {
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   start: () => Promise<void>;
   /**
-   * Stops recording and resolves with the recognised text. In realtime mode
-   * this is instant: committed segments already went out via onLiveCommit, so
-   * it resolves the uncommitted partial tail (possibly "") without waiting
-   * for the server. Resolves null when there is nothing usable — a discard, a
-   * misclick-length blob, or a reported error (already surfaced via onError).
+   * Stops recording and resolves the remaining recognized text. Confirmed
+   * live segments already entered the draft through onLiveCommit. Soniox
+   * drains final tokens under a deadline. An incomplete result returns null
+   * and reports an error, so voice send keeps the draft for review.
    */
   stop: () => Promise<string | null>;
   discard: () => void;
@@ -187,10 +328,10 @@ export interface UseDictationResult {
  *    and the transcript arrives live via `liveText` (picked when
  *    /api/transcribe/token hands out a session token, i.e. one of those two
  *    backends is selected — the answer names the provider);
- *  - batch: MediaRecorder (webm/opus) posted to /api/transcribe on stop —
+ *  - batch: bounded microphone PCM (WAV) posted to /api/transcribe on stop —
  *    the fallback whenever no token is available.
  * Lifted out of MicButton so a composer can orchestrate its own send button
- * around the same recording (see TmuxComposer's stop-and-send).
+ * around the same recording (see ConversationComposer's stop-and-send).
  */
 export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDictationOptions): UseDictationResult {
   const { t, locale } = useLocale();
@@ -204,16 +345,27 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
      reducer body can be re-invoked (StrictMode) which would double them. */
   const elapsedRef = useRef(0);
   const capHoldRef = useRef<number | null>(null);
-  const recRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
   const liveRef = useRef<LiveSession | null>(null);
+  const rtcRef = useRef<OpenAiSession | null>(null);
+  const captureRef = useRef<DictationSession | null>(null);
+  const traceRef = useRef<DictationTrace | null>(null);
+  const connectingRef = useRef<{ capture: DictationSession; abort: AbortController } | null>(null);
+  const stopWaitersRef = useRef<Array<(text: string | null) => void>>([]);
   const discardRef = useRef(false);
   const timerRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const meterRef = useRef<{ ctx: AudioContext; raf: number } | null>(null);
   const pendingRef = useRef<((text: string | null) => void) | null>(null);
   const startingRef = useRef(false);
+  const startGenerationRef = useRef(0);
   const mountedRef = useRef(true);
+
+  const finishTrace = (outcome: DictationTrace["outcome"] = "complete") => {
+    const trace = traceRef.current;
+    if (!trace || trace.endedAt !== null) return;
+    trace.stoppedAt ??= Date.now(); trace.endedAt = Date.now(); trace.outcome = outcome;
+    publishDictationTrace(trace);
+  };
 
   const stopStream = (stream: MediaStream | null) => {
     stream?.getTracks().forEach((track) => track.stop());
@@ -280,33 +432,46 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     meterRef.current = { ctx, raf: requestAnimationFrame(draw) };
   };
 
-  const teardownLive = () => {
+  const teardownLive = (stopTracks = true) => {
     const live = liveRef.current;
     liveRef.current = null;
     if (!live) return;
+    if (live.connectTimer !== null) window.clearTimeout(live.connectTimer);
+    live.processor.onaudioprocess = null;
     try {
       live.processor.disconnect();
     } catch {
       /* already disconnected */
     }
     try {
-      if (live.closeFrame !== undefined && live.ws.readyState === WebSocket.OPEN) live.ws.send(live.closeFrame);
-    } catch {
-      /* the close below ends the stream anyway */
-    }
-    try {
       live.ws.close();
     } catch {
       /* already closed */
     }
-    live.stream.getTracks().forEach((track) => track.stop());
+    if (stopTracks) live.stream.getTracks().forEach((track) => track.stop());
     void live.ctx.close().catch(() => undefined);
+  };
+
+  const teardownOpenAi = (stopTracks = true) => {
+    const session = rtcRef.current;
+    rtcRef.current = null;
+    if (!session) return;
+    session.capture.stopObservation();
+    if (session.deadline !== null) window.clearTimeout(session.deadline);
+    try { session.channel.close(); } catch { /* already closed */ }
+    try { session.pc.close(); } catch { /* already closed */ }
+    if (stopTracks) session.stream.getTracks().forEach((track) => track.stop());
   };
 
   /* Ends a live session and hands the uncommitted tail to whoever waits for
      it: the pending stop() resolver, or onUnclaimedText for the auto-stop.
      Committed segments are already in the draft via onLiveCommit. */
-  const finishLive = (live: LiveSession) => {
+  const finishLive = (live: LiveSession, dropped = false) => {
+    if (liveRef.current !== live) return;
+    live.trace.closeReason = live.trace.closeReason === "none" ? "normal" : live.trace.closeReason;
+    if (live.trace.connectOutcome === "pending") {
+      live.trace.connectOutcome = "error"; live.trace.connectMs = Date.now() - live.connectBegan;
+    }
     stopTimer();
     stopMeter();
     teardownLive();
@@ -319,8 +484,10 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       return;
     }
     const tail = live.partial.trim();
-    if (resolvePending) resolvePending(tail);
-    else if (tail) onUnclaimedText(tail);
+    if (tail) live.trace.commits++;
+    finishTrace(dropped ? "incomplete" : "complete");
+    if (resolvePending && !dropped) resolvePending(tail);
+    else { if (tail) onUnclaimedText(tail); resolvePending?.(null); }
   };
 
   useEffect(() => {
@@ -330,122 +497,17 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       stopMeter();
       clearCapHold();
       discardRef.current = true;
+      connectingRef.current?.abort.abort();
       teardownLive();
-      const rec = recRef.current;
-      if (rec && rec.state !== "inactive") rec.stop();
-      rec?.stream.getTracks().forEach((track) => track.stop());
+      teardownOpenAi();
+      captureRef.current?.discard();
+      captureRef.current = null;
+      finishTrace("discarded");
+
     };
   }, []);
 
-  const finishBatch = async () => {
-    stopTimer();
-    stopMeter();
-    const rec = recRef.current;
-    recRef.current = null;
-    rec?.stream.getTracks().forEach((track) => track.stop());
-    const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-    chunksRef.current = [];
-    const resolvePending = pendingRef.current;
-    pendingRef.current = null;
-    if (discardRef.current || blob.size < MIN_BLOB_BYTES) {
-      setPhase("idle");
-      resolvePending?.(null);
-      return;
-    }
-    setPhase("busy");
-    try {
-      const form = new FormData();
-      form.append("file", blob, "dictation.webm");
-      form.append("language", transcriptionLanguage(locale));
-      const res = await fetch("/api/transcribe", { method: "POST", body: form });
-      const json = (await res.json()) as { text?: string; error?: string };
-      if (!res.ok || typeof json.text !== "string") {
-        onError(json.error ?? t("dictation.failed"));
-        resolvePending?.(null);
-        return;
-      }
-      const text = json.text.trim();
-      if (text) {
-        if (resolvePending) resolvePending(text);
-        else onUnclaimedText(text);
-      } else {
-        onError(t("dictation.silence"));
-        resolvePending?.(null);
-      }
-    } catch {
-      onError(t("common.serverUnavailable"));
-      resolvePending?.(null);
-    } finally {
-      setPhase("idle");
-    }
-  };
-
-  /* Soniox: one JSON start request on open, then raw PCM binary frames. Tokens
-     stream back sub-word, so a draft segment is cut at the endpoint token and
-     the still-rewritten tail rides in liveText until then. */
-  const startSonioxLive = (stream: MediaStream, token: string): boolean => {
-    let ctx: AudioContext;
-    try {
-      ctx = new AudioContext({ sampleRate: LIVE_SAMPLE_RATE });
-    } catch {
-      return false;
-    }
-    const ws = new WebSocket(SONIOX_LIVE_WS_URL);
-    ws.binaryType = "arraybuffer";
-    const processor = ctx.createScriptProcessor(4096, 1, 1);
-    const live: LiveSession = { ws, ctx, processor, stream, preOpenQueue: [], partial: "", closeFrame: "" };
-    liveRef.current = live;
-    let state: SonioxLiveState = sonioxLiveInitialState();
-
-    const source = ctx.createMediaStreamSource(stream);
-    processor.onaudioprocess = (event) => {
-      if (liveRef.current !== live) return;
-      const chunk = float32ToPcm16(event.inputBuffer.getChannelData(0)).buffer as ArrayBuffer;
-      if (ws.readyState === WebSocket.OPEN) ws.send(chunk);
-      else if (ws.readyState === WebSocket.CONNECTING) live.preOpenQueue.push(chunk);
-    };
-    source.connect(processor);
-    processor.connect(ctx.destination);
-
-    ws.addEventListener("open", () => {
-      if (liveRef.current !== live) return;
-      /* The handshake carries the temporary key; the real account key never
-         reaches this side. ctx.sampleRate over the request, because a browser
-         may hand back a context at its own rate. */
-      ws.send(JSON.stringify(sonioxStartRequest({ token, sampleRate: ctx.sampleRate })));
-      for (const chunk of live.preOpenQueue) ws.send(chunk);
-      live.preOpenQueue = [];
-    });
-
-    ws.addEventListener("message", (event) => {
-      if (liveRef.current !== live) return;
-      const update = applySonioxFrame(state, event.data);
-      if (!update) return;
-      state = update.state;
-      if (update.error) {
-        onError(update.error);
-        finishLive(live);
-        return;
-      }
-      /* Straight into the draft, mid-recording. */
-      if (update.commit) onLiveCommit(update.commit, update.language);
-      live.partial = update.liveText;
-      setLiveText(live.partial);
-      /* The server closed on its own (session cap): keep what arrived. */
-      if (update.finished) finishLive(live);
-    });
-
-    ws.addEventListener("close", () => {
-      if (liveRef.current === live && !pendingRef.current) {
-        onError(t("dictation.connectionLost"));
-        finishLive(live);
-      }
-    });
-
-    return true;
-  };
-
-  const startElevenLabsLive = (stream: MediaStream, token: string): boolean => {
+  const startElevenLabsLive = (stream: MediaStream, token: string, trace: DictationTrace): boolean => {
     let ctx: AudioContext;
     try {
       ctx = new AudioContext({ sampleRate: LIVE_SAMPLE_RATE });
@@ -463,9 +525,21 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     for (const language of TRANSCRIPTION_LANGUAGES) {
       if (language !== transcriptionLanguage(locale)) params.append("secondary_languages", language);
     }
-    const ws = new WebSocket(`${LIVE_WS_URL}?${params.toString()}`);
+    const began = Date.now();
+    trace.connectOutcome = "pending"; trace.sampleRate = ctx.sampleRate;
+    let ws: WebSocket;
+    try { ws = new WebSocket(`${LIVE_WS_URL}?${params.toString()}`); }
+    catch {
+      trace.connectOutcome = "error"; trace.connectMs = Date.now() - began;
+      void ctx.close().catch(() => undefined); publishDictationTrace(trace); return false;
+    }
     const processor = ctx.createScriptProcessor(4096, 1, 1);
-    const live: LiveSession = { ws, ctx, processor, stream, preOpenQueue: [], partial: "" };
+    const live: LiveSession = { ws, ctx, processor, stream, preOpenQueue: [], partial: "", trace, connectTimer: null, connectBegan: began };
+    live.connectTimer = window.setTimeout(() => {
+      if (liveRef.current !== live) return;
+      trace.connectOutcome = "deadline"; trace.connectMs = Date.now() - began;
+      onError(t("dictation.connectionLost")); finishLive(live, true);
+    }, OPENAI_CONNECT_MS);
     liveRef.current = live;
 
     const source = ctx.createMediaStreamSource(stream);
@@ -473,20 +547,39 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       if (liveRef.current !== live) return;
       const open = ws.readyState === WebSocket.OPEN;
       if (!open && ws.readyState !== WebSocket.CONNECTING) return;
+      const input = event.inputBuffer.getChannelData(0);
+      trace.capturedSamples += input.length;
       const frame = JSON.stringify({
         message_type: "input_audio_chunk",
-        audio_base_64: float32ToBase64Pcm16(event.inputBuffer.getChannelData(0)),
+        audio_base_64: float32ToBase64Pcm16(input),
       });
-      if (open) ws.send(frame);
-      else live.preOpenQueue.push(frame);
+      try {
+        if (open) { ws.send(frame); trace.sentSamples += input.length; }
+        else {
+          if (trace.bufferedSamples + input.length > DICTATION_BUFFER_SAMPLES) {
+            onError(t("dictation.bufferLimit")); finishLive(live, true); return;
+          }
+          live.preOpenQueue.push({ frame, samples: input.length });
+          trace.bufferedSamples += input.length;
+          trace.peakBufferedSamples = Math.max(trace.peakBufferedSamples, trace.bufferedSamples);
+        }
+      } catch { trace.closeReason = "error"; onError(t("dictation.connectionLost")); finishLive(live, true); }
     };
     source.connect(processor);
     processor.connect(ctx.destination);
 
     ws.addEventListener("open", () => {
       if (liveRef.current !== live) return;
-      for (const chunk of live.preOpenQueue) ws.send(chunk);
-      live.preOpenQueue = [];
+      if (live.connectTimer !== null) window.clearTimeout(live.connectTimer);
+      live.connectTimer = null;
+      trace.connectOutcome = "ok"; trace.connectMs = Date.now() - began;
+      try {
+        for (const chunk of live.preOpenQueue) {
+          ws.send(chunk.frame); trace.sentSamples += chunk.samples; trace.bufferedSamples -= chunk.samples;
+        }
+        live.preOpenQueue = [];
+      } catch { trace.closeReason = "error"; onError(t("dictation.connectionLost")); finishLive(live, true); }
+      publishDictationTrace(trace);
     });
 
     ws.addEventListener("message", (event) => {
@@ -501,6 +594,8 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         ) {
           /* Straight into the draft, mid-recording. */
           live.partial = "";
+          trace.finalSegments++; trace.commits++;
+          publishDictationTrace(trace);
           onLiveCommit(msg.text, transcriptionResult(msg.text, [msg.language_code], locale).language ?? transcriptionLanguage(locale));
         } else if (
           msg.message_type === "auth_error" ||
@@ -508,8 +603,9 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
           msg.message_type === "invalid_request" ||
           msg.message_type === "quota_exceeded"
         ) {
-          onError(msg.error || t("dictation.liveError"));
-          finishLive(live);
+          trace.closeReason = "error";
+          onError(t("dictation.liveError"));
+          finishLive(live, true);
           return;
         }
         setLiveText(live.partial);
@@ -518,63 +614,189 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       }
     });
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener("error", () => {
+      if (liveRef.current !== live) return;
+      trace.closeReason = "error";
+      if (trace.connectOutcome === "pending") { trace.connectOutcome = "error"; trace.connectMs = Date.now() - began; }
+      onError(t("dictation.connectionLost")); finishLive(live, true);
+    });
+    ws.addEventListener("close", event => {
+      trace.closeCode = event.code;
+      if (trace.closeReason !== "error") trace.closeReason = event.code === 1000 ? "normal" : "abnormal";
+      if (trace.connectOutcome === "pending") { trace.connectOutcome = "error"; trace.connectMs = Date.now() - began; }
+      publishDictationTrace(trace);
+      if (liveRef.current !== live) return;
       /* Unexpected drop mid-recording: keep what was already transcribed. */
       if (liveRef.current === live && !pendingRef.current) {
         onError(t("dictation.connectionLost"));
-        finishLive(live);
+        finishLive(live, true);
       }
     });
 
     return true;
   };
 
-  /** Picks the socket that matches the token the server handed out. */
-  const startLive = (stream: MediaStream, minted: LiveToken): boolean =>
-    minted.provider === "soniox" ? startSonioxLive(stream, minted.token) : startElevenLabsLive(stream, minted.token);
+  /* Ends an OpenAI session and hands its whole transcript to whoever waits for
+     it: OpenAI transcribes each committed turn, so the text arrives after the
+     stop rather than segment by segment. */
+  const finishOpenAi = (session: OpenAiSession, dropped = false, warning: string | null = null) => {
+    if (rtcRef.current !== session) return;
+    stopTimer();
+    stopMeter();
+    teardownOpenAi();
+    setLiveText("");
+    setPhase("idle");
+    const resolvePending = pendingRef.current;
+    pendingRef.current = null;
+    if (discardRef.current) {
+      resolvePending?.(null);
+      return;
+    }
+    const text = openAiTranscriptText(session.heard).trim();
+    if (text) session.trace.commits += session.heard.items.filter(item => item.text).length;
+    if (session.trace.drainOutcome === "pending") session.trace.drainOutcome = dropped ? "error" : "ok";
+    if (session.trace.closeReason === "none") session.trace.closeReason = dropped ? "abnormal" : "normal";
+    finishTrace(dropped ? "incomplete" : "complete");
+    /* Saving text clears the composer's status, so an incomplete end reports
+       its warning only after the text is in the draft. */
+    if (text) {
+      if (resolvePending && !dropped) resolvePending(text);
+      else { onUnclaimedText(text); resolvePending?.(null); }
+      if (warning) onError(warning);
+      return;
+    }
+    if (warning) onError(warning);
+    else if (!dropped) onError(t("dictation.silence"));
+    resolvePending?.(null);
+  };
+
+  /* The stop rule: commit the turn, then wait for its transcript up to the deadline. */
+  const stopOpenAi = (session: OpenAiSession) => {
+    if (session.stopping) return;
+    session.stopping = true;
+    session.capture.stopObservation();
+    session.trace.drainOutcome = "pending";
+    publishDictationTrace(session.trace);
+    stopTimer();
+    stopMeter();
+    setPhase("busy");
+    try {
+      session.channel.send(JSON.stringify(openAiCommitEvent()));
+    } catch {
+      session.trace.closeReason = "error";
+      finishOpenAi(session, true, t("dictation.tailMissing"));
+      return;
+    }
+    session.stream.getAudioTracks().forEach((track) => { track.enabled = false; });
+    session.deadline = window.setTimeout(() => {
+      session.trace.drainOutcome = "deadline";
+      finishOpenAi(session, true, t("dictation.tailMissing"));
+    }, OPENAI_TRANSCRIPTION_STOP_MS);
+  };
+
+  const startOpenAiLive = async (stream: MediaStream, minted: LiveToken, capture: DictationSession, trace: DictationTrace, generation: number, signal: AbortSignal): Promise<boolean> => {
+    const connected = await connectOpenAiLive(stream, minted, signal, trace);
+    if (!connected) return false;
+    if (!mountedRef.current || discardRef.current || signal.aborted || startGenerationRef.current !== generation || captureRef.current !== capture || !capture.active) {
+      try { connected.channel.close(); } catch { /* already closed */ }
+      try { connected.pc.close(); } catch { /* already closed */ }
+      return false;
+    }
+    const session: OpenAiSession = { ...connected, stream, heard: { items: [] }, committed: null, stopping: false, deadline: null, capture, trace };
+    rtcRef.current = session;
+    connected.channel.addEventListener("message", (event) => {
+      if (rtcRef.current !== session) return;
+      let value: unknown;
+      try { value = JSON.parse(String(event.data)); } catch { return; }
+      const message = value as { type?: unknown; item_id?: unknown };
+      const previous = session.heard;
+      session.heard = reduceOpenAiTranscript(previous, value);
+      if (message.type === "conversation.item.input_audio_transcription.completed" && session.heard !== previous) {
+        trace.finalSegments++; publishDictationTrace(trace);
+      }
+      setLiveText(openAiTranscriptText(session.heard));
+      if (message.type === "input_audio_buffer.committed" && typeof message.item_id === "string") session.committed = message.item_id;
+      if (!session.stopping) return;
+      const done = message.type === "conversation.item.input_audio_transcription.completed"
+        && (session.committed === null || message.item_id === session.committed);
+      /* An error once the turn is committed (an empty buffer, a refused turn) leaves nothing more to wait for. */
+      if (message.type === "error") {
+        /* With words already received the turn is an incomplete tail, not silence. */
+        trace.closeReason = "error";
+        finishOpenAi(session, true, t(openAiTranscriptText(session.heard).trim() ? "dictation.tailMissing" : "dictation.silence"));
+      }
+      else if (done) finishOpenAi(session);
+    });
+    const lost = () => {
+      if (rtcRef.current !== session) return;
+      /* A drop mid-recording keeps what already arrived; after the stop it ends the wait
+         with the tail missing. */
+      finishOpenAi(session, true, t(session.stopping ? "dictation.tailMissing" : "dictation.connectionLost"));
+    };
+    connected.channel.addEventListener("close", lost);
+    connected.pc.addEventListener("connectionstatechange", () => { if (connected.pc.connectionState === "failed") lost(); });
+    return true;
+  };
 
   const start = async () => {
     /* getUserMedia can hang on a permission prompt; a second tap during that
        wait would spin up a second recorder over the first and leak its stream. */
-    if (startingRef.current || recRef.current || liveRef.current) return;
+    if (startingRef.current || liveRef.current || rtcRef.current || captureRef.current) return;
     startingRef.current = true;
+    const generation = ++startGenerationRef.current;
     setPhase("starting");
     discardRef.current = false;
     let stream: MediaStream | null = null;
     let streamOwned = true;
+    let prepared: ReturnType<typeof prepareDictationInput> | null = null;
     try {
-      /* The token mint needs no stream, so both round-trips overlap and the
-         press only waits for the slower one (usually the mic itself). A
-         prewarmed token makes takeLiveToken resolve instantly. */
-      const [mediaStream, token] = await Promise.all([
-        navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } }),
+      const trace = newDictationTrace();
+      traceRef.current = trace;
+      publishDictationTrace(trace);
+      const tokenBegan = Date.now();
+      let tokenTimer: number | undefined;
+      const tokenPending = Promise.race([
         takeLiveToken(),
-      ]);
-      stream = mediaStream;
+        new Promise<null>(resolve => { tokenTimer = window.setTimeout(() => { trace.tokenOutcome = "deadline"; resolve(null); }, DICTATION_TOKEN_MS); }),
+      ]).then(token => {
+        if (tokenTimer !== undefined) window.clearTimeout(tokenTimer);
+        trace.tokenMs = Date.now() - tokenBegan;
+        if (token === "deadline") trace.tokenOutcome = "deadline";
+        else if (trace.tokenOutcome !== "deadline") trace.tokenOutcome = token ? "ok" : "unavailable";
+        publishDictationTrace(trace);
+        return token === "deadline" ? null : token;
+      });
+      prepared = prepareDictationInput(DICTATION_BUFFER_SAMPLES);
+      const worklet = await prepared.ready;
+      if (!mountedRef.current || discardRef.current || generation !== startGenerationRef.current) return;
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
       rememberMicGrant();
-      if (!mountedRef.current || discardRef.current) return;
+      if (!mountedRef.current || discardRef.current || generation !== startGenerationRef.current) return;
       setLiveText("");
-
-      const liveStarted = token !== null && startLive(stream, token);
-      if (!liveStarted) {
-        const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : MediaRecorder.isTypeSupported("audio/webm")
-            ? "audio/webm"
-            : "";
-        const rec = mimeType
-          ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: BATCH_BITRATE })
-          : new MediaRecorder(stream, { audioBitsPerSecond: BATCH_BITRATE });
-        chunksRef.current = [];
-        rec.ondataavailable = (event) => {
-          if (event.data.size) chunksRef.current.push(event.data);
-        };
-        rec.onstop = () => {
-          void finishBatch();
-        };
-        rec.start(250);
-        recRef.current = rec;
-      }
+      const capture = new DictationSession(stream, trace, {
+        language: transcriptionLanguage(locale),
+        partial: text => { if (mountedRef.current) setLiveText(text); },
+        commit: (text, language) => { if (mountedRef.current && !discardRef.current) onLiveCommit(text, language); },
+        busy: () => { stopTimer(); stopMeter(); if (mountedRef.current) setPhase("busy"); },
+        done: (text, issue) => {
+          if (captureRef.current !== capture) return;
+          if (connectingRef.current?.capture === capture) connectingRef.current.abort.abort();
+          captureRef.current = null;
+          if (startGenerationRef.current === generation) startingRef.current = false;
+          stopTimer(); stopMeter();
+          const waiters = stopWaitersRef.current.splice(0);
+          if (mountedRef.current) { setLiveText(""); setPhase("idle"); }
+          if (discardRef.current || !mountedRef.current) { waiters.forEach(resolve => resolve(null)); return; }
+          if (issue) {
+            if (text) onUnclaimedText(text);
+            onError(t(issue === "buffer" ? "dictation.bufferLimit" : "dictation.tailMissing"));
+            waiters.forEach(resolve => resolve(null));
+          } else if (waiters.length) waiters.forEach((resolve, index) => resolve(index === 0 ? text : null));
+          else if (text) onUnclaimedText(text);
+        },
+      }, prepared.ctx, worklet);
+      prepared = null;
+      captureRef.current = capture;
       streamOwned = false;
       startMeter(stream);
       /* A fresh recording clears any lingering cap-stopped chip / SR text from
@@ -585,9 +807,10 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       elapsedRef.current = 0;
       setElapsed(0);
       setPhase("rec");
+      const recordingBegan = performance.now();
       timerRef.current = window.setInterval(() => {
         const prev = elapsedRef.current;
-        const next = prev + 1;
+        const next = Math.min(MAX_SECONDS, Math.floor((performance.now() - recordingBegan) / 1000));
         elapsedRef.current = next;
         setElapsed(next);
         const cues = dictationCues(prev, next, MAX_SECONDS);
@@ -598,23 +821,65 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
           flagCapStopped();
           /* The transcript is preserved and reviewed, never auto-sent: the
              stop resolves through onUnclaimedText (no pending stop() waits). */
-          if (recRef.current?.state === "recording") recRef.current.stop();
-          else if (liveRef.current) finishLive(liveRef.current);
+          if (liveRef.current) finishLive(liveRef.current);
+          else if (rtcRef.current) stopOpenAi(rtcRef.current);
+          else captureRef.current?.stop();
         }
       }, 1_000);
+      const token = await tokenPending;
+      if (!mountedRef.current || discardRef.current || captureRef.current !== capture || !capture.active) return;
+      if (token?.authority === tokenAuthority && token.provider === "soniox") capture.connect(token.token);
+      else if (token?.authority === tokenAuthority) {
+        // These transports cannot replay the early PCM capture. Keep its one
+        // owner and use the existing batch route if any audio already arrived.
+        if (trace.capturedSamples) { capture.useBatch(); return; }
+        trace.provider = token.provider; trace.path = "live";
+        const connection = { capture, abort: new AbortController() };
+        connectingRef.current = connection;
+        const started = token.provider === "openai"
+          ? await startOpenAiLive(stream, token, capture, trace, generation, connection.abort.signal)
+          : startElevenLabsLive(stream, token.token, trace);
+        if (connectingRef.current === connection) connectingRef.current = null;
+        if (!mountedRef.current || discardRef.current || captureRef.current !== capture || startGenerationRef.current !== generation) return;
+        if (started && capture.release(token.provider === "openai" ? count => {
+          const session = rtcRef.current;
+          if (session?.capture !== capture || session.stopping) return;
+          trace.capturedSamples += count;
+          // WebRTC owns packetization: count samples offered to the connected peer.
+          if (session.pc.connectionState === "connected") trace.sentSamples += count;
+        } : undefined)) captureRef.current = null;
+        else {
+          // Audio can arrive while OpenAI's asynchronous connection opens.
+          // Retire the new transport without stopping the capture's tracks.
+          teardownOpenAi(false); teardownLive(false);
+          setLiveText(""); capture.useBatch();
+        }
+      } else capture.useBatch();
     } catch {
+      if (captureRef.current) { captureRef.current.discard(); captureRef.current = null; }
+      finishTrace(stream ? "incomplete" : "no-microphone");
       if (mountedRef.current) onError(stream ? t("dictation.unsupported") : t("dictation.noMic"));
     } finally {
+      if (prepared) void prepared.ctx.close().catch(() => undefined);
       if (streamOwned) stopStream(stream);
-      startingRef.current = false;
-      /* Success flipped the phase to "rec" already; any bail-out (denied
-         permission, discard mid-start, unmount race) returns to idle. */
-      if (mountedRef.current) setPhase((prev) => (prev === "starting" ? "idle" : prev));
+      // An earlier token waiter cannot unlock or reset a newer microphone press.
+      if (startGenerationRef.current === generation) {
+        startingRef.current = false;
+        if (mountedRef.current) setPhase((prev) => (prev === "starting" ? "idle" : prev));
+      }
     }
   };
 
   const stop = (): Promise<string | null> => {
     return new Promise((resolve) => {
+      const trace = traceRef.current;
+      if (trace && trace.stoppedAt === null) { trace.stoppedAt = Date.now(); publishDictationTrace(trace); }
+      const capture = captureRef.current;
+      if (capture) {
+        stopWaitersRef.current.push(resolve);
+        capture.stop();
+        return;
+      }
       const live = liveRef.current;
       if (live) {
         /* Instant: the current partial IS the tail — no waiting for the
@@ -623,20 +888,25 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         finishLive(live);
         return;
       }
-      const rec = recRef.current;
-      if (!rec || rec.state !== "recording") {
-        resolve(null);
+      const session = rtcRef.current;
+      if (session) {
+        /* OpenAI transcribes the committed turn: this resolves once its transcript arrives, or at the deadline. */
+        if (session.stopping) { resolve(null); return; }
+        pendingRef.current = resolve;
+        stopOpenAi(session);
         return;
       }
-      pendingRef.current = resolve;
-      rec.stop();
+      resolve(null);
     });
   };
 
   const discard = () => {
     discardRef.current = true;
-    if (recRef.current?.state === "recording") recRef.current.stop();
-    else if (liveRef.current) finishLive(liveRef.current);
+    connectingRef.current?.abort.abort();
+    captureRef.current?.discard();
+    finishTrace("discarded");
+    if (liveRef.current) finishLive(liveRef.current);
+    else if (rtcRef.current) finishOpenAi(rtcRef.current);
   };
 
   return {

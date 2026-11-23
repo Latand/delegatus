@@ -11,10 +11,14 @@ import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { VIEWER_SPAWN_CAPABILITY_ENV } from "@/lib/agent/spawnPolicy";
 import type { PublicDenyList } from "@/lib/bridge/publicSafe";
-import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
+import { ForgeAppWriteRefused, ForgeAppTokenSource, forgeAppWriter } from "@/lib/forge/appWrite";
+import { issueReportPublisher } from "@/lib/issueReports/publish";
+import { fakeAppConnection, CONNECT_SOURCE } from "@/lib/forge/appConnect.fixture";
+import { FORGE_APP_ISSUE_PERMISSIONS, mintInstallationToken } from "../../../bin/forge-app-token.mjs";
 import { ISSUE_REPORT_QUESTION_ID, issueReportApprovalForm, issueReportApprovalReplies } from "@/lib/issueReports/approvalForm";
 import { issueReportDigest, readIssueReportPreview, recordIssueReportPreview } from "@/lib/issueReports/store";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import { writeStoredSeatRecord } from "@/lib/orchestrator/seatStoreFixture";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests } from "@/lib/prototypeReview/deliveryWorker";
 import { decisionsPOST, publishPOST, reviewScopePOST } from "@/lib/prototypeReview/http";
@@ -613,10 +617,9 @@ test("an approval survives another rotation without a new show or question", asy
   const successor = { ...SEAT_CALLER, conversationId: "conversation_third_seat" };
   designate(PROJECT, successor.conversationId!);
   // Exercise the reader for records written before seatLineage was introduced.
-  const file = path.join(privacyState, "orchestrator-seats.json");
-  const legacy = JSON.parse(fs.readFileSync(file, "utf8"));
+  const legacy = readOrchestratorSeatFile();
   delete legacy.seatLineage;
-  fs.writeFileSync(file, JSON.stringify(legacy));
+  writeStoredSeatRecord(legacy);
   expect(await h.call(successor, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
   expect(loadSeatRounds(PROJECT)).toHaveLength(1);
   expect(h.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
@@ -630,7 +633,7 @@ test.each(["unreadable", "ambiguous"] as const)("%s seat lineage cannot transfer
   tick();
   designate(PROJECT, OTHER_SEAT);
   await h.call(OTHER_SEAT_CALLER, { action: "show", digest });
-  if (kind === "unreadable") fs.writeFileSync(path.join(privacyState, "orchestrator-seats.json"), "{broken");
+  if (kind === "unreadable") writeStoredSeatRecord("{broken");
   else designate("repo-foreign", OTHER_SEAT);
   expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, details: { reason: "no_form" } });
   expect(h.published).toEqual([]);
@@ -771,6 +774,25 @@ test("a refusal that provably came before the write frees the preview for anothe
   expect(h.published).toHaveLength(2);
 });
 
+test("an approved issue report surfaces missing installation permission keys before dispatch", async () => {
+  const fake = fakeAppConnection(REPOSITORY);
+  fake.set({ installed: true, covered: true });
+  fake.items.set(REPOSITORY, JSON.stringify({ ...JSON.parse(fake.items.get(CONNECT_SOURCE)!), installation_id: fake.targetInstallation }));
+  let dispatches = 0;
+  const tokens = new ForgeAppTokenSource(async repository => {
+    try { return await mintInstallationToken(repository, fake.ports, FORGE_APP_ISSUE_PERMISSIONS); }
+    catch (error) { throw new ForgeAppWriteRefused((error as Error).message); }
+  });
+  const h = harness({ publisher: issueReportPublisher({ writer: forgeAppWriter(process.cwd(), 1_000, { tokens, exec: async () => { dispatches++; return ISSUE_URL; } }) }) });
+  const digest = await previewed(h); await h.approves(digest);
+  const answer = await h.call(SEAT_CALLER, { action: "publish", digest });
+  expect(answer).toMatchObject({ ok: false, code: "issue_report_publish_failed", retryable: true });
+  expect(answer.error).toContain("missing permissions: issues");
+  expect(answer.error).not.toContain("missing, suspended");
+  expect(answer.error).not.toContain(fake.pem);
+  expect(dispatches).toBe(0); expect(fake.calls.filter(call => call.method === "POST")).toEqual([]);
+});
+
 test("a preview needs an identified session and a one-line title", async () => {
   const h = harness();
   expect(await h.call({ kind: "unidentified", conversationId: null, role: null }, { action: "preview", ...REPORT }))
@@ -877,4 +899,14 @@ test("a draft is prepared without consent and a plain decline ends the report", 
   expect(loadSeatRounds(PROJECT)).toHaveLength(1);
   expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview", title: REPORT.title, body: REPORT.body });
   expect(fs.readdirSync(sandbox).filter(name => /^[a-f0-9]{64}\.json$/.test(name))).toEqual([`${digest}.json`]);
+});
+
+test("public issue language hints stay separate from the localized operator preview", async () => {
+  const h = harness({ locale: "uk" });
+  const answer = await h.call(REPORTER, { action: "preview", ...REPORT, title: "Виправити публікацію" });
+  expect(answer).toMatchObject({ ok: true, previewLanguage: "uk", title: "Виправити публікацію" });
+  expect(answer.hintWarnings).toContain("Publication language hint: title line 1 uses another script; write public GitHub prose in English.");
+  const shown = await h.call(SEAT_CALLER, { action: "show", digest: answer.digest });
+  expect(shown.hintWarnings).toEqual(answer.hintWarnings);
+  expect(shown.previewText).not.toContain((answer.hintWarnings as string[])[0]!);
 });

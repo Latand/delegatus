@@ -12,14 +12,17 @@ export function usd(amount: number, locale: string): string {
   return amount > 0 && amount < 0.01 ? `<${format.format(0.01)}` : format.format(amount);
 }
 
-/** The row's one muted line: what turning it on sends where, and the spend. */
+/** The row's one muted line: what turning it on sends where, and the spend. The
+    provider named is the one the next message goes to: OpenAI once it is
+    chosen with a key, OpenRouter otherwise (docs/design/openai-key-services.md). */
 export function asksYouHint(t: TFunction, view: AsksYouSettingView | null, locale: string, failed: boolean): string {
   if (failed) return t("asksYou.failed");
   if (!view) return t("asksYou.off");
   if (!view.keySource) return t("asksYou.noKey", { path: view.keyPath });
-  if (!view.enabled) return t("asksYou.off");
+  const openai = view.provider === "openai";
+  if (!view.enabled) return t(openai ? "asksYou.openai.off" : "asksYou.off");
   const values = { spent: usd(view.spentUsd, locale), cap: usd(view.capUsd, locale) };
-  return view.capped > 0 || view.spentUsd >= view.capUsd ? t("asksYou.capped", values) : t("asksYou.on", values);
+  return view.capped > 0 || view.spentUsd >= view.capUsd ? t("asksYou.capped", values) : t(openai ? "asksYou.openai.on" : "asksYou.on", values);
 }
 
 /*
@@ -27,7 +30,7 @@ export function asksYouHint(t: TFunction, view: AsksYouSettingView | null, local
  * turn-ending message goes to the classifier, for the whole installation. Off
  * by default; the hint says what leaves the machine and this month's spend. It
  * sits beside the project's switches in the board's ⋯ menu and the phone's ⋯
- * sheet. Without an OpenRouter key it cannot be turned on, and says where the
+ * sheet. Without its provider's key it cannot be turned on, and says where the
  * key goes.
  */
 export function AsksYouRow({ variant, initial }: {

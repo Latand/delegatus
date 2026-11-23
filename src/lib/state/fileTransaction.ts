@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { recordBlockingWait } from "@/lib/blockingWaits";
+import { noteWriterAdmitted } from "./admissionWitness";
 import { procBackend } from "@/lib/proc";
 
 const LOCK_ATTEMPTS = 6_000;
@@ -194,6 +195,7 @@ export function withFileTransactionAttempt<T>(filePath: string, busyMessage: str
   try {
     const descriptor = tryAcquire(ticket);
     if (descriptor === null) throw new FileTransactionAdmissionError(busyMessage);
+    noteWriterAdmitted();
     try { return operation(); }
     finally { release(ticket, descriptor); }
   } finally { removeIfOwned(ticket.ticketPath, ticket.owner.token); }
@@ -223,6 +225,7 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
         continue;
       }
       admittedAt = performance.now();
+      noteWriterAdmitted();
       try {
         return operation();
       } finally {
@@ -255,6 +258,7 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
         continue;
       }
       admittedAt = performance.now();
+      noteWriterAdmitted();
       try {
         const result = operation();
         // A synchronous commit releases before another in-process synchronous
@@ -272,7 +276,7 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
 
 /** Async filesystem admission for paths whose publication must not perform
  * synchronous filesystem work on the Viewer loop. */
-export async function withFileTransactionAsync<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T): Promise<T> {
+export async function withFileTransactionAsync<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T, options: { waitMs?: number } = {}): Promise<T> {
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
@@ -281,6 +285,7 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
   try {
   const lockPath = `${filePath}.write-lock`;
   const queuePath = `${filePath}.write-locks`;
+  const deadline = options.waitMs === undefined ? Infinity : startedAt + Math.max(0, options.waitMs);
   await fsp.mkdir(queuePath, { recursive: true, mode: 0o700 });
   const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID() };
   const ticketPath = path.join(queuePath, `${String(Date.now()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`);
@@ -345,13 +350,20 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
   };
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+      if (performance.now() >= deadline) throw new FileTransactionBusyError(busyMessage);
       const handle = await acquireAsync();
       if (handle === null) {
         waited = true;
-        await new Promise<void>((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
+        await new Promise<void>((resolve) => setTimeout(resolve, Math.min(LOCK_WAIT_MS, Math.max(0, deadline - performance.now()))));
         continue;
       }
+      if (performance.now() >= deadline) {
+        await handle.close();
+        await removeOwnedAsync(lockPath, owner.token);
+        throw new FileTransactionBusyError(busyMessage);
+      }
       admittedAt = performance.now();
+      noteWriterAdmitted();
       try {
         const result = operation();
         // A synchronous commit releases before another in-process synchronous

@@ -265,7 +265,7 @@ test.each([
   const composerRace = scenario === "composer after cleanup" || scenario === "composer during MCP grace";
   const mcpGrace = scenario === "retained during MCP grace" || scenario === "composer during MCP grace";
   const retainedClaim = scenario === "retained dead claim" || mcpGrace || composerRace || scenario === "rotation after cleanup";
-  if (retainedClaim) f.registry.upsert({ ...entry, status: "idle", claimOwner: "structured-host:predecessor",
+  if (retainedClaim) f.registry.upsert({ ...entry, status: "idle", claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_001, startIdentity: "prior-writer" })}`,
     structuredHost: { kind: "claude-broker", endpoint: "stdio:predecessor", process: { pid: 2_000_000_000, startIdentity: "gone" },
       eventCursor: 0, protocolVersion: "v1", writerClaimEpoch: entry.claimEpoch, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
   const oldDigest = f.registry.seatMcpReceipt(f.seat.conversationId)!.spawnCapabilityDigest;
@@ -287,16 +287,16 @@ test.each([
           return {};
         }, append: async () => ({}), transitionOperation: async () => ({}),
       } as unknown as RuntimeHostClient,
-        transport: () => "structured", park: () => null,
+        transportAvailable: () => true, park: () => null,
         resolveAccount: () => {
-          if (composerRace) f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
+          if (composerRace) f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`, status: "idle" });
           if (scenario === "rotation after cleanup") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
           return { engine: "claude", accountId: "default", kind: "legacy", home: f.dir, transcriptRoot: f.dir, env: { NODE_ENV: "test" } };
         },
         spawn: async input => {
           expect(f.row().outstandingWake?.clientMessageId).toBe(message.clientMessageId ?? undefined);
           spawns += 1;
-          if (scenario === "composer before claim") f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: "structured-host:replacement", status: "idle" });
+          if (scenario === "composer before claim") f.registry.upsert({ ...entry, claimEpoch: 2, claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`, status: "idle" });
           if (scenario === "terminal failure" || scenario === "unsettled failure") {
             if (scenario === "terminal failure") f.registry.failSpawn(input.receipt.launchId, "No conversation found with session ID");
             throw new Error("No conversation found with session ID");
@@ -305,7 +305,8 @@ test.each([
             startHost: async () => {
               starts++;
               if (scenario === "terminal exit after claim") throw new Error("No conversation found with session ID");
-              return { identity: { sessionId: key.sessionId }, viewerMcpTransport: "stdio", release: async () => {} } as never;
+              return { identity: { sessionId: key.sessionId }, viewerMcpTransport: "stdio",
+                health: async () => ({ status: "idle", pid: null, processStartIdentity: null }), release: async () => {} } as never;
             },
             bindHost: async (registry, claimedKey, _host, owner, epoch) => {
               registry.setStructuredHostClaimed(claimedKey, {
@@ -326,7 +327,7 @@ test.each([
       enqueueStructured: async request => {
         if (scenario === "composer before enqueue") {
           const current = f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]!;
-          f.registry.upsert({ ...current, claimEpoch: current.claimEpoch + 1, claimOwner: "structured-host:replacement" });
+          f.registry.upsert({ ...current, claimEpoch: current.claimEpoch + 1, claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}` });
         }
         request.admissionGuard?.();
         expect(request.clientMessageId).toBe(message.clientMessageId);
@@ -349,6 +350,7 @@ test.each([
   let rotations = 0;
   rig.deps.seatRecovery = { rotate: async body => {
     expect(body.expectedIncumbentSeatEpoch).toBe(f.seat.seatEpoch);
+    expect(f.row().outstandingWake?.dispatch?.state).toBe("refused");
     rotations += 1;
     return { status: 503, body: { error: "replacement unavailable" } };
   } };
@@ -362,7 +364,7 @@ test.each([
       expect(deliveredKeys).toEqual([]);
       expect(rotations).toBe(0);
       expect(f.row().announcedDeploys ?? []).not.toContain("composer-deploy");
-      if (scenario.startsWith("composer")) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.claimOwner).toBe("structured-host:replacement");
+      if (scenario.startsWith("composer")) expect(f.registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.claimOwner).toBe(`structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`);
     } finally { releaseDrain(drainFile(), "recovery-drain"); }
     return;
   }
@@ -467,6 +469,7 @@ test.each(["rotated", "failed"] as const)("a definitively failed dead-seat reviv
   rig.deps.seatRecovery = { rotate: async body => {
     rotations.push(body);
     expect(body.expectedIncumbentSeatEpoch).toBe(7);
+    expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state).toBe("refused");
     if (state === "rotated") rig.seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
     return state === "rotated" ? { status: 200, body: { ok: true } }
       : { status: 503, body: { ok: false, error: "replacement unavailable" } };
@@ -494,7 +497,11 @@ test("a failed revival notice stays owed across controller restart until the boa
     notices += 1;
     return true;
   };
-  rig.deps.seatRecovery = { rotate: async () => { rotations += 1; return { status: 503, body: { error: "replacement unavailable" } }; } };
+  rig.deps.seatRecovery = { rotate: async () => {
+    expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state).toBe("refused");
+    rotations += 1;
+    return { status: 503, body: { error: "replacement unavailable" } };
+  } };
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.deps.readState!(PROJECT).hostRecovery?.told).toBe(false);
   boardReady = true;
@@ -505,7 +512,8 @@ test("a failed revival notice stays owed across controller restart until the boa
   expect(rotations).toBe(1);
 });
 
-test.each([false, true])("a pending recovery after restart updates one production card before recording the failure as told (closed: %s)", async closed => {
+test.each(["open", "closed"])("a pending recovery after restart updates one %s production card before recording the failure as told", async cardState => {
+  const closed = cardState === "closed";
   const previous = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "recovery-board-"));
   try {
@@ -535,6 +543,7 @@ test.each([false, true])("a pending recovery after restart updates one productio
           writeState(project, row);
         },
         seatRecovery: { rotate: async () => {
+          expect(readSeatTickState(PROJECT, stateFile).outstandingWake?.dispatch?.state).toBe("refused");
           rotations += 1;
           pendingCards = cards();
           if (closed) {
@@ -585,6 +594,8 @@ test("a composer host appearing during fallback fences rotation even with health
   let rotations = 0;
   rig.deps.seatRecovery = { rotate: async (_body, _dependencies, _triggeredBy, admission) => {
     rotations += 1;
+    expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state).toBe("refused");
+    expect(await admission!.replacementHold!()).toBeNull();
     composerLive = true;
     const hold = await admission!.replacementHold!();
     expect(hold?.status).toBe(409);
@@ -770,7 +781,13 @@ test("seat MCP health follows its recorded launch transport across server flag c
   }
 });
 
-test("repeated real launcher child crashes block seat wakes until a tool response proves recovery", async () => {
+const MCP_RECOVERY_CASE_MS = 20_000;
+const MCP_RESPONSE_MS = 5_000;
+test.each([0, 6_000])("repeated real launcher child crashes block seat wakes until a tool response proves recovery (bootstrap hold %d ms)", async (bootstrapHoldMs) => {
+  // Share the existing case budget across boots, leaving time for the final
+  // response and owned cleanup. The delayed fixture exceeds the old 5s slice.
+  const readinessDeadline = performance.now() + MCP_RECOVERY_CASE_MS - MCP_RESPONSE_MS;
+  const readinessWaits: number[] = [];
   const node = Bun.which("node");
   if (!node) throw new Error("Node is required for the launcher test");
   const packageRoot = fs.mkdtempSync(path.join(SANDBOX, "mcp-launcher-"));
@@ -778,6 +795,25 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   const dist = path.join(packageRoot, "dist");
   fs.mkdirSync(bin);
   fs.mkdirSync(dist);
+  const timerFixture = path.join(packageRoot, "early-restart.mjs");
+  fs.writeFileSync(timerFixture, `
+    const nativeTimeout = globalThis.setTimeout;
+    const nativeNow = Date.now;
+    let lastNow = nativeNow();
+    let restartWakes = 0;
+    Date.now = () => (lastNow = nativeNow());
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (delay === 200 && ++restartWakes === 2) {
+        const beforeDeadline = lastNow;
+        return nativeTimeout(() => {
+          const trackedNow = Date.now;
+          Date.now = () => beforeDeadline;
+          try { callback(...args); } finally { Date.now = trackedNow; }
+        }, 0);
+      }
+      return nativeTimeout(callback, delay, ...args);
+    };
+  `);
   // The module set the product publishes beside the stable launcher, and nothing else.
   const sourceBin = path.join(import.meta.dir, "../../../bin");
   for (const name of ["mcp-server.mjs", ...mcpLauncherImports(sourceBin)]) fs.copyFileSync(path.join(sourceBin, name), path.join(bin, name));
@@ -785,6 +821,14 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   fs.writeFileSync(crashFlag, "crash");
   fs.writeFileSync(path.join(dist, "mcp-server.mjs"), `
     const fs = await import("node:fs");
+    const starts = process.env.LLV_TEST_STARTS_FILE;
+    const generation = fs.existsSync(starts) ? Number(fs.readFileSync(starts, "utf8")) + 1 : 1;
+    fs.writeFileSync(starts, String(generation));
+    // Hold the third child inside its admitted initialization window.
+    if (generation === 3) await new Promise(resolve => setTimeout(resolve, Number(process.env.LLV_TEST_BOOTSTRAP_HOLD_MS)));
+    if (generation === 3) await new Promise((resolve, reject) => {
+      process.stderr.write(Buffer.alloc(1024 * 1024, "x"), error => error ? reject(error) : resolve());
+    });
     let input = "";
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", chunk => {
@@ -807,12 +851,16 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
   const capability = "D".repeat(43);
   const digest = createHash("sha256").update(capability).digest("hex");
   const heartbeatFile = path.join(stateDir, "mcp-runtime", "sessions", `${digest}.json`);
-  const session = spawn(node, [path.join(bin, "mcp-server.mjs")], {
+  const session = spawn(node, ["--import", timerFixture, path.join(bin, "mcp-server.mjs")], {
     cwd: packageRoot,
     env: { ...process.env, LLV_STATE_DIR: stateDir, LLV_SPAWN_CAPABILITY: capability,
-      LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_CRASH_FLAG: crashFlag },
+      LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_CRASH_FLAG: crashFlag,
+      LLV_TEST_STARTS_FILE: path.join(packageRoot, "starts"), LLV_TEST_BOOTSTRAP_HOLD_MS: String(bootstrapHoldMs) },
     stdio: ["pipe", "pipe", "pipe"],
   });
+  let stderrTail = "";
+  session.stderr.setEncoding("utf8");
+  session.stderr.on("data", (chunk: string) => { stderrTail = (stderrTail + chunk).slice(-4096); });
   type McpResponse = { id: number; result: { serverInfo?: { name: string }; isError?: boolean; content?: { text: string }[] } };
   const pendingResponses = new Map<number, (message: McpResponse) => void>();
   let output = "";
@@ -829,17 +877,26 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
     }
   });
   const call = (id: number, method: string) => new Promise<McpResponse>((resolve, reject) => {
-    const timeout = setTimeout(() => { pendingResponses.delete(id); reject(new Error(`MCP response ${id} timed out`)); }, 5_000);
+    const timeout = setTimeout(() => { pendingResponses.delete(id); reject(new Error(`MCP response ${id} timed out`)); }, MCP_RESPONSE_MS);
     pendingResponses.set(id, (message) => { clearTimeout(timeout); resolve(message); });
     session.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params: { name: "check", arguments: {} } }) + "\n");
   });
   const readyHeartbeat = async () => {
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline) {
-      if (fs.existsSync(heartbeatFile) && JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).ready === true) return;
+    const began = performance.now();
+    while (performance.now() < readinessDeadline) {
+      if (fs.existsSync(heartbeatFile) && JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).ready === true) {
+        readinessWaits.push(Math.round(performance.now() - began));
+        return;
+      }
       await Bun.sleep(20);
     }
-    throw new Error("MCP child did not reinitialize");
+    let state: unknown;
+    try {
+      state = { heartbeat: fs.readFileSync(heartbeatFile, "utf8"), starts: fs.readFileSync(path.join(packageRoot, "starts"), "utf8") };
+    } catch (error) { state = String(error); }
+    throw new Error("MCP child did not reinitialize", { cause: new Error(JSON.stringify({
+      bootstrapHoldMs, exitCode: session.exitCode, signalCode: session.signalCode, state, stderrTail,
+    })) });
   };
   const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
   const receipt = { spawnCapabilityDigest: digest, createdAt: new Date(Date.now() - 30 * MINUTE).toISOString() };
@@ -863,11 +920,14 @@ test("repeated real launcher child crashes block seat wakes until a tool respons
     await runSeatTickCheck(PROJECT, deps);
     expect(rig.cards.at(-1)?.card).toMatchObject({ kind: "mcp-unavailable", state: "resolved" });
     expect(rig.sent).toHaveLength(1);
+    expect(Number(fs.readFileSync(path.join(packageRoot, "starts"), "utf8"))).toBe(4);
   } finally {
+    console.info("MCP launcher readiness waits", { bootstrapHoldMs, milliseconds: readinessWaits });
+    session.stderr.resume();
     session.stdin.end();
     if (session.exitCode === null) await new Promise<void>((resolve) => session.once("close", () => resolve()));
   }
-}, 20_000);
+}, MCP_RECOVERY_CASE_MS);
 
 /* Two checks that found the same thing raise the same wake, so a re-send after
    a send that never landed is the replay the delivery layer treats it as —
@@ -1057,10 +1117,10 @@ test("a seat that is still the same seat keeps a wake its holder is still holdin
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.withdrawn).toEqual([]);
   expect(rig.journal.some((line) => line.verdict === "revoked")).toBe(false);
-  /* The attempt is kept as it was, with one addition: a row written before
-     the instant existed is stamped with when it was first seen (#1465), so
-     the bound on an attempt nobody can account for is measured from a fact. */
-  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstanding, preparedAt: new Date(NOW).toISOString() });
+  /* A legacy row receives a first-observed age stamp for its attention
+     bound (#1465), explicitly marked as missing actual preparation proof.
+     Its payload and original delivery identity stay intact. */
+  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstanding, preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true });
   expect(rig.cards).toEqual([]);
 });
 
@@ -1159,7 +1219,7 @@ test("a holder that cannot be reached is journaled, and the attempt is retained 
   expect(line.verdict).toBe("retired");
   expect(rig.written.at(-1)!.outstandingWake).toBeNull();
   expect(rig.written.at(-1)!.retiredWakes).toEqual([
-    { wake: { ...outstanding, preparedAt: new Date(NOW).toISOString() }, retiredAt: new Date(NOW).toISOString(),
+    { wake: { ...outstanding, preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true }, retiredAt: new Date(NOW).toISOString(),
       supersededBy: { conversationId: SUCCESSOR, seatEpoch: 8 }, reason: "seat-superseded" },
   ]);
   expect(rig.cards).toEqual([]);
@@ -1179,7 +1239,7 @@ test("a different wake is withheld while the outstanding one is unresolved, and 
   expect(record).toMatchObject({ verdict: "wake", delivery: { outcome: "deferred-outstanding" } });
   expect(record!.delivery!.clientMessageId).not.toBe(outstandingWake().clientMessageId);
   expect(rig.sent).toEqual([]);
-  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstandingWake(), preparedAt: new Date(NOW).toISOString() });
+  expect(rig.written.at(-1)!.outstandingWake).toEqual({ ...outstandingWake(), preparedAt: new Date(NOW).toISOString(), preparationTimeUnknown: true });
   expect(rig.written.at(-1)!.lastWakeAt).toBe(OVERDUE.lastWakeAt);
 });
 
@@ -1585,7 +1645,7 @@ test("a lane event still wakes the seat while GitHub is unreadable, and the wake
 /* The acceptance case (#1298), end to end: a parked lane, a pull-request
    source that cannot be read, and a seat that used to hear nothing at all. */
 test("a parked lane and an unreadable pull-request source produce a wake naming both", async () => {
-  const parked = [{ id: "pipeline_p1", state: "paused", createdAt: "2026-08-28T09:00:00.000Z", movedAt: "2026-08-28T09:30:00.000Z" }];
+  const parked = [{ id: "pipeline_p1", state: "needs_decision", attemptState: "failed", createdAt: "2026-08-28T09:00:00.000Z", movedAt: "2026-08-28T09:30:00.000Z" }];
   const first = harness({
     pipelines: [...parked, ...FINISHED_LANE],
     state: OVERDUE,
@@ -1614,7 +1674,7 @@ test("a parked lane and an unreadable pull-request source produce a wake naming 
    these two lanes stood parked; the wake below is what the seat should have
    been getting all along. */
 test("a gh that throws beside a parked lane still wakes the seat, and names what it could not see", async () => {
-  const parked = [{ id: "pipeline_p1", state: "paused", createdAt: "2026-08-28T09:00:00.000Z", movedAt: "2026-08-28T09:30:00.000Z" }];
+  const parked = [{ id: "pipeline_p1", state: "needs_decision", attemptState: "failed", createdAt: "2026-08-28T09:00:00.000Z", movedAt: "2026-08-28T09:30:00.000Z" }];
   const run: GithubRunner = async () => { throw new Error("gh: could not authenticate"); };
   const first = harness({ pipelines: [...parked, ...FINISHED_LANE], state: OVERDUE, githubRun: run });
   await runSeatTickCheck(PROJECT, first.deps);
@@ -2045,8 +2105,16 @@ test("expiry removes the overlay and requests one end report even with wakes swi
   if (!off.ok) throw new Error(off.error);
   const options = { pipelines: OPEN_LANE, settings: off.settings, now: NOW + MINUTE };
   const rig = harness(options);
+  rig.deps.sources!.workerAsks = async (_project, seatConversationId) => {
+    expect(seatConversationId).toBe(CONVERSATION);
+    return { asks: [], forms: { count: 1, rows: [{ id: "prototype:autonomy-form", kind: "prototype", title: "Choose",
+      line: "Choose", since: new Date(NOW).toISOString(), taskId: null, subject: { reviewId: "autonomy-form" },
+      target: null, stale: false, evidence: [{ code: "earlier-seat", stale: false, detail: "a previous seat epoch asked this", at: null, source: "seat-notices" }] }] } };
+  };
   expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "wake", reasons: ["autonomy-ended"], items: 0 });
   expect(rig.sent[0]!.text).toContain(`key autonomy:${at}`);
+  expect(rig.sent[0]!.text).toContain("- prototype autonomy-form |");
+  expect(rig.sent[0]!.text).toContain("earlier-seat");
   expect(rig.sent[0]!.text).not.toContain("Full autonomy until");
   options.now += MINUTE;
   expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
@@ -2055,3 +2123,26 @@ test("expiry removes the overlay and requests one end report even with wakes swi
   options.now += 61 * MINUTE;
   expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "quiet" });
 });
+
+for (const [read, delivered] of [["null", true], ["throw", true], ["null", false], ["throw", false]] as const) {
+  test(`autonomy-ended reports an unread forms source (${read}; delivered=${delivered}) without credit`, async () => {
+    const { applySeatTickSettingsChange } = await import("./seatTickSettings");
+    const at = new Date(NOW).toISOString();
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    const on = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true } }, { at, actor });
+    if (!on.ok) throw new Error(on.error);
+    const off = applySeatTickSettingsChange(on.settings, { enabled: false, reason: "Operator returned" }, { at: new Date(NOW + MINUTE).toISOString(), actor });
+    if (!off.ok) throw new Error(off.error);
+    const rig = harness({ pipelines: OPEN_LANE, settings: off.settings, now: NOW + MINUTE,
+      delivery: delivered ? { ok: true, target: "structured", outcome: "delivered", spawned: true, structured: true }
+        : { ok: false, outcome: "failed", error: "fixture refusal", status: 503 } });
+    rig.deps.sources!.workerAsks = async () => {
+      if (read === "throw") throw new Error("forms read failed");
+      return null;
+    };
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent[0]!.text).toContain("Open decision forms: not read this check");
+    expect(rig.sent[0]!.text).not.toContain("Open decision forms: 0");
+    expect(rig.deps.readState!(PROJECT).formPageAfter).toBeUndefined();
+  });
+}

@@ -23,6 +23,13 @@ python3 scripts/run-isolated-performance.py bun scripts/profile-catalog-search.t
 python3 scripts/run-isolated-performance.py bun scripts/profile-populated-viewer.ts <checkout> .artifacts/browser-profile
 ```
 
+The helper removes its private scratch directory after success or failure;
+write results to a path outside that directory. Pass `--keep` before the
+command to retain the printed scratch path for inspection. Unix runs default to `/var/tmp`; `--root <existing-directory>` or
+the caller's `TMPDIR` selects another short path. Bun's package cache is shared
+across runs through `BUN_INSTALL_CACHE_DIR`, while state and provider homes
+remain private.
+
 Run the last two commands separately against the base and candidate, retaining the same corpus directory for search. The browser harness bundles the actual Viewer with production React and stylesheet, on an ephemeral loopback server. Every application request is answered inside the invented fixture; it cannot send, mutate a live board, or use provider credentials. It exercises 975 files, 321 flows and 1,207 tasks, long histories in both transcript dialects, tool records, catalog updates and appended synthetic output. `same-answer` as the fourth argument retains the adversarial repeated-timestamp case; `cpu` records that case's CPU profile.
 
 ## Measurements

@@ -49,6 +49,12 @@ test.each(["inline", "on_demand"])("owner describes and calls reactions and poll
   request.input.requester!.is_owner = true;
   request.input.tools = mode === "on_demand" ? JSON.parse(fs.readFileSync(path.join(x1Dir, "claimed_tools_on_demand_owner.json"), "utf8")).request.input.tools : ownerRequest().input.tools;
   request.input.tool_guidance = "Describe the target before the action.";
+  // Prompt selection must not change the hydrated adapter's full contracts.
+  request.input.owner_instructions = "o".repeat(15017);
+  request.input.short_term_memory = "optional memory ".repeat(1000);
+  request.input.conversation.unshift(...Array.from({ length: 38 }, (_, i) => ({
+    ...request.input.conversation[0]!, id: `unrelated-${i}`, text: "old history ".repeat(100),
+  })));
   updateRelayStore(s => ({ ...s, relays: [relay] }));
   const selected = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
     engine: "codex", accountId: "answer", kind: "managed", home, transcriptRoot: home, env: { ...process.env },
@@ -80,6 +86,8 @@ test.each(["inline", "on_demand"])("owner describes and calls reactions and poll
     await expect(own.relay_service_tools({ op: "call", calls: [{ tool: "create_poll", arguments: {} }] })).rejects.toMatchObject({ details: { code: "relay_tools_unavailable" } });
     expect(posts).toHaveLength(2);
     expect(prompts[0]).not.toContain('"parameters"');
+    expect(Buffer.byteLength(prompts[0]!)).toBeLessThanOrEqual(32000);
+    expect(prompts[0]).not.toContain("optional memory");
     expect(lookups.length).toBe(mode === "on_demand" ? 2 : 0);
     if (mode === "on_demand") {
       const bodies = JSON.parse(fs.readFileSync(path.join(x1Dir, "lookup_bodies.json"), "utf8"));
@@ -239,6 +247,17 @@ test("confirmation pending preserves summary and expiry, stops further calls loc
     expect(await own.relay_service_tools(args("get_media"))).toMatchObject({ results: [{ code: "too_many_calls" }] });
     expect(posts).toBe(1);
   }, { now: () => Date.parse("2026-10-17T12:00:00Z") });
+});
+
+test("an owner read quoting chat history returns no pending enrolment code to the agent", async () => {
+  const code = "DLG-ABCDEF012345";
+  await withAdapter("enrolment-redaction", (_req, body) => ({ body: okResult(body, { ...x1Results.ok!, status: "ok",
+    output: `@clone ${code} (and ${code.toLowerCase()} quoted)` }) }), async ({ own }) => {
+    const reply = await own.relay_service_tools(args("search_chat_messages", { keywords: ["clone"] }));
+    expect(reply).toMatchObject({ results: [{ tool: "search_chat_messages", status: "ok",
+      output: "@clone [enrolment code] (and [enrolment code] quoted)" }] });
+    expect(JSON.stringify(reply)).not.toMatch(/DLG-/i);
+  });
 });
 
 test("other conversations, deputies and absent callers cannot borrow the owner's adapter", async () => {

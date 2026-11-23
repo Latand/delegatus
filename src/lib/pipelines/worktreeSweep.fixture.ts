@@ -4,10 +4,35 @@ import { createInterface } from "node:readline";
 import { WorktreeSweepCache } from "./worktreeSweepCache";
 import { scanProcesses, runTempSweepInHelper } from "../tempSweep";
 import { diskVolumes, observeDiskPressure } from "../state/diskPressure";
-import { allocatedBytes, sweepMergedWorktrees, type SweptPipeline } from "./worktreeSweep";
+import { allocatedBytes, readWorktreeSweepReport, recordWorktreeSweep, startWorktreeSweep, stopWorktreeSweep, sweepMergedWorktrees, type SweptPipeline } from "./worktreeSweep";
+import { requestDiskPressureSweeps } from "../state/diskPressureSweeps";
 import { runAttemptTempSweep } from "../runtime/attemptTempProduction";
 console.log = (...args) => console.error(...args);
 const directory = process.env.SWEEP_TEST_ROOT!;
+if (process.argv.includes("--pressure")) {
+  let now = Date.parse("2026-10-22T00:00:00Z");
+  const previous = readWorktreeSweepReport();
+  const callbacks: Array<() => void> = [], delays: number[] = [];
+  startWorktreeSweep({ env: {}, previous, now: () => now, intervalMs: 60_000, firstDelayMs: 100,
+    schedule: (callback, delay) => { callbacks.push(callback); delays.push(delay); return { unref() {} } as ReturnType<typeof setTimeout>; },
+    sweep: async () => {
+      const report = await sweepMergedWorktrees({ mode: "on", pipelines: [], repositories: [], now: () => now,
+        git: async () => ({ code: 0, stdout: "", stderr: "" }), mergedPullRequests: () => [],
+        conversationCwds: () => [], scan: () => ({ ownNamespace: null, processes: [] }), recordResolution: () => false,
+      });
+      recordWorktreeSweep(report);
+      return report;
+    },
+  });
+  if (!previous) { callbacks[0]!(); await new Promise(resolve => setImmediate(resolve)); }
+  for (let n = 0; n < 10; n++) { now += 1000; requestDiskPressureSweeps(); }
+  const beforeInterval = [...delays];
+  now = Date.parse("2026-10-22T00:01:00Z"); requestDiskPressureSweeps();
+  const afterInterval = [...delays];
+  stopWorktreeSweep();
+  process.stdout.write(JSON.stringify({ beforeInterval, afterInterval }) + "\n");
+  process.exit(0);
+}
 if (process.argv.includes("--slice")) {
   const root = path.join(directory, "repo");
   fs.mkdirSync(root, { recursive: true });
@@ -29,10 +54,11 @@ if (process.argv.includes("--slice")) {
   process.stdout.write(JSON.stringify({ visited, progress: report.progress }) + "\n");
   process.exit(0);
 }
+if (process.argv.includes("--complete-pass")) fs.appendFileSync(path.join(directory, "pass-pids"), `${process.pid}\n`);
 const cache = new WorktreeSweepCache(path.join(directory, "cache.json"));
 const tree = path.join(directory, "tree");
 for await (const line of createInterface({ input: process.stdin })) {
-  const { mode, kind, env } = JSON.parse(line);
+  const { mode, kind, env, deadline } = JSON.parse(line);
   if (mode === "on" && process.argv.includes("--hold-worktree")) {
     fs.writeFileSync(path.join(directory, "busy-pid"), String(process.pid));
     while (!fs.existsSync(path.join(directory, "release-worktree"))) await new Promise(resolve => setTimeout(resolve, 5));
@@ -48,6 +74,11 @@ for await (const line of createInterface({ input: process.stdin })) {
       continue;
     }
     if (process.argv.includes("--oversize")) { process.stdout.write("x".repeat(9 * 1024 * 1024)); continue; }
+  }
+  if (kind === "maintenance") {
+    fs.appendFileSync(path.join(directory, "requests"), kind + "\n");
+    fs.writeFileSync(path.join(directory, "maintenance-deadline"), String(deadline));
+    process.stdout.write(JSON.stringify({ report: { checked: 0, removed: 0 } }) + "\n"); continue;
   }
   if (kind === "attempt-temp") {
     fs.appendFileSync(path.join(directory, "requests"), kind + "\n");
@@ -76,6 +107,6 @@ for await (const line of createInterface({ input: process.stdin })) {
   const bytes = await cache.allocation(tree, "kept", [], new Set(), () => allocatedBytes(tree));
   cache.persist();
   process.stdout.write(JSON.stringify({report:{at:"2026-10-18T00:00:00.000Z",mode,repositories:[],removed:[],removedBytes:0,trimmed:[],trimmedBytes:0,
-    kept:[{path:tree,reason:"no-merged-pr",bytes}],keptCounts:{"no-merged-pr":1},keptBytes:{"no-merged-pr":bytes},errors:[],cacheStats:{...cache.stats}}})+"\n");
+    ...(process.argv.includes("--complete-pass") ? {progress:{complete:true,visited:1}} : {}),kept:[{path:tree,reason:"no-merged-pr",bytes}],keptCounts:{"no-merged-pr":1},keptBytes:{"no-merged-pr":bytes},errors:[],cacheStats:{...cache.stats}}})+"\n");
 }
 cache.close();

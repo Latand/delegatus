@@ -23,6 +23,7 @@ import { FakeDeploymentAdapter, healthy, release } from "./fixtures/fakeDeployme
 import { HostCommandViewerDeploymentAdapter } from "./deploymentAdapter";
 import { viewerCandidateDockerArgs, viewerComposeServiceFromConfig } from "./candidateContainer";
 import { RuntimeHost } from "./host";
+import { testEndpoint } from "./fixtures/testEndpoint";
 import { RuntimeJournal } from "./journal";
 import { serveRuntimeHost } from "./socket";
 import { currentRuntimeHostGeneration, writeRuntimeHostRelease } from "./hostRelease";
@@ -37,6 +38,63 @@ function journal(name: string): RuntimeJournal {
   sandboxes.push(dir);
   return new RuntimeJournal(path.join(dir, "runtime.sqlite"), { now: () => 1_000 });
 }
+
+test("reconciliation fences a deployment while resolution is held, across host restart", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-deploy-fenced-"));
+  sandboxes.push(dir);
+  const filename = path.join(dir, "runtime.sqlite");
+  const store = new RuntimeJournal(filename);
+  const adapter = new FakeDeploymentAdapter();
+  const held = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>();
+  const resolve = adapter.resolveRevision.bind(adapter);
+  adapter.resolveRevision = async revision => { entered.resolve(); await held.promise; return resolve(revision); };
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+  const request = { revision: "a".repeat(40), idempotencyKey: "fenced-deploy" };
+  const original = coordinator.requestViewerDeployment(request).then(value => ({ value, error: null }), error => ({ value: null, error: error as Error }));
+  try {
+    await entered.promise;
+    await expect(coordinator.requestViewerDeployment({ ...request, reconcileOnly: true })).rejects.toThrow("permanently closed");
+    held.resolve();
+    expect((await original).error?.message).toContain("permanently closed");
+    expect(store.viewerDeploymentByIdempotencyKey(request.idempotencyKey)).toBeNull();
+    expect(adapter.calls.some(call => call.startsWith("build:"))).toBe(false);
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { RuntimeJournal } from "./src/runtime-host/journal";
+      import { ViewerDeploymentCoordinator } from "./src/runtime-host/deployment";
+      import { FakeDeploymentAdapter } from "./src/runtime-host/fixtures/fakeDeploymentAdapter";
+      const store = new RuntimeJournal(process.argv[1]);
+      const adapter = new FakeDeploymentAdapter();
+      const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 11, startIdentity: "11:1" });
+      const request = JSON.parse(process.argv[2]);
+      const answers = [];
+      try {
+        for (const reconcileOnly of [false, true]) {
+          try { await coordinator.requestViewerDeployment({ ...request, reconcileOnly }); answers.push("unexpected admission"); }
+          catch (error) { answers.push(error.code); }
+        }
+        try { await coordinator.requestViewerDeployment({ ...request, revision: "b".repeat(40), reconcileOnly: true }); }
+        catch (error) { answers.push(error.code); }
+        console.log(JSON.stringify({ answers, calls: adapter.calls }));
+      } finally { store.close(); }
+    `, filename, JSON.stringify(request)], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(stdout)).toEqual({ answers: ["deploy_not_admitted", "deploy_not_admitted", "idempotency-conflict"], calls: [] });
+    adapter.resolveRevision = resolve;
+    const fresh = await coordinator.requestViewerDeployment({ revision: request.revision, idempotencyKey: "fresh-deploy" });
+    expect(fresh.state).toBe("accepted");
+    await coordinator.waitForDeployment(fresh.deploymentId);
+    expect(await coordinator.requestViewerDeployment({ revision: request.revision, idempotencyKey: "fresh-deploy", reconcileOnly: true })).toMatchObject({ state: "accepted", deploymentId: fresh.deploymentId, replayed: true });
+    await expect(store.joinActiveViewerDeployment({ idempotencyKey: request.idempotencyKey, requestedRevision: request.revision, expectedDeploymentId: fresh.deploymentId })).rejects.toThrow("permanently closed");
+    expect(await store.joinActiveViewerDeployment({ idempotencyKey: "fresh-joined-key", requestedRevision: request.revision, expectedDeploymentId: fresh.deploymentId })).toMatchObject({ state: "accepted", deploymentId: fresh.deploymentId });
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    held.resolve();
+    const outcome = await original;
+    if (outcome.value?.state === "accepted") await coordinator.waitForDeployment(outcome.value.deploymentId);
+    store.close();
+  }
+}, 30_000);
 
 function journalFile(name: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `llv-deploy-${name}-`));
@@ -1101,7 +1159,6 @@ test("newly promoted Viewer environment requests the next deployment through run
   } } }));
   const args = viewerCandidateDockerArgs(release("current", "current"), composeService, {
     runtimeSocket: socketPath,
-    tmuxTmpdir: "/run/user/1000/agent-log-viewer",
   });
   const environment = {} as NodeJS.ProcessEnv;
   for (let index = 0; index < args.length; index += 1) {
@@ -1145,6 +1202,74 @@ test("Viewer socket admission outlives the ordinary client timeout during delaye
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     store.close();
+  }
+});
+
+test("runtime socket reconciliation bypasses held resolution and reports the durable refusal code", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-deploy-socket-fence-"));
+  sandboxes.push(dir);
+  const store = new RuntimeJournal(path.join(dir, "runtime.sqlite"));
+  const adapter = new FakeDeploymentAdapter();
+  const entered = Promise.withResolvers<void>(), held = Promise.withResolvers<void>();
+  const resolve = adapter.resolveRevision.bind(adapter);
+  adapter.resolveRevision = async value => { entered.resolve(); await held.promise; return resolve(value); };
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+  const socket = testEndpoint(dir, "runtime");
+  const server = serveRuntimeHost(socket, new RuntimeHost(store, undefined, coordinator));
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const client = new UnixRuntimeHostClient(socket);
+  const request = { revision: "a".repeat(40), idempotencyKey: "socket-fenced-key" };
+  const original = client.requestViewerDeployment(request).catch(error => error);
+  try {
+    await entered.promise;
+    await expect(client.requestViewerDeployment({ ...request, reconcileOnly: true })).rejects.toMatchObject({ code: "deploy_not_admitted" });
+    held.resolve();
+    expect(await original).toMatchObject({ code: "deploy_not_admitted" });
+    expect(store.viewerDeploymentByIdempotencyKey(request.idempotencyKey)).toBeNull();
+    expect(adapter.calls.some(call => call.startsWith("build:"))).toBe(false);
+  } finally {
+    held.resolve(); await original;
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    store.close();
+  }
+});
+
+test("an older runtime protocol rejects reconciliation without receiving a deployment request", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-deploy-old-protocol-"));
+  sandboxes.push(dir);
+  const store = new RuntimeJournal(path.join(dir, "runtime.sqlite"));
+  const adapter = new FakeDeploymentAdapter();
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+  const host = new RuntimeHost(store, undefined, coordinator), handle = host.handle.bind(host);
+  let admissions = 0;
+  host.handle = (request, options) => {
+    // Replay the earlier receiver: its method switch rejects unknown names,
+    // and its deployment parser only forwards the three original fields.
+    if (request.method === "viewer-deployment-reconcile") return handle({ ...request, method: "older-unsupported-method" as never }, options);
+    if (request.method === "viewer-deployment-request") {
+      admissions++;
+      return handle({ ...request, params: { revision: request.params?.revision, ref: request.params?.ref, idempotencyKey: request.params?.idempotencyKey } }, options);
+    }
+    return handle(request, options);
+  };
+  const socket = testEndpoint(dir, "older-runtime");
+  const server = serveRuntimeHost(socket, host);
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const client = new UnixRuntimeHostClient(socket);
+  const request = { revision: "a".repeat(40), idempotencyKey: "older-runtime-key" };
+  try {
+    await expect(client.requestViewerDeployment({ ...request, reconcileOnly: true })).rejects.toThrow("unsupported");
+    expect(admissions).toBe(0);
+    expect(store.viewerDeploymentByIdempotencyKey(request.idempotencyKey)).toBeNull();
+    const admitted = await client.requestViewerDeployment(request);
+    expect(admitted.state).toBe("accepted");
+    await coordinator.waitForDeployment(admitted.deploymentId);
+    expect(admissions).toBe(1);
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    const admitted = store.viewerDeploymentByIdempotencyKey(request.idempotencyKey);
+    if (admitted) await coordinator.waitForDeployment(admitted.deploymentId);
+    await new Promise<void>(resolve => server.close(() => resolve())); store.close();
   }
 });
 

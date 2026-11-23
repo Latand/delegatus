@@ -1,3 +1,4 @@
+import { textLengthError } from "@/lib/textLimits";
 import { memoryImportDrainSignal } from "./importStatus";
 import { createHash } from "node:crypto";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -5,6 +6,7 @@ import { seatTickSignalVersion } from "@/lib/monitor/seatTick";
 import { redactBounded } from "@/lib/monitor/redact";
 import type { SeatTickSignalInput } from "@/lib/monitor/types";
 import { roleMemoryCollection, RoleMemoryRefusal } from "./roleStore";
+import { roleProblemRowKeys } from "./roleViewSource";
 import { lessonText, lessonTextLength, PROBLEM_MAX_CHARS, PROBLEM_EVIDENCE_MAX_CHARS, type ProblemInput, type ScopeKind, type RoleMemoryRow, type LessonRequestRow, type RoleMemoryRule } from "./roleTypes";
 
 /** Structural hints catch concrete paths and defect statements. The agent and
@@ -34,12 +36,19 @@ export function problemInput(value: unknown): ProblemInput {
   const input = value as Record<string, unknown>;
   const field = (key: string, limit: number) => {
     const raw = input[key];
-    if (typeof raw !== "string" || !lessonTextLength(raw) || lessonTextLength(raw) > limit) throw new RoleMemoryRefusal("LESSON_INVALID", `problem.${key} must be 1–${limit} characters`);
+    if (typeof raw !== "string") throw new RoleMemoryRefusal("LESSON_INVALID", `problem.${key} must be text`);
+    const actual = lessonTextLength(raw);
+    if (!actual || actual > limit) throw new RoleMemoryRefusal("LESSON_INVALID", textLengthError(`problem.${key}`, actual, limit, "normalized Unicode code points", 1));
     return lessonText(raw);
   };
   return { statement: field("statement", PROBLEM_MAX_CHARS), evidence: field("evidence", PROBLEM_EVIDENCE_MAX_CHARS) };
 }
 
+/** The rule and request rows that carry a problem, and no other row. */
+function problemRows(): RoleMemoryRow[] {
+  const collection = roleMemoryCollection();
+  return collection ? roleProblemRowKeys().flatMap(key => { const row = collection.get(key); return row ? [row] : []; }) : [];
+}
 function reportedProblem(row: RoleMemoryRow): row is (LessonRequestRow | RoleMemoryRule) & { problem: ProblemInput } {
   return row.kind !== "scope" && !!row.problem
     && (row.kind === "request" || !row.versionOf && row.state === "archived" && row.reason === "problem");
@@ -68,7 +77,7 @@ function problemSignal(row: (LessonRequestRow | RoleMemoryRule) & { problem: Pro
     another report in its place. Delivery keeps the full record readable. */
 export function readMemoryProblem(project: string, id: string): ProblemInput | null {
   const canonical = canonicalProject(project);
-  const row = roleMemoryCollection()?.snapshot().filter(reportedProblem).find(row => problemId(row) === id
+  const row = problemRows().filter(reportedProblem).find(row => problemId(row) === id
     && canonicalProject(row.kind === "request" ? row.project : row.source.project) === canonical);
   return row ? { ...row.problem } : null;
 }
@@ -77,9 +86,8 @@ export function readMemoryProblem(project: string, id: string): ProblemInput | n
 let preparingMemoryProblemRead: Promise<void> | undefined;
 export async function prepareMemoryProblemRead(): Promise<void> {
   if (!preparingMemoryProblemRead) {
-    preparingMemoryProblemRead = Promise.resolve().then(async () => {
-      await roleMemoryCollection()?.loadReadonlyAsync();
-    }).finally(() => { preparingMemoryProblemRead = undefined; });
+    // The read takes only the rows that carry a problem; nothing is filled ahead of it.
+    preparingMemoryProblemRead = Promise.resolve().finally(() => { preparingMemoryProblemRead = undefined; });
   }
   await preparingMemoryProblemRead;
 }
@@ -90,7 +98,7 @@ export function memoryProblemSignals(project: string, shown: readonly string[], 
   const collection = roleMemoryCollection();
   if (!collection) return memoryImportDrainSignal(project);
   const canonical = canonicalProject(project);
-  const pending = collection.loadReadonly().filter(pendingProblem).filter(row => canonicalProject(row.kind === "request" ? row.project : row.source.project) === canonical);
+  const pending = problemRows().filter(pendingProblem).filter(row => canonicalProject(row.kind === "request" ? row.project : row.source.project) === canonical);
   const versions = new Set(shown);
   const delivered = pending.filter(row => versions.has(seatTickSignalVersion(problemSignal(row), recipient)));
   if (delivered.length) collection.boundedPatch(4096, tx => {

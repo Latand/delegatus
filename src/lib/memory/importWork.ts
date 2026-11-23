@@ -428,7 +428,9 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       // Packaged releases have no checkout identity. Use the same durable
       // release remote as the Viewer's own-project authorization boundary.
       const projects = viewerRepositoryProjects(process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim() || manifestMetadata.repository.url, process.cwd()).map(canonicalProject);
-      record.hostProject ??= ports.hostProject ?? projects.find(project => orchestratorSeatFor(project).active) ?? projects[0];
+      const selectedProjects = [...new Set(candidates.flatMap(candidate => candidate.occurrences.map(occurrence => occurrence.project).filter((project): project is string => Boolean(project))))].sort();
+      record.hostProject ??= ports.hostProject ?? projects.find(project => orchestratorSeatFor(project).active)
+        ?? selectedProjects.find(project => orchestratorSeatFor(project).active) ?? projects[0];
       if (!record.hostProject) throw new MemoryImportError("backup_refused");
       record.roots ??= roots;
       const { importHistoryKeys, inheritImportDispositions } = await import("./importHistory");

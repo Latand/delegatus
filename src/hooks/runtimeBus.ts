@@ -279,7 +279,7 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
 
   /**
    * The runtime routes answered that this deployment has no runtime plane.
-   * The UI flag ships on, so a tmux-only viewer lands here — and a bus that
+   * The UI flag ships on, so a viewer without a runtime host lands here — and a bus that
    * stayed `enabled` with an empty store would make the plane authoritative
    * but blind, resolving every running conversation to `unresolved` (Send
    * disabled, Stop/kill/terminal hidden) for the life of the tab. Going inert

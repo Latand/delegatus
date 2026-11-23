@@ -1,0 +1,134 @@
+import { test, expect } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { EvalBudget, evaluate, measure, type EvalCase } from "./role-selection-eval";
+import { selectRoleMemory } from "../src/lib/memory/roleSelect";
+import { openAiRoleSelectionProvider, openRouterRoleSelectionProvider } from "../src/lib/memory/roleSelectionProvider";
+import type { SelectionPromptVersion } from "../src/lib/memory/roleSelectionPrompt";
+import type { RoleMemoryRule } from "../src/lib/memory/roleTypes";
+
+test("the committed privacy-safe bundle replays every recorded cell without dispatch", async () => {
+  const directory = path.join(import.meta.dir, "..", "evals", "role-selection");
+  const cases = JSON.parse(fs.readFileSync(path.join(directory, "corpus.json"), "utf8")) as EvalCase[];
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, "inputs.json"), "utf8"));
+  const expected = JSON.parse(fs.readFileSync(path.join(directory, "results.json"), "utf8"));
+  expect(expected.threshold).toBe(0.02);
+  const providers = [openAiRoleSelectionProvider, openRouterRoleSelectionProvider].map(make => ({
+    id: make().id, key: "offline", make: (promptVersion: SelectionPromptVersion) => make({ promptVersion }),
+  }));
+  expect(manifest.digest).toBe((await import("./role-selection-eval")).digest(cases));
+  const actual = await evaluate(cases, new EvalBudget(path.join(directory, "spend.json")), providers, true);
+  const stableActual = actual.map(row => row.arm === "whole" || row.arm === "bm25" ? { ...row, latencyMs: null } : row);
+  const stableExpected = expected.results.map((row: { arm: string }) => row.arm === "whole" || row.arm === "bm25" ? { ...row, latencyMs: null } : row);
+  expect(stableActual).toEqual(stableExpected);
+  const receipts = new EvalBudget(path.join(directory, "spend.json")).read();
+  expect(receipts).toHaveLength(336);
+  expect({
+    usageConfirmedUsd: receipts.reduce((sum, row) => sum + (row.cost ?? (row.usageVersion === 2 ? row.observedUsd ?? 0 : 0)), 0),
+    retainedUsd: receipts.reduce((sum, row) => sum + (row.cost ?? row.ceiling), 0),
+    unpricedCells: receipts.filter(row => row.cost === null).length,
+  }).toEqual(expected.spend);
+});
+
+test("the fixed corpus contains meaningful anonymized briefs and rule candidates", () => {
+  const directory = path.join(import.meta.dir, "..", "evals", "role-selection");
+  const cases = JSON.parse(fs.readFileSync(path.join(directory, "corpus.json"), "utf8")) as EvalCase[];
+  const totalCandidates = cases.reduce((sum, input) => sum + input.scopes.reduce((count, scope) => count + scope.rules.length, 0), 0);
+  expect(cases).toHaveLength(24);
+  expect(cases.reduce((sum, input) => sum + input.applied.length, 0)).toBe(64);
+  expect(cases.reduce((sum, input) => sum + input.misled.length, 0)).toBe(8);
+  expect(totalCandidates).toBe(96);
+  for (const input of cases) {
+    expect(input.brief.trim().split(/\s+/).length).toBeGreaterThan(18);
+    expect(input.brief).not.toMatch(/x{20,}/i);
+    const candidates = input.scopes.flatMap(scope => scope.rules);
+    const ids = new Set(candidates.map(rule => rule.id));
+    expect(input.baselineIds?.length).toBeGreaterThan(0);
+    expect(input.baselineIds?.every(id => ids.has(id))).toBe(true);
+    expect(input.applied.every(id => ids.has(id))).toBe(true);
+    expect(input.misled.every(id => ids.has(id))).toBe(true);
+    expect(candidates.filter(rule => !input.applied.includes(rule.id) && !input.misled.includes(rule.id))).toHaveLength(1);
+    expect(candidates.every(rule => rule.rule.trim().split(/\s+/).length >= 5 && !/x{20,}/i.test(rule.rule))).toBe(true);
+    const text = [input.brief, ...candidates.map(rule => rule.rule)].join("\n");
+    expect(text).not.toMatch(/(?:\/home\/|\/Users\/|[A-Za-z]:\\\\|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{16,})/i);
+    expect(text).not.toMatch(/[«»“”‘’]/u);
+  }
+});
+
+test("BM25 comparison recomputes each fixed case instead of replaying captured historical ids", async () => {
+  const directory = path.join(import.meta.dir, "..", "evals", "role-selection");
+  const cases = JSON.parse(fs.readFileSync(path.join(directory, "corpus.json"), "utf8")) as EvalCase[];
+  const actual = await evaluate(cases, new EvalBudget(path.join(directory, "spend.json")), [], true);
+  const bm25 = actual.filter(result => result.arm === "bm25");
+  expect(bm25).toHaveLength(cases.length);
+  let differsFromHistorical = false;
+  for (const input of cases) {
+    const expected = await selectRoleMemory(input.scopes, input.brief, { apiKey: null, timeoutMs: 30_000 });
+    expect(expected.selector).toBe("bm25");
+    differsFromHistorical ||= JSON.stringify(input.baselineIds) !== JSON.stringify(expected.shadowIds);
+    expect(bm25.find(result => result.case === input.id)).toMatchObject({
+      ...measure(input, expected.shadowIds), selectedIds: expected.shadowIds,
+      reason: expected.reason,
+    });
+  }
+  expect(differsFromHistorical).toBe(true);
+});
+
+test("the eval cap retains unknown dispatches and observed bills across real process restarts", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "selection-eval-"));
+  const file = path.join(root, "budget.json");
+  try {
+    const budget = new EvalBudget(file);
+    expect(budget.reserve("first", 3)).toBe(true);
+    budget.observe("first", .01);
+    const script = `import { EvalBudget } from ${JSON.stringify(path.join(import.meta.dir, "role-selection-eval.ts"))};
+const budget = new EvalBudget(${JSON.stringify(file)});
+if (budget.read()[0].observedUsd !== .01) throw Error('observed usage was lost');
+if (budget.reserve('second', 0.01)) throw Error('unknown dispatch admitted');
+budget.finish({ key:'first',ceiling:3,cost:2.99,complete:true });
+if (!budget.reserve('second',1)) throw Error('remaining credit refused');
+budget.finish({ key:'second',ceiling:1,cost:1,complete:true });
+if (budget.reserve('third',0.02)) throw Error('cap exceeded');
+if (!budget.reserve('last',0.005)) throw Error('within cap refused');`;
+    const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    try {
+      const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+    } finally { if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; } }
+    expect(budget.reserve("duplicate", .001)).toBe(false);
+    expect(budget.reserve("first", .001)).toBe(false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("both prompts and providers replay captured decisions without dispatch or another charge", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "selection-eval-replay-"));
+  const input: EvalCase = { id: "case-a", cohort: "replay", role: "builder", brief: "Repair receipt recovery", applied: ["r_a"], misled: ["r_b"], scopes: [{ scope: "machine", rules: ["Check receipt ownership before replaying.", "Measure browser colors in both themes."].map((rule, i): RoleMemoryRule => ({
+    kind: "rule", id: i ? "r_b" : "r_a", rule, why: "Earlier checks missed a boundary.", scope: "machine", state: "active", hints: [],
+    source: { origin: "conversation", project: "fixture", roleId: "builder", fixRound: false, conversationId: "fixture-conversation" }, createdAt: "2026-10-01T00:00:00Z", changedAt: "2026-10-01T00:00:00Z",
+  })) }] };
+  let calls = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    calls++;
+    const body = await request.json();
+    return Array.isArray(body.questions)
+      ? Response.json({ answers: body.questions.map((q: { name: string }, i: number) => ({ type: "predicate", name: q.name, probability: i ? .01 : .9 })), usage: { input_tokens: 100 } })
+      : Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map((id, i) => [id, { noul: i ? .01 : .9 }])), usage: { cost: .00001 } });
+  } });
+  const nativeFetch = globalThis.fetch;
+  const request = ((url, init) => nativeFetch(new URL(new URL(String(url)).pathname, server.url), init)) as typeof fetch;
+  const providers = [openAiRoleSelectionProvider, openRouterRoleSelectionProvider].map(make => ({ id: make().id, key: "fixture", make: (promptVersion: SelectionPromptVersion) => make({ promptVersion, fetch: request }) }));
+  try {
+    const budget = new EvalBudget(path.join(root, "spend.json"));
+    const first = await evaluate([input], budget, providers);
+    expect(calls).toBe(4);
+    for (const result of first.filter(result => result.arm.includes("-v"))) expect(result).toMatchObject({ recalled: 1, misledDelivered: 0, delivered: 1 });
+    const receipt = fs.readFileSync(budget.file, "utf8");
+    const replay = await evaluate([input], budget, providers, true);
+    expect(replay.filter(result => result.arm.includes("-v"))).toEqual(first.filter(result => result.arm.includes("-v")));
+    expect(calls).toBe(4);
+    expect(fs.readFileSync(budget.file, "utf8")).toBe(receipt);
+    await expect(evaluate([{ ...input, brief: "A changed task" }], budget, providers, true)).rejects.toThrow("missing frozen response");
+    expect(calls).toBe(4);
+  } finally { await server.stop(true); fs.rmSync(root, { recursive: true, force: true }); }
+});

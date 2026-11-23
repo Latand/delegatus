@@ -1,10 +1,47 @@
 import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { createLoopHeapSignals as createSignals, type GcSubscriber } from "./loopHeapSignals";
+import { createLoopHeapSignals as createSignals, readLoopMemoryUsage, type GcSubscriber } from "./loopHeapSignals";
 
 const createLoopHeapSignals = (read?: () => number, subscribe?: GcSubscriber) => createSignals(read, subscribe, () => 0);
 
 const unsupported: GcSubscriber = () => ({ unavailable: "gc-entry-unsupported" });
+
+test("process memory counters preserve zero, report failed reads and recover without stale values", () => {
+  const original = process.memoryUsage;
+  let fail = false, calls = 0;
+  const usage = { rss: 0, heapUsed: 0, heapTotal: 0, external: 0, arrayBuffers: 0 };
+  Object.defineProperty(process, "memoryUsage", { configurable: true, value: () => {
+    calls++; if (fail) throw new Error("private read error"); return usage;
+  } });
+  const signals = createSignals(readLoopMemoryUsage, unsupported, () => 0);
+  try {
+    const first = signals.sample(0, 1000, 990)!;
+    expect(first.memoryUsage).toMatchObject({ source: "memory-reader", sampleAt: 1000, ...usage,
+      bun: { heapSizeAfterLastCollection: 0, heapBlockBytesAllocated: 0, extraAndExternalMemorySize: 0 } });
+    expect(calls).toBe(2);
+    fail = true;
+    const failed = signals.sample(1000, 2000, 990)!;
+    expect(failed.memoryUsage).toEqual({ source: "unavailable", sampleAt: 2000,
+      rss: null, heapUsed: null, heapTotal: null, external: null, arrayBuffers: null });
+    expect(failed.heap).toMatchObject({ deltaBytes: null, unavailable: "heap-read-failed" });
+    expect(JSON.stringify(failed)).not.toContain("private read error");
+    fail = false; usage.rss = 9000; usage.heapUsed = 1000;
+    usage.external = NaN;
+    expect(signals.sample(2000, 3000, 990)!.memoryUsage.source).toBe("unavailable");
+    usage.external = 500;
+    const recovered = signals.sample(3000, 4000, 990)!;
+    expect(recovered.memoryUsage).toMatchObject({ source: "memory-reader", ...usage });
+    expect(recovered.heap.deltaBytes).toBeNull();
+    usage.heapUsed = 2000;
+    expect(signals.sample(4000, 5000, 990)!.heap.deltaBytes).toBe(1000);
+    signals.stop();
+    expect(signals.memoryUsage().rss).toBeNull();
+    signals.start();
+    expect(signals.memoryUsage()).toMatchObject({ ...usage, sampleAt: 0 });
+  } finally {
+    signals.stop(); Object.defineProperty(process, "memoryUsage", { configurable: true, value: original });
+  }
+});
 
 test("heap proxy preserves growth, shrinkage and zero without inventing allocation or GC totals", () => {
   let heap = 4000;
@@ -137,7 +174,7 @@ test("ordinary polls only advance the baseline and allocate no report", () => {
   expect(signals.sample(250, 1000, 740)!.heap.deltaBytes).toBe(100);
 });
 
-test("the pinned Bun reports heap sampling unavailable without blocking the loop", () => {
+test("a sampler without a reader reports unavailable heap counters", () => {
   const signals = createLoopHeapSignals();
   signals.start();
   const report = signals.sample(0, 1000, 990)!;
@@ -147,7 +184,7 @@ test("the pinned Bun reports heap sampling unavailable without blocking the loop
   signals.stop();
 });
 
-test("default heap sampling never calls Bun memoryUsage on the monitor loop", () => {
+test("a sampler without a reader never calls memoryUsage", () => {
   const original = process.memoryUsage;
   let reads = 0;
   Object.defineProperty(process, "memoryUsage", {

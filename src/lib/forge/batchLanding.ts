@@ -7,11 +7,13 @@ import { realExec } from "@/lib/workflows/provision";
 /** Replay the reviewed change onto the landing parent and compare trees,
  * then reverse-merge it from the base tree and compare the whole resulting
  * change. Already reverted hunks become no-ops and cannot pass.
+ * Closed-PR hints may name a batch tip with companion changes; that mode
+ * verifies the reviewed diff itself, leaving the native exact-patch rule intact.
  * Git writes only objects; the checkout, index and branch refs stay untouched. */
-async function patchPresent(repoDir: string, head: string, landing: string, base: string): Promise<boolean> {
-  if (![head, landing, base].every((sha) => /^[0-9a-f]{40}$/i.test(sha))) return false;
+async function patchPresent(repoDir: string, head: string, landing: string, bases: string[], allowCompanions = false, fetchEnv: Partial<NodeJS.ProcessEnv> = {}): Promise<boolean> {
+  if (![head, landing, ...bases].every((sha) => /^[0-9a-f]{40}$/i.test(sha))) return false;
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "llv-batch-patch-"));
-  const env = { GIT_NO_REPLACE_OBJECTS: "1" };
+  const env = { GIT_NO_REPLACE_OBJECTS: "1", ...fetchEnv };
   const git = (args: string[]) => realExec("git", args, repoDir, env, { timeoutMs: 30_000 });
   const checked = async (args: string[]) => {
     const result = await git(args);
@@ -20,16 +22,18 @@ async function patchPresent(repoDir: string, head: string, landing: string, base
   };
   try {
     const missing: string[] = [];
-    for (const sha of new Set([head, landing, base])) {
+    for (const sha of new Set([head, landing, ...bases])) {
       if ((await git(["cat-file", "-e", `${sha}^{commit}`])).code !== 0) missing.push(sha);
     }
     if (missing.length) await checked(["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "origin", ...missing]);
     const parents = (await checked(["rev-list", "--parents", "-n", "1", landing])).split(" ");
-    if (parents.length !== 2) return false;
-    const fork = await checked(["merge-base", parents[1]!, head]);
+    if (allowCompanions ? parents.length < 2 : parents.length !== 2) return false;
+    const firstParent = parents[1]!;
+    // A merge commit may already contain the reviewed head through another parent.
+    const fork = await checked(["merge-base", allowCompanions && parents.length === 2 ? landing : firstParent, head]);
     // Git's three-way replay preserves which occurrence was reviewed while
     // incorporating nearby edits and line shifts from the landing parent.
-    const replayed = await git(["-c", "merge.renames=false", "merge-tree", "--write-tree", "--no-messages", `--merge-base=${fork}`, parents[1]!, head]);
+    const replayed = await git(["-c", "merge.renames=false", "merge-tree", "--write-tree", "--no-messages", `--merge-base=${fork}`, allowCompanions ? landing : firstParent, head]);
     if (replayed.code !== 0 || replayed.stdout.trim() !== await checked(["rev-parse", `${landing}^{tree}`])) return false;
     const patch = async (from: string, to: string, name: string) => {
       const file = path.join(scratch, name);
@@ -39,13 +43,18 @@ async function patchPresent(repoDir: string, head: string, landing: string, base
         .filter((line) => !line.startsWith("index "))
         .map((line) => line.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/, "@@")).join("\n") };
     };
-    const expectedReverse = await patch(landing, parents[1]!, "expected-reverse.diff");
+    const reverseBase = allowCompanions ? head : landing;
+    const reverseParent = allowCompanions ? fork : firstParent;
+    const expectedReverse = await patch(reverseBase, reverseParent, "expected-reverse.diff");
     if (!expectedReverse.signature.trim()) return false;
-    const reversed = await git(["-c", "merge.renames=false", "merge-tree", "--write-tree", "--no-messages", `--merge-base=${landing}`, base, parents[1]!]);
-    if (reversed.code !== 0) return false;
-    const tree = reversed.stdout.trim();
-    if (!/^[0-9a-f]{40}$/i.test(tree)) return false;
-    return (await patch(base, tree, "current-reverse.diff")).signature === expectedReverse.signature;
+    for (const base of new Set(bases)) {
+      const reversed = await git(["-c", "merge.renames=false", "merge-tree", "--write-tree", "--no-messages", `--merge-base=${reverseBase}`, base, reverseParent]);
+      if (reversed.code !== 0) return false;
+      const tree = reversed.stdout.trim();
+      if (!/^[0-9a-f]{40}$/i.test(tree)
+        || (await patch(base, tree, "current-reverse.diff")).signature !== expectedReverse.signature) return false;
+    }
+    return true;
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
@@ -78,10 +87,98 @@ export async function readBatchLanding(repository: string, number: number, base:
     // A rebased batch contains one commit per lane. Ancestry alone also
     // admits a reverted patch or a receipt for an older PR head.
     if (await ancestor(commit, tip) && await ancestor(tip, baseTip)
-      && await patchPresent(reviewed.repoDir, reviewed.head, commit, baseTip)) {
+      && await patchPresent(reviewed.repoDir, reviewed.head, commit, [baseTip])) {
       const current = (await run(["api", `repos/${repository}/branches/${encodeURIComponent(base)}`, "--jq", ".commit.sha"])).trim();
       if (current === baseTip) return { commit, mergedAt: batch.mergedAt ?? null };
     }
   }
   return null;
+}
+
+export type CarriedBranchLanding = { state: "waiting"; batch?: number; commit?: string; after?: string; unproven?: true }
+  | { state: "landed"; batch: number; mergedAt: string; commit: string };
+
+type Carrier = {
+  number?: number; state?: string; merged_at?: string | null; merge_commit_sha?: string | null;
+  base?: { ref?: string };
+};
+export type CarriedLandingHint = { commit?: string; after?: string; carrier?: Carrier };
+
+/** Verify the reviewed patch in the carrier merge and at the current base tip.
+ * The work merge supplies a commit for an associated carrier. A locally
+ * squashed work PR supplies commit hints in comments. Contents reads use a
+ * separate App permission. */
+export async function readCarriedBranchLanding(repository: string, number: number, base: string,
+  reviewed: { head: string; repoDir: string } & CarriedLandingHint, issueRead: GithubRunner, contentsRead: GithubRunner,
+  fetchEnv: Partial<NodeJS.ProcessEnv> = {}): Promise<CarriedBranchLanding> {
+  if (!/^[0-9a-f]{40}$/i.test(reviewed.head)) throw new Error("Reviewed batch head is unavailable");
+  if (typeof base !== "string" || !base) throw new Error("Batch default branch is unavailable");
+  const preferred = reviewed.commit && /^[0-9a-f]{40}$/i.test(reviewed.commit) ? reviewed.commit.toLowerCase() : undefined;
+  if (reviewed.carrier && !preferred) throw new Error("Batch work merge commit is invalid");
+  let all: string[] = [];
+  if (!reviewed.carrier) {
+    const raw = await issueRead(["api", `repos/${repository}/issues/${number}/comments?per_page=100`, "--paginate", "--jq", ".[] | {body} | @json"]);
+    const comments = raw.split("\n").filter(line => line.trim()).map(line => JSON.parse(line) as { body?: unknown });
+    all = [...new Set(comments.reverse().flatMap(comment => {
+      if (typeof comment.body !== "string") return [];
+      return [...comment.body.matchAll(/\b[0-9a-f]{40}\b/gi)].map(match => match[0].toLowerCase());
+    }))];
+  }
+  const cursor = reviewed.after ? all.indexOf(reviewed.after) + 1 : 0;
+  const start = cursor >= all.length ? 0 : cursor;
+  const page = all.slice(start, start + (preferred ? 4 : 5));
+  const candidates = [...new Set([...(preferred ? [preferred] : []), ...page])];
+  const after = start + page.length < all.length ? page.at(-1) : undefined;
+  const baseTip = async () => {
+    const value = (await contentsRead(["api", `repos/${repository}/branches/${encodeURIComponent(base)}`, "--jq", ".commit.sha"])).trim();
+    if (!/^[0-9a-f]{40}$/i.test(value)) throw new Error("Batch default tip is unavailable");
+    return value;
+  };
+  const ancestor = async (sha: string, target: string) => {
+    if (sha === target) return true;
+    const value = JSON.parse(await contentsRead(["api", `repos/${repository}/compare/${sha}...${target}?per_page=1`, "--jq", "{status, merge_base_commit:{sha:.merge_base_commit.sha}}"]));
+    return ["ahead", "identical"].includes(value.status) && value.merge_base_commit?.sha === sha;
+  };
+  if (!candidates.length) return { state: "waiting" };
+  // Establish App read authority before Git may fetch a missing object.
+  const current = await baseTip();
+  let waitingBatch: number | undefined;
+  let provenCommit: string | undefined;
+  let unproven = false;
+  let openCarrier: { batch: number; commit: string } | undefined;
+  for (const commit of candidates) {
+    // Arbitrary comments can contain nonexistent or unrelated commit ids.
+    // Establish a carrier before fetching Git objects for a hint.
+    let carriers: Carrier[] = reviewed.carrier ? [reviewed.carrier] : [];
+    if (!reviewed.carrier) {
+      try { carriers = JSON.parse(await issueRead(["api", `repos/${repository}/commits/${commit}/pulls?per_page=100`])); }
+      catch (error) {
+        if (/\b404\b/.test(String((error as { stderr?: unknown })?.stderr ?? error))) continue;
+        throw error;
+      }
+    }
+    if (!Array.isArray(carriers)) throw new Error("Batch carrier list is unavailable");
+    if (!carriers.some(carrier => carrier.number !== number && carrier.base?.ref === base
+      && (carrier.state === "open" || carrier.merged_at))) continue;
+    if (!await patchPresent(reviewed.repoDir, reviewed.head, commit, [commit], true, fetchEnv)) continue;
+    provenCommit ??= commit;
+    for (const carrier of carriers) {
+      const batch = carrier.number;
+      if (typeof batch !== "number" || !Number.isSafeInteger(batch) || batch <= 0 || batch === number
+        || carrier.base?.ref !== base) continue;
+      if (!carrier.merged_at) {
+        if (carrier.state === "open") openCarrier ??= { batch, commit };
+        continue;
+      }
+      const tip = carrier.merge_commit_sha;
+      if (carrier.state !== "closed" || !Number.isFinite(Date.parse(carrier.merged_at)) || !tip || !/^[0-9a-f]{40}$/i.test(tip)) throw new Error("Batch carrier is invalid");
+      unproven = true;
+      waitingBatch = batch; provenCommit = commit;
+      if (await ancestor(commit, tip) && await ancestor(tip, current)
+        && await patchPresent(reviewed.repoDir, reviewed.head, commit, [tip, current], true, fetchEnv)
+        && await baseTip() === current) return { state: "landed", batch, mergedAt: carrier.merged_at, commit };
+    }
+  }
+  if (openCarrier) return { state: "waiting", ...openCarrier, ...(after ? { after } : {}) };
+  return { state: "waiting", ...(waitingBatch ? { batch: waitingBatch } : {}), ...(provenCommit ? { commit: provenCommit } : {}), ...(after ? { after } : {}), ...(unproven ? { unproven: true } : {}) };
 }

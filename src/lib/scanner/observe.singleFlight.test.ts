@@ -6,15 +6,13 @@ import path from "node:path";
 /**
  * The completed scanner projection at production shape (#845).
  *
- * `operator_snapshot` and `/api/agent/snapshot` both walk the whole corpus through
- * `observeFiles`, and it used to walk once per CALLER. Twenty concurrent warm
- * control-plane reads therefore meant twenty full walks racing each other and the
- * coordinator's own scan generation — and a client that gave up left its walk
- * running against files nobody would read.
+ * `operator_snapshot` and `/api/agent/snapshot` share the completed scanner
+ * generation. The probe checks that concurrent `completedFileScan` readers
+ * reuse the warm generation and receive separate file arrays.
  *
  * ## Isolation, and why it needs proving rather than asserting
  *
- * The scanner resolves three roots, and only two of them follow HOME. The
+ * The scanner resolves account roots that can override HOME. The
  * `claude-tasks` root is `<CLAUDE_CODE_TMPDIR or tmpdir>/claude-<uid>`, Claude Code's
  * own rule — so a fixture that set HOME but inherited the operator's TMPDIR (or a
  * CLAUDE_CODE_TMPDIR) would quietly walk the operator's real background-task outputs,
@@ -116,7 +114,6 @@ interface ProbeResult {
   files: number;
   projects: number;
   entriesWithPid: number;
-  entriesWithPaneTarget: number;
   claudeTaskEntries: number;
   afterWarm: number;
   afterConcurrent: number;
@@ -131,17 +128,27 @@ interface ProbeResult {
 }
 
 async function runProbe(sandbox: Fixture): Promise<ProbeResult> {
+  const codexHome = path.join(sandbox.home, ".codex");
+  const claudeHome = path.join(sandbox.home, ".claude");
   const child = Bun.spawn(["bun", "src/lib/scanner/observe.probe.ts"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      /* Isolated on every axis the scanner, the state layer and the pane resolver
-         read. TMPDIR is what moves the `claude-tasks` root off the live one, and an
-         inherited CLAUDE_CODE_TMPDIR would outrank it, so it is cleared. */
+      /* The probe can load the public aliases before resolving scanner roots.
+         Set both spellings so the runner's account homes cannot take precedence. */
       HOME: sandbox.home,
+      USERPROFILE: sandbox.home,
+      LLV_CODEX_HOME: codexHome,
+      DELEGATUS_CODEX_HOME: codexHome,
+      LLV_CLAUDE_HOME: claudeHome,
+      DELEGATUS_CLAUDE_HOME: claudeHome,
+      COPILOT_HOME: path.join(sandbox.home, ".copilot"),
+      OPENCLAW_STATE_DIR: path.join(sandbox.home, ".openclaw"),
       XDG_CONFIG_HOME: sandbox.config,
       LLV_STATE_DIR: sandbox.state,
+      DELEGATUS_STATE_DIR: sandbox.state,
       TMPDIR: sandbox.tmp,
+      /* Clear this override so the tasks root follows the fixture's TMPDIR. */
       CLAUDE_CODE_TMPDIR: "",
       TMUX_TMPDIR: path.join(sandbox.tmp, "tmux"),
       /* The scheme window exists to keep the BOARD bounded; here it would trim the
@@ -162,16 +169,16 @@ async function runProbe(sandbox: Fixture): Promise<ProbeResult> {
 
 function expectFullyIsolated(result: ProbeResult, sandbox: Fixture): void {
   expect(result.error).toBeUndefined();
-  /* Every root, not just the two that follow HOME. */
+  /* Every resolved transcript and task root must be inside the fixture. */
   expect(result.roots.length).toBeGreaterThanOrEqual(3);
-  for (const { root } of result.roots) expect(root.startsWith(sandbox.home + path.sep)).toBe(true);
+  const outsideFixture = result.roots.filter(({ root }) => !root.startsWith(sandbox.home + path.sep));
+  expect(outsideFixture.map(({ key }) => key)).toEqual([]);
   expect(result.claudeTasksRoot).toBe(sandbox.claudeTasks);
   /* The live root, named explicitly so this fails loudly if it is ever selected. */
   expect(result.claudeTasksRoot).not.toBe(`/tmp/claude-${process.getuid?.() ?? 0}`);
   /* Nothing on the machine holds a fixture transcript open, so the fd-holder scan
      attributed no pid and the pane resolver was never reached. */
   expect(result.entriesWithPid).toBe(0);
-  expect(result.entriesWithPaneTarget).toBe(0);
   /* And the isolated task root really is empty, so `outputHolders()` — the scan that
      walks fds UNDER that root — never ran. */
   expect(result.claudeTaskEntries).toBe(0);

@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants, existsSync } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import net from "node:net";
 import { constants, homedir, networkInterfaces } from "node:os";
 import { join, posix, resolve, win32 } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
+import { probeBind, RUNTIME_HOST_STARTUP_CEILING_MS } from "./launcher-deadline.mjs";
 
 export const RUNTIME_HOST_STARTUP_SILENCE_MS = 30_000;
-export const RUNTIME_HOST_STARTUP_CEILING_MS = 300_000;
+export { RUNTIME_HOST_STARTUP_CEILING_MS };
 
 // Read one candidate's existing startup record, never the shared journal or
 // every startup file. Timestamps and repeated output do not prove progress.
@@ -394,19 +394,7 @@ export function classifyBindProbeFailure(error, platform = process.platform) {
  * @returns {Promise<void>}
  */
 export function attemptAddressBind(address, port) {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer((socket) => {
-      // A connection landing inside the probe's window must not reach the
-      // process as an unhandled `error`. The probe answers about an address; it
-      // never serves anything.
-      socket.on("error", () => {});
-      socket.destroy();
-    });
-    server.once("error", reject);
-    server.listen({ host: address, port, exclusive: true }, () => {
-      server.close((error) => error ? reject(error) : resolve());
-    });
-  });
+  return probeBind({ host: address, port, exclusive: true });
 }
 
 /**

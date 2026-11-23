@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { spawn, type ChildProcess } from "node:child_process";
-import { fixtureReport } from "@/lib/testing/fixtureProcess";
+import { fixtureReport, ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -17,7 +17,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
  *  - a runtime host generation: `src/runtime-host/main.ts` under `bun run`, on
  *    a private socket in a private state directory. Every Viewer generation
  *    below talks to it over that socket, as the Viewer container does.
- *  - Viewer generations: `fixtures/stageHostGeneration.ts` under `bun run`,
+ *  - Viewer generations: `fixtures/generationCloseHost.ts` under `bun run`,
  *    one process per generation. The incumbent runs the product's spawn
  *    writers and records itself as the claim owner; a successor runs the
  *    product's `adoptStructuredHostsAtStartup` with only the CLI launch
@@ -71,6 +71,7 @@ const { defaultPipelinePorts, drainStageActivations, patchPipeline, stopPipeline
 const { registerPipelineTick } = await import("./controllerSignal");
 const { PATCH } = await import("@/app/api/pipelines/[id]/route");
 type Pipeline = import("./types").Pipeline;
+registerPipelineTick(async () => {});
 
 // Direct scheduler observations run as the controller. HTTP close calls keep
 // the caller's sidecar shape and still cross the real transport above.
@@ -81,11 +82,12 @@ async function tickPipelines(...args: Parameters<typeof engineTickPipelines>) {
 }
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
-const generationFixture = path.join(import.meta.dir, "fixtures", "stageHostGeneration.ts");
+const generationFixture = path.join(import.meta.dir, "fixtures", "generationCloseHost.ts");
 const runtimeSocket = path.join(isolated, "runtime-host.sock");
 const generationEnvironment: Record<string, string | undefined> = {
   PATH: process.env.PATH,
   ...isolatedEnvironment,
+  LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
   LLV_STRUCTURED_HOSTS: "1",
   LLV_RUNTIME_HOST_SOCKET: runtimeSocket,
   LLV_RUNTIME_JOURNAL: path.join(isolated, "runtime-events.sqlite"),
@@ -171,7 +173,7 @@ const signals: Array<{ pid: number; signal: string | number | undefined }> = [];
 beforeEach(() => {
   signals.length = 0;
   process.kill = ((pid: number, signal?: string | number) => {
-    signals.push({ pid, signal });
+    if (signal !== 0) signals.push({ pid, signal });
     return realKill.call(process, pid, signal as NodeJS.Signals);
   }) as typeof process.kill;
 });
@@ -179,6 +181,7 @@ afterEach(async () => {
   process.kill = realKill;
   setAgentRegistryForTests(null);
   for (const created of tracked.splice(0)) await created.end();
+  savePipelines([]);
 });
 
 function signalsTo(pid: number) {
@@ -210,16 +213,24 @@ type AdoptReport = {
     line, so a generation that completes a later pass is read the same way. */
 type Generation<Report> = Tracked & { report: Report; reports: Report[] };
 
-function generation<Report extends { generation: ProcessIdentity }>(
-  mode: "spawn" | "adopt",
+function startGeneration(
+  mode: "spawn" | "adopt" | "pending",
   lane: { registryPath: string; directory: string },
   hostShape: "single" | "tree" = "single",
-): Promise<Generation<Report>> {
-  const child: ChildProcess = spawn(process.execPath, ["run", generationFixture, mode, lane.registryPath, lane.directory, hostShape], {
+): ChildProcess {
+  return ownFixtureTree(spawn(process.execPath, ["run", generationFixture, mode, lane.registryPath, lane.directory, hostShape], {
     cwd: repoRoot,
     env: { ...generationEnvironment, NODE_ENV: "test", LLV_FIXTURE_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) },
     stdio: ["ignore", "pipe", "pipe"],
-  });
+  }));
+}
+
+function generation<Report extends { generation: ProcessIdentity }>(
+  mode: "spawn" | "adopt" | "pending",
+  lane: { registryPath: string; directory: string },
+  hostShape: "single" | "tree" = "single",
+): Promise<Generation<Report>> {
+  const child = startGeneration(mode, lane, hostShape);
   if (child.pid === undefined) throw new Error("generation did not start");
   const pid = child.pid;
   const created = track(pid);
@@ -378,6 +389,14 @@ function pipelineRecord(id: string): Pipeline {
   return record;
 }
 
+const ownershipReads = new Set([
+  "git rev-parse --path-format=absolute --git-common-dir",
+  "git branch --show-current",
+]);
+function expectOnlyOwnershipReads(commands: string[]): void {
+  expect(commands.filter(command => !ownershipReads.has(command))).toEqual([]);
+}
+
 /* ---------- the transport: a loopback listener serving the real route ---------- */
 
 type CloseReport = {
@@ -407,7 +426,7 @@ afterAll(() => { listener.stop(true); });
 
 /** PATCH /api/pipelines/<id> {action:"close"} over HTTP, from a same-origin
     caller, answered by the real handler with default ports. */
-async function closeOverHttp(id: string): Promise<CloseAnswer> {
+async function closeOverHttp(id: string, expectedStatus: "pending" | "settled" = "pending"): Promise<CloseAnswer> {
   const response = await fetch(`http://127.0.0.1:${listener.port}/api/pipelines/${id}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
@@ -415,7 +434,7 @@ async function closeOverHttp(id: string): Promise<CloseAnswer> {
   });
   const body = await response.json() as { error?: string; close?: CloseReport };
   expect(response.status).toBe(200);
-  expect(body.close).toMatchObject({ status: "pending" });
+  expect(body.close).toMatchObject({ status: expectedStatus });
   await drainStageActivations(defaultPipelinePorts());
   return { status: response.status, ...body, close: pipelineRecord(id).closeReport };
 }
@@ -454,7 +473,7 @@ test("incident: a stage host re-hosted by a successor generation is ended by a c
   expect(next.report.adopted.map((item) => item.key)).toEqual([sessionKeyId(current.key)]);
   const hostB = tracked.find((item) => item.pid === next.report.adopted[0]!.host.pid)!;
   expect(current.hostedBy()).toEqual(next.report.adopted[0]!.host);
-  expect(current.entry()).toMatchObject({ status: "live", claimOwner: `structured-host:${JSON.stringify(next.identity)}` });
+  expect(current.entry()).toMatchObject({ status: "idle", claimOwner: `structured-host:${JSON.stringify(next.identity)}` });
   expect(next.alive()).toBeTrue();
   const other = bystander();
   const before = structuredClone(pipelineRecord(pipeline.id).runs);
@@ -812,16 +831,22 @@ test("a row rebound to another process while the termination awaits the runtime 
 
   const closed = await closeWithTermination(pipeline.id, {
     terminateOwnedHost: async () => {
-      /* Another writer re-hosts the conversation during the await: the row
-         now names a process this close was never authorized for. */
+      /* Current writers refuse rebinding captured custody. Model an older
+         external writer replacing the row while this close is suspended. */
       const claimed = current.entry()!;
-      current.registry.setStructuredHostClaimed(
+      expect(current.registry.setStructuredHostClaimed(
         current.key,
         { ...claimed.structuredHost!, endpoint: `stdio:${replacement.pid}`, process: replacement.identity },
         "live",
         claimed.claimOwner!,
         claimed.claimEpoch,
-      );
+      )).toBeNull();
+      const snapshot = structuredClone(current.registry.readOnlySnapshot());
+      snapshot.entries[sessionKeyId(current.key)]!.structuredHost = {
+        ...claimed.structuredHost!, endpoint: `stdio:${replacement.pid}`, process: replacement.identity,
+      };
+      fs.writeFileSync(current.registryPath, JSON.stringify(snapshot));
+      expect(current.hostedBy()).toEqual(replacement.identity);
       return false;
     },
   });
@@ -891,7 +916,7 @@ test("a row naming a pid in this process's own ancestry is refused without a sig
   expect(signals).toEqual([]);
 });
 
-test("with a control channel present the runtime path answers and the identity path is never entered (#1501)", async () => {
+test.each([false, true])("runtime delivery requires positive host death before reporting stopped (ended=%s) (#1501)", async (ended) => {
   const current = await lane();
   let terminations = 0;
 
@@ -899,16 +924,22 @@ test("with a control channel present the runtime path answers and the identity p
     { stageId: "build", attempt: 1, conversationId: current.conversationId, agentPath: current.transcriptPath, paneId: null, launchId: current.launchId },
     {
       /* A kill the runtime accepted and settled: what the Viewer process sees. */
-      action: async () => ({ status: 200, body: { ok: true, structured: true, operationId: "op-1", receipt: { status: "delivered" } } }),
+      action: async () => {
+        if (ended) await current.hostA.end();
+        return { status: 200, body: { ok: true, structured: true, operationId: "op-1", receipt: { status: "delivered" } } };
+      },
+      budgetMs: 0,
       termination: { signal: () => { terminations += 1; } },
     },
   );
 
-  expect(result).toEqual({ outcome: "stopped" });
+  expect(result).toEqual(ended ? { outcome: "stopped" } : {
+    outcome: "unconfirmed", operationId: "op-1", detail: "kill accepted as delivered but termination was not confirmed",
+  });
   expect(terminations).toBe(0);
   expect(signals).toEqual([]);
-  expect(current.hostA.alive()).toBeTrue();
-  expect(processIdentityStatus(current.hostA.identity)).toBe("alive");
+  expect(current.hostA.alive()).toBe(!ended);
+  expect(processIdentityStatus(current.hostA.identity)).toBe(ended ? "dead" : "alive");
 });
 
 
@@ -957,6 +988,7 @@ test("successor partial stop merges an earlier generation's late survivor eviden
   const survivorA = current.descendant!;
   const pipeline = pipelineFor(current);
   const beforeFirstClose = pipelineRecord(pipeline.id);
+  const beforeFirstCapture = structuredClone(current.registry.readOnlySnapshot());
   const first = await closeWithTermination(pipeline.id, {
     signal: (pid, value) => {
       if (pid === survivorA.pid) throw Object.assign(new Error("refused"), { code: "EPERM" });
@@ -972,6 +1004,9 @@ test("successor partial stop merges an earlier generation's late survivor eviden
   // Restore the real earlier snapshot: removing only the mutable attempt's
   // evidence leaves the already-published frozen close custody in place.
   savePipelines(loadPipelines().map((record) => record.id === pipeline.id ? beforeFirstClose : record));
+  // Both authorities must show the earlier cut: a published registry capture
+  // correctly refuses adoption even if only the pipeline row was restored.
+  fs.writeFileSync(current.registryPath, JSON.stringify(beforeFirstCapture));
   await current.incumbent.end();
   holdWork(current);
   const adopted = await successor(current);
@@ -993,7 +1028,9 @@ test("successor partial stop merges an earlier generation's late survivor eviden
   await adopted.end();
   const rebooted = await successor(current);
   expect(rebooted.report.adopted).toEqual([]);
-  expect(rebooted.report.deferred).not.toBeNull();
+  expect(rebooted.report.deferred).toBeNull();
+  expect(current.hostedBy()).toBeNull();
+  expect(pipelineRecord(pipeline.id).runs[0]!.attempts[0]!.unresolvedTermination?.survivors).toEqual([survivorA.identity]);
   signals.length = 0;
   expect((await closeOverHttp(pipeline.id)).status).toBe(200);
   expect(signals).toEqual([]);
@@ -1078,13 +1115,10 @@ test("a deferred lane completes the boot once: an unrelated pending launch is re
   const before = current.entry()!;
   /* Conversation B: a launch an earlier generation accepted and never carried
      to a host — the receipt startup's pending-spawn recovery owes a verdict. */
-  const pending = current.registry.beginSpawnRequest({
-    engine: "claude", cwd: current.directory, transport: "structured", accountId: null,
-    launchProfile: { title: "unrelated pending launch" },
-  });
-  if (pending.kind !== "created") throw new Error("pending launch receipt was unavailable");
-  const receiptB = () => current.registry.readOnlySnapshot().receipts[pending.receipt.launchId]!;
+  const pending = await generation<{ generation: ProcessIdentity; launchId: string }>("pending", current);
+  const receiptB = () => current.registry.readOnlySnapshot().receipts[pending.report.launchId]!;
   expect(receiptB().state).toBe("starting");
+  await pending.end();
   fs.writeFileSync(path.join(current.directory, "startup-reprobe"), "live");
 
   const booted = await successor(current);
@@ -1114,7 +1148,7 @@ test("a deferred lane completes the boot once: an unrelated pending launch is re
   expect(admitted.passes).toBe(2);
   expect(admitted.adopted.map((item) => item.key)).toEqual([sessionKeyId(current.key)]);
   expect(admitted.published).toEqual([sessionKeyId(current.key)]);
-  expect(current.entry()).toMatchObject({ status: "live", claimOwner: `structured-host:${JSON.stringify(booted.identity)}` });
+  expect(current.entry()).toMatchObject({ status: "idle", claimOwner: `structured-host:${JSON.stringify(booted.identity)}` });
   expect(current.hostedBy()).toEqual(admitted.adopted[0]!.host);
   expect(booted.alive()).toBeTrue();
   expect((await closeOverHttp(pipeline.id)).status).toBe(200);
@@ -1275,7 +1309,7 @@ test("startup rereads after transcript refresh and defers a concurrently persist
   expect((await successor(current)).report.adopted).toHaveLength(1);
 });
 
-test("startup admission holds the pipeline lease until its replacement is published (#1501)", async () => {
+test("startup releases admission during replacement preparation and preserves explicitly owed work after a close (#1501)", async () => {
   const current = await lane();
   const pipeline = pipelineFor(current);
   await loseIncumbent(current);
@@ -1287,12 +1321,20 @@ test("startup admission holds the pipeline lease until its replacement is publis
   let closeSettled = false;
   const close = closeOverHttp(pipeline.id).then((value) => { closeSettled = true; return value; });
   await Bun.sleep(100);
-  expect(closeSettled).toBeFalse();
+  expect((await close).status).toBe(200);
+  expect(closeSettled).toBeTrue();
+  expect(processIdentityStatus(current.hostedBy()!)).toBe("dead");
   fs.writeFileSync(`${barrier}.release`, "continue");
   const booted = await boot;
   expect(booted.report.adopted).toHaveLength(1);
-  expect((await close).status).toBe(200);
-  expect(processIdentityStatus(booted.report.adopted[0]!.host)).toBe("dead");
+  expect(booted.report.published).toEqual([sessionKeyId(current.key)]);
+  expect(pipelineRecord(pipeline.id).state).toBe("closed");
+  const frozen = structuredClone(pipelineRecord(pipeline.id).closeTeardown!.hosts);
+  signals.length = 0;
+  expect((await closeOverHttp(pipeline.id, "settled")).status).toBe(200);
+  expect(pipelineRecord(pipeline.id).closeTeardown!.hosts).toEqual(frozen);
+  expect(signalsTo(booted.report.adopted[0]!.host.pid)).toEqual([]);
+  expect(processIdentityStatus(booted.report.adopted[0]!.host)).toBe("alive");
 });
 
 test.each(["retry-stage", "skip-stage"] as const)("%s checks older attempt survivors before any reset or advancement (#1501)", async (action) => {
@@ -1355,18 +1397,47 @@ test("ticks defer worktree provisioning until an earlier partial tree is positiv
   const commands: string[] = [];
   const ports = { ...defaultPipelinePorts(), exec: (command: string, args: string[]) => {
     commands.push([command, ...args].join(" "));
+    if (command === "git" && args[0] === "branch") return { code: 0, stdout: `${pipeline.branch}\n`, stderr: "" };
+    if (command === "git" && args[0] === "rev-parse") {
+      return { code: 0, stdout: `${path.join(current.directory, ".git")}\n`, stderr: "" };
+    }
     return { code: 1, stdout: "", stderr: "controlled command boundary" };
   } };
   await tickPipelines([], ports);
-  expect(commands).toEqual([]);
+  expectOnlyOwnershipReads(commands);
   expect(pipelineRecord(pipeline.id).state).toBe("provisioning");
   expect(survivor.alive()).toBeTrue();
+  commands.length = 0;
   await survivor.end();
   await tickPipelines([], ports);
-  expect(commands.length).toBeGreaterThan(0);
+  expect(commands.filter(command => !ownershipReads.has(command)).length).toBeGreaterThan(0);
 });
 
-test.each(["{broken", JSON.stringify({ runs: [] })])("malformed archive %s defers startup and recovers on a successful reread (#1501)", async (corrupt) => {
+test("readiness timeout reaps an adopted host before its first report", async () => {
+  const current = await lane();
+  await loseIncumbent(current);
+  holdWork(current);
+  const other = bystander();
+  const barrier = path.join(current.directory, "startup-pause-report");
+  fs.writeFileSync(barrier, "pause");
+  const child = startGeneration("adopt", current);
+  const root = track(child.pid!);
+  try {
+    await settles(() => fs.existsSync(`${barrier}.reached`), "adopted host before first report", 6000);
+    const identity = current.hostedBy()!;
+    expect(identity.pid).not.toBe(current.hostA.pid);
+    const host = track(identity.pid, identity);
+    expect(host.alive()).toBeTrue();
+    await expect(fixtureReport(child, "stalled adoption report", [], 100)).rejects.toThrow("stalled adoption report did not report within 100ms");
+    expect(root.alive()).toBeFalse();
+    expect(host.alive() && !procBackend.processExited(host.pid)).toBeFalse();
+    expect(other.alive()).toBeTrue();
+  } finally {
+    await stopFixtureTree(child);
+  }
+}, 40_000);
+
+test.each(["{broken", JSON.stringify({ runs: [] }), "invalid-runs"])("malformed archive %s defers startup and recovers on a successful reread (#1501)", async (shape) => {
   const current = await lane();
   const pipeline = pipelineFor(current);
   pipeline.state = "closed";
@@ -1383,6 +1454,8 @@ test.each(["{broken", JSON.stringify({ runs: [] })])("malformed archive %s defer
   const db = new Database(path.join(isolatedEnvironment.LLV_STATE_DIR, "state.sqlite"));
   const row = db.query("SELECT value_json FROM state_rows WHERE collection='pipelines_archive' AND row_key=?").get(pipeline.id) as { value_json: string };
   expect(row).not.toBeNull();
+  // Preserve both original payloads, including the row whose id is missing.
+  const corrupt = shape === "invalid-runs" ? JSON.stringify({ ...pipeline, runs: "unreadable" }) : shape;
   db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines_archive' AND row_key=?").run(corrupt, pipeline.id);
   try {
     for (const pending of [false, true]) {
@@ -1502,6 +1575,8 @@ test.each(["pass", "fail"] as const)("late %s verdict recovery waits for every r
   const commands: string[] = [];
   const ports = { ...defaultPipelinePorts(), exec: (command: string, args: string[]) => {
     commands.push([command, ...args].join(" "));
+    if (command === "git" && args[0] === "branch") return { code: 0, stdout: `${pipeline.branch}\n`, stderr: "" };
+    if (command === "git" && args[0] === "rev-parse" && args.includes("--git-common-dir")) return { code: 0, stdout: `${path.join(current.directory, ".git")}\n`, stderr: "" };
     return { code: 1, stdout: "", stderr: "controlled publication boundary" };
   } };
   expect((await ports.durableTurnEvidence("claude", current.transcriptPath))?.turn).toBe("terminal");
@@ -1520,20 +1595,21 @@ test.each(["pass", "fail"] as const)("late %s verdict recovery waits for every r
     expect(after.runs[0]!.attempts[0]!.verdict).toBeNull();
     expect(after.runs[0]!.attempts[0]!.verdictRecovery).toEqual(before.runs[0]!.attempts[0]!.verdictRecovery);
     expect(after.runs[0]!.attempts[0]!.unresolvedTermination).toEqual(before.runs[0]!.attempts[0]!.unresolvedTermination);
-    expect(commands).toEqual([]);
+    expectOnlyOwnershipReads(commands);
     expect(signals).toEqual([]);
     expect(survivor.alive()).toBeTrue();
   }
+  commands.length = 0;
   await survivor.end();
   await tickPipelines([], ports);
   const recovered = pipelineRecord(pipeline.id);
   expect(recovered.runs[0]!.attempts[0]!.verdict?.status).toBe(status);
   expect(recovered.runs[0]!.attempts[0]!.unresolvedTermination).toBeUndefined();
   if (status === "fail") expect(recovered.cursor?.stageId).toBe("recover");
-  else expect(commands.length).toBeGreaterThan(0);
+  else expect(commands.filter(command => !ownershipReads.has(command)).length).toBeGreaterThan(0);
 });
 
-test("bound flow recovery keeps evidence synchronization but defers resume until positive death (#1501)", async () => {
+test("retired bound flow preserves archived synchronization and never resumes after survivor death (#1501)", async () => {
   const current = await lane("tree");
   const pipeline = pipelineFor(current);
   const survivor = current.descendant!;
@@ -1556,6 +1632,11 @@ test("bound flow recovery keeps evidence synchronization but defers resume until
   record.stages[0]!.next = "review";
   record.runs.push({ stageId: "review", attempts: [{ ...structuredClone(record.runs[0]!.attempts[0]!),
     effectiveRole: record.stages[1]!.effectiveRole, state: "needs_decision", flowId: "survivor-flow", unresolvedTermination: undefined,
+    reviewFlowSync: {
+      generation: "archived-generation", roundCount: 1, implementerHeadSha: null, reviewerHeadSha: null,
+      verdict: "REQUEST_CHANGES", relayState: "paused", terminalState: null,
+      synchronizedAt: NOW(), sourceUpdatedAt: null, lagMs: null,
+    },
     error: `review flow paused in relaying: ${error}` }] });
   record.runs[0]!.attempts[0]!.state = "passed";
   record.cursor = { stageId: "review", state: "reviewing", input: null, activatedBy: null };
@@ -1594,10 +1675,12 @@ test("bound flow recovery keeps evidence synchronization but defers resume until
     expect(signals).toEqual([]);
     expect(survivor.alive()).toBeTrue();
   }
+  const beforeDeath = pipelineRecord(pipeline.id);
   await survivor.end();
   await tickPipelines([], ports);
-  expect(patches).toEqual([`${flow.id}:resume`]);
-  expect(pipelineRecord(pipeline.id).state).toBe("running");
+  expect(patches).toEqual([]);
+  expect(pipelineRecord(pipeline.id)).toEqual(beforeDeath);
+  expect(await patchPipeline(pipeline.id, { action: "retry-stage" }, ports)).toMatchObject({ code: "STAGE_KIND_RETIRED", status: 410 });
 });
 
 test.each(["pipelines.json", "pipelines-archive.json"])("null legacy %s defers startup without migration and recovers on reread (#1501)", async (filename) => {
@@ -1621,7 +1704,11 @@ test.each(["pipelines.json", "pipelines-archive.json"])("null legacy %s defers s
       expect(blocked.report.deferred).not.toBeNull();
       expect(current.entry()).toEqual(before);
       expect(fs.readFileSync(file, "utf8")).toBe("null");
-      expect(fs.existsSync(path.join(legacy, "state.sqlite"))).toBeFalse();
+      const database = new Database(path.join(legacy, "state.sqlite"), { readonly: true });
+      try {
+        expect(database.query("SELECT collection FROM state_collections WHERE collection IN ('pipelines', 'pipelines_archive')").all()).toEqual([]);
+        expect(database.query("SELECT row_key FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive')").all()).toEqual([]);
+      } finally { database.close(); }
       await blocked.end();
     }
     const { PIPELINES_SCHEMA_VERSION } = await import("./store");

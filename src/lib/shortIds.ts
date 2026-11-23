@@ -38,7 +38,9 @@ export function shortenHashesInText(text: string): string {
 }
 
 const authored = new Set(["text", "details", "body", "prompt", "spec", "summary", "findings", "snippet", "content", "comment", "answer", "title", "task", "clientRequestId", "idempotencyKey",
-  "cursor", "nextCursor", "next_cursor", "page_of"]);
+  "cursor", "nextCursor", "next_cursor", "page_of",
+  // References can be external provenance without a supported prefix lookup.
+  "ref"]);
 const status = new Set(["stateDetail", "error", "detail"]);
 export function shortIdsInAnswer<T>(payload: T): T {
   const seen = new WeakMap<object, unknown>();

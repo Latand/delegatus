@@ -254,7 +254,7 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
-  reminderKind?: "task" | "pause" | "overdue";
+  reminderKind?: "task" | "pause" | "overdue" | "waiting";
   occurredAt?: string | null;
   /** Journal identity of a merge this visible line announces on delivery. */
   mergeEventSeq?: number;
@@ -306,7 +306,7 @@ export interface SeatTickItem {
   manifestLine?: string;
   /** Only on a `deploy` line (#2063): the settled deployment as the ledger
       records it. `id` is its deployment id. */
-  maintenance?: { runId: string };
+  maintenance?: { runId: string; page: number; pages: number };
   deploy?: { deploymentId: string; phase: string; sha: string; error: string | null };
 }
 
@@ -362,6 +362,8 @@ export type SeatTickVerdict =
     items: SeatTickItem[];
     /** Every lane the board routes to the seat, independent of detail credit. */
     seatOwnedLanes?: SeatTickSeatOwnedLane[];
+    taskPage?: SeatTickTaskPage;
+    formPage?: SeatTickFormPage;
     /** Current stall episodes let a landed wake retire stale episode history
         without evicting an unchanged conversation behind unrelated wakes. */
     activeStallTokens?: string[];
@@ -386,7 +388,7 @@ export type SeatTickVerdict =
     reportLines?: string[];
   }
   /** No work, and the proposal slot is due. */
-  | { kind: "proactive"; detail: string }
+  | { kind: "proactive"; detail: string; formPage?: SeatTickFormPage }
   /**
    * The check could not establish that nothing is owed, and nothing else was
    * owed either.
@@ -612,6 +614,22 @@ export interface SeatTickOwnLaneInput {
       open pipelines on the task (#2187 §5.3), so a seat that marked the wrong
       lane sees it. */
   taskWaits?: number;
+}
+
+export interface SeatTickAgendaInput {
+  asks: readonly SeatTickWorkerAskInput[];
+  pauseWaitingTasks?: Readonly<Record<string, readonly string[]>>;
+  forms: { rows: import("@/lib/attention/needsYouRead").NeedsYouRow[]; count: number; routedToSeat?: number };
+}
+export interface SeatTickFormPage {
+  lines: string[];
+  rows: { id: string; line: string }[];
+}
+
+export interface SeatTickTaskPage {
+  lines: string[];
+  rows: { item: SeatTickItem; line: string }[];
+  due: number;
 }
 
 export interface SeatTickTaskInput {
@@ -902,6 +920,8 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  responseBoundMs?: number;
+  formPage?: SeatTickFormPage;
   /** Interval at preparation, used to preserve an outage across a delayed landing. */
   wakeIntervalMs?: number;
   catchUp?: SeatTickCatchUp;
@@ -954,6 +974,8 @@ export interface SeatTickWakeCommit {
       must carry (docs/design/orchestrator-reports.md §5.1). A landing records
       them as owed; a wake that never landed announced nothing. */
   reportsOwed?: { key: string; label: string }[];
+  /** The report key and complete owed set named by this delivered wake. */
+  reportRequest?: { key: string; outcomeKeys: string[] };
   /** The stall tokens of the stall lines this wake carries, recorded by a
       landing and by nothing else: a stall the per-wake bound cut was never
       reported. Absent on a plan written before this field, which records none. */
@@ -1003,6 +1025,8 @@ export interface SeatTickOutstandingWake {
       here: an attempt still unresolved one wake interval later is put on the
       board. It ends nothing — an unresolved attempt keeps its identity. */
   preparedAt?: string;
+  /** The attention timestamp was synthesized from first observation. */
+  preparationTimeUnknown?: true;
   /** The reservation guard rechecks this token. Expired callers are revoked
       before destination reconciliation. Legacy calls keep their frozen key
       and payload during idempotent recovery. */
@@ -1107,7 +1131,13 @@ export interface SeatTickReportOwed {
   label: string;
   /** When the wake that announced it reached the seat. */
   receivedAt: string;
+  /** Request keys on delivered wakes that included this outcome. */
+  requestedBy?: string[];
 }
+
+/** Outcome keys discharged from a delivered wake, retained so later agenda
+    changes cannot turn the same parked outcome back into new report debt. */
+export type SeatTickReportAcknowledged = SeatTickReportOwed;
 
 /** Owed outcomes one project's row keeps; past it the oldest are dropped and
     counted (§5.1). */
@@ -1126,9 +1156,17 @@ export interface SeatTickReportsInput {
   operatorLocale: "en" | "uk" | null;
   /** `at` of the newest manager report of the project. */
   lastReportAt: string | null;
-  /** Project-scoped ids of the project's manager reports and of every key
-      they name in `covers`. */
+  /** Project-scoped ids of manager reports filed under their own keys. */
   reportedIds: readonly string[];
+  /** Project-scoped ids explicitly named by manager reports' `covers` field. */
+  coveredIds?: readonly string[];
+  /** Report ids retained after their full rows were retired. */
+  reservedIds?: readonly string[];
+  /** IDs of every current project report row, including worker-authored rows;
+      these reserve keys without providing settlement evidence. */
+  occupiedIds?: readonly string[];
+  /** Outcome keys settled by an earlier check and retained in project state. */
+  acknowledgedOutcomeKeys?: readonly string[];
   /** The ids a report filed under `key` may carry: scoped by the project, and
       by every older key of the project a manager report was filed under. */
   reportIdsFor: (key: string) => readonly string[];
@@ -1138,6 +1176,8 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  wakeResponse?: import("./seatWakeResponse").SeatWakeResponse;
+  formPageAfter?: string;
   /** Last delivered deployment wake's cutoff for draining its pause instructions. */
   deployResumeThrough?: string;
   /** First identity-checked gone-host observation; cleared by a landed wake. */
@@ -1176,6 +1216,8 @@ export interface SeatTickProjectState {
   checkErrorAlarmVersion?: number;
   catchUpProgress?: Omit<SeatTickCatchUp, "pending"> | null;
   lastWakeAt: string | null;
+  /** Task-page cadence. Legacy rows use lastWakeAt until the next landing. */
+  lastTaskWakeAt?: string;
   lastWakeReasons: SeatTickWakeReasonKind[];
   /** Consecutive wakes carrying this reason that changed nothing. */
   wakesWithoutChange: Partial<Record<SeatTickWakeReasonKind, number>>;
@@ -1318,6 +1360,9 @@ export interface SeatTickProjectState {
   /** Settled outcomes a landed wake announced that the report log has not
       received yet (§5.1). The project's, so a successor inherits them. */
   reportsOwed?: SeatTickReportOwed[];
+  /** Bounded keys already discharged, preventing the same parked outcome
+      from returning when its agenda presentation changes. */
+  reportsAcknowledged?: string[];
   /** Owed outcomes dropped past the bound, which the wake states. */
   reportsOwedDropped?: number;
   /** The newest manager report this tick has observed, and the material
@@ -1368,9 +1413,11 @@ export interface SeatTickSeatOwnedLane {
 export interface SeatTickWorkerAskInput {
   /** The route key: changes whenever the wait does. */
   key: string;
-  /** The conversation id (or transcript path) that asked, or the lane id. */
+  /** The conversation id (or transcript path), lane id or task id. */
   id: string;
   label: string;
+  /** Waiting tasks carried by this task or lane line. */
+  waitingTaskIds?: readonly string[];
   /** Original wait time, used for oldest-first detail selection. */
   sinceMs?: number | null;
   /** The board's seat-owned lane, also carried when its detail was shown. */
@@ -1378,6 +1425,8 @@ export interface SeatTickWorkerAskInput {
 }
 
 export interface SeatTickCheckInput {
+  /** Process-local fence attached by the owning seat sweep. */
+  sweepIsCurrent?: () => boolean;
   releaseAlerts?: { kind: "release-settled" | "release-blocked"; id: string; label: string }[];
   project: string;
   workers?: { limit: number; source: string; machine: number; running: number };
@@ -1394,9 +1443,12 @@ export interface SeatTickCheckInput {
       (docs/design/attention-auto-resolve.md), each with the line that says
       what was asked and how to answer it. Absent reads as none. */
   workerAsks?: readonly SeatTickWorkerAskInput[];
+  pauseWaitingTasks?: SeatTickAgendaInput["pauseWaitingTasks"];
   /** False when the source failed or was skipped. Omitted sources read as
       empty; an unreadable source cannot prove a catch-up agenda complete. */
   workerAsksObserved?: boolean;
+  decisionForms?: SeatTickAgendaInput["forms"];
+  instructionReview?: string;
   /** Events after {@link SeatTickProjectState.eventsThrough}, oldest first. */
   events: readonly SeatTickEventInput[];
   /** Pull requests that finished lanes left open (#1289). Empty whenever the
@@ -1486,7 +1538,7 @@ export interface SeatTickCheckInput {
     second check re-finds it instead of minting a twin. */
 export interface SeatTickCard {
   ref: string;
-  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "check-errors" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery";
+  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "check-errors" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery" | "disk-pressure";
   detail: string;
   /**
    * Whether the condition still holds.
@@ -1589,6 +1641,7 @@ export type SeatTickVerdictKind =
  */
 export interface SeatTickRunRecord {
   schemaVersion: 1;
+  timing?: import("./seatTickTiming").SeatTickTiming;
   at: string;
   project: string;
   seatEpoch: number | null;

@@ -24,7 +24,7 @@ export type RuntimeScopeString = `${RuntimeScopeKind}:${string}`;
 export type RuntimeScopeInput = RuntimeScope | RuntimeScopeString;
 
 export type RuntimeEngine = "codex" | "claude" | "copilot";
-export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "tmux-legacy" | "unhosted";
+export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "unhosted";
 
 /** The structured host kind each engine runs under. */
 export function runtimeHostKindForEngine(engine: RuntimeEngine): Extract<RuntimeHostKind, "codex-app-server" | "claude-broker" | "copilot-acp"> {
@@ -249,6 +249,15 @@ export interface RuntimeRetirementClaim {
   process: import("@/lib/processIdentity").ProcessIdentity;
 }
 
+/** The journal's original refusal, retained beside the canonical settlement reason. */
+export interface RuntimeDeliveryFailure { status: "failed" | "rejected"; reason: string | null }
+export function normalizeRuntimeDeliveryFailure(value: unknown): RuntimeDeliveryFailure | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const failure = value as Partial<RuntimeDeliveryFailure>;
+  return (failure.status === "failed" || failure.status === "rejected") && (failure.reason === null || typeof failure.reason === "string")
+    ? { status: failure.status, reason: failure.reason?.slice(0, 2048) ?? null } : undefined;
+}
+
 export interface RuntimeOperationReceipt {
   redirectedTo?: { operationId: string; conversationId: string };
   /** Exclusive automatic teardown authority, held until actuation ends. */
@@ -278,10 +287,13 @@ export interface RuntimeOperationReceipt {
   turnId?: string | null;
   queuePosition?: number | null;
   reason?: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
   text?: string | null;
   /** A send may already have reached the engine. Retained across requeues;
       the current reason only describes the latest wait or transition. */
   deliveryUnverified?: boolean;
+  /** Pending sends captured by the first kill admission, retained on replay. */
+  pendingSendIds?: string[];
   imageCount?: number;
   /** The per-turn runtime settings snapshot a send/steer was admitted with
       (issue #499): the durable audit record that the selected model/effort/fast
@@ -333,6 +345,9 @@ export interface RuntimeTransitionOptions {
   retirementClaim?: RuntimeRetirementClaim;
   /** Compare-and-set fence evaluated inside the journal write transaction. */
   fromStatuses?: readonly RuntimeReceiptStatus[];
+  /** A dead-host failure is safe only while the original admission is still
+      untouched. Checked atomically against the journal receipt revision. */
+  requirePristineAdmission?: boolean;
   /** Marks a terminal transition as owed a durable projection, inside the same
       write transaction that commits it (#1612). The caller is saying: the
       answer to this call is what carries the outcome into the delivery record,
@@ -404,7 +419,9 @@ export interface RuntimeSendCommand extends RuntimeCommandBase {
   contentDigest?: string;
   /** Privacy revision that must still be current when a pipeline first prompt dispatches. */
   roleMemoryRevision?: string;
-  policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
+  /** context-or-queue chooses native context for a supported active host at dispatch,
+   * otherwise waits for an idle wake. A possibly written insertion is never retried. */
+  policy?: "queue" | "context-or-queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   /** Automatic continuation requires this same idle revision and writer at admission and execution. */
   onlyIfIdle?: RuntimeIdleKillFence;
@@ -449,6 +466,8 @@ export interface RuntimeInterruptCommand extends RuntimeCommandBase {
 export interface RuntimeIdleKillFence {
   revision: number;
   writerClaim: string;
+  /** Explicitly fences the dead/unhosted registry fallback projection. */
+  releasedSession?: true;
 }
 
 /** Engine recovery authority for one provider-cut attempt. Requires an idle fence. */
@@ -465,15 +484,19 @@ export function runtimeIdleKillMatches(
   key: RuntimeKillCommand["sessionKey"],
   fence: RuntimeIdleKillFence,
 ): boolean {
-  return !!session && session.host === "hosted" && session.turn === "idle"
-    && session.activeTurnId === null && session.attentionIds.length === 0
-    && session.sessionKey.engine === key.engine && session.sessionKey.sessionId === key.sessionId
-    && session.revision === fence.revision && session.writerClaim === fence.writerClaim
-    && session.retirementBlocked !== true;
+  if (!session || session.activeTurnId !== null || session.attentionIds.length !== 0
+    || session.sessionKey.engine !== key.engine || session.sessionKey.sessionId !== key.sessionId
+    || session.revision !== fence.revision || session.retirementBlocked === true) return false;
+  return fence.releasedSession === true
+    ? fence.writerClaim === "released-session" && session.writerClaim === null
+      && (session.host === "dead" || session.host === "unhosted") && session.turn === "unknown"
+    : session.host === "hosted" && session.turn === "idle" && session.writerClaim === fence.writerClaim;
 }
 
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
+  /** Viewer-derived cohort; the first admission owns it across retries. */
+  pendingSendIds?: string[];
   /** Authenticated control authorship; an automatic recovery is system custody. */
   origin?: MessageOrigin;
   onlyIfIdle?: RuntimeIdleKillFence;
@@ -999,7 +1022,15 @@ export interface ViewerDeploymentStatus {
   revisionNumber: number;
 }
 
+/** A durable admission refusal: the key is fenced before this is reported. */
+export class DeploymentAdmissionClosedError extends Error {
+  readonly code = "deploy_not_admitted";
+  constructor() { super("Deployment was not admitted; this request key is permanently closed."); }
+}
+
 export interface ViewerDeploymentRequest {
+  /** Settle the original key without ever starting a deployment. */
+  reconcileOnly?: boolean;
   revision?: string;
   /** A branch of the canonical repository (`refs/heads/<branch>`), resolved to
       its exact commit by the host adapter (#1033). Takes precedence over
@@ -1101,7 +1132,7 @@ export interface RuntimeSocketRequest {
   /** Opt in to serial reuse; older listeners close after the answer. */
   keepAlive?: boolean;
   id: string;
-  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "files-revision" | "session-read" | "startup-session-evidence" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-transition-pristine" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 
@@ -1247,4 +1278,14 @@ export function assertRuntimeEvent(input: RuntimeEventInput): void {
 export interface RuntimeSessionRead {
   conversationId?: string;
   artifactPath?: string;
+}
+
+export const STARTUP_SESSION_VERSION_BATCH = 128;
+export type StartupRuntimeSession = Pick<RuntimeSession, "conversationId" | "host" | "turn" | "recentReceipts">;
+export interface RuntimeStartupSessionEvidence {
+  generation: string;
+  version: string;
+  effectsVersion: string;
+  sessions: (number | null)[];
+  evidence?: StartupRuntimeSession | null;
 }

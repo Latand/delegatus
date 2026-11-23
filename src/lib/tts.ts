@@ -56,5 +56,5 @@ export function spokenAnswerText(markdown: string): string {
 
 /** Providers decoded as streamed 24 kHz signed little-endian PCM. */
 export function isPcmTtsBackend(id: string | undefined): boolean {
-  return id === "soniox" || id === "fishaudio" || id === "elevenlabs";
+  return id === "openai" || id === "soniox" || id === "fishaudio" || id === "elevenlabs";
 }

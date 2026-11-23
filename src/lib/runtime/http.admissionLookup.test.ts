@@ -20,8 +20,10 @@ import { afterAll, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { admissionInFlight, handleRuntimeAdmissionQuery, handleRuntimeCommand, type RuntimeAdmissionQueryDependencies } from "./http";
+import { resetIngressStopsForTests } from "./ingressStop";
 import { AgentRegistry, type DeliveryAdmissionEvidence } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { lookupRuntimeAdmission } from "@/hooks/useRuntime";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-admission-lookup-"));
 let registryNumber = 0;
@@ -462,4 +464,96 @@ test("a conversation born after the upgrade still proves `not-executed` in the s
   expect(upgraded.deliveryAdmissionForKey(born.id, "never-used-key")).toMatchObject({ outcome: "not-executed" });
   const reopened = new AgentRegistry(filename);
   expect(reopened.deliveryAdmissionForKey(born.id, "never-used-key")).toMatchObject({ outcome: "not-executed" });
+});
+
+/**
+ * A FAILURE BETWEEN THE BOOKKEEPING AND THE RESERVATION STAYS QUERYABLE.
+ *
+ * Incident 2026-11-09: a send passed the route's ledgers and never got a
+ * reservation. Its key answered `not-executed`, which is also what a request
+ * that never reached the Viewer answers, so nothing could say whether the
+ * operator's words had been turned away or lost on the way. Driven through the
+ * real registry and the real in-flight claim: the absence is still the
+ * registry's verdict, and the stop the route recorded explains it.
+ */
+test("a send stopped before its reservation answers `not-executed` with the stop the route recorded", async () => {
+  resetIngressStopsForTests(() => {});
+  const { registry, conversationId: liveConversationId } = conversationRegistry();
+  let duringSend: Record<string, unknown> | undefined;
+  const response = await handleRuntimeCommand(sendRequest({
+    conversationId: liveConversationId, text: "stopped between the ledgers and the reservation", idempotencyKey: "stopped-key",
+  }), "send", {
+    enabled: () => true,
+    structuredEnabled: () => true,
+    client: () => null,
+    enqueue: async () => {
+      duringSend = await (await handleRuntimeAdmissionQuery(
+        lookupRequest(`conversationId=${liveConversationId}&clientMessageId=stopped-key`), liveDependencies(registry),
+      )).json() as Record<string, unknown>;
+      throw new Error("the delivery reservation could not be written");
+    },
+  });
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({ delivery: "uncertain", stop: { boundary: "admission", reason: "outcome-unknown" } });
+  /* While the POST was still inside admission, the lookup could not say. */
+  expect(duringSend).toMatchObject({ outcome: "unknown" });
+  expect(registry.pendingDeliveries(liveConversationId as never)).toEqual([]);
+  const after = await (await handleRuntimeAdmissionQuery(
+    lookupRequest(`conversationId=${liveConversationId}&clientMessageId=stopped-key`), liveDependencies(registry),
+  )).json() as Record<string, unknown>;
+  expect(after).toEqual({
+    outcome: "not-executed", conversationId: liveConversationId, clientMessageId: "stopped-key",
+    stop: { boundary: "admission", reason: "outcome-unknown", status: 503, at: expect.any(String) },
+  });
+});
+
+test("a recorded stop never rides on an `admitted` answer: the reservation outranks it", async () => {
+  resetIngressStopsForTests(() => {});
+  const { registry, conversationId: liveConversationId } = conversationRegistry();
+  /* The first attempt stops; a second attempt under the same key is admitted
+     by another path that leaves no response here, as a second tab would. */
+  await handleRuntimeCommand(sendRequest({ conversationId: liveConversationId, text: "go", idempotencyKey: "stopped-then-held" }), "send", {
+    enabled: () => true, structuredEnabled: () => true, client: () => null, enqueue: async () => null,
+  });
+  registry.holdDelivery(liveConversationId as never, "go", "stopped-then-held", "text", [], null, {});
+  const body = await (await handleRuntimeAdmissionQuery(
+    lookupRequest(`conversationId=${liveConversationId}&clientMessageId=stopped-then-held`), liveDependencies(registry),
+  )).json() as Record<string, unknown>;
+  expect(body.outcome).toBe("admitted");
+  expect(body.stop).toBeUndefined();
+});
+
+/* 2026-11-09: the browser's lookup read `not-executed` and dropped the stop
+   beside it, so a lost refusal answer still read as a request that never
+   arrived. The client half now keeps a well-formed stop and only that. */
+test("the browser lookup keeps the stop the route recorded, and drops one it cannot read", async () => {
+  resetIngressStopsForTests(() => {});
+  const { registry, conversationId: liveConversationId } = conversationRegistry();
+  const refused = await handleRuntimeCommand(sendRequest({
+    conversationId: liveConversationId, text: "turned away at admission", idempotencyKey: "browser-stop-key",
+  }), "send", {
+    enabled: () => true, structuredEnabled: () => true, client: () => null,
+    enqueue: async () => ({ ok: false, structured: true, outcome: "failed", status: 503,
+      error: "the conversation is synchronizing; try again shortly", admission: "refused" }) as never,
+  });
+  expect(refused.status).toBe(503);
+  const original = globalThis.fetch;
+  let reply: ((url: string) => Promise<Response>) = async url => await handleRuntimeAdmissionQuery(
+    new NextRequest(`http://127.0.0.1${url}`, { headers: { host: "127.0.0.1" } }), liveDependencies(registry)) as unknown as Response;
+  globalThis.fetch = (async (input: string | URL | Request) => reply(String(input))) as typeof fetch;
+  try {
+    expect(await lookupRuntimeAdmission(liveConversationId, "browser-stop-key")).toEqual({ outcome: "not-executed",
+      stop: { boundary: "admission", reason: "refused-before-reservation", status: 503, at: expect.any(String) } });
+    /* A key nothing stopped is the transport-loss answer: no stop at all. */
+    expect(await lookupRuntimeAdmission(liveConversationId, "never-arrived-key")).toEqual({ outcome: "not-executed" });
+    for (const stop of [{ boundary: "admission", reason: "invented", status: 503, at: "x" },
+      { boundary: "elsewhere", reason: "command-invalid", status: 400, at: "x" },
+      { boundary: "intake", reason: "command-invalid", status: "400", at: "x" }, "refused"]) {
+      reply = async () => Response.json({ outcome: "not-executed", stop });
+      expect(await lookupRuntimeAdmission(liveConversationId, "malformed-stop-key")).toEqual({ outcome: "not-executed" });
+    }
+  } finally {
+    globalThis.fetch = original;
+    registry.close();
+  }
 });

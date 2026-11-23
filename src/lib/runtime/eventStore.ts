@@ -1,7 +1,10 @@
+import { recordNativeTiming } from "./attemptTiming";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import fs from "node:fs";
 import path from "node:path";
+import { open, stat } from "node:fs/promises";
+import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
@@ -13,6 +16,8 @@ import { normalizeVoiceDeliveries } from "./voiceDelivery";
 export interface RuntimeEventStore {
   load(threadId: string): RuntimeEvent[];
   append(threadId: string, event: RuntimeEvent): void;
+  /** Visit the validated prefix without retaining it; return its final cursor. */
+  scan?(threadId: string, visit: (event: RuntimeEvent) => void): Promise<number>;
 }
 
 export interface RuntimeEventCursorRecoveryDiagnostic {
@@ -68,10 +73,11 @@ function cachedLedger(filename: string, identity: LedgerIdentity): RuntimeEvent[
   return cached.events.slice();
 }
 
-function rememberLedger(filename: string, identity: LedgerIdentity, events: RuntimeEvent[]): void {
+/** `owned` hands the cache an array nobody else holds; otherwise it keeps a copy. */
+function rememberLedger(filename: string, identity: LedgerIdentity, events: RuntimeEvent[], owned = false): void {
   const cache = ledgerCache();
   cache.delete(filename);
-  cache.set(filename, { identity, events: events.slice() });
+  cache.set(filename, { identity, events: owned ? events : events.slice() });
   let bytes = 0;
   for (const entry of cache.values()) bytes += entry.identity.size;
   while (cache.size > MAX_CACHED_LEDGERS || bytes > MAX_CACHED_LEDGER_BYTES) {
@@ -144,7 +150,8 @@ function validEvent(value: unknown): value is RuntimeEvent {
   const nonEmptyString = (field: unknown): field is string => typeof field === "string" && field.length > 0;
   switch (event.kind) {
     case "native-queue-changed":
-      return nonEmptyString(event.threadId);
+      return nonEmptyString(event.threadId)
+        && (event.evidenceRejectedFor === undefined || nonEmptyString(event.evidenceRejectedFor));
     case "turn-started":
       return nonEmptyString(event.turnId);
     case "delta":
@@ -169,6 +176,7 @@ function validEvent(value: unknown): value is RuntimeEvent {
     }
     case "turn-ended":
       return nonEmptyString(event.turnId)
+        && (event.claudeResultUuid === undefined || (nonEmptyString(event.claudeResultUuid) && event.claudeResultUuid.length <= 128))
         && (event.status === "completed" || event.status === "interrupted" || event.status === "error");
     case "attention":
       return nonEmptyString(event.id) && nonEmptyString(event.method) && Object.hasOwn(event, "attention")
@@ -353,6 +361,85 @@ export function hostTurnRecordIdentity(
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
   }
+}
+
+const CODEX_RETIREMENT_LEDGER_BYTES = 128 * 1024;
+
+/** Corroborate a native terminal against the bounded, contiguous suffix of the
+ * same host ledger cursor that published idle status and cleared its active ref. */
+export async function readCodexRetirementTurnLedger(threadId: string, turnId: string, cursor: number,
+  directory: string = statePath("structured-host-events")): Promise<{
+  identity: string;
+  mtimeMs: number;
+  status: "completed" | "interrupted" | "error";
+} | null> {
+  const filename = hostLedgerFilename(threadId, directory);
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    const stats = await handle.stat();
+    if (!stats.isFile() || !Number.isSafeInteger(stats.size) || stats.size === 0) return null;
+    const before = ledgerIdentity(stats);
+    const bytes = Buffer.alloc(Math.min(before.size, CODEX_RETIREMENT_LEDGER_BYTES));
+    const start = before.size - bytes.length;
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, start + offset);
+      if (bytesRead === 0) return null;
+      offset += bytesRead;
+    }
+    if (bytes.at(-1) !== 10) return null;
+    const first = start === 0 ? 0 : bytes.indexOf(10) + 1;
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    let status: "completed" | "interrupted" | "error" | null = null;
+    let idleCheckpoint = false;
+    let newestStatus = true;
+    let expected = cursor;
+    let anchored = false;
+    for (let end = bytes.length - 1; end >= first;) {
+      const previous = end > 0 ? bytes.lastIndexOf(10, end - 1) : -1;
+      const line = bytes.subarray(Math.max(first, previous + 1), end);
+      end = previous;
+      const event: unknown = JSON.parse(decoder.decode(line));
+      if (!validEvent(event) || event.seq !== expected) return null;
+      expected--;
+      if (event.kind === "turn-started") {
+        if (!status || !idleCheckpoint || event.turnId !== turnId) return null;
+        anchored = true;
+        break;
+      }
+      if (event.kind === "session-status") {
+        // Codex can publish idle before turn completion, with the registry
+        // cursor landing on turn-ended. The matching idle checkpoint may
+        // therefore be on either side of the terminal in sequence order. An
+        // active status older than the newest idle status belongs to the
+        // settled turn; only the newest status can indicate current activity.
+        if (newestStatus) {
+          if (event.status !== "idle") return null;
+          newestStatus = false;
+          idleCheckpoint = true;
+        } else if (status && (event.status === "active" || event.status === "idle")) {
+          continue;
+        } else {
+          return null;
+        }
+        continue;
+      }
+      if (status) continue;
+      if (event.kind === "turn-ended") {
+        if (event.turnId !== turnId) return null;
+        status = event.status;
+      } else if (event.kind !== "limits" && event.kind !== "attention-resolved") return null;
+    }
+    // The idle checkpoint can precede or follow the terminal. A complete
+    // ledger with no start is still ambiguous; only a truncated suffix with
+    // the matching checkpoint can anchor it.
+    if (!status || !idleCheckpoint || !(anchored || start > 0)) return null;
+    const after = ledgerIdentity(await handle.stat());
+    if (!sameLedgerIdentity(before, after) || !sameLedgerIdentity(after, ledgerIdentity(await stat(filename)))) return null;
+    return { identity: ledgerIdentityStamp(before), mtimeMs: before.mtimeMs, status };
+  } catch { return null; }
+  finally { await handle?.close(); }
 }
 
 /** When a session's ledger file was last written, without reading it:
@@ -547,12 +634,32 @@ export function readHostTurnRecord(
   }
 }
 
+/** Both readers use the same event validator, sequence check and torn-tail rule. */
+function parseLedgerEvent(line: string, partial: boolean, previous?: number): RuntimeEvent | null {
+  if (!line) throw new Error("runtime event ledger contains an empty record");
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch {
+    if (partial) return null;
+    throw new Error("runtime event ledger contains malformed JSON");
+  }
+  if (!validEvent(parsed)) {
+    if (partial) return null;
+    throw new Error("runtime event ledger contains an invalid event");
+  }
+  if (previous !== undefined && parsed.seq !== previous + 1) {
+    throw new Error(`runtime event ledger sequence gap after ${previous}`);
+  }
+  return parsed;
+}
+
 export class FileRuntimeEventStore implements RuntimeEventStore {
   /* The structured host claim makes this store the single writer of its
      ledger, so the durable tail (last sequence and byte length) is owned in
      memory. Production #367: deriving the tail by replaying the whole file on
      every append made each streamed delta O(ledger) on the shared event loop,
      starving snapshot and concurrent admission for the length of a turn. */
+  private readonly timingGaps = new Set<string>();
+  private timingOverflow = false;
   private readonly tails = new Map<string, { lastSeq: number; bytes: number }>();
 
   constructor(private readonly directory = statePath("structured-host-events")) {}
@@ -583,19 +690,8 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
     for (const [index, line] of lines.entries()) {
       if (!line && index === lines.length - 1 && hasTerminatingNewline) continue;
       if (!line) throw new Error("runtime event ledger contains an empty record");
-      let parsed: unknown;
-      try { parsed = JSON.parse(line); } catch {
-        if (index === lines.length - 1 && !hasTerminatingNewline) break;
-        throw new Error("runtime event ledger contains malformed JSON");
-      }
-      if (!validEvent(parsed)) {
-        if (index === lines.length - 1 && !hasTerminatingNewline) break;
-        throw new Error("runtime event ledger contains an invalid event");
-      }
-      const previous = events.at(-1);
-      if (previous && parsed.seq !== previous.seq + 1) {
-        throw new Error(`runtime event ledger sequence gap after ${previous.seq}`);
-      }
+      const parsed = parseLedgerEvent(line, index === lines.length - 1 && !hasTerminatingNewline, events.at(-1)?.seq);
+      if (!parsed) break;
       events.push(parsed);
     }
     try {
@@ -603,6 +699,67 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
       if (sameLedgerIdentity(identity, after)) rememberLedger(filename, after, events);
     } catch { /* a concurrent replacement stays uncached */ }
     return events;
+  }
+
+  /** Read a fixed prefix from one descriptor. Memory is the retained window,
+   * one record and a 64 KiB read buffer, independent of journal length. No
+   * ledger cache or append-tail state is populated by this read-only path. */
+  async scan(threadId: string, visit: (event: RuntimeEvent) => void): Promise<number> {
+    const filename = this.filename(threadId);
+    let handle;
+    try { handle = await open(filename, "r"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+    const signal = AbortSignal.timeout(60_000);
+    let stream: fs.ReadStream | undefined;
+    try {
+      const before = await handle.stat();
+      if (!before.size) throw new Error("runtime event ledger contains an empty record");
+      // Bun can emit an unhandled stream error during construction when the
+      // signal already expired while stat was awaited.
+      signal.throwIfAborted();
+      stream = handle.createReadStream({ encoding: "utf8", highWaterMark: 64 * 1024,
+        end: before.size - 1, autoClose: false, signal });
+      let pending = "";
+      let previous: number | undefined;
+      let yieldedAt = performance.now();
+      const take = (line: string, partial = false) => {
+        const event = parseLedgerEvent(line, partial, previous);
+        if (event) { previous = event.seq; visit(event); }
+      };
+      for await (const chunk of stream) {
+        pending += chunk;
+        let start = 0;
+        let newline: number;
+        while ((newline = pending.indexOf("\n", start)) >= 0) {
+          take(pending.slice(start, newline));
+          start = newline + 1;
+          if (performance.now() - yieldedAt >= 4) {
+            await yieldToLoop(undefined, { signal });
+            yieldedAt = performance.now();
+          }
+        }
+        pending = pending.slice(start);
+      }
+      if (pending) take(pending, true);
+      // Concurrent appends belong to the live window. Replacements, truncation
+      // or edits of the prefix cannot publish a partially restored window.
+      const after = await handle.stat();
+      const onPath = await stat(filename);
+      if (before.dev !== onPath.dev || before.ino !== onPath.ino || after.size < before.size
+        || onPath.size < before.size || after.size === before.size && !sameLedgerIdentity(ledgerIdentity(before), ledgerIdentity(after))) {
+        throw new Error("runtime event ledger changed during window refill");
+      }
+      return previous ?? 0;
+    } catch (error) {
+      if (signal.aborted) throw new Error("runtime event window refill exceeded its read deadline", { cause: error });
+      throw error;
+    } finally {
+      stream?.destroy();
+      await handle.close();
+    }
   }
 
   append(threadId: string, event: RuntimeEvent): void {
@@ -622,12 +779,23 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
       const line = `${JSON.stringify(event)}\n`;
       fs.writeSync(fd, line);
       fs.fsyncSync(fd);
+      if ((event.kind === "turn-started" || event.kind === "turn-ended" || event.kind === "item") && event.accountingAt) {
+        try { recordNativeTiming(this.directory, threadId, event, this.timingOverflow || this.timingGaps.has(threadId), `${fs.fstatSync(fd).dev}:${fs.fstatSync(fd).ino}`); this.timingGaps.delete(threadId); }
+        catch {
+          if (this.timingGaps.size < 128) this.timingGaps.add(threadId); else this.timingOverflow = true;
+          console.warn("[accounting] native timing observation unavailable");
+        }
+      }
       const nextTail = { lastSeq: event.seq, bytes: tail.bytes + Buffer.byteLength(line) };
       this.tails.set(threadId, nextTail);
       const cached = ledgerCache().get(filename);
       const current = fs.fstatSync(fd);
       if (cached && cached.identity.size === tail.bytes && (cached.events.at(-1)?.seq ?? 0) === tail.lastSeq) {
-        rememberLedger(filename, ledgerIdentity(current), [...cached.events, event]);
+        /* The cache owns its array and hands out copies, so an append extends
+           it in place. Copying it twice per append made every streamed delta
+           of a cached ledger cost O(ledger). */
+        cached.events.push(event);
+        rememberLedger(filename, ledgerIdentity(current), cached.events, true);
       } else {
         forgetLedger(filename);
       }

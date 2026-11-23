@@ -1,0 +1,5216 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "baseRevision": "a706416942a261300de13ed78c965cea75c1d202",
+  "sourceSha256": {
+    "src/app/api/monitor/seat-tick/settings/route.test.ts": "f8bfcd5cb3dfd2c15ca9fb49b4c6fc980e4a2b6538d82f27a6bf8d216bdf0682",
+    "src/app/api/monitor/seat-tick/settings/route.ts": "7f2e2b38e7653640497a10da771b9cd043a2b9867e0f6e4581840f30c6532da4",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "4bfe8aebeff8fb0315a5d6dcdccb81f2ad079f53779392d45b6e7d5bc39eda88",
+    "src/components/mobile/MobileSeatTickSheet.dom.test.tsx": "bd6e2f81fe76bc2de26a7041efa906cb77d4575d3fb7f21436eaac4414dd0916",
+    "src/components/mobile/MobileSeatTickSheet.tsx": "761068cb47788be7c5a61b5a1940409f5d920cdc3b90d39f05f2aa3734c66ee1",
+    "src/components/orchestrator/SeatTickBody.tsx": "b9d5753b4d8c48bc875c182d15dc62df23fd55deadfb42eecd4f401ee040387f",
+    "src/components/orchestrator/SeatTickChip.dom.test.tsx": "e840d4fe24ab12fa2f6563f5d1f069cb429efdb4b82470c8f1847496598153d1",
+    "src/components/orchestrator/SeatTickChip.tsx": "c4f0a17bb2a523381dfe297f18f7e90f8a5a794ef5bd0be6b7401d1aec2c1f66",
+    "src/components/orchestrator/SeatTickSwitch.tsx": "56e1180c8d8a50ad74aac6357aff094c5aa0e0c78522d30b1e7b58a91f1d83a2",
+    "src/components/orchestrator/seatTickView.test.ts": "028938f95144bfcd0c42036db394eaa97247c17b91be812e249359506b9aabe0",
+    "src/components/orchestrator/useSeatTickSettings.ts": "36b4634af505660f15b0627ba72b7b4faa1f41e169e52bb24a80ddd954fb722c",
+    "src/lib/monitor/seatTickSettingsAnswer.ts": "16b53f6e1a87351f4c856eb89e28088c9cbb3f1411dbf2188739446af0ba5995"
+  },
+  "viewports": [
+    {
+      "width": 320,
+      "height": 844
+    },
+    {
+      "width": 390,
+      "height": 844
+    },
+    {
+      "width": 1000,
+      "height": 700
+    },
+    {
+      "width": 1440,
+      "height": 700
+    }
+  ],
+  "locales": [
+    "en",
+    "uk"
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "states": 136,
+  "screenshots": 248,
+  "readings": [
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick",
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 569
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes every 10 min · state unknown",
+        "Actual state unknown: the tick has not recorded this project.",
+        "Maintenance off",
+        "Full autonomy",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "Turbo",
+        "Turbo:",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Orchestrator wakes",
+        "Every (minutes)",
+        "Until",
+        "Instructions for every wake",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "Restore tick defaults"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 286,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 286,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 569,
+        "actual": 569,
+        "maximum": 569
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "Restore tick defaults",
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Details"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 286,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 286,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick",
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 569
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes every 10 min · state unknown",
+        "Actual state unknown: the tick has not recorded this project.",
+        "Maintenance off",
+        "Full autonomy",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "Turbo",
+        "Turbo:",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Orchestrator wakes",
+        "Every (minutes)",
+        "Until",
+        "Instructions for every wake",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "Restore tick defaults"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 286,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 286,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 569,
+        "actual": 569,
+        "maximum": 569
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "Restore tick defaults",
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Details"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 286,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 286,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора",
+        "Тікер оркестратора",
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 16,
+        "maximum": 613
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Обслуговування вимкнено",
+        "Повна автономія",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Турбо",
+        "Турбо:",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "Пробудження оркестратора",
+        "Кожні (хв)",
+        "Термін",
+        "Вказівки на кожне пробудження",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Типові налаштування тікера"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 286,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 286,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 613,
+        "actual": 604,
+        "maximum": 613
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Типові налаштування тікера",
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 286,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 286,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора",
+        "Тікер оркестратора",
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 16,
+        "maximum": 613
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Обслуговування вимкнено",
+        "Повна автономія",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Турбо",
+        "Турбо:",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "Пробудження оркестратора",
+        "Кожні (хв)",
+        "Термін",
+        "Вказівки на кожне пробудження",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Типові налаштування тікера"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 286,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 286,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 613,
+        "actual": 604,
+        "maximum": 613
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Типові налаштування тікера",
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 286,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 286,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick",
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes could not be read"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick",
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes could not be read"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора",
+        "Тікер оркестратора",
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження не вдалося прочитати"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора",
+        "Тікер оркестратора",
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 320,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження не вдалося прочитати"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick",
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 553
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes every 10 min · state unknown",
+        "Actual state unknown: the tick has not recorded this project.",
+        "Maintenance off",
+        "Full autonomy",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "Turbo",
+        "Turbo:",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Orchestrator wakes",
+        "Every (minutes)",
+        "Until",
+        "Instructions for every wake",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "Restore tick defaults"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 356,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 356,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 553,
+        "actual": 553,
+        "maximum": 553
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "Restore tick defaults",
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Details"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 356,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 356,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick",
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 553
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes every 10 min · state unknown",
+        "Actual state unknown: the tick has not recorded this project.",
+        "Maintenance off",
+        "Full autonomy",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "Turbo",
+        "Turbo:",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Orchestrator wakes",
+        "Every (minutes)",
+        "Until",
+        "Instructions for every wake",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "Restore tick defaults"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 356,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 356,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 553,
+        "actual": 553,
+        "maximum": 553
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "The agent receives these instructions on every wake. The field includes older li",
+        "Restore tick defaults",
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Details"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 356,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 356,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора",
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 553
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження кожні 10 хв · стан невідомий",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Обслуговування вимкнено",
+        "Повна автономія",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Турбо",
+        "Турбо:",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "Пробудження оркестратора",
+        "Кожні (хв)",
+        "Термін",
+        "Вказівки на кожне пробудження",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Типові налаштування тікера"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 356,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 356,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 553,
+        "actual": 553,
+        "maximum": 553
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Типові налаштування тікера",
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 356,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 356,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора",
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 553
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження кожні 10 хв · стан невідомий",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Обслуговування вимкнено",
+        "Повна автономія",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Турбо",
+        "Турбо:",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "Пробудження оркестратора",
+        "Кожні (хв)",
+        "Термін",
+        "Вказівки на кожне пробудження",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Типові налаштування тікера"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 356,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 356,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 553,
+        "actual": 553,
+        "maximum": 553
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Агент отримує ці вказівки на кожне пробудження. У полі є й старіші рядки без зап",
+        "Типові налаштування тікера",
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 356,
+          "height": 42
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 356,
+          "height": 60
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 94,
+          "height": 42
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick",
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes could not be read"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick",
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Wakes could not be read"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора",
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження не вдалося прочитати"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора",
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "visibleText": [
+        "Пробудження не вдалося прочитати"
+      ],
+      "controlOnFirstScreen": false,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 603
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick · atlas",
+        "Wakes every 10 min · state unknown",
+        "Actual state unknown: the tick has not recorded this project.",
+        "Maintenance off",
+        "Full autonomy",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "Turbo",
+        "Turbo:",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Orchestrator wakes",
+        "Every (minutes)",
+        "Until",
+        "Instructions for every wake"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 603,
+        "actual": 598,
+        "maximum": 603
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Restore tick defaults",
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Details"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 603
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick · atlas",
+        "Wakes every 10 min · state unknown",
+        "Actual state unknown: the tick has not recorded this project.",
+        "Maintenance off",
+        "Full autonomy",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "Turbo",
+        "Turbo:",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Orchestrator wakes",
+        "Every (minutes)",
+        "Until",
+        "Instructions for every wake"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 603,
+        "actual": 598,
+        "maximum": 603
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Restore tick defaults",
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Details"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 621
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора · atlas",
+        "Пробудження кожні 10 хв · стан невідомий",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Обслуговування вимкнено",
+        "Повна автономія",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Турбо",
+        "Турбо:",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "Пробудження оркестратора",
+        "Кожні (хв)",
+        "Термін",
+        "Вказівки на кожне пробудження"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 621,
+        "actual": 614,
+        "maximum": 621
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Типові налаштування тікера",
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 621
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора · atlas",
+        "Пробудження кожні 10 хв · стан невідомий",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Обслуговування вимкнено",
+        "Повна автономія",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Турбо",
+        "Турбо:",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "Пробудження оркестратора",
+        "Кожні (хв)",
+        "Термін",
+        "Вказівки на кожне пробудження"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 621,
+        "actual": 614,
+        "maximum": 621
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Типові налаштування тікера",
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes could not be read"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes could not be read"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження не вдалося прочитати"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження не вдалося прочитати"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "refused",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…",
+        "Cadence held for review"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-write-refused",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 658,
+        "actual": 649,
+        "maximum": 658
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Cadence held for review",
+        "Details"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "refused",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…",
+        "Cadence held for review"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-write-refused",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 658,
+        "actual": 649,
+        "maximum": 658
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Cadence held for review",
+        "Details"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "refused",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…",
+        "Cadence held for review"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-write-refused",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 676,
+        "actual": 665,
+        "maximum": 676
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Cadence held for review",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "refused",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…",
+        "Cadence held for review"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-write-refused",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 676,
+        "actual": 665,
+        "maximum": 676
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Cadence held for review",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 603
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick · atlas",
+        "Wakes every 10 min · state unknown",
+        "Actual state unknown: the tick has not recorded this project.",
+        "Maintenance off",
+        "Full autonomy",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "Turbo",
+        "Turbo:",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Orchestrator wakes",
+        "Every (minutes)",
+        "Until",
+        "Instructions for every wake"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 603,
+        "actual": 598,
+        "maximum": 603
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Restore tick defaults",
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Details"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 603
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Seat tick · atlas",
+        "Wakes every 10 min · state unknown",
+        "Actual state unknown: the tick has not recorded this project.",
+        "Maintenance off",
+        "Full autonomy",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "The orchestrator decides on its own, keeps work moving and looks for new work. T",
+        "Turbo",
+        "Turbo:",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Codex agents run at their account's fastest speed. Limits are spent faster.",
+        "Orchestrator wakes",
+        "Every (minutes)",
+        "Until",
+        "Instructions for every wake"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 603,
+        "actual": 598,
+        "maximum": 603
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Restore tick defaults",
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Details"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 621
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора · atlas",
+        "Пробудження кожні 10 хв · стан невідомий",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Обслуговування вимкнено",
+        "Повна автономія",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Турбо",
+        "Турбо:",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "Пробудження оркестратора",
+        "Кожні (хв)",
+        "Термін",
+        "Вказівки на кожне пробудження"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 621,
+        "actual": 614,
+        "maximum": 621
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Типові налаштування тікера",
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-ready",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 0,
+        "actual": 0,
+        "maximum": 621
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Тікер оркестратора · atlas",
+        "Пробудження кожні 10 хв · стан невідомий",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Фактичний стан невідомий: тікер ще нічого не записав про цей проєкт.",
+        "Обслуговування вимкнено",
+        "Повна автономія",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Оркестратор вирішує сам, рухає роботу й шукає нову. Заборонене лишається заборон",
+        "Турбо",
+        "Турбо:",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються",
+        "Пробудження оркестратора",
+        "Кожні (хв)",
+        "Термін",
+        "Вказівки на кожне пробудження"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-end",
+      "outcome": "loaded",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 621,
+        "actual": 614,
+        "maximum": 621
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Типові налаштування тікера",
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes could not be read"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes could not be read"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження не вдалося прочитати"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "failed",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-failed",
+      "outcome": "failed",
+      "calls": [
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження не вдалося прочитати"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "refused",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…",
+        "Cadence held for review"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "state": "panel-write-refused",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 658,
+        "actual": 649,
+        "maximum": 658
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Cadence held for review",
+        "Details"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "refused",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "10 min"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Wakes reading…",
+        "Cadence held for review"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "state": "panel-write-refused",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 658,
+        "actual": 649,
+        "maximum": 658
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 min",
+      "visibleText": [
+        "Board maintenance",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "One Codex agent (gpt-6.1-sol, high) tidies task statuses and texts.",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "At most once per interval. It starts from tick checks and pauses while wakes are",
+        "Last run",
+        "never",
+        "Next run",
+        "none while maintenance is off",
+        "Role memory curator",
+        "Every (hours)",
+        "Last run",
+        "never",
+        "Next run",
+        "waiting for role memory rules",
+        "Auto-rotation",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "When its context reaches the threshold, the orchestrator is replaced with a fres",
+        "Cadence held for review",
+        "Details"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (default)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "closed-ready",
+      "outcome": "refused",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-pending",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…",
+        "Cadence held for review"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "state": "panel-write-refused",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 676,
+        "actual": 665,
+        "maximum": 676
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Cadence held for review",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "closed-ready",
+      "outcome": "refused",
+      "calls": [
+        "summary"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "10 хв"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": null,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-pending",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": null,
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Пробудження читаємо…",
+        "Cadence held for review"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 0,
+      "fields": [],
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "panel-write-refused",
+      "outcome": "refused",
+      "calls": [
+        "summary",
+        "summary",
+        "panel"
+      ],
+      "scroll": {
+        "desired": 676,
+        "actual": 665,
+        "maximum": 676
+      },
+      "cuts": [],
+      "clipDetails": [],
+      "overlaps": [],
+      "word": "10 хв",
+      "visibleText": [
+        "Обслуговування дошки",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Один агент Codex (gpt-6.1-sol, high) прибирає статуси й тексти задач.",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Не частіше за інтервал. Запускається перевіркою тікера і стоїть на паузі, поки п",
+        "Останній запуск",
+        "ніколи",
+        "Наступний запуск",
+        "немає, доки обслуговування вимкнено",
+        "немає, доки обслуговування вимкнено",
+        "Куратор пам’яті ролей",
+        "Кожні (год)",
+        "Останній запуск",
+        "ще не було",
+        "Наступний запуск",
+        "очікує на правила пам’яті ролей",
+        "Автоматична ротація",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Коли контекст досягає порогу, у першу ж паузу оркестратора замінює новий, з пере",
+        "Cadence held for review",
+        "Деталі"
+      ],
+      "controlOnFirstScreen": true,
+      "pageOverflow": false,
+      "scrollbarGutter": 0,
+      "panelScrollbarGutter": 15,
+      "fields": [
+        {
+          "value": "10",
+          "placeholder": "60 (типово)",
+          "width": 277,
+          "height": 26
+        },
+        {
+          "value": "Review queued work",
+          "placeholder": "",
+          "width": 277,
+          "height": 48
+        },
+        {
+          "value": "6",
+          "placeholder": "",
+          "width": 78,
+          "height": 26
+        }
+      ],
+      "pageErrors": []
+    }
+  ]
+}

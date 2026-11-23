@@ -1,0 +1,551 @@
+import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { AccountContext } from "@/lib/accounts/contracts";
+import { claudeManagedEnvironment } from "@/lib/accounts/claude";
+import { resolveBinary } from "@/lib/agent/cli";
+import { prepareClaudeCloudTask, ClaudeTaskError, CLAUDE_TASK_REASONS, claudeTaskStep, type ClaudeTaskProvider } from "@/lib/projects/claudeCloudTasks";
+import type { CloudEnvironmentPreparation, PrepareCloudEnvironmentInput } from "@/lib/projects/codexCloudEnvironments";
+import { cloudInputTurn, splitCloudInput } from "./cloudStageInput";
+import { CloudSubmissionNotStartedError } from "./cloudHostedClient";
+import { HostedCloudError } from "./cloudHostedErrors";
+import type { CloudStageClient, CloudStageSubmitInput, CloudSubmissionReceipt, CloudTaskAccess } from "./cloudStage";
+
+/* A Claude Code cloud session on the account's subscription login. The login
+ * is read into memory per operation, the way the installed CLI's own /schedule
+ * tool sends it; no API key path exists. The shapes read here were observed on
+ * live sessions, listed in docs/design/claude-code-cloud.md §1.14. */
+
+const API = "https://api.anthropic.com";
+const TRIGGERS_BETA = "ccr-triggers-2026-01-30";
+const EVENTS_PAGE = 500;
+const EVENT_PAGES = 40;
+const SEND_DEADLINE_MS = 25_000;
+const OUTCOME_WINDOW_MS = 10 * 60_000;
+const CLOCK_ALLOWANCE_MS = 60_000;
+const READ_DEADLINE_MS = 20_000;
+export const CLAUDE_SUBMISSION_RECOVERY_MS = 20_000;
+const CANDIDATES_PER_READ = 5;
+const DIFF_BLOCK_BYTES = 2_000;
+const DIFF_BLOCKS_PER_COMMAND = 10;
+const DIFF_LIMIT_BYTES = 16 * 1024 * 1024;
+/** A follow-up of 129,939 bytes arrived whole. A session reads one message in one turn, so fewer parts are safer. */
+const PART_BYTES = 120_000;
+const TERMINAL_STATUSES = new Set(["failed", "cancelled", "canceled", "archived"]);
+/** The two errors seen to leave nothing queued. Any other refusal may have landed. */
+const NOTHING_QUEUED = /invalid session ID|need a claude\.ai sign-in|is not a cloud session ID/;
+
+type Row = Record<string, unknown>;
+export type ClaudeLogin = { accessToken: string; organization: string; expiresAt: number };
+export type ClaudeSendOutcome = { state: "queued" } | { state: "refused"; detail: string } | { state: "unknown" };
+export type ClaudeCloudDependencies = {
+  fetch: typeof fetch;
+  readLogin: (account: AccountContext) => Promise<ClaudeLogin | null>;
+  send: (input: { account: AccountContext; sessionId: string; text: string; signal: AbortSignal }) => Promise<ClaudeSendOutcome>;
+  random: () => string;
+  now: () => number;
+  sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  /** Test seam; production admission queues the complete allowed project pool. */
+  queueTaskPreparation?: (project: string, assertCurrent: () => void) => void;
+};
+type Access = Pick<CloudTaskAccess, "account" | "signal" | "assertCurrent">;
+type Event = { sequence: number; type: string; payload: Row };
+
+const record = (value: unknown): Row => value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
+const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+const never = (message: string, category: HostedCloudError["category"]) => new CloudSubmissionNotStartedError(message, category);
+
+export const CLAUDE_CLOUD_SEND_ARGS = (sessionId: string) => ["-p", "--cloud", sessionId, "--output-format", "json"];
+
+/** The account's own login files. Anything else, an API key included, is no login here. */
+async function readAccountLogin(account: AccountContext): Promise<ClaudeLogin | null> {
+  try {
+    const { accessToken, expiresAt } = record(record(JSON.parse(await fs.readFile(path.join(account.home, ".credentials.json"), "utf8"))).claudeAiOauth);
+    const configFile = path.basename(account.home) === ".claude" ? path.join(path.dirname(account.home), ".claude.json") : path.join(account.home, ".claude.json");
+    const organization = record(record(JSON.parse(await fs.readFile(configFile, "utf8"))).oauthAccount).organizationUuid;
+    if (typeof accessToken !== "string" || !accessToken || typeof organization !== "string" || !organization) return null;
+    return { accessToken, organization, expiresAt: Number(expiresAt) || 0 };
+  } catch { return null; }
+}
+
+/** Text goes on stdin so stage input never reaches an argument list. D1 documents
+ * `{ok}` JSON for a send and stderr without JSON for a configuration error. */
+export function claudeCliSender(binary: string): ClaudeCloudDependencies["send"] {
+  return ({ account, sessionId, text, signal }) => new Promise(resolve => {
+    const child = spawn(binary, CLAUDE_CLOUD_SEND_ARGS(sessionId), { cwd: os.tmpdir(), detached: true, stdio: ["pipe", "pipe", "pipe"], env: claudeManagedEnvironment(account.home) });
+    let out = "", err = "", finished = false, killed = false;
+    const stop = () => {
+      killed = true;
+      try { process.kill(-child.pid!, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+    };
+    const timer = setTimeout(stop, SEND_DEADLINE_MS);
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
+    const settle = (outcome: ClaudeSendOutcome) => {
+      if (finished) return;
+      finished = true; clearTimeout(timer); signal.removeEventListener("abort", stop); resolve(outcome);
+    };
+    child.stdout.on("data", chunk => { if (out.length < 65_536) out += String(chunk); });
+    child.stderr.on("data", chunk => { if (err.length < 4_096) err += String(chunk); });
+    child.stdin.on("error", () => undefined);
+    child.on("error", error => settle((error as NodeJS.ErrnoException).code === "ENOENT" ? { state: "refused", detail: "the claude CLI is not installed" } : { state: "unknown" }));
+    child.on("close", code => {
+      if (killed) return settle({ state: "unknown" });
+      try {
+        const reply = record(JSON.parse(out));
+        if (reply.ok === true) return settle({ state: "queued" });
+        if (reply.ok === false) return settle(typeof reply.error === "string" && NOTHING_QUEUED.test(reply.error) ? { state: "refused", detail: reply.error.slice(0, 500) } : { state: "unknown" });
+      } catch { /* no JSON: decided below */ }
+      const first = err.trim().split("\n")[0] ?? "";
+      settle(code && NOTHING_QUEUED.test(first) ? { state: "refused", detail: first.slice(0, 500) } : { state: "unknown" });
+    });
+    child.stdin.end(text);
+  });
+}
+
+const defaultDependencies = (): ClaudeCloudDependencies => ({
+  fetch, readLogin: readAccountLogin, send: input => claudeCliSender(resolveBinary("claude"))(input), random: () => randomBytes(16).toString("hex"), now: () => Date.now(),
+  sleep: (milliseconds, signal) => new Promise(resolve => {
+    const timer = setTimeout(resolve, milliseconds);
+    signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+  }),
+});
+
+/** Claude model aliases report the catalogue id they resolve to. */
+export function sameClaudeModel(reported: string, requested: string): boolean {
+  return reported === requested || (/^[a-z]+$/.test(requested) && reported.startsWith(`claude-${requested}-`));
+}
+
+function neverOpened(error: unknown): boolean {
+  const code = String(record(error).code ?? record(record(error).cause).code ?? "");
+  return ["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "ConnectionRefused", "FailedToOpenSocket", "DNSException"].includes(code);
+}
+
+function userText(event: Event): string | null {
+  const content = record(event.payload.message).content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const texts = content.filter(block => record(block).type === "text").map(block => String(record(block).text ?? ""));
+  return texts.length ? texts.join("\n") : null;
+}
+
+function assistantText(event: Event): string | null {
+  const content = record(event.payload.message).content;
+  if (!Array.isArray(content)) return null;
+  const texts = content.filter(block => record(block).type === "text").map(block => String(record(block).text ?? ""));
+  return texts.length ? texts.join("\n") : null;
+}
+
+/** A queued message joins the running turn or starts its own; either way the
+ * turn's result lists it, which is what ends the turn that read it. */
+function ownResult(events: Event[], start: number): number {
+  const uuid = events[start]?.payload.uuid;
+  return events.findIndex((event, index) => index > start && event.type === "result"
+    && (event.payload.user_message_uuid === uuid || (Array.isArray(event.payload.user_message_uuids) && event.payload.user_message_uuids.includes(uuid))));
+}
+
+/** Binds a follow-up: the receipt token appears only in the header this client generated. */
+const carriesPart = (event: Event, token: string) => event.type === "user" && (userText(event)?.slice(0, 400).includes(`token ${token},`) ?? false);
+
+const partHeader = (lead: string, nonce: string, token: string, text: string) => `${lead}, nonce ${nonce}, token ${token}, sha256 ${sha256(text)}`;
+
+/** The bound final turn of the part carrying `token`, in event order: its user
+ * event, then an assistant message opening with its receipt, then the end of the
+ * turn that read it. Once that turn ended nothing later can bind, so it settles. */
+function boundTurn(events: Event[], token: string): { state: "pending" } | { state: "failed"; error: string } | { state: "completed"; message: string; model: string | null; after: Event[] } {
+  const start = events.findIndex(event => carriesPart(event, token));
+  if (start < 0) return { state: "pending" };
+  const end = ownResult(events, start);
+  if (end < 0) return { state: "pending" };
+  const result = events[end]!, turn = events.slice(start + 1, end);
+  if (result.payload.is_error === true || (result.payload.subtype !== undefined && result.payload.subtype !== "success")) {
+    return { state: "failed", error: `Claude Cloud turn ended with ${String(result.payload.subtype ?? "an error")}: ${String(result.payload.result ?? "").slice(0, 500)}` };
+  }
+  const final = turn.filter(event => event.type === "assistant" && assistantText(event) !== null).at(-1);
+  const [first, ...rest] = (final ? assistantText(final)! : "").split("\n");
+  if (!final || first?.trim() !== `Receipt ${token}`) return { state: "failed", error: "Claude Cloud session ended its turn without the receipt of the last input part" };
+  const model = record(final.payload.message).model;
+  return { state: "completed", message: rest.join("\n").trimStart(), model: typeof model === "string" ? model : null, after: turn };
+}
+
+async function claudeLogin(account: AccountContext, dependencies: ClaudeCloudDependencies): Promise<ClaudeLogin> {
+  if (account.claudeProvider) throw new ClaudeTaskError("third_party_provider");
+  const found = await dependencies.readLogin(account);
+  if (!found) throw new ClaudeTaskError("login_missing");
+  if (found.expiresAt && found.expiresAt <= dependencies.now()) throw new ClaudeTaskError("login_expired");
+  return found;
+}
+
+async function claudeUnauthorizedReason(response: Response): Promise<string> {
+  const body = record(await response.json().catch(() => null));
+  return record(body.error).reason === "github_token_missing"
+    ? `${CLAUDE_TASK_REASONS.github_not_connected}; ${claudeTaskStep("github_not_connected")!.url}` : "Claude Cloud login was refused";
+}
+
+export function createClaudeCloudTaskProvider(overrides: Partial<ClaudeCloudDependencies> = {}): ClaudeTaskProvider {
+  const dependencies = { ...defaultDependencies(), ...overrides };
+  return {
+    identity: async account => { const auth = await claudeLogin(account, dependencies); return sha256(JSON.stringify([account.home, auth.organization])); },
+    request: async (account, signal, method, target, body, fence) => {
+      const auth = await claudeLogin(account, dependencies);
+      if (fence && sha256(JSON.stringify([account.home, auth.organization])) !== fence.principal) throw new Error("Claude preparation principal changed");
+      fence?.assertCurrent();
+      target = target.replace("/organizations/current/", `/organizations/${encodeURIComponent(auth.organization)}/`);
+      return dependencies.fetch(`${API}${target}`, { method, redirect: "error",
+        headers: { Authorization: `Bearer ${auth.accessToken}`, "Content-Type": "application/json", "anthropic-version": "2023-06-01",
+          "x-organization-uuid": auth.organization, "anthropic-beta": target === "/v1/environment_providers" ? "ccr-byoc-2025-07-29" : TRIGGERS_BETA },
+        signal: AbortSignal.any([signal, AbortSignal.timeout(READ_DEADLINE_MS)]), ...(body ? { body: JSON.stringify(body) } : {}) });
+    },
+  };
+}
+
+export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDependencies> = {}): CloudStageClient {
+  const dependencies = { ...defaultDependencies(), ...overrides };
+
+  const provider = createClaudeCloudTaskProvider(dependencies);
+  const login = (account: AccountContext) => claudeLogin(account, dependencies);
+  const request = provider.request;
+  type RequestFence = { principal: string; assertCurrent: () => void };
+
+  async function read(account: AccountContext, signal: AbortSignal, target: string, what = "read", fence?: RequestFence): Promise<Row> {
+    let response: Response;
+    try { response = await request(account, signal, "GET", target, undefined, fence); }
+    catch (error) {
+      if (error instanceof HostedCloudError) throw error;
+      throw new HostedCloudError("Claude Cloud read failed", "unavailable");
+    }
+    if (response.status === 401) {
+      const reason = await claudeUnauthorizedReason(response);
+      throw new HostedCloudError(reason, reason.includes("GitHub") ? "cloud-limit" : "account-limit");
+    }
+    if (response.status === 429 || response.status >= 500) throw new HostedCloudError(`Claude Cloud ${what} answered ${response.status}`, "unavailable");
+    if (!response.ok) throw new HostedCloudError(`Claude Cloud ${what} answered ${response.status}`, "invalid");
+    const parsed = await response.json().catch(() => null) as unknown;
+    if (!parsed || typeof parsed !== "object") throw new HostedCloudError("Claude Cloud read returned an unknown shape", "invalid");
+    return parsed as Row;
+  }
+
+  /** Newest first on the wire; `until` stops the walk back once the page holds what is needed. */
+  async function eventsBack(account: AccountContext, signal: AbortSignal, sessionId: string, until: (events: Event[]) => boolean, fence?: RequestFence): Promise<Event[]> {
+    const seen: Event[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < EVENT_PAGES; page++) {
+      const query = new URLSearchParams({ limit: String(EVENTS_PAGE), sort_order: "desc", ...(cursor ? { cursor } : {}) });
+      const body = await read(account, signal, `/v1/code/sessions/${encodeURIComponent(sessionId)}/events?${query}`, "read", fence);
+      if (!Array.isArray(body.data)) throw new HostedCloudError("Claude Cloud events returned an unknown shape", "invalid");
+      for (const row of body.data) {
+        const payload = record(record(row).payload);
+        const sequence = Number(record(row).sequence_num);
+        if (!Number.isFinite(sequence) || typeof payload.type !== "string") continue;
+        seen.push({ sequence, type: payload.type, payload });
+      }
+      seen.sort((left, right) => left.sequence - right.sequence);
+      cursor = typeof body.next_cursor === "string" && body.next_cursor ? body.next_cursor : null;
+      if (!cursor || until(seen)) return seen;
+    }
+    return seen;
+  }
+
+  /** A run's prompt sits at its start, so a long foreign run costs one page here. */
+  async function firstEvents(account: AccountContext, signal: AbortSignal, sessionId: string, fence?: RequestFence): Promise<Event[]> {
+    const body = await read(account, signal, `/v1/code/sessions/${encodeURIComponent(sessionId)}/events?${new URLSearchParams({ limit: "50", sort_order: "asc" })}`, "read", fence);
+    if (!Array.isArray(body.data)) throw new HostedCloudError("Claude Cloud events returned an unknown shape", "invalid");
+    return body.data.flatMap(row => {
+      const payload = record(record(row).payload);
+      return typeof payload.type === "string" ? [{ sequence: Number(record(row).sequence_num), type: payload.type, payload }] : [];
+    });
+  }
+
+  /** Only an answer or the run's own events bind a run to this attempt. */
+  async function reconcile(input: { account: AccountContext; signal: AbortSignal; taskId: string; nonce: string; startedAt: number; assertCurrent: () => void }): Promise<string | null> {
+    const deadline = dependencies.now() + OUTCOME_WINDOW_MS;
+    const foreign = new Set<string>(), own = new Set<string>(), attempted = new Map<string, number>(), unread = new Set<string>();
+    for (let round = 0; dependencies.now() < deadline && !input.signal.aborted; round++) {
+      input.assertCurrent();
+      const list = await read(input.account, input.signal, `/v1/code/sessions?${new URLSearchParams({ trigger_id: input.taskId, limit: "20" })}`).catch(() => null);
+      /* An answer with no list says nothing about which runs exist. */
+      if (Array.isArray(list?.data)) {
+        const pending = list.data.map(record)
+          /* A run whose creation time cannot be read is kept: only a time before this attempt rules it out. */
+          .filter(row => typeof row.id === "string" && !foreign.has(row.id) && !own.has(row.id) && !(Date.parse(String(row.created_at)) < input.startedAt - CLOCK_ALLOWANCE_MS))
+          .map(row => row.id as string);
+        for (const id of pending) if (!attempted.has(id)) unread.add(id);
+        /* A read covers the runs tried least recently, so neither a pending run nor a failing read can hide a later one. */
+        const candidates = [...new Set([...pending, ...unread])].sort((left, right) => (attempted.get(left) ?? -1) - (attempted.get(right) ?? -1)).slice(0, CANDIDATES_PER_READ);
+        for (const id of candidates) {
+          attempted.set(id, round);
+          const events = await firstEvents(input.account, input.signal, id).catch(() => null);
+          if (!events) continue;
+          unread.delete(id);
+          if (events.some(event => JSON.stringify(event.payload).includes(input.nonce))) own.add(id);
+          /* The run's payload follows its saved prompt, and the worker starts after both. */
+          else if (events.some(event => event.type === "system")) foreign.add(id);
+        }
+        if (own.size > 1) return null;
+        /* A second run carrying the nonce refuses both, so every listed run must answer a read before one is adopted. */
+        if (own.size === 1 && !unread.size) return [...own][0]!;
+      }
+      await dependencies.sleep(Math.min(30_000, 2_000 * 2 ** Math.min(round, 4)), input.signal);
+    }
+    return null;
+  }
+
+  /** The account's run call happens once. A cause that proves no session lets
+   * the engine retry or fall back; any other answer is reconciled by the nonce. */
+  async function startRun(input: { account: AccountContext; signal: AbortSignal; taskId: string; nonce: string; journaled?: boolean; principal?: string; assertCurrent: () => void }): Promise<string> {
+    const startedAt = dependencies.now();
+    let response: Response | null = null;
+    input.assertCurrent();
+    const auth = await login(input.account).catch((error: unknown) => {
+      throw error instanceof HostedCloudError ? never(error.message, error.category) : never("Claude Cloud login could not be read", "cloud-limit");
+    });
+    try {
+      response = await request(input.account, input.signal, "POST", `/v1/code/triggers/${encodeURIComponent(input.taskId)}/run`, { text: `Delegatus stage run, nonce ${input.nonce}` },
+        { principal: input.principal ?? sha256(JSON.stringify([input.account.home, auth.organization])), assertCurrent: input.assertCurrent });
+    } catch (error) {
+      if (neverOpened(error)) throw never("Claude Cloud could not be reached", "unavailable");
+    }
+    if (response) {
+      if (response.status === 429) {
+        const wait = Number(response.headers.get("retry-after"));
+        throw never(`Claude Cloud refused the run: the task's start limit was reached${Number.isFinite(wait) && wait > 0 ? `, retry after ${wait} seconds` : ""}`, "cloud-limit");
+      }
+      if (response.status === 401) {
+        const reason = await claudeUnauthorizedReason(response);
+        throw never(reason, reason.includes("GitHub") ? "cloud-limit" : "account-limit");
+      }
+      if ([400, 403, 404].includes(response.status)) throw never(`Claude Cloud refused the run with ${response.status}: the task is missing, paused or turned off`, "cloud-limit");
+      if (response.ok) {
+        const id = record(await response.json().catch(() => null)).session_id;
+        if (typeof id === "string" && /^(?:session|cse)_[A-Za-z0-9_-]{1,150}$/.test(id)) return id;
+      }
+    }
+    // The engine owns the single durable recovery admission for journaled submissions.
+    if (input.journaled) throw new HostedCloudError("Claude Cloud run outcome is unknown; automatic resubmission refused", "invalid");
+    const adopted = await reconcile({ ...input, startedAt });
+    if (adopted) return adopted;
+    throw new HostedCloudError("Claude Cloud run outcome is unknown; automatic resubmission refused", "invalid");
+  }
+
+  /** A follow-up is sent once. A lost answer is settled by the follow-up's own event, never by resending. */
+  async function deliver(input: { account: AccountContext; signal: AbortSignal; sessionId: string; text: string; arrived: (event: Event) => boolean; assertCurrent: () => void }): Promise<void> {
+    input.assertCurrent();
+    const outcome = await dependencies.send({ account: input.account, sessionId: input.sessionId, text: input.text, signal: input.signal });
+    if (outcome.state === "queued") return;
+    if (outcome.state === "refused") throw never(`Claude Cloud refused the input: ${outcome.detail}`, "unavailable");
+    const deadline = dependencies.now() + OUTCOME_WINDOW_MS;
+    for (let round = 0; dependencies.now() < deadline && !input.signal.aborted; round++) {
+      input.assertCurrent();
+      const events = await eventsBack(input.account, input.signal, input.sessionId, found => found.some(input.arrived)).catch(() => [] as Event[]);
+      if (events.some(input.arrived)) return;
+      await dependencies.sleep(Math.min(30_000, 2_000 * 2 ** Math.min(round, 4)), input.signal);
+    }
+    throw new HostedCloudError("Claude Cloud input outcome is unknown; the part is not sent again", "invalid");
+  }
+
+  return {
+    supportsModel: (model, effort) => /^[A-Za-z0-9._-]{1,128}$/.test(model) && (effort === null || /^[a-z]{1,32}$/.test(effort)),
+    sameModel: sameClaudeModel,
+    hasEnvironment: async input => !!input.environmentId,
+    demandPreparation: async input => {
+      // Admission prepares every allowed account independently of execution quota.
+      if (dependencies.queueTaskPreparation) dependencies.queueTaskPreparation(input.project, input.assertCurrent);
+      else {
+        const { queueClaudeCloudTasks } = await import("@/lib/projects/claudeCloudTaskDemand");
+        queueClaudeCloudTasks(input.project, undefined, input.assertCurrent, undefined, input.repository);
+      }
+    },
+    prepareEnvironment: async (input: PrepareCloudEnvironmentInput): Promise<CloudEnvironmentPreparation> => {
+      return prepareClaudeCloudTask({ ...input, now: input.now ?? dependencies.now }, provider);
+    },
+    submit: input => submit(input, false),
+    recoverSubmission: async input => {
+      const signal = AbortSignal.any([input.signal, AbortSignal.timeout(CLAUDE_SUBMISSION_RECOVERY_MS)]);
+      const bounded = { ...input, signal, assertCurrent: () => {
+        input.assertCurrent();
+        signal.throwIfAborted();
+      } };
+      try {
+        if (!input.claudeSubmission) return { state: "unknown", reason: "The interrupted submission has no saved nonce; the vendor cannot look up the controller's attempt identity" };
+        const receipt = await submit(bounded, true);
+        bounded.assertCurrent();
+        return { state: "found", receipt };
+      } catch {
+        // A failed read, empty list or missing event has no absence guarantee.
+        return { state: "unknown", reason: "Claude Cloud submission remains unknown after one bounded recovery attempt; use resolve-decision to accept duplicate execution risk, or override-stage runtime=local then retry-stage" };
+      }
+    },
+    poll: async input => {
+      const { sessionId, token } = sessionOf(input);
+      input.assertCurrent();
+      const events = await eventsBack(input.account, input.signal, sessionId, found => !found.some(event => event.type === "result") || found.some(event => carriesPart(event, token)));
+      const bound = boundTurn(events, token);
+      if (bound.state === "completed") return { state: "completed", model: bound.model };
+      if (bound.state === "failed") return { state: "failed", error: bound.error, model: null };
+      input.assertCurrent();
+      const answer = await read(input.account, input.signal, `/v1/code/sessions/${encodeURIComponent(sessionId)}`);
+      const session = record(answer.response_shape ?? answer);
+      if (TERMINAL_STATUSES.has(String(session.status).toLowerCase())) return { state: "failed", error: `Claude Cloud session ended as ${String(session.status)} before its result`, model: null };
+      return { state: "pending", model: null };
+    },
+    readFinalMessage: async input => {
+      const bound = await boundFinal(input);
+      return { message: bound.message, model: bound.model ?? "" };
+    },
+    readDiff: async input => {
+      const bound = await boundFinal(input);
+      return readExportedDiff(bound.after);
+    },
+  };
+
+  async function submit(input: CloudStageSubmitInput, recovering: boolean): Promise<CloudSubmissionReceipt> {
+    const repository = input.environmentScope?.repository;
+    if (!repository) throw never("Claude Cloud requires a GitHub repository", "cloud-limit");
+    const auth = await login(input.account);
+    input.assertCurrent();
+    if (input.environmentPrincipal && sha256(JSON.stringify([input.account.home, auth.organization])) !== input.environmentPrincipal) {
+      throw never("Claude Cloud submission principal changed", "cloud-limit");
+    }
+    const principal = sha256(JSON.stringify([input.account.home, auth.organization]));
+    const fence = { principal, assertCurrent: input.assertCurrent };
+    const journal = input.claudeSubmission && structuredClone(input.claudeSubmission);
+    const nonce = journal?.nonce ?? dependencies.random();
+    const shared = { account: input.account, signal: input.signal, assertCurrent: input.assertCurrent };
+    const save = async () => {
+      input.assertCurrent();
+      if (journal && input.checkpointSubmission) await input.checkpointSubmission(structuredClone(journal));
+      input.assertCurrent();
+    };
+    if (recovering && !journal) throw new HostedCloudError("Claude Cloud submission has no saved identity", "invalid");
+    let sessionId = journal?.sessionId;
+    if (!sessionId && recovering) {
+      const list = await read(input.account, input.signal, `/v1/code/sessions?${new URLSearchParams({ trigger_id: input.environmentId, limit: "20" })}`, "read", fence);
+      input.assertCurrent();
+      if (!Array.isArray(list.data) || list.data.length > 20 || list.next_cursor || list.has_more === true) throw new HostedCloudError("Claude Cloud session list cannot prove a unique match", "invalid");
+      const candidates = list.data.map(record).filter(row => typeof row.id === "string"
+        && /^(?:session|cse)_[A-Za-z0-9_-]{1,150}$/.test(row.id)
+        && !(Date.parse(String(row.created_at)) < journal!.startedAt - CLOCK_ALLOWANCE_MS));
+      if (candidates.length > CANDIDATES_PER_READ) throw new HostedCloudError("Claude Cloud recovery candidate bound reached", "invalid");
+      const matches: string[] = [];
+      for (const row of candidates) {
+        const events = await firstEvents(input.account, input.signal, String(row.id), fence);
+        input.assertCurrent();
+        if (events.some(event => event.type === "user" && new RegExp(`nonce ${nonce}(?![a-f0-9])`).test(userText(event) ?? ""))) matches.push(String(row.id));
+        else if (!events.some(event => event.type === "system")) throw new HostedCloudError("Claude Cloud session prompt is not visible yet", "invalid");
+      }
+      if (matches.length !== 1) throw new HostedCloudError("Claude Cloud submission has no unique nonce match; absence is unproved", "invalid");
+      sessionId = matches[0]!;
+    }
+    if (!sessionId) sessionId = await startRun({ ...shared, taskId: input.environmentId, nonce, journaled: !!journal, principal });
+    input.assertCurrent();
+    if (journal) { journal.sessionId = sessionId; await save(); }
+    const receipt = (): CloudSubmissionReceipt => ({ taskId: sessionId!, taskUrl: `https://claude.ai/code/${sessionId!.replace(/^cse_/, "session_")}`,
+      thread: { threadId: sessionId!, turnId: journal?.lastToken ?? lastToken } });
+    let lastToken = "";
+    // A send persisted as in-flight is read back, never repeated. A missing
+    // event cannot prove that the CLI left nothing queued.
+    if (recovering && journal?.sending) {
+      const pending = journal.sending;
+      const events = await eventsBack(input.account, input.signal, sessionId, found => found.some(event => event.type === "user" && sha256(userText(event) ?? "") === pending.digest), fence);
+      input.assertCurrent();
+      if (!events.some(event => event.type === "user" && sha256(userText(event) ?? "") === pending.digest)) throw new HostedCloudError("Claude Cloud in-flight input has no visible receipt", "invalid");
+      journal.sent.push(pending.digest);
+      if (pending.final && pending.token) { journal.lastToken = pending.token; journal.complete = true; }
+      delete journal.sending;
+      await save();
+    }
+    if (journal?.complete) return receipt();
+    let index = 0;
+    const send = async (text: string, arrived: (event: Event) => boolean, token?: string, final?: boolean) => {
+      const digest = sha256(text), ownIndex = index++;
+      if (journal?.sent[ownIndex]) {
+        if (journal.sent[ownIndex] !== digest) throw new HostedCloudError("Claude Cloud recovered input differs from its saved digest", "invalid");
+        return;
+      }
+      if (journal) {
+        if (journal.sending || journal.sent.length !== ownIndex || ownIndex >= 100) throw new HostedCloudError("Claude Cloud input journal cannot advance", "invalid");
+        journal.sending = { digest, ...(token ? { token } : {}), ...(final ? { final } : {}) }; await save();
+      }
+      await deliver({ ...shared, sessionId: sessionId!, text, arrived });
+      input.assertCurrent();
+      if (journal) {
+        journal.sent.push(digest); delete journal.sending;
+        if (final && token) { journal.lastToken = token; journal.complete = true; }
+        await save();
+      }
+    };
+    for (const command of [`/model ${input.model}`, ...(input.reasoningEffort ? [`/effort ${input.reasoningEffort}`] : [])]) {
+      await send(command, event => event.type === "user" && userText(event) === command);
+    }
+    const prompt = input.preparePrompt ? await input.preparePrompt(sessionId) : input.prompt;
+    input.assertCurrent();
+    const framed = `${claudeAssignmentPolicy}\n\n${prompt}\n\n${claudeRuntimeLines(input.branch, input.headSha, nonce, input.writable === true)}`;
+    const turns = splitCloudInput(framed, PART_BYTES);
+    for (let part = 0; part < turns.length; part++) {
+      const token = lastToken = journal ? sha256(`${nonce}:part:${part}`).slice(0, 32) : dependencies.random();
+      const text = `${claudeAssignmentPolicy}\n\n${cloudInputTurn(turns, part)}`;
+      await send(`${partHeader(`Input part ${part + 1}/${turns.length}`, nonce, token, text)}\n\n${text}`, event => carriesPart(event, token), token, part === turns.length - 1);
+    }
+    return receipt();
+  }
+
+  async function boundFinal(input: Access & CloudTaskAccess) {
+    const { sessionId, token } = sessionOf(input);
+    input.assertCurrent();
+    const events = await eventsBack(input.account, input.signal, sessionId, found => found.some(event => carriesPart(event, token)));
+    const bound = boundTurn(events, token);
+    if (bound.state !== "completed") throw new HostedCloudError("Claude Cloud final message is not bound to the last input part", "invalid");
+    return bound;
+  }
+}
+
+function sessionOf(input: CloudTaskAccess): { sessionId: string; token: string } {
+  if (!input.thread?.threadId || !input.thread.turnId) throw new HostedCloudError("Claude Cloud task receipt has no session binding", "invalid");
+  return { sessionId: input.thread.threadId, token: input.thread.turnId };
+}
+
+/** Repeated on every part for tasks whose saved prompt still requires the old probe. */
+const claudeAssignmentPolicy = "The repository owner allows GitHub write access on this connection. Skip the obsolete GitHub write probe required by any earlier saved task prompt; no probe will be sent. Accept this assignment and begin work after its last input part arrives. Never push, open pull requests or comment on GitHub. Send no notifications. Return results through the requested patch export and final message; the controller handles publication.";
+
+/** Added to the assignment, so its text is covered by the part digest. */
+function claudeRuntimeLines(branch: string, head: string, nonce: string, writable: boolean): string {
+  const file = `"$HOME/delegatus-${nonce}.patch"`, blocks = `"$HOME/delegatus-${nonce}.blocks"`;
+  return [
+    "Claude Code cloud session instructions:",
+    `Work only after the last input part has arrived. First run: git fetch origin ${branch} && git checkout --detach ${head}`,
+    "Never push, and open or comment on nothing on GitHub.",
+    "Begin your final message with the line `Receipt <token>`, copying the token from the header of the last input part. The verdict follows it.",
+    ...(writable ? [
+      "As the last step before your final message, export your changes exactly like this, in one turn, and change nothing afterwards:",
+      `git add -A && git diff --cached --binary ${head} > ${file} && printf 'DELEGATUS-DIFF ${nonce} %s %s\\n' "$(wc -c < ${file})" "$(sha256sum ${file} | cut -d' ' -f1)" && base64 -w 0 ${file} | fold -w ${DIFF_BLOCK_BYTES} > ${blocks} && awk 'END {print NR}' ${blocks}`,
+      `Then print every block, ${DIFF_BLOCKS_PER_COMMAND} per Bash call, advancing FROM by ${DIFF_BLOCKS_PER_COMMAND} until all are printed: awk -v from=FROM 'NR>=from && NR<from+${DIFF_BLOCKS_PER_COMMAND} {print "DELEGATUS-DIFF-BLOCK ${nonce} " NR " " $0}' ${blocks}`,
+    ] : []),
+  ].join("\n\n");
+}
+
+/** Only harness-recorded output counts, and the session's own digest must agree. */
+function readExportedDiff(events: Event[]): string {
+  const outputs = events.filter(event => event.type === "user").map(event => record(event.payload.tool_use_result).stdout).filter((value): value is string => typeof value === "string");
+  let declared: { nonce: string; bytes: number; digest: string } | null = null;
+  for (const output of outputs) {
+    const match = /^DELEGATUS-DIFF ([a-f0-9]{32}) (\d+) ([a-f0-9]{64})$/m.exec(output);
+    if (match) declared = { nonce: match[1]!, bytes: Number(match[2]), digest: match[3]! };
+  }
+  if (!declared) throw new HostedCloudError("Claude Cloud diff export is missing from the session", "invalid");
+  if (declared.bytes > DIFF_LIMIT_BYTES) throw new HostedCloudError("Claude Cloud diff exceeded its byte limit", "invalid");
+  const blocks = new Map<number, string>();
+  for (const output of outputs) {
+    for (const match of output.matchAll(new RegExp(`^DELEGATUS-DIFF-BLOCK ${declared.nonce} (\\d+) ([A-Za-z0-9+/=]+)$`, "gm"))) blocks.set(Number(match[1]), match[2]!);
+  }
+  const joined = [...blocks.keys()].sort((left, right) => left - right).map((key, index) => {
+    if (key !== index + 1) throw new HostedCloudError("Claude Cloud diff blocks are incomplete", "invalid");
+    return blocks.get(key)!;
+  }).join("");
+  const patch = Buffer.from(joined, "base64");
+  if (patch.length !== declared.bytes || sha256(patch) !== declared.digest) throw new HostedCloudError("Claude Cloud diff checksum does not match", "invalid");
+  return patch.toString("utf8");
+}
+
+export const claudeCloudStageClient = createClaudeCloudStageClient();

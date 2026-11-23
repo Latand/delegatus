@@ -161,6 +161,21 @@ const text = (element: Element | null) => (element?.textContent ?? "").replace(/
 const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>(`[data-section="${name}"]`);
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
 
+describe("administrator self-update policy", () => {
+  for (const locale of ["en", "uk"] as const) for (const mode of ["managed", "checkout", "package", "unsupported"] as const) {
+    test(`policy hides all update actions in ${mode} (${locale})`, () => {
+      setLocale(locale);
+      const el = render(snapshot({ mode, selfUpdateDisabled: true, ...available(),
+        action: { id: "update-first", button: true },
+      }));
+      expect(el.querySelector("[data-section='updates-disabled']")).not.toBeNull();
+      expect(el.querySelectorAll("button").length).toBe(0);
+      expect(text(el)).toContain(locale === "uk" ? "Адміністратор вимкнув" : "disabled by the administrator");
+      expect(text(el)).toContain(locale === "uk" ? "командний рядок" : "command-line");
+    });
+  }
+});
+
 describe("MCP update failure guidance", () => {
   for (const locale of ["en", "uk"] as const) {
     test.each([

@@ -84,6 +84,12 @@ export function setProjectCrown(project: string, crowned: boolean): boolean {
   } catch { return false; }
 }
 
+/** The name a project is stored under, or null when it cannot be one. */
+export function projectDisplayNameFrom(name: string): string | null {
+  const displayName = name.trim();
+  return displayName && displayName.length <= 80 ? displayName : null;
+}
+
 /**
  * Register an operator-named project rooted at a directory. The identity is
  * minted exactly the way the scanner mints it for sessions running in that
@@ -98,8 +104,8 @@ export function createManualProject(
   existingProjects: ReadonlySet<string> = new Set(),
   options: CreateProjectOptions = {},
 ): CreateProjectResult {
-  const displayName = name.trim();
-  if (!displayName || displayName.length > 80) {
+  const displayName = projectDisplayNameFrom(name);
+  if (!displayName) {
     return { ok: false, code: "INVALID_NAME", message: "project name must be 1-80 characters" };
   }
   const requested = root.trim();

@@ -152,6 +152,11 @@ export class ViewerDeploymentCoordinator {
   }
 
   async requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> {
+    if (request.reconcileOnly !== undefined && typeof request.reconcileOnly !== "boolean") throw new Error("invalid reconciliation flag");
+    const requested = request.ref?.trim() || request.revision?.trim() || this.defaultRevision;
+    if (!request.idempotencyKey || request.idempotencyKey.length > 200 || /[\r\n]/.test(request.idempotencyKey)) throw new Error("deployment idempotencyKey is invalid");
+    if (!validRequestedRevision(requested)) throw new Error(REQUESTED_REVISION_REFUSAL);
+    if (request.reconcileOnly) return this.journal.reconcileViewerDeployment(request.idempotencyKey, requested);
     return this.runAdmissionExclusive(() => this.admit(request));
   }
 
@@ -198,6 +203,7 @@ export class ViewerDeploymentCoordinator {
       }
       return { state: "accepted", deploymentId: existing.deploymentId, revision: existing.revision, replayed: true };
     }
+    this.journal.assertViewerDeploymentOpen(request.idempotencyKey, requestedRevision);
     const active = this.journal.activeViewerDeployment();
     if (active) {
       const requested = requestedRevision.toLowerCase();

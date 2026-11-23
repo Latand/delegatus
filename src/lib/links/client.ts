@@ -1,4 +1,3 @@
-import { assertTaskExportCurrent } from "./taskExportPrivacy";
 import { exchangeTelegramPublications, validTelegramPublicationPart, type TelegramPublicationPart } from "./telegramPublication";
 import { sharedLinkState } from "./runtimeState";
 import dns from "node:dns/promises";
@@ -52,7 +51,6 @@ export async function peerTarget(input: string, scope: "board:sync" = "board:syn
 }
 
 async function call(target: Target, route: string, method: "GET" | "POST" | "DELETE", body?: object, headers: Record<string, string> = {}, hostOverride?: string): Promise<{ status: number; body: Record<string, unknown>; bytesRead: number; bytesWritten: number }> {
-  assertTaskExportCurrent(body);
   const encoded = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
   const transport = target.url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {
@@ -192,6 +190,9 @@ async function runSyncPeer(id: string, recover: boolean): Promise<{ peer: Link; 
       // after checking the live authorization and sharing boundary again.
       const currentLocal = sharedProjects();
       const currentHash = sharedDigest(currentLocal);
+      // Recovery negotiates from an empty wire digest. Check for changes
+      // across the awaits against the sharing list actually stored locally.
+      const currentRemoteHash = recovering ? sharedDigest(remoteProjects(id)) : remoteHash;
       if (currentHash !== localHash) {
         local = currentLocal;
         localHash = currentHash;
@@ -211,10 +212,10 @@ async function runSyncPeer(id: string, recover: boolean): Promise<{ peer: Link; 
       }
       const taskParts = await exchange?.request(linked) ?? {};
       stillLinked();
-      if (sharedDigest(sharedProjects()) !== currentHash || sharedDigest(remoteProjects(id)) !== remoteHash) throw new LinkError("sharing-changed");
+      if (sharedDigest(sharedProjects()) !== currentHash || sharedDigest(remoteProjects(id)) !== currentRemoteHash) throw new LinkError("sharing-changed");
       const outboundAgents = linked.size && agentCapable.has(id) ? await agentPart(`peer:${id}`, agentState.pushed, linked, agentState.pushOffset) : null;
       stillLinked();
-      if (sharedDigest(sharedProjects()) !== currentHash || sharedDigest(remoteProjects(id)) !== remoteHash) throw new LinkError("sharing-changed");
+      if (sharedDigest(sharedProjects()) !== currentHash || sharedDigest(remoteProjects(id)) !== currentRemoteHash) throw new LinkError("sharing-changed");
       const pushAgents = outboundAgents && ("rows" in outboundAgents || "reset" in outboundAgents) ? outboundAgents : null;
       const push = pushAgents ? { ...(taskParts.push ?? {}), agents: pushAgents } : taskParts.push;
       const messageLink = linkedPeer("peer", id);

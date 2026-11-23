@@ -367,7 +367,7 @@ describe("directReviewFlows", () => {
     for (const working of [
       { ...stale, activity: "live" as const },
       { ...stale, proc: "running" as const },
-      { ...stale, pendingQuestion: { kind: "question" as const, toolUseId: "t", transcriptPath: "/reviewer-stale", pid: 1, paneTarget: null, askedAt: "2026-07-10T00:00:00.000Z" } },
+      { ...stale, pendingQuestion: { kind: "question" as const, toolUseId: "t", transcriptPath: "/reviewer-stale", pid: 1, askedAt: "2026-07-10T00:00:00.000Z" } },
       { ...stale, waitingInput: { since: 1, screenTail: "…", target: "%1", menu: null } },
     ]) {
       const flows = directReviewFlows({ files: [builder, working], flows: [], tasks: [] });

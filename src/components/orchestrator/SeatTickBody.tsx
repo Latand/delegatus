@@ -423,7 +423,8 @@ export function SeatTickActions({ read, state, surface }: {
   /* Turbo shows its own refusal under its control. */
   const saveError = read.errorScope === "turbo" ? null : read.error;
   if (!state.dirty && !saveError) return null;
-  const overLimit = read.error?.match(/^instructions \(reason\) are (\d+) characters; the limit is 500\. Nothing was stored — shorten the instructions and send them again$/);
+  const overLimit = read.error?.match(/^instructions \(reason\) must be at most 500 UTF-16 code units; actual length is (\d+)\./)
+    ?? read.error?.match(/^instructions \(reason\) are (\d+) characters; the limit is 500\. Nothing was stored — shorten the instructions and send them again$/);
   const notesChanged = read.error === SEAT_NOTE_REMOVAL_STALE;
   const instructionsRequired = read.error === "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one";
   const error = overLimit
@@ -570,6 +571,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const reading = seatTickReading(read, now, t);
   const record = read.record;
   const { draft, setDraft } = state;
+  const releaseMismatch = record?.release?.status.observation?.reason === "release-version-mismatch";
   const maintenance = record?.maintenance;
   const maintenanceView = maintenanceReading(maintenance, now, locale, t, state.maintainer.config?.engine === "claude" ? "claude" : "codex");
 
@@ -613,6 +615,17 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const control = phone
     ? "h-11 rounded-control border border-border bg-card px-2.5 text-body text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
     : "h-7 rounded-control border border-border bg-card px-2 text-ui text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+
+  // The summary deliberately contains no editable panel record. Wait for the
+  // full read before offering fields that could otherwise submit defaults.
+  if (!record || record.view === "summary") return (
+    <div data-seat-tick-body={project} className={phone ? "px-4 pb-3" : "p-3"}>
+      <p role="status" data-seat-tick-summary className="text-ui text-secondary">
+        {reading.status.headline}
+      </p>
+      {actions}
+    </div>
+  );
 
   /* Until belongs to a tick that leaves the defaults. Instructions stand at
      every cadence. The interval is shown while wakes are enabled. */
@@ -660,6 +673,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         {read.answer?.journalError ? (
           <p role="status" data-seat-tick-journal-unreadable className="pl-3 text-caption leading-4 text-warning">{t("seatTick.journalUnreadable")}</p>
         ) : null}
+        {releaseMismatch ? <p data-seat-tick-release-reason data-seat-tick-release-reason-top role="status" className="text-caption leading-4 text-warning">{t("seatTick.release.wait.versionMismatch")}</p> : null}
         {state.storedAutonomy.state !== "off" ? <AutonomyStatus stored={state.storedAutonomy} now={now} locale={locale} /> : null}
         <TurboStatus control={turbo} now={now} locale={locale} />
         {maintenanceView ? (
@@ -935,9 +949,10 @@ function SeatTickRelease({ value, state, control, row, phone, now, locale, tickE
   const { t } = useLocale();
   const draft = state.release;
   const observation = value.status.observation;
-  const reasons: Record<string, MessageKey> = { "releases-off": "seatTick.release.wait.off", "tick-off": "seatTick.release.wait.tick", "merge-off": "seatTick.release.wait.merge", "release-in-flight": "seatTick.release.wait.flight", "checks-red": "seatTick.release.wait.checks", "checks-pending": "seatTick.release.wait.checks", rollback: "seatTick.release.wait.rollback", hold: "seatTick.release.wait.hold", "no-cut": "seatTick.release.wait.cut", draining: "seatTick.release.wait.deploy", deploying: "seatTick.release.wait.deploy", gap: "seatTick.release.wait.gap", changes: "seatTick.release.wait.changes", "declined-cut": "seatTick.release.wait.declined" };
+  const reasons: Record<string, MessageKey> = { "releases-off": "seatTick.release.wait.off", "tick-off": "seatTick.release.wait.tick", "merge-off": "seatTick.release.wait.merge", "release-in-flight": "seatTick.release.wait.flight", "release-version-mismatch": "seatTick.release.wait.versionMismatch", "checks-red": "seatTick.release.wait.checks", "checks-pending": "seatTick.release.wait.checks", rollback: "seatTick.release.wait.rollback", hold: "seatTick.release.wait.hold", "no-cut": "seatTick.release.wait.cut", draining: "seatTick.release.wait.deploy", deploying: "seatTick.release.wait.deploy", gap: "seatTick.release.wait.gap", changes: "seatTick.release.wait.changes", "declined-cut": "seatTick.release.wait.declined" };
   const reason = !value.enabled && !value.status.request && !value.status.live ? "seatTick.release.wait.off" : !tickEnabled ? "seatTick.release.wait.tick" : observation?.reason.startsWith("capture-tools:") ? "seatTick.release.wait.tools" : observation?.reason ? reasons[observation.reason] : null;
   return <div data-seat-tick-release className="flex min-w-0 flex-col gap-2 border-t border-border pt-2.5">
+    {reason && reason !== "seatTick.release.wait.versionMismatch" ? <p data-seat-tick-release-reason role="status" className="text-caption leading-4 text-warning">{t(reason)}</p> : null}
     <div className={`flex items-center gap-2 ${row}`}>
       <p className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.release.head")}</p>
       <Toggle on={draft.enabled} label={t("seatTick.release.head")} disabled={state.saving}
@@ -955,7 +970,6 @@ function SeatTickRelease({ value, state, control, row, phone, now, locale, tickE
           className={`${control} w-20 shrink-0 rounded border border-border bg-input px-2 text-ui text-primary`}
           onChange={event => state.setRelease({ ...draft, [field]: event.target.value })} /></label>)}
     {observation ? <p className="text-caption leading-4 text-secondary">{t("seatTick.release.count", { count: observation.count, target: value.minChanges })}</p> : null}
-    {reason ? <p data-seat-tick-release-reason role="status" className="text-caption leading-4 text-muted">{t(reason)}</p> : null}
     {observation ? <p className="text-caption text-muted">{t("seatTick.release.last", { version: observation.lastTag })}</p> : null}
     {observation?.reason === "gap" ? <p className="text-caption text-muted">{t("seatTick.release.next", { time: seatTickLocalTime(new Date(observation.nextEligibleAt).toISOString(), now, locale) ?? t("seatTick.unknown") })}</p> : null}
     {value.status.hold && !draft.clearHold ? <div className={`flex items-center gap-2 ${row}`}>
@@ -1006,7 +1020,7 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
   const endedAt = run ? seatTickLocalTime(run.endedAt ?? run.claimedAt, now, locale) ?? t("seatTick.unknown") : null;
   const startedAt = running ? seatTickLocalTime(running.claimedAt, now, locale) : null;
   const nextAt = seatTickLocalTime(value.nextRunAt, now, locale);
-  const counts = run ? ([
+  const counts = run && !value.runsError ? ([
     ["calls", "seatTick.curation.count.calls"],
     ["changed", "seatTick.curation.count.changed"],
     ["rewritten", "seatTick.curation.count.rewritten"],
@@ -1052,7 +1066,7 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
           <span className="shrink-0 text-caption text-muted">{t("seatTick.maintenance.row.last")}</span>
           <span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{run
             ? t(run.state === "succeeded" ? "seatTick.maintenance.status.done" : "seatTick.maintenance.status.failed", { time: endedAt ?? t("seatTick.unknown") })
-            : t("seatTick.curation.never")}</span>
+            : t(value.runsError ? "seatTick.unknown" : "seatTick.curation.never")}</span>
         </div>
         {counts ? <span data-seat-tick-curation-counts className="break-words text-right text-caption text-secondary">{counts}</span> : null}
         {run?.failure ? <span role="status" className="break-words text-right text-caption text-warning">{run.failure}</span> : null}
@@ -1065,7 +1079,9 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
         <span className="shrink-0 text-caption text-muted">{t("seatTick.maintenance.row.next")}</span><span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{next}</span>
       </div>
     </div>
-    {value.runsError ? <p role="status" className="break-words text-caption text-warning">{value.runsError}</p> : null}
+    {value.runsError ? <p role="status" className="break-words text-caption text-warning">{
+      /^curation (?:status|panel) read timed out$/.test(value.runsError) ? t("seatTick.curation.readTimeout") : value.runsError
+    }</p> : null}
   </div>;
 }
 

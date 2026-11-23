@@ -2,6 +2,7 @@
 
 import { useState, type Ref } from "react";
 
+import { effortTierLabel } from "@/components/builderCopy";
 import { AgentLaunchControls, launchEngineLabel, type AgentLaunchDraft } from "@/components/draft/AgentLaunchControls";
 import { EngineMark } from "@/components/EngineMark";
 import { ENGINE_MODELS, modelDisplayName } from "@/lib/agent/models";
@@ -17,7 +18,7 @@ export function runsOnValue(draft: AgentLaunchDraft, t: ReturnType<typeof useLoc
     launchEngineLabel(draft.engine),
     /* The picker's own label for the alias it launches ("opus" is Opus 5.5). */
     ENGINE_MODELS[draft.engine].find((option) => option.id === draft.model)?.label ?? modelDisplayName(draft.engine, draft.model),
-    draft.effort ? t("orchPanel.runsOnEffort", { effort: draft.effort }) : null,
+    draft.effort ? t("orchPanel.runsOnEffort", { effort: effortTierLabel(t, draft.effort) }) : null,
     account ? t("orchPanel.runsOnAccount", { label: account.label }) : null,
     /* A chosen speed other than the standard one, as the pill below names it. */
     draft.engine === "codex" ? draft.speed === "ultrafast" ? "Ultrafast" : draft.speed === "fast" ? t("composer.speedFastShort") : null : null,

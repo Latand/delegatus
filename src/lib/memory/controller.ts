@@ -1,10 +1,11 @@
+import { resolveService } from "@/lib/openaiServices/policy";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { structuredContent } from "@/lib/runtime/structuredContent";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import { agentRegistry } from "@/lib/agent/registry";
-import { readAsksYouSettings, readOpenRouterApiKey } from "@/lib/asks/settings";
+import { readAsksYouSettings } from "@/lib/asks/settings";
 import { mutateOperatorAsks, spendMonth } from "@/lib/asks/store";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
@@ -157,7 +158,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     if (!viewerReleaseOwnsTraffic()) { reason = "notOwner"; return ""; }
     if (engineMemoryOff()) { reason = "memorySource"; return ""; }
     if (!sharedMemoryEnabled(project)) { reason = "projectOff"; return ""; }
-    const key = readOpenRouterApiKey();
+    const resolution = resolveService("memory");
+    const key = resolution.apiKey;
     if (!key) { reason = "noKey"; return ""; }
     if (performance.now() >= deadline) { reason = "timeout"; return ""; }
     if (!index.claimHook(conversationId, requestId)) { possibleOperator = false; return ""; }
@@ -170,7 +172,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     const month = spendMonth(new Date());
     counted = true;
     return await injectMemory({ prompt, origin, engine: engine, project, conversation: conversationId, requestId, context }, {
-      deadline, signal: request.signal,
+      deadline, signal: request.signal, provider: resolution.effective,
       activity: event => { try { index.recordInjectionActivity(event); if (event === "noMatches") index.recordUnmatchedTurn(conversationId, requestId); } catch { /* optional ledger */ } },
       enabled: () => !engineMemoryOff() && sharedMemoryEnabled(project), ownsTraffic: () => viewerReleaseOwnsTraffic(),
       reason: value => { reason = value === "projectOff" && engineMemoryOff() ? "memorySource" : value === "noCandidates" && candidateReason ? candidateReason : value; },
@@ -182,7 +184,11 @@ export async function offerForHook(request: Request, input: Record<string, unkno
         });
         return reserved > 0;
       },
-      decide: (body, signal) => decideMemories(body, key, signal),
+      decide: (body, signal) => {
+        const current = resolveService("memory");
+        if (current.effective !== resolution.effective || !current.apiKey) throw Error("memory authority changed");
+        return decideMemories(body, current.apiKey, signal, current.effective);
+      },
       settle: cost => { mutateOperatorAsks(file => { if (file.spend.month === month) file.spend.usd += cost - reserved; }); },
       record: entries => {
         if (Date.now() >= expires || request.signal.aborted) throw Error("memory delivery evidence unavailable");

@@ -62,7 +62,6 @@ async function main(): Promise<void> {
     /* Proof the fd-holder scan attributed nothing: no fixture transcript is held open,
        so no pid from the operator's machine can have been adopted onto a card. */
     entriesWithPid: warm.snapshot.files.filter((entry) => entry.pid !== null).length,
-    entriesWithPaneTarget: warm.snapshot.files.filter((entry) => entry.pendingQuestion?.paneTarget != null).length,
     claudeTaskEntries: warm.snapshot.files.filter((entry) => entry.root === "claude-tasks").length,
     claudeTaskPaths: warm.snapshot.files.filter((entry) => entry.root === "claude-tasks").map((entry) => entry.path),
     projectKeys: warm.snapshot.projectCatalog.map((entry) => entry.project),

@@ -1,0 +1,41 @@
+{
+  "claim": {
+    "wait_s": 25,
+    "kinds": [
+      "answer"
+    ],
+    "features": [
+      "requester_context",
+      "relay_tool_calls",
+      "relay_tool_actions",
+      "request_deadline",
+      "relay_guest_answers"
+    ],
+    "slots": [
+      {
+        "target_id": "t_89cb6fbd614a6e011f43085e",
+        "free": 1
+      }
+    ]
+  },
+  "source": {
+    "revision": "f27ca4e08746f685f54ea19084c82b5f64403848",
+    "file": "claimed_guest_owner.json",
+    "bytes": 4721,
+    "sha256": "61d6d384f956e70d9b0097da80ab855772b4091a5184efa41bf3e1d4df9ca4f5"
+  },
+  "runner": "ephemeral",
+  "profile": {
+    "webSearch": true
+  },
+  "completion": {
+    "lease_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "outcome": "answered",
+    "answer": {
+      "action": "reply",
+      "text": "Done.",
+      "reply_to": null
+    },
+    "duration_ms": 0
+  }
+}

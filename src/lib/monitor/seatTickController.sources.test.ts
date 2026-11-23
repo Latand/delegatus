@@ -1,7 +1,8 @@
-import { expect, test, harness, PROJECT, OPEN_LANE, OVERDUE, runSeatTickCheck, fs, path, spawn, SANDBOX } from "./seatTickController.fixture";
+import { expect, test, spyOn, harness, PROJECT, CONVERSATION, OPEN_LANE, FINISHED_LANE, OVERDUE, runSeatTickCheck, fs, path, spawn, SANDBOX } from "./seatTickController.fixture";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { guardedSeatTickPort, seatTickWorkSignal } from "./seatTickWork";
 import type { DeadlineScheduler } from "@/lib/deadline";
+import { deepFreeze } from "@/lib/deepFreeze";
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -21,6 +22,69 @@ function clock() {
     for (const [id, timer] of timers) if (timer.at <= now) { timers.delete(id); timer.run(); }
   } };
 }
+
+const projectionCase = process.env.LLV_TICK_PROJECTION_CASE;
+test.skipIf(!projectionCase)("retained board deadline subprocess", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE,
+    tasks: Array.from({ length: 640 }, (_, index) => ({ id: `retained-${index}`, status: "done" as const })) });
+  const time = clock();
+  Object.assign(rig.deps, { workBudgetMs: 75_000, workClock: time.now, workScheduler: time.scheduler });
+  const ports = rig.deps.sources!;
+  const tasks = deepFreeze(ports.tasks()), lanes = deepFreeze(ports.pipelines());
+  ports.tasks = () => tasks;
+  ports.pipelines = () => lanes;
+  const immediate = globalThis.setImmediate;
+  let turns = 0;
+  const scheduling = spyOn(globalThis, "setImmediate").mockImplementation(((callback: (...args: unknown[]) => void, ...args: unknown[]) =>
+    immediate(() => { turns++; time.advance(250); callback(...args); })) as typeof setImmediate);
+  if (projectionCase === "stalled") ports.tasks = () => {
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    for (;;) Atomics.wait(wait, 0, 0, 1000);
+  };
+  try {
+    process.stdout.write("\nPROJECTION_ENTERED\n");
+    const result = await runSeatTickCheck(PROJECT, rig.deps);
+    expect(result).toMatchObject({ verdict: "wake", delivery: { outcome: "delivered" } });
+    expect(rig.sent).toHaveLength(1);
+    expect(time.now()).toBeLessThan(75_000);
+    expect(turns).toBeGreaterThan(0);
+    expect(time.timers.size).toBe(0);
+  } finally { scheduling.mockRestore(); }
+});
+
+test.skipIf(!!projectionCase).each(["delivery", "stalled"] as const)(
+  "a parent supervises an owed wake with retained board rows (%s)", async mode => {
+    const child = spawn(process.execPath, ["test", "--timeout=60000", import.meta.path,
+      "--test-name-pattern", "^retained board deadline subprocess$"], {
+      env: { ...process.env, LLV_TICK_PROJECTION_CASE: mode }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "", entered = false, timedOut = false;
+    const started = performance.now();
+    const expire = () => { timedOut = true; child.kill("SIGKILL"); };
+    let timer = setTimeout(expire, 15_000);
+    child.stderr.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+    child.stdout.on("data", chunk => {
+      output = (output + chunk).slice(-16_000);
+      if (!entered && output.includes("PROJECTION_ENTERED")) {
+        entered = true;
+        clearTimeout(timer);
+        timer = setTimeout(expire, 5_000);
+      }
+    });
+    try {
+      const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+      expect({ entered, timedOut, ...result, output }).toMatchObject(mode === "delivery"
+        ? { entered: true, timedOut: false, code: 0, signal: null }
+        : { entered: true, timedOut: true, code: null, signal: "SIGKILL" });
+      expect(performance.now() - started).toBeLessThan(25_000);
+    } finally {
+      clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+  });
 
 test.each(["liveness", "workerAsks", "recordRuleReports"] as const)(
   "a slow %s yields its share and the owed wake still lands", async source => {
@@ -59,6 +123,20 @@ test.each(["liveness", "workerAsks", "recordRuleReports"] as const)(
       expect(lateWrites).toBe(0);
     } finally { release.resolve(); await checking; }
   });
+
+test("a timed-out finished-lane pull request read preserves its gap and lets later sources run", async () => {
+  const rig = harness({ pipelines: FINISHED_LANE, state: OVERDUE });
+  rig.deps.workBudgetMs = 1_200;
+  let reports = 0;
+  rig.deps.sources!.openPullRequests = () => new Promise(() => {});
+  rig.deps.sources!.recordRuleReports = () => { reports++; };
+
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+
+  expect(result).not.toBeNull();
+  expect(rig.deps.readState!(PROJECT).pullRequestGap).toMatchObject({ gap: "timed-out" });
+  expect(reports).toBeGreaterThan(0);
+}, 10_000);
 
 test("a repeatedly overflowing source leaves other sources a turn on every check", async () => {
   const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
@@ -340,4 +418,81 @@ test("dispatch receipt bookkeeping retries an admission failure without losing t
     expect(rig.deps.readState!(PROJECT).outstandingWake).toMatchObject({ operationId: "saved-operation", dispatch: { state: "returned" } });
     expect(rig.sent).toHaveLength(1);
   } finally { save.mockRestore(); }
+});
+
+
+for (const source of ["skipped", "failed"] as const) test(`a ${source} forms read is explicit in a landed controller wake`, async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  rig.deps.sources!.workerAsks = async () => { if (source === "failed") throw new Error("fixture source failed"); return null; };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).toContain("Open decision forms: not read this check");
+  expect(rig.sent[0]!.text).not.toContain("Open decision forms: 0");
+});
+
+test("the controller forwards the active seat identity through the ordinary form gather", async () => {
+  const { NOW } = await import("./seatTickController.fixture");
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  const ids: (string | undefined)[] = [];
+  rig.deps.sources!.workerAsks = async (_project, seatConversationId) => {
+    ids.push(seatConversationId);
+    return { asks: [], forms: { count: 1, rows: [{ id: "prototype:previous-seat", kind: "prototype", title: "Choose",
+      line: "Choose", since: new Date(NOW - 86_400_000).toISOString(), taskId: null, subject: { reviewId: "previous-seat" },
+      target: null, stale: false, evidence: [{ code: "earlier-seat", stale: false, detail: "a previous seat epoch asked this", at: null, source: "seat-notices" }] }] } };
+  };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(ids).toContain(CONVERSATION);
+  expect(rig.sent[0]!.text).toContain("earlier-seat");
+});
+
+test("form pages rotate only after complete rows land, and carry exact withdrawal identities", async () => {
+  const { NOW, MINUTE } = await import("./seatTickController.fixture");
+  const { readSeatTickState } = await import("./seatTickState");
+  const forms = { count: 11, routedToSeat: 2, rows: Array.from({ length: 11 }, (_, n) => ({ id: `prototype:round-${String(n).padStart(2, "0")}`, kind: "prototype" as const,
+    title: `Choice ${n}`, line: "Choose a direction", since: new Date(NOW - 86_400_000).toISOString(), taskId: null,
+    subject: { reviewId: `round-${String(n).padStart(2, "0")}` }, target: null, stale: n === 0,
+    evidence: n === 0 ? [{ code: "lane-moved-past", stale: true, at: null, detail: "The lane moved on", source: "pipelines" }] : [],
+  })) };
+  const file = path.join(SANDBOX, "form-pages.json");
+  const first = harness({ pipelines: OPEN_LANE, state: OVERDUE, stateFile: file, now: NOW, delivery: { ok: false, outcome: "failed", error: "fixture refusal", status: 503 } });
+  first.deps.sources!.workerAsks = async () => ({ asks: [], forms });
+  await runSeatTickCheck(PROJECT, first.deps);
+  expect(first.sent[0]!.text).toContain("STALE: lane-moved-past");
+  expect(first.sent[0]!.text).toContain('target {kind:"prototype", taskId, reviewId}');
+  expect(readSeatTickState(PROJECT, file).formPageAfter).toBeUndefined();
+  const second = harness({ pipelines: OPEN_LANE, stateFile: file, now: NOW + 60 * MINUTE, wakeState: "absent" });
+  second.deps.sources!.workerAsks = async () => ({ asks: [], forms });
+  await runSeatTickCheck(PROJECT, second.deps);
+  const after = readSeatTickState(PROJECT, file).formPageAfter;
+  expect(after).toBeTruthy();
+  const third = harness({ pipelines: OPEN_LANE, stateFile: file, now: NOW + 120 * MINUTE });
+  third.deps.sources!.workerAsks = async () => ({ asks: [], forms });
+  await runSeatTickCheck(PROJECT, third.deps);
+  const next = forms.rows.findIndex(row => row.id === after) + 1;
+  expect(third.sent[0]!.text).toContain(`- prototype ${forms.rows[next]!.subject.reviewId} |`);
+  expect(third.sent[0]!.text).not.toContain("- prototype round-00 |");
+});
+
+
+test("a decided form with failed delivery is identified as answered in the controller wake", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  rig.deps.sources!.workerAsks = async () => ({ asks: [], forms: { count: 1, rows: [{ id: "prototype:answered-round", kind: "prototype", title: "Saved choice", line: "Delivery needs attention", since: "2026-08-27T12:00:00Z", taskId: null,
+    subject: { reviewId: "answered-round" }, target: null, stale: false, evidence: [{ code: "undelivered", stale: false, at: null, detail: "The saved answer has not arrived", source: "tasks" }] }] } });
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent[0]!.text).toContain("answered; delivery pending");
+});
+
+
+for (const delivered of [false, true]) test(`proposal wakes carry forms and credit only delivery: ${delivered}`, async () => {
+  const { readSeatTickState } = await import("./seatTickState");
+  const file = path.join(SANDBOX, `proposal-form-${delivered}.json`);
+  const rig = harness({ pipelines: [], tasks: [], state: { ...OVERDUE, lastProposalAt: null }, stateFile: file,
+    ...(delivered ? {} : { delivery: { ok: false, outcome: "failed" as const, error: "fixture refusal", status: 503 } }) });
+  rig.deps.sources!.workerAsks = async () => ({ asks: [], forms: { count: 1, rows: [{ id: "prototype:proposal-choice", kind: "prototype", title: "Choose a direction", line: "Choose", since: "2026-08-26T12:00:00Z", taskId: null,
+    subject: { reviewId: "proposal-choice" }, target: null, stale: false, evidence: [] }] } });
+  const result = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(result?.verdict).toBe("proactive");
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.text).toContain("- prototype proposal-choice |");
+  expect(readSeatTickState(PROJECT, file).formPageAfter).toBe(delivered ? "prototype:proposal-choice" : undefined);
 });

@@ -7,18 +7,31 @@ import type { ProjectCatalogEntry } from "@/lib/types";
 
 export type CreateProjectOutcome =
   | { ok: true; project: string; root?: string }
-  | { ok: false; code: string; message?: string };
+  | {
+    ok: false;
+    code: string;
+    message?: string;
+    /** DUPLICATE_NAME: the project that already carries the name. `root` is
+        null when it has no known folder. */
+    project?: string;
+    displayName?: string;
+    root?: string | null;
+    /** PARENT_IN_REPOSITORY: the projects folder the server refused. */
+    parent?: string;
+  };
 
 export interface CreateProjectRequestOptions {
   /** Ask the server to mkdir a missing root before creating the project. */
   createRoot?: boolean;
+  /** The workspace the new project joins; a team member must name one. */
+  workspaceId?: string;
 }
 
 export interface UseProjectCuration {
   /** Server crowns with this tab's optimistic toggles layered on top. */
   crownedProjects: ReadonlySet<string>;
   toggleCrown: (project: string, crowned: boolean) => void;
-  createProject: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
+  createProject: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
   /** Freshly created projects, overlaid until the server catalog carries them. */
   createdCatalog: ProjectCatalogEntry[];
 }
@@ -94,13 +107,19 @@ export function useProjectCuration(
     });
   }, []);
 
-  const createProject = useCallback(async (name: string, root: string, options?: CreateProjectRequestOptions): Promise<CreateProjectOutcome> => {
+  const createProject = useCallback(async (name: string, root: string | null, options?: CreateProjectRequestOptions): Promise<CreateProjectOutcome> => {
     let response: Response;
     try {
       response = await fetch("/api/projects/create", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(options?.createRoot ? { name, root, createRoot: true } : { name, root }),
+        /* No root is the name-only flow: the server picks and creates the folder. */
+        body: JSON.stringify({
+          name,
+          ...(root === null ? {} : { root }),
+          ...(root !== null && options?.createRoot ? { createRoot: true } : {}),
+          ...(options?.workspaceId ? { workspaceId: options.workspaceId } : {}),
+        }),
       });
     } catch {
       return { ok: false, code: "NETWORK" };
@@ -115,8 +134,14 @@ export function useProjectCuration(
     if (!response.ok || typeof record?.project !== "string") {
       return {
         ok: false,
-        code: typeof record?.error === "string" ? record.error : "ERROR",
+        /* A gate refusal names itself in `code` (workspace_forbidden); a create
+           refusal names itself in `error`. */
+        code: typeof record?.code === "string" ? record.code : typeof record?.error === "string" ? record.error : "ERROR",
         message: typeof record?.message === "string" ? record.message : undefined,
+        ...(typeof record?.project === "string" ? { project: record.project } : {}),
+        ...(typeof record?.displayName === "string" ? { displayName: record.displayName } : {}),
+        ...(typeof record?.root === "string" || record?.root === null ? { root: record.root as string | null } : {}),
+        ...(typeof record?.parent === "string" ? { parent: record.parent } : {}),
       };
     }
     const entry: ProjectCatalogEntry = {

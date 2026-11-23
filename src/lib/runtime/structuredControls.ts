@@ -1,4 +1,6 @@
-import { registryReceiptsForConversation } from "@/lib/agent/registry";
+import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
+import { fencePendingSends } from "./sendSettlement";
+import { ownsItsSettlement, registryReceiptsForConversation } from "@/lib/agent/registry";
 import { cancelSeatQuotaOnControl } from "@/lib/monitor/seatQuotaRecovery";
 import { structuredHostsEnabled } from "./flags";
 import { agentRegistry, type AgentRegistry, type ProcessIdentity, type StructuredHostColumns } from "@/lib/agent/registry";
@@ -14,6 +16,7 @@ import {
 } from "@/lib/accounts/accountOverrides";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
+import { HistorySecurityError, MissingSourceAncestorError, sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
 import { headCwd } from "@/lib/agent/transcript";
 
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "./client";
@@ -24,7 +27,7 @@ import { recoverDeadStructuredConversation, structuredHostProcessAlive } from ".
 
 export type StructuredControlResult =
   | { status: 200; body: { ok: true; structured: true; target: string; outcome: "delivered" } }
-  | { status: 200; body: { ok: true; structured: true; target: string; outcome: "resumed"; spawned: boolean } }
+  | { status: 200; body: { ok: true; structured: true; target: string; outcome: "resumed" | "held"; spawned: boolean } }
   /** Picking the account the conversation runs on while another pick waits (#1846): the waiting pick is
       withdrawn, nothing was ever moved, and no new operation was needed. */
   | { status: 200; body: { ok: true; structured: true; target: string; outcome: "withdrawn"; withdrawn: string | null } }
@@ -53,6 +56,7 @@ export type StructuredControlResult =
       answered and refused (#1501). */
   | { status: 503; body: { error: string; code: typeof RUNTIME_HOST_UNAVAILABLE_CODE } }
   | { status: 503; body: { error: string; retryable: true } }
+  | { status: 409; body: { error: string; code: import("@/lib/accounts/migration/safeHistoryCopy").HistorySecurityCode | "source-ancestor-missing" } }
   | { status: 400 | 409 | 503; body: { error: string } };
 
 export const RUNTIME_HOST_UNAVAILABLE_CODE = "runtime-host-unavailable";
@@ -267,7 +271,11 @@ export async function dispatchStructuredControl(
     attributeAccountChoice?: typeof attributeNamedAccountChoice;
     recover?: typeof recoverDeadStructuredConversation;
     republish?: typeof republishStructuredDeliveryHost;
+    onResumed?: (conversationId: string) => void | Promise<void>;
     hostProcessAlive?: (identity: ProcessIdentity | null) => boolean;
+    preflightSource?: typeof import("@/lib/accounts/migration/provider").preflightCodexSource;
+    /** A caller with durable custody can reconcile under its own deadline. */
+    recoverTransportReceipt?: false;
   } = {},
 ): Promise<StructuredControlResult | null> {
   if (request.providerRecovery && (request.action !== "kill" || !request.onlyIfIdle)) {
@@ -290,21 +298,26 @@ export async function dispatchStructuredControl(
   const snapshot = registry.readOnlySnapshot();
   const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
   if (!entry) return null;
-  // Current legacy ownership wins over retained structured adapter metadata.
-  // The legacy executor revalidates its process fence immediately before acting.
-  if (entry.host) return null;
   /* Host teardown clears the structuredHost column before terminal kill
      projection or reconfigure recovery finishes. Durable conversation state
      keeps those controls on the structured channel throughout that gap. */
-  const structuredKill = request.action === "kill" && !entry.host;
+  const structuredKill = request.action === "kill";
+  // Capture before command admission: a later send is outside this kill's cohort.
+  const pendingSendIds = structuredKill ? [...new Set([
+    ...hotRegistryRows(snapshot, "heldDeliveries").filter(([, row]) => row.conversationId === conversation.id
+      && row.state !== "failed" && row.state !== "delivered").map(([, row]) => row.command.operationId),
+    ...hotRegistryRows(snapshot, "deliveryOperationOwners").filter(([, row]) => row.conversationId === conversation.id
+      && ownsItsSettlement(row) && row.terminalState === null).map(([id]) => id),
+  ])] : [];
+  const pendingSendSet = new Set(pendingSendIds);
+  const fenceSends = (ids = pendingSendIds) => fencePendingSends(ids.filter(id => pendingSendSet.has(id)), { registry,
+    client: dependencies.client === undefined ? runtimeHostClient() : dependencies.client });
   const completedStructuredOwnership = request.action === "reconfigure"
-    && !entry.host
     && registryReceiptsForConversation(snapshot, conversation.id).some((receipt) =>
       receipt.transport === "structured"
         && receipt.state === "completed"
         && registry.canonicalConversationId(receipt.conversationId) === conversation.id);
   const structuredReconfigureRestart = request.action === "reconfigure"
-    && !entry.host
     && (conversation.reconfigure?.status === "applying" || completedStructuredOwnership);
   if (!entry.structuredHost && !structuredKill && !structuredReconfigureRestart) return null;
 
@@ -318,6 +331,13 @@ export async function dispatchStructuredControl(
   if (!STRUCTURED_CONTROL_ACTIONS.has(request.action)) {
     if (request.action === "resume") {
       if (entry.status === "dead" || entry.status === "unhosted") return null;
+      const resumed = (spawned: boolean, held = false): StructuredControlResult => {
+        if (!held) void Promise.resolve().then(async () => {
+          const notify = dependencies.onResumed ?? (await import("@/lib/monitor/resumedSeatTick")).requestResumedSeatTick;
+          await notify(conversation.id);
+        }).catch(error => console.warn("[structured resume] seat recheck deferred", error instanceof Error ? error.message : String(error)));
+        return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: held ? "held" : "resumed", spawned } };
+      };
       try {
         if ((dependencies.hostProcessAlive ?? structuredHostProcessAlive)(entry.structuredHost?.process ?? null)) {
           const republished = await (dependencies.republish ?? republishStructuredDeliveryHost)({
@@ -325,18 +345,21 @@ export async function dispatchStructuredControl(
             sessionId: generation.id,
           });
           if (!republished) {
-            return { status: 503, body: { error: "structured recovery ownership is unavailable" } };
+            // A native Codex process can survive its Viewer connection. Reclaim
+            // that verified socket before reporting the conversation resumed.
+            const recovered = conversation.engine === "codex"
+              ? await (dependencies.recover ?? recoverDeadStructuredConversation)({
+                path: request.path || generation.path,
+                conversationId: conversation.id,
+                reconnectLiveHost: true,
+              }, { registry })
+              : null;
+            if (!recovered || recovered.conversationId !== conversation.id || recovered.reconnected !== true) {
+              return { status: 503, body: { error: "structured recovery ownership is unavailable" } };
+            }
+            return resumed(recovered.spawned, Boolean(recovered.hold));
           }
-          return {
-            status: 200,
-            body: {
-              ok: true,
-              structured: true,
-              target: conversation.id,
-              outcome: "resumed",
-              spawned: false,
-            },
-          };
+          return resumed(false);
         }
         const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
           path: request.path || generation.path,
@@ -345,16 +368,7 @@ export async function dispatchStructuredControl(
         if (!recovered) {
           return { status: 503, body: { error: "structured recovery ownership is unavailable" } };
         }
-        return {
-          status: 200,
-          body: {
-            ok: true,
-            structured: true,
-            target: conversation.id,
-            outcome: "resumed",
-            spawned: recovered.spawned,
-          },
-        };
+        return resumed(recovered.spawned, Boolean(recovered.hold));
       } catch (error) {
         return { status: 503, body: { error: error instanceof Error ? error.message : String(error) } };
       }
@@ -390,12 +404,13 @@ export async function dispatchStructuredControl(
   const reconfigurableEngine = conversation.engine;
 
   const pipelineStage = snapshot.memberships[conversation.id]?.some(membership => membership.kind === "pipeline");
-  if (structuredKill && ((request.controlOrigin?.kind ?? request.actor?.kind) === "agent" || !pipelineStage)
+  if (structuredKill && !request.operationId && ((request.controlOrigin?.kind ?? request.actor?.kind) === "agent" || !pipelineStage)
     && !entry.structuredHost?.process
     && (entry.status === "dead" || entry.status === "unhosted")) {
     /* The durable projection already records this session as torn down, so a
        retirement replays the terminal outcome. Pipeline operator stops still
        need durable admission to fence recovery of the dead stage. */
+    await fenceSends();
     return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: "delivered" } };
   }
 
@@ -410,6 +425,7 @@ export async function dispatchStructuredControl(
      journal that only appends cannot take back a record written for a
      reconfigure the host then refused. */
   let attributeSwitch: (() => AccountOverrideNotice | undefined) | null = null;
+  let assertSwitchCurrent: (() => void) | null = null;
   try {
     const requestedCopilotModel = typeof request.reconfiguration?.model === "string" ? request.reconfiguration.model.trim() : "";
     const copilotAccount = conversation.engine === "copilot"
@@ -497,6 +513,25 @@ export async function dispatchStructuredControl(
       if (conversation.engine !== "copilot" && !accountExists(reconfigurableEngine as "claude" | "codex", reconfiguration.value.accountId)) {
         return { status: 400, body: { error: `account is not available for ${conversation.engine}` } };
       }
+      if (conversation.engine === "codex" && reconfiguration.value.accountId !== generation.accountId) {
+        const { preflightCodexSource, captureCodexSourceAuthority } = await import("@/lib/accounts/migration/provider");
+        const assertSource = captureCodexSourceAuthority(registry, conversation.id, generation);
+        const intent = JSON.stringify([conversation.reconfigure, conversation.migration]);
+        assertSwitchCurrent = () => {
+          assertSource();
+          const current = registry.conversation(conversation.id);
+          const owner = registry.conversationDeliverySnapshot({ conversationId: conversation.id }).entries[sessionKeyId({ engine: "codex", sessionId: generation.id })];
+          if (JSON.stringify([current?.reconfigure, current?.migration]) !== intent
+            || owner?.claimOwner !== entry.claimOwner || owner?.claimEpoch !== entry.claimEpoch
+            || owner?.structuredHost?.writerClaimEpoch !== entry.structuredHost?.writerClaimEpoch
+            || JSON.stringify(owner?.structuredHost?.process) !== JSON.stringify(entry.structuredHost?.process)
+            || owner?.structuredHost?.endpoint !== entry.structuredHost?.endpoint
+            || !accountExists("codex", reconfiguration.value!.accountId!)) throw new Error("account switch ownership changed");
+        };
+        assertSwitchCurrent();
+        await (dependencies.preflightSource ?? preflightCodexSource)(generation, undefined, assertSwitchCurrent);
+        assertSwitchCurrent();
+      }
       /* #1279: a reconfigure that MOVES this conversation onto another account
          places its work there, so this path — which returned before ever
          consulting the binding — now asks it. It asks in order to ATTRIBUTE,
@@ -529,7 +564,7 @@ export async function dispatchStructuredControl(
     }
     const sessionKey = { engine: conversation.engine, sessionId: generation.id };
     const command: RuntimeOperationCommand = request.action === "kill"
-      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey,
+      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey, pendingSendIds,
           origin: request.controlOrigin ?? (request.actor?.kind === "agent" ? { kind: "agent", conversationId: request.actor.conversationId } : { kind: "operator" }),
           ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
           ...(request.providerRecovery ? { providerRecovery: request.providerRecovery } : {}) }
@@ -563,9 +598,15 @@ export async function dispatchStructuredControl(
               conversationId: conversation.id,
               turnId: entry.structuredHost?.activeTurnRef ?? null,
             };
+    assertSwitchCurrent?.();
     const result = await client.command(command);
+    if (structuredKill && (!request.onlyIfIdle || result.receipt.status === "delivered")
+      && ["pending", "queued", "delivering", "applying", "delivered"].includes(result.receipt.status)) {
+      await fenceSends(result.receipt.pendingSendIds ?? (result.replayed ? [] : pendingSendIds));
+    }
     /* The host holds a durable receipt for this reconfigure, so the switch is a
        thing that happened and the record describes it. */
+    assertSwitchCurrent?.();
     const accountOverride = attributeSwitch?.();
     (dependencies.kick ?? kickStructuredDeliveryQueue)();
     return {
@@ -580,14 +621,24 @@ export async function dispatchStructuredControl(
       },
     };
   } catch (error) {
-    if ((request.action === "kill" || request.action === "reconfigure" || request.action === "compact")
+    if (error instanceof HistorySecurityError || error instanceof MissingSourceAncestorError) {
+      const safe = sanitizeProviderError(error);
+      return { status: 409, body: { error: safe.message, code: error instanceof HistorySecurityError ? error.code : "source-ancestor-missing" } };
+    }
+    if (dependencies.recoverTransportReceipt !== false
+      && (request.action === "kill" || request.action === "reconfigure" || request.action === "compact")
       && isRuntimeHostTransportFailure(error)) {
       /* The socket failed after the command may have reached the journal. The
          durable receipt decides whether structured control owns the response. */
       const durable = await client.operationStatus(operationId).catch(() => null);
       if (durable) {
+        if (structuredKill && (!request.onlyIfIdle || durable.receipt.status === "delivered")
+          && ["pending", "queued", "delivering", "applying", "delivered"].includes(durable.receipt.status)) {
+          await fenceSends(durable.receipt.pendingSendIds ?? []);
+        }
         /* The socket failed, the receipt did not: the command was accepted, so
            this is the same acceptance the success path attributes. */
+        try { assertSwitchCurrent?.(); } catch { return { status: 409, body: { error: "account switch ownership changed" } }; }
         const accountOverride = attributeSwitch?.();
         (dependencies.kick ?? kickStructuredDeliveryQueue)();
         return {

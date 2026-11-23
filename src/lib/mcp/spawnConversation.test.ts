@@ -191,7 +191,7 @@ for (const registryMode of ["off", "sqlite"] as const) {
         const args = { conversationId: f.receipt.conversationId, clientRequestId: "held-read" };
         const pending = service.call(tool, args);
         try {
-          await ready;
+          await Promise.race([ready, pending.then(() => { throw new Error("the first read ended before the in-flight barrier"); })]);
           f.as(changed === "caller" ? foreign : owner, changed === "project" ? "other-project" : "fixture");
           const other = service.call(tool, args);
           // The foreign call's promise chain reaches joining/dispatch before

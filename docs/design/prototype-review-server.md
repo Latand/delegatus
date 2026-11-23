@@ -299,13 +299,23 @@ replicas keep their existing delivery shape.
 
 After an approved deployment, the Viewer's existing startup sweep rediscovers
 both task and taskless answers across projects. It settles answers whose exact
-signal version already reached the current seat. Answers without that proof
+signal version already reached the current seat. A closed source pipeline or
+an explicitly skipped source attempt retires its callback with a local
+`delivery.settlement` timestamp and reason. The original delivery state and
+operation receipt stay intact. Normal publisher completion, an absent pipeline
+and a pipeline belonging to another project supply no retirement proof. The
+worker rechecks closure after receipt recovery and before dispatch. Settled
+callbacks leave the retry schedule and wake agenda and no longer block task
+completion; the next boot reads the same settlement. Answers without either proof
 remain on the seat's ordinary wake agenda; after a complete wake is confirmed,
 the next delivery sweep settles them. An operator can press the answer's
 **Send again** action to run the same reconciliation immediately. A safe
 unadmitted answer can then be delivered to the current seat within the reset
 budget; an unresolved execution reports its duplicate risk. No database edits,
 new message keys, forced operation retries or Telegram form reposts are part of
-recovery. Verify each affected round as `sent` and inspect its original receipt
-or local wake proof before closing the recovery. Deployment and installation
-verification belong to the approved Deployer stage.
+recovery. Verify each affected round's delivery receipt, local wake proof or
+closed-target settlement before closing the recovery. Deployment and installation
+verification belong to the approved Deployer stage. The waiting strip and
+Decisions badge count only unanswered notices. Answered delivery notices may
+remain in the list with their original delivery state; a retired callback has
+no retry action.

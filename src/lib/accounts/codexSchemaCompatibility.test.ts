@@ -7,6 +7,141 @@ import { codexSchemaBreaks } from "./codexSchemaCompatibility";
 const read = (version: string, name: string) => JSON.parse(fs.readFileSync(path.join(import.meta.dir, "protocol", version, `${name}.json`), "utf8"));
 
 describe("reviewed pins", () => {
+  test.each(["stable", "experimental"])("0.170.0 changes recovered answer display (%s)", name => {
+    const previous = read("0.169.0", name), current = read("0.170.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual([
+      "v2.AgentMessageDisplay.properties: removed",
+      "v2.AgentMessageDisplay.action: became optional",
+      "v2.AgentMessageDisplay: type changed",
+    ]);
+    const compile = (schema: typeof current) => new Ajv({ strict: false }).compile({
+      $ref: "#/definitions/v2/ItemCompletedNotification", definitions: schema.definitions,
+    });
+    const completion = (display: object | null) => ({
+      threadId: "thread", turnId: "turn", completedAtMs: 1,
+      item: { type: "agentMessage", id: "answer", text: "done", moderation: { moderated: true, display } },
+    });
+    const before = compile(previous), after = compile(current);
+    const legacy = completion({ action: "show" });
+    expect(before(legacy)).toBeTrue();
+    expect(after(legacy)).toBeFalse();
+    expect(before(completion(null))).toBeTrue();
+    expect(after(completion(null))).toBeTrue();
+    for (const display of [
+      { version: 1, mode: "show", trustedContacts: "skip" },
+      { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } },
+      { version: 1, mode: "block", reason: { kind: "cyber" } },
+    ]) {
+      expect(before(completion(display))).toBeFalse();
+      expect(after(completion(display))).toBeTrue();
+    }
+    expect(after(completion({ version: 1, mode: "show" }))).toBeFalse();
+    expect(after(completion({ version: 2, mode: "show", trustedContacts: "skip" }))).toBeFalse();
+    // The other changes are additive or annotations.
+    current.definitions.v2.AgentMessageDisplay = previous.definitions.v2.AgentMessageDisplay;
+    expect(codexSchemaBreaks(previous, current)).toEqual([]);
+  });
+
+  test.each(["stable", "experimental"])("0.168.0 extends 0.167.0 additively (%s)", name => {
+    expect(codexSchemaBreaks(read("0.167.0", name), read("0.168.0", name))).toEqual([]);
+  });
+
+  for (const previous of ["0.167.0", "0.168.0"]) test.each(["stable", "experimental"])(`0.169.0 needs its own pin above ${previous} (%s)`, name => {
+    const before = read(previous, name), current = read("0.169.0", name);
+    expect(codexSchemaBreaks(before, current)).toEqual([
+      'ClientRequest.oneOf[method="account/gatewayOAuth/read"].params: type changed',
+      'ClientRequest.oneOf[method="account/gatewayOAuth/read"].params.anyOf: added',
+      'ClientRequest.oneOf[method="account/gatewayOAuth/login"].params: type changed',
+    ]);
+    // The diagnostic is bounded to three paths. Compare each changed method
+    // separately so neither the login union nor the audio change is hidden.
+    for (const method of ["account/gatewayOAuth/read", "account/gatewayOAuth/login"]) {
+      const isolate = (schema: typeof current) => ({ definitions: { ClientRequest: {
+        oneOf: schema.definitions.ClientRequest.oneOf.filter((row: { properties: { method: { enum: string[] } } }) => row.properties.method.enum.includes(method)),
+      } } });
+      expect(codexSchemaBreaks(isolate(before), isolate(current))).toEqual([
+        `ClientRequest.oneOf[method="${method}"].params: type changed`,
+        `ClientRequest.oneOf[method="${method}"].params.anyOf: added`,
+      ]);
+    }
+    const withoutGatewayChanges = structuredClone(current);
+    withoutGatewayChanges.definitions.ClientRequest = before.definitions.ClientRequest;
+    expect(codexSchemaBreaks(before, withoutGatewayChanges)).toEqual([
+      'v2.FunctionCallOutputContentItem.oneOf[type="input_audio"].audio_url: removed',
+      'v2.FunctionCallOutputContentItem.oneOf[type="input_audio"].audio_url: became optional',
+      'v2.FunctionCallOutputContentItem.oneOf[type="input_audio"].anyOf: added',
+    ]);
+    const compile = (schema: typeof current) => new Ajv({ strict: false }).compile({
+      $ref: "#/definitions/v2/FunctionCallOutputContentItem", definitions: schema.definitions,
+    });
+    const old = compile(before), accepts = compile(current);
+    const url = { type: "input_audio", audio_url: "data:audio/wav;base64,AA==" };
+    expect(old(url)).toBeTrue();
+    expect(accepts(url)).toBeTrue();
+    expect(old({ type: "input_audio", file_id: "stored-audio" })).toBeFalse();
+    expect(accepts({ type: "input_audio", file_id: "stored-audio" })).toBeTrue();
+    expect(accepts({ ...url, file_id: "stored-audio" })).toBeTrue();
+    for (const audio of [{ type: "input_audio" }, { type: "input_audio", file_id: 7 }, { type: "input_audio", audio_url: 7 }]) expect(accepts(audio)).toBeFalse();
+  });
+
+  test.each(["stable", "experimental"])("0.167.0 human command approvals need their reviewed server-request contract (%s)", name => {
+    const previous = read("0.166.0", name), current = read("0.167.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual([
+      "CommandExecutionApprovalKind.enum: removed",
+      "CommandExecutionApprovalKind: type changed",
+      "CommandExecutionApprovalKind.oneOf: added",
+    ]);
+    const compile = (schema: typeof current) => new Ajv({ strict: false }).compile({
+      $ref: "#/definitions/CommandExecutionApprovalKind", definitions: schema.definitions,
+    });
+    const before = compile(previous), after = compile(current);
+    for (const kind of ["command", "writeStdin"]) {
+      expect(before(kind)).toBeTrue();
+      expect(after(kind)).toBeTrue();
+    }
+    expect(before("humanCommand")).toBeFalse();
+    expect(after("humanCommand")).toBeTrue();
+    expect(after("unknownCommand")).toBeFalse();
+  });
+  test.each(["stable", "experimental"])("0.165.0 extends 0.164.0 additively (%s)", name => {
+    const previous = read("0.164.0", name), current = read("0.165.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual([]);
+    const compile = (schema: typeof current, definition: string) => new Ajv({ strict: false }).compile({
+      $ref: `#/definitions/v2/${definition}`, definitions: schema.definitions,
+    });
+    const error = compile(current, "CodexErrorInfo");
+    for (const value of previous.definitions.v2.CodexErrorInfo.anyOf[0].enum) expect(error(value)).toBeTrue();
+    expect(error("modelNotFound")).toBeTrue();
+    const account = compile(current, "Account");
+    expect(account({ type: "gcp" })).toBeTrue();
+    expect(account({ type: "unknown-provider" })).toBeFalse();
+    expect(compile(current, "NetworkRequirements")({ reviewDomains: ["example.test"] })).toBeTrue();
+    expect(compile(current, "NetworkRequirements")({ reviewDomains: 7 })).toBeFalse();
+  });
+  test.each(["stable", "experimental"])("0.166.0 drops detached reviews and is reviewed under its own pin (%s)", name => {
+    const previous = read("0.165.0", name), current = read("0.166.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual([
+      "v2.HookRunSummary.sourcePath.$ref: changed",
+      "v2.ReviewDelivery: enum value removed",
+      "v2.ThreadItem: type changed",
+    ]);
+    const compile = (schema: typeof current, definition: string) => new Ajv({ strict: false }).compile({
+      $ref: `#/definitions/v2/${definition}`, definitions: schema.definitions,
+    });
+    // The renamed path reference is the same string shape.
+    expect(previous.definitions.v2.AbsolutePathBuf.type).toBe("string");
+    expect(current.definitions.v2.LegacyAppPathString).toEqual({ type: "string" });
+    // ThreadItem keeps every variant and gains optional item timestamps.
+    const item = { type: "agentMessage", id: "item", text: "done" };
+    for (const schema of [previous, current]) expect(compile(schema, "ThreadItem")(item)).toBeTrue();
+    expect(compile(current, "ThreadItem")({ ...item, startedAtMs: 1, completedAtMs: null })).toBeTrue();
+    expect(compile(current, "ThreadItem")({ ...item, startedAtMs: "soon" })).toBeFalse();
+    expect(compile(current, "ThreadItem")({ type: "unknownItem", id: "item" })).toBeFalse();
+    // The only narrowing: review/start no longer accepts detached delivery.
+    expect(compile(previous, "ReviewDelivery")("detached")).toBeTrue();
+    expect(compile(current, "ReviewDelivery")("detached")).toBeFalse();
+    expect(compile(current, "ReviewDelivery")("inline")).toBeTrue();
+  });
   test.each(["stable", "experimental"])("0.164.0 reviews file-backed images while retaining inline results (%s)", name => {
     const previous = read("0.163.0", name), current = read("0.164.0", name);
     expect(codexSchemaBreaks(previous, current)).toEqual([
@@ -85,6 +220,31 @@ describe("synthetic changes", () => {
     expect(codexSchemaBreaks(bundle(), missing)).toEqual(["ServerNotification: definition removed"]);
   });
 
+  test("untagged enum growth matches only an otherwise unchanged anyOf branch", () => {
+    const union = "anyOf";
+    const shape = (variants: object[]) => ({ definitions: { Choice: { [union]: variants } } });
+    const before = shape([{ type: "string", enum: ["a", "b"] }, { type: "integer" }]);
+    expect(codexSchemaBreaks(before, shape([{ type: "integer" }, { type: "string", enum: ["a", "b", "c"] }]))).toEqual([]);
+    for (const candidate of [
+      { type: "string", enum: ["a", "c"] },
+      { type: "string", enum: ["a", "b", "c"], maxLength: 1 },
+      { type: ["string", "null"], enum: ["a", "b", "c"] },
+    ]) expect(codexSchemaBreaks(before, shape([candidate, { type: "integer" }]))).toEqual([
+      `Choice.${union}: variant untagged removed or changed`,
+    ]);
+  });
+
+  test("oneOf enum growth that overlaps another branch is refused", () => {
+    const before = { oneOf: [{ type: "string", enum: ["a", "b"] }, { type: "string", enum: ["c", "d"] }] };
+    const after = { oneOf: [{ type: "string", enum: ["a", "b", "c"] }, { type: "string", enum: ["c", "d"] }] };
+    const ajv = new Ajv({ strict: false });
+    expect(ajv.compile(before)("c")).toBeTrue();
+    expect(ajv.compile(after)("c")).toBeFalse();
+    expect(codexSchemaBreaks({ definitions: { Choice: before } }, { definitions: { Choice: after } })).toEqual([
+      "Choice.oneOf: variant untagged removed or changed",
+    ]);
+  });
+
   test("the report is bounded and carries paths, never schema values", () => {
     const breaks = codexSchemaBreaks(bundle(), { definitions: {} });
     expect(breaks).toHaveLength(3);
@@ -112,6 +272,14 @@ describe("the server-request closure", () => {
     expect(codexSchemaBreaks(approval(), approval(undefined, { futureHint: { type: "string" } }))).toEqual(["v2.ApprovalParams.futureHint: added inside a server request"]);
     expect(codexSchemaBreaks(approval(), approval({ type: "string", enum: ["accept", "decline", "defer"] }))).toEqual(["Decision.enum: changed inside a server request"]);
     expect(codexSchemaBreaks(approval({ oneOf: [{ type: "string", enum: ["accept"] }] }), approval({ oneOf: [{ type: "string", enum: ["accept"] }, { type: "object" }] }))).toEqual(["Decision.oneOf: changed inside a server request"]);
+  });
+
+  test.each(["oneOf", "anyOf"])("enum growth inside a server-request union stays refused (%s)", union => {
+    const before = approval({ [union]: [{ type: "string", enum: ["accept", "decline"] }] });
+    const after = approval({ [union]: [{ type: "string", enum: ["accept", "decline", "defer"] }] });
+    expect(codexSchemaBreaks(before, after)).toEqual([union === "anyOf"
+      ? "Decision.anyOf[0].enum: changed inside a server request"
+      : "Decision.oneOf: variant untagged removed or changed"]);
   });
 
   test("outside it the same additions stay additive, and annotations never count", () => {

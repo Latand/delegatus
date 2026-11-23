@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { configureAudioPrefsStorage, CUES_ENABLED_KEY } from "@/lib/audio/prefs";
-import { createBrowserCues, CUE_CLOSE_MS, CUE_PEAK_GAIN, CUE_TONES } from "./cues";
+import { createBrowserCues, CUE_CLOSE_MS, CUE_PEAK_GAIN, CUE_TONES, TIMER_CUE_TONES } from "./cues";
 
 /** A recording AudioContext: every oscillator, its frequency and schedule, and every gain value ever set. */
 function fakeAudio() {
@@ -54,6 +54,20 @@ test("the connect cue is two quiet rising tones and the disconnect cue the same 
   } finally { globalThis.fetch = realFetch; }
 });
 
+test("the timer cue is three quiet rising tones, unlike connect and disconnect, and the sound switch governs it", () => {
+  let enabled = false;
+  const audio = fakeAudio();
+  const cues = createBrowserCues(audio.factory, () => enabled);
+  cues.timer();
+  expect(audio.log.oscillators).toEqual([]);
+  enabled = true;
+  cues.timer();
+  expect(audio.log.oscillators.map((row) => row.hz)).toEqual([...TIMER_CUE_TONES]);
+  expect([...TIMER_CUE_TONES].sort((a, b) => a - b)).toEqual([...TIMER_CUE_TONES]);
+  expect(Math.max(...audio.log.gains)).toBeLessThanOrEqual(CUE_PEAK_GAIN);
+  expect(audio.log.oscillators.at(-1)!.stop! - audio.log.oscillators[0]!.start!).toBeLessThan(0.3);
+});
+
 test("the header sound switch governs the cues: muted plays nothing, and unmuting mid-session brings them back", () => {
   let enabled = false;
   const audio = fakeAudio();
@@ -65,6 +79,16 @@ test("the header sound switch governs the cues: muted plays nothing, and unmutin
   enabled = true;
   cues.connect();
   expect(audio.log.oscillators.map((row) => row.hz)).toEqual([CUE_TONES.low, CUE_TONES.high]);
+});
+
+test("retry ticks are softer than the call cues; give-up falls in three tones under 300ms, under the same switch", () => {
+  let enabled = false; const audio = fakeAudio(); const cues = createBrowserCues(audio.factory, () => enabled);
+  cues.tick?.(); cues.giveUp?.(); expect(audio.log.oscillators).toEqual([]);
+  enabled = true; cues.tick?.(); expect(audio.log.oscillators).toHaveLength(1);
+  expect(Math.max(...audio.log.gains)).toBeLessThan(CUE_PEAK_GAIN);
+  cues.giveUp?.(); const notes = audio.log.oscillators.slice(1);
+  expect(notes.map(row => row.hz)).toEqual([990, 825, 660]); expect(notes.at(-1)!.stop! - notes[0].start!).toBeLessThan(0.3);
+  expect(audio.log.contexts).toBe(1);
 });
 
 test("with no switch handed over, the cues read the device's own sound preference", () => {

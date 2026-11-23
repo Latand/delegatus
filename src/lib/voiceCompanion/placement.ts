@@ -68,6 +68,25 @@ export const NARROW_LANE_WIDTHS = [240, 216] as const;
 export const bubbleChars = (width: number): number => Math.round((BUBBLE_MAX_CHARS * Math.min(width, BUBBLE_MAX_WIDTH)) / BUBBLE_MAX_WIDTH);
 /** The lane heights tried, tallest first: the tallest that fits where the character may stand. */
 export const LANE_HEIGHTS = [360, 340, 320, 300, 280, 260, 240, 220, 200, 180] as const;
+/** The shorter lanes tried only for a call whose state has to be said (reconnecting, offered back, back): a column
+    such as a sidebar in a short window then shows that line where every lane of `LANE_HEIGHTS` is just too tall. */
+export const CALL_LANE_HEIGHTS = [170, 160, 150, 140] as const;
+/** The lanes an opened companion takes where it stands over the page on request: tall enough for the call's notice
+    and the reply it cut, short enough to hide little of the page. */
+export const PAGE_LANE_HEIGHTS = [220, 200, 180, ...CALL_LANE_HEIGHTS] as const;
+/** The room a call's line takes beside a tile that no lane can open from: one row of the notice with its Reconnect,
+    its words on two lines at the most. A column's head row in a short window holds it. */
+export const CALL_LINE: Size = { width: 320, height: 46 };
+/** The narrower room tried where no row holds `CALL_LINE`: the same row with its icon left out beside a Reconnect
+    whose label may take two lines, which a column's head beside a narrower board still holds. */
+export const CALL_LINE_NARROW: Size = { width: 200, height: 46 };
+/** The rooms a call's line is tried in, widest first. */
+export const CALL_LINES: readonly Size[] = [CALL_LINE, CALL_LINE_NARROW];
+/** What an opened companion standing over the page hides beyond its own parts, and the room kept beside each line it
+    takes in, out of that surface's rounded corners (12 px of radius cut about 3.5 px from each corner). Only beside:
+    a line's neighbours above and below would otherwise be taken in too, and theirs, down the whole paragraph. */
+export const VEIL_PAD = 6;
+export const VEIL_CORNER = 4;
 
 /** `above`: the lane stands over the character, in a column too narrow for it beside the character. */
 export type LaneSide = "left" | "right" | "above";
@@ -82,6 +101,30 @@ export function intersectionArea(a: Rect, b: Rect): number {
 }
 
 const inflate = (rect: Rect, by: number): Rect => ({ x: rect.x - by, y: rect.y - by, width: rect.width + by * 2, height: rect.height + by * 2 });
+
+const contains = (outer: Rect, inner: Rect) => inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
+const union = (a: Rect, b: Rect): Rect => {
+  const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+  return { x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y };
+};
+
+/**
+ * The one surface an opened companion stands on where it is over the page: the box around its parts, grown until
+ * every line of the page's text (or small control) it meets lies wholly inside it, out of its rounded corners. No
+ * line is then cut through by a part, and none shows between the parts. Kept within the viewport.
+ */
+export function veilOver(parts: readonly Rect[], lines: readonly Rect[], viewport: Size): Rect {
+  let veil = inflate(parts.reduce(union), VEIL_PAD);
+  /* Each pass takes in at least one more line, so the lines bound the passes. */
+  const beside = (line: Rect): Rect => ({ ...line, x: line.x - VEIL_CORNER, width: line.width + VEIL_CORNER * 2 });
+  for (let pass = 0; pass <= lines.length; pass += 1) {
+    const cut = lines.find((line) => intersectionArea(veil, line) > 0 && !contains(veil, beside(line)));
+    if (!cut) break;
+    veil = union(veil, beside(cut));
+  }
+  const x = Math.max(0, veil.x), y = Math.max(0, veil.y);
+  return { x, y, width: Math.min(viewport.width, veil.x + veil.width) - x, height: Math.min(viewport.height, veil.y + veil.height) - y };
+}
 
 /** Whether `rect` keeps `clearance` from every obstacle. */
 export function isFree(rect: Rect, obstacles: readonly Rect[], clearance = CONTROL_CLEARANCE): boolean {

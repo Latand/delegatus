@@ -27,6 +27,38 @@ test("the latest non-historical critic pass supplies provenance", () => {
   lane.runs[0]!.attempts.push({ ...criticAttempt(lane), n: 2, historical: true, state: "failed" });
   expect(prototypeCriticGate(lane, "publish")).toEqual({ ok: true, pass: { pipelineId: "prototype-lane", stageId: "critic", attempt: 1, outcome: "passed" } });
 });
+test("only an explicitly operator-attributed skip satisfies the critic gate", () => {
+  const lane = criticLane();
+  const attempt = criticAttempt(lane);
+  attempt.state = "skipped";
+  attempt.output = "Skipped by operator.";
+  for (const operatorCriticSkip of [undefined, null, false, "true"]) {
+    Object.assign(attempt, { operatorCriticSkip });
+    expect(prototypeCriticGate(lane, "publish").ok).toBe(false);
+  }
+  Object.assign(attempt, { operatorCriticSkip: true });
+  expect(prototypeCriticGate(lane, "publish")).toEqual({ ok: true, pass: {
+    pipelineId: lane.id, stageId: "critic", attempt: 1, outcome: "skipped-by-operator",
+  } });
+  attempt.state = "failed"; attempt.verdict!.status = "fail";
+  lane.runs[1]!.attempts[0]!.startedAt = "2026-10-12T09:00:00Z";
+  expect(prototypeCriticGate(lane, "publish").ok).toBe(false);
+  attempt.state = "skipped";
+  attempt.effectiveRole = { ...attempt.effectiveRole, roleId: "builder" };
+  const waived = prototypeCriticGate(lane, "publish");
+  expect(waived.ok && waived.pass.outcome).toBe("skipped-by-operator");
+  lane.stages[1]!.effectiveRole = { ...lane.stages[1]!.effectiveRole, roleId: "builder" };
+  expect(prototypeCriticGate(lane, "publish").ok).toBe(true);
+  attempt.state = "passed";
+  expect(prototypeCriticGate(lane, "publish").ok).toBe(false);
+});
+test("another critic pass cannot hide the operator's skip disclosure", () => {
+  const lane = criticLane();
+  lane.stages.push({ ...lane.stages[1]!, id: "second-critic" });
+  lane.runs.push({ stageId: "second-critic", attempts: [{ ...criticAttempt(lane), state: "skipped", operatorCriticSkip: true }] });
+  const result = prototypeCriticGate(lane, "publish");
+  expect(result.ok && result.pass).toEqual({ pipelineId: lane.id, stageId: "second-critic", attempt: 1, outcome: "skipped-by-operator" });
+});
 test("a failed critic is fixed only by its passed fix started after that failure", () => {
   const lane = criticLane();
   criticAttempt(lane).state = "failed"; criticAttempt(lane).verdict!.status = "fail";

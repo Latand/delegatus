@@ -1,3 +1,5 @@
+import { createMediaTextStream } from "@/lib/externalRelay/mediaTextStream";
+import { redactMediaProjection, redactMediaText } from "@/lib/externalRelay/mediaPrivacy";
 import { isNonblockingCodexQuestion } from "./codexAttention";
 import { projectCodexAttentionActions } from "./codexAttentionActions";
 import { codexRequestDigest } from "./codexRequestReceipt";
@@ -6,7 +8,7 @@ import { RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES, runtimeHostKindForEngine, type Runti
 import type { RuntimeEvent } from "./engineHost";
 import { boundedToolArgs } from "./liveTurn";
 import { isPermissionRequest, permissionCommandExcerpt } from "./permissionRequests";
-import { terminalVoiceResponse } from "./voiceDelivery";
+import { streamingVoiceDelivery, terminalVoiceResponse } from "./voiceDelivery";
 
 type JsonObject = Record<string, unknown>;
 
@@ -182,6 +184,7 @@ function truncatedItemProjection(source: JsonObject, maxBytes: number): JsonObje
     oversized one is reduced to its live-turn projection, and a projection that
     is still too large falls back to bare identity. */
 function boundedItem(value: unknown, maxBytes = 8 * 1024): unknown {
+  value = redactMediaProjection(value);
   let serialized: string;
   try { serialized = JSON.stringify(value); } catch { return { truncated: true }; }
   if (Buffer.byteLength(serialized) <= maxBytes) return value;
@@ -370,6 +373,89 @@ export function coalesceReadyEngineDeltas(
   };
 }
 
+/** A cursor-only live companion for a durable suffix. The live window
+ * already delivered the original text, including any voice response. */
+export function clearEngineHostText(event: RuntimeEvent): RuntimeEvent {
+  if (event.kind === "delta") return { ...event, text: "" };
+  if (event.kind === "item" || event.kind === "voice-chunk") return { kind: "item", turnId: event.turnId, seq: event.seq, phase: "completed", item: {} };
+  return event;
+}
+
+type LedgerProjection = ((event: RuntimeEvent) => RuntimeEvent) & {
+  flushPendingText(turnId?: string | null, kind?: string): string;
+  flushPendingEvents(turnId: string | null): RuntimeEvent[];
+};
+
+/** Make the durable host-ledger copy safe before its first append. The live
+ * event remains untouched in the host window and native engine context. */
+export function createEngineHostLedgerProjection(): LedgerProjection {
+  const streams = new Map<string, { turnId: string | null; kind: string; text: ReturnType<typeof createMediaTextStream>; tail: (text: string) => RuntimeEvent }>();
+  // Refuse excess streams for this projector’s lifetime. Evicting a private
+  // context would let its next payload fragment pass as ordinary text.
+  let saturated = false;
+  const projectText = (turnId: string | null, kind: string, identity: string, source: string, tail: (text: string) => RuntimeEvent) => {
+    const key = JSON.stringify([turnId, kind, identity]);
+    let stream = streams.get(key);
+    if (!stream) {
+      if (saturated || streams.size >= 256) { saturated = true; return "[private relay media omitted]"; }
+      stream = { turnId, kind, text: createMediaTextStream(), tail };
+    }
+    const result = stream.text.write(source);
+    if (stream.text.pending) { stream.tail = tail; streams.set(key, stream); }
+    else streams.delete(key);
+    return result;
+  };
+  const project = ((event: RuntimeEvent) => {
+    const projected = redactMediaProjection(event) as RuntimeEvent;
+    if (event.kind === "delta") {
+      const { turnId, seq } = event;
+      const folded = (event as CoalescedEngineEvent & { foldedTextLengths?: number[] }).foldedTextLengths;
+      let offset = 0;
+      // Credit belongs to each source delta even when privacy lookbehind moves
+      // text into a later part. The journal uses these safe lengths to remove
+      // parts a predecessor already committed under the same host cursor.
+      const pieces = (folded ?? [event.text.length]).map(length => {
+        const source = event.text.slice(offset, offset + length);
+        offset += length;
+        return projectText(turnId, "delta", "", source, text => ({ kind: "delta", turnId, seq, text }));
+      });
+      return { ...projected, text: pieces.join(""), ...(folded ? { foldedTextLengths: pieces.map(piece => piece.length) } : {}) };
+    }
+    if (event.kind === "item" && event.voiceResponse) {
+      const { responseId, text } = event.voiceResponse;
+      const { turnId, seq, phase } = event;
+      return { ...projected, voiceResponse: { responseId, text: projectText(turnId, "voice", responseId, text,
+        text => ({ kind: "item", turnId, seq, phase, item: {}, voiceResponse: { responseId: `${responseId}:projection-tail`, text } })) } };
+    }
+    if (event.kind === "voice-chunk") {
+      const { turnId, seq } = event;
+      // Response ids change at each speech chunk. The privacy context follows
+      // the source turn across those chunks, rather than each delivery id.
+      const delivery = { ...event.delivery, responses: [] };
+      return { ...projected, delivery: { ...event.delivery, responses: event.delivery.responses.map(({ responseId, text }) => ({
+        responseId, text: projectText(turnId, "voice-chunk", "", text,
+          text => ({ kind: "voice-chunk", turnId, seq, delivery: streamingVoiceDelivery({ sourceTurnId: turnId, chunkIndex: delivery.streamChunk?.index ?? 0, startOffset: delivery.streamChunk?.endOffset ?? 0, endOffset: (delivery.streamChunk?.endOffset ?? 0) + text.length, text }) })),
+      })) } };
+    }
+    return projected;
+  }) as LedgerProjection;
+  const drain = (turnId?: string | null, kind?: string): RuntimeEvent[] => {
+    const tails: RuntimeEvent[] = [];
+    for (const [key, stream] of streams) {
+      if ((turnId === undefined || stream.turnId === turnId) && (!kind || stream.kind === kind)) {
+        const text = stream.text.finish();
+        if (text) tails.push(stream.tail(text));
+        streams.delete(key);
+      }
+    }
+    return tails;
+  };
+  project.flushPendingEvents = turnId => drain(turnId);
+  project.flushPendingText = (turnId, kind) => drain(turnId, kind).map(event => event.kind === "delta" ? event.text
+    : event.kind === "item" ? event.voiceResponse?.text ?? "" : event.kind === "voice-chunk" ? event.delivery.responses.map(response => response.text).join("") : "").join("");
+  return project;
+}
+
 export function projectEngineHostEvent(
   conversationId: string,
   hostKey: string,
@@ -384,7 +470,7 @@ export function projectEngineHostEvent(
     return { ...base, kind: "turn-started", payload: { conversationId, turnId: event.turnId } };
   }
   if (event.kind === "delta") {
-    const text = clipped(event.text, 8 * 1024);
+    const text = redactMediaText(clipped(event.text, 8 * 1024));
     const folded = "foldedTextLengths" in event && text === event.text ? { foldedTextLengths: event.foldedTextLengths } : {};
     return { ...base, kind: "delta", payload: { conversationId, turnId: event.turnId, text }, ...folded };
   }
@@ -397,7 +483,7 @@ export function projectEngineHostEvent(
         realtimeSessionId: event.realtimeSessionId,
         segmentId: event.segmentId,
         role: event.role,
-        text: clipped(event.text, 16 * 1024),
+        text: redactMediaText(clipped(event.text, 16 * 1024)),
         final: event.final,
       },
     };
@@ -409,7 +495,7 @@ export function projectEngineHostEvent(
       payload: {
         conversationId,
         turnId: event.turnId,
-        voiceDelivery: event.delivery,
+        voiceDelivery: redactMediaProjection(event.delivery),
       },
     };
   }
@@ -419,6 +505,7 @@ export function projectEngineHostEvent(
       : engine === "codex" && event.phase === "completed"
         ? terminalVoiceResponse(event.item, `engine-host:${hostKey}:${event.seq}`)
         : null;
+    const safeVoiceResponse = voiceResponse ? redactMediaProjection(voiceResponse) : null;
     return {
       ...base,
       kind: "item",
@@ -427,7 +514,7 @@ export function projectEngineHostEvent(
         turnId: event.turnId,
         item: boundedItem(event.item),
         phase: event.phase,
-        ...(voiceResponse ? { voiceResponse } : {}),
+        ...(safeVoiceResponse ? { voiceResponse: safeVoiceResponse } : {}),
       },
     };
   }
@@ -437,6 +524,11 @@ export function projectEngineHostEvent(
   if (event.kind === "native-queue-changed") {
     return { ...base, kind: "native-queue-changed", payload: { conversationId, threadId: event.threadId } };
   }
+  /* A recorded check wait is the host's own automatic callback: nobody can
+     answer it, and Codex never confirms its reply. Its receipt stays in the
+     host's ledger for handover recovery and never becomes operator attention,
+     which would hold the session's attention set and block idle work. */
+  if ((event.kind === "attention" || event.kind === "attention-resolved") && event.codexReceipt?.gateWait) return null;
   if (event.kind === "attention") {
     const projected = attentionProjection(engine, event);
     const payload = {

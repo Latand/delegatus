@@ -1,22 +1,29 @@
 import WebSocket from "ws";
 import type { HostedCloudDependencies } from "./cloudHostedClient";
+import { deriveRepositorySetup, type RepositorySetupFiles } from "@/lib/projects/cloudEnvironmentSetup";
+import type { CloudEnvironmentDependencies } from "@/lib/projects/codexCloudEnvironments";
 
 type Row = Record<string, unknown>;
 /** HTTP and WebSocket provider substitute. Only the injected transport can
  * reach it; every HTTP request is remapped to this owned loopback listener. */
 export function stubCloudBackend(options: { create?: boolean; missingConnector?: boolean; pending?: boolean; failedApprovals?: number; operationPhaseFailed?: boolean;
   runtimeStatus?: "missing" | "error" | "invalid" | "foreign"; repository?: string; ref?: string;
+  setupFiles?: RepositorySetupFiles; installScript?: string; draftInstallScript?: string;
   /** Whole reply frames (`{ error }` or `{ result }`) replacing the default answer. */
   replies?: Partial<Record<"thread/start" | "command/exec", Row>> } = {}) {
   const calls: { method: string; path: string; account: string; body: Row }[] = [];
   const configs = new Map<string, Row>();
   const approvals = new Map<string, { id: string; failed: boolean }>();
+  const setupFiles = options.setupFiles ?? { ".bun-version": "1.4.0", "bun.lock": "" };
+  const defaultScript = options.installScript ?? deriveRepositorySetup(setupFiles).installScript;
   let approved = !options.create;
   const config = (account: string, id = `asenvcfg_${account}`) => {
     let value = configs.get(id);
     if (!value) { value = { id, name: "misleading display name", repositories: [{ repository_id: "repo-fixture", ref: options.ref ?? "main", mount_path: "/workspace/project" }],
       version_id: approved ? "version-two" : "version-one", version_revision: approved ? 2 : 1,
-      latest_ready_version_id: approved ? "version-two" : null, share_settings: "private" }; configs.set(id, value); }
+      latest_ready_version_id: approved ? "version-two" : null, share_settings: "private", install_script: defaultScript,
+      ...(options.draftInstallScript === undefined ? {} : { draft: { id: "draft-fixture", revision: 1, base_version_id: "version-two",
+        install_script: options.draftInstallScript }, environment_id: "ccarenv_setup" }) }; configs.set(id, value); }
     return value;
   };
   const threadId = ["00000000", "0000", "0000", "0000", "000000000000"].join("-");
@@ -26,7 +33,8 @@ export function stubCloudBackend(options: { create?: boolean; missingConnector?:
     async fetch(request, server) {
       const url = new URL(request.url), account = request.headers.get("ChatGPT-Account-Id") ?? "fixture";
       if (url.pathname === "/socket" && server.upgrade(request, { data: { account } })) return;
-      const body = request.method === "POST" ? await request.json() as Row : {};
+      if (url.pathname === "/fixture/repository-setup") return Response.json(setupFiles);
+      const body = ["POST", "PATCH"].includes(request.method) ? await request.json() as Row : {};
       calls.push({ method: request.method, path: url.pathname + url.search, account, body });
       if (url.pathname === "/backend-api/wham/github/list-repositories") return Response.json({ repositories: [{ id: "repo-fixture", repository_full_name: options.repository ?? "sample/project" }] });
       if (url.pathname === "/backend-api/wham/github/repositories/repo-other") return Response.json({ repository_full_name: "other/project", default_branch: "main" });
@@ -40,12 +48,14 @@ export function stubCloudBackend(options: { create?: boolean; missingConnector?:
         const value = prior ?? config(account, configs.has(`asenvcfg_${account}`) ? `asenvcfg_${account}_replacement` : `asenvcfg_${account}`);
         value.name = body.name;
         value.repositories = body.repositories;
+        for (const key of ["install_script", "start_skill", "network_policy"]) if (body[key] !== undefined) value[key] = body[key];
         Object.assign(value, { version_id: "version-one", latest_ready_version_id: null, version_revision: 1 });
         return Response.json(value);
       }
       const targetId = url.pathname.split("/")[3] ?? "";
       if (/\/drafts$/.test(url.pathname)) {
-        Object.assign(config(account, targetId), { draft: { id: "draft-fixture", revision: 1 }, environment_id: "ccarenv_setup" });
+        const value = config(account, targetId);
+        Object.assign(value, { draft: { id: "draft-fixture", revision: 1, base_version_id: value.version_id, install_script: value.install_script }, environment_id: "ccarenv_setup" });
         return Response.json({ draft_id: "draft-fixture", environment_id: "ccarenv_setup", thread_id: null });
       }
       if (/\/approve\/begin$/.test(url.pathname)) {
@@ -60,9 +70,17 @@ export function stubCloudBackend(options: { create?: boolean; missingConnector?:
       if (/\/approve\/complete$/.test(url.pathname)) {
         approved = true;
         const value = config(account, targetId); Object.assign(value, { version_id: "version-two", latest_ready_version_id: "version-two", version_revision: 2 });
+        value.install_script = (value.draft as Row).install_script;
         return Response.json(value);
       }
-      if (/\/drafts\/draft-fixture$/.test(url.pathname)) return Response.json({ ...config(account, targetId), draft: { revision: 1 } });
+      if (/\/drafts\/draft-fixture$/.test(url.pathname)) {
+        const value = config(account, targetId), draft = value.draft as Row;
+        if (request.method === "PATCH") {
+          if (body.expected_revision !== draft.revision || body.base_version_id !== draft.base_version_id) return Response.json({}, { status: 409 });
+          Object.assign(draft, { install_script: body.install_script, revision: Number(draft.revision) + 1 });
+        }
+        return Response.json(value);
+      }
       if (url.pathname === `/v1/environment-configs/asenvcfg_${account}`) return Response.json(config(account));
       if (url.pathname === `/v1/environment-configs/${targetId}` && configs.has(targetId)) return Response.json(configs.get(targetId));
       return Response.json({ error: { code: "not_found" } }, { status: 404 });
@@ -96,7 +114,8 @@ export function stubCloudBackend(options: { create?: boolean; missingConnector?:
     },
   });
   const url = `http://127.0.0.1:${server.port}`;
-  const dependencies: HostedCloudDependencies = {
+  const dependencies: HostedCloudDependencies & CloudEnvironmentDependencies = {
+    repositorySetup: async (_repository, _ref, guard) => { guard(); return setupFiles; },
     authenticate: async account => ({ token: "fixture-auth", account: account.accountId }),
     socket: auth => new WebSocket(url.replace("http:", "ws:") + "/socket", { headers: { "ChatGPT-Account-Id": auth.account ?? "fixture" } }),
     fetch: (target, init) => {

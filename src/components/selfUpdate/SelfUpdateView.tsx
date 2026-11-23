@@ -710,6 +710,12 @@ function InstallActionCard({ s, actions, state, t }: { s: Snapshot; actions: Vie
 
 export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot: Snapshot; live: Live; state: ViewState; actions: ViewActions }) {
   const { t, locale } = useLocale();
+  if (s.selfUpdateDisabled) return (
+    <section data-section="updates-disabled" role="status" className={CARD}>
+      <h2 className="m-0 text-body font-semibold text-primary">{t("selfUpdate.disabled.title")}</h2>
+      <p className="m-0 text-ui text-secondary">{t("selfUpdate.refusal.updates-disabled")}</p>
+    </section>
+  );
   const banner = state.waitingForWeb
     ? <p data-banner="waiting" role="status" className="m-0 flex items-center gap-2 rounded-[8px] bg-accent-soft px-3 py-2 text-ui text-primary"><Icon kind="running" />{t("selfUpdate.reconnect.waiting")}</p>
     : state.reloadTo

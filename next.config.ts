@@ -1,4 +1,6 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
 
 /* DELEGATUS_STANDALONE and DELEGATUS_DEV_ORIGINS fold into the LLV_ names
@@ -6,6 +8,9 @@ import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants
 import "./bin/envAlias.mjs";
 
 const nextConfig: NextConfig = {
+  // The first microphone press can install the audio processor from the
+  // already loaded client bundle. The public file also serves restrictive CSPs.
+  env: { NEXT_PUBLIC_DICTATION_WORKLET_SOURCE: readFileSync(join(__dirname, "public/audio/dictation-capture.js"), "utf8") },
   // Conditional standalone output keeps `bun run build && bun start` warning-free while packaging can still opt in.
   output: process.env.LLV_STANDALONE === "1" ? "standalone" : undefined,
   // Dev-only: hosts allowed to reach dev resources cross-origin (Tailscale/LAN preview).
@@ -22,6 +27,8 @@ const nextConfig: NextConfig = {
   },
   outputFileTracingIncludes: {
     "/*": [
+      "src/lib/accounts/protocol/*/stable.json",
+      "src/lib/accounts/protocol/*/experimental.json",
       ".next/server/file-scanner-worker.js",
       ".next/server/files-response-worker.js",
       ".next/server/task-page-worker.js",
@@ -38,6 +45,7 @@ const nextConfig: NextConfig = {
       ".next/server/relay-attachment-stage-worker.js",
       ".next/server/relay-lease-worker.js",
       ".next/server/relay-pdf-validation-worker.js",
+      ".next/server/seat-tick-journal-worker.js",
       ".next/server/mcp-task-worker.js",
       ".next/server/memory-import-worker.js",
       ".next/server/voice-tools-probe-worker.js",
@@ -78,6 +86,7 @@ const nextConfig: NextConfig = {
         "relay-attachment-stage-worker": "./src/lib/externalRelay/attachmentStage.worker.ts",
         "relay-lease-worker": "./src/lib/externalRelay/relayLease.worker.ts",
         "relay-pdf-validation-worker": "./src/lib/externalRelay/pdfValidation.worker.ts",
+        "seat-tick-journal-worker": "./src/lib/monitor/seatTickJournal.worker.ts",
         // The shared MCP graph imports App Router APIs, including after().
         "mcp-task-worker": { import: "./src/lib/mcpTask.worker.ts", layer: "rsc" },
       });

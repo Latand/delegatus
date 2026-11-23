@@ -208,7 +208,7 @@ function runColdSide(checkout: string, work: string, side: string, coldRoot: str
 const OPTIONAL_READ_KEY_TOOLS = new Set([
  'message_receipt', 'list_conversations', 'search_transcripts', 'get_conversation',
  'conversation_deliverability', 'conversation_messages', 'get_pipeline', 'board_snapshot',
- 'list_flows', 'get_flow', 'list_pipelines', 'list_tasks', 'get_task',
+ 'list_pipelines', 'list_tasks', 'get_task',
  'deployment_status', 'resources', 'get_orchestrator', 'account_limits',
 ]);
 

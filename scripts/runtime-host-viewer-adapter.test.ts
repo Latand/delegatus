@@ -8,7 +8,7 @@ import type { Readable } from "node:stream";
 
 import { checkEnvironment } from "./gate-cache";
 import { createGateSandbox, isolatedEnvironment } from "./local-gate";
-import { MCP_TOOL_NAMES } from "../src/lib/mcp/server";
+import { MCP_TOOL_NAMES, MCP_UPDATE_BRIDGE_TOOL_NAMES } from "../src/lib/mcp/server";
 import { UnixRuntimeHostClient } from "../src/lib/runtime/client";
 import { viewerComposeSnapshotName } from "../src/runtime-host/deploymentArtifacts";
 import { RuntimeHost } from "../src/runtime-host/host";
@@ -553,7 +553,7 @@ test("documented bootstrap input obtains host-owned admission through the final 
       calls: { deploymentStatus: true, boardSnapshot: true },
       ok: true,
     });
-    expect(result.health.mcpRuntime?.tools).toEqual([...MCP_TOOL_NAMES, "suggest_replies"].sort());
+    expect(result.health.mcpRuntime?.tools).toEqual([...MCP_TOOL_NAMES, ...MCP_UPDATE_BRIDGE_TOOL_NAMES].sort());
     expect(fs.existsSync(socketPath)).toBe(false);
     const successor = new RuntimeHostFence(`${socketPath}.lock`);
     successor.acquire();
@@ -660,6 +660,7 @@ exit 1
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1 $2" = "compose --project-directory" ]; then printf '%s\\n' "$FAKE_COMPOSE"; exit 0; fi
+if [ "$1 $2" = "buildx inspect" ]; then exit 0; fi
 if [ "$1 $2" = "build --pull" ]; then
   printf '%s\\n' 'lookup registry.example.invalid: no such host; recovered' >&2
   printf '%s\\n' 'ERROR: failed to solve: failed to read dockerfile: open Dockerfile: no such file or directory' >&2
@@ -735,6 +736,7 @@ exit 1
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1 $2" = "compose --project-directory" ]; then printf '%s\\n' "$FAKE_COMPOSE"; exit 0; fi
+if [ "$1 $2" = "buildx inspect" ]; then exit 0; fi
 if [ "$1 $2" = "build --pull" ]; then
   count=$(grep -c '^build --pull' "$FAKE_DOCKER_LOG")
   if [ "$count" = 1 ]; then
@@ -899,78 +901,6 @@ async function runAction(options: {
     state,
   };
 }
-
-test.each(["migrated", "explicit external"])("candidate starts retain the %s tmux endpoint and mount across adapter restarts", async (mode) => {
-  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-existing-tmux-"));
-  const state = path.join(sandbox, "state");
-  const marker = path.join(state, "legacy-tmux-migration-complete");
-  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
-  const endpoint = `http://127.0.0.1:${listener.port}`;
-  await listener.stop(true);
-  const candidate = { image: "viewer:test", container: "viewer-existing-tmux", endpoint, revision: "a".repeat(40) };
-  const snapshot = JSON.parse(composeSnapshot());
-  snapshot.services.viewer.environment.TMUX_TMPDIR = mode === "migrated" ? "/tmp" : "/run/user/1000/agent-log-viewer";
-  if (mode === "explicit external") snapshot.services.viewer.environment.LLV_LEGACY_TMUX_EXTERNAL = "1";
-  const dockerScript = `#!/bin/sh
-printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
-if [ "$1 $2" = "container inspect" ]; then echo 'No such container' >&2; exit 1; fi
-if [ "$1" = run ]; then exit 0; fi
-exit 1
-`;
-  try {
-    for (let start = 0; start < 2; start++) {
-      const result = await runAction({
-        action: "start-candidate", input: { candidate }, dockerScript, sandbox, preserveSandbox: true,
-        setupState: start === 0 ? (directory) => {
-          if (mode === "migrated") fs.writeFileSync(marker, "completed\n");
-          fs.writeFileSync(path.join(directory, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), JSON.stringify(snapshot));
-        } : undefined,
-      });
-      expectAdapterSuccess(result);
-      const runs = result.dockerCalls.filter(call => call.startsWith("run "));
-      expect(runs).toHaveLength(start + 1);
-      for (const call of runs) {
-        expect(call.split(" ")).toContain("TMUX_TMPDIR=/run/user/1000/agent-log-viewer");
-        expect(call.split(" ")).toContain("type=bind,source=/run/user/1000/agent-log-viewer,target=/run/user/1000/agent-log-viewer");
-      }
-      expect(result.dockerCalls.filter(call => !call.startsWith("run ")))
-        .toEqual(Array(start + 1).fill(`container inspect ${candidate.container}`));
-      if (mode === "migrated") expect(fs.readFileSync(marker, "utf8")).toBe("completed\n");
-      else expect(fs.existsSync(marker)).toBe(false);
-      expect(JSON.parse(fs.readFileSync(path.join(state, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), "utf8")))
-        .toEqual(snapshot);
-    }
-  } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
-});
-
-test.each(["redirected", "read-only"])("candidate start refuses a %s explicit external tmux mount before Docker run", async (kind) => {
-  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-conflicting-tmux-"));
-  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
-  const endpoint = `http://127.0.0.1:${listener.port}`;
-  await listener.stop(true);
-  const candidate = { image: "viewer:test", container: "viewer-conflicting-tmux", endpoint, revision: "a".repeat(40) };
-  const snapshot = JSON.parse(composeSnapshot());
-  Object.assign(snapshot.services.viewer.environment, { LLV_LEGACY_TMUX_EXTERNAL: "1", TMUX_TMPDIR: "/run/user/1000/agent-log-viewer" });
-  snapshot.services.viewer.volumes.push({
-    type: "bind", source: kind === "redirected" ? "/elsewhere" : "/run/user/1000/agent-log-viewer",
-    target: "/run/user/1000/agent-log-viewer", read_only: kind === "read-only", bind: {},
-  });
-  try {
-    const result = await runAction({
-      action: "start-candidate", input: { candidate }, sandbox, preserveSandbox: true,
-      dockerScript: `#!/bin/sh
-printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
-echo 'No such container' >&2
-exit 1
-`,
-      setupState: directory => fs.writeFileSync(path.join(directory, "deployments", "compose", viewerComposeSnapshotName(candidate.container)), JSON.stringify(snapshot)),
-    });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("writable host directory");
-    expect(result.dockerCalls).toEqual([`container inspect ${candidate.container}`]);
-    expect(fs.existsSync(path.join(result.state, "legacy-tmux-migration-complete"))).toBe(false);
-  } finally { fs.rmSync(sandbox, { recursive: true, force: true }); }
-});
 
 function initializeHotStateFixture(
   state: string,
@@ -1373,7 +1303,7 @@ test("the first successor boot publishes and probes the MCP runtime after an old
         },
       },
     });
-    expect(result.health.tools).toEqual([...MCP_TOOL_NAMES, "suggest_replies"].sort());
+    expect(result.health.tools).toEqual([...MCP_TOOL_NAMES, ...MCP_UPDATE_BRIDGE_TOOL_NAMES].sort());
     const target = JSON.parse(fs.readFileSync(path.join(fixture.state, "viewer-release.json"), "utf8"));
     expect(target).toMatchObject({
       revision,
@@ -1485,6 +1415,7 @@ exit 1
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1 $2" = "compose --project-directory" ]; then printf '%s\\n' "$FAKE_COMPOSE"; exit 0; fi
+if [ "$1 $2" = "buildx inspect" ]; then exit 0; fi
 if [ "$1 $2" = "build --pull" ]; then exit 0; fi
 if [ "$1 $2" = "build --target" ]; then exit 0; fi
 if [ "$1 $2" = "container ls" ]; then exit 0; fi
@@ -1676,6 +1607,42 @@ exit 1
   expect(result.dockerCalls).toContain("container stop --time 10 viewer-rollback");
   expect(result.dockerCalls).not.toContain("container stop --time 10 viewer-current");
   expect(result.dockerCalls).toContain("container rm -f viewer-obsolete");
+});
+
+test("managed retention prunes the install builder at the successful build cutoff and protects both release IDs", async () => {
+  const { releaseBuilderName, viewerCandidateContainerName, viewerCandidateImageName } = await import("../src/runtime-host/deploymentArtifacts");
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "managed-release-retention-"));
+  const state = path.join(sandbox, "state");
+  const make = (key: string, revision: string) => {
+    const container = viewerCandidateContainerName(key);
+    return { ...release, revision, container, image: viewerCandidateImageName(revision, container) };
+  };
+  const current = make("current", "a".repeat(40)), rollback = make("previous", "b".repeat(40));
+  const old = make("obsolete", "c".repeat(40)), foreign = make("foreign", "d".repeat(40));
+  const builder = releaseBuilderName(state), id = (char: string) => "sha256:" + char.repeat(64);
+  const result = await runAction({ action: "retain-only", sandbox, input: { releases: [current, rollback] },
+    environment: { LLV_RELEASE_BUILD_CACHE_BYTES: "1024" },
+    setupState: () => {
+      for (const key of ["current", "previous", "obsolete"]) fs.mkdirSync(path.join(state, "deployments", key));
+      fs.writeFileSync(path.join(state, "deployments/current/docker-build.json"),
+        JSON.stringify({ image: current.image, builder, startedAt: Date.now() - 120_000 }));
+    },
+    dockerScript: `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1 $2" in
+  "container ls"|"container inspect"|"container stop"|"buildx prune"|"image rm") exit 0 ;;
+  "image inspect") printf '%s\\n' '${id("a")}' '${id("b")}' ;;
+  "image ls") printf '%s\\n' '${id("a")} ${current.image}' '${id("b")} ${rollback.image}' '${id("b")} ${old.image}-gate' '${id("c")} ${old.image}' '${id("d")} ${foreign.image}' ;;
+  *) exit 1 ;;
+esac
+` });
+  expectAdapterSuccess(result);
+  expect(result.dockerCalls.filter(call => call.startsWith("image rm"))).toEqual([`image rm ${old.image}`]);
+  expect(result.dockerCalls).toContain(`image ls --no-trunc --filter before=${current.image} --format {{.ID}} {{.Repository}}:{{.Tag}}`);
+  const prune = result.dockerCalls.find(call => call.startsWith("buildx prune"));
+  expect(prune).toContain(`--builder ${builder} --force --all --filter until=`);
+  expect(Number(/until=(\d+)s/.exec(prune!)![1])).toBeGreaterThanOrEqual(120);
+  expect(prune).toEndWith("--max-used-space 1024");
 });
 
 test("a candidate that dies before readiness carries its container's own account into the evidence", async () => {

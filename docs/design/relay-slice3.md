@@ -74,6 +74,12 @@ derives from its own record of the message (relay.md §A.8):
 | `is_admin: true`, `is_owner: false` (admins, anonymous admins, the owner posting anonymously) | **one-shot**, exactly the 2b run | An admin's rounds carry admin-audience results. Resuming the member session with them would put admin-only text where a member's later turn can quote it. The member session catches up on the admin's question and the posted reply from the window on its next turn. |
 | a request without `chat` | one-shot | relay.md §A.8: no key, no conversation. |
 
+Amended 2026-11-21: a requester block counts only when its `key` authored the
+unique non-`self` message named by `respond_to` (and, for `is_owner`, with
+`is_anonymous_admin: false`). The parser declines any other requester
+`invalid_request` before a session is chosen, so a forged owner flag reaches
+neither the owner session nor owner-audience results.
+
 So exactly two sessions exist per (relay id, target id, chat key), matching K4,
 and nothing restricted ever enters the one members share. A third,
 admins-only session and an admin fork of the member session were considered;

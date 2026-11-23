@@ -283,13 +283,13 @@ test("a launch freezes the control and cannot leave a popup open over it", () =>
 
 test("an empty directory reads as empty rather than as a blank control", () => {
   render("");
-  expect(trigger().textContent).toContain("no directory chosen");
-  expect(trigger().getAttribute("aria-label")).toBe("Agent working directory: no directory chosen");
+  expect(trigger().textContent).toContain("Choose a folder…");
+  expect(trigger().getAttribute("aria-label")).toBe("Agent working directory: Choose a folder…");
   setLocale("uk");
   flushSync(() => root!.render(
     <DirectoryPicker id="pick" value="" dirs={DIRS} ariaLabel="Робоча директорія агента" onChange={() => {}} />,
   ));
-  expect(trigger().textContent).toContain("директорію не вибрано");
+  expect(trigger().textContent).toContain("Оберіть теку…");
 });
 
 /* Issue #1223: create-project's suggestions come from the filesystem, so the

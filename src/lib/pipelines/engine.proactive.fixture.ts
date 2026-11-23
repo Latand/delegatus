@@ -15,6 +15,14 @@ export const stages = [
 export async function fixture(name: string, cloud = false, repoDir = "/repo", project = `proactive-${name}`, graph: readonly { id: string; [key: string]: unknown }[] = stages) {
   savePipelines([]);
   const h = harness();
+  if (cloud) {
+    // Admission needs capabilities before creation. Each Cloud scenario installs
+    // its execution fake before ticking; this guard keeps provider effects fake.
+    const unexpected = async () => { throw new Error("Configure the Cloud execution fake before ticking"); };
+    h.ports.cloudClient = { supportsModel: model => model === "gpt-6.1-sol",
+      hasEnvironment: unexpected, submit: unexpected, poll: unexpected,
+      readFinalMessage: unexpected, readDiff: unexpected };
+  }
   h.advanceWallClock(NOW - 1_000_000);
   h.ports.projectForCwd = () => project;
   h.setConversationActive(false); h.setPaneAlive(false);

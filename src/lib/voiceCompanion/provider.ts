@@ -3,7 +3,16 @@ import { liveSessionConfiguration, type BackendRequest } from "./sessionConfig";
 import type { VoiceToolSnapshot } from "@/lib/voiceTools/snapshot";
 
 export type LiveCommand = Record<string, unknown> & { type: string };
-export interface LiveConnection { send(event: LiveCommand): void; dispose(): void }
+/** What became of words handed to `speak`: voiced at the provider, possibly voiced, or never going to be. */
+export type SpeechOutcome = "handed" | "uncertain" | "withdrawn";
+/** Words the provider may hold. `withdraw` takes back words not yet on their way, and says whether it did. */
+export interface HeldSpeech { withdraw(): boolean }
+export interface LiveConnection {
+  send(event: LiveCommand): void;
+  dispose(): void;
+  /** For a provider that queues speech: without it, `send` returning means the provider took the words. Throws when it cannot take them. */
+  speak?(text: string, settled: (outcome: SpeechOutcome) => void): HeldSpeech;
+}
 export type LiveToolHandler = (name: string, args: unknown, callId: string, turnId: string) => Promise<unknown>;
 export interface LiveProvider {
   /** Codex owns the backing turn and the call's leased process. */

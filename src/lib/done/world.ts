@@ -7,7 +7,7 @@ import { readForgeCache } from "@/lib/forge/cache";
 import { pipelineRepository } from "@/lib/forge/resolve";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { readHistory } from "@/lib/limitsHistoryStore";
-import { loadArchivedPipelinesForListAsync, loadPipelinesForListAsync } from "@/lib/pipelines/store";
+import { findPipelineRecord, loadArchivedPipelinesForListAsync, loadPipelinesForListAsync } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { recordedProjectRemotes } from "@/lib/projects/aliases";
 import { namedProjectDirectory, resolveNamedProject, type NamedProjectDirectory } from "@/lib/projects/nameResolution";
@@ -118,6 +118,7 @@ export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWo
     reports: () => quietly(() => readBridgeReportLog().reports, []),
     limits: () => quietly(() => readHistory().series, {}),
     pipelineRepository: (pipeline) => quietly(() => pipelineRepository(pipeline), null),
+    pipelineRecord: (pipelineId) => quietly(() => findPipelineRecord(pipelineId), null),
     repositoryProject(repository) {
       return quietly(() => {
         if (!repositories) {

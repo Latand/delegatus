@@ -442,6 +442,41 @@ test("a never-run stage's ⚙ opens its configuration in a sheet — the desktop
   expect(q(stageRow(done, "fix")!, ".pb-stage-row")!.tagName).toBe("DIV");
 });
 
+test("a tap on a stage that has not started opens this screen on that stage's sheet, once; a stage that ran, another lane or a finished lane opens none (docs/design/task-card-no-inline-conversations.md §6)", async () => {
+  const { requestPipelineStage } = await import("./pipelineStageRequest");
+  const sheetOf = () => dom.document.querySelector('[data-mobile2-sheet="stage"]') as unknown as HTMLElement | null;
+
+  const store = nav();
+  requestPipelineStage("p2", "fix");
+  mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, store);
+  await settle();
+  expect(store.getState().sheet).toBe("stage");
+  expect(sheetOf()!.textContent).toContain(translate("en", "mobile2.pipeline.configureTitle", { stage: "Fix" }));
+  expect(sheetOf()!.querySelector('[data-mobile2-stage-config="fix"] [data-pipeline-stage-card="p2::fix"]')).not.toBeNull();
+  flushSync(() => store.closeSheet());
+  await settle();
+  expect(sheetOf()).toBeNull();
+
+  /* The request is taken once: the next screen for the same lane opens plain. */
+  const again = nav();
+  mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, again);
+  await settle();
+  expect(again.getState().sheet).toBeNull();
+
+  for (const [pipelineId, stageId, pipeline] of [
+    ["p2", "review", parkedPipeline()],
+    ["other", "fix", parkedPipeline()],
+    ["p2", "fix", parkedPipeline({ state: "completed", cursor: null })],
+  ] as const) {
+    const plain = nav();
+    requestPipelineStage(pipelineId, stageId);
+    mount(<MobilePipelineScreen pipeline={pipeline} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, plain);
+    await settle();
+    expect(plain.getState().sheet).toBeNull();
+    expect(sheetOf()).toBeNull();
+  }
+});
+
 test("a spent review budget is answered inside the review stage: its heads, Close lane and One more round", () => {
   const review = parkedPipeline({
     state: "needs_review",
@@ -681,6 +716,24 @@ test.each(["running", "passed", "failed", "needs_decision"] as const)("stage age
   click(q(stage, 'details summary'));
   click(q(stage, '[data-open-attempt="1"]'));
   expect(opened).toEqual([current.path, old.path]);
+});
+
+test("a stage that ran in the cloud opens its stored cloud task from the same row, in both languages", () => {
+  const taskUrl = "https://example.com/cloud/tasks/task_abc123";
+  const cloudPipeline = (cloud: Record<string, unknown>) => parkedPipeline({
+    stages: [STAGES[0]!], state: "completed", cursor: null,
+    runs: [{ stageId: "design", attempts: [attempt({ n: 1, state: "passed", agentPath: null, conversationId: null, definition: { runtime: "codex-cloud" }, cloud })] }],
+  } as unknown as Partial<Pipeline>);
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const host = mount(<MobilePipelineScreen pipeline={cloudPipeline({ phase: "completed", taskId: "task_abc123", taskUrl })} files={[]} now={NOW} onOpenConversation={() => { throw new Error("cloud stages have no transcript"); }} />);
+    const link = q(host, '.pb-stage[data-stage="design"] a.pb-open-conv[data-open-cloud="design"]') as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe(taskUrl);
+    expect(link.textContent).toBe(translate(lang, "pipelineStage.openCloudTask"));
+    expect(q(host, "[data-open-conversation]")).toBeNull();
+    const bare = mount(<MobilePipelineScreen pipeline={cloudPipeline({ phase: "failed", taskId: null, taskUrl: null, error: "refused", submissionUnresolved: false })} files={[]} now={NOW} onOpenConversation={() => {}} />);
+    expect(q(bare, "[data-open-cloud]")).toBeNull();
+  }
 });
 
 test("a conversation id missing from the scan still offers Open agent and uses the normal reader link in Ukrainian", () => {

@@ -1,0 +1,831 @@
+{
+  "measuredAtUtc": "2026-11-11T16:30:23.251224+00:00",
+  "baseCommit": "1037130eed9d990edcdd3053150af7ba44592cf9",
+  "implementationCommit": "54dab50d9e2a703627aaf3a44ae9672036d63130",
+  "runtime": "Bun 1.4.0; Linux; 24 logical CPUs",
+  "controlled": {
+    "startedAtUtc": "2026-11-11T15:26:50Z",
+    "endedAtUtc": "2026-11-11T15:42:29Z",
+    "hookWallSeconds": 939,
+    "outerHarnessAdmissionSeconds": 268.063,
+    "hookCpuAdmissionSeconds": 33.643,
+    "typesSeconds": 636,
+    "lintSeconds": 7,
+    "privacy": "PASS; phase duration unreported",
+    "touchedExecutionBudgetSeconds": 900,
+    "selectedFiles": 67,
+    "reportedFiles": 58,
+    "greenFiles": 41,
+    "incompleteFiles": 13,
+    "baselineStarted": false,
+    "exit": 1,
+    "cleanup": "owned survivor reported; recorded process absent on post-run inspection",
+    "load1Range": [
+      30.06884765625,
+      120.4873046875
+    ],
+    "testUnitFullStallFraction": 0.056228064217939355,
+    "cpuSampling": "one-second samples; partial cgroup lifetimes",
+    "headFiles": [
+      {
+        "file": "src/lib/pipelines/engine.closeAttempts.test.ts",
+        "wallMs": 26133,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.claudeCloud.test.ts",
+        "wallMs": 31026,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+        "wallMs": 15993,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.cpuQueue.test.ts",
+        "wallMs": 12786,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.capacity.test.ts",
+        "wallMs": 98388,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.dependencies.test.ts",
+        "wallMs": 9266,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.activation.test.ts",
+        "wallMs": 132463,
+        "failures": 1,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "wallMs": 123138,
+        "failures": 6,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.historyWrites.test.ts",
+        "wallMs": 34439,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.fencedMessage.test.ts",
+        "wallMs": 94194,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.containment.test.ts",
+        "wallMs": 207345,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.creation.test.ts",
+        "wallMs": 153887,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+        "wallMs": 217516,
+        "failures": 1,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.accountGuard.test.ts",
+        "wallMs": 218359,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.pauseMetadata.test.ts",
+        "wallMs": 13287,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.privacyCorrelation.test.ts",
+        "wallMs": 7070,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.launchLease.test.ts",
+        "wallMs": 98250,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.cloud.test.ts",
+        "wallMs": 301132,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.missingWorktree.test.ts",
+        "wallMs": 131807,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudget.test.ts",
+        "wallMs": 116798,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+        "wallMs": 240518,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+        "wallMs": 300907,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.proactive.test.ts",
+        "wallMs": 233199,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.ports.part3.test.ts",
+        "wallMs": 301163,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.ports.test.ts",
+        "wallMs": 300923,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.proactive.part2.test.ts",
+        "wallMs": 300809,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+        "wallMs": 203612,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+        "wallMs": 100291,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+        "wallMs": 183549,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+        "wallMs": 178937,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+        "wallMs": 191408,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+        "wallMs": 178879,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerChains.part2.test.ts",
+        "wallMs": 98154,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+        "wallMs": 184315,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+        "wallMs": 185612,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+        "wallMs": 184473,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerReset.part3.test.ts",
+        "wallMs": 29310,
+        "failures": 27,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+        "wallMs": 175895,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.recoveredPending.test.ts",
+        "wallMs": 22842,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerChains.test.ts",
+        "wallMs": 150523,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.provisioning.test.ts",
+        "wallMs": 94171,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerSignals.test.ts",
+        "wallMs": 106639,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.publication.test.ts",
+        "wallMs": 105117,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.recovery.test.ts",
+        "wallMs": 106285,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.recovery.part2.test.ts",
+        "wallMs": 113579,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerReset.part2.test.ts",
+        "wallMs": 210513,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+        "wallMs": 115892,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+        "wallMs": 97667,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.providerReset.test.ts",
+        "wallMs": 215043,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.settlementAuthority.test.ts",
+        "wallMs": 9335,
+        "failures": 0,
+        "complete": true
+      },
+      {
+        "file": "src/lib/pipelines/engine.restoreContinuation.test.ts",
+        "wallMs": 78075,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+        "wallMs": 123865,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+        "wallMs": 107286,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.roleMemoryDispatch.test.ts",
+        "wallMs": 76599,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.settlement.test.ts",
+        "wallMs": 28262,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.routing.test.ts",
+        "wallMs": 39596,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+        "wallMs": 46785,
+        "failures": 1,
+        "complete": false
+      },
+      {
+        "file": "src/lib/pipelines/engine.settlementPreparation.test.ts",
+        "wallMs": 10417,
+        "failures": 1,
+        "complete": false
+      }
+    ]
+  },
+  "native": [
+    {
+      "cpuQuotaPercent": 25,
+      "base": {
+        "passingCommands": 1,
+        "commands": 5,
+        "medianWallSeconds": 16.468,
+        "load1Range": [
+          13.35595703125,
+          15.921875
+        ],
+        "commandWallSeconds": [
+          17.262,
+          16.468,
+          16.731,
+          16.297,
+          5.609
+        ]
+      },
+      "boundsOnly": {
+        "passingCommands": 2,
+        "commands": 5,
+        "medianWallSeconds": 49.783,
+        "load1Range": [
+          12.904296875,
+          15.3046875
+        ],
+        "commandWallSeconds": [
+          49.783,
+          50.413,
+          51.162,
+          5.814,
+          5.515
+        ]
+      },
+      "fixed": {
+        "passingCommands": 5,
+        "commands": 5,
+        "medianWallSeconds": 4.704,
+        "load1Range": [
+          8.3017578125,
+          9.4140625
+        ],
+        "commandWallSeconds": [
+          5.231,
+          5.26,
+          4.552,
+          4.704,
+          4.401
+        ]
+      }
+    },
+    {
+      "cpuQuotaPercent": 10,
+      "base": {
+        "passingCommands": 5,
+        "commands": 5,
+        "medianWallSeconds": 15.397,
+        "load1Range": [
+          9.51953125,
+          14.2236328125
+        ],
+        "commandWallSeconds": [
+          18.13,
+          15.705,
+          15.397,
+          12.167,
+          12.828
+        ]
+      },
+      "boundsOnly": {
+        "passingCommands": 2,
+        "commands": 5,
+        "medianWallSeconds": 32.274,
+        "load1Range": [
+          9.533203125,
+          14.6162109375
+        ],
+        "commandWallSeconds": [
+          33.922,
+          32.274,
+          57.036,
+          11.94,
+          13.067
+        ]
+      },
+      "fixed": {
+        "passingCommands": 5,
+        "commands": 5,
+        "medianWallSeconds": 12.851,
+        "load1Range": [
+          6.12548828125,
+          7.7265625
+        ],
+        "commandWallSeconds": [
+          12.887,
+          12.247,
+          12.355,
+          12.851,
+          16.271
+        ]
+      }
+    },
+    {
+      "cpuQuotaPercent": 300,
+      "base": {
+        "passingCommands": 2,
+        "commands": 5,
+        "medianWallSeconds": 5.689,
+        "load1Range": [
+          9.4775390625,
+          13.15185546875
+        ],
+        "commandWallSeconds": [
+          1.112,
+          5.689,
+          1.225,
+          10.115,
+          10.24
+        ]
+      },
+      "boundsOnly": {
+        "passingCommands": 3,
+        "commands": 5,
+        "medianWallSeconds": 1.204,
+        "load1Range": [
+          9.92626953125,
+          20.02392578125
+        ],
+        "commandWallSeconds": [
+          1.197,
+          21.191,
+          26.992,
+          1.204,
+          1.123
+        ]
+      },
+      "fixed": {
+        "passingCommands": 5,
+        "commands": 5,
+        "medianWallSeconds": 1.138,
+        "load1Range": [
+          6.8369140625,
+          7.09033203125
+        ],
+        "commandWallSeconds": [
+          1.161,
+          1.171,
+          1.138,
+          1.087,
+          1.108
+        ]
+      }
+    }
+  ],
+  "nativeConditions": "Five isolated commands per series and quota, two named cases each; loads differ; fixed series always requests a one-page FIFO. No throughput claim.",
+  "recoveryTestSplit": {
+    "beforeTests": 137,
+    "afterTests": [
+      123,
+      14
+    ],
+    "beforeAssertions": 2915,
+    "afterAssertions": [
+      2511,
+      404
+    ],
+    "beforeRunnerSeconds": 319.15,
+    "afterRunnerSeconds": [
+      191.48,
+      27.59
+    ],
+    "fileLimitSeconds": 300,
+    "movedBlockUnchanged": true,
+    "conditions": "Sequential isolated files; unmatched machine loads"
+  },
+  "controls": [
+    {
+      "name": "privacy configuration result before repair",
+      "observed": "check-failure; retryAt null",
+      "expected": "interrupted; retry after 60 seconds",
+      "exit": 1
+    },
+    {
+      "name": "comparator budget result before repair",
+      "observed": "check-failure; retryAt null",
+      "expected": "infrastructure-deadline; retry after 60 seconds",
+      "exit": 1
+    },
+    {
+      "name": "aggregate checkpoint before repair",
+      "observedExit": 1,
+      "expectedExit": 75
+    },
+    {
+      "name": "remove comparator CPU wait credit after strengthening the pool control",
+      "exit": 1
+    },
+    {
+      "name": "remove typed filtered budget refusal",
+      "exit": 1
+    },
+    {
+      "name": "old fixture with FIFO forced to 4096 bytes",
+      "observed": "native process blocked in pipe_write; reader held while waiting for native exit",
+      "exit": 1
+    }
+  ],
+  "checks": [
+    {
+      "file": "./src/lib/pipelines/publicationHistory.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./src/lib/pipelines/publicationHistory.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 36.065,
+      "passingTests": 57,
+      "assertions": 237,
+      "runnerSeconds": 35.47
+    },
+    {
+      "file": "./src/lib/pipelines/publication.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./src/lib/pipelines/publication.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 1.008,
+      "passingTests": 83,
+      "assertions": 135,
+      "runnerSeconds": 0.483
+    },
+    {
+      "file": "./scripts/local-gate-tests.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./scripts/local-gate-tests.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 46.946,
+      "passingTests": 33,
+      "assertions": 158,
+      "runnerSeconds": 46.48
+    },
+    {
+      "file": "./scripts/local-gate-tests.retry.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./scripts/local-gate-tests.retry.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 49.545,
+      "passingTests": 25,
+      "assertions": 132,
+      "runnerSeconds": 49.03
+    },
+    {
+      "file": "./scripts/local-gate-tests.rendezvous.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./scripts/local-gate-tests.rendezvous.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 73.109,
+      "passingTests": 3,
+      "assertions": 34,
+      "runnerSeconds": 72.69
+    },
+    {
+      "file": "./scripts/local-gate-tests.baseline.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./scripts/local-gate-tests.baseline.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 45.92,
+      "passingTests": 10,
+      "assertions": 80,
+      "runnerSeconds": 45.47
+    },
+    {
+      "file": "./scripts/local-gate-tests.cpuQueue.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./scripts/local-gate-tests.cpuQueue.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 17.56,
+      "passingTests": 4,
+      "assertions": 10,
+      "runnerSeconds": 17.14
+    },
+    {
+      "file": "./scripts/local-gate.checkpoints.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./scripts/local-gate.checkpoints.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 47.771,
+      "passingTests": 12,
+      "assertions": 82,
+      "runnerSeconds": 47.31
+    },
+    {
+      "file": "./src/lib/pipelines/publicationRecovery.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./src/lib/pipelines/publicationRecovery.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 192.013,
+      "passingTests": 123,
+      "assertions": 2511,
+      "runnerSeconds": 191.48
+    },
+    {
+      "file": "./src/lib/pipelines/publicationRecovery.gateFaults.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./src/lib/pipelines/publicationRecovery.gateFaults.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 28.185,
+      "passingTests": 14,
+      "assertions": 404,
+      "runnerSeconds": 27.59
+    },
+    {
+      "file": "./src/lib/runtime/codexSocketTransport.native.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./src/lib/runtime/codexSocketTransport.native.test.ts"
+      ],
+      "exit": 0,
+      "wallSeconds": 10.227,
+      "passingTests": 34,
+      "assertions": 542,
+      "runnerSeconds": 9.86
+    },
+    {
+      "file": "./scripts/local-gate.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./scripts/local-gate.test.ts",
+        "-t",
+        "push checks commits|repository default budgets|supervision covers"
+      ],
+      "exit": 0,
+      "wallSeconds": 0.964,
+      "passingTests": 2,
+      "assertions": 8,
+      "runnerSeconds": 0.47
+    },
+    {
+      "file": "./scripts/local-gate.hooks.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./scripts/local-gate.hooks.test.ts",
+        "-t",
+        "the admitted hook credits"
+      ],
+      "exit": 0,
+      "wallSeconds": 0.988,
+      "passingTests": null,
+      "assertions": 2,
+      "runnerSeconds": null
+    },
+    {
+      "file": "./scripts/local-gate.hooks.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "./scripts/local-gate.hooks.test.ts",
+        "-t",
+        "repository default budgets"
+      ],
+      "exit": 0,
+      "wallSeconds": 7.431,
+      "passingTests": null,
+      "assertions": 12,
+      "runnerSeconds": null
+    }
+  ],
+  "gitVerification": {
+    "testedCommit": "55743fdea04bbcd2554a36e3fa9db41013932cde",
+    "baseCommit": "1037130eed9d990edcdd3053150af7ba44592cf9",
+    "fullHead": {
+      "pass": 208,
+      "fail": 6,
+      "errors": 3,
+      "assertions": 1313,
+      "runnerSeconds": 442.62,
+      "commandWallSeconds": 443.523
+    },
+    "matchingBaseSample": {
+      "pass": 0,
+      "fail": 6,
+      "errors": 3,
+      "assertions": 12,
+      "runnerSeconds": 153.07,
+      "commandWallSeconds": 153.739
+    },
+    "systemGitSample": {
+      "head": {
+        "pass": 4,
+        "fail": 2,
+        "assertions": 38,
+        "runnerSeconds": 4.96,
+        "commandWallSeconds": 5.685
+      },
+      "base": {
+        "pass": 4,
+        "fail": 2,
+        "assertions": 38,
+        "runnerSeconds": 4.46,
+        "commandWallSeconds": 5.122
+      }
+    },
+    "toolResolution": "Four fixture failures disappear on both revisions when fixtures resolve system Git instead of the inherited agent Git wrapper.",
+    "remainingFailures": "Both unreadable-role-memory cases fail identically on base and head: the first expects one damaged row and receives two; the second never reaches its damage boundary.",
+    "status": "No introduced failure observed. The complete Git file is not green; base-identical failures remain reported."
+  }
+}

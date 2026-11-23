@@ -53,7 +53,7 @@ const provisional = row("spawn:launch-919", {
 });
 
 function body(files: FileEntry[], launchRoutes: Record<string, string> = {}) {
-  return JSON.stringify({ files, flows: [], pipelines: [], workflows: [], tasks: [], launchRoutes, systemHealth: { tmux: { status: "healthy" } } });
+  return JSON.stringify({ files, flows: [], pipelines: [], workflows: [], tasks: [], launchRoutes, systemHealth: {} });
 }
 
 test("a receipt overlay renders immediately and survives a stale scan that does not carry it", async () => {

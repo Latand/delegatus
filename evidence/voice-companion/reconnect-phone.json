@@ -1,0 +1,126 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "synthetic": true,
+  "readings": [
+    {
+      "lang": "en",
+      "scheme": "light",
+      "state": "reconnecting",
+      "frame": "en-light-reconnecting.png",
+      "text": "Connection lost.\nReconnecting…",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "en",
+      "scheme": "light",
+      "state": "back",
+      "frame": "en-light-back.png",
+      "text": "Connection restored.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "en",
+      "scheme": "light",
+      "state": "gave-up",
+      "frame": "en-light-gave-up.png",
+      "text": "Couldn't reconnect.\nWhat was said is kept.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "state": "reconnecting",
+      "frame": "en-dark-reconnecting.png",
+      "text": "Connection lost.\nReconnecting…",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "state": "back",
+      "frame": "en-dark-back.png",
+      "text": "Connection restored.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "state": "gave-up",
+      "frame": "en-dark-gave-up.png",
+      "text": "Couldn't reconnect.\nWhat was said is kept.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "state": "reconnecting",
+      "frame": "uk-light-reconnecting.png",
+      "text": "Зʼєднання втрачено.\nПерепідключаюся…",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "state": "back",
+      "frame": "uk-light-back.png",
+      "text": "Зʼєднання відновлено.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "state": "gave-up",
+      "frame": "uk-light-gave-up.png",
+      "text": "Не вдалося перепідключитися.\nСказане збережено.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "reconnecting",
+      "frame": "uk-dark-reconnecting.png",
+      "text": "Зʼєднання втрачено.\nПерепідключаюся…",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "back",
+      "frame": "uk-dark-back.png",
+      "text": "Зʼєднання відновлено.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    },
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "state": "gave-up",
+      "frame": "uk-dark-gave-up.png",
+      "text": "Не вдалося перепідключитися.\nСказане збережено.",
+      "inside": true,
+      "clipped": [],
+      "clamped": false
+    }
+  ]
+}

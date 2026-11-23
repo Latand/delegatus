@@ -146,14 +146,19 @@ export function readDoneRows(): DoneItemV1[] {
   return (collection("read")?.snapshot() ?? []).filter(isItem);
 }
 
+/** Read-only view of item rows for callers that do not mutate elements in place. */
+export function readDoneRowsReadonly(): readonly DoneItemV1[] {
+  return (collection("read")?.loadReadonly() ?? []).filter(isItem);
+}
+
 /** What the projector needs besides the item rows: the keys retention
     settled and the limit episodes it remembers. */
 export function readDoneMemory(): { settled: Set<string>; limitEpisodes: DoneLimitEpisodes } {
   const settled = new Set<string>();
   let limitEpisodes: DoneLimitEpisodes = {};
-  for (const row of collection("read")?.snapshot() ?? []) {
+  for (const row of collection("read")?.loadReadonly() ?? []) {
     if (isSettled(row)) settled.add(row.key.slice(SETTLED_PREFIX.length));
-    else if (isEpisodes(row)) limitEpisodes = row.series;
+    else if (isEpisodes(row)) limitEpisodes = structuredClone(row.series);
   }
   return { settled, limitEpisodes };
 }
@@ -215,7 +220,7 @@ export function writeDoneProjection(write: DoneWrite, now: number): { inserted: 
   let removedKeys: string[] = [];
   let counts = { inserted: 0, updated: 0, deleted: 0 };
   store.patchSync(() => {
-    const snapshot = store.snapshot();
+    const snapshot = store.loadReadonly();
     const rows = new Map(snapshot.filter(isItem).map((row) => [row.key, row] as const));
     const settled = new Map(snapshot.filter(isSettled).map((row) => [row.key, row] as const));
     const records: DoneRow[] = [];

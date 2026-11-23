@@ -48,6 +48,12 @@ test("answer transformation is idempotent, preserves authored strings and traver
   expect(input.revision).toBe(hash);
 });
 
+test.each(values)("opaque references round-trip exactly with stable sibling identity display: %s", ref => {
+  const input = { hold: { ref }, steps: [{ ref }], revision: hash };
+  expect(shortIdsInAnswer(input)).toEqual({ hold: { ref }, steps: [{ ref }], revision: "a1b2c3d4" });
+  expect(input).toEqual({ hold: { ref }, steps: [{ ref }], revision: hash });
+});
+
 test("prototype media URLs carry usable short review and media references", () => {
   const review = `pr_${hash.slice(0, 32)}`;
   const url = `/api/image?taskId=task-1&prototype=${review}&media=${hash}`;

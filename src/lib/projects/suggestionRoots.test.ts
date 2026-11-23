@@ -7,7 +7,7 @@ import { afterAll, beforeEach, expect, test } from "bun:test";
 import { resetProjectDirectoryCacheForTests } from "@/lib/scanner/projectDirectories";
 
 import { createManualProject, resetProjectCurationForTests } from "./curation";
-import { anchorForProjectRoot, SUGGESTION_ROOT_LIMIT, suggestionRoots } from "./suggestionRoots";
+import { anchorForProjectRoot, defaultProjectsParent, SUGGESTION_ROOT_LIMIT, suggestionRoots } from "./suggestionRoots";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-suggestion-roots-"));
 const STATE = path.join(SANDBOX, "state");
@@ -83,7 +83,7 @@ test("the roots are the home directory and the parents of the project roots the 
 test("with nothing known yet the home directory is still a root, so the picker is never empty", () => {
   /* And it is the running viewer's home: a runtime under an isolated $HOME
      suggests from that one, never from the machine's real home. */
-  expect(suggestionRoots()).toEqual([HOME]);
+  expect(suggestionRoots()).toEqual([path.join(HOME, "Projects"), HOME]);
 });
 
 test("the list is capped here, once, and the home fallback survives the cap", () => {
@@ -111,4 +111,48 @@ test("the list is capped here, once, and the home fallback survives the cap", ()
   expect(roots).toContain(path.join(SANDBOX, "anchor-0"));
   expect(roots).not.toContain(path.join(SANDBOX, `anchor-${SUGGESTION_ROOT_LIMIT + 3}`));
   expect(roots[roots.length - 1]).toBe(HOME);
+});
+
+function catalogOfAnchors(count: number, name = (index: number) => `anchor-${index}`): void {
+  const files: Record<string, { cwd: string; projectRoot: string }> = {};
+  for (let index = 0; index < count; index += 1) {
+    const checkout = path.join(SANDBOX, name(index), "checkout");
+    fs.mkdirSync(checkout, { recursive: true });
+    files[`fixture-${index}`] = { cwd: checkout, projectRoot: checkout };
+  }
+  fs.mkdirSync(STATE, { recursive: true });
+  fs.writeFileSync(path.join(STATE, "project-catalog.json"), JSON.stringify({ version: 2, resolutionVersion: 4, files }));
+  resetProjectDirectoryCacheForTests();
+}
+
+/* Red on main: the default parent was no root at all, so a $HOME/Projects that
+   links out of home failed the bound. */
+test("the default projects parent keeps its place past the anchor cap, just before home", () => {
+  catalogOfAnchors(SUGGESTION_ROOT_LIMIT + 4);
+  const roots = suggestionRoots();
+  expect(roots).toHaveLength(SUGGESTION_ROOT_LIMIT);
+  expect(roots.slice(-2)).toEqual([defaultProjectsParent(), HOME]);
+});
+
+test("a default parent that is also an anchor costs no slot", () => {
+  const parent = path.join(HOME, "Projects");
+  const checkout = path.join(parent, "first");
+  fs.mkdirSync(checkout, { recursive: true });
+  const files: Record<string, { cwd: string; projectRoot: string }> = { parent: { cwd: checkout, projectRoot: checkout } };
+  for (let index = 0; index < SUGGESTION_ROOT_LIMIT; index += 1) {
+    const other = path.join(SANDBOX, `crowd-${index}`, "checkout");
+    fs.mkdirSync(other, { recursive: true });
+    files[`fixture-${index}`] = { cwd: other, projectRoot: other };
+  }
+  fs.mkdirSync(STATE, { recursive: true });
+  fs.writeFileSync(path.join(STATE, "project-catalog.json"), JSON.stringify({ version: 2, resolutionVersion: 4, files }));
+  resetProjectDirectoryCacheForTests();
+  try {
+    const roots = suggestionRoots();
+    expect(roots).toHaveLength(SUGGESTION_ROOT_LIMIT);
+    expect(roots.filter((root) => root === parent)).toHaveLength(1);
+    expect(roots.slice(-2)).toEqual([parent, HOME]);
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
 });

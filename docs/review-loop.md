@@ -127,12 +127,13 @@ Before pipelines, Delegatus ran implement and review rounds as a **flow**,
 started from the **Flow** chip of the scheme view. Flows are retired
 ([docs/design/retire-flows.md](design/retire-flows.md)): nothing in the
 interface starts one, the desktop has a single view, the board, and the phone
-shows old flow rounds as history only. Stored flows stay readable:
-`GET /api/flows` and the MCP tools `list_flows` and `get_flow` serve existing
-flows as history, and their artifacts live under the state directory's
-`flows/<id>/`; the server refuses to start or drive one. `flow_action` reads
-no archive: it refuses every action with `FLOW_RETIRED`, except that an
-`agent-decision` repeating the owner's already accepted request under the
-same `clientRequestId` replays that stored receipt. The
-`.claude/skills/review-loop/` skill is a short pointer to this page for the
-compatibility window.
+shows old flow rounds as history only. The flow and workflow engines are
+removed. Stored flows stay readable: `GET /api/review-history?project=<project>`
+lists them, `GET /api/review-history/<id>` reads one, and their artifacts live
+under the state directory's `flows/<id>/`. `/api/flows` and `/api/workflows`
+answer 410 `FLOW_RETIRED` for every method, naming `/api/pipelines` as the
+replacement and `/api/review-history` as the archive. The MCP tools
+`list_flows`, `get_flow` and `flow_action` are gone from the tool list; a
+caller that still names one gets `FLOW_RETIRED` with the pipeline tools to use
+instead. The `.claude/skills/review-loop/` skill is a short pointer to this
+page.

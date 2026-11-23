@@ -169,7 +169,7 @@ the requirement; it reads labels only and runs only on an idle board.
   and states its plan in its first turn.
 - The clock contract (`prompt.ts:140`): after the items a wake lists, "make
   ONE bounded pass over this project's whole board": `list_pipelines`,
-  `list_flows`, `agent_activity` with `liveOnly`, open tasks with nothing
+  `agent_activity` with `liveOnly`, open tasks with nothing
   running. This is the board walk the operator now wants taken off the
   orchestrator at start.
 - Task ownership (`prompt.ts:294`): "Never close containers in bulk to tidy
@@ -204,7 +204,7 @@ pieces matter here:
 ### 1.6 The MCP reads
 
 The orchestrator's own reads for the same facts are `list_tasks` (openOnly),
-`list_pipelines` (`state: "open"`, compact), `list_flows`, `agent_activity`
+`list_pipelines` (`state: "open"`, compact), `agent_activity`
 (`liveOnly`), `board_snapshot`, `get_orchestrator` and `deployment_status`.
 Each is a thin wrapper over an in-process store the pass can call directly.
 `agent_activity` is classed as a writing tool (`src/lib/mcp/server.ts:127`)

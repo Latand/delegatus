@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { NextRequest } from "next/server";
 
@@ -11,7 +11,7 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { messageSenders } from "@/lib/team";
 import { claimInstall, createInvite, redeemJoin } from "@/lib/team/members";
 import { MEMBER_COOKIE } from "@/lib/team/sessions";
-import { existingTeamStore, resetTeamStoreForTests, teamStore, teamStoreFile } from "@/lib/team/store";
+import { existingTeamStore, resetTeamStoreForTests, teamStore, teamStoreFile, TeamStore } from "@/lib/team/store";
 
 import { handleRuntimeCommand, type RuntimeHttpDependencies } from "./http";
 
@@ -197,4 +197,46 @@ test("an author is read back only on the conversation the message was sent into"
   );
   expect(messageSenders(["shared-id"], (id) => id === "conversation_oleh")["shared-id"]?.name).toBe("Oleh");
   expect(messageSenders(["shared-id"], (id) => id === "conversation_direct")).toEqual({});
+  const enqueued: unknown[] = [];
+  const ports = dependencies(enqueued);
+  const enqueue = ports.enqueue!;
+  ports.enqueue = async (...args) => {
+    expect(store.latestConversationMember("conversation_direct")).toBe(oleh.member.id);
+    return enqueue(...args);
+  };
+  await handleRuntimeCommand(request({ conversationId: "conversation_direct", text: "reuse in another conversation", idempotencyKey: "shared-id" },
+    { cookie: `${MEMBER_COOKIE}=${oleh.cookie}` }), "send", ports);
+  expect(enqueued).toHaveLength(1);
+  resetTeamStoreForTests();
+  expect(teamStore().latestConversationMember("conversation_direct")).toBe(oleh.member.id);
+});
+
+test("runtime question answers bind the member before sending the command", async () => {
+  const store = teamStore();
+  const owner = claimInstall(store, "Owner", DESKTOP);
+  const member = redeemJoin(store, createInvite(store, owner.member, null).code, "Member", DESKTOP);
+  let calls = 0;
+  const response = await handleRuntimeCommand(request({ conversationId: "conversation_direct", idempotencyKey: "answer-authority",
+    attentionId: "question-fixture", resolution: "accept" }, { cookie: `${MEMBER_COOKIE}=${member.cookie}` }), "answer", {
+      ...dependencies([]), client: () => ({ command: async () => {
+        calls++;
+        expect(store.latestConversationMember("conversation_direct")).toBe(member.member.id);
+        return { operationId: "answer-authority", receipt: { status: "delivered" } };
+      } }) as never,
+    });
+  expect(response.status).toBe(200);
+  expect(calls).toBe(1);
+});
+
+test("a failed runtime authority write refuses before enqueue", async () => {
+  const owner = claimInstall(teamStore(), "Owner", DESKTOP);
+  const enqueued: unknown[] = [];
+  const write = spyOn(TeamStore.prototype, "admitConversationMember").mockImplementation(() => { throw new Error("fixture write refused"); });
+  try {
+    const response = await handleRuntimeCommand(request({ conversationId: "conversation_direct", text: "request", idempotencyKey: "authority-refusal" },
+      { cookie: `${MEMBER_COOKIE}=${owner.cookie}` }), "send", dependencies(enqueued));
+    expect(response.status).toBe(503);
+    expect(enqueued).toEqual([]);
+    expect((await response.json()).delivery).toBe("refused");
+  } finally { write.mockRestore(); }
 });

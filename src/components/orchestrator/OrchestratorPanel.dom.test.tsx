@@ -296,7 +296,6 @@ const hostedSession = (): RuntimeSessionView => ({
   uiState: "idle",
   attentions: [],
   receipts: [],
-  legacy: false,
   structuredControlsEnabled: true,
 });
 
@@ -1969,7 +1968,6 @@ const orchestratorQuestion = {
   toolUseId: "tool-use-orch",
   transcriptPath: "/transcripts/orch.jsonl",
   pid: 4_242,
-  paneTarget: null,
   askedAt: "2026-08-25T10:00:00.000Z",
   questions: [{ header: "Rollout window", question: "Approve the proposed rollout window", multiSelect: false, options: [] }],
 };

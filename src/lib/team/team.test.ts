@@ -36,6 +36,7 @@ import { messageSenders, recordAuthors, subjectAuthorship } from "./index";
 import { MEMBER_COOKIE, requestSession, sessionIsLive, teamMode, verifySessionValue } from "./sessions";
 import { existingTeamStore, resetTeamStoreForTests, SESSION_IDLE_MS, teamStore, teamStoreFile } from "./store";
 import { handleTelegramStart, startTelegram, telegramState } from "./telegramSignIn";
+import { workspaceRouteDecision } from "./workspaceRoutes";
 
 /*
  * The team module against a real SQLite file in a throw-away state directory:
@@ -535,6 +536,21 @@ describe("the identity gate in team mode", () => {
   test("a refused API call names the reason", async () => {
     const answer = teamGate(request("/api/files"), { bearerAuthenticated: false });
     expect(await answer!.json()).toEqual({ error: "sign in required", code: "member_required" });
+  });
+});
+
+describe("creating a project as a member", () => {
+  /* Red on main: the create route's decision was "owner", so the gate refused a
+     member before the route could ask about their workspace. */
+  test("the gate passes a member to the create route and keeps the folder list owner-only", () => {
+    const store = teamStore();
+    const mira = claimInstall(store, "Mira", DESKTOP).member;
+    const oleh = redeemJoin(store, createInvite(store, mira, null).code, "Oleh", PHONE);
+    expect(teamGate(request("/api/projects/create", { method: "POST", cookie: oleh.cookie }), { bearerAuthenticated: false })).toBeNull();
+    const directories = teamGate(request("/api/projects/directories", { cookie: oleh.cookie }), { bearerAuthenticated: false });
+    expect(directories?.status).toBe(403);
+    expect(workspaceRouteDecision("/api/projects/directories")).toBe("owner");
+    expect(teamGate(request("/api/projects/create", { method: "POST" }), { bearerAuthenticated: false })?.status).toBe(401);
   });
 });
 

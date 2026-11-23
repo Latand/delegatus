@@ -22,11 +22,17 @@ export async function settleNativeQueueEntry(
   const state = removed ? "failed" : "delivered";
   const reason = removed ? "delivery-discarded" : null;
   const owner = registry.deliverySnapshotForOperation(entry.entryId).deliveryOperationOwners[entry.entryId];
+  // Replayed committed proofs need no further registry write once its sender
+  // agrees. A lost progress update can still be repaired below.
+  if (owner?.terminalState === state && (removed ? owner.terminalReason === reason : owner.terminalDisposition === "delivered")) {
+    try { progress?.settle(entry.entryId, state, reason); } catch { /* Progress never fails settlement. */ }
+    return true;
+  }
   const correlation = { label: "delivery.native-settle", operationId: entry.entryId };
   const written = owner?.directAdmission
     ? await registry.deliveryWrite(correlation, () => registry.settleDirectAdmission(entry.entryId, state, reason, removed ? undefined : "delivered"))
     : await registry.deliveryWrite(correlation, () => registry.recordDeliveryOutcomeForOperation(
-      entry.conversationId as ViewerConversationId, entry.entryId, state, reason));
+      entry.conversationId as ViewerConversationId, entry.entryId, state, reason, removed ? undefined : "delivered"));
   if (!written.acquired) return false;
   try { progress?.settle(entry.entryId, state, reason); }
   catch { /* A progress record never fails a settlement. */ }

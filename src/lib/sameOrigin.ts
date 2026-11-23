@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 
 import type { ApiError } from "@/lib/types";
 import { pendingSelfProbeHost } from "@/lib/links/selfProbe";
+import { configuredPublicOrigin, publicOriginForRequest } from "@/lib/publicOrigin";
 
 /**
  * CSRF gate for mutating API routes. The server binds to localhost, but any
@@ -45,6 +46,7 @@ function allowedHostNames(): Set<string> {
   add(tailnetHost);
   const publicHost = process.env.LLV_PUBLIC_HOST;
   if (process.env.LLV_TOKEN) add(publicHost);
+  add(configuredPublicOrigin()?.hostname);
   return allowedHosts;
 }
 
@@ -53,6 +55,11 @@ function allowedHostNames(): Set<string> {
 export function rejectForeignHost(req: NextRequest): NextResponse<ApiError> | null {
   const host = req.headers.get("host");
   const name = hostWithoutPort(host ?? "");
+  // The new public address pins the whole authority. Keep existing listener,
+  // tailnet and linked-install port handling for their established callers.
+  if (name && name === configuredPublicOrigin()?.hostname) {
+    return publicOriginForRequest(req) ? null : forbidden();
+  }
   if (name && allowedHostNames().has(name)) return null;
   // An operator's address Save probes the proposed Host before committing it.
   // Only that outstanding nonce's self-check POST may use the proposed name;
@@ -74,6 +81,16 @@ export function rejectCrossOrigin(req: NextRequest): NextResponse<ApiError> | nu
   if (hostRejection) return hostRejection;
 
   const origin = req.headers.get("origin");
+  const publicOrigin = configuredPublicOrigin();
+  if (origin !== null && publicOrigin) {
+    // Public browser requests use exactly the configured HTTPS origin. Also
+    // prevent that origin from writing through a loopback-addressed request.
+    let originName: string | undefined;
+    try { originName = new URL(origin).hostname; } catch { /* rejected below */ }
+    if (publicOriginForRequest(req) || originName === publicOrigin.hostname) {
+      if (!publicOriginForRequest(req) || origin !== publicOrigin.origin) return forbidden();
+    }
+  }
   if (origin !== null) {
     let originHost: string | null;
     try {

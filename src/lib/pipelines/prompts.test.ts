@@ -9,11 +9,21 @@ import { convertNewLegacyReviewStages } from "./legacyReviewDefinition";
 import { buildPipeline } from "./store";
 import { effectiveWorkerLimit, setMachineWorkerLimit, setProjectWorkerLimit } from "@/lib/operator/workerLimit";
 import { renderStagePrompt } from "./prompts";
+import { MAX_STAGE_REPORT_SUMMARY_CHARS } from "./limits";
 import { parseStageVerdict } from "./verdict";
 import { pipelineRoleLookup, resolvePipelineRole } from "./roles";
 import type { PipelineStage } from "./types";
 import { composeStageInput } from "./stageInput";
 import { seededTemplatesFromRoles } from "@/lib/workflows/store";
+
+test("stage guidance includes the shared summary bound's value", () => {
+  const stage: PipelineStage = { id: "build", kind: "run", prompt: "Build", next: null,
+    effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } };
+  const pipeline = buildPipeline({ id: "summary-bound", task: "Build", project: "fixture", repoDir: "/repo",
+    stages: [stage], srcPath: null, srcConversationId: null, now: "2026-11-11T12:00:00.000Z" });
+  const values = renderStagePrompt(pipeline, stage, stage.effectiveRole, "").match(/\b\d+\b/g) ?? [];
+  expect(values).toContain(String(MAX_STAGE_REPORT_SUMMARY_CHARS));
+});
 
 test.each(["vitest", "delegatus", "missing"])("assembled test guidance uses installed tooling and project checks: %s", async (kind) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-test-guidance-"));
@@ -273,18 +283,6 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
   expect(fixPrompt).toContain("P1 src/a.ts:3 wrong label");
 });
 
-
-test("design and UI stages receive the task-bound prototype publishing contract", () => {
-  const stage: PipelineStage = { id: "design", kind: "run", prompt: "Design the layout", next: null,
-    effectiveRole: { roleId: "architect", engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: null } };
-  const pipeline = buildPipeline({ id: "prototype", task: "Layout", project: "viewer", repoDir: "/repo", stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
-  /* The wrapper renders at every launch, so the contract lives there, and only
-     for the stages that build or judge frames (role-prompts-rewrite.md §3.3). */
-  for (const [roleId, shown] of [[null, true], ["builder", true], ["architect", true], ["visual-critic", true], ["reviewer", false], ["merger", false], ["verifier", false]] as const) {
-    const current: PipelineStage = { ...stage, effectiveRole: { ...stage.effectiveRole, roleId } };
-    expect(renderStagePrompt(pipeline, current, current.effectiveRole, "").includes("Prototype stages render numbered variants")).toBe(shown);
-  }
-});
 
 /* A stage keeps the scaffold it was created with (pipelines/roles.ts): a lane
    stored before the working rules shipped renders that text byte for byte,

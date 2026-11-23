@@ -695,3 +695,24 @@ describe("database identity", () => {
     );
   });
 });
+
+test("reading one account source does not clone another source's rows", () => {
+  const directory = sandbox();
+  writeAccountSource(CLAUDE_ACCOUNTS_SOURCE, registry("selected"), directory);
+  writeAccountSource(CODEX_ACCOUNTS_SOURCE, registry("unrelated-0",
+    Array.from({ length: 64 }, (_, index) => `unrelated-${index}`)), directory);
+  const nativeClone = globalThis.structuredClone;
+  let unrelatedCopies = 0;
+  const clone = spyOn(globalThis, "structuredClone").mockImplementation((value, options) => {
+    if (value && typeof value === "object" && "k" in value
+      && typeof value.k === "string" && value.k.startsWith("codex:")) unrelatedCopies++;
+    return nativeClone(value, options);
+  });
+  try {
+    expect(body(directory, CLAUDE_ACCOUNTS_SOURCE)).toEqual(registry("selected"));
+    expect(unrelatedCopies).toBe(0);
+    const first = body(directory, CLAUDE_ACCOUNTS_SOURCE) as { accounts: { label: string }[] };
+    first.accounts[0].label = "caller changed its own copy";
+    expect(body(directory, CLAUDE_ACCOUNTS_SOURCE)).toEqual(registry("selected"));
+  } finally { clone.mockRestore(); }
+});

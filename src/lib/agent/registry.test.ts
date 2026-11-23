@@ -74,6 +74,28 @@ test.each(["cleared", "missing"] as const)("resume setup claims %s host entries 
   expect(current().structuredHost).toBeNull();
 });
 
+for (const sqliteMode of ["off", "sqlite"] as const) test(`resume setup writer output agrees with the persisted reader in ${sqliteMode} mode`, () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-setup-replay-"));
+  const filename = path.join(directory, "registry.json");
+  const store = new AgentRegistry(filename, () => true, undefined, { sqliteMode });
+  let restarted: AgentRegistry | null = null;
+  try {
+    const setupHost = { kind: "codex-app-server" as const, endpoint: "stdio:pending", process: null,
+      eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+      agentStateTurnStartedAt: Date.parse("2026-10-28T09:00:00Z") };
+    const claimed = store.claimStructuredHost(KEY, { pid: 41_001, startIdentity: "fixture-setup" }, {
+      allowUnhosted: true, setupHost, setupEntry: { artifactPath: "/sessions/fixture.jsonl", cwd: "/repo", accountId: null },
+    })!;
+    expect(claimed.structuredHost).toMatchObject({ attentionVerified: true, agentStateNativePromptAnchor: null,
+      agentStateNativePromptOrdinal: null, agentStateNativeTurnId: null, agentStateTurnStartedAt: setupHost.agentStateTurnStartedAt });
+    expect(store.hostEntry(KEY)).toEqual(claimed);
+    restarted = new AgentRegistry(filename, () => true, undefined, { sqliteMode });
+    expect(restarted.hostEntry(KEY)).toEqual(claimed);
+    expect(restarted.ownsStructuredHostClaim(KEY, claimed.claimOwner!, claimed.claimEpoch)).toBe(true);
+    expect(setupHost.writerClaimEpoch).toBe(0);
+  } finally { restarted?.close(); store.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 function structuredLaunchFixture(store: AgentRegistry, pendingAction: "spawn" | "handoff" = "spawn") {
   const sessionId = crypto.randomUUID();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-1583-registry-"));
@@ -1220,160 +1242,6 @@ describe("agent registry", () => {
     expect(store.readOnlySnapshot().entries[`codex:${fixture.entry.key.sessionId}`]?.pendingAction).toBe("spawn");
   });
 
-  test("an observed account-home Claude session recovers a pane-bound late-readiness failure", () => {
-    const store = registry();
-    const sessionId = "88d36d1d-d681-\x34dc3-ac3b-0b0c54f33c7e";
-    const artifactPath = `/home/user/.config/agent-log-viewer/accounts/claude/work/projects/-repo/${sessionId}.jsonl`;
-    const begun = store.beginSpawnRequest({
-      engine: "claude",
-      cwd: "/repo",
-      accountId: "work",
-    });
-    if (begun.kind !== "created") throw new Error("expected create");
-    const pane = {
-      endpoint: "/run/user/1000/agent-log-viewer",
-      server: { pid: 900, startIdentity: "900:one" },
-      paneId: "%25",
-      panePid: { pid: 100, startIdentity: "100:one" },
-      target: "agents:17.0",
-    };
-    store.bindSpawnPane(begun.receipt.launchId, pane);
-    store.failSpawn(begun.receipt.launchId, "agent never reached a launch-ready prompt");
-
-    const observed = store.completeObservedSpawn(begun.receipt.launchId, {
-      key: { engine: "claude", sessionId },
-      artifactPath,
-      cwd: "/repo",
-      accountId: null,
-      status: "live",
-      host: {
-        kind: "tmux",
-        ...pane,
-        windowName: "claude-new",
-        agent: { pid: 101, startIdentity: "101:one" },
-        argv: ["claude", "--session-id", sessionId],
-      },
-      claimEpoch: 0,
-      claimOwner: null,
-      pendingAction: null,
-    });
-
-    expect(observed).toMatchObject({
-      kind: "settled",
-      receipt: { state: "completed", artifactPath, key: { engine: "claude", sessionId } },
-      entry: { host: { paneId: "%25", argv: ["claude", "--session-id", sessionId] } },
-    });
-    expect(store.conversationForPath(artifactPath)?.id).toBe(begun.receipt.conversationId);
-  });
-
-  test("live pane evidence releases a readiness quarantine and preserves hard identity fences", () => {
-    const store = registry();
-    const begun = store.beginSpawnRequest({ engine: "claude", cwd: "/repo", accountId: "work" });
-    if (begun.kind !== "created") throw new Error("expected create");
-    const binding = {
-      endpoint: "/tmp",
-      server: { pid: 900, startIdentity: null },
-      paneId: "%25",
-      panePid: { pid: 100, startIdentity: null },
-      target: "agents:17.0",
-    };
-    const host = {
-      kind: "tmux" as const,
-      endpoint: "/tmp",
-      server: { pid: 900, startIdentity: "900:observed" },
-      paneId: "%25",
-      panePid: { pid: 100, startIdentity: "100:observed" },
-      windowName: "claude-new",
-      agent: { pid: 101, startIdentity: "101:observed" },
-      argv: ["claude", "--session-id", "88d36d1d-d681-\x34dc3-ac3b-0b0c54f33c7e"],
-    };
-    store.bindSpawnPane(begun.receipt.launchId, binding);
-    store.failSpawn(begun.receipt.launchId, "agent never reached a launch-ready prompt");
-
-    expect(store.confirmSpawnPaneAlive(begun.receipt.launchId, host, { engine: "claude", cwd: "/repo" })).toMatchObject({
-      state: "host-verified",
-      error: null,
-      verifiedHost: host,
-    });
-
-    const fenced = store.beginSpawnRequest({ engine: "claude", cwd: "/repo", accountId: "work" });
-    if (fenced.kind !== "created") throw new Error("expected create");
-    store.bindSpawnPane(fenced.receipt.launchId, binding);
-    store.invalidateSpawnHost(fenced.receipt.launchId, "spawn_host_identity_conflict");
-    expect(store.confirmSpawnPaneAlive(fenced.receipt.launchId, host, { engine: "claude", cwd: "/repo" })).toMatchObject({
-      state: "conflicted",
-      error: "spawn_host_identity_conflict",
-    });
-
-    const authFailure = store.beginSpawnRequest({ engine: "claude", cwd: "/repo", accountId: "work" });
-    if (authFailure.kind !== "created") throw new Error("expected create");
-    store.bindSpawnPane(authFailure.receipt.launchId, binding);
-    store.failSpawn(authFailure.receipt.launchId, "Claude account work needs re-login. Open Accounts, sign in, and retry.");
-    expect(store.confirmSpawnPaneAlive(authFailure.receipt.launchId, host, { engine: "claude", cwd: "/repo" })).toMatchObject({
-      state: "conflicted",
-      error: "Claude account work needs re-login. Open Accounts, sign in, and retry.",
-    });
-
-    const changedHost = store.beginSpawnRequest({ engine: "claude", cwd: "/repo", accountId: "work" });
-    if (changedHost.kind !== "created") throw new Error("expected create");
-    store.bindSpawnPane(changedHost.receipt.launchId, binding);
-    store.failSpawn(changedHost.receipt.launchId, "spawn host identity changed before launch confirmation");
-    expect(store.confirmSpawnPaneAlive(changedHost.receipt.launchId, host, { engine: "claude", cwd: "/repo" })).toMatchObject({
-      state: "conflicted",
-      error: "spawn host identity changed before launch confirmation",
-    });
-  });
-
-  test("a verified ready-composer host stays available after prompt verification fails", () => {
-    const store = registry();
-    const begun = store.beginSpawnRequest({ engine: "claude", cwd: "/repo", accountId: "work" });
-    if (begun.kind !== "created") throw new Error("expected create");
-    const binding = {
-      endpoint: "/tmp",
-      server: { pid: 900, startIdentity: "900:one" },
-      paneId: "%25",
-      panePid: { pid: 100, startIdentity: "100:one" },
-      target: "agents:17.0",
-    };
-    const host = {
-      kind: "tmux" as const,
-      endpoint: "/tmp",
-      server: binding.server,
-      paneId: binding.paneId,
-      panePid: binding.panePid,
-      windowName: "claude-new",
-      agent: { pid: 101, startIdentity: "101:one" },
-      argv: ["claude", "--session-id", "88d36d1d-d681-\x34dc3-ac3b-0b0c54f33c7e"],
-    };
-    store.bindSpawnPane(begun.receipt.launchId, binding);
-    store.markSpawnHostVerified(begun.receipt.launchId, host);
-    store.failSpawn(begun.receipt.launchId, "launch prompt was not accepted by the agent: ready composer");
-
-    expect(store.snapshot().receipts[begun.receipt.launchId]).toMatchObject({
-      state: "host-verified",
-      error: "launch prompt was not accepted by the agent: ready composer",
-      verifiedHost: host,
-    });
-    store.failSpawn(begun.receipt.launchId, "tmux paste failed after ready composer");
-    expect(store.snapshot().receipts[begun.receipt.launchId]).toMatchObject({
-      state: "host-verified",
-      error: "tmux paste failed after ready composer",
-      verifiedHost: host,
-    });
-
-    const authFailure = store.beginSpawnRequest({ engine: "claude", cwd: "/repo", accountId: "work" });
-    if (authFailure.kind !== "created") throw new Error("expected create");
-    store.bindSpawnPane(authFailure.receipt.launchId, binding);
-    store.markSpawnHostVerified(authFailure.receipt.launchId, host);
-    store.invalidateSpawnHost(authFailure.receipt.launchId, "Claude account work needs re-login. Open Accounts, sign in, and retry.");
-    store.failSpawn(authFailure.receipt.launchId, "Claude account work needs re-login. Open Accounts, sign in, and retry.");
-    expect(store.snapshot().receipts[authFailure.receipt.launchId]).toMatchObject({
-      state: "conflicted",
-      error: "Claude account work needs re-login. Open Accounts, sign in, and retry.",
-      verifiedHost: null,
-    });
-  });
-
   test("serializes durable operations", async () => {
     const store = registry();
     store.upsert({ key: KEY, artifactPath: "/a", cwd: "/repo", accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
@@ -2292,68 +2160,6 @@ describe("agent registry", () => {
     expect(store.conversationIdForSpawnCapabilityDigest("b".repeat(64))).toBeNull();
   });
 
-  test("restart inventory recovers a path-pending Codex receipt after its pane exits", () => {
-    const store = registry();
-    const parentPath = "/sessions/parent-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1325.jsonl";
-    const childPath = "/sessions/child-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1326.jsonl";
-    const parent = store.ensureConversation("codex", parentPath, "terra");
-    const begun = store.beginSpawnRequest({
-      engine: "codex",
-      cwd: "/repo",
-      accountId: "terra",
-      parentConversationId: parent.id,
-      parentSessionKey: { engine: "codex", sessionId: "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1325" },
-      parentArtifactPath: parentPath,
-      launchProfile: emptyLaunchProfile({ cwd: "/repo", parentConversationId: parent.id }),
-    });
-    if (begun.kind !== "created") throw new Error("expected create");
-    store.bindSpawnPane(begun.receipt.launchId, {
-      endpoint: "/tmp",
-      server: { pid: 9, startIdentity: "9:a" },
-      paneId: "%9",
-      panePid: { pid: 99, startIdentity: "99:a" },
-      target: "agents:9.0",
-    });
-    store.markSpawnHostVerified(begun.receipt.launchId, {
-      kind: "tmux",
-      endpoint: "/tmp",
-      server: { pid: 9, startIdentity: "9:a" },
-      paneId: "%9",
-      panePid: { pid: 99, startIdentity: "99:a" },
-      windowName: "codex-new",
-      agent: { pid: 100, startIdentity: "100:a" },
-      argv: ["codex"],
-    });
-    store.markSpawnPromptDelivered(begun.receipt.launchId);
-    const pending = store.markSpawnPathPending(begun.receipt.launchId);
-    const startedAt = new Date(Date.parse(pending.pathCorrelation!.startedAt) + 1_000).toISOString();
-
-    const restarted = new AgentRegistry(store.filename);
-    restarted.reconcileConversations([{
-      engine: "codex",
-      path: childPath,
-      accountId: "terra",
-      launchProfile: emptyLaunchProfile({ cwd: "/repo", parentConversationId: parent.id }),
-      turn: { state: "idle", source: "empty", terminalAt: null },
-      startedAt,
-      observedAt: "2026-07-12T12:00:00.000Z",
-    }]);
-
-    expect(restarted.conversationForPath(childPath)?.id).toBe(begun.receipt.conversationId);
-    expect(restarted.snapshot().receipts[begun.receipt.launchId]).toMatchObject({
-      state: "completed",
-      artifactPath: childPath,
-      completionMode: "observed-completed",
-    });
-    expect(restarted.snapshot().lineageEdges[begun.receipt.conversationId]).toMatchObject({
-      childConversationId: begun.receipt.conversationId,
-      parentConversationId: parent.id,
-      childArtifactPath: childPath,
-      parentArtifactPath: parentPath,
-      evidence: { launchId: begun.receipt.launchId },
-    });
-  });
-
   test("restart inventory pairs distinct same-cwd Codex windows and repairs provisional owners", () => {
     const store = registry();
     const parentPath = "/sessions/parent-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1325.jsonl";
@@ -2576,14 +2382,9 @@ describe("agent registry", () => {
       source: "viewer-spawn",
       evidence: { launchId: begun.receipt.launchId },
     });
-    const receipt = store.bindSpawnPane(begun.receipt.launchId, { endpoint: "/tmp", server: { pid: 9, startIdentity: "9:a" }, paneId: "%9", panePid: { pid: 99, startIdentity: "99:a" }, target: "agents:9.0" });
-    expect(receipt.state).toBe("pane-bound");
-    store.markSpawnPromptDelivered(receipt.launchId);
+    const receipt = begun.receipt;
     const path = "/sessions/019f4906-3f67-\x37b72-9fbc-9ec3b5ad1326.jsonl";
-    const observed = store.completeObservedSpawn(receipt.launchId, {
-      ...spawnEntry(path, "wrong-account"),
-      host: { kind: "tmux", endpoint: "/tmp", server: { pid: 9, startIdentity: "9:a" }, paneId: "%9", panePid: { pid: 99, startIdentity: "99:a" }, windowName: "codex", agent: { pid: 100, startIdentity: "100:a" }, argv: ["codex"] },
-    });
+    const observed = store.completeObservedSpawn(receipt.launchId, spawnEntry(path, "wrong-account"));
     expect(observed.kind).toBe("settled");
     const revisionAfterObservedSettlement = store.snapshot().conversationRevision.codex;
     const route = store.settleSpawn(receipt.launchId, spawnEntry(path));
@@ -3226,296 +3027,6 @@ describe("agent registry", () => {
       role: "architect",
       liveChildrenCap: 3,
     }).kind).toBe("created");
-  });
-
-  test("dead pane-bound reservations release child-cap capacity", () => {
-    const store = registry();
-    const caller = store.ensureConversation(
-      "codex",
-      "/sessions/caller-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1326.jsonl",
-      "terra",
-    );
-    for (let index = 0; index < 3; index += 1) {
-      const reservation = store.beginSpawnRequest({
-        engine: "codex",
-        cwd: "/repo",
-        parentConversationId: caller.id,
-        role: "builder",
-        liveChildrenCap: 3,
-      });
-      if (reservation.kind !== "created") throw new Error("expected reservation");
-      const deadPid = 900_000 + index;
-      store.bindSpawnPane(reservation.receipt.launchId, {
-        endpoint: "/dead-tmux",
-        server: { pid: deadPid, startIdentity: "dead" },
-        paneId: `%${index}`,
-        panePid: { pid: deadPid, startIdentity: "dead" },
-        target: `agents:${index}.0`,
-      });
-    }
-
-    expect(store.beginSpawnRequest({
-      engine: "claude",
-      cwd: "/repo",
-      parentConversationId: caller.id,
-      role: "architect",
-      liveChildrenCap: 3,
-    }).kind).toBe("created");
-  });
-
-  test("completed children with stale live entries release capacity when their verified host is dead", () => {
-    const store = registry();
-    const caller = store.ensureConversation(
-      "codex",
-      "/sessions/caller-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1326.jsonl",
-      "terra",
-    );
-    for (let index = 0; index < 3; index += 1) {
-      const reservation = store.beginSpawnRequest({
-        engine: "codex",
-        cwd: "/repo",
-        parentConversationId: caller.id,
-        role: "builder",
-        liveChildrenCap: 3,
-      });
-      if (reservation.kind !== "created") throw new Error("expected reservation");
-      const deadPid = 910_000 + index;
-      const pane = {
-        endpoint: "/dead-tmux",
-        server: { pid: deadPid, startIdentity: "dead" },
-        paneId: `%${index}`,
-        panePid: { pid: deadPid, startIdentity: "dead" },
-        target: `agents:${index}.0`,
-      };
-      store.bindSpawnPane(reservation.receipt.launchId, pane);
-      store.markSpawnHostVerified(reservation.receipt.launchId, {
-        kind: "tmux",
-        ...pane,
-        windowName: "codex-new",
-        agent: { pid: deadPid, startIdentity: "dead" },
-        argv: ["codex"],
-      });
-      store.settleSpawn(reservation.receipt.launchId, spawnEntry(
-        `/sessions/child-019f4906-3f67-7b72-9fbc-9ec3b5ad13${30 + index}.jsonl`,
-      ));
-    }
-
-    expect(store.beginSpawnRequest({
-      engine: "claude",
-      cwd: "/repo",
-      parentConversationId: caller.id,
-      role: "architect",
-      liveChildrenCap: 3,
-    }).kind).toBe("created");
-  });
-
-  test("a verified live host consumes capacity despite a stale dead entry", () => {
-    const store = registry();
-    const caller = store.ensureConversation(
-      "codex",
-      "/sessions/caller-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1326.jsonl",
-      "terra",
-    );
-    for (let index = 0; index < 3; index += 1) {
-      const reservation = store.beginSpawnRequest({
-        engine: "codex",
-        cwd: "/repo",
-        parentConversationId: caller.id,
-        role: "builder",
-        liveChildrenCap: 3,
-      });
-      if (reservation.kind !== "created") throw new Error("expected reservation");
-      const pane = {
-        endpoint: "/live-tmux",
-        server: { pid: process.pid, startIdentity: null },
-        paneId: `%${index}`,
-        panePid: { pid: process.pid, startIdentity: null },
-        target: `agents:${index}.0`,
-      };
-      store.bindSpawnPane(reservation.receipt.launchId, pane);
-      store.markSpawnHostVerified(reservation.receipt.launchId, {
-        kind: "tmux",
-        ...pane,
-        windowName: "codex-new",
-        agent: { pid: process.pid, startIdentity: null },
-        argv: ["codex"],
-      });
-      store.settleSpawn(reservation.receipt.launchId, {
-        ...spawnEntry(`/sessions/child-019f4906-3f67-7b72-9fbc-9ec3b5ad13${40 + index}.jsonl`),
-        status: "dead",
-      });
-    }
-
-    expect(() => store.beginSpawnRequest({
-      engine: "claude",
-      cwd: "/repo",
-      parentConversationId: caller.id,
-      role: "architect",
-      liveChildrenCap: 3,
-    })).toThrow("3 live children (cap: 3)");
-  });
-
-  test("a conflicted receipt with a live pane keeps consuming child capacity", () => {
-    const store = registry();
-    const caller = store.ensureConversation(
-      "codex",
-      "/sessions/caller-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1350.jsonl",
-      "terra",
-    );
-    for (let index = 0; index < 3; index += 1) {
-      const reservation = store.beginSpawnRequest({
-        engine: "codex",
-        cwd: "/repo",
-        parentConversationId: caller.id,
-        role: "builder",
-        liveChildrenCap: 3,
-      });
-      if (reservation.kind !== "created") throw new Error("expected reservation");
-      store.bindSpawnPane(reservation.receipt.launchId, {
-        endpoint: "/live-tmux",
-        server: { pid: process.pid, startIdentity: null },
-        paneId: `%${index}`,
-        panePid: { pid: process.pid, startIdentity: null },
-        target: `agents:${index}.0`,
-      });
-      store.failSpawn(reservation.receipt.launchId, "post-bind confirmation failed");
-    }
-
-    expect(() => store.beginSpawnRequest({
-      engine: "claude",
-      cwd: "/repo",
-      parentConversationId: caller.id,
-      role: "architect",
-      liveChildrenCap: 3,
-    })).toThrow("3 live children (cap: 3)");
-  });
-
-  test("a live adopted structured host outweighs dead original tmux evidence", () => {
-    const store = registry();
-    const caller = store.ensureConversation(
-      "codex",
-      "/sessions/caller-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1360.jsonl",
-      "terra",
-    );
-    for (let index = 0; index < 3; index += 1) {
-      const reservation = store.beginSpawnRequest({
-        engine: "codex",
-        cwd: "/repo",
-        parentConversationId: caller.id,
-        role: "builder",
-        liveChildrenCap: 3,
-      });
-      if (reservation.kind !== "created") throw new Error("expected reservation");
-      const deadPid = 930_000 + index;
-      const pane = {
-        endpoint: "/dead-tmux",
-        server: { pid: deadPid, startIdentity: "dead" },
-        paneId: `%${index}`,
-        panePid: { pid: deadPid, startIdentity: "dead" },
-        target: `agents:${index}.0`,
-      };
-      store.bindSpawnPane(reservation.receipt.launchId, pane);
-      store.markSpawnHostVerified(reservation.receipt.launchId, {
-        kind: "tmux",
-        ...pane,
-        windowName: "codex-new",
-        agent: { pid: deadPid, startIdentity: "dead" },
-        argv: ["codex"],
-      });
-      const settled = store.settleSpawn(
-        reservation.receipt.launchId,
-        spawnEntry(`/sessions/child-019f4906-3f67-7b72-9fbc-9ec3b5ad13${60 + index}.jsonl`),
-      );
-      if (settled.kind !== "settled") throw new Error("expected settlement");
-      store.setStructuredHost(settled.entry.key, {
-        kind: "codex-app-server",
-        endpoint: `stdio:${process.pid}`,
-        process: { pid: process.pid, startIdentity: null },
-        eventCursor: 0,
-        protocolVersion: null,
-        writerClaimEpoch: 0,
-        activeTurnRef: null,
-        pendingAttention: [],
-        activeFlags: [],
-      }, "idle");
-    }
-
-    expect(() => store.beginSpawnRequest({
-      engine: "claude",
-      cwd: "/repo",
-      parentConversationId: caller.id,
-      role: "architect",
-      liveChildrenCap: 3,
-    })).toThrow("3 live children (cap: 3)");
-  });
-
-  test("a live resumed generation outweighs dead original launch evidence", () => {
-    const store = registry();
-    const caller = store.ensureConversation(
-      "codex",
-      "/sessions/caller-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1370.jsonl",
-      "terra",
-    );
-    for (let index = 0; index < 3; index += 1) {
-      const reservation = store.beginSpawnRequest({
-        engine: "codex",
-        cwd: "/repo",
-        parentConversationId: caller.id,
-        role: "builder",
-        liveChildrenCap: 3,
-      });
-      if (reservation.kind !== "created") throw new Error("expected reservation");
-      const deadPid = 940_000 + index;
-      const pane = {
-        endpoint: "/dead-tmux",
-        server: { pid: deadPid, startIdentity: "dead" },
-        paneId: `%${index}`,
-        panePid: { pid: deadPid, startIdentity: "dead" },
-        target: `agents:${index}.0`,
-      };
-      store.bindSpawnPane(reservation.receipt.launchId, pane);
-      store.markSpawnHostVerified(reservation.receipt.launchId, {
-        kind: "tmux",
-        ...pane,
-        windowName: "codex-new",
-        agent: { pid: deadPid, startIdentity: "dead" },
-        argv: ["codex"],
-      });
-      const settled = store.settleSpawn(
-        reservation.receipt.launchId,
-        spawnEntry(`/sessions/child-019f4906-3f67-7b72-9fbc-9ec3b5ad13${70 + index}.jsonl`),
-      );
-      if (settled.kind !== "settled") throw new Error("expected settlement");
-      const resumed = store.beginSpawnRequest({
-        engine: "codex",
-        cwd: "/repo",
-        conversationId: settled.conversation.id,
-        purpose: "resume-successor",
-      });
-      if (resumed.kind !== "created") throw new Error("expected resume reservation");
-      const liveHost = {
-        kind: "tmux" as const,
-        endpoint: "/live-tmux",
-        server: { pid: process.pid, startIdentity: null },
-        paneId: `%${10 + index}`,
-        panePid: { pid: process.pid, startIdentity: null },
-        windowName: "codex-resume",
-        agent: { pid: process.pid, startIdentity: null },
-        argv: ["codex", "resume"],
-      };
-      store.settleSpawn(resumed.receipt.launchId, {
-        ...spawnEntry(`/sessions/resumed-019f4906-3f67-7b72-9fbc-9ec3b5ad13${80 + index}.jsonl`),
-        host: liveHost,
-      });
-    }
-
-    expect(() => store.beginSpawnRequest({
-      engine: "claude",
-      cwd: "/repo",
-      parentConversationId: caller.id,
-      role: "architect",
-      liveChildrenCap: 3,
-    })).toThrow("3 live children (cap: 3)");
   });
 
   test("provisional successor adoption discards lineage that canonicalizes to a self-edge", () => {
@@ -4498,4 +4009,15 @@ test("Codex socket reattachment takes only the exact live process after its prev
   const claimed = store.claimStructuredHost(entry.key, next, { reconnectCodex });
   expect(claimed).toMatchObject({ claimEpoch: 5, structuredHost: { endpoint, process: engine, pendingAttention: ["callback"], eventCursor: 12 } });
   expect(store.claimStructuredHost(entry.key, writer, { reconnectCodex })).toBeNull();
+});
+
+
+test("malformed MCP observations remain unavailable through registry normalization", async () => {
+  const { normalizeRegistry } = await import("./registry");
+  const row = spawnEntry("/sessions/mcp-malformed.jsonl");
+  for (const viewerMcp of [null, { denied: [] }, { seq: 2, observedAt: "2026-11-01T00:00:00.000Z", unverified: false, denied: [{ tool: "x".repeat(129), seq: 1 }] }]) {
+    const value = normalizeRegistry({ version: 2, entries: { [`codex:${row.key.sessionId}`]: { ...row,
+      structuredHost: { kind: "codex-app-server", writerClaimEpoch: 0, viewerMcp } } }, receipts: {} });
+    expect(value.entries[`codex:${row.key.sessionId}`]?.structuredHost?.viewerMcp).toMatchObject({ denied: [], unverified: true });
+  }
 });

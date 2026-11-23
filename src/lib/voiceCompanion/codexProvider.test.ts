@@ -14,13 +14,14 @@ import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts
 import type { QuotaObservation } from "@/lib/accounts/migration/quotaPolicy";
 import { durableQuotaObservation } from "@/lib/accounts/migration/quotaController";
 import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
+import { VoiceTimers, voiceTimerStore, voiceTimersFile } from "./voiceTimers";
 
 const roots: string[] = [];
 const stateDirectory = process.env.LLV_STATE_DIR;
 afterEach(() => { process.env.LLV_STATE_DIR = stateDirectory; for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function gone(pid: number) { try { process.kill(pid, 0); return procBackend.processExited(pid); } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } }
-async function until(check: () => boolean) {
-  const deadline = Date.now() + 5000;
+async function until(check: () => boolean, waitMs = 5000) {
+  const deadline = Date.now() + waitMs;
   while (!check()) { if (Date.now() > deadline) throw new Error("fixture deadline"); await Bun.sleep(10); }
 }
 async function releaseHolder(root: string) {
@@ -401,6 +402,156 @@ test("capacity honours project bindings and never falls back to the legacy home"
   expect(selectVoiceAccount(accounts.slice(0, 2), [bare("account-a", true, now - 5 * 60_000 - 1)], [], "fixture", now).id).toBe("account-a");
 });
 
+/** Only a stuck test waits this long: these cases move on what the fixture answers, on a machine of any speed. */
+const TIMER_WATCHDOG_MS = 60_000;
+test("the timer tool reaches a Codex call as a dynamic tool, and a fired timer is voiced as its bare sentence, once", async () => {
+  const f = fixture("timers");
+  fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+  process.env.LLV_STATE_DIR = path.join(f.root, "state");
+  const start = Date.UTC(2026, 10, 1, 8, 5);
+  const world = { now: start, wake: null as null | (() => void), pushes: 0 };
+  const now = () => world.now;
+  const storage = new CompanionStorage(now); storage.updateSettings({ enabled: true, monthlyCapUsd: 0 });
+  storage.providerKey = () => { throw new Error("API key read on subscription path"); };
+  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("A timer never reaches the orchestrator"); }, reports: () => [] }, now);
+  const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const timers = new VoiceTimers({ now, schedule(wake) { world.wake = wake; return { cancel() { if (world.wake === wake) world.wake = null; } }; },
+    ownsTraffic: () => true, liveCall: owner => service.liveCall(owner), isOperator: () => true, telegramChosen: () => false, timeZone: () => "Europe/Kyiv",
+    push: async () => { world.pushes += 1; return "sent"; }, telegram: async () => "none", forgetPush: async () => undefined });
+  const service: CompanionLiveSessions = new CompanionLiveSessions(storage, admission, reads, f.provider, { timers: false, closeTimeoutMs: 50, now, voiceTimers: timers });
+  let session: Awaited<ReturnType<typeof service.start>> | undefined;
+  let releaseAttach!: () => void;
+  const attached = new Promise<void>(resolve => { releaseAttach = resolve; });
+  try {
+    const wireText = () => fs.existsSync(path.join(f.root, "wire")) ? fs.readFileSync(path.join(f.root, "wire"), "utf8") : "";
+    // Nothing is asked before the tools are attached, and nothing after a set before that set is answered, however slow
+    // either is. Each hold outlasts the gaps of a fixture on a fixed schedule, and a slow host can only miss such a fixture.
+    const attach = f.provider.attach.bind(f.provider);
+    f.provider.attach = async (...args) => { await attached; return attach(...args); };
+    const starting = service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: { operator: true }, timeZone: "Europe/Kyiv" });
+    await until(() => fs.existsSync(path.join(f.root, "ack")), TIMER_WATCHDOG_MS);
+    await Bun.sleep(300);
+    expect(wireText()).not.toContain('"id":"timer_0"');
+    releaseAttach();
+    session = await starting;
+    let firstSetHeld = false;
+    let releaseFirstSet!: () => void;
+    const firstSet = new Promise<void>(resolve => { releaseFirstSet = resolve; });
+    const realSet = timers.set.bind(timers);
+    timers.set = async input => { if (input.label === "tea") { firstSetHeld = true; await firstSet; } return realSet(input); };
+    fs.writeFileSync(path.join(f.root, "tools-attached"), "ready");
+    await until(() => firstSetHeld, TIMER_WATCHDOG_MS);
+    await Bun.sleep(300);
+    expect(wireText()).not.toContain('"id":"timer_0","result"');
+    expect(wireText()).not.toContain('"id":"timer_1"');
+    releaseFirstSet();
+    await until(() => wireText().includes('"id":"timer_3","result"'), TIMER_WATCHDOG_MS);
+    const started = wire(f.root).find(row => row.method === "thread/start")!.params as { dynamicTools: Array<{ name: string; inputSchema: { required: string[] } }> };
+    expect(started.dynamicTools.find(tool => tool.name === "timer")!.inputSchema.required).toEqual(["action", "minutes", "label", "timer"]);
+    const replies = fs.readFileSync(path.join(f.root, "wire"), "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(row => String(row.id).startsWith("timer_"));
+    const answers = replies.sort((a, b) => String(a.id).localeCompare(String(b.id))).map(row => JSON.parse(row.result.contentItems[0].text));
+    expect(answers[0]).toMatchObject({ status: "set", label: "tea", at: "10:20 Kyiv time", speech: "Timer «tea» set for 15 minutes, until 10:20 Kyiv time. One timer is running." });
+    expect(answers[1]).toMatchObject({ status: "set", label: null, running: 2 });
+    expect(answers[2]).toMatchObject({ status: "ok", running: [{ label: "tea" }, { label: null }] });
+    expect(answers[3]).toMatchObject({ status: "cancelled", label: "tea", running: 1 });
+
+    await timers.settled();
+    world.now = start + 20 * 60_000 - 1000;
+    await service.events(session.sessionId, 0);
+    world.now = start + 20 * 60_000;
+    timers.start();
+    await timers.settled();
+    await service.events(session.sessionId, 0);
+    await service.events(session.sessionId, 0);
+    await until(() => spokenTexts(f.root).includes("The 20-minute timer, set at 10:05, is up."), TIMER_WATCHDOG_MS);
+    expect(spokenTexts(f.root).filter(text => String(text).includes("timer"))).toEqual(["The 20-minute timer, set at 10:05, is up."]);
+    await until(() => admission.events(session!.sessionId, 0).some(row => row.type === "timer.fired"), TIMER_WATCHDOG_MS);
+    await timers.settled();
+    expect(admission.events(session.sessionId, 0).filter(row => row.type === "timer.fired")).toHaveLength(1);
+    expect(world.pushes).toBe(0);
+  } finally {
+    releaseAttach();
+    timers.stop();
+    if (session) await service.close(session.sessionId);
+    await f.provider.hangup("voice_thread", "");
+  }
+}, TIMER_WATCHDOG_MS);
+
+/** A Codex call with one timer of five minutes that is due, with the voice already speaking when it fires. */
+async function timerWhileSpeaking() {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+  process.env.LLV_STATE_DIR = path.join(f.root, "state");
+  const start = Date.UTC(2026, 10, 1, 8, 5);
+  const world = { now: start, pushes: 0 };
+  const now = () => world.now;
+  const storage = new CompanionStorage(now); storage.updateSettings({ enabled: true, monthlyCapUsd: 0 });
+  storage.providerKey = () => { throw new Error("API key read on subscription path"); };
+  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("A timer never reaches the orchestrator"); }, reports: () => [] }, now);
+  const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const timers = new VoiceTimers({ now, schedule() { return { cancel() {} }; }, ownsTraffic: () => true, liveCall: owner => service.liveCall(owner), isOperator: () => true, telegramChosen: () => false, timeZone: () => "Europe/Kyiv",
+    push: async () => { world.pushes += 1; return "sent"; }, telegram: async () => "none", forgetPush: async () => undefined });
+  const service: CompanionLiveSessions = new CompanionLiveSessions(storage, admission, reads, f.provider, { timers: false, closeTimeoutMs: 50, now, voiceTimers: timers });
+  const session = await service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: { operator: true } });
+  await timers.set({ owner: { operator: true }, sessionId: session.sessionId, callId: "call_tea", delegationId: "delegation_tea", minutes: 5, label: "tea", locale: "en", private: false });
+  await timers.settled();
+  assistant(f.root, "delta", "Still speaking");
+  await until(() => admission.events(session.sessionId, 0).some(row => row.type === "transcript.snapshot" && row.speaker === "companion"), TIMER_WATCHDOG_MS);
+  world.now = start + 5 * 60_000 - 1000;
+  await service.events(session.sessionId, 0);
+  world.now = start + 5 * 60_000;
+  timers.start();
+  await timers.settled();
+  await service.events(session.sessionId, 0);
+  await timers.settled();
+  const finish = async () => { timers.stop(); await service.close(session.sessionId); await f.provider.hangup("voice_thread", ""); };
+  return { f, world, admission, timers, service, session, finish };
+}
+const timerSpeech = (root: string) => spokenTexts(root).filter(text => String(text).includes("timer"));
+const timerRow = () => voiceTimerStore.read(voiceTimersFile())[0]!;
+
+test("a timer queued while the voice speaks is not spoken: closing the call takes it back, and one push delivers it and no voice ever does", async () => {
+  const { f, world, admission, timers, service, session, finish } = await timerWhileSpeaking();
+  try {
+    expect(timerSpeech(f.root)).toEqual([]);
+    expect(timerRow().delivery.voice?.state).toBe("saying");
+    await service.close(session.sessionId);
+    await timers.settled();
+    expect(timerRow().delivery.voice?.state).toBe("withdrawn");
+    expect(world.pushes).toBe(1);
+    expect(timerSpeech(f.root)).toEqual([]);
+    expect(admission.events(session.sessionId, 0).filter(row => row.type === "timer.fired")).toEqual([]);
+    timers.start();
+    await timers.settled();
+    expect(world.pushes).toBe(1);
+  } finally { await finish(); }
+}, TIMER_WATCHDOG_MS);
+
+test("a timer queued while the voice speaks is spoken once the voice is free, and only then counts and sounds its cue", async () => {
+  const { f, world, admission, timers, session, finish } = await timerWhileSpeaking();
+  try {
+    expect(admission.events(session.sessionId, 0).filter(row => row.type === "timer.fired")).toEqual([]);
+    assistant(f.root, "done", "Still speaking");
+    await until(() => timerSpeech(f.root).length > 0, TIMER_WATCHDOG_MS);
+    await until(() => admission.events(session.sessionId, 0).some(row => row.type === "timer.fired"), TIMER_WATCHDOG_MS);
+    await timers.settled();
+    expect(timerSpeech(f.root)).toEqual(["The 5-minute timer «tea», set at 10:05, is up."]);
+    expect(timerRow().delivery.voice?.state).toBe("spoken");
+    expect(world.pushes).toBe(0);
+  } finally { await finish(); }
+}, TIMER_WATCHDOG_MS);
+
+test("a timer queued when the plan runs out is dropped with the other unsaid speech, and goes to push", async () => {
+  const { f, world, timers, finish } = await timerWhileSpeaking();
+  try {
+    notify(f.root, "account/rateLimits/updated", { rateLimits: { planType: "pro", primary: { usedPercent: 100, resetsAt: 2000000100, windowDurationMins: 300 }, secondary: null } });
+    await until(() => timerRow().delivery.voice?.state === "withdrawn", TIMER_WATCHDOG_MS);
+    await timers.settled();
+    expect(world.pushes).toBe(1);
+    expect(timerSpeech(f.root)).toEqual([]);
+  } finally { await finish(); }
+}, TIMER_WATCHDOG_MS);
+
 test("Codex tool calls use the session registry and reuse the read ledger across turns", async () => {
   const f = fixture("tools");
   fs.writeFileSync(path.join(f.root, "sdp"), "ready");
@@ -504,4 +655,77 @@ test("the operator's zone and the call's local start time reach the Codex voice 
     expect(String(wire(f.root).find(row => row.method === "thread/start")?.params?.developerInstructions)).toContain(local);
     expect(String(wire(f.root).find(row => row.method === "thread/realtime/start")?.params?.prompt)).toContain(local);
   } finally { await service.close(session.sessionId); await f.provider.hangup("voice_thread", ""); }
+});
+
+for (const [lostStarts, multipart] of [[0, false], [0, true], [2, false]] as const) test(`reconnect: real Codex keeps unsent ${multipart ? "multipart" : "report"} speech owed after ${lostStarts} lost starts`, async () => {
+  let clock = Date.UTC(2026, 10, 11, 12);
+  const now = () => clock;
+  const f = fixture("sdp", now); fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+  process.env.LLV_STATE_DIR = path.join(f.root, "state");
+  const storage = new CompanionStorage(now); storage.updateSettings({ enabled: true, backend: "codex" });
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const sends: string[] = [];
+  const admission = new CompanionAdmission(storage, {
+    recipient: project => ({ project, conversationId: "conversation_fixture", seatEpoch: 1, engine: "codex" }),
+    send: async input => { sends.push(input.delivery.clientMessageId); return { status: "delivered", operationId: "operation_fixture" }; },
+    reports: () => reports,
+  }, now);
+  const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), f.provider, { now, timers: false, closeTimeoutMs: 1000 });
+  let request = 0;
+  const start = (resume?: string, cursor: import("./contract").ResumeCursor = {}) => service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: `queued-speech-${++request}`, ...(resume ? { resume, cursor } : {}) });
+  const note = async (text: string, done = false) => {
+    assistant(f.root, done ? "done" : "delta", text);
+    await until(() => fs.readdirSync(f.root).every(name => !/^notify-\d+\.json$/.test(name)));
+    await until(() => admission.transcriptRecord(last!).entries.some(row => row.kind === "reply" && String(row.data.text).includes(text) && (!done || row.data.final === true)));
+    await service.drain(last!);
+  };
+  const fact = (id: string, text: string) => reports.push({ id, seq: reports.length + 1, project: "fixture", at: new Date(now()).toISOString(), class: "completed", body: text,
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  let last: string | undefined;
+  try {
+    const p = await start(); last = p.sessionId;
+    await note("Ready."); await note("Ready.", true);
+    let reached = p;
+    if (lostStarts) {
+      await admission.delegate(p.sessionId, "open-call", "open-source", "Review the release plan");
+      await service.close(p.sessionId, "transport"); fact("report-one", "FIRST_REPORT"); admission.pollReports(p.sessionId);
+      const reply = admission.transcriptRecord(p.sessionId).entries.find(row => row.kind === "reply")!;
+      for (let i = 0; i < lostStarts; i++) { const lost = await start(p.sessionId, { unplayed: [reply.id] }); last = lost.sessionId; }
+      reached = await start(p.sessionId, { unplayed: [reply.id] }); last = reached.sessionId;
+    } else { fact("report-one", multipart ? `FIRST_REPORT ${"More detail. ".repeat(60)}FINAL_REPORT` : "FIRST_REPORT"); fact("report-two", "SECOND_REPORT"); }
+    const before = spokenTexts(f.root).length;
+    await service.events(reached.sessionId, 0);
+    await until(() => spokenTexts(f.root).length === before + 1);
+    // Cross the resume hold and poll twice while the provider still voices the first item.
+    clock += 16_000; await service.events(reached.sessionId, 0); await service.events(reached.sessionId, 0);
+    expect(spokenTexts(f.root).slice(before)).toHaveLength(1);
+    const firstPart = String(spokenTexts(f.root).at(-1));
+    await note(lostStarts ? "The connection dropped. Shall I go on?" : multipart ? firstPart : "FIRST_REPORT");
+    await service.close(reached.sessionId, "transport");
+    const n = await start(reached.sessionId); last = n.sessionId;
+    const owed = admission.reportSpeech(n.sessionId).map(row => row.reportId);
+    expect(owed).toEqual(multipart ? ["report-one", "report-two"] : [lostStarts ? "report-one" : "report-two"]);
+    const remainingParts = multipart ? admission.reportSpeech(n.sessionId)[0].parts!.slice(1) : [];
+    if (multipart) expect(admission.reportSpeech(n.sessionId)[0].handed).toBe(1);
+    expect(sends).toHaveLength(lostStarts ? 1 : 0);
+    const proposals = Object.values(admission.session(n.sessionId).proposals);
+    expect(proposals).toHaveLength(lostStarts ? 1 : 0);
+    if (lostStarts) expect(proposals[0]).toMatchObject({ status: "delivered", delivery: { clientMessageId: sends[0] } });
+    const recoveredAt = spokenTexts(f.root).length;
+    await service.events(n.sessionId, 0);
+    await until(() => spokenTexts(f.root).length === recoveredAt + 1);
+    const expectedParts = multipart ? [...remainingParts, "SECOND_REPORT"] : [lostStarts ? "FIRST_REPORT" : "SECOND_REPORT"];
+    for (const [index, expected] of expectedParts.entries()) {
+      await until(() => spokenTexts(f.root).length === recoveredAt + index + 1);
+      await until(() => admission.transcriptRecord(n.sessionId).entries.filter(row => row.kind === "handoff").length === index + 1);
+      expect(spokenTexts(f.root).at(-1)).toContain(expected);
+      await note(expected); await note(expected, true);
+      await service.events(n.sessionId, 0);
+    }
+    if (multipart) expect(spokenTexts(f.root).slice(recoveredAt)).not.toContain(firstPart);
+    await service.events(n.sessionId, 0); await service.close(n.sessionId, "transport");
+    const n2 = await start(n.sessionId); last = n2.sessionId;
+    expect(admission.reportSpeech(n2.sessionId)).toEqual([]);
+    expect(sends).toHaveLength(lostStarts ? 1 : 0);
+  } finally { if (last) await service.close(last); await f.provider.hangup("voice_thread", ""); }
 });

@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { reviewExport } from "../review-export";
-import { makeHarness, privateValue, testFile, withoutRunnerLines, type Harness } from "./harness.fixture";
+import { git, makeHarness, privateValue, testFile, withoutRunnerLines, type Harness } from "./harness.fixture";
 
 const linux = process.platform === "linux";
 /** Several stub runs, each a full checkout, install and owned test run; slow under load. */
@@ -53,7 +53,14 @@ test.if(linux)("a review export runs remotely through its record; a copy without
   const h = harness();
   const scratchDir = path.join(h.root, "exports");
   fs.mkdirSync(scratchDir);
-  const exported = reviewExport(h.fixture, h.head, scratchDir);
+  // A tracked file that an ignore rule matches belongs to the export all the same.
+  const ignoredFixture = ".artifacts/synthetic-ignored-fixture.txt";
+  fs.mkdirSync(path.join(h.fixture, path.dirname(ignoredFixture)), { recursive: true });
+  fs.writeFileSync(path.join(h.fixture, ignoredFixture), "tracked under an ignore rule\n");
+  git(h.fixture, "check-ignore", "--quiet", ignoredFixture);
+  git(h.fixture, "add", "--force", ignoredFixture);
+  git(h.fixture, "commit", "--quiet", "--no-verify", "-m", "tracked file under an ignore rule");
+  const exported = reviewExport(h.fixture, git(h.fixture, "rev-parse", "HEAD"), scratchDir);
   const at = (file: string) => path.join(exported.directory, file);
   const before = treeHashes(path.dirname(exported.directory));
   fs.appendFileSync(at("README.md"), "\nedited in the export\n");
@@ -65,7 +72,7 @@ test("export tree", () => {
   expect(fs.readFileSync("README.md", "utf8")).toEndWith("edited in the export\\n");
   expect(fs.existsSync("LICENSE")).toBe(false);
   expect(fs.existsSync(".git")).toBe(false);
-  expect(fs.existsSync(".artifacts/form-draft-brief.md")).toBe(true);
+  expect(fs.readFileSync(${JSON.stringify(ignoredFixture)}, "utf8")).toBe("tracked under an ignore rule\\n");
 });`);
   const edited = treeHashes(path.dirname(exported.directory));
   const result = h.run(["bun", "test", "./gate-runner-fixture/export.test.ts"], { cwd: exported.directory });

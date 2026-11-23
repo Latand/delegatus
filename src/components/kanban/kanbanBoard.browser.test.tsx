@@ -1,6 +1,7 @@
-import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAppConnectForms, withAppConnectBrowserTemp, captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
-import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
+import type { BoardTask } from "@/lib/tasks/types";
+import { staleWorkingFixture, staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { describe, expect, test } from "bun:test";
@@ -31,7 +32,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { browserCase, caseChromium as chromium, captureLaneReviewFrames, captureTaskTimelinePrototype, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskFilesFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -44,7 +45,8 @@ import { measureStageChain, stageChainFailures, wideStageChainFailures, type Sta
 import { sampleAnswer, sampleMemory, sampleRule, sampleScope } from "@/lib/memory/profile.fixture";
 import { createProfileService } from "@/lib/memory/profileService";
 import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
-import type { RoleMemoryProjectView, RuleRevisionView, RuleView } from "@/lib/memory/roleTypes";
+import { PROFILE_PROMPT_VERSION, profileView } from "@/lib/memory/profile";
+import type { RoleMemoryProjectView, RuleRevisionView, RuleView, ScopeView } from "@/lib/memory/roleTypes";
 import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
 
 /*
@@ -67,6 +69,2259 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+/** Where a memory-profile block keeps its frames: under MEMORY_PROFILE_OUT when set, otherwise under .artifacts. */
+const memoryOut = (name: string) => process.env.MEMORY_PROFILE_OUT ? path.resolve(process.env.MEMORY_PROFILE_OUT, name) : path.resolve(".artifacts", name);
+
+describe("accepted queued creation continuity", () => {
+  browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
+    const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "accepted-creation-desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { expect(await captureAcceptedCreation(browser, out, false)).toHaveLength(24); }
+    finally { await browser.close(); sockets.close(); }
+  }, 600_000);
+});
+
+describe("independent creation lock", () => {
+  type CreationResult = { id?: string; accepted?: boolean; error?: string; warning?: string };
+  type CreationWindow = typeof window & { createAcceptedEvidence(): Promise<CreationResult>; firstResult: CreationResult | null };
+  for (const seam of ["headers", "body", "closed"] as const) browserTest(`a ${seam} stall releases capacity for another document`, async () => {
+    const { serveEvidenceFixture, openFixture, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "creation-lock", seam);
+    fs.mkdirSync(out, { recursive: true });
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let posts = 0;
+    let queued = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/team": { mode: "solo", me: null, members: [], methods: {} },
+      "/fixture/config": { task: "Independent accepted work", repoDir: "/fixture/repo", project: "atlas", autoStart: false, stages: [] },
+      "/api/files": { files: [], pipelines: [], tasks: [], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }], systemHealth: {} },
+      "/api/tasks": { tasks: [] },
+      "/api/pipelines": async (request: Request) => {
+        if (request.method !== "POST") return Response.json({ pipelines: [] });
+        const number = ++posts;
+        const pipeline = buildPipeline({ id: `independent-${number}`, project: "atlas", task: "Independent accepted work", repoDir: "/fixture/repo", taskIds: [], srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00Z", stages: [] });
+        pipeline.state = "draft";
+        if (number === 1) {
+          entered();
+          if (seam === "body") return new Response(new ReadableStream({
+            async start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"pipeline":'));
+              await held;
+              try { controller.enqueue(new TextEncoder().encode(JSON.stringify(pipeline) + "}")); controller.close(); }
+              catch { /* The timed-out reader has already cancelled its stream. */ }
+            },
+          }), { status: 201, headers: { "content-type": "application/json" } });
+          await held;
+        }
+        return queued
+          ? Response.json({ pipeline, queued: { queuedAt: pipeline.createdAt, reason: "store_unavailable" } }, { status: 202 })
+          : Response.json({ pipeline }, { status: 201 });
+      },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const { context, page } = await openFixture(browser, `${server.base}?scenario=accepted-creation&project=atlas`, { width: 900, height: 700 }, "light", "en");
+    try {
+      await page.waitForFunction(() => typeof (window as CreationWindow).createAcceptedEvidence === "function");
+      await page.clock.install({ time: new Date("2030-01-01T00:00:00Z") });
+      await page.clock.pauseAt(new Date("2030-01-01T00:00:01Z"));
+      const headers = seam === "body" ? page.waitForResponse(response => response.url().endsWith("/api/pipelines") && response.request().method() === "POST") : null;
+      await page.evaluate(() => {
+        (window as CreationWindow).firstResult = null;
+        void (window as CreationWindow).createAcceptedEvidence().then((value) => { (window as CreationWindow).firstResult = value; });
+      });
+      await started;
+      if (headers) await headers;
+      expect((await page.evaluate(() => navigator.locks.query())).held?.some(lock => lock.name === "delegatus-accepted-create")).toBe(true);
+      const second = await context.newPage();
+      await second.goto(`${server.base}?scenario=accepted-creation&project=atlas`);
+      await second.waitForFunction(() => typeof (window as CreationWindow).createAcceptedEvidence === "function");
+      if (seam === "closed") await page.close();
+      else {
+        await page.clock.runFor(29_000);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toBeNull();
+        await page.clock.runFor(1_001);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toEqual({ error: "Creation status unavailable" });
+      }
+      const result = await second.evaluate(() => (window as CreationWindow).createAcceptedEvidence());
+      expect(result).toEqual({ id: "independent-2" });
+      expect(posts).toBe(2);
+      release();
+      if (seam !== "closed") {
+        await page.clock.runFor(60_000);
+        expect(await page.evaluate(() => (window as CreationWindow).firstResult)).toEqual({ error: "Creation status unavailable" });
+        expect(await page.locator('[data-pipeline="independent-1"], [data-creation="independent-1"]').count()).toBe(0);
+      }
+      expect(posts).toBe(2);
+      // Successful acceptance still serializes the shared eight-ID snapshot.
+      if (seam !== "closed") {
+        queued = true;
+        for (let index = 0; index < 8; index++) {
+          const document = index % 2 === 0 ? second : page;
+          expect(await document.evaluate(() => (window as CreationWindow).createAcceptedEvidence()))
+            .toEqual({ id: `independent-${index + 3}`, accepted: true });
+        }
+        const refused = await second.evaluate(() => (window as CreationWindow).createAcceptedEvidence());
+        expect(refused.error).toContain("tracking is full");
+        expect(posts).toBe(10);
+      }
+      const locks = await second.evaluate(() => navigator.locks.query());
+      expect(locks.held?.filter(lock => lock.name === "delegatus-accepted-create")).toHaveLength(0);
+      fs.writeFileSync(path.join(out, "result.json"), JSON.stringify({ seam, posts, result, locks }, null, 2));
+    } finally { release(); await context.close(); await browser.close(); sockets.close(); server.stop(); }
+  }, 120_000);
+});
+
+describe("per-account paid spending", () => {
+  browserTest("account row switch and balance fit in both locales and themes", async () => {
+    const out = path.resolve(".artifacts/account-spend-credits"); fs.mkdirSync(out, { recursive: true });
+    let enabled = false;
+    let refuse = false;
+    const checkedAt = "2026-11-03T12:00:00Z";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/accounts": () => Response.json({ codex: { active: "account-a", accounts: [{
+        id: "account-a", label: "Credit account", kind: "managed", authPresent: true, spendCredits: enabled,
+        loginPending: false, loginState: "authenticated", deviceAuth: null, paidCredits: { balance: "12.50", checkedAt },
+      }] } }),
+      "/api/accounts/codex/spend-credits": async (request: Request) => {
+        const body = await request.json();
+        if (refuse) return Response.json({}, { status: 503 });
+        enabled = body.spendCredits;
+        return Response.json(body);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const width of [390, 1280]) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        enabled = false; refuse = false;
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=spend-credits`, { width, height: width === 390 ? 844 : 700 }, theme, locale);
+        try {
+          const row = page.locator('[data-account-spend-credits="account-a"]');
+          const toggle = row.getByRole("switch");
+          await toggle.waitFor();
+          expect(await toggle.isChecked()).toBe(false);
+          // Whole credits: 12.50 reads as 13, with no fraction.
+          expect(await row.innerText()).toMatch(/\b13\b/);
+          expect(await row.innerText()).not.toMatch(/12[.,]50|\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
+          await Promise.all([page.waitForResponse(response => response.url().endsWith("/spend-credits") && response.ok()), toggle.click()]);
+          await page.waitForFunction(() => document.querySelector('[data-account-spend-credits] [role="switch"]')?.getAttribute("aria-checked") === "true");
+          refuse = true;
+          await toggle.click();
+          await row.getByRole("alert").waitFor();
+          expect(await toggle.isChecked()).toBe(true);
+          const geometry = await row.evaluate(element => {
+            const outer = element.getBoundingClientRect();
+            const rects = [...element.querySelectorAll("p, span")].flatMap(child => {
+              const range = document.createRange(); range.selectNodeContents(child);
+              return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
+            });
+            return { fits: rects.every(rect => rect.left >= outer.left && rect.right <= outer.right + 1 && rect.top >= 0 && rect.bottom <= innerHeight) };
+          });
+          expect(geometry.fits).toBe(true);
+          const alertWhole = await row.getByRole("alert").evaluate(element => {
+            const scroller = element.closest("[data-accounts-scroller]")?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
+            const range = document.createRange(); range.selectNodeContents(element);
+            return [...range.getClientRects()].every(rect => rect.top >= scroller.top - 0.5 && rect.bottom <= scroller.bottom + 0.5);
+          });
+          expect(alertWhole).toBe(true);
+          expect(pageErrors).toEqual([]);
+          const dialog = await page.getByRole("dialog").boundingBox();
+          expect(dialog && dialog.y >= 0 && dialog.y + dialog.height <= (width === 390 ? 844 : 700)).toBe(true);
+          await page.evaluate(() => { for (const animation of document.getAnimations()) {
+            animation.pause();
+            const duration = animation.effect?.getTiming().duration;
+            animation.currentTime = typeof duration === "number" && Number.isFinite(duration) ? duration : 0;
+          } });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  browserTest("an exhausted account on paid credits names the reading day, says the limit once and reads red from its number", async () => {
+    const out = path.resolve(".artifacts/account-spend-credits-exhausted"); fs.mkdirSync(out, { recursive: true });
+    // Thirty hours back is an earlier calendar day in any time zone the browser runs in.
+    const lastNight = new Date(Date.now() - 30 * 3_600_000);
+    const resetsAt = Math.floor(Date.now() / 1000) + 3 * 86_400;
+    let enabled = true;
+    let balance = "49390.66";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/accounts": () => Response.json({ codex: { active: "account-a", accounts: [{
+        id: "account-a", label: "Credit account", kind: "managed", authPresent: true, spendCredits: enabled,
+        loginPending: false, loginState: "authenticated", deviceAuth: null, paidCredits: { balance, checkedAt: lastNight.toISOString() },
+        limits: { state: "fresh", session: null, weekly: { usedPercent: 100, resetsAt, windowMinutes: 10_080, observedAt: Math.floor(Date.now() / 1000) } },
+      }] } }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const width of [390, 1280]) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const switchOn of [true, false]) {
+        enabled = switchOn; balance = switchOn ? "49390.66" : "0";
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=spend-credits`, { width, height: width === 390 ? 844 : 700 }, theme, locale);
+        try {
+          const row = page.locator('[data-account-row="account-a"]');
+          await row.waitFor();
+          const facts = await row.evaluate((element, [iso, bcp47]) => {
+            const read = new Date(iso!).toLocaleDateString(bcp47, { day: "numeric", month: "short" });
+            const text = element.textContent ?? "";
+            const number = element.querySelector<HTMLElement>("[data-limit-number]");
+            return { text, read, chip: number?.style.color ?? "" };
+          }, [lastNight.toISOString(), locale === "uk" ? "uk-UA" : "en-US"]);
+          expect(facts.text).toContain(`${facts.read}`);
+          // One colour rule, read from the number: a spent window is red whether or not credits carry the account.
+          expect(facts.chip).toBe("var(--color-danger)");
+          if (switchOn) {
+            const limitLine = locale === "uk" ? "Ліміт плану вичерпано" : "Past its plan limit";
+            expect(facts.text.split(limitLine)).toHaveLength(2);
+            expect(facts.text).not.toMatch(/(running on paid credits|працює на платних кредитах)/);
+          }
+          expect(pageErrors).toEqual([]);
+          await page.evaluate(() => { for (const animation of document.getAnimations()) {
+            animation.pause();
+            const duration = animation.effect?.getTiming().duration;
+            animation.currentTime = typeof duration === "number" && Number.isFinite(duration) ? duration : 0;
+          } });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${switchOn ? "on" : "off"}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+});
+
+describe("account row", () => {
+  /* The accounts dialog: every state of the chosen row at 640, 900, 1170 and 1440 px, in both languages and both
+     schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the frames and `readings.json`;
+     `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
+  browserTest("the dialog's rows hold every state at every width, language and scheme, with the keyboard and reduced motion", async () => {
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal } = await import("@/components/accountRowFrames");
+    const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "dialog"); fs.mkdirSync(out, { recursive: true });
+    const rows = accountRowRoutes();
+    const server = await serveEvidenceFixture(out, undefined, rows.routes);
+    // The desktop's scrollbars are part of the width a row has.
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      // `LLV_ACCOUNT_ROW_CASE=reveal` runs only the case of a row opened below the fold.
+      if (process.env.LLV_ACCOUNT_ROW_CASE === "reveal") {
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
+        return;
+      }
+      const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
+      const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "dialog", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [640, 900, 1170, 1440], height: 900, only });
+      expect(failures).toEqual([]);
+      expect(frames).toBeGreaterThan(0);
+      if (!only) {
+        expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 900 })).toEqual([]);
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 7_200_000);
+});
+
+describe("GitHub App connection forms", () => {
+  browserTest("GitHub links and confirmation fit the desktop Decisions column", async () => {
+    await withAppConnectBrowserTemp(async () => {
+      const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try { expect(await captureAppConnectForms(browser, path.resolve(".artifacts/forge-app-connect/desktop"), false)).toHaveLength(24); }
+      finally { await browser.close(); }
+    });
+  }, 180_000);
+});
+
+/* The timeline's geometry reading, shared by every case that frames the chart: text ranges cut by a scroll edge,
+   a pinned bar or the window, control hit tests, bars and stage rows. */
+async function timelineGeometry(target: Locator) {
+  return target.evaluate(element => {
+    const failures: string[] = [];
+    const viewport = element.getBoundingClientRect();
+    const scroller = element.querySelector<HTMLElement>("[data-timeline-scroll]");
+    const scrollBox = scroller?.getBoundingClientRect();
+    const clip = scrollBox && scroller ? { top: scrollBox.top, left: scrollBox.left, right: scrollBox.left + scroller.clientWidth, bottom: scrollBox.top + scroller.clientHeight } : null;
+    const labelWidth = element.querySelector(".bt-axis-label")?.getBoundingClientRect().width ?? 0;
+    const axis = element.querySelector<HTMLElement>(".bt-axis")?.offsetHeight ?? 0;
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (!node.textContent?.trim()) continue;
+      const range = document.createRange(); range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (!rect.width || !rect.height) continue;
+        if (rect.right <= 0 || rect.left >= innerWidth || rect.bottom <= 0 || rect.top >= innerHeight) continue;
+        if (clip && node.parentElement?.closest(".bt-row") && (rect.bottom <= clip.top + axis || rect.top >= clip.bottom)) continue;
+        if (clip && node.parentElement?.closest(".bt-row") && (rect.top < clip.top + axis - 1 || rect.bottom > clip.bottom + 1)) failures.push(node.textContent);
+        // Tick labels outside the horizontal view are intentionally scrolled away.
+        if (node.parentElement?.closest(".bt-tick") && (rect.left < (clip?.left ?? 0) + labelWidth || rect.right > innerWidth)) continue;
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          if (/(hidden|clip|auto|scroll)/.test(style.overflow + style.overflowX + style.overflowY)) {
+            const box = parent.getBoundingClientRect();
+            if (rect.left < box.left - 1 || rect.right > box.right + 1 || rect.top < box.top - 1 || rect.bottom > box.bottom + 1) failures.push(node.textContent);
+          }
+        }
+        if (rect.left < -1 || rect.right > innerWidth + 1 || rect.top < -1 || rect.bottom > innerHeight + 1) failures.push(node.textContent);
+      }
+    }
+    const controls = [...element.querySelectorAll("button")].filter(button => {
+      const box = button.getBoundingClientRect();
+      if (clip && button.closest(".bt-row") && (box.bottom <= clip.top + axis || box.top >= clip.bottom)) return false;
+      return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= 0 && box.right <= innerWidth;
+    }).map(button => {
+      const box = button.getBoundingClientRect();
+      return { text: button.getAttribute("aria-label") ?? button.textContent, width: box.width, height: box.height,
+        hit: [[box.left + box.width / 2, box.top + box.height / 2], [box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2], [box.left + box.width / 2, box.top + 1], [box.left + box.width / 2, box.bottom - 1]]
+          .every(([x, y]) => button.contains(document.elementFromPoint(x!, y!))) };
+    });
+    const bars = [...element.querySelectorAll<HTMLElement>("[data-timeline-bar]")].map(bar => ({ left: bar.offsetLeft, width: bar.offsetWidth }));
+    const now = element.querySelector<HTMLElement>(".bt-now")?.offsetLeft ?? null;
+    const stageRows = [...element.querySelectorAll<HTMLElement>(".bt-stage")].map(row => ({ earlier: row.dataset.earlier === "1",
+      lane: row.querySelector<HTMLElement>(".bt-lane")!.offsetHeight, label: row.querySelector<HTMLElement>(".bt-label")!.offsetHeight, row: row.offsetHeight }));
+    const visibleRows = [...element.querySelectorAll(".bt-row")].filter(row => {
+      const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + axis - 1 && box.bottom <= clip.top + scroller!.clientHeight + 1;
+    }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row") ?? `fold:${row.getAttribute("data-timeline-fold")}`);
+    const labelRects = [...element.querySelectorAll(".bt-row:not(.bt-fold) .bt-label")].slice(0, 3).map(label => {
+      const box = label.getBoundingClientRect();
+      return { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) };
+    });
+    return { failures: [...new Set(failures)], controls, bars, now, stageRows, text: element.textContent, scrollTop: scroller?.scrollTop, scrollLeft: scroller?.scrollLeft,
+      visibleRows, labelRects, scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
+  });
+}
+
+describe("board timeline hybrid", () => {
+  browserTest("real board and phone timeline, folds, zoom, history and empty states in every locale and theme", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const { timelineStorageKey } = await import("./boardTimelineStore");
+    const out = path.resolve(".artifacts/board-timeline"); fs.mkdirSync(out, { recursive: true });
+    const now = Date.parse("2026-10-26T13:20:00Z");
+    const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const records = (lang: "en" | "uk", mode = "work") => {
+      const titles = lang === "uk" ? ["Експорт CSV на великих проєктах", "Зберегти фільтри пошуку", "Відновити оплату карткою", "Перевірити контраст підказок", "Доставка сповіщень", "Пошук у логах агентів"]
+        : ["CSV export on large projects", "Keep the search filters", "Restore card payments", "Check tooltip contrast", "Notification delivery", "Search agent logs"];
+      const tasks: BoardTask[] = Array.from({ length: 14 }, (_, index) => ({ id: `timeline-task-${index}`, project: "atlas", text: `${titles[index % titles.length]}${index >= titles.length ? ` ${index + 1}` : ""}`,
+        status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(6000), updatedAt: iso(1) }));
+      const beforeWork = mode === "waiting" || mode === "pending";
+      if (beforeWork) tasks.splice(1);
+      const pipelines: Pipeline[] = [];
+      tasks.forEach((task, index) => {
+        const stageIds = ["builder", "reviewer", "fix"];
+        const stages = stageIds.map((id, stageIndex) => {
+          const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+          const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+          if (!resolved.role) throw new Error(resolved.error);
+          return { id, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, "prompt": "{{task}}" };
+        });
+        const lane = buildPipeline({ id: `timeline-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(480 - index * 10), stages });
+        lane.state = beforeWork || index === 1 ? "provisioning" : index === 0 || index === 3 ? "running" : "needs_decision";
+        lane.cursor = { stageId: beforeWork || index === 1 ? "builder" : "fix", state: beforeWork || index === 1 ? "pending" : index === 0 ? "running" : index === 3 ? "reviewing" : "spawning", input: null, activatedBy: null };
+        lane.runs.forEach((run, stageIndex) => {
+          if (mode === "waiting" || ((beforeWork || index === 1) && stageIndex > 0)) return;
+          const state = beforeWork || index === 1 ? "pending" : stageIndex === 0 ? "passed" : stageIndex === 1 ? "failed" : index === 0 ? "running" : index === 3 ? "reviewing" : "needs_decision";
+          run.attempts.push({ n: 1, state, effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+            startedAt: beforeWork || index === 1 ? null : iso(470 - index * 10 - stageIndex * 90), completedAt: beforeWork || index === 1 || (stageIndex === 2 && (index === 0 || index === 3)) ? null : iso(400 - index * 10 - stageIndex * 90),
+            input: null, output: null, activatedBy: null, verdict: null, error: null });
+        });
+        if (index === 0 && !beforeWork) lane.runs[0]!.attempts.push({ ...structuredClone(lane.runs[0]!.attempts[0]!), n: 2, startedAt: iso(399), completedAt: iso(350) });
+        if (index === tasks.length - 1 && !beforeWork) {
+          lane.createdAt = iso(5); lane.state = "running"; lane.cursor = { ...lane.cursor!, stageId: "builder", state: "running" };
+          lane.runs = [lane.runs[0]!]; lane.runs[0]!.attempts[0] = { ...lane.runs[0]!.attempts[0]!, state: "running", startedAt: iso(5), completedAt: null };
+        }
+        pipelines.push(lane);
+        if (index === 0 && !beforeWork) {
+          const old = structuredClone(lane); old.id = "timeline-previous-lane"; old.createdAt = iso(5800); old.state = "completed"; old.cursor = null; old.closedAt = iso(5650);
+          old.runs = [old.runs[0]!]; old.runs[0]!.attempts = [old.runs[0]!.attempts[0]!]; old.runs[0]!.attempts[0]!.startedAt = iso(5790); old.runs[0]!.attempts[0]!.completedAt = iso(5660);
+          pipelines.push(old);
+        }
+      });
+      if (mode === "empty") pipelines.length = 0;
+      if (mode === "unknown") for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) { attempt.startedAt = null; attempt.completedAt = null; }
+      const longAttempt = !beforeWork && mode !== "unknown" && mode !== "empty" ? pipelines.find(lane => lane.id === "timeline-lane-0")?.runs[0]?.attempts[0] : undefined;
+      if (longAttempt) {
+        longAttempt.startedAt = iso(72 * 60 + 36 + 400);
+        pipelines.find(lane => lane.id === "timeline-lane-0")!.createdAt = iso(5000);
+      }
+      // A lifecycle row alone is not native work evidence. Supply explicit
+      // resolved worker turns for the coloured strips exercised by this case.
+      const files: FileEntry[] = [];
+      for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) {
+        if (!attempt.startedAt) continue;
+        const id = `${lane.id}-${run.stageId}-${attempt.n}`;
+        const file = { path: `/fixture/${id}.jsonl`, conversationId: id, project: "atlas", projectName: "Atlas",
+          root: "codex-sessions", name: `${id}.jsonl`, title: id, kind: "session", fmt: "codex", parent: null,
+          engine: attempt.effectiveRole!.engine, model: attempt.effectiveRole!.model, mtime: now / 1000,
+          size: 100, proc: attempt.completedAt ? "done" : "running", activity: attempt.completedAt ? "idle" : "live",
+          pendingQuestion: null, waitingInput: null,
+          lastTurn: { startedAt: attempt === longAttempt ? Date.parse(attempt.completedAt!) - 120_000 : Date.parse(attempt.startedAt), endedAt: attempt.completedAt ? Date.parse(attempt.completedAt) : null },
+          agentActivity: { lastRecordAt: now, checking: false, check: null },
+        } as FileEntry;
+        attempt.conversationId = id; attempt.agentPath = file.path; files.push(file);
+        for (const task of tasks.filter(task => lane.taskIds.includes(task.id)))
+          task.assignments.push({ path: file.path, conversationId: id, panePid: null, state: "linked", error: null, at: iso(1) });
+      }
+      return { ...filesReadSummary([], pipelines), files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: files.length, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+    };
+    let payload = records("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
+    // A short browser-owned temp path avoids the Linux singleton socket limit.
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [390, 1024, 1440]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        payload = records(lang);
+        const phone = width === 390;
+        const opened = await openFixture(browser, "about:blank", { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+        const { page, context, pageErrors } = opened;
+        try {
+          await context.addInitScript(({ lang, theme }) => {
+            localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+            localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+          }, { lang, theme });
+          await page.clock.setFixedTime(new Date(now));
+          await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+          await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+          const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : '[data-board-timeline-toggle]');
+          await toggle.waitFor();
+          const seenRows = new Set<string>();
+          let frozenPaint: Buffer[] = [];
+          const frame = async (state: string, target = page.locator("[data-board-timeline]")) => {
+            const name = `${width}-${lang}-${theme}-${state}`;
+            // Row snapping can resize the scroller and schedule another scroll
+            // event. Judge the settled geometry; retain every clipping assertion.
+            await page.evaluate(async () => {
+              let previous = "", stable = 0;
+              for (let frame = 0; frame < 30; frame++) {
+                await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+                const scroll = document.querySelector<HTMLElement>("[data-timeline-scroll]");
+                const current = scroll ? [scroll.scrollTop, scroll.scrollLeft, scroll.clientHeight, scroll.scrollHeight].join(":") : "absent";
+                stable = current === previous ? stable + 1 : 0;
+                previous = current;
+                if (stable >= 3) return;
+              }
+              throw new Error("timeline scroll geometry did not settle");
+            });
+            const geometry = await timelineGeometry(target);
+            const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
+            const paintDifference: number[] = [];
+            // A frozen label must keep its actual painted words when time is
+            // zoomed. DOM rectangles alone miss stale sticky-cell painting.
+            if (["default", "zoom-12", "zoom-6"].includes(state)) {
+              const current = await Promise.all(geometry.labelRects.map(rect => sharp(capture).extract(rect).removeAlpha().raw().toBuffer()));
+              if (state === "default") frozenPaint = current;
+              else for (let index = 0; index < current.length; index++) {
+                const before = frozenPaint[index]!, after = current[index]!;
+                expect(after.length).toBe(before.length);
+                let changed = 0;
+                for (let pixel = 0; pixel < after.length; pixel += 3) if (Math.max(...[0, 1, 2].map(channel => Math.abs(after[pixel + channel]! - before[pixel + channel]!))) > 20) changed++;
+                paintDifference.push(changed / (after.length / 3));
+              }
+            }
+            readings.push({ name, state, width, lang, theme, ...geometry, paintDifference, imageSha256: createHash("sha256").update(capture).digest("hex") });
+            for (const difference of paintDifference) expect(difference).toBeLessThan(0.01);
+            if (state.startsWith("scroll-page-")) for (const row of geometry.visibleRows) seenRows.add(row);
+            expect(pageErrors).toEqual([]);
+            expect(geometry.failures).toEqual([]);
+            expect(geometry.controls.filter(control => !control.hit)).toEqual([]);
+            // A phone stage without a history control stacks its text above a 26px lane; only the 44px control grows the lane.
+            if (phone) for (const stage of geometry.stageRows) { expect(stage.lane).toBe(stage.earlier ? 44 : 26); expect(stage.row).toBeLessThanOrEqual(stage.label + stage.lane + 1); }
+            if (geometry.now !== null) for (const bar of geometry.bars) expect(bar.left + bar.width).toBeLessThanOrEqual(geometry.now + 1);
+            for (const control of geometry.controls) { expect(control.width).toBeGreaterThanOrEqual(phone ? 44 : 24); expect(control.height).toBeGreaterThanOrEqual(phone ? 44 : 24); }
+          };
+          await frame("board", page.locator(phone ? "[data-phone-kanban-tabs]" : '[data-bar="project"]'));
+          await toggle.click();
+          const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
+          // Tasks without a live agent sit in the chart's closed groups; this case reads them all, so the groups are opened and kept open.
+          // A task is collapsed by default; this case reads the first task's stages, so its expansion is stored here.
+          await page.evaluate(key => { const stored = JSON.parse(localStorage.getItem(key)!); stored.expanded = { ...stored.expanded, "timeline-task-0": true, "group:needs-you": true, "group:still": true, "group:still-long": true }; localStorage.setItem(key, JSON.stringify(stored)); }, timelineStorageKey("atlas"));
+          await page.reload(); await chart.waitFor();
+          const first = page.locator('[data-timeline-task="timeline-task-0"]');
+          await page.locator('[data-timeline-task="timeline-task-0"][data-expanded="1"]').waitFor();
+          expect(await first.locator("[data-timeline-expand]").evaluate(element => getComputedStyle(element).fontWeight)).toBe("600");
+          // One window wide: of the task's five observed turns the oldest, 96 hours back, lies outside the 1-day window and is not drawn.
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(4);
+          const strip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => ({ height: part.getBoundingClientRect().height, color: getComputedStyle(part).backgroundColor })));
+          expect(strip.every(part => part.height === 4)).toBe(true);
+          expect(new Set(strip.map(part => part.color)).size).toBe(2);
+          const longStage = chart.locator(`[data-timeline-attempt='${JSON.stringify(["timeline-lane-0", "builder", 1])}']`);
+          await longStage.getByText(translate(lang, "timeline.lastTurn", { duration: lang === "uk" ? "2 хв" : "2m" }), { exact: true }).waitFor();
+          await longStage.getByText(translate(lang, "timeline.elapsed", { duration: lang === "uk" ? "3 д" : "3d" }), { exact: true }).waitFor();
+          // The stage bar is clipped to the window, so the known work is compared in time, from the unclipped bounds each bar carries.
+          const knownWorkFraction = await longStage.evaluate(row => {
+            const elapsed = row.querySelector<HTMLElement>("[data-timeline-bar]")!;
+            const work = row.querySelector<HTMLElement>("[data-timeline-work]")!;
+            return (Number(work.dataset.endMs) - Number(work.dataset.startMs)) / (Number(elapsed.dataset.endMs) - Number(elapsed.dataset.startMs));
+          });
+          expect(knownWorkFraction).toBeLessThan(0.01);
+          const runtimeLabels = await chart.locator(".bt-runtime").allTextContents();
+          expect(runtimeLabels.every(label => !/\b(builder|reviewer)\b/.test(label))).toBe(true);
+          // Stages that ended before the window are one line; opening it lists them, each with its paging control. Open here so the rows, and their frozen labels, do not change with the scale.
+          const foldedLine = page.locator('[data-timeline-fold-expand][aria-expanded="false"]').first();
+          await foldedLine.waitFor();
+          for (const fold of await page.locator('[data-timeline-fold-expand][aria-expanded="false"]').all()) await fold.click();
+          await frame("default");
+          const timeScroll = page.locator("[data-timeline-scroll]");
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
+          // The earlier-stage control pages the window back; the axis's «now» label then returns it.
+          const viewStart = () => timeScroll.getAttribute("data-view-start").then(Number);
+          const recentStart = await viewStart();
+          await page.locator(".bt-earlier").first().click();
+          expect(await viewStart()).toBeLessThan(recentStart);
+          await page.locator("[data-timeline-back]").waitFor();
+          await frame("history");
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
+          await first.locator("button").click(); await frame("collapsed");
+          // Two successful agents keep their own inks, including after a
+          // failure becomes a pass. Outcomes cannot erase identity.
+          const reviewer = payload.pipelines.find(lane => lane.id === "timeline-lane-0")!.runs[1]!.attempts[0]!;
+          reviewer.state = "passed";
+          await page.reload(); await chart.waitFor();
+          const passedStrip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => getComputedStyle(part).backgroundColor));
+          expect(passedStrip).toEqual(strip.map(part => part.color));
+          await frame("successful-agents");
+          await page.reload(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("0");
+          await frame("reloaded");
+          await first.locator("button").click(); await frame("expanded");
+          const zoomIn = page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true });
+          const zoomOut = page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true });
+          const scaleWords: Record<number, string> = { 6: translate(lang, "timeline.hours", { count: 6 }), 12: translate(lang, "timeline.hours", { count: 12 }), 24: translate(lang, "timeline.days", { count: 1 }), 72: translate(lang, "timeline.days", { count: 3 }), 168: translate(lang, "timeline.week") };
+          for (const hours of [12, 6]) { await zoomIn.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(scaleWords[hours]!); await frame(`zoom-${hours}`); }
+          expect(await zoomIn.isDisabled()).toBe(true);
+          for (const hours of [12, 24, 72, 168]) { await zoomOut.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(scaleWords[hours]!); if (hours >= 72) await frame(`zoom-${hours}`); }
+          expect(await zoomOut.isDisabled()).toBe(true);
+          await page.locator("[data-timeline-scroll]").evaluate(element => element.scrollTop = element.scrollHeight / 2);
+          await frame("scroll-middle");
+          await page.locator("[data-timeline-scroll]").evaluate(element => element.scrollTop = element.scrollHeight);
+          await frame("scroll-end");
+          await timeScroll.evaluate(element => element.scrollTop = 0);
+          let lastTop = -1;
+          for (let pageIndex = 1; pageIndex <= 20; pageIndex++) {
+            const top = await timeScroll.evaluate(element => element.scrollTop);
+            if (top === lastTop) break;
+            lastTop = top;
+            await frame(`scroll-page-${pageIndex}`);
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 44);
+          }
+          const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row")!));
+          expect([...seenRows].sort()).toEqual(allRows.sort());
+          payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); expect(await first.getAttribute("data-expanded")).toBe("1");
+          await chart.locator(".bt-stage").first().getByText(translate(lang, "timeline.elapsed", { duration: translate(lang, "timeline.unknownTime") }), { exact: true }).waitFor();
+          expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("unknown");
+          payload = records(lang, "pending"); await page.reload(); await chart.waitFor();
+          await chart.locator(".bt-stage").getByText(translate(lang, "kanban.graphState.pending"), { exact: true }).waitFor();
+          expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("pending");
+          payload = records(lang, "waiting"); await page.reload(); await chart.waitFor(); await first.locator("button").click();
+          await chart.getByText(translate(lang, "timeline.waiting"), { exact: true }).waitFor();
+          expect(await chart.locator(".bt-stage").count()).toBe(0); await frame("waiting");
+          payload = records(lang, "empty"); await page.reload(); await chart.waitFor(); await page.getByText(translate(lang, "timeline.empty"), { exact: true }).waitFor(); await frame("empty");
+          // Use the real scanner/launch fixture's live FileEntry as a board
+          // assignment, with no pipeline, through both production mounts.
+          const memberDirectory = path.join(out, `member-${width}-${lang}-${theme}`); fs.mkdirSync(memberDirectory, { recursive: true });
+          const live = staleWorkingFixture(memberDirectory, now).live;
+          const agentTask = payload.tasks[0]!;
+          payload.tasks.splice(1);
+          const memberTask = { ...agentTask, assignments: [{ path: live.path, conversationId: live.conversationId, panePid: null,
+            state: "delivered" as const, error: null, at: iso(1) }] };
+          payload = { ...payload, files: [live], tasks: [memberTask], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 1, smt: now / 1000 }] };
+          await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "timeline-task-0": true, "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
+          await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("1");
+          expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+          await chart.getByText(translate(lang, "mobile2.kanban.agents", { count: 1 }), { exact: true }).waitFor();
+          expect(await chart.locator(".bt-stage-name").innerText()).toContain(translate(lang, "dash.agent"));
+          await frame("standalone-agent");
+          const history = records(lang).pipelines[0]!;
+          history.runs = [history.runs[0]!];
+          history.runs[0]!.attempts = [history.runs[0]!.attempts[0]!];
+          const prior = history.runs[0]!.attempts[0]!;
+          prior.startedAt = iso(30); prior.completedAt = iso(10); prior.state = "passed";
+          prior.conversationId = live.conversationId!; prior.agentPath = live.path;
+          for (const state of ["completed", "needs_decision"] as const) {
+            history.state = state;
+            history.cursor = state === "completed" ? null : { stageId: "builder", state: "running", input: null, activatedBy: null };
+            payload.pipelines = [history];
+            await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
+            await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+            await first.waitFor();
+            // A lane parked on a decision still has its stage running: the card counts the agent as working, so the chart lifts it into the working group.
+            // The kanban does not count the conversation of a completed lane as working, so the chart keeps that task in its group. Both start collapsed.
+            expect(await first.getAttribute("data-expanded")).toBe("0");
+            expect(await first.getAttribute("data-timeline-group") === "working").toBe(state !== "completed");
+            await first.locator("[data-timeline-expand]").click();
+            expect(await chart.locator('[data-live="1"] [data-timeline-bar]').count()).toBe(1);
+            expect(await chart.locator('[data-live="0"] [data-timeline-bar]').count()).toBe(1);
+            // Only the later native turn is known; the old attempt remains an elapsed outline.
+            expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+            await chart.locator('[data-live="0"]').getByText(translate(lang, "timeline.workUnknown"), { exact: true }).waitFor();
+            const liveRight = await chart.locator('[data-live="1"] [data-timeline-bar]').evaluate(element => (element as HTMLElement).offsetLeft + (element as HTMLElement).offsetWidth);
+            expect(Math.abs(liveRight - await chart.locator(".bt-now").first().evaluate(element => (element as HTMLElement).offsetLeft))).toBeLessThanOrEqual(1);
+            await frame(`resumed-${state}`);
+          }
+          history.state = "running";
+          history.cursor = { stageId: "builder", state: "running", input: null, activatedBy: null };
+          prior.state = "running"; prior.completedAt = null;
+          await page.reload(); await chart.waitFor();
+          expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+          const runningWord = translate(lang, "kanban.graphState.running"), stoppedWord = translate(lang, "timeline.stopped");
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(runningWord);
+          await frame("running-once");
+          // A running attempt can outlive its native turn or host. Preserve
+          // that lifecycle while proving both idle labels through the mounts.
+          for (const state of ["ended-turn", "dead-host"] as const) {
+            payload.files = [{ ...live, proc: state === "dead-host" ? "killed" : "running", activity: state === "dead-host" ? "live" : "idle",
+              lastTurn: { startedAt: now - 12 * 60_000, endedAt: state === "ended-turn" ? now - 10 * 60_000 : null } }];
+            await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
+            await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+            expect(await first.getAttribute("data-expanded")).toBe("0");
+            const idleWord = translate(lang, "timeline.idle");
+            expect(await first.locator(".bt-meta").innerText()).toContain(idleWord);
+            expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+            expect(await first.locator("[data-timeline-strip]").count()).toBe(state === "ended-turn" ? 1 : 0);
+            await frame(`idle-${state}-collapsed`);
+            await first.locator("button").click();
+            expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(idleWord);
+            expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+            if (state === "ended-turn") {
+              await chart.locator(".bt-stage").getByText(translate(lang, "timeline.lastTurn", { duration: lang === "uk" ? "2 хв" : "2m" }), { exact: true }).waitFor();
+              expect(await chart.locator("[data-timeline-work]").count()).toBe(1);
+              const endFraction = await chart.locator(".bt-stage").evaluate(row => {
+                const work = row.querySelector<HTMLElement>("[data-timeline-work]")!.style;
+                const elapsed = row.querySelector<HTMLElement>("[data-timeline-bar]")!.style;
+                return (parseFloat(work.left) + parseFloat(work.width) - parseFloat(elapsed.left)) / parseFloat(elapsed.width);
+              });
+              // The minimum visible ink width may exceed two minutes at this
+              // zoom; its right edge must still stop ten minutes before now.
+              expect(endFraction).toBeCloseTo(2 / 3, 3);
+            } else {
+              await chart.locator(".bt-stage").getByText(translate(lang, "timeline.workUnknown"), { exact: true }).waitFor();
+              expect(await chart.locator("[data-timeline-work]").count()).toBe(0);
+            }
+            await frame(`idle-${state}-expanded`);
+          }
+          history.state = "paused";
+          prior.suspension = { reason: "pause", detail: "Host stopped", requestedAt: iso(10), stoppedAt: iso(9) };
+          payload.files = [];
+          await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
+          await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("0");
+          // A confirmed stop reads as stopped in the collapsed row, never as running.
+          expect(await first.locator(".bt-meta").innerText()).toContain(stoppedWord);
+          expect(await first.locator(".bt-meta").innerText()).not.toContain(runningWord);
+          await frame("suspended-collapsed");
+          await first.locator("button").click();
+          expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+          const stoppedBounds = await chart.locator("[data-timeline-bar]").getAttribute("style");
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(0);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
+          await frame("suspended-expanded");
+          await page.clock.setFixedTime(new Date(now + 10 * 60_000));
+          await page.reload(); await chart.waitFor();
+          expect(await chart.locator("[data-timeline-bar]").getAttribute("style")).toBe(stoppedBounds);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(0);
+          expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
+          await frame("suspended-later");
+          await page.clock.setFixedTime(new Date(now));
+          payload.pipelines = []; payload.files = [live];
+          // Every line of a permitted long title must be reachable, even
+          // when its row is taller than the entire chart viewport.
+          const longTitle = (lang === "uk" ? "Довга назва задачі з описом роботи " : "Long task title describing the work ").repeat(80);
+          payload.tasks[0]!.text = longTitle;
+          await page.reload(); await chart.waitFor();
+          const settle = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          // A text line of any row is either whole inside the visible chart
+          // area (under the pinned axis, above the bottom edge) or wholly outside it.
+          const clippedLines = () => timeScroll.evaluate(scroller => {
+            const box = scroller.getBoundingClientRect();
+            const visibleTop = box.top + scroller.querySelector<HTMLElement>(".bt-axis")!.offsetHeight, visibleBottom = box.top + scroller.clientHeight;
+            const range = document.createRange(), clipped: { text: string; top: number; bottom: number; visibleTop: number; visibleBottom: number }[] = [];
+            for (const row of scroller.querySelectorAll(".bt-row")) {
+              const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (!rect.height || rect.bottom <= visibleTop + 0.5 || rect.top >= visibleBottom - 0.5) continue;
+                  if (rect.top < visibleTop - 0.5 || rect.bottom > visibleBottom + 0.5) clipped.push({ text: node.textContent.trim().slice(0, 24), top: rect.top, bottom: rect.bottom, visibleTop, visibleBottom });
+                }
+              }
+            }
+            return clipped;
+          });
+          // The chart fits its viewport to text lines once it has mounted; scroll after that.
+          await page.waitForFunction(() => (document.querySelector("[data-timeline-scroll]") as HTMLElement | null)?.style.height);
+          await settle();
+          await timeScroll.evaluate(element => element.scrollTop = 100);
+          await settle();
+          // The settled position moves to the next text line edge, never into a line.
+          expect(await timeScroll.evaluate(element => element.scrollTop)).toBeGreaterThanOrEqual(99);
+          expect(await clippedLines()).toEqual([]);
+          const lines = await first.locator(".bt-disclosure .bt-title").evaluate(element => {
+            const node = element.firstChild!;
+            const scroller = element.closest(".bt-scroll")!;
+            const box = scroller.getBoundingClientRect();
+            const rects = new Map<number, { top: number; bottom: number }>();
+            for (let index = 0; index < node.textContent!.length; index++) {
+              const range = document.createRange(); range.setStart(node, index); range.setEnd(node, index + 1);
+              const rect = range.getBoundingClientRect();
+              rects.set(rect.top, { top: rect.top - box.top + scroller.scrollTop, bottom: rect.bottom - box.top + scroller.scrollTop });
+            }
+            return [...rects.values()];
+          });
+          const reached = new Set<number>();
+          let longPrevious = -1;
+          for (let index = 0; index < 20; index++) {
+            const position = await timeScroll.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight }));
+            if (position.top === longPrevious) break;
+            longPrevious = position.top;
+            expect(await clippedLines()).toEqual([]);
+            lines.forEach((line, lineIndex) => { if (line.top >= position.top + 44 && line.bottom <= position.top + position.height) reached.add(lineIndex); });
+            const name = `${width}-${lang}-${theme}-long-title-${index}`;
+            const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ name, width, lang, theme, state: "long-title", ...position, imageSha256: createHash("sha256").update(capture).digest("hex") });
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 88);
+            await settle();
+          }
+          // Include the beginning after deliberately testing an interior scroll.
+          await timeScroll.evaluate(element => element.scrollTop = 0);
+          await settle();
+          expect(await clippedLines()).toEqual([]);
+          const height = await timeScroll.evaluate(element => element.clientHeight);
+          lines.forEach((line, index) => { if (line.top >= 44 && line.bottom <= height) reached.add(index); });
+          expect(reached.size).toBe(lines.length);
+          expect(pageErrors).toEqual([]);
+          if (phone) {
+            expect(await page.locator('[role="tab"][aria-selected="true"]').count()).toBe(1);
+            await page.locator('[data-phone-kanban-tab="assigned"]').click(); expect(await chart.count()).toBe(0);
+          } else { await toggle.click(); expect(await chart.count()).toBe(0); }
+          const stored = await page.evaluate(key => localStorage.getItem(key), timelineStorageKey("atlas")); expect(JSON.parse(stored!).view).toBe("board");
+        } finally { await context.close(); }
+      }
+    } finally {
+      fs.mkdirSync("evidence/board-timeline", { recursive: true });
+      const sources = ["src/lib/board/taskTimeline.ts", "src/lib/board/taskTimelineMembers.ts", "src/components/kanban/BoardTimeline.tsx", "src/components/kanban/boardTimeline.css", "src/components/kanban/boardTimelineStore.ts", "src/components/kanban/KanbanBoard.tsx", "src/components/mobile/MobileKanban.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+      fs.writeFileSync("evidence/board-timeline/frontend.json", JSON.stringify({ source: "board timeline hybrid in kanbanBoard.browser.test.tsx", capturedAt: new Date().toISOString(),
+        command: 'LLV_KANBAN_BROWSER_TEST=1 bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"',
+        sources: Object.fromEntries(sources.map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), now, readings }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+  }, 600_000);
+
+  /*
+   * #scroll: the chart follows the gesture. A chart of 30 tasks (collapsed and
+   * with every task expanded) is driven by real touch input through CDP and by
+   * real wheel, key and scrollbar input, next to a plain scroller given the same
+   * gesture. Numbers land in $LLV_EVIDENCE_DIR/timeline-scroll-<label>.json
+   * (label: LLV_TIMELINE_SCROLL_LABEL) before any assertion runs.
+   */
+  browserTest("chart follows touch, trackpad, wheel and key scrolling without jumps", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const label = process.env.LLV_TIMELINE_SCROLL_LABEL ?? "run";
+    const evidence = process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts/board-timeline-scroll");
+    const out = path.resolve(".artifacts/board-timeline-scroll"); fs.mkdirSync(out, { recursive: true }); fs.mkdirSync(evidence, { recursive: true });
+    const now = Date.parse("2026-10-26T13:20:00Z");
+    const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const titles = ["Експорт CSV на великих проєктах з вибором колонок і кодування", "Зберегти фільтри пошуку", "Відновити оплату карткою після відмови банку та повторної спроби", "Перевірити контраст підказок",
+      "Доставка сповіщень", "Пошук у логах агентів за часом і за роллю виконавця у вибраному проєкті"];
+    const records = (count: number) => {
+      const tasks: BoardTask[] = Array.from({ length: count }, (_, index) => ({ id: `scroll-task-${index}`, project: "atlas", text: `${titles[index % titles.length]} ${index + 1}`,
+        status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(1600), updatedAt: iso(1) }));
+      const pipelines: Pipeline[] = tasks.map((task, index) => {
+        const stageIds = ["builder", "reviewer", "fix"];
+        const stages = stageIds.map((id, stageIndex) => {
+          const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+          const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+          if (!resolved.role) throw new Error(resolved.error);
+          return { id, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, "prompt": "{{task}}" };
+        });
+        const lane = buildPipeline({ id: `scroll-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(1500 - index * 40), stages });
+        const running = index % 3 === 0;
+        lane.state = running ? "running" : "needs_decision";
+        lane.cursor = { stageId: "fix", state: running ? "running" : "pending", input: null, activatedBy: null };
+        lane.runs.forEach((run, stageIndex) => {
+          const start = 1490 - index * 40 - stageIndex * 100 + (index === count - 1 ? -1480 + 6 + stageIndex * 100 : 0);
+          const live = stageIndex === 2 && running;
+          run.attempts.push({ n: 1, state: stageIndex < 2 ? "passed" : running ? "running" : "needs_decision", effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+            startedAt: iso(Math.max(start, 6)), completedAt: live ? null : iso(Math.max(start - 80, 1)), input: null, output: null, activatedBy: null, verdict: null, error: null });
+        });
+        return lane;
+      });
+      return { ...filesReadSummary([], pipelines), files: [] as FileEntry[], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+    };
+    let payload = records(30);
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const report: Record<string, unknown> = { label, now, ranToEnd: false, abort: null as string | null, rows: {} as Record<string, number>, touch: [] as unknown[], control: [] as unknown[], desktop: [] as unknown[], refresh: [] as unknown[], rest: [] as unknown[] };
+    const failures: string[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+    /* Records, per animation frame, where the chart is, and every script write to its position or height. */
+    const install = (page: Page) => page.evaluate(() => {
+      const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+      const rec = { on: false, frames: [] as { top: number; left: number; h: number }[], writes: [] as string[], touched: null as { kind: string; element: string; at: string; under: string[]; underKind: string } | null };
+      (window as unknown as { __rec: typeof rec }).__rec = rec;
+      // What a point lands on: a mark of the chart (segment, line, stage bar), a row's title, the bare lane or track, or anything else.
+      const classify = (el: Element | null) => {
+        const element = el ? `${el.tagName.toLowerCase()}${el.classList.length ? `.${[...el.classList].join(".")}` : ""}` : "none";
+        const kind = !el ? "none" : el.closest("[data-timeline-segment], [data-timeline-line], [data-timeline-bar]") ? "mark" : el.closest(".bt-title, .bt-stage-name") ? "title" : el.matches(".bt-lane, .bt-track") ? "bare" : "other";
+        return { kind, element };
+      };
+      (window as unknown as { __classify: typeof classify }).__classify = classify;
+      // The element each touch really started on, as the page's own event reports it.
+      document.addEventListener("touchstart", event => {
+        if (!rec.on) return;
+        const point = event.touches[0]!, stack = document.elementsFromPoint(point.clientX, point.clientY);
+        rec.touched = { ...classify(event.target as Element), at: `${Math.round(point.clientX * 10) / 10},${Math.round(point.clientY * 10) / 10}`, under: stack.slice(0, 3).map(el => classify(el).element), underKind: classify(stack[0] ?? null).kind };
+      }, true);
+      const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      Object.defineProperty(scroller, "scrollTop", { configurable: true, get() { return descriptor.get!.call(this); },
+        set(value) { if (rec.on) rec.writes.push(`scrollTop=${value}`); descriptor.set!.call(this, value); } });
+      new MutationObserver(() => { if (rec.on) rec.writes.push(`style=${scroller.getAttribute("style")}`); }).observe(scroller, { attributes: true, attributeFilter: ["style"] });
+      const loop = () => { if (rec.on) rec.frames.push({ top: scroller.scrollTop, left: scroller.scrollLeft, h: scroller.clientHeight }); requestAnimationFrame(loop); };
+      requestAnimationFrame(loop);
+    });
+    const startRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: unknown[]; writes: string[]; touched: unknown } }).__rec; rec.frames = []; rec.writes = []; rec.touched = null; rec.on = true; });
+    const stopRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: { top: number; left: number; h: number }[]; writes: string[]; touched: { kind: string; element: string; at: string; under: string[]; underKind: string } | null } }).__rec; rec.on = false; return rec; });
+    const series = (frames: { top: number }[]) => {
+      let maxJump = 0, backRun = 0, maxBack = 0, last = 0;
+      for (let index = 1; index < frames.length; index++) {
+        const delta = frames[index]!.top - frames[index - 1]!.top;
+        maxJump = Math.max(maxJump, Math.abs(delta));
+        if (!delta) continue;
+        if (last && Math.sign(delta) !== last) backRun = 0;
+        // A reversal is the length of a run against the direction of the finger's first leg (positive = chart moving down the list).
+        last = Math.sign(delta); if (delta < 0) { backRun += -delta; maxBack = Math.max(maxBack, backRun); } else backRun = 0;
+      }
+      return { maxJump: Math.round(maxJump * 10) / 10, maxBackwardRun: Math.round(maxBack * 10) / 10 };
+    };
+    const position = (page: Page) => page.evaluate(() => { const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!; return { top: s.scrollTop, left: s.scrollLeft, h: s.clientHeight, sh: s.scrollHeight }; });
+    const cuts = (page: Page) => page.evaluate(() => {
+      const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+      const top = box.top + axis, bottom = box.top + s.clientHeight, cut: string[] = [];
+      for (const row of s.querySelectorAll<HTMLElement>(".bt-row")) {
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom <= top + 0.5 || rect.top >= bottom - 0.5) continue;
+        if (rect.top < top - 0.5 || rect.bottom > bottom + 0.5) cut.push(`${row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")}:${Math.round(rect.top - top)}..${Math.round(rect.bottom - bottom)}`);
+      }
+      return cut;
+    });
+    const settle = async (page: Page) => { await sleep(700); await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); };
+    const open = async (phone: boolean, expandedAll: boolean, hold = 0) => {
+      payload = records(30);
+      const opened = await openFixture(browser, "about:blank", { width: phone ? 390 : 1440, height: phone ? 844 : 900 }, "light", "uk", "reduce", phone);
+      const { page, context, pageErrors } = opened;
+      await context.addInitScript(({ stored }) => {
+        localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+        localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+      }, { stored: { view: "timeline", hours: 24, expanded: { ...Object.fromEntries(payload.tasks.map(task => [task.id, expandedAll])), "group:needs-you": true, "group:still": true, "group:still-long": true } } });
+      await page.clock.setFixedTime(new Date(now));
+      await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+      if (phone) { const tab = page.locator('[data-phone-kanban-tab="timeline"]'); await tab.waitFor(); if (await tab.getAttribute("aria-selected") !== "true") await tab.click(); }
+      else { const toggle = page.locator("[data-board-timeline-toggle]"); await toggle.waitFor(); if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click(); }
+      await page.locator("[data-timeline-scroll]").waitFor();
+      await page.waitForFunction(() => (document.querySelector("[data-timeline-scroll]") as HTMLElement | null)?.style.height !== undefined);
+      await settle(page); void hold;
+      return { page, context, pageErrors };
+    };
+    /* Where a finger can start on a row with a lane, each point proved by the element under it: a mark (a segment, a line or a stage bar that
+       shows inside the lane), a title, and a bare spot of the lane or track. A kind with no such point on any whole row in view is an error. */
+    const geometry = (page: Page) => page.evaluate(() => {
+      const classify = (window as unknown as { __classify: (el: Element | null) => { kind: string; element: string } }).__classify;
+      const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+      // On the phone group heading rows and fold rows carry a title and no lane; only a row with a lane has a bar line to touch.
+      const rows = [...s.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { if (!row.querySelector(".bt-lane")) return false; const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + s.clientHeight + 1; });
+      if (!rows.length) throw new Error(`no whole row with a lane in view: scroller ${box.top}+${s.clientHeight}, axis ${axis}, scrollTop ${s.scrollTop}`);
+      const order = rows.map((_, index) => index).sort((a, b) => Math.abs(a - rows.length / 2) - Math.abs(b - rows.length / 2));
+      // A fingertip is a few pixels wide and the browser hands a touch to a control within its reach, so a start on a mark or on bare lane
+      // keeps at least 6 px from every button of the chart that shows in the scroller (a button cut off by the scroller's edge is not reachable)
+      // and from the scroller's top and bottom edges, and the point with the most room wins; a title is the label button's own text and needs none.
+      const view = { left: box.left, right: box.left + s.clientWidth, top: axis, bottom: box.top + s.clientHeight };
+      const controls = [...s.querySelectorAll<HTMLElement>("button, a[href], [role='button']")].map(control => control.getBoundingClientRect())
+        .map(rect => ({ left: Math.max(rect.left, view.left), right: Math.min(rect.right, view.right), top: Math.max(rect.top, view.top), bottom: Math.min(rect.bottom, view.bottom) }))
+        .filter(rect => rect.right > rect.left && rect.bottom > rect.top);
+      const room = (at: { x: number; y: number }) => Math.min(30, at.y - view.top, view.bottom - at.y, ...controls.map(rect => Math.hypot(Math.max(rect.left - at.x, 0, at.x - rect.right), Math.max(rect.top - at.y, 0, at.y - rect.bottom))));
+      const pick = (kind: "mark" | "title" | "bare") => {
+        let best: { x: number; y: number; row: number; room: number } | null = null;
+        for (const index of order) {
+          const row = rows[index]!, lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect();
+          const candidates: { x: number; y: number }[] = [];
+          if (kind === "mark") {
+            // A phone task row draws its marks at the foot of the lane, about 10 px above the next row's button, which the browser hands a touch to
+            // from that close: the points tried are the upper part of a mark at its centre and at both ends of the part that shows, where the button's
+            // corner is farther away, and the one with the most room wins.
+            const marks = [...row.querySelectorAll<HTMLElement>("[data-timeline-segment], [data-timeline-line], [data-timeline-bar]")].map(mark => mark.getBoundingClientRect())
+              .map(rect => ({ rect, from: Math.max(rect.left, lane.left, view.left + 2), to: Math.min(rect.right, lane.right, view.right - 2) })).filter(mark => mark.to - mark.from >= 3 && mark.rect.height > 0);
+            for (const mark of marks) for (const dy of [Math.min(0.5, mark.rect.height / 2), Math.min(2, mark.rect.height / 2), mark.rect.height / 2]) for (const x of [(mark.from + mark.to) / 2, mark.from + 0.5, mark.to - 0.5]) candidates.push({ x, y: mark.rect.top + dy });
+          } else if (kind === "title") {
+            const title = row.querySelector<HTMLElement>(".bt-title, .bt-stage-name")?.getClientRects()[0];
+            if (title) for (const dx of [24, 12, title.width / 2, 4]) candidates.push({ x: title.left + Math.min(dx, title.width - 1), y: title.top + title.height / 2 });
+          } else {
+            const track = row.querySelector<HTMLElement>(".bt-track")?.getBoundingClientRect();
+            const xs = Array.from({ length: Math.floor((view.right - view.left - 24) / 6) + 1 }, (_, step) => view.left + 12 + step * 6).sort((a, b) => Math.abs(a - (view.left + view.right) / 2) - Math.abs(b - (view.left + view.right) / 2));
+            for (const y of [lane.top + lane.height / 2, track ? track.top + track.height / 2 : null]) if (y !== null) for (const x of xs) candidates.push({ x, y });
+          }
+          for (const at of candidates) {
+            if (classify(document.elementFromPoint(at.x, at.y)).kind !== kind) continue;
+            if (kind === "title") return { x: Math.round(at.x * 10) / 10, y: Math.round(at.y * 10) / 10, row: index, room: 0 };
+            const spare = room(at);
+            if (spare >= 6 && (!best || spare > best.room)) best = { x: Math.round(at.x * 10) / 10, y: Math.round(at.y * 10) / 10, row: index, room: Math.round(spare * 10) / 10 };
+          }
+        }
+        if (best) return best;
+        throw new Error(`no start point on a ${kind} on any of ${rows.length} whole rows with a lane in view (scrollTop ${s.scrollTop})`);
+      };
+      const label = pick("title"), bar = pick("mark"), empty = pick("bare");
+      return { label, bar, empty, visibleRows: rows.length, rowHeights: rows.map(r => Math.round(r.getBoundingClientRect().height)) };
+    });
+    try {
+      for (const mode of ["collapsed", "expanded"] as const) {
+        const { page, context, pageErrors } = await open(true, mode === "expanded");
+        try {
+          const cdp = await context.newCDPSession(page);
+          const touch = (type: "touchStart" | "touchMove" | "touchEnd", x: number, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+          await install(page);
+          const rowCount = await page.locator("[data-board-timeline] .bt-row").count();
+          (report.rows as Record<string, number>)[mode] = rowCount;
+          check(rowCount >= 28, `${mode}: chart has ${rowCount} rows, at least 28 needed`);
+          const rest: { mode: string; atOpen: string[]; zoomOut?: string[]; toggled?: string[] } = { mode, atOpen: await cuts(page) };
+          // A plain scroller beside the chart gets each gesture too, as the reference for what a finger moves.
+          await page.evaluate(() => {
+            const box = document.createElement("div"); box.id = "scroll-control"; box.style.cssText = "position:fixed;left:0;top:420px;width:390px;height:300px;overflow:auto;background:#fff;z-index:99999;border:2px solid #06c;visibility:hidden";
+            const inner = document.createElement("div"); inner.style.cssText = "width:3000px;height:4000px;background:repeating-linear-gradient(#eee 0 40px,#ccc 40px 80px)"; box.append(inner); document.body.append(box);
+          });
+          const shapes: { name: string; legs: [number, number][]; step: number; starts: ("bar" | "label" | "empty")[]; holds: number[] }[] = [
+            { name: "drag200", legs: [[0, -200]], step: 4, starts: ["bar", "label", "empty"], holds: [0, 700] },
+            { name: "drag30", legs: [[0, -30]], step: 3, starts: ["bar", "label", "empty"], holds: [0] },
+            { name: "slow60", legs: [[0, -60]], step: 1, starts: ["bar", "label", "empty"], holds: [0] },
+            { name: "wobble", legs: [[0, -40], [0, 12], [0, -40], [0, 12], [0, -40]], step: 3, starts: ["bar", "label", "empty"], holds: [0, 700] },
+            { name: "drag200down", legs: [[0, 200]], step: 4, starts: ["bar", "label", "empty"], holds: [0] },
+          ];
+          const reference: Record<string, number> = {};
+          for (const shape of shapes) {
+            await page.evaluate(() => { const b = document.getElementById("scroll-control")!; b.style.visibility = "visible"; b.scrollTop = 1000; });
+            await touch("touchStart", 200, 600); await sleep(100);
+            let y = 600; for (const [, dy] of shape.legs) { const n = Math.ceil(Math.abs(dy) / shape.step); for (let i = 0; i < n; i++) { y += dy / n; await touch("touchMove", 200, y); await sleep(16); } await sleep(60); }
+            await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
+            reference[shape.name] = await page.evaluate(() => document.getElementById("scroll-control")!.scrollTop - 1000);
+            await page.evaluate(() => { document.getElementById("scroll-control")!.style.visibility = "hidden"; });
+            (report.control as unknown[]).push({ mode, shape: shape.name, moved: reference[shape.name] });
+          }
+          for (const shape of shapes) for (const start of shape.starts) for (const hold of shape.holds) {
+            await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 400; });
+            await settle(page);
+            const g = await geometry(page), at = g[start], before = await position(page);
+            await startRec(page);
+            await touch("touchStart", at.x, at.y); await sleep(hold);
+            let x = at.x, y = at.y; const marks: number[] = [];
+            for (const [dx, dy] of shape.legs) {
+              const n = Math.ceil(Math.hypot(dx, dy) / shape.step);
+              for (let i = 0; i < n; i++) { x += dx / n; y += dy / n; await touch("touchMove", x, y); await sleep(16); }
+              await sleep(60); marks.push((await position(page)).top - before.top);
+            }
+            await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
+            const recorded = await stopRec(page); const after = await position(page); const stats = series(recorded.frames);
+            const moved = after.top - before.top, heights = [...new Set(recorded.frames.map(frame => frame.h))];
+            const touched = recorded.touched, entry = { mode, shape: shape.name, start, hold, startAt: { x: at.x, y: at.y }, touched, before: before.top, moved, expected: -shape.legs.reduce((sum, [, dy]) => sum + dy, 0), control: reference[shape.name], afterEachLeg: marks, movedX: after.left - before.left,
+              heights, scriptWrites: recorded.writes.length, writes: recorded.writes.slice(0, 3), ...stats };
+            (report.touch as unknown[]).push(entry);
+            const tag = `${mode}/${shape.name}/${start}/hold${hold}`;
+            const expectedKind = { bar: "mark", label: "title", empty: "bare" }[start];
+            // The browser hands a touch to a button within about 13 px of it, and a phone task row draws its marks about 10 px above the next row's
+            // label button: there the page's event names that button while the finger is over the mark (under), and the report says so.
+            const retargeted = start === "bar" && touched?.kind === "other" && touched.element === "button.bt-disclosure" && touched.underKind === "mark";
+            (entry as Record<string, unknown>).retargetedToButton = retargeted;
+            check(touched?.kind === expectedKind || retargeted, `${tag}: the touch started on ${touched ? `${touched.element} (${touched.kind}), the finger over ${touched.under[0]}` : "nothing, no touchstart reached the page"}, expected a ${expectedKind} at ${at.x},${at.y}`);
+            check(recorded.writes.length === 0, `${tag}: ${recorded.writes.length} script writes to scrollTop or height during the gesture`);
+            check(heights.length === 1, `${tag}: viewport height took ${heights.length} values`);
+            if (shape.name === "drag200") check(Math.abs(moved - 185) <= 10, `${tag}: moved ${moved}, expected 185±10`);
+            if (shape.name === "drag200down") check(Math.abs(moved + 185) <= 10, `${tag}: moved ${moved}, expected -185±10`);
+            if (shape.name === "drag30") check(moved >= 0 && moved <= 30, `${tag}: moved ${moved}, expected at most 30`);
+            if (shape.name === "slow60") check(moved > 0 && moved <= 62 && Math.abs(moved - reference.slow60!) <= 10, `${tag}: moved ${moved}, a plain scroller moved ${reference.slow60}`);
+            if (shape.name === "wobble") check(stats.maxBackwardRun <= 14 && Math.abs(moved - reference.wobble!) <= 10, `${tag}: moved ${moved} (plain ${reference.wobble}), largest reversal ${stats.maxBackwardRun}, finger's own 12`);
+            check(stats.maxJump <= 40, `${tag}: largest one-frame jump ${stats.maxJump}`);
+            if (shape.name === "drag200" && hold === 0 && start === "label") await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-phone-${mode}-after-drag200.png`) });
+          }
+          // A data refresh while the user has scrolled leaves the position where the user put it.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          const before = await position(page), g = await geometry(page);
+          await touch("touchStart", g.label.x, g.label.y);
+          for (let i = 0; i < 40; i++) { await touch("touchMove", g.label.x, g.label.y - i * 3); await sleep(16); }
+          await touch("touchEnd", 0, 0); await sleep(900);
+          const placed = await position(page); const cutsBefore = await cuts(page);
+          await startRec(page);
+          payload = records(31); payload.tasks[3]!.updatedAt = iso(0);
+          await page.evaluate(() => { for (const name of ["llv:tasks-changed", "llv:files-changed", "llv:pipelines-changed"]) window.dispatchEvent(new Event(name)); });
+          await page.waitForFunction(() => document.querySelectorAll("[data-timeline-task]").length >= 31, undefined, { timeout: 15_000 }).catch(() => undefined);
+          await sleep(1200);
+          const recorded = await stopRec(page); const refreshed = await position(page);
+          const rows31 = await page.locator("[data-timeline-task]").count();
+          (report.refresh as unknown[]).push({ mode, phone: true, scrolledFrom: before.top, placedAt: placed.top, afterRefreshTop: refreshed.top, heightBefore: placed.h, heightAfter: refreshed.h, taskRows: rows31, writes: recorded.writes.length, cutsAtPlacement: cutsBefore });
+          check(rows31 >= 31, `${mode}: the refresh did not reach the chart (${rows31} task rows)`);
+          check(refreshed.top === placed.top && refreshed.h === placed.h && recorded.writes.length === 0, `${mode}: refresh moved the position ${placed.top}→${refreshed.top} or height ${placed.h}→${refreshed.h} (${recorded.writes.length} writes)`);
+          // Layout changes still fit whole rows: zoom, and expand/collapse of a task.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await page.getByRole("button", { name: translate("uk", "timeline.zoomOut"), exact: true }).click(); await settle(page);
+          rest.zoomOut = await cuts(page);
+          await page.locator("[data-timeline-expand]").nth(2).click(); await settle(page);
+          rest.toggled = await cuts(page);
+          (report.rest as unknown[]).push(rest);
+          check(rest.atOpen.length === 0 && rest.zoomOut!.length === 0 && rest.toggled!.length === 0, `${mode}: rows cut at rest after open/zoom/toggle: ${JSON.stringify(rest)}`);
+          await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-phone-${mode}-rest.png`) });
+          check(pageErrors.length === 0, `${mode}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      for (const mode of ["collapsed", "expanded"] as const) {
+        const { page, context, pageErrors } = await open(false, mode === "expanded");
+        try {
+          await install(page);
+          const scroller = page.locator("[data-timeline-scroll]");
+          const box = (await scroller.boundingBox())!;
+          const wheelPoint = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+          await page.evaluate(() => {
+            const control = document.createElement("div"); control.id = "scroll-control"; const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+            control.style.cssText = `position:fixed;left:0;top:0;width:${s.clientWidth}px;height:${s.clientHeight}px;overflow:auto;visibility:hidden;z-index:99999`;
+            const inner = document.createElement("div"); inner.style.cssText = "height:6000px"; control.append(inner); document.body.append(control);
+          });
+          const rest: { mode: string; atOpen: string[]; zoomOut?: string[]; toggled?: string[] } = { mode, atOpen: await cuts(page) };
+          const wheelOnce = async (delta: number, target: "chart" | "control") => {
+            await page.evaluate(target => { const c = document.getElementById("scroll-control")!; c.style.visibility = target === "control" ? "visible" : "hidden"; c.scrollTop = 0; if (target === "chart") document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; }, target);
+            await settle(page);
+            await page.mouse.move(wheelPoint.x, wheelPoint.y);
+            const before = target === "chart" ? (await position(page)).top : 0;
+            if (target === "chart") await startRec(page);
+            await page.mouse.wheel(0, delta); await sleep(900);
+            const writes = target === "chart" ? (await stopRec(page)).writes : [];
+            const top = target === "chart" ? (await position(page)).top : await page.evaluate(() => document.getElementById("scroll-control")!.scrollTop);
+            return { moved: top - before, writes: writes.length };
+          };
+          for (const delta of [40, 100]) {
+            const chart = await wheelOnce(delta, "chart"), control = await wheelOnce(delta, "control");
+            (report.desktop as unknown[]).push({ mode, input: `wheel ${delta}`, moved: chart.moved, control: control.moved, scriptWrites: chart.writes });
+            check(chart.writes === 0, `${mode}: wheel ${delta} wrote scrollTop or height ${chart.writes} times`);
+            check(Math.abs(chart.moved - control.moved) <= 4 && (delta !== 40 || Math.abs(chart.moved - 40) <= 6), `${mode}: wheel ${delta} moved ${chart.moved}, a plain scroller moved ${control.moved}`);
+          }
+          await page.evaluate(() => { document.getElementById("scroll-control")!.style.visibility = "hidden"; });
+          // Arrow keys: one row at a time, each landing on a row's top edge below the pinned axis.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await scroller.focus();
+          const edges = await page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, top = s.getBoundingClientRect().top + s.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+            return [...s.querySelectorAll<HTMLElement>(".bt-row")].map(row => Math.round(row.getBoundingClientRect().top - top + s.scrollTop));
+          });
+          let previous = 0; const stepped: number[] = [];
+          for (let press = 0; press < 3; press++) {
+            await startRec(page); await page.keyboard.press("ArrowDown"); await sleep(500);
+            const recorded = await stopRec(page); const top = (await position(page)).top; stepped.push(top - previous);
+            check(edges.some(edge => Math.abs(edge - top) <= 1), `${mode}: arrow down ${press + 1} landed at ${top}, not on a row edge`);
+            check(top > previous && edges.filter(edge => edge > previous + 1 && edge < top - 1).length === 0, `${mode}: arrow down ${press + 1} moved ${previous}→${top}, more than one row`);
+            previous = top; void recorded;
+          }
+          const upTop = (await (async () => { await page.keyboard.press("ArrowUp"); await sleep(500); return (await position(page)).top; })());
+          check(edges.some(edge => Math.abs(edge - upTop) <= 1) && upTop < previous, `${mode}: arrow up landed at ${upTop} from ${previous}`);
+          (report.desktop as unknown[]).push({ mode, input: "arrow down x3 then up", steps: stepped, upTop, firstRowEdges: edges.slice(0, 6) });
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page); await scroller.focus();
+          const pageHeight = (await position(page)).h;
+          await page.keyboard.press("PageDown"); await sleep(600);
+          const paged = (await position(page)).top;
+          (report.desktop as unknown[]).push({ mode, input: "PageDown", moved: paged, clientHeight: pageHeight });
+          check(paged > pageHeight * 0.5 && paged <= pageHeight, `${mode}: PageDown moved ${paged} of a ${pageHeight}px viewport`);
+          await page.keyboard.press("PageUp"); await sleep(600);
+          check((await position(page)).top < paged, `${mode}: PageUp did not scroll back`);
+          // The scrollbar: a click on its track below the thumb pages the chart. (A synthesized press on the
+          // thumb itself starts no drag in headless Chromium, with or without this change, so the track is the input.)
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          const gutter = await scroller.evaluate(element => (element as HTMLElement).offsetWidth - element.clientWidth);
+          check(gutter >= 12, `${mode}: scrollbar gutter is ${gutter}px, so the scrollbar is not exercised`);
+          const barX = box.x + box.width - gutter / 2;
+          await startRec(page);
+          await page.mouse.move(barX, box.y + box.height - 60); await sleep(150);
+          await page.mouse.down(); await sleep(60); await page.mouse.up(); await sleep(700);
+          const dragged = await stopRec(page); const thumbTop = (await position(page)).top;
+          (report.desktop as unknown[]).push({ mode, input: "scrollbar track click", moved: thumbTop, scriptWrites: dragged.writes.length, writes: dragged.writes.slice(0, 3) });
+          check(thumbTop > 0 && dragged.writes.length === 0, `${mode}: scrollbar track click moved ${thumbTop} with ${dragged.writes.length} script writes`);
+          // A refresh while scrolled leaves the position.
+          const placed = await position(page);
+          await startRec(page);
+          payload = records(31); payload.tasks[3]!.updatedAt = iso(0);
+          await page.evaluate(() => { for (const name of ["llv:tasks-changed", "llv:files-changed", "llv:pipelines-changed"]) window.dispatchEvent(new Event(name)); });
+          await page.waitForFunction(() => document.querySelectorAll("[data-timeline-task]").length >= 31, undefined, { timeout: 15_000 }).catch(() => undefined);
+          await sleep(1200);
+          const recorded = await stopRec(page); const refreshed = await position(page);
+          (report.refresh as unknown[]).push({ mode, phone: false, placedAt: placed.top, afterRefreshTop: refreshed.top, heightBefore: placed.h, heightAfter: refreshed.h, writes: recorded.writes.length });
+          check(refreshed.top === placed.top && refreshed.h === placed.h && recorded.writes.length === 0, `${mode} desktop: refresh moved ${placed.top}→${refreshed.top}, height ${placed.h}→${refreshed.h}, ${recorded.writes.length} writes`);
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await page.getByRole("button", { name: translate("uk", "timeline.zoomOut"), exact: true }).click(); await settle(page);
+          rest.zoomOut = await cuts(page);
+          (report.rest as unknown[]).push({ phone: false, ...rest });
+          check(rest.atOpen.length === 0 && rest.zoomOut!.length === 0, `${mode} desktop: rows cut at rest ${JSON.stringify(rest)}`);
+          await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-desktop-${mode}.png`) });
+          check(pageErrors.length === 0, `${mode} desktop: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      report.ranToEnd = true;
+    } catch (error) {
+      // A report with no failures only means the case ran to its end when ranToEnd is true and abort is null.
+      report.abort = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      throw error;
+    } finally {
+      // Per mode and start kind: how many gestures ran and what each one's touchstart reported (element: count), with the element the finger was over.
+      const starts: Record<string, { gestures: number; targets: Record<string, number>; fingerOver: Record<string, number>; retargetedToButton: number }> = {};
+      for (const entry of report.touch as { mode: string; start: string; touched: { element: string; under: string[] } | null; retargetedToButton?: boolean }[]) {
+        const group = (starts[`${entry.mode}/${entry.start}`] ??= { gestures: 0, targets: {}, fingerOver: {}, retargetedToButton: 0 });
+        const target = entry.touched?.element ?? "none", over = entry.touched?.under[0] ?? "none";
+        group.gestures++; group.targets[target] = (group.targets[target] ?? 0) + 1; group.fingerOver[over] = (group.fingerOver[over] ?? 0) + 1;
+        if (entry.retargetedToButton) group.retargetedToButton++;
+      }
+      report.starts = starts;
+      report.failures = failures;
+      fs.writeFileSync(path.join(evidence, `timeline-scroll-${label}.json`), JSON.stringify(report, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+/*
+ * The manager's view of the chart (docs/design/board-timeline-manager-view.md): 28 tasks shaped like the
+ * production snapshot the critique read, in the groups the board's own rules put them in. Times are hours
+ * before the clock (`start`, `lastEnd`) or after it (`due`). The records go through the real model and the
+ * real chart; the expectations below read the fixture's own table, never the chart's output.
+ */
+type ManagerSpec = {
+  n: number; status: "assigned" | "blocked"; start: number; laneAt?: number; attempts: number; stages?: number; lastEnd: number | null; due: number; slips: number;
+  hold?: "operator" | "pr" | "external" | "worker" | "resource" | "task" | "postponed";
+  lane: "paused" | "needs_decision" | "running" | "completed" | null; final?: "failed" | "needs_decision" | "passed" | "running" | "pending";
+  minutes?: number; working?: "stage" | "stage-ended" | "agent"; agent?: number; stopped?: boolean; noEnd?: boolean; neverStarted?: boolean;
+  /** Hours before the clock at which the running attempt began, instead of the table's own. */
+  lastBegin?: number;
+  /** The standalone agent works now, but its transcript tail and launch facts name no start. */
+  startUnknown?: boolean;
+};
+const MANAGER_SPECS: ManagerSpec[] = [
+  { n: 1, status: "blocked", start: 340, attempts: 1, minutes: 8, lastEnd: 340, due: 4, slips: 6, hold: "pr", lane: "paused", final: "failed" },
+  { n: 2, status: "blocked", start: 287, laneAt: 287, attempts: 0, lastEnd: null, due: 8, slips: 4, hold: "postponed", lane: "paused" },
+  { n: 3, status: "blocked", start: 183, attempts: 4, lastEnd: 91, due: 32, slips: 3, hold: "operator", lane: "needs_decision", final: "needs_decision" },
+  { n: 4, status: "blocked", start: 183, attempts: 5, lastEnd: 90, due: 74, slips: 2, hold: "operator", lane: "needs_decision", final: "needs_decision" },
+  { n: 5, status: "blocked", start: 179, attempts: 6, lastEnd: 178, due: 32, slips: 2, hold: "external", lane: "needs_decision", final: "needs_decision" },
+  { n: 6, status: "assigned", start: 178, attempts: 12, lastEnd: 40, due: 8, slips: 6, lane: "paused", final: "failed" },
+  { n: 7, status: "assigned", start: 177, attempts: 14, stages: 2, lastEnd: 84, due: 32, slips: 4, lane: "paused", final: "failed", stopped: true },
+  { n: 8, status: "blocked", start: 155, attempts: 23, stages: 2, lastEnd: 60, due: -96, slips: 2, hold: "postponed", lane: "paused", final: "failed" },
+  { n: 9, status: "blocked", start: 155, attempts: 2, lastEnd: 91, due: 8, slips: 4, hold: "pr", lane: "needs_decision", final: "needs_decision" },
+  { n: 10, status: "blocked", start: 143, attempts: 3, lastEnd: 120, due: 74, slips: 2, hold: "operator", lane: "paused", final: "failed" },
+  { n: 11, status: "blocked", start: 119, attempts: 2, lastEnd: 118, due: -92, slips: 0, hold: "postponed", lane: "paused", final: "failed" },
+  { n: 12, status: "blocked", start: 118, attempts: 3, lastEnd: 117.5, due: 8, slips: 1, hold: "external", lane: "paused", final: "failed", noEnd: true },
+  { n: 13, status: "blocked", start: 87, attempts: 4, lastEnd: 83, due: 8, slips: 4, hold: "worker", lane: "paused", final: "pending", neverStarted: true },
+  { n: 14, status: "assigned", start: 87, attempts: 4, lastEnd: 83, due: 8, slips: 3, lane: "paused", final: "failed" },
+  { n: 15, status: "blocked", start: 84, attempts: 2, lastEnd: 83, due: 4, slips: 9, hold: "task", lane: "paused", final: "failed" },
+  { n: 16, status: "blocked", start: 83, attempts: 12, lastEnd: 40, due: 10, slips: 2, hold: "resource", lane: "paused", final: "failed" },
+  { n: 17, status: "assigned", start: 40, attempts: 13, stages: 3, lastEnd: null, due: 8, slips: 0, lane: "running", final: "running", working: "stage" },
+  { n: 18, status: "blocked", start: 22, attempts: 3, lastEnd: null, due: 8, slips: 4, hold: "resource", lane: "running", final: "running", working: "stage" },
+  { n: 19, status: "blocked", start: 19, attempts: 2, lastEnd: 14.5, due: 10, slips: 0, hold: "task", lane: "paused", final: "failed" },
+  { n: 20, status: "assigned", start: 18.6, attempts: 9, stages: 2, lastEnd: 12.5, due: 4, slips: 0, lane: "paused", final: "failed" },
+  { n: 21, status: "assigned", start: 16, attempts: 1, lastEnd: 15, due: 28, slips: 0, lane: "completed", final: "passed", agent: 2.5 },
+  { n: 22, status: "blocked", start: 11.5, attempts: 1, minutes: 3, lastEnd: 11.5, due: 32, slips: 0, hold: "external", lane: "needs_decision", final: "needs_decision" },
+  { n: 23, status: "assigned", start: 11, attempts: 7, stages: 2, lastEnd: null, due: 1, slips: 0, lane: "running", final: "running", working: "stage-ended" },
+  { n: 24, status: "assigned", start: 1.1, attempts: 1, lastEnd: null, due: 58, slips: 0, lane: "running", final: "running", working: "stage" },
+  { n: 25, status: "assigned", start: 0.8, attempts: 1, lastEnd: null, due: 10, slips: 0, lane: "running", final: "running", working: "stage" },
+  { n: 26, status: "assigned", start: 0.5, attempts: 0, lastEnd: null, due: 32, slips: 0, lane: null, agent: 0.5 },
+  { n: 27, status: "assigned", start: 2, attempts: 0, lastEnd: null, due: 32, slips: 0, lane: null, agent: 2 },
+  { n: 28, status: "assigned", start: 0.3, attempts: 0, lastEnd: null, due: 32, slips: 0, lane: null, agent: 0.3 },
+];
+const MANAGER_NOW = Date.parse("2026-11-13T08:10:00Z");
+const MANAGER_GROUPS = { working: [17, 18, 21, 24, 25, 26, 27, 28], needs: [3, 4, 5, 9, 10, 22], still: [6, 8, 16, 19, 20, 23], long: [1, 2, 7, 11, 12, 13, 14, 15] };
+const MANAGER_TITLES: Record<"en" | "uk", string[]> = {
+  en: ["Temporary files pile up between runs", "One source of truth for agent state", "Project and work in one call", "Balance and spend in API mode", "Search filters survive a reload",
+    "New control engines for long sessions with a careful hand-over between releases", "Export the report to a spreadsheet", "Notification delivery after an outage", "Retry policy for failed uploads",
+    "Check tooltip contrast in dark mode", "Import history from the old tracker", "Rename the project without losing links", "Pin a conversation to the top of its list",
+    "Show the account that spent the quota", "Short names for stage roles", "Restore card payments after a bank refusal and a repeated attempt with the new limits",
+    "Agent log search by time and by role", "Calendar sync for due dates", "Faster first screen on a slow network", "Keyboard order inside the sheet",
+    "Plan the release notes", "Archive finished work after a week", "Draft area keeps the typed answer", "Voice input in the composer", "Unread badge on the tab",
+    "Diff view for large files", "Hide the finished lanes", "Settings page for notifications"],
+  uk: ["Тимчасові файли накопичуються між запусками", "Одне джерело правди про стан агента", "Проєкт і робота одним викликом", "Баланс і витрати в API-режимі", "Фільтри пошуку не губляться після оновлення",
+    "Нові рушії керування довгими сесіями з обережною передачею між випусками", "Експорт звіту в таблицю", "Доставка сповіщень після збою", "Повтор для невдалих вивантажень",
+    "Перевірити контраст підказок у темній темі", "Імпорт історії зі старого трекера", "Перейменувати проєкт без втрати посилань", "Закріпити розмову вгорі списку",
+    "Показати акаунт, що витратив квоту", "Короткі назви ролей етапів", "Відновити оплату карткою після відмови банку та повторної спроби з новими лімітами",
+    "Пошук у логах агентів за часом і за роллю", "Синхронізація календаря для строків", "Швидший перший екран на повільній мережі", "Порядок клавіатури всередині аркуша",
+    "Спланувати нотатки до випуску", "Архівувати завершену роботу через тиждень", "Чернетка зберігає набрану відповідь", "Голосовий ввід у полі повідомлення", "Лічильник непрочитаного на вкладці",
+    "Перегляд змін для великих файлів", "Сховати завершені лінії", "Сторінка налаштувань сповіщень"],
+};
+
+async function managerRecords(lang: "en" | "uk", mutate?: (spec: ManagerSpec) => ManagerSpec) {
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+  const { filesReadSummary } = await import("@/lib/filesReadSummary");
+  const hours = (ago: number) => new Date(MANAGER_NOW - ago * 3_600_000).toISOString();
+  const tasks: BoardTask[] = [], pipelines: Pipeline[] = [], files: FileEntry[] = [];
+  /** What each task's records say about when its work ran, for the expectations. */
+  const truth: Record<string, { startMs: number | null; segments: { startMs: number; endMs: number | null }[] }> = {};
+  const stageIds = ["builder", "reviewer", "fix"];
+  const workingFile = (id: string, ago: number, extra: Partial<FileEntry> = {}): FileEntry => ({ path: `/fixture/${id}.jsonl`, conversationId: id, project: "atlas", projectName: "Atlas",
+    root: "codex-sessions", name: `${id}.jsonl`, title: id, kind: "session", fmt: "codex", parent: null, engine: "claude", model: "fable", mtime: MANAGER_NOW / 1000, size: 100,
+    proc: "running", activity: "live", pendingQuestion: null, waitingInput: null, lastTurn: { startedAt: MANAGER_NOW - ago * 3_600_000, endedAt: null },
+    agentActivity: { lastRecordAt: MANAGER_NOW, checking: false, check: null }, ...extra } as FileEntry);
+  for (const base of MANAGER_SPECS) {
+    const spec = mutate ? mutate(base) : base;
+    const id = `mgr-task-${spec.n}`;
+    const title = MANAGER_TITLES[lang][spec.n - 1]!;
+    const hold = spec.hold ? { kind: spec.hold, note: spec.hold, since: hours(spec.start), by: "agent" as const, ...(spec.hold === "postponed" ? { until: hours(2) } : {}) } : undefined;
+    const task: BoardTask = { id, project: "atlas", text: title, status: spec.status, placement: "unplaced", assignments: [], createdAt: hours(spec.start + 1), updatedAt: hours(1),
+      dueAt: new Date(MANAGER_NOW + spec.due * 3_600_000).toISOString(), dueTz: "UTC", ...(spec.slips ? { dueHistory: { firstAt: hours(spec.start), slips: spec.slips } } : {}), ...(hold ? { hold } : {}) } as BoardTask;
+    tasks.push(task);
+    truth[id] = { startMs: null, segments: [] };
+    if (spec.lane) {
+      const stages = stageIds.map((stageId, stageIndex) => {
+        const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+        const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+        if (!resolved.role) throw new Error(resolved.error);
+        return { id: stageId, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, prompt: "{{task}}" };
+      });
+      const lane = buildPipeline({ id: `mgr-lane-${spec.n}`, task: title, taskIds: [id], project: "atlas", repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: hours(spec.laneAt ?? spec.start + 0.02), stages });
+      lane.state = spec.lane; lane.createdAt = hours(spec.laneAt ?? spec.start + 0.02);
+      const used = Math.min(3, spec.stages ?? 3);
+      let lastStage = 0, lastState: string = spec.final ?? "failed";
+      for (let index = 0; index < spec.attempts; index++) {
+        const last = index === spec.attempts - 1;
+        const minutes = spec.minutes ?? 5 + (index * 7) % 21;
+        const running = last && spec.final === "running";
+        const lastBegin = running ? spec.lastBegin ?? ({ 17: 0.7, 18: 0.5, 23: 0.9 } as Record<number, number>)[spec.n] ?? spec.start : (spec.lastEnd ?? 0) + minutes / 60;
+        const fraction = spec.attempts === 1 ? 0 : index / (spec.attempts - 1);
+        const begin = spec.start + fraction * (lastBegin - spec.start);
+        const stageIndex = index % used, run = lane.runs[stageIndex]!;
+        lastStage = stageIndex;
+        const state = last ? spec.final ?? "failed" : spec.stopped && index === 3 ? "running" : "passed";
+        lastState = state;
+        const started = !(last && spec.neverStarted);
+        const completed = !(running || last && spec.neverStarted || spec.noEnd && index === 1 || spec.stopped && index === 3);
+        const attempt = { n: run.attempts.length + 1, state, effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+          startedAt: started ? hours(begin) : null, completedAt: started && completed ? hours(begin - minutes / 60) : null, input: null, output: null, activatedBy: null, verdict: null, error: null } as unknown as Pipeline["runs"][number]["attempts"][number];
+        if (spec.stopped && index === 3) attempt.suspension = { reason: "pause", detail: "Host stopped", requestedAt: hours(begin - 0.2), stoppedAt: hours(begin - 0.25) } as never;
+        run.attempts.push(attempt);
+        if (started) {
+          const end = running ? null : spec.stopped && index === 3 ? MANAGER_NOW - (begin - 0.25) * 3_600_000 : completed ? MANAGER_NOW - (begin - minutes / 60) * 3_600_000 : null;
+          const startMs = MANAGER_NOW - begin * 3_600_000;
+          // A running attempt with no working file is waiting: only its start is evidenced. One whose turn ended works up to that turn's end.
+          truth[id]!.segments.push({ startMs, endMs: running ? !spec.working ? null : spec.working === "stage-ended" ? MANAGER_NOW - 12 * 60_000 : MANAGER_NOW : spec.stopped && index === 3 ? MANAGER_NOW - (begin - 0.25) * 3_600_000 : end });
+          truth[id]!.startMs = Math.min(truth[id]!.startMs ?? Infinity, startMs);
+        }
+        if (running && spec.working) {
+          const fileId = `mgr-file-${spec.n}`;
+          const file = spec.working === "stage" ? workingFile(fileId, Math.max(begin, 0.05))
+            : workingFile(fileId, 0.4, { lastTurn: { startedAt: MANAGER_NOW - 0.4 * 3_600_000, endedAt: MANAGER_NOW - 12 * 60_000 }, activity: "idle", agentActivity: { lastRecordAt: MANAGER_NOW - 12 * 60_000, checking: false, check: null } } as Partial<FileEntry>);
+          attempt.conversationId = fileId; attempt.agentPath = file.path; files.push(file);
+          task.assignments.push({ path: file.path, conversationId: fileId, panePid: null, state: "linked", error: null, at: hours(0.5) });
+        }
+      }
+      lane.cursor = spec.lane === "completed" ? null : { stageId: stageIds[lastStage]!, state: lastState as never, input: null, activatedBy: null };
+      if (spec.lane === "completed") lane.closedAt = hours(spec.lastEnd ?? 0);
+      if (spec.lane === "paused") lane.pausedAt = hours(spec.lastEnd ?? spec.start);
+      if (!spec.attempts) lane.runs.forEach(run => { run.attempts = []; });
+      if (!truth[id]!.startMs && spec.attempts === 0) truth[id]!.startMs = MANAGER_NOW - (spec.laneAt ?? spec.start) * 3_600_000;
+      pipelines.push(lane);
+    }
+    if (spec.agent !== undefined) {
+      const fileId = `mgr-agent-${spec.n}`;
+      const file = workingFile(fileId, spec.agent, spec.startUnknown ? { lastTurn: null } : {});
+      files.push(file);
+      task.assignments.push({ path: file.path, conversationId: fileId, panePid: null, state: "delivered", error: null, at: hours(spec.agent) });
+      if (!spec.startUnknown) {
+        const startMs = MANAGER_NOW - spec.agent * 3_600_000;
+        truth[id]!.segments.push({ startMs, endMs: MANAGER_NOW });
+        truth[id]!.startMs = Math.min(truth[id]!.startMs ?? Infinity, startMs);
+      }
+    }
+  }
+  return { payload: { ...filesReadSummary([], pipelines), files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: files.length, smt: MANAGER_NOW / 1000 }], projectCwds: { atlas: "/fixture/atlas" } }, truth };
+}
+
+describe("board timeline manager view", () => {
+  const evidenceDirectory = () => path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-timeline-manager");
+  const SIZES = [{ width: 390, height: 844 }, { width: 720, height: 900 }, { width: 1024, height: 768 }, { width: 1200, height: 800 }, { width: 1440, height: 900 }];
+  const GROUP_KEYS = { "group:needs-you": true, "group:still": true, "group:still-long": true };
+  const idOf = (n: number) => `mgr-task-${n}`;
+  const settleChart = (page: Page) => page.evaluate(async () => {
+    let previous = "", stable = 0;
+    for (let frame = 0; frame < 40; frame++) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      const scroll = document.querySelector<HTMLElement>("[data-timeline-scroll]");
+      const current = scroll ? [scroll.scrollTop, scroll.clientHeight, scroll.scrollHeight, scroll.clientWidth].join(":") : "absent";
+      stable = current === previous ? stable + 1 : 0;
+      previous = current;
+      if (stable >= 3) return;
+    }
+    throw new Error("timeline scroll geometry did not settle");
+  });
+  const readRows = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".bt-row")].map(row => ({
+    task: row.getAttribute("data-timeline-task"), attempt: row.getAttribute("data-timeline-attempt"), group: row.getAttribute("data-timeline-group"), groupRow: row.getAttribute("data-timeline-group-row"),
+    expanded: row.getAttribute("data-expanded"), dueAt: row.getAttribute("data-due-at"), height: row.getBoundingClientRect().height,
+    label: row.querySelector(".bt-label")?.textContent ?? "", since: row.querySelector("[data-timeline-since]")?.textContent ?? null,
+    due: [...row.querySelectorAll<HTMLElement>("[data-timeline-due]")].map(node => ({ tone: node.dataset.timelineDue, edge: node.dataset.timelineDueEdge ?? null, words: node.textContent ?? "" })),
+    flags: row.querySelectorAll("[data-timeline-flag]").length, clipped: row.querySelectorAll("[data-timeline-clipped]").length, line: row.querySelectorAll("[data-timeline-line]").length,
+    segments: row.querySelectorAll("[data-timeline-segment]").length, ticks: row.querySelectorAll("[data-timeline-tick]").length, strips: row.querySelectorAll("[data-timeline-strip]").length,
+  })));
+  type ManagerRow = Awaited<ReturnType<typeof readRows>>[number];
+  const managerTest = process.env.LLV_TIMELINE_DENSITY_ONLY === "1" ? test.skip : browserTest;
+
+  async function openManager(browser: Browser, base: string, options: { width: number; height: number; lang: "en" | "uk"; theme: "light" | "dark"; seat: boolean; stored: unknown }) {
+    const phone = options.width === 390;
+    const opened = await openFixture(browser, "about:blank", { width: options.width, height: options.height }, options.theme, options.lang, "reduce", phone, 1, new Date(MANAGER_NOW));
+    const { page, context, pageErrors } = opened;
+    await context.addInitScript(({ lang, theme, seat, stored }) => {
+      localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+      // Seeded once: a reload keeps what the page itself stored.
+      if (localStorage.getItem("llv:kanban-seat:v2") === null) localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: !seat }, placement: "top", height: null, width: null }));
+      if (localStorage.getItem("llv:board-timeline:v1:atlas") === null) localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+    }, { lang: options.lang, theme: options.theme, seat: options.seat, stored: options.stored });
+    await page.goto(`${base}?scenario=board-timeline#p=atlas`);
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, options.theme);
+    return { page, context, pageErrors, phone };
+  }
+
+  managerTest("working tasks on top, two closed groups, due dates, one window, room beside the seat panel; frames in both languages and themes", async () => {
+    const { timelineWindow, dueMark, clipSpan, HOUR } = await import("@/lib/board/taskTimelineView");
+    const out = path.join(os.tmpdir(), `llv-manager-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = evidenceDirectory(); fs.mkdirSync(evidence, { recursive: true });
+    let current = await managerRecords("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang);
+        const truth = current.truth;
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+        const days = (hours: number) => lang === "uk" ? `${Math.floor(hours / 24)} д` : `${Math.floor(hours / 24)}d`;
+        for (const theme of ["light", "dark"] as const) for (const { width, height } of SIZES) {
+          const tag = `${width}-${lang}-${theme}`;
+          // `LLV_TIMELINE_ONLY=1440-uk-light,390-en-dark` runs only those combinations; without it every one runs.
+          if (process.env.LLV_TIMELINE_ONLY && !process.env.LLV_TIMELINE_ONLY.split(",").includes(tag)) continue;
+          const phone = width === 390;
+          const frameOf = (page: Page, pageErrors: string[]) => async (state: string, target?: Locator, strict = true) => {
+            await settleChart(page).catch(() => undefined);
+            const geometry = await timelineGeometry(target ?? page.locator("[data-board-timeline]"));
+            await page.screenshot({ path: path.join(evidence, `${tag}-${state}.png`) });
+            readings.push({ name: `${tag}-${state}`, width, height, lang, theme, state, failures: geometry.failures, controls: geometry.controls.length, visibleRows: geometry.visibleRows.length, scrollHeight: geometry.scrollHeight, clientHeight: geometry.clientHeight });
+            check(pageErrors.length === 0, `${tag}-${state}: page errors ${pageErrors.join(" | ")}`);
+            if (strict) {
+              check(geometry.failures.length === 0, `${tag}-${state}: text cut by an edge: ${JSON.stringify(geometry.failures.slice(0, 5))}`);
+              check(geometry.controls.every(control => control.hit), `${tag}-${state}: a control is covered: ${JSON.stringify(geometry.controls.filter(control => !control.hit).map(control => control.text))}`);
+              for (const control of geometry.controls) check(control.width >= (phone ? 44 : 24) && control.height >= (phone ? 44 : 24), `${tag}-${state}: control ${control.text} is ${control.width}×${control.height}`);
+            }
+          };
+          const lateWords = (hours: number) => t("timeline.overdueBy", { duration: days(Math.abs(hours)) });
+          // The words, flags and edges of every due date, against the window the scale draws.
+          const checkDue = async (page: Page, rows: ManagerRow[], hours: number, where: string) => {
+            const view = timelineWindow(MANAGER_NOW, hours, null);
+            const tasks = rows.filter(row => row.task);
+            check(tasks.length === 28, `${where}: ${tasks.length} task rows, 28 expected`);
+            for (const row of tasks) {
+              const spec = MANAGER_SPECS[Number(row.task!.replace("mgr-task-", "")) - 1]!;
+              const mark = dueMark(new Date(MANAGER_NOW + spec.due * HOUR).toISOString(), MANAGER_NOW, view, 800)!;
+              check(row.due.length === 1, `${where}: ${row.task} shows ${row.due.length} due marks`);
+              const shown = row.due[0];
+              if (!shown) continue;
+              check(shown.tone === (spec.due < 0 ? "overdue" : "due"), `${where}: ${row.task} tone ${shown.tone}`);
+              check((mark.place === "in") === (row.flags === 1 && shown.edge === null), `${where}: ${row.task} place ${mark.place}, flags ${row.flags}, edge ${shown.edge}`);
+              if (mark.place !== "in") check(shown.edge === (mark.place === "before" ? "left" : "right"), `${where}: ${row.task} edge ${shown.edge}, expected ${mark.place}`);
+              if (spec.due < 0) check(shown.words.includes(lateWords(-spec.due)), `${where}: ${row.task} words «${shown.words}» lack «${lateWords(-spec.due)}»`);
+              else check(!shown.words.includes(t("timeline.overdueBy", { duration: "" }).trim()), `${where}: ${row.task} reads overdue`);
+              const stem = lang === "uk" ? "переносили" : "moved";
+              check(spec.slips ? shown.words.includes(t("timeline.slips", { count: spec.slips })) : !shown.words.includes(stem), `${where}: ${row.task} slip words «${shown.words}» against ${spec.slips}`);
+            }
+            check(tasks.filter(row => row.due[0]?.tone === "overdue").length === 2, `${where}: overdue rows ${tasks.filter(row => row.due[0]?.tone === "overdue").length}, 2 expected`);
+            check(tasks.filter(row => row.due[0]?.words.includes(lang === "uk" ? "переносили" : "moved")).length === 16, `${where}: rows with slip words`);
+            void page;
+          };
+          // An attempt with a start and no end draws the same 3 px tick in its expanded stage row (brief §6).
+          const stageTicks = async (page: Page, taskId: string) => {
+            const toggleRow = page.locator(`[data-timeline-task="${taskId}"] [data-timeline-expand]`);
+            const wasOpen = await toggleRow.getAttribute("aria-expanded") === "true";
+            if (!wasOpen) { await toggleRow.click(); await settleChart(page); }
+            const ticks = await page.evaluate(id => {
+              const task = document.querySelector(`[data-timeline-task="${id}"]`)!, found: number[] = [];
+              for (let row = task.nextElementSibling; row && row.hasAttribute("data-timeline-attempt"); row = row.nextElementSibling) {
+                for (const tick of row.querySelectorAll<HTMLElement>("[data-timeline-tick]")) found.push(Number(tick.dataset.startMs));
+              }
+              return found;
+            }, taskId);
+            if (!wasOpen) { await toggleRow.click(); await settleChart(page); }
+            return ticks;
+          };
+          const checkWindow = async (page: Page, rows: ManagerRow[], hours: number, where: string) => {
+            const view = timelineWindow(MANAGER_NOW, hours, null);
+            const fit = await page.evaluate(() => { const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!; return { scrollWidth: s.scrollWidth, clientWidth: s.clientWidth, lane: document.querySelector<HTMLElement>(".bt-lane")!.offsetWidth, labels: document.querySelector<HTMLElement>(".bt-label")!.offsetWidth }; });
+            check(fit.scrollWidth <= fit.clientWidth + 1, `${where}: the chart is ${fit.scrollWidth}px wide in ${fit.clientWidth}px`);
+            for (const row of rows.filter(row => row.task)) {
+              const expected = truth[row.task!]!;
+              const known = expected.segments.filter(segment => segment.endMs === null || clipSpan(segment.startMs, Math.min(segment.endMs, MANAGER_NOW), view, fit.lane) !== null);
+              const spans = expected.segments.filter(segment => segment.endMs !== null && clipSpan(segment.startMs, Math.min(segment.endMs, MANAGER_NOW), view, fit.lane) !== null).length;
+              const ticks = expected.segments.filter(segment => segment.endMs === null && clipSpan(segment.startMs, segment.startMs, view, fit.lane, 3) !== null).length;
+              check(row.segments === spans + ticks && row.ticks === ticks, `${where}: ${row.task} draws ${row.segments} segments (${row.ticks} ticks), expected ${spans}+${ticks} of ${known.length}`);
+              const started = expected.startMs !== null;
+              check(row.line === (started && expected.startMs! <= MANAGER_NOW ? 1 : 0), `${where}: ${row.task} thin line ${row.line}`);
+              check(row.clipped === (started && expected.startMs! < view.start ? 1 : 0), `${where}: ${row.task} clipped marks ${row.clipped}`);
+              check(!/\b(4[8-9]|[5-9]\d|\d{3,})\s?(год|h)\b/.test(row.label), `${where}: ${row.task} writes two days or more in hours: ${row.label}`);
+            }
+          };
+
+          // 1. Fresh storage, seat folded: the kanban's own numbers, then the chart's defaults.
+          const A = await openManager(browser, served.base, { width, height, lang, theme, seat: false, stored: { view: "board", hours: 24, expanded: {} } });
+          try {
+            const { page, pageErrors } = A;
+            const frame = frameOf(page, pageErrors);
+            const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : "[data-board-timeline-toggle]");
+            await page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : "[data-bar=\"project\"]").first().waitFor();
+            await page.locator(phone ? "[data-phone-tab-working]" : ".kb .live[data-count]").first().waitFor();
+            const green = await page.evaluate(isPhone => [...document.querySelectorAll<HTMLElement>(isPhone ? "[data-phone-tab-working]" : ".kb .live[data-count]")]
+              .reduce((sum, node) => sum + Number(isPhone ? node.getAttribute("data-phone-tab-working") : node.getAttribute("data-count")), 0), phone);
+            await frame("board", page.locator(phone ? "[data-phone-kanban-tabs]" : '[data-bar="project"]'), false);
+            // The bar gives its Timeline toggle up on a narrow desktop; the chart opens from its stored view there.
+            if (await toggle.isVisible()) await toggle.click();
+            else { await page.evaluate(() => { const key = "llv:board-timeline:v1:atlas"; localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), view: "timeline" })); }); await page.reload(); }
+            const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
+            await page.locator("[data-timeline-task]").first().waitFor();
+            await settleChart(page);
+            let rows = await readRows(page);
+            const working = rows.filter(row => row.group === "working");
+            check(green === 8, `${tag}: the kanban's green numbers sum to ${green}, 8 expected`);
+            check(JSON.stringify(working.map(row => row.task).sort()) === JSON.stringify(MANAGER_GROUPS.working.map(idOf).sort()), `${tag}: top rows ${working.map(row => row.task)}`);
+            check(rows.findIndex(row => row.groupRow) >= working.length, `${tag}: a group row sits above a working row`);
+            check(working.every(row => row.expanded === "0"), `${tag}: a working task is expanded on fresh storage`);
+            check(JSON.stringify(rows.filter(row => row.groupRow).map(row => [row.groupRow, row.expanded])) === JSON.stringify([["needs-you", "0"], ["still", "0"]]), `${tag}: groups on fresh storage ${JSON.stringify(rows.filter(row => row.groupRow).map(row => [row.groupRow, row.expanded]))}`);
+            const header = await chart.locator("[data-timeline-count]").innerText();
+            check(header.includes(t("kanban.columnWorking", { count: green })) && header.includes(t("timeline.needsCount", { count: 6 })) && header.includes(t("timeline.stillCount", { count: 14 })), `${tag}: header «${header}»`);
+            // The count of overdue tasks and the greatest lateness sit in the header, whatever is folded (the two overdue tasks are 96 h and 92 h late).
+            const overdueWords = t("timeline.group.overdue", { count: 2, duration: days(96) });
+            check(header.includes(overdueWords), `${tag}: header lacks «${overdueWords}»: «${header}»`);
+            check(lang === "uk" || ((await page.locator("body").innerText()).match(/need(s)? you/gi)?.length ?? 0) <= 1, `${tag}: «needs you» is on the screen twice`);
+            check(Number(await chart.locator("[data-timeline-count]").getAttribute("data-working")) === green, `${tag}: the header's working number differs from the kanban's ${green}`);
+            const closedStill = rows.find(row => row.groupRow === "still")!;
+            check(closedStill.label.includes(t("timeline.group.still", { count: 14 })) && closedStill.label.includes(t("timeline.group.longCount", { days: 3, count: 8 })) && closedStill.label.includes(overdueWords), `${tag}: closed «Stopped» row «${closedStill.label}»`);
+            check(rows.find(row => row.groupRow === "needs-you")!.label.includes(t("timeline.group.needs", { count: 6 })), `${tag}: closed needs-you row`);
+            const sorted = (list: ManagerRow[]) => list.every((row, index) => index === 0 || Date.parse(list[index - 1]!.dueAt!) <= Date.parse(row.dueAt!));
+            check(sorted(working), `${tag}: the top rows are not in due order`);
+            // First screen on fresh storage: every working task is one collapsed row, so no stage row and no fold line is drawn.
+            const firstScreen = await page.evaluate(() => {
+              const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = scroller.getBoundingClientRect();
+              const axis = scroller.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+              const whole = (row: Element) => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + scroller.clientHeight + 1; };
+              return { working: [...scroller.querySelectorAll('[data-timeline-group="working"]')].filter(whole).length,
+                groups: [...scroller.querySelectorAll("[data-timeline-group-row]")].filter(whole).map(row => row.getAttribute("data-timeline-group-row")),
+                stageRows: scroller.querySelectorAll("[data-timeline-attempt]").length, folds: scroller.querySelectorAll("[data-timeline-fold]").length };
+            });
+            readings.push({ name: `${tag}-first-screen`, ...firstScreen });
+            check(firstScreen.stageRows === 0 && firstScreen.folds === 0, `${tag}: ${firstScreen.stageRows} stage rows and ${firstScreen.folds} fold lines on the first screen of collapsed tasks`);
+            // Measured on the fixture: all 8 working tasks and both groups fit at 1024 and 1440, five working tasks at 390.
+            check(firstScreen.working >= (width >= 1024 ? 8 : 5), `${tag}: first screen shows ${firstScreen.working} working tasks`);
+            check(width < 1024 || (firstScreen.groups.includes("needs-you") && firstScreen.groups.includes("still")), `${tag}: groups on the first screen ${JSON.stringify(firstScreen.groups)}`);
+            await frame("default");
+            // Expanding a task is remembered: the same frame after a reload still shows it open, and nothing else changed.
+            const expandedTask = working[0]!.task!;
+            await page.locator(`[data-timeline-task="${expandedTask}"] [data-timeline-expand]`).click();
+            await settleChart(page);
+            check(await page.locator(`[data-timeline-task="${expandedTask}"]`).getAttribute("data-expanded") === "1", `${tag}: ${expandedTask} did not expand`);
+            await frame("expanded");
+            await page.reload(); await chart.waitFor(); await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            rows = await readRows(page);
+            check(JSON.stringify(rows.filter(row => row.group === "working").map(row => [row.task, row.expanded])) === JSON.stringify(working.map(row => [row.task, row.task === expandedTask ? "1" : "0"])), `${tag}: expansion after a reload ${JSON.stringify(rows.filter(row => row.group === "working").map(row => [row.task, row.expanded]))}`);
+            await frame("expanded-reload");
+            await page.locator(`[data-timeline-task="${expandedTask}"] [data-timeline-expand]`).click();
+            await settleChart(page);
+            // 2. Open the three groups: every task is listed, in due order inside each group.
+            for (const key of ["needs-you", "still"]) await page.locator(`[data-timeline-group-row="${key}"] button`).click();
+            await page.locator('[data-timeline-group-row="still-long"] button').click();
+            await settleChart(page);
+            rows = await readRows(page);
+            const byGroup = (name: string) => rows.filter(row => row.group === name);
+            check(byGroup("needs-you").length === 6 && byGroup("still").length === 6 && byGroup("still-long").length === 8, `${tag}: group sizes ${byGroup("needs-you").length}/${byGroup("still").length}/${byGroup("still-long").length}`);
+            for (const name of ["needs-you", "still", "still-long"]) check(sorted(byGroup(name)), `${tag}: ${name} is not in due order`);
+            check(JSON.stringify(rows.filter(row => row.groupRow).map(row => row.label.includes(t("timeline.group.stillLong", { days: 3, count: 8 })))) === "[false,false,true]", `${tag}: nested line label`);
+            check(MANAGER_GROUPS.needs.every(n => byGroup("needs-you").some(row => row.task === idOf(n))) && MANAGER_GROUPS.still.every(n => byGroup("still").some(row => row.task === idOf(n))) && MANAGER_GROUPS.long.every(n => byGroup("still-long").some(row => row.task === idOf(n))), `${tag}: a task is in the wrong group`);
+            const scroller = page.locator("[data-timeline-scroll]");
+            await scroller.evaluate(element => { element.scrollTop = 0; });
+            await settleChart(page);
+            await frame("groups-open-top");
+            await scroller.evaluate(element => { element.scrollTop = (element.scrollHeight - element.clientHeight) / 2; });
+            await frame("groups-open-middle");
+            await scroller.evaluate(element => { element.scrollTop = element.scrollHeight; });
+            await frame("groups-open-end");
+            await scroller.evaluate(element => { element.scrollTop = 0; });
+            await settleChart(page);
+            // 3. Folds are remembered.
+            await page.reload(); await chart.waitFor(); await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            rows = await readRows(page);
+            check(rows.filter(row => row.groupRow).length === 3 && rows.filter(row => row.groupRow).every(row => row.expanded === "1") && rows.filter(row => row.group === "working").every(row => row.expanded === "0"), `${tag}: folds were not kept across a reload`);
+            // 4. Due dates and the window at 1 day, 6 hours and 1 week.
+            const scaleButton = (name: "zoomIn" | "zoomOut") => page.getByRole("button", { name: t(`timeline.${name}`), exact: true });
+            await checkDue(page, rows, 24, `${tag} 1d`); await checkWindow(page, rows, 24, `${tag} 1d`);
+            const row1 = rows.find(row => row.task === idOf(1))!;
+            check(row1.since === t("timeline.since", { start: lang === "uk" ? "30.10" : "30/10", duration: days(340) }), `${tag}: row 1 start words «${row1.since}»`);
+            check(row1.clipped === 1 && row1.line === 1, `${tag}: row 1 is not clipped at the left edge`);
+            for (const hours of [12, 6]) { await scaleButton("zoomIn").click(); await settleChart(page); if (hours === 6) { rows = await readRows(page); await checkDue(page, rows, 6, `${tag} 6h`); await checkWindow(page, rows, 6, `${tag} 6h`); check((await stageTicks(page, idOf(12))).length === 0, `${tag} 6h: task 12 stage row draws a tick for a start outside the window`); await frame("zoom-6h"); } }
+            for (const hours of [12, 24, 72, 168]) { await scaleButton("zoomOut").click(); await settleChart(page); if (hours === 168) { rows = await readRows(page); await checkDue(page, rows, 168, `${tag} 1w`); await checkWindow(page, rows, 168, `${tag} 1w`); const unknownEnd = truth[idOf(12)]!.segments.filter(segment => segment.endMs === null).map(segment => segment.startMs); const drawn = await stageTicks(page, idOf(12)); check(unknownEnd.length === 1 && drawn.length === 1 && drawn[0] === unknownEnd[0], `${tag} 1w: task 12 stage-row ticks ${JSON.stringify(drawn)}, expected ${JSON.stringify(unknownEnd)}`); await frame("zoom-1w"); } }
+            const r12 = rows.find(row => row.task === idOf(12))!, r13 = rows.find(row => row.task === idOf(13))!;
+            check(r12.ticks === 1 && r13.ticks === 0 && r13.segments === 3, `${tag}: end-unknown tick ${r12.ticks}, never-started tick ${r13.ticks}, segments ${r13.segments}`);
+            for (const hours of [72, 24]) { await scaleButton("zoomIn").click(); void hours; }
+            await settleChart(page);
+            // 5. Paging back on purpose, and back to now.
+            const viewStart = () => scroller.getAttribute("data-view-start").then(Number);
+            const liveStart = await viewStart();
+            const restAxisHeight = await page.locator(".bt-axis").evaluate(axis => axis.getBoundingClientRect().height);
+            await page.locator(`[data-timeline-task="${idOf(1)}"] [data-timeline-expand]`).click();
+            await settleChart(page);
+            const foldLine = page.locator(`[data-timeline-fold="${idOf(1)}"] [data-timeline-fold-expand]`);
+            check(await foldLine.count() === 1 && await foldLine.getAttribute("aria-expanded") === "false", `${tag}: task 1 does not fold its earlier stages`);
+            await foldLine.click(); await settleChart(page);
+            const earlier = page.locator(".bt-earlier").first();
+            await earlier.scrollIntoViewIfNeeded();
+            await earlier.click();
+            await settleChart(page);
+            check(await viewStart() < liveStart && await page.locator("[data-timeline-back]").count() === 1, `${tag}: paging did not move the window back`);
+            await page.locator(`[data-timeline-task="${idOf(1)}"]`).scrollIntoViewIfNeeded();
+            // The return control sits in the axis's time-label row and the axis keeps its height; no label is under it, cut by an edge or left out.
+            check(Math.abs(await page.locator(".bt-axis").evaluate(axis => axis.getBoundingClientRect().height) - restAxisHeight) <= 0.5, `${tag}: the axis changed height while paged`);
+            const axisLabels = await page.evaluate(() => {
+              const back = document.querySelector<HTMLElement>("[data-timeline-back]")!.getBoundingClientRect(), scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+              const edge = scroller.getBoundingClientRect().left + scroller.clientWidth, range = document.createRange();
+              const labels = [...scroller.querySelectorAll<HTMLElement>(".bt-axis .bt-tick, .bt-axis .bt-day")].map(label => { range.selectNodeContents(label); const box = range.getBoundingClientRect(); return { right: box.right, top: box.top, bottom: box.bottom, left: box.left }; });
+              return { labels: labels.length, covered: labels.filter(box => box.left < back.right && box.right > back.left && box.top < back.bottom && box.bottom > back.top).length, cut: labels.filter(box => box.right > edge + 0.5).length };
+            });
+            check(axisLabels.labels >= 2 && axisLabels.covered === 0 && axisLabels.cut === 0, `${tag}: paged axis has ${axisLabels.labels} labels, ${axisLabels.covered} under the return control, ${axisLabels.cut} cut`);
+            await frame("paged");
+            check((await chart.locator("[data-timeline-back]").innerText()).includes(t("timeline.now")), `${tag}: the return control lacks the now label`);
+            await page.locator("[data-timeline-back]").click(); await settleChart(page);
+            check(await viewStart() === liveStart && await page.locator("[data-timeline-back]").count() === 0, `${tag}: the return control did not bring the window back`);
+          } finally { await A.context.close(); }
+
+          // 6. Seat panel expanded on desktop: a minimum chart height, the page scrolls under the panel.
+          if (!phone) {
+            const stored = { view: "timeline", hours: 24, expanded: { ...Object.fromEntries(Array.from({ length: 28 }, (_, index) => [idOf(index + 1), false])), ...GROUP_KEYS } };
+            const B = await openManager(browser, served.base, { width, height, lang, theme, seat: true, stored });
+            try {
+              const { page, pageErrors } = B;
+              const frame = frameOf(page, pageErrors);
+              await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+              await frame("seat-top", undefined, false);
+              const measures = () => page.evaluate(() => {
+                const frameBox = document.querySelector<HTMLElement>(".board-frame")!.getBoundingClientRect(), pageBox = document.querySelector<HTMLElement>(".kb-page")!;
+                const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+                const strip = document.querySelector<HTMLElement>(".seat-return")?.getBoundingClientRect() ?? null;
+                const overlap = strip ? Math.max(0, Math.min(strip.bottom, frameBox.bottom) - Math.max(strip.top, frameBox.top)) : 0;
+                return { frame: frameBox.height, frameBottom: frameBox.bottom, pageScrolls: pageBox.scrollHeight - pageBox.clientHeight, pageTop: pageBox.scrollTop, chartViewport: scroller.clientHeight, innerHeight, stripOverlap: overlap };
+              });
+              const atTop = await measures();
+              check(atTop.frame >= 439, `${tag}: the chart frame is ${atTop.frame}px beside the seat panel`);
+              check(atTop.pageScrolls > 0, `${tag}: the page does not scroll under the seat panel`);
+              check(atTop.chartViewport >= 150, `${tag}: only ${atTop.chartViewport}px of rows beside the seat panel`);
+              await page.evaluate(() => { const pageBox = document.querySelector<HTMLElement>(".kb-page")!; pageBox.scrollTop = pageBox.scrollHeight; });
+              await settleChart(page);
+              await frame("seat-page-end");
+              await page.evaluate(() => { const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!; scroller.scrollTop = scroller.scrollHeight; });
+              await frame("seat-chart-end");
+              const atEnd = await measures();
+              check(atEnd.frameBottom <= atEnd.innerHeight + 1 && atEnd.stripOverlap <= 1, `${tag}: the chart's end is cut by the window (${atEnd.frameBottom} of ${atEnd.innerHeight}) or covered by the return strip (${atEnd.stripOverlap}px)`);
+              // Every row is reachable: step the chart from its top to its end and collect the whole rows it shows.
+              const scrollerOf = page.locator("[data-timeline-scroll]");
+              await scrollerOf.evaluate(element => { element.scrollTop = 0; });
+              const seen = new Set<string>(); let previous = -1;
+              for (let step = 0; step < 40; step++) {
+                const state = await scrollerOf.evaluate(element => {
+                  const box = element.getBoundingClientRect(), axis = element.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+                  const ids = [...element.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + element.clientHeight + 1; })
+                    .map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row") ?? `fold:${row.getAttribute("data-timeline-fold")}`);
+                  const before = element.scrollTop; element.scrollTop += element.clientHeight - 60;
+                  return { ids, before, after: element.scrollTop };
+                });
+                state.ids.forEach(id => seen.add(id));
+                await settleChart(page);
+                if (state.before === previous && state.after === state.before) break;
+                previous = state.before;
+              }
+              const allRows = await readRows(page);
+              check(seen.size === allRows.length, `${tag}: ${seen.size} of ${allRows.length} rows reached beside the seat panel`);
+            } finally { await B.context.close(); }
+          }
+        }
+      }
+    } finally {
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify({ now: MANAGER_NOW, failures, readings }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 3_000_000);
+
+  /*
+   * The seven defects the installed-version check found (docs/design/board-timeline-manager-view.md §20), each on the
+   * fixture shape that reproduces it: an open stage with no agent (task 10), a recent overdue task among those waiting
+   * for the operator (22), an agent with seconds in its elapsed time (26) and one with no known start (27), and a due
+   * date on the window's right edge (25). Frames: $LLV_EVIDENCE_DIR/board-timeline-waiting/<width>-<lang>-<theme>-<state>.png.
+   */
+  managerTest("waiting reads as the thin line, overdue notes share one ink, minute durations, a live row without a start, the return control on the axis, the right-edge flag", async () => {
+    const { timelineWindow, HOUR } = await import("@/lib/board/taskTimelineView");
+    const out = path.join(os.tmpdir(), `llv-waiting-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-timeline-waiting"); fs.mkdirSync(evidence, { recursive: true });
+    const edge = timelineWindow(MANAGER_NOW, 6, null).end;
+    const mutate = (spec: ManagerSpec): ManagerSpec => spec.n === 10 ? { ...spec, final: "running", lastBegin: 120 }
+      : spec.n === 22 ? { ...spec, due: -(24 * 60 + 46) / 3600 }
+        : spec.n === 25 ? { ...spec, due: (edge - MANAGER_NOW) / HOUR }
+          : spec.n === 26 ? { ...spec, agent: 0.5 + 39 / 3600 }
+            : spec.n === 27 ? { ...spec, startUnknown: true } : spec;
+    let current = await managerRecords("en", mutate);
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang, mutate);
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+        for (const theme of ["light", "dark"] as const) for (const { width, height } of [{ width: 390, height: 844 }, { width: 1000, height: 700 }, { width: 1200, height: 800 }, { width: 1440, height: 900 }]) {
+          const tag = `${width}-${lang}-${theme}`;
+          if (process.env.LLV_TIMELINE_ONLY && !process.env.LLV_TIMELINE_ONLY.split(",").includes(tag)) continue;
+          const phone = width === 390;
+          const A = await openManager(browser, served.base, { width, height, lang, theme, seat: false, stored: { view: "board", hours: 24, expanded: {} } });
+          try {
+            const { page, pageErrors } = A;
+            const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : "[data-board-timeline-toggle]");
+            await page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : "[data-bar=\"project\"]").first().waitFor();
+            if (await toggle.isVisible()) await toggle.click();
+            else { await page.evaluate(() => { const key = "llv:board-timeline:v1:atlas"; localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), view: "timeline" })); }); await page.reload(); }
+            const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
+            await page.locator("[data-timeline-task]").first().waitFor();
+            await settleChart(page);
+            const scroller = page.locator("[data-timeline-scroll]");
+            const scaleButton = (name: "zoomIn" | "zoomOut") => page.getByRole("button", { name: t(`timeline.${name}`), exact: true });
+            const taskRow = (n: number) => page.locator(`[data-timeline-task="${idOf(n)}"]`);
+            // Bring a row to the top of the chart, under the pinned axis, so a frame shows it whole.
+            const show = async (selector: string) => {
+              await page.evaluate(sel => {
+                const scrollBox = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, row = document.querySelector<HTMLElement>(sel);
+                if (!row) return;
+                const axis = scrollBox.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+                scrollBox.scrollTop = row.getBoundingClientRect().top - scrollBox.getBoundingClientRect().top + scrollBox.scrollTop - axis;
+              }, selector);
+              await settleChart(page);
+            };
+            const frame = async (state: string, strict = true) => {
+              await settleChart(page).catch(() => undefined);
+              const geometry = await timelineGeometry(chart);
+              await page.screenshot({ path: path.join(evidence, `${tag}-${state}.png`) });
+              readings.push({ name: `${tag}-${state}`, width, height, lang, theme, state, failures: geometry.failures, controls: geometry.controls.length });
+              check(pageErrors.length === 0, `${tag}-${state}: page errors ${pageErrors.join(" | ")}`);
+              if (strict) {
+                check(geometry.failures.length === 0, `${tag}-${state}: text cut by an edge: ${JSON.stringify(geometry.failures.slice(0, 5))}`);
+                check(geometry.controls.every(control => control.hit), `${tag}-${state}: a control is covered: ${JSON.stringify(geometry.controls.filter(control => !control.hit).map(control => control.text))}`);
+                for (const control of geometry.controls) check(control.width >= (phone ? 44 : 24) && control.height >= (phone ? 44 : 24), `${tag}-${state}: control ${control.text} is ${control.width}×${control.height}`);
+              }
+            };
+            // F1: every overdue note reads in the danger ink of an overdue due word; F3, F4: words and minutes.
+            const noteInk = async (state: string) => {
+              const ink = await page.evaluate(() => {
+                const probe = document.createElement("i"); probe.style.color = "var(--color-danger)"; document.body.append(probe);
+                const danger = getComputedStyle(probe).color; probe.remove();
+                const due = document.querySelector<HTMLElement>('[data-timeline-due="overdue"]');
+                const notes = [...document.querySelectorAll<HTMLElement>(".bt-overdue-note")].map(note => ({ text: note.textContent ?? "", color: getComputedStyle(note).color, weight: getComputedStyle(note).fontWeight }));
+                return { danger, due: due ? getComputedStyle(due).color : null, notes };
+              });
+              check(ink.notes.length >= 1, `${tag}-${state}: no overdue note on screen`);
+              for (const note of ink.notes) {
+                check(note.color === ink.danger && (ink.due === null || note.color === ink.due), `${tag}-${state}: note «${note.text}» is ${note.color}, danger ${ink.danger}, due word ${ink.due}`);
+                check(!note.text.includes(" · до "), `${tag}-${state}: ambiguous maximum in «${note.text}»`);
+                check(note.text.includes(t("timeline.group.overdue", { count: 0, duration: "" }).split("·")[1]!.trim().split(" ")[0]!), `${tag}-${state}: note «${note.text}» lacks the maximum word`);
+              }
+              return ink.notes.map(note => note.text);
+            };
+            const noSeconds = async (state: string) => {
+              const texts = await page.evaluate(() => { const root = document.querySelector<HTMLElement>("[data-board-timeline]")!;
+                return [root.innerText, ...[...root.querySelectorAll<HTMLElement>("[title]")].map(node => node.title)]; });
+              const seconds = lang === "uk" ? /\d+\s?с(?![\p{L}])/u : /\d+s\b/;
+              for (const text of texts) check(!seconds.test(text), `${tag}-${state}: seconds in «${text.slice(0, 120)}»`);
+            };
+            // F5: the live mark of task 27 stands on the now line and claims no duration.
+            const liveMarks = (state: string, count: number, scope = taskRow(27)) => scope.evaluate((row, expected) => {
+              const marks = [...row.querySelectorAll<HTMLElement>("[data-timeline-live]")];
+              const now = row.querySelector<HTMLElement>(".bt-lane .bt-now");
+              const lane = row.querySelector<HTMLElement>(".bt-lane");
+              if (!now || !lane) return `no now line (${marks.length} marks)`;
+              const nowX = now.getBoundingClientRect().left;
+              const bad = marks.filter(mark => Math.abs(mark.getBoundingClientRect().right - nowX) > 1 || mark.getBoundingClientRect().width > 10.5);
+              return marks.length === expected && !bad.length && !row.querySelector("[data-timeline-segment]") && !row.querySelector("[data-timeline-line]") ? "" : `${marks.length} marks (${expected} expected), ${bad.length} off the now line or wide, ${row.querySelectorAll("[data-timeline-segment]").length} segments`;
+            }, count).then(problem => check(problem === "", `${tag}-${state}: task 27 live mark: ${problem}`));
+            const rowsOf = (rows: ManagerRow[], n: number) => rows.find(row => row.task === idOf(n))!;
+
+            // 1. Fresh storage: collapsed, groups closed.
+            let rows = await readRows(page);
+            const notesClosed = await noteInk("default");
+            check(notesClosed.length >= 3, `${tag}-default: ${notesClosed.length} overdue notes, the header and two closed groups expected`);
+            await noSeconds("default");
+            const r27 = rowsOf(rows, 27), r26 = rowsOf(rows, 26);
+            check(r27.since === t("timeline.startUnknown") && r27.line === 0 && r27.segments === 0, `${tag}-default: task 27 reads «${r27.since}», line ${r27.line}, segments ${r27.segments}`);
+            check(!r27.label.includes(t("timeline.elapsed", { duration: "" }).trim()) && r27.label.includes(t("mobile2.kanban.agents", { count: 1 })) && r27.label.includes(t("kanban.graphState.running")), `${tag}-default: task 27 label «${r27.label}»`);
+            await liveMarks("default", 1);
+            check((r26.since ?? "").endsWith(` · ${lang === "uk" ? "30 хв" : "30m"}`), `${tag}-default: task 26 reads «${r26.since}»`);
+            check(await page.locator("[data-flag-head=\"left\"]").count() === 0, `${tag}-default: a flag inside the lane points its head left`);
+            const restAxis = await page.locator(".bt-axis").evaluate(axis => axis.getBoundingClientRect().height);
+            await show('[data-timeline-task="mgr-task-27"]');
+            await frame("default");
+
+            // 2. «Waiting for you» open: the recent overdue task, in minutes.
+            await page.locator('[data-timeline-group-row="needs-you"] button').click(); await settleChart(page);
+            rows = await readRows(page);
+            const r22 = rowsOf(rows, 22);
+            check(r22.due[0]?.tone === "overdue" && r22.due[0].words.includes(t("timeline.overdueBy", { duration: lang === "uk" ? "24 хв" : "24m" })), `${tag}-needs-open: task 22 reads «${r22.due[0]?.words}»`);
+            await noteInk("needs-open"); await noSeconds("needs-open");
+            await show('[data-timeline-task="mgr-task-22"]');
+            await frame("needs-open");
+
+            // 3. «Stopped» open, its nested line closed: the note leads the nested row's meta.
+            await page.locator('[data-timeline-group-row="still"] button').click(); await settleChart(page);
+            await noteInk("still-open"); await noSeconds("still-open");
+            const nested = await page.locator('[data-timeline-group-row="still-long"] .bt-overdue-note').count();
+            check(nested === 1, `${tag}-still-open: the nested line carries ${nested} overdue notes`);
+            await page.locator('[data-timeline-group-row="still-long"] button').click(); await settleChart(page);
+            // Task 23's work ends with its observed turn (12 min ago); the thin line goes on to the clock.
+            const ends23 = await taskRow(23).locator("[data-timeline-segment]").evaluateAll(nodes => nodes.map(node => Number((node as HTMLElement).dataset.endMs)));
+            check(ends23.length > 0 && Math.max(...ends23) === MANAGER_NOW - 12 * 60_000, `${tag}-still-open: task 23 work ends ${JSON.stringify(ends23.slice(-2))}, expected ${MANAGER_NOW - 12 * 60_000}`);
+            await show('[data-timeline-group-row="still"]');
+            await frame("still-open");
+
+            // 4. Waiting: task 10 open. No thick segment of its idle open stage reaches the clock at 1 day, 3 days or 1 week.
+            const waiting = async (state: string, hours: number, ticks: number) => {
+              const segs = await taskRow(10).locator("[data-timeline-segment]").evaluateAll(nodes => nodes.map(node => { const el = node as HTMLElement; return { tick: "timelineTick" in el.dataset, start: Number(el.dataset.startMs), end: el.dataset.endMs ? Number(el.dataset.endMs) : null }; }));
+              check(segs.every(segment => segment.tick || segment.end! < MANAGER_NOW - 100 * HOUR), `${tag}-${state}: task 10 draws work past its last turn: ${JSON.stringify(segs)}`);
+              check(segs.filter(segment => segment.tick).length === ticks, `${tag}-${state}: task 10 ticks ${segs.filter(segment => segment.tick).length}, expected ${ticks} at ${hours} h`);
+            };
+            await taskRow(10).locator("[data-timeline-expand]").click(); await settleChart(page);
+            await waiting("expanded-waiting", 24, 0);
+            const stageRows10 = await page.evaluate(id => { const out: { ticks: number; bar: boolean; live: number }[] = [];
+              for (let row = document.querySelector(`[data-timeline-task="${id}"]`)!.nextElementSibling; row && row.hasAttribute("data-timeline-attempt"); row = row.nextElementSibling) out.push({ ticks: row.querySelectorAll("[data-timeline-tick]").length, bar: !!row.querySelector("[data-timeline-bar]"), live: row.querySelectorAll("[data-timeline-live]").length });
+              return out; }, idOf(10));
+            check(stageRows10.every(row => row.ticks === 0 && row.live === 0), `${tag}-expanded-waiting: stage rows ${JSON.stringify(stageRows10)}`);
+            await show('[data-timeline-task="mgr-task-10"]');
+            await frame("expanded-waiting");
+
+            // 5. A live row without a start, opened: the agent's stage row carries the mark and the unknown elapsed word.
+            await taskRow(27).locator("[data-timeline-expand]").click(); await settleChart(page);
+            const stage27 = await page.evaluate(id => { const row = document.querySelector(`[data-timeline-task="${id}"]`)!.nextElementSibling!; return { attempt: row.hasAttribute("data-timeline-attempt"), text: row.querySelector(".bt-label")?.textContent ?? "", marks: row.querySelectorAll("[data-timeline-live]").length }; }, idOf(27));
+            check(stage27.attempt && stage27.marks === 1 && stage27.text.includes(t("timeline.elapsed", { duration: t("timeline.unknownTime") })), `${tag}-expanded-live: stage row ${JSON.stringify(stage27)}`);
+            await show('[data-timeline-task="mgr-task-27"]');
+            await frame("expanded-live");
+            await taskRow(27).locator("[data-timeline-expand]").click(); await settleChart(page);
+
+            // 6. A running stage: its segment ends on the now line.
+            await taskRow(17).locator("[data-timeline-expand]").click(); await settleChart(page);
+            const live17 = await taskRow(17).locator("[data-timeline-segment]").evaluateAll(nodes => nodes.map(node => Number((node as HTMLElement).dataset.endMs)));
+            check(live17.length > 0 && live17.at(-1) === MANAGER_NOW, `${tag}-running: task 17 last segment ends ${live17.at(-1)}, clock ${MANAGER_NOW}`);
+            await show('[data-timeline-task="mgr-task-17"]');
+            await frame("running");
+            await taskRow(17).locator("[data-timeline-expand]").click(); await settleChart(page);
+
+            // 7. Zooms: 3 days and 1 week keep the waiting line, the mark and the notes; 6 hours puts the due flag on the edge.
+            await scaleButton("zoomOut").click(); await settleChart(page);
+            await liveMarks("zoom-3d", 1); await waiting("zoom-3d", 72, 0); await noteInk("zoom-3d"); await noSeconds("zoom-3d");
+            await show('[data-timeline-task="mgr-task-10"]'); await frame("zoom-3d");
+            await scaleButton("zoomOut").click(); await settleChart(page);
+            await liveMarks("zoom-1w", 1); await waiting("zoom-1w", 168, 1); await noteInk("zoom-1w"); await noSeconds("zoom-1w");
+            await show('[data-timeline-task="mgr-task-10"]'); await frame("zoom-1w");
+            for (let step = 0; step < 4; step++) { await scaleButton("zoomIn").click(); await settleChart(page); }
+            await liveMarks("zoom-6h", 1); await noteInk("zoom-6h"); await noSeconds("zoom-6h");
+            const flag = await taskRow(25).evaluate(row => { const lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect(), pole = row.querySelector<HTMLElement>("[data-timeline-flag]")!;
+              const box = pole.getBoundingClientRect(), words = row.querySelector<HTMLElement>("[data-timeline-due]")!.getBoundingClientRect();
+              return { inside: box.left >= lane.left - 0.01 && box.right <= lane.right + 0.01, head: pole.dataset.flagHead ?? null, wordsInside: words.left >= lane.left - 1 && words.right <= lane.right + 1 }; });
+            check(flag.inside && flag.head === "left" && flag.wordsInside, `${tag}-zoom-6h: task 25 flag ${JSON.stringify(flag)}`);
+            await show('[data-timeline-task="mgr-task-25"]');
+            await frame("zoom-6h");
+            for (let step = 0; step < 2; step++) { await scaleButton("zoomOut").click(); await settleChart(page); }
+
+            // 8. Paged back: the axis keeps its height and the return control sits inside it, over no label.
+            await page.reload(); await chart.waitFor(); await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            const viewStart = () => scroller.getAttribute("data-view-start").then(Number);
+            const liveStart = await viewStart();
+            await taskRow(1).locator("[data-timeline-expand]").click(); await settleChart(page);
+            await page.locator(`[data-timeline-fold="${idOf(1)}"] [data-timeline-fold-expand]`).click(); await settleChart(page);
+            const earlier = page.locator(".bt-earlier").first();
+            await earlier.scrollIntoViewIfNeeded(); await earlier.click(); await settleChart(page);
+            check(await viewStart() < liveStart && await page.locator("[data-timeline-back]").count() === 1, `${tag}-paged: paging did not move the window back`);
+            const axisNow = () => page.evaluate(() => {
+              const axis = document.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect(), back = document.querySelector<HTMLElement>("[data-timeline-back]")?.getBoundingClientRect() ?? null;
+              const scrollBox = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, edge = scrollBox.getBoundingClientRect().left + scrollBox.clientWidth, range = document.createRange();
+              const labels = [...document.querySelectorAll<HTMLElement>(".bt-axis .bt-tick, .bt-axis .bt-day")].map(label => { range.selectNodeContents(label); const box = range.getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top, bottom: box.bottom }; });
+              return { height: axis.height, back: back && { left: back.left, right: back.right, top: back.top, bottom: back.bottom, width: back.width, height: back.height }, axis: { top: axis.top, bottom: axis.bottom, left: axis.left, right: axis.right },
+                labels: labels.length, covered: back ? labels.filter(box => box.left < back.right && box.right > back.left && box.top < back.bottom && box.bottom > back.top).length : 0, cut: labels.filter(box => box.right > edge + 0.5).length };
+            });
+            const pagedAxis = await axisNow();
+            check(Math.abs(pagedAxis.height - restAxis) <= 0.5, `${tag}-paged: the axis is ${pagedAxis.height}px paged and ${restAxis}px at rest`);
+            check(!!pagedAxis.back && pagedAxis.back.left >= pagedAxis.axis.left - 0.5 && pagedAxis.back.right <= pagedAxis.axis.right + 0.5 && pagedAxis.back.top >= pagedAxis.axis.top - 0.5 && pagedAxis.back.bottom <= pagedAxis.axis.bottom + 0.5, `${tag}-paged: the return control lies outside the axis ${JSON.stringify(pagedAxis)}`);
+            check(pagedAxis.labels >= 2 && pagedAxis.covered === 0 && pagedAxis.cut === 0, `${tag}-paged: axis has ${pagedAxis.labels} labels, ${pagedAxis.covered} under the return control, ${pagedAxis.cut} cut`);
+            check(!!pagedAxis.back && pagedAxis.back.height >= (phone ? 44 : 24) - 0.5 && pagedAxis.back.width >= (phone ? 44 : 24), `${tag}-paged: the return control is ${pagedAxis.back?.width}×${pagedAxis.back?.height}`);
+            check((await chart.locator("[data-timeline-back]").innerText()).includes(t("timeline.now")), `${tag}-paged: the return control lacks the now label`);
+            await page.locator("[data-timeline-back]").focus();
+            check(await page.evaluate(() => document.activeElement?.hasAttribute("data-timeline-back") === true), `${tag}-paged: keyboard focus does not reach the return control`);
+            await page.locator(`[data-timeline-task="${idOf(1)}"]`).scrollIntoViewIfNeeded();
+            await frame("paged");
+            await page.locator("[data-timeline-back]").click(); await settleChart(page);
+            check(await viewStart() === liveStart && await page.locator("[data-timeline-back]").count() === 0, `${tag}-back-to-now: the window did not return`);
+            const backAxis = await axisNow();
+            check(Math.abs(backAxis.height - restAxis) <= 0.5, `${tag}-back-to-now: the axis is ${backAxis.height}px, ${restAxis}px at rest`);
+            await frame("back-to-now");
+          } catch (error) { failures.push(`${tag}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally { await A.context.close(); }
+        }
+      }
+    } finally {
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify({ now: MANAGER_NOW, failures, readings }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 3_000_000);
+
+  /*
+   * Rows per screen and heights, on the fixture above with every task collapsed and every group open (all 28 tasks listed).
+   * `LLV_TIMELINE_DENSITY_LABEL=before` records the same readings on the base, where the chart has no groups: the whole
+   * file is copied there and `LLV_TIMELINE_DENSITY_ONLY=1` skips the cases that need the new chart.
+   */
+  browserTest("rows per screen and heights at 390, 1024 and 1440 hold or improve on the base", async () => {
+    const label = process.env.LLV_TIMELINE_DENSITY_LABEL ?? "after";
+    const out = path.join(os.tmpdir(), `llv-density-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = evidenceDirectory(); fs.mkdirSync(evidence, { recursive: true });
+    let current = await managerRecords("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const result: Record<string, { rows: number; taskRows: number; taskMedian: number; taskMax: number; head: number; chartHeight: number; tall?: string[] }> = {};
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang);
+        for (const theme of ["light", "dark"] as const) for (const { width, height } of [SIZES[0]!, SIZES[2]!, SIZES[4]!]) {
+          const stored = { view: "timeline", hours: 24, expanded: { ...Object.fromEntries(Array.from({ length: 28 }, (_, index) => [idOf(index + 1), false])), ...GROUP_KEYS } };
+          const { page, context } = await openManager(browser, served.base, { width, height, lang, theme, seat: false, stored });
+          try {
+            await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+            await settleChart(page);
+            const reading = await page.evaluate(() => {
+              const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = scroller.getBoundingClientRect(), axis = scroller.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+              const all = [...scroller.querySelectorAll<HTMLElement>(".bt-row")];
+              const whole = all.filter(row => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + scroller.clientHeight + 1; });
+              const tasks = all.filter(row => row.hasAttribute("data-timeline-task")).map(row => row.getBoundingClientRect().height).sort((a, b) => a - b);
+              return { rows: whole.length, taskRows: whole.filter(row => row.hasAttribute("data-timeline-task")).length, taskMedian: tasks[Math.floor(tasks.length / 2)]!, taskMax: tasks.at(-1)!, tall: all.filter(row => row.hasAttribute("data-timeline-task") && row.getBoundingClientRect().height > 67).map(row => `${row.getAttribute("data-timeline-task")}:${Math.round(row.getBoundingClientRect().height)}`),
+                head: document.querySelector<HTMLElement>(".bt-head")!.getBoundingClientRect().height, chartHeight: scroller.clientHeight, total: all.length, tasks: tasks.length };
+            });
+            expect(reading.tasks).toBe(28);
+            result[`${width}-${lang}-${theme}`] = reading;
+            await page.screenshot({ path: path.join(evidence, `density-${label}-${width}-${lang}-${theme}.png`) });
+          } finally { await context.close(); }
+        }
+      }
+    } finally {
+      fs.writeFileSync(path.join(evidence, `density-${label}.json`), JSON.stringify({ label, now: MANAGER_NOW, conditions: "seat folded, 1 day, every task collapsed, every group open", readings: result }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    if (label === "after") {
+      for (const [name, reading] of Object.entries(result)) {
+        const width = Number(name.split("-")[0]);
+        expect(reading.taskMax).toBeLessThanOrEqual(width === 390 ? 91 : 67);
+        expect(reading.head).toBeLessThanOrEqual(width === 390 ? 100 : width === 1024 ? 60 : 45);
+      }
+      const beforeFile = path.join(evidence, "density-before.json");
+      if (fs.existsSync(beforeFile)) {
+        const before = JSON.parse(fs.readFileSync(beforeFile, "utf8")).readings as typeof result;
+        for (const [name, reading] of Object.entries(result)) {
+          expect(reading.taskRows).toBeGreaterThanOrEqual(before[name]!.taskRows);
+          expect(reading.taskMedian).toBeLessThanOrEqual(before[name]!.taskMedian + 0.5);
+          expect(reading.taskMax).toBeLessThanOrEqual(before[name]!.taskMax + 0.5);
+          expect(reading.head).toBeLessThanOrEqual(before[name]!.head + 0.5);
+        }
+      }
+    }
+  }, 900_000);
+});
+
+/*
+ * Attempt rows of the chart open their conversation and say how long the agent worked
+ * (Build 7 … Build 11 of one stage: a 25-hour calendar span that holds under an hour of turns,
+ * a stage whose transcript cannot be read, and one working now). The work-time route answers from
+ * the table below, never from the chart; the expectations read the same table.
+ */
+describe("board timeline attempt rows: open the conversation, show real working time", () => {
+  const NOW = Date.parse("2026-11-22T10:30:00Z");
+  const H = 3_600_000, MIN = 60_000;
+  const ago = (hours: number) => NOW - hours * H;
+  // Attempt number → calendar span in hours before the clock, and the turn windows its transcript holds (null: no readable transcript).
+  const ATTEMPTS: Array<{ n: number; from: number; to: number | null; turns: Array<[number, number | null]> | null }> = [
+    { n: 7, from: 53, to: 51, turns: [[52.9, 52.5], [52.2, 51.9]] },
+    { n: 8, from: 49, to: 23.9, turns: [[48.9, 48.65], [30, 29.5], [24.2, 24]] },
+    { n: 9, from: 22, to: 19, turns: null },
+    { n: 10, from: 17, to: 8, turns: [[16.9, 12.4], [11, 9.5]] },
+    { n: 11, from: 1.5, to: null, turns: [[1.4, null]] },
+  ];
+  const workMs = (spec: (typeof ATTEMPTS)[number]) => spec.turns?.reduce((sum, [from, to]) => sum + (ago(to ?? 0) - ago(from)), 0) ?? null;
+  const conversationOf = (n: number) => `conversation_build_${n}`;
+
+  async function records(lang: "en" | "uk") {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const title = lang === "uk" ? "Графік: рядки спроб відкривають розмову" : "Chart: attempt rows open the conversation";
+    const role = { roleId: "builder" as const };
+    const resolved = resolvePipelineRole({ role, engine: "codex", model: "gpt-6.2-astra", effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
+    if (!resolved.role) throw new Error(resolved.error);
+    const lane = buildPipeline({ id: "attempt-lane", task: title, taskIds: ["attempt-task"], project: "atlas", repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(ago(54)),
+      stages: [{ id: "build", kind: "run", role, effectiveRole: resolved.role, next: null, prompt: "{{task}}" }] });
+    lane.state = "running"; lane.createdAt = iso(ago(54));
+    lane.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+    const file = { path: "/fixture/build-11.jsonl", conversationId: conversationOf(11), project: "atlas", projectName: "Atlas", root: "codex-sessions", name: "build-11.jsonl", title: "Build 11", kind: "session", fmt: "codex",
+      parent: null, engine: "codex", model: "gpt-6.2-astra", mtime: NOW / 1000, size: 100, proc: "running", activity: "live", pendingQuestion: null, waitingInput: null,
+      lastTurn: { startedAt: ago(1.4), endedAt: null }, agentActivity: { lastRecordAt: NOW, checking: false, check: null } } as unknown as FileEntry;
+    for (const spec of ATTEMPTS) {
+      lane.runs[0]!.attempts.push({ n: spec.n, state: spec.to === null ? "running" : "passed", effectiveRole: structuredClone(resolved.role), launchId: null, conversationId: conversationOf(spec.n), sessionId: null,
+        agentPath: `/fixture/build-${spec.n}.jsonl`, paneId: null, flowId: null, startedAt: iso(ago(spec.from)), completedAt: spec.to === null ? null : iso(ago(spec.to)), input: null, output: null, activatedBy: null, verdict: null, error: null } as unknown as Pipeline["runs"][number]["attempts"][number]);
+    }
+    const task = { id: "attempt-task", project: "atlas", text: title, status: "assigned", placement: "unplaced", createdAt: iso(ago(55)), updatedAt: iso(ago(1)),
+      dueAt: iso(NOW + 8 * H), dueTz: "UTC", assignments: [{ path: file.path, conversationId: file.conversationId, panePid: null, state: "linked", error: null, at: iso(ago(1.5)) }] } as unknown as BoardTask;
+    return { payload: { ...filesReadSummary([], [lane]), files: [file], tasks: [task], pipelines: [lane], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 1, smt: NOW / 1000 }], projectCwds: { atlas: "/fixture/atlas" } }, task, lane };
+  }
+
+  browserTest("a stage row opens its conversation, and its working time is the sum of its turns, with the calendar span labelled apart; 1440 and 390, uk and en", async () => {
+    const { timelineDuration } = await import("@/lib/board/taskTimelineView");
+    const out = path.join(os.tmpdir(), `llv-attempt-rows-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-timeline-attempt-rows"); fs.mkdirSync(evidence, { recursive: true });
+    let current = await records("en");
+    const asked: string[] = [];
+    const served = await serveEvidenceFixture(out, undefined, {
+      "/api/files": () => Response.json(current.payload),
+      "/api/tasks": () => Response.json({ tasks: current.payload.tasks }),
+      "/api/board/work-time": (request: Request) => {
+        const id = new URL(request.url).searchParams.get("conversationId") ?? "";
+        asked.push(id);
+        const spec = ATTEMPTS.find(candidate => conversationOf(candidate.n) === id);
+        const work = spec?.turns ? { windows: spec.turns.map(([from, to]) => [ago(from), to === null ? null : ago(to)]), lastRecordAt: NOW, complete: true } : null;
+        return Response.json({ work: { [id]: work } });
+      },
+    });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await records(lang);
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+        for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+          const tag = `${width}-${lang}-${theme}`;
+          const phone = width === 390;
+          asked.length = 0;
+          const opened = await openFixture(browser, "about:blank", { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date(NOW));
+          const { page, context, pageErrors } = opened;
+          try {
+            await context.addInitScript(({ stored }) => {
+              localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+              localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+            }, { stored: { view: "timeline", hours: 72, expanded: { "attempt-task": true } } });
+            await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+            await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+            await page.locator("[data-timeline-attempt]").first().waitFor();
+            await page.waitForFunction(() => document.querySelectorAll("[data-timeline-work-time='loading']").length === 0);
+            const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-timeline-attempt]")].map(row => {
+              const label = row.querySelector<HTMLElement>(".bt-label")!, box = label.getBoundingClientRect();
+              const bar = row.querySelector<HTMLElement>("[data-timeline-bar]");
+              const work = [...row.querySelectorAll<HTMLElement>("[data-timeline-work]")].reduce((sum, node) => sum + node.offsetWidth, 0);
+              return { key: row.dataset.timelineAttempt!, openable: row.dataset.openable ?? null, role: label.getAttribute("role"), tabindex: label.tabIndex, height: box.height, width: box.width,
+                work: row.querySelector("[data-timeline-work-time]")?.textContent ?? "", state: row.querySelector("[data-timeline-work-time]")?.getAttribute("data-timeline-work-time") ?? "",
+                wall: row.querySelector("[data-timeline-wall]")?.textContent ?? "", fills: row.querySelectorAll("[data-timeline-work]").length, fillWidth: work, barWidth: bar?.offsetWidth ?? 0 };
+            }));
+            check(rows.length === ATTEMPTS.length, `${tag}: ${rows.length} attempt rows, ${ATTEMPTS.length} expected`);
+            for (const [index, spec] of ATTEMPTS.entries()) {
+              const row = rows[index];
+              if (!row) continue;
+              const ms = workMs(spec);
+              const expectedWork = ms === null ? t("timeline.workUnknown") : t("timeline.worked", { duration: timelineDuration(ms, lang, t as never) });
+              check(row.work === expectedWork, `${tag}: attempt ${spec.n} work «${row.work}», expected «${expectedWork}»`);
+              check(row.state === (ms === null ? "unknown" : "known"), `${tag}: attempt ${spec.n} state ${row.state}`);
+              const wall = t("timeline.elapsed", { duration: spec.to === null ? timelineDuration(NOW - ago(spec.from), lang, t as never) : timelineDuration((spec.from - spec.to) * H, lang, t as never) });
+              check(row.wall === wall, `${tag}: attempt ${spec.n} calendar span «${row.wall}», expected «${wall}»`);
+              check(!row.wall.includes(t("timeline.worked", { duration: "" }).trim()) && !row.work.includes(t("timeline.elapsed", { duration: "" }).trim()), `${tag}: attempt ${spec.n} mixes the two figures`);
+              check(row.openable === "1" && row.role === "button" && row.tabindex === 0, `${tag}: attempt ${spec.n} is not a control (${row.openable}, ${row.role}, ${row.tabindex})`);
+              check(row.height >= (phone ? 44 : 24), `${tag}: attempt ${spec.n} target ${row.width}×${row.height}`);
+              check(ms === null ? row.fills === 0 : row.fills > 0, `${tag}: attempt ${spec.n} draws ${row.fills} work fills`);
+              // The fill is the turn time, not the calendar span: a 25 h attempt of under an hour of turns fills a sliver of its bar.
+              if (spec.n === 8) check(row.barWidth > 0 && row.fillWidth / row.barWidth < 0.1, `${tag}: attempt 8 fill ${row.fillWidth} of ${row.barWidth}`);
+            }
+            check(ATTEMPTS.every(spec => asked.includes(conversationOf(spec.n))), `${tag}: work-time asked for ${asked.join(",")}`);
+            const geometry = await timelineGeometry(page.locator("[data-board-timeline]"));
+            check(geometry.failures.length === 0, `${tag}: text cut by an edge: ${JSON.stringify(geometry.failures.slice(0, 5))}`);
+            check(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+            const scroller = page.locator("[data-timeline-scroll]");
+            await page.screenshot({ path: path.join(evidence, `${tag}-rows.png`) });
+            // Every row shows its open cue at rest, and on a desktop all five rows are one height (the calendar span stays on the meta line; the phone sets name and state on one line).
+            const cues = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-timeline-attempt]")].map(row => {
+              const cue = row.querySelector<SVGElement>("[data-timeline-open-cue]"), box = cue?.getBoundingClientRect(), name = row.querySelector(".bt-stage-name span")!.getBoundingClientRect();
+              return { shown: !!box && box.width > 0 && box.height > 0, afterName: !!box && box.left >= name.right - 0.5, height: row.querySelector(".bt-label")!.getBoundingClientRect().height };
+            }));
+            check(cues.length === ATTEMPTS.length && cues.every(cue => cue.shown && cue.afterName), `${tag}: open cue at rest ${JSON.stringify(cues)}`);
+            check(phone || new Set(cues.map(cue => Math.round(cue.height))).size === 1, `${tag}: stage row heights ${cues.map(cue => cue.height).join(",")}`);
+            // A hover tint (a pointer) and a pressed tint (any input) wash the row; the press ends off the row so it opens nothing.
+            const stage = scroller.locator(`[data-timeline-attempt*="9]"]`);
+            const tint = () => stage.evaluate(node => getComputedStyle(node).backgroundColor);
+            const rest = await tint();
+            if (!phone) {
+              await stage.hover();
+              const hovered = await tint();
+              check(hovered !== rest, `${tag}: hover leaves the row at ${hovered}`);
+              await page.screenshot({ path: path.join(evidence, `${tag}-hover.png`) });
+            }
+            const box = (await stage.boundingBox())!;
+            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+            await page.mouse.down();
+            const pressed = await tint();
+            check(pressed !== rest, `${tag}: press leaves the row at ${pressed}`);
+            await page.screenshot({ path: path.join(evidence, `${tag}-pressed.png`) });
+            await page.mouse.move(box.x + box.width / 2, Math.max(1, box.y - 40));
+            await page.mouse.up();
+            await page.mouse.move(1, 1);
+            // The legend names the outline as the stage's calendar span and the fill as the agent's working time, whole at this width.
+            const legend = page.locator(".bt-legend");
+            await legend.scrollIntoViewIfNeeded();
+            const legendRead = await legend.evaluate(node => {
+              const range = document.createRange(); range.selectNodeContents(node);
+              const box = range.getBoundingClientRect(), host = node.getBoundingClientRect();
+              return { text: node.textContent ?? "", whole: box.left >= host.left - 0.5 && box.right <= host.right + 0.5 && box.right <= window.innerWidth && box.bottom <= window.innerHeight + 0.5 };
+            });
+            check(legendRead.text === t("timeline.legend"), `${tag}: legend «${legendRead.text}»`);
+            check(legendRead.text.includes(lang === "uk" ? "товста лінія — етапи йшли (календарний час)" : "Thick line: stages ran (calendar time)"), `${tag}: legend does not name the thick task segment`);
+            check(legendRead.whole, `${tag}: legend cut by an edge`);
+            await legend.screenshot({ path: path.join(evidence, `${tag}-legend.png`) });
+            readings.push({ name: tag, rows, legend: legendRead, failures: geometry.failures });
+            // A tap on a bar opens the conversation the attempt recorded (no card holds it, so the board addresses it by its link).
+            await scroller.locator(`[data-timeline-attempt*="8]"] [data-timeline-bar]`).click();
+            await page.waitForFunction(id => decodeURIComponent(location.hash).includes(id), conversationOf(8));
+            await page.screenshot({ path: path.join(evidence, `${tag}-opened-recorded.png`) });
+            await page.evaluate(() => { location.hash = "#p=atlas"; });
+            // The live attempt's conversation is on the board: its window opens, and the keyboard does the same.
+            await page.locator(`[data-timeline-attempt*="11]"] .bt-label`).focus();
+            await page.keyboard.press("Enter");
+            // The board holds this conversation, so it opens it itself (the agent window on a desktop, the phone's own surface otherwise).
+            await page.waitForFunction(id => document.body.outerHTML.includes(id), conversationOf(11));
+            await page.waitForTimeout(600);
+            await page.screenshot({ path: path.join(evidence, `${tag}-opened-live.png`) });
+          } catch (error) {
+            failures.push(`${tag}: ${error instanceof Error ? error.message : String(error)}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify(readings, null, 1));
+    } finally {
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+/* The «Графік» toggle is the last segment of the header's panel group: Orchestrator, the recent
+   agents' clock and the chart read as one segmented control, pressed or not. Every frame is the
+   header at the exact width, in both languages and themes, with the chart shown and hidden, and
+   after a click (the focus the press leaves). The readings compare the segments' own computed
+   height, radius, border and fill. `LLV_HEADER_FRAMES_PHASE=before` names the frames of a run on
+   the base. */
+describe("board header chart toggle", () => {
+  const phase = process.env.LLV_HEADER_FRAMES_PHASE ?? "after";
+  const segmentReadings = (page: Page) => page.evaluate(() => {
+    const group = document.querySelector<HTMLElement>('.bar[data-bar="project"] [data-bar-group="panels"]');
+    if (!group) return null;
+    const chart = group.querySelector<HTMLElement>("[data-board-timeline-toggle]");
+    const segments = [group.querySelector<HTMLElement>("[data-orchestrator-toggle]"), group.querySelector<HTMLElement>("[data-bar-recent-toggle]"), chart];
+    const read = (node: HTMLElement | null) => {
+      if (!node) return null;
+      const style = getComputedStyle(node), box = node.getBoundingClientRect(), label = node.querySelector<HTMLElement>("[data-fit-label]");
+      const text = label && getComputedStyle(label).display !== "none" ? label.textContent : null;
+      const range = document.createRange(); range.selectNodeContents(node);
+      return { pressed: node.getAttribute("aria-pressed"), x: box.x, y: box.y, width: box.width, height: box.height, radius: [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomRightRadius, style.borderBottomLeftRadius],
+        border: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth], borderColor: style.borderTopColor, background: style.backgroundColor, color: style.color,
+        shadow: style.boxShadow, outline: style.outlineStyle === "none" ? "none" : `${style.outlineWidth} ${style.outlineColor}`, font: `${style.fontSize}/${style.fontWeight}`, text,
+        icon: (() => { const svg = node.querySelector("svg"); if (!svg) return null; const r = svg.getBoundingClientRect(); return { y: r.y + r.height / 2 - (box.y + box.height / 2), width: r.width }; })(),
+        cut: range.getBoundingClientRect().right > box.right + 0.5 || range.getBoundingClientRect().left < box.left - 0.5 };
+    };
+    return { bar: document.querySelector<HTMLElement>('.bar[data-bar="project"]')!.getBoundingClientRect().toJSON(), orchestrator: read(segments[0]!), recent: read(segments[1]!), chart: read(chart) };
+  });
+
+  browserTest("the chart toggle is the third segment of the panel group in every state", async () => {
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-header-chart-toggle"); fs.mkdirSync(evidence, { recursive: true });
+    const out = path.join(os.tmpdir(), `llv-header-chart-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    let current = await managerRecords("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang);
+        for (const theme of ["dark", "light"] as const) for (const { width, height } of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }]) for (const shown of [false, true]) {
+          const tag = `${width}-${lang}-${theme}-${shown ? "chart" : "board"}`;
+          const { page, context, pageErrors } = await openFixture(browser, "about:blank", { width, height }, theme, lang, "reduce", false, 1, new Date(MANAGER_NOW));
+          try {
+            await context.addInitScript(({ lang, theme, shown }) => {
+              localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+              if (localStorage.getItem("llv:kanban-seat:v2") === null) localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: false }, placement: "top", height: null, width: null }));
+              if (localStorage.getItem("llv:board-timeline:v1:atlas") === null) localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify({ view: shown ? "timeline" : "board", hours: 24, expanded: {} }));
+            }, { lang, theme, shown });
+            await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+            await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+            const toggle = page.locator("[data-board-timeline-toggle]");
+            await toggle.waitFor({ timeout: 20_000 });
+            await page.waitForFunction(() => document.querySelector("[data-board-timeline-toggle]")?.getAttribute("aria-pressed") !== null);
+            const bar = page.locator('.bar[data-bar="project"]');
+            const frame = async (state: string) => {
+              const box = (await bar.boundingBox())!;
+              const reading = await segmentReadings(page);
+              await page.screenshot({ path: path.join(evidence, `${phase}-${tag}-${state}.png`), clip: { x: Math.max(0, box.x + box.width - 560), y: box.y, width: Math.min(560, box.width), height: box.height }, animations: "disabled" });
+              readings.push({ name: `${phase}-${tag}-${state}`, reading });
+              return reading;
+            };
+            const rest = await frame("rest");
+            const check = (ok: boolean, detail: string) => { if (!ok) failures.push(`${tag}: ${detail}`); };
+            check(pageErrors.length === 0, `page errors ${pageErrors.join(" | ")}`);
+            check(!!rest?.chart && !!rest.recent && !!rest.orchestrator, "a segment is missing");
+            if (rest?.chart && rest.recent && rest.orchestrator) {
+              check(rest.chart.pressed === String(shown), `aria-pressed ${rest.chart.pressed}`);
+              for (const name of ["orchestrator", "recent"] as const) check(rest[name]!.height === rest.chart.height && rest[name]!.y === rest.chart.y, `${name} height ${rest[name]!.height} at ${rest[name]!.y} against the chart's ${rest.chart.height} at ${rest.chart.y}`);
+              check(Math.abs(rest.chart.x - (rest.recent.x + rest.recent.width)) < 1.01, `the chart segment sits ${rest.chart.x - (rest.recent.x + rest.recent.width)} px from the clock`);
+              check(rest.chart.radius.join(" ") === `0px ${rest.orchestrator.radius[0]} ${rest.orchestrator.radius[0]} 0px`, `chart radius ${rest.chart.radius.join(" ")}`);
+              check(rest.recent.radius.join(" ") === "0px 0px 0px 0px", `the clock's radius ${rest.recent.radius.join(" ")} is not square inside the group`);
+              check(rest.chart.border.join(" ") === `${rest.chart.border[0]} ${rest.chart.border[1]} ${rest.chart.border[2]} 0px`, `chart border ${rest.chart.border.join(" ")}`);
+              check(rest.chart.outline === "none" && rest.chart.shadow === "none", `chart resting outline ${rest.chart.outline}, shadow ${rest.chart.shadow}`);
+              check(Math.abs(rest.chart.icon!.y - rest.orchestrator.icon!.y) <= 1 && rest.chart.icon!.width === rest.orchestrator.icon!.width, "chart icon is not aligned with the orchestrator's");
+              check(!rest.chart.cut && (rest.chart.text === null) === (rest.orchestrator.text === null), `the chart's label is ${rest.chart.text} beside the orchestrator's ${rest.orchestrator.text} (cut: ${rest.chart.cut})`);
+            }
+            await toggle.click();
+            await page.mouse.move(0, 300);
+            await frame("pressed-by-click");
+            await toggle.click();
+            await frame("toggled-back");
+            /* The focus ring of each segment stays inside the group: after a click and a key (the state
+               the operator's frame showed) on the chart, and by Tab on every segment. */
+            const insideGroup = (name: string, node: NonNullable<Awaited<ReturnType<typeof segmentReadings>>>["chart"], at: string) => {
+              if (!node) { check(false, `${at}: ${name} is missing`); return; }
+              const layers = node.shadow.replace(/(?:rgba?|color)\([^)]*\)/g, "c").split(",").map(layer => layer.trim()).filter(layer => layer !== "none");
+              check(layers.length > 0 && layers.every(layer => layer.includes("inset")), `${at}: ${name} focus shadow "${node.shadow}" is not drawn inside the segment`);
+              check(node.outline === "none", `${at}: ${name} focus outline ${node.outline}`);
+              check(node.shadow !== rest?.[name === "chart" ? "chart" : name === "clock" ? "recent" : "orchestrator"]?.shadow, `${at}: ${name} shows no focus indicator`);
+              check(node.height === rest?.chart?.height && node.y === rest?.chart?.y, `${at}: ${name} spans ${node.height} at ${node.y}, the group ${rest?.chart?.height} at ${rest?.chart?.y}`);
+            };
+            await toggle.click();
+            await page.keyboard.press("ArrowDown");
+            await page.mouse.move(0, 300);
+            const keyed = await frame("focus-after-click-and-key");
+            check(await page.evaluate(() => document.activeElement?.hasAttribute("data-board-timeline-toggle") === true && document.activeElement.matches(":focus-visible")), "the chart toggle is not in focus-visible after click and key");
+            insideGroup("chart", keyed?.chart ?? null, "click+key");
+            await page.locator("[data-orchestrator-toggle]").focus();
+            await page.keyboard.press("Shift+Tab"); await page.keyboard.press("Tab");
+            for (const [name, key, selector] of [["orchestrator", "orchestrator", "[data-orchestrator-toggle]"], ["clock", "recent", "[data-bar-recent-toggle]"], ["chart", "chart", "[data-board-timeline-toggle]"]] as const) {
+              if (name !== "orchestrator") await page.keyboard.press("Tab");
+              check(await page.evaluate(selector => document.activeElement?.matches(`${selector}:focus-visible`) === true, selector), `Tab did not reach ${name} with focus-visible`);
+              const tabbed = await frame(`focus-tab-${name}`);
+              insideGroup(name, tabbed?.[key] ?? null, `Tab ${name}`);
+            }
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(evidence, `${phase}-readings.json`), JSON.stringify(readings, null, 2));
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); served.stop(); if (fd !== null) fs.closeSync(fd); }
+  }, 600_000);
+});
+
+describe("project default stage runtime", () => {
+  browserTest("project menus show the saved runtime and roll back refused choices", async () => {
+    const out = path.resolve(".artifacts/project-stage-runtime");
+    const readings: Record<string, unknown>[] = [];
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const { context, page } = await openFixture(browser, `${server.base}?scenario=merge-states`, { width, height: width === 390 ? 844 : 700 }, theme, lang, "reduce", width === 390);
+        try {
+          await page.locator(width === 390 ? '[data-phone-card="task:t-merge-stop"]' : '[data-id="task:t-merge-stop"] [data-merge-stop]').waitFor();
+          const clickControl = async (selector: string) => {
+            const target = page.locator(selector).first();
+            await target.waitFor({ state: "visible" });
+            const point = await target.evaluate(element => {
+              const box = element.getBoundingClientRect();
+              const x = box.left + box.width / 2, y = box.top + box.height / 2;
+              return { x, y, hit: element.contains(document.elementFromPoint(x, y)) };
+            });
+            if (!point.hit) await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-blocked.png`) });
+            expect(point.hit, `${selector}: ${JSON.stringify(point)}`).toBe(true);
+            if (width === 390) await page.touchscreen.tap(point.x, point.y);
+            else await page.mouse.click(point.x, point.y);
+          };
+          if (width === 390) {
+            await clickControl('[data-mobile2-open="menu"]');
+            await clickControl('[data-mobile2-menu-row="rules"]');
+          } else {
+            await clickControl('[data-bar-group="more"] button');
+            await clickControl('[data-bar-menu-head="merging"]');
+          }
+          const row = page.locator("[data-project-stage-runtime]");
+          const select = row.locator("select");
+          await select.waitFor();
+          await page.waitForFunction(() => !document.querySelector<HTMLSelectElement>("[data-project-stage-runtime] select")?.disabled);
+          expect(await select.inputValue()).toBe("local");
+          await select.selectOption("codex-cloud");
+          await page.waitForFunction(() => (window as unknown as { evidence: { pipelineStageRuntime: string } }).evidence.pipelineStageRuntime === "codex-cloud");
+          await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("[data-project-stage-runtime] select")?.value === "codex-cloud");
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-cloud.png`) });
+          await page.evaluate(() => { (window as unknown as { evidence: { refusePipelineStageRuntime: boolean } }).evidence.refusePipelineStageRuntime = true; });
+          await select.selectOption("local");
+          await row.locator('[role="alert"]').waitFor();
+          expect(await select.inputValue()).toBe("codex-cloud");
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-error.png`) });
+          const geometry = await row.evaluate(element => {
+            const select = element.querySelector("select")!.getBoundingClientRect();
+            const label = element.querySelector("label span")!.getBoundingClientRect();
+            const hint = element.querySelector('[role="alert"]')!.getBoundingClientRect();
+            return { overlaps: label.right > select.left, right: Math.max(select.right, hint.right), bottom: hint.bottom, height: select.height };
+          });
+          expect(geometry.overlaps).toBe(false); expect(geometry.right).toBeLessThanOrEqual(width); expect(geometry.bottom).toBeLessThanOrEqual(width === 390 ? 844 : 700);
+          if (width === 390) expect(geometry.height).toBeGreaterThanOrEqual(44);
+          readings.push({ width, lang, theme, runtime: "codex-cloud", geometry });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-failure.png`) });
+          throw error;
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "verification.json"), JSON.stringify({ schemaVersion: 1, frameCount: readings.length * 2, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
 
 /* docs/design/lane-diff-comments.md: the lane review sheet, entered from the
    card's ⋯, in every state at 1440, 1024 and 640 px, both languages and themes. */
@@ -457,6 +2712,141 @@ describe("Cloud check execution choices", () => {
     } finally { await browser.close(); server.stop(); }
   });
 
+});
+
+describe("where a stage ran", () => {
+  /* What each surface draws with no hover: the stage's place, its word and mark,
+     and whether every word stays inside the box that holds it and the window. */
+  const readPlaces = (page: Page, scope: string, holder: string) => page.evaluate(({ scope, holder }) => {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(`${scope} ${holder}[data-stage]`));
+    return Object.fromEntries(rows.map((row) => {
+      const mark = row.querySelector<HTMLElement>(".iplace");
+      const range = document.createRange();
+      if (mark) range.selectNodeContents(mark);
+      const text = range.getBoundingClientRect(), box = row.getBoundingClientRect();
+      return [row.dataset.stage!, {
+        place: mark?.dataset.stagePlace ?? null, word: mark?.innerText.trim() ?? "", shape: mark?.querySelector("svg")?.innerHTML ?? "",
+        inside: !mark || (text.left >= box.left - 0.5 && text.right <= box.right + 0.5 && text.top >= box.top - 0.5 && text.bottom <= box.bottom + 0.5 && text.right <= innerWidth),
+      }];
+    }));
+  }, { scope, holder });
+
+  browserTest("the cloud and a local fallback read apart with no hover on the card, the graph and the stage pane, in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/stage-place");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => {
+      server.stop(); sockets.close(); throw error;
+    });
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const key = `${lang}-${theme}-${width}`;
+        const words = lang === "uk" ? { cloud: "хмара", local: "локально · збій хмари", cause: "після збою" } : { cloud: "cloud", local: "local · cloud failed", cause: "failure" };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-place`, { width, height: 1000 }, theme, lang, "reduce", false);
+        try {
+          const lane = card("t-stage-place");
+          const verify = (surface: string, read: Awaited<ReturnType<typeof readPlaces>>, expected: { cloud: string; local: string }) => {
+            const { implement, review, verify: configured } = read;
+            if (implement?.place !== "cloud" || implement.word !== expected.cloud) failures.push(`${key} ${surface} cloud: ${JSON.stringify(implement)}`);
+            if (review?.place !== "moved-local" || review.word !== expected.local) failures.push(`${key} ${surface} local: ${JSON.stringify(review)}`);
+            if (configured?.place !== "cloud") failures.push(`${key} ${surface} configured: ${JSON.stringify(configured)}`);
+            if (!implement?.shape || implement.shape === review?.shape) failures.push(`${key} ${surface}: the two places draw one mark`);
+            for (const [stage, row] of Object.entries(read)) if (!row.inside) failures.push(`${key} ${surface} ${stage}: the word leaves its box`);
+          };
+          await page.waitForSelector(`${lane} .pb-pills [data-stage="review"]`, { timeout: 10_000 });
+          await page.locator(`${lane} .pb-pills`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          verify("card", await readPlaces(page, `${lane} .pb-pills`, ".pb-pill"), words);
+          await page.screenshot({ path: path.join(out, `${key}-card.png`) });
+
+          /* «Graph» opens the graph full-screen, in the stages view (docs/design/task-card-no-inline-conversations.md §3). */
+          await page.click(`${lane} [data-graph-toggle]`);
+          await page.waitForSelector('.gsheet .gs-graph .pnode[data-stage="review"]', { timeout: 5_000 });
+          verify("graph", await readPlaces(page, ".gsheet .gs-graph", ".pnode"), words);
+          await page.screenshot({ path: path.join(out, `${key}-graph.png`) });
+
+          const line = page.locator('.gsheet .pane[data-stage="review"] [data-stage-place-line]');
+          await line.waitFor({ timeout: 10_000 });
+          const clippedModels = await page.locator(".gsheet .pnode .imodel").evaluateAll((models) => models.filter((model) => model.scrollWidth > model.clientWidth).map((model) => model.textContent));
+          if (clippedModels.length) failures.push(`${key} modal graph clips models: ${clippedModels.join(", ")}`);
+          await line.scrollIntoViewIfNeeded();
+          const cause = await line.evaluate((element) => {
+            const pane = element.closest(".pane")!.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect();
+            return { place: (element as HTMLElement).dataset.stagePlace, text: (element as HTMLElement).innerText, inside: text.left >= pane.left && text.right <= pane.right && text.top >= pane.top && text.bottom <= pane.bottom && text.bottom <= innerHeight };
+          });
+          if (cause.place !== "moved-local" || !cause.text.includes(words.cause) || !cause.text.includes("setup step 2") || !cause.inside) failures.push(`${key} pane cause: ${JSON.stringify(cause)}`);
+          const running = await page.locator('.gsheet .pane[data-stage="implement"] [data-stage-place-line]').getAttribute("data-stage-place");
+          if (running !== "cloud") failures.push(`${key} pane cloud: ${running}`);
+          await page.screenshot({ path: path.join(out, `${key}-pane.png`) });
+          if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); sockets.close(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
+describe("Cloud stage task link", () => {
+  browserTest("a stage that ran in the cloud opens its cloud task from its pane, and a stage that moved local offers none, in both languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "cloud-task-link");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => {
+      server.stop(); sockets.close(); throw error;
+    });
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const key = `${lang}-${theme}-${width}`;
+        const word = lang === "uk" ? "Відкрити хмарну задачу" : "Open cloud task";
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-place`, { width, height: 1000 }, theme, lang, "reduce", false);
+        try {
+          await page.click(`${card("t-stage-place")} [data-graph-toggle]`);
+          const link = page.locator('.gsheet .pane[data-stage="implement"] a[data-open-cloud="implement"]');
+          await link.waitFor({ timeout: 10_000 });
+          await link.scrollIntoViewIfNeeded();
+          const read = await link.evaluate((element) => {
+            const pane = element.closest(".pane")!.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect(), box = element.getBoundingClientRect();
+            return {
+              text: (element as HTMLElement).innerText.trim(), href: element.getAttribute("href"), target: element.getAttribute("target"), rel: element.getAttribute("rel"),
+              aria: element.getAttribute("aria-label"), height: box.height,
+              inside: text.left >= pane.left && text.right <= pane.right && text.top >= pane.top && text.bottom <= pane.bottom && text.bottom <= innerHeight && text.right <= innerWidth,
+              conversationButton: !!element.closest(".pane")!.querySelector("[data-open-conversation]"),
+            };
+          });
+          if (read.text !== word) failures.push(`${key} text «${read.text}»`);
+          if (read.href !== "https://example.com/cloud/tasks/task_7f3a9c21" || read.target !== "_blank" || !read.rel?.includes("noopener")) failures.push(`${key} link ${JSON.stringify(read)}`);
+          if (!/implement/i.test(read.aria ?? "")) failures.push(`${key} aria «${read.aria}»`);
+          if (read.height < 28) failures.push(`${key} target ${read.height}px`);
+          if (!read.inside) failures.push(`${key} the label leaves its pane`);
+          if (read.conversationButton) failures.push(`${key} a cloud stage also draws a conversation button`);
+          /* The stage that moved to this machine has no cloud task to open. */
+          const review = await page.locator('.gsheet .pane[data-stage="review"] [data-open-cloud]').count();
+          if (review !== 0) failures.push(`${key} the moved-local stage offers a cloud link`);
+          await page.screenshot({ path: path.join(out, `${key}-pane.png`) });
+          /* Opening it asks the browser for a new tab and leaves the board where it is. */
+          const popup = context.waitForEvent("page", { timeout: 5_000 }).catch(() => null);
+          await page.route("https://example.com/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<title>cloud task</title>" }));
+          await link.click();
+          const opened = await popup;
+          if (!opened) failures.push(`${key} the link opened no tab`);
+          else { if (!opened.url().startsWith("https://example.com/cloud/tasks/task_7f3a9c21")) failures.push(`${key} opened ${opened.url()}`); await opened.close(); }
+          if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); sockets.close(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
 });
 
 describe("legacy review follow-up navigation", () => {
@@ -1420,30 +3810,28 @@ describe("subscription API consent", () => {
           await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
           await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
           const section = page.locator("[data-subscription-api]"); await section.waitFor();
-          expect(await section.locator("h3").innerText()).toBe(translate(lang, "subscriptionApi.title"));
           const toggle = section.getByRole("switch");
           await toggle.waitFor({ state: "visible" });
           expect(await toggle.isChecked()).toBe(false);
           const geometry = await section.evaluate(element => {
             const panel = element.closest("[data-telemetry-settings]")!;
-            const button = element.querySelector("input")!;
-            const label = button.closest("label")!;
-            const box = label.getBoundingClientRect(), edge = panel.getBoundingClientRect();
+            const box = element.querySelector("[role=switch]")!.getBoundingClientRect(), edge = panel.getBoundingClientRect();
             return { visible: box.top >= edge.top && box.bottom <= edge.bottom, overflow: element.scrollWidth > element.clientWidth, scrolls: panel.scrollHeight > panel.clientHeight };
           });
           expect(geometry.visible).toBe(true); expect(geometry.overflow).toBe(false);
-          expect(await section.innerText()).toContain("api.anthropic.com/api/oauth/usage");
+          await page.locator("[data-settings-details-toggle]").click();
+          expect(await page.locator("[data-settings-details]").innerText()).toContain("api.anthropic.com/api/oauth/usage");
           await page.screenshot({ path: path.join(out, `${phone ? "phone" : "desktop"}-${lang}-${theme}.png`) });
           await toggle.click();
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === true);
+          await page.waitForFunction(() => document.querySelector('[data-subscription-api] [role=switch]')?.getAttribute("aria-checked") === "true");
           await toggle.click();
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === false);
+          await page.waitForFunction(() => document.querySelector('[data-subscription-api] [role=switch]')?.getAttribute("aria-checked") === "false");
           expect(pageErrors).toEqual([]);
           readings.push({ lang, theme, viewport, ...geometry });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/subscription-api", { recursive: true });
-      const sources = ["src/components/telemetry/SubscriptionApiSetting.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      const sources = ["src/components/settings/PrivacySection.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
       fs.writeFileSync("evidence/subscription-api/readings.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
         revision: process.env.LLV_EVIDENCE_REVISION ?? "working-tree", recordedAt: new Date().toISOString(),
         command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'subscription API consent'",
@@ -1473,7 +3861,7 @@ describe("telemetry opt-outs", () => {
             await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
             await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
           } else {
-            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
+            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "settings.section.privacy"), exact: true }).click();
           }
           const dialog = page.locator("[data-telemetry-settings]"); await dialog.waitFor();
           const toggle = dialog.getByRole("switch", { name: translate(lang, "telemetry.label"), exact: true });
@@ -1481,10 +3869,12 @@ describe("telemetry opt-outs", () => {
           expect(await toggle.isDisabled()).toBe(off);
           expect(await toggle.isChecked()).toBe(!off);
           const { telemetryNotice } = await import("../../../bin/telemetry-notice.mjs");
-          expect((await dialog.innerText()).includes(telemetryNotice[lang])).toBe(!off);
+          await page.locator("[data-settings-details-toggle]").click();
+          const inDetails = (await dialog.innerText()).replace(/\s+/g, " ");
+          expect(inDetails.includes(telemetryNotice[lang].match(/DO_NOT_TRACK=1/)![0])).toBe(!off);
           const name = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${off ? "off" : "on"}`;
-          await dialog.screenshot({ path: path.join(out, `${name}-settings.png`) });
-          await dialog.getByRole("button", { name: translate(lang, "telemetry.close"), exact: true }).click();
+          await page.screenshot({ path: path.join(out, `${name}-settings.png`) });
+          await page.locator(phone ? "[data-mobile2-sheet='settings'] [data-mobile2-close]" : "[data-settings-close]").click();
           if (!off) await page.locator("[data-telemetry-notice]").waitFor();
           const noticeCount = await page.locator("[data-telemetry-notice]").count();
           expect(noticeCount).toBe(off ? 0 : 1);
@@ -1504,7 +3894,7 @@ describe("telemetry opt-outs", () => {
 
 describe("swarm release rules", () => {
   browserTest("consent, refused save and read-only scope fit both languages, themes and viewports", async () => {
-    const out = path.resolve(".artifacts/swarm-rules"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("swarm-rules"); fs.mkdirSync(out, { recursive: true });
     let receiving = false, refuse = false;
     const rules = sampleMemory();
     const publicRule = { ...rules.scopes[0].active[0], id: "r_0000000000000088", rule: "Read the project instruction files before changing code.", why: "" };
@@ -1537,7 +3927,7 @@ describe("swarm release rules", () => {
           expect(await toggle.isEnabled()).toBe(true);
           expect(await toggle.isChecked()).toBe(false);
           await setting.scrollIntoViewIfNeeded();
-          expect(await setting.innerText()).toContain(translate(lang, "telemetry.swarm.description"));
+          expect(await setting.innerText()).toContain(translate(lang, "settings.privacy.swarmHint"));
           const geometry = await setting.evaluate(element => {
             const box = element.getBoundingClientRect(), dialog = element.closest("[role=dialog]")!.getBoundingClientRect();
             const lines = [...element.querySelectorAll("label,p")].flatMap(text => {
@@ -1567,26 +3957,26 @@ describe("swarm release rules", () => {
           const saved = page.waitForResponse(response => new URL(response.url()).pathname === "/api/telemetry" && response.request().method() === "PUT");
           await toggle.click();
           expect((await saved).status()).toBe(200);
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>("[data-swarm-setting] input")?.checked === true && !document.querySelector("[data-telemetry-settings] [role=alert]"));
+          await page.waitForFunction(() => document.querySelector("[data-swarm-setting] [role=switch]")?.getAttribute("aria-checked") === "true" && !document.querySelector("[data-telemetry-settings] [role=alert]"));
           expect(receiving).toBe(true);
           await page.reload();
           await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().waitFor();
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
           await toggle.waitFor(); expect(await toggle.isChecked()).toBe(true);
           await page.goto(`${server.base}?scenario=memory-profile&rolememory=1`);
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-          const swarm = page.locator('[data-rules-swarm="swarm:builder"]');
+          /* The swarm level is a row of its own, after the role's other rows; its pane is read only. */
+          await page.locator('[data-profile-level="swarm:builder"]').waitFor();
+          const order = await page.locator("[data-profile-level]").evaluateAll(rows => { const scopes = rows.map(row => row.getAttribute("data-profile-level")); const at = scopes.indexOf("swarm:builder"); return at > scopes.indexOf("role:*:builder") && at > scopes.indexOf("role:garden:builder"); });
+          expect(order).toBe(true);
+          await page.locator('[data-profile-level="swarm:builder"]').click();
+          const swarm = page.locator('[data-rules-section="swarm"]');
           await swarm.waitFor(); await swarm.scrollIntoViewIfNeeded();
           expect(await swarm.innerText()).toContain(publicRule.rule);
+          expect(await swarm.innerText()).toContain(translate(lang, "roleMemory.swarmPublic"));
           expect(await swarm.locator("[data-learned-rule-delete]").count()).toBe(0);
-          const order = await page.locator('[data-rules-section="role"]').evaluate(element => {
-            const local = element.querySelector("[data-rules-every-project]")!, shared = element.querySelector("[data-rules-swarm]")!;
-            return !!(local.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING);
-          });
-          expect(order).toBe(true);
           await page.screenshot({ path: path.join(out, `rules-${tag}.png`) });
           expect(pageErrors).toEqual([]);
-          readings.push({ lang, theme, width, ...geometry, refusedVisible, order, readOnly: true, openingScroll: "dialog starts at top; swarm setting scrolled into view", rulesScroll: "All rules; swarm section scrolled into view" });
+          readings.push({ lang, theme, width, ...geometry, refusedVisible, order, readOnly: true, openingScroll: "dialog starts at top; swarm setting scrolled into view", rulesScroll: "swarm level selected; its pane at the top" });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/swarm-rules", { recursive: true });
@@ -1603,7 +3993,7 @@ describe("memory profile", () => {
   browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("CLI timings reach the visible page", async () => {
     // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
     const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView };
-    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile"); fs.mkdirSync(out, { recursive: true });
     const rows = new Map<string, ProfileRow>();
     const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: prepareProfileCaller });
     const server = await serveEvidenceFixture(out, undefined, {
@@ -1649,7 +4039,7 @@ describe("memory profile", () => {
     } finally { await browser.close(); server.stop(); }
   });
   browserTest("summary, slices and states render at desktop and phone widths in both locales and schemes", async () => {
-    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile"); fs.mkdirSync(out, { recursive: true });
     const rules = sampleMemory();
     const rows = new Map<string, ProfileRow>();
     let calls = 0;
@@ -1699,25 +4089,29 @@ describe("memory profile", () => {
           const geometry = await page.evaluate(() => {
             const profile = document.querySelector<HTMLElement>("[data-memory-profile]")!;
             const window = document.querySelector<HTMLElement>("[data-rules-window]")!;
-            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] > h3")!;
+            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] h3")!;
             const summarize = profile.querySelector<HTMLElement>("[data-profile-summarize]")!;
-            const headlineRect = headline.getBoundingClientRect();
-            const card = headline.parentElement!.getBoundingClientRect();
-            const chipHeights = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill]")].map(chip => Math.round(chip.getBoundingClientRect().height));
+            const headlineRect = headline.getBoundingClientRect(), column = profile.getBoundingClientRect();
             const summarizeRect = summarize.getBoundingClientRect();
-            const pills = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill] > span")];
-            return { overflow: profile.scrollWidth - profile.clientWidth, fullWidthHeadline: Math.abs(headlineRect.left - (card.left + 17)) <= 1 && Math.abs(headlineRect.right - (card.right - 17)) <= 1, maxChipHeight: Math.max(...chipHeights), left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
-              headlineButtonOverlap: headlineRect.left < summarizeRect.right && headlineRect.right > summarizeRect.left && headlineRect.top < summarizeRect.bottom && headlineRect.bottom > summarizeRect.top,
-              truncatedPills: pills.filter(pill => pill.scrollWidth > pill.clientWidth).length, pills: pills.map(pill => ({ width: pill.getBoundingClientRect().width, maxWidth: getComputedStyle(pill).maxWidth })) };
+            return { overflow: profile.scrollWidth - profile.clientWidth, headlineWithinColumn: headlineRect.left >= column.left && headlineRect.right <= column.right, left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
+              headlineButtonOverlap: headlineRect.left < summarizeRect.right && headlineRect.right > summarizeRect.left && headlineRect.top < summarizeRect.bottom && headlineRect.bottom > summarizeRect.top };
           });
           expect(geometry.overflow).toBeLessThanOrEqual(1); expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
           expect(geometry.headlineButtonOverlap).toBe(false);
-          expect(geometry.fullWidthHeadline).toBe(true);
-          expect(geometry.maxChipHeight).toBeLessThanOrEqual(30);
-          expect(geometry.truncatedPills).toBeGreaterThan(0);
-          readings.push({ width, scheme, lang, geometry });
-          await page.locator("[data-profile-slice] button").last().scrollIntoViewIfNeeded();
-          await page.locator("[data-profile-slice] button").last().click();
+          expect(geometry.headlineWithinColumn).toBe(true);
+          /* A level's pills live under its subtitle in the pane; the first level opens beside the list, or behind a row on a phone. */
+          if (width === 390) await page.locator("[data-profile-level]").first().click();
+          await page.locator("[data-profile-pill]").first().waitFor();
+          const pills = await page.evaluate(() => {
+            const spans = [...document.querySelectorAll<HTMLElement>("[data-level-pane] [data-profile-pill] > span")];
+            return { maxChipHeight: Math.max(...[...document.querySelectorAll<HTMLElement>("[data-level-pane] [data-profile-pill]")].map(chip => Math.round(chip.getBoundingClientRect().height))), truncated: spans.filter(span => span.scrollWidth > span.clientWidth).length };
+          });
+          expect(pills.maxChipHeight).toBeLessThanOrEqual(30);
+          expect(pills.truncated).toBeGreaterThan(0);
+          readings.push({ width, scheme, lang, geometry, pills });
+          if (width === 390) await page.locator("[data-level-back]").click();
+          await page.locator("[data-profile-level]").last().scrollIntoViewIfNeeded();
+          await page.locator("[data-profile-level]").last().click();
           await page.locator("[data-rules-section]").waitFor();
           await page.screenshot({ path: path.join(out, `rules-${width}-${scheme}-${lang}.png`) });
           expect(pageErrors).toEqual([]);
@@ -1745,8 +4139,8 @@ describe("memory profile", () => {
 });
 
 describe("memory profile window: one top, whole rows, level order, named topic", () => {
-  browserTest("the window top and header hold across Profile and All rules, no rule row is cut, levels keep the All rules order, a topic drill names its topic", async () => {
-    const out = path.resolve(".artifacts/memory-profile-window"); fs.mkdirSync(out, { recursive: true });
+  browserTest("the window top, header and height hold across levels, no rule row is cut and nothing inside a pane scrolls, levels keep their order, a topic names itself once", async () => {
+    const out = memoryOut("memory-profile-window"); fs.mkdirSync(out, { recursive: true });
     const rules = sampleMemory();
     /* The store lists every-project first; the page must put this project's level ahead of it. */
     rules.scopes = [rules.scopes[1]!, rules.scopes[0]!, ...rules.scopes.slice(2)];
@@ -1800,33 +4194,41 @@ describe("memory profile window: one top, whole rows, level order, named topic",
             seen.push({ state: next, top: profile.top, header: profile.header });
             await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-${next}.png`) });
             if (next === "ready") {
-              const names = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-profile-slice") + ":" + node.querySelector("p, h4")!.textContent));
+              /* The levels keep the order the rules page used, whatever order the store lists them in. */
+              const order = await page.locator("[data-profile-level]").evaluateAll(rows => rows.map(row => row.getAttribute("data-profile-level")));
+              expect(order).toEqual(["role:garden:builder", "role:*:builder", "project:garden", "machine"]);
+              const names = await page.locator("[data-profile-level]").evaluateAll(rows => rows.map(row => row.querySelector("span span")!.textContent ?? ""));
               expect(names[0]).toContain(translate(lang, "memoryProfile.thisProject")); expect(names[1]).toContain(translate(lang, "memoryProfile.everyProject"));
-              expect(names.slice(2).map(name => name.split(":")[0])).toEqual(["project", "machine"]);
-              await page.locator("[data-profile-pill], [data-memory-profile] section > div button").first().scrollIntoViewIfNeeded();
-              await page.getByText(lang === "uk" ? "Ізольовані тести" : "Isolated tests", { exact: false }).first().click();
-              const heading = await page.locator("[data-rules-section] h3").first().innerText();
+              /* A topic names itself once, over one section per level. */
+              await page.locator('[data-profile-topic="0"]').scrollIntoViewIfNeeded();
+              await page.locator('[data-profile-topic="0"]').click();
+              const heading = await page.locator('[data-level-pane="topic"] h3').first().innerText();
               expect(heading).toBe(lang === "uk" ? "Ізольовані тести" : "Isolated tests");
+              expect(await page.locator('[data-level-pane="topic"]').innerText()).toContain(heading);
+              expect((await page.locator('[data-level-pane="topic"]').innerText()).split(heading).length - 1).toBe(1);
               await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-topic.png`) });
-              await page.getByRole("button", { name: new RegExp(translate(lang, "memoryProfile.back")) }).click();
+              if (phone) await page.locator("[data-level-back]").click();
             }
-            await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-            await page.locator("[data-rules-section]").first().waitFor();
+            /* A level's rules: one pane beside the list, or one screen behind a row. */
+            await page.locator("[data-profile-level]").first().click();
+            await page.locator("[data-level-pane] [data-rules-section]").waitFor();
             const rulesPage = await measureWindow(page);
-            seen.push({ state: `${next}:rules`, top: rulesPage.top, header: rulesPage.header });
+            seen.push({ state: `${next}:level`, top: rulesPage.top, header: rulesPage.header });
             if (!phone) {
-              expect(rulesPage.top).toBe(profile.top); expect(rulesPage.header).toBe(profile.header);
-              await page.locator("[data-learned-rule]").first().locator("button").first().click();
-              await page.locator("[data-rule-versions] summary").first().click();
-              /* With a rule and its earlier text open, each card shows its rows whole from the top: none starts above or ends below the card's edge. */
-              const sliced = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rules-section] > div")].flatMap(scroller => {
-                scroller.scrollTop = 0;
-                const band = scroller.getBoundingClientRect();
-                return [...scroller.querySelectorAll<HTMLElement>("[data-learned-rule]")].filter(row => { const r = row.getBoundingClientRect(); return r.top < band.top - 1 || (r.top < band.bottom && r.bottom > band.bottom + 1 && scroller.scrollHeight <= scroller.clientHeight + 1); }).map(row => row.getAttribute("data-learned-rule"));
-              }));
-              expect(sliced).toEqual([]);
+              /* Choosing a level moves none of the window's edges. */
+              expect(rulesPage.top).toBe(profile.top); expect(rulesPage.header).toBe(profile.header); expect(rulesPage.bottom).toBe(profile.bottom);
             }
-            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules-${next}.png`) });
+            await page.locator("[data-learned-rule]").first().locator("button").first().click();
+            await page.locator("[data-rule-versions] summary").first().click();
+            /* With a rule and its earlier text open, the pane shows its rows whole from the top, and nothing inside it scrolls on its own. */
+            const sliced = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-level-pane]")].flatMap(scroller => {
+              scroller.scrollTop = 0;
+              const band = scroller.getBoundingClientRect();
+              const nested = [...scroller.querySelectorAll<HTMLElement>("*")].filter(node => /auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1).map(node => `nested:${node.tagName}`);
+              return [...nested, ...[...scroller.querySelectorAll<HTMLElement>("[data-learned-rule]")].filter(row => { const r = row.getBoundingClientRect(); return r.top < band.top - 1 || (r.top < band.bottom && r.bottom > band.bottom + 1 && scroller.scrollHeight <= scroller.clientHeight + 1); }).map(row => row.getAttribute("data-learned-rule")!)];
+            }));
+            expect(sliced).toEqual([]);
+            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-level-${next}.png`) });
             expect(pageErrors).toEqual([]);
           } finally { await context.close(); }
         }
@@ -1854,8 +4256,106 @@ function richMemory(): RoleMemoryProjectView {
 }
 
 describe("memory profile window: opening under slow data", () => {
+  browserTest("a cached profile is readable while the first full rules response is still held", async () => {
+    const out = memoryOut("memory-profile-cold-open"); fs.mkdirSync(out, { recursive: true });
+    const rules = richMemory();
+    let releaseRules!: () => void;
+    let gate = Promise.resolve();
+    let rulesAnswered = 0, profileReads = 0, posts = 0;
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async () => { await gate; rulesAnswered++; return Response.json(rules); },
+      "/api/role-memory/profile": (request: Request) => {
+        if (request.method !== "GET") { posts++; return Response.json({}, { status: 405 }); }
+        profileReads++;
+        const lang = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        const view = service.read("garden", lang);
+        view.overall = { scope: "overall", createdAt: "2026-01-01T10:00:00Z", durationMs: 1, model: "haiku", promptVersion: 1, stale: false,
+          answer: { headline: lang === "uk" ? "Збережений профіль проєкту" : "Saved project overview", text: lang === "uk" ? "Готовий опис доступний, поки завантажуються правила." : "The saved overview is available while the rules load.",
+            topics: [{ title: "Saved rule topic", text: "A known rule.", ruleIds: [rules.scopes.flatMap(scope => scope.active)[0]!.id] }] } };
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const [width, scheme, lang] of [[1440, "dark", "uk"], [390, "light", "en"]] as const) {
+        rulesAnswered = profileReads = posts = 0; gate = new Promise<void>(resolve => { releaseRules = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator("[data-profile-ready]").waitFor({ timeout: 5000 });
+          expect(rulesAnswered).toBe(0); expect(profileReads).toBe(1);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(0);
+          const topic = page.getByRole("button", { name: /Saved rule topic/ });
+          expect(await topic.isDisabled()).toBe(true);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-before-rules.png`) });
+          /* The levels and the topic are held with the rules; the window says why. */
+          await page.locator("[data-rules-window-loading]").waitFor();
+          expect(await page.locator("[data-profile-level]").evaluateAll(rows => rows.length > 0 && rows.every(row => (row as HTMLButtonElement).disabled))).toBe(true);
+          expect(await page.locator("[data-level-pane]").count()).toBe(0);
+          releaseRules();
+          await page.waitForFunction(() => document.querySelector("[data-profile-level]") && !document.querySelector("[data-profile-level]:disabled"));
+          expect(await topic.isDisabled()).toBe(false);
+          expect(await page.locator("[data-profile-summarize]").count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-after-rules.png`) });
+          if (width === 390) await page.locator("[data-profile-level]").first().click();
+          await page.locator("[data-level-pane] [data-rules-section]").waitFor();
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-level.png`) });
+          expect(posts).toBe(0); expect(pageErrors).toEqual([]);
+        } finally { releaseRules(); await context.close(); }
+      }
+    } finally { releaseRules?.(); await browser.close(); await server.stop(); }
+  }, 60_000);
+
+  browserTest("the first slow rules answer draws the list and the selected level after a poll tick", async () => {
+    const out = memoryOut("memory-profile-slow-first"); fs.mkdirSync(out, { recursive: true });
+    const rules = richMemory();
+    let answeredFirst!: () => void;
+    let began!: () => void;
+    let started = Promise.resolve();
+    let reads = 0, posts = 0;
+    const pending: Array<() => void> = [];
+    const service = createProfileService({ rules: () => structuredClone(rules), read: () => null, write: () => {}, model: "haiku", prepare: async () => async () => ({ answer: sampleAnswer(false), model: "haiku" }) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async () => {
+        reads++;
+        const wait = new Promise<void>(resolve => { pending.push(resolve); if (reads === 1) answeredFirst = resolve; });
+        began(); await wait; return Response.json(rules);
+      },
+      "/api/role-memory/profile": (request: Request) => {
+        if (request.method !== "GET") { posts++; return Response.json({}, { status: 405 }); }
+        return Response.json(service.read("garden", new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en"));
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const [width, scheme, lang] of [[1440, "dark", "uk"], [390, "light", "en"]] as const) {
+        reads = 0; posts = 0; started = new Promise<void>(resolve => { began = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.clock.install({ time: new Date("2026-01-02T12:00:00.000Z") });
+          await page.goto(`${server.base}?scenario=memory-profile&rolememory=1`);
+          await started;
+          await page.locator("[data-rules-window-loading]").waitFor();
+          await page.clock.fastForward(16_000);
+          answeredFirst();
+          await page.locator("[data-memory-profile]").waitFor({ timeout: 5000 });
+          await page.locator('[data-memory-profile][aria-busy="false"]').waitFor({ timeout: 5000 });
+          expect(reads).toBe(1);
+          expect(await page.locator("[data-rules-window-loading]").count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile.png`) });
+          if (width === 390) await page.locator("[data-profile-level]").first().click();
+          await page.locator("[data-level-pane] [data-rules-section]").first().waitFor();
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-rules.png`) });
+          expect(posts).toBe(0); expect(pageErrors).toEqual([]);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        } finally { for (const release of pending.splice(0)) release(); await context.close(); }
+      }
+    } finally { for (const release of pending.splice(0)) release(); await browser.close(); await server.stop(); }
+  }, 60_000);
+
   browserTest("opened from the menu row with the rules already read, the body draws before the held rules and profile answers, one profile request goes out and Summarize waits for its answer, with each role's costume beside its name in every state", async () => {
-    const out = path.resolve(".artifacts/memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
     let rulesReads = 0, rulesAnswered = 0, profileAnswered = 0;
     const profileReads: string[] = [];
@@ -1895,7 +4395,7 @@ describe("memory profile window: opening under slow data", () => {
           release();
           await page.locator("[data-profile-summarize]").waitFor();
           expect(profileReads).toEqual(["GET"]);
-          const slices = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-profile-slice"), label: node.querySelector("h4, p")!.textContent ?? "", costume: node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null })));
+          const slices = await page.locator("[data-profile-level]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-profile-level")!.split(":")[0]!, label: node.querySelector("span span")!.textContent ?? "", costume: node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null })));
           for (const slice of slices) expect(slice.costume !== null).toBe(slice.kind === "role" || slice.kind === "swarm");
           /* Repeated roles across scopes each wear their own costume. */
           const byRole = slices.filter(slice => slice.kind === "role" || slice.kind === "swarm").map(slice => slice.costume);
@@ -1903,13 +4403,17 @@ describe("memory profile window: opening under slow data", () => {
           for (const id of ["merger", "orchestrator"]) expect(byRole.filter(costume => costume === id).length).toBe(2);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
           await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-loaded.png`) });
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-          await page.locator("[data-rules-section]").first().waitFor();
-          /* The curator's history summary and each pass wear the curator; the swarm heading wears its role. */
+          /* A level opens beside the list, or on its own screen on a phone. */
+          const openLevel = async (scope: string) => {
+            if (await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
+            await page.locator(`[data-profile-level="${scope}"]`).click();
+            await page.locator("[data-level-pane] [data-rules-section]").first().waitFor();
+          };
+          await openLevel("role:garden:builder");
+          /* The curator's history summary and each pass wear the curator. */
           await page.locator("[data-curation-history] summary").click();
           expect(await costumes(page, "[data-curation-history] summary")).toEqual(["curator"]);
           expect(await costumes(page, "[data-curation-pass]")).toEqual(["curator", "curator"]);
-          expect(await costumes(page, "[data-rules-swarm]")).toEqual(["builder"]);
           for (const row of await page.locator("[data-learned-rule] button[aria-expanded]").all()) await row.click();
           for (const summary of await page.locator("[data-rule-versions] summary").all()) await summary.click();
           const provenance = await page.locator("[data-rule-provenance]").evaluateAll(nodes => nodes.flatMap(node => [...node.querySelectorAll("img[data-role-avatar]")].map(img => img.getAttribute("data-role-avatar"))));
@@ -1918,12 +4422,397 @@ describe("memory profile window: opening under slow data", () => {
           expect(provenance).toEqual(expect.arrayContaining(["architect", "curator"]));
           expect(earlierLines.sort()).toEqual(["curator", "merger"]);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules.png`) });
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-level.png`) });
+          /* The swarm heading wears its role. */
+          await openLevel("swarm:builder");
+          expect(await costumes(page, '[data-rules-section="swarm"] h3')).toEqual(["builder"]);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-swarm.png`) });
           expect(pageErrors).toEqual([]);
         } finally { release(); await context.close(); }
       }
     } finally { await browser.close(); server.stop(); }
   });
+});
+
+/* S7: the memory profile window as variant 5 draws it, the levels on the left and the chosen level's rules on the right, on the real window and
+   the real components. Each state is rendered at desktop and phone widths in both languages and themes; every frame is read by `measureS7` and
+   written to manifest.json beside the frames. */
+type S7Data = "rich" | "many" | "empty" | "paused-source" | "paused-override";
+type S7Profile = "ready" | "none" | "running" | "error" | "stale" | "reading";
+type S7State = {
+  id: string; data?: S7Data; profile?: S7Profile; focus?: string; coldRules?: boolean; endScroll?: boolean; edge?: boolean; wide?: boolean;
+  /* Elements that name the state: each is whole inside the window and inside its scroller on the first screen. `last:` takes the last match. */
+  define: (phone: boolean) => string[];
+  act?: (page: Page, helpers: { phone: boolean; openLevel: (scope: string) => Promise<void> }) => Promise<void>;
+  topicIds?: string[];
+};
+const S7_BUILDER = "role:garden:builder", S7_EVERY = "role:*:builder", S7_REVIEWER = "role:garden:reviewer", S7_ARCHITECT = "role:garden:architect", S7_SWARM = "swarm:builder", S7_PROJECT = "project:garden";
+const S7_TOPIC_IDS = ["b-a", "p-1"];
+const HEADLINES: Record<string, [string, string]> = {
+  [S7_BUILDER]: ["Builders prove each change with a named check", "Білдери доводять кожну зміну названою перевіркою"], [S7_EVERY]: ["Habits that hold in every repository: name the check, keep the evidence beside the finding, and say which readers no check reached", "Звички, що працюють у кожному репозиторії: назвати перевірку, тримати докази поруч із зауваженням і сказати, яких читачів жодна перевірка не охопила"],
+  [S7_REVIEWER]: ["Reviewers hold the evidence to one bar", "Рев’юери тримають докази на одній планці"], [S7_SWARM]: ["Public guidance shipped with the product", "Публічні поради, що йдуть разом із продуктом"],
+  [S7_PROJECT]: ["How this project is tested", "Як тестують цей проєкт"], machine: ["How this machine runs checks", "Як ця машина запускає перевірки"],
+};
+const scrollPaneToRow = (page: Page, row: "middle" | "end") => page.evaluate((target) => {
+  const pane = document.querySelector<HTMLElement>("[data-level-pane]")!;
+  if (target === "end") { pane.scrollTop = pane.scrollHeight; return; }
+  const rows = [...pane.querySelectorAll<HTMLElement>("[data-learned-rule]")];
+  pane.scrollTop += rows[Math.floor(rows.length / 2)]!.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+}, row);
+const S7_STATES: S7State[] = [
+  { id: "default", edge: true, wide: true, define: phone => phone ? ["[data-memory-profile] [data-profile-ready] h3", `[data-profile-level="${S7_BUILDER}"]`] : ["[data-memory-profile] [data-profile-ready] h3", "[data-level-pane] h3", "[data-level-pane] [data-rules-count]"] },
+  { id: "level", define: () => ["[data-level-pane] h3", "[data-level-pane] [data-rules-count]"], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); } },
+  { id: "earlier", wide: true, define: () => ['[data-rule-versions="b-export-format"][open] summary', "[data-rule-revert]"], act: async (page, { openLevel }) => {
+    await openLevel(S7_BUILDER);
+    await page.locator('[data-learned-rule="b-export-format"] > div > button').first().click();
+    await page.locator('[data-rule-versions="b-export-format"] summary').click();
+  } },
+  { id: "archived", wide: true, define: () => ["[data-rules-history]", '[data-left-rule="r-merged"] [data-rule-counterpart]', '[data-left-rule-restore="r-budget"]'], act: async (page, { openLevel }) => {
+    await openLevel(S7_REVIEWER);
+    await page.locator("[data-rules-history]").click();
+    await page.locator("[data-left-rule]").nth(3).waitFor();
+    await page.evaluate(() => { const pane = document.querySelector<HTMLElement>("[data-level-pane]")!; pane.scrollTop += document.querySelector("[data-rules-history]")!.getBoundingClientRect().top - pane.getBoundingClientRect().top; });
+  } },
+  { id: "archived-only", define: () => ["[data-level-pane] h3", "[data-rules-history]"], act: async (page, { openLevel }) => { await openLevel(S7_ARCHITECT); } },
+  { id: "empty-level", endScroll: true, define: () => ["[data-level-pane] h3", "[data-level-pane] p"], act: async (page, { openLevel }) => { await openLevel("machine"); } },
+  { id: "long", edge: true, define: () => ['[data-learned-rule="b-long"]', '[data-learned-rule="b-path"]'], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); } },
+  { id: "long-open", edge: true, define: () => ['[data-learned-rule="b-long"][data-open]', '[data-learned-rule="b-path"][data-open]'], act: async (page, { openLevel }) => {
+    await openLevel(S7_BUILDER);
+    for (const id of ["b-long", "b-path"]) await page.locator(`[data-learned-rule="${id}"] > div > button`).first().click();
+  } },
+  { id: "many-rest", data: "many", wide: true, define: phone => phone ? ["[data-profile-ready] h3", `[data-profile-level="${S7_BUILDER}"]`] : ["[data-level-pane] h3", "[data-level-pane] [data-rules-count]"] },
+  { id: "many-middle", data: "many", define: () => ["[data-level-pane] ol > li:nth-child(21)"], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); await scrollPaneToRow(page, "middle"); } },
+  { id: "many-end", data: "many", endScroll: true, define: () => ["last:[data-level-pane] ol > li"], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); await scrollPaneToRow(page, "end"); } },
+  { id: "many-list-end", data: "many", endScroll: true, define: () => ["last:[data-memory-profile] [data-profile-level]"], act: async (page) => {
+    await page.evaluate(() => { const list = document.querySelector<HTMLElement>("[data-memory-profile]")!; list.scrollTop = list.scrollHeight; });
+  } },
+  { id: "topic", topicIds: S7_TOPIC_IDS, define: () => ['[data-level-pane="topic"] h3', '[data-level-pane="topic"] [data-rules-section]'], act: async (page) => { await page.locator('[data-profile-topic="0"]').click(); await page.locator('[data-level-pane="topic"]').waitFor(); await page.evaluate(() => { for (const scroller of document.querySelectorAll<HTMLElement>("[data-memory-profile], [data-level-pane]")) scroller.scrollTop = 0; }); } },
+  { id: "focus", focus: "b-export-format", define: () => ['[data-learned-rule="b-export-format"][data-open][data-focused]'] },
+  { id: "focus-departed", focus: "r-merged", define: () => ['[data-left-rule="r-merged"][data-focused]', '[data-rules-history][aria-expanded="true"]'] },
+  { id: "swarm", define: () => ["[data-level-pane] h3", '[data-learned-rule="sw-1"]'], act: async (page, { openLevel }) => { await openLevel(S7_SWARM); } },
+  { id: "undo", define: () => ["[data-rules-undo]", "[data-rules-undo-button]"], act: async (page, { openLevel }) => {
+    await openLevel(S7_BUILDER);
+    await page.locator('[data-learned-rule-delete="b-a"]').click();
+    await page.locator("[data-rules-undo]").waitFor();
+  } },
+  { id: "profile-reading", profile: "reading", define: () => ["[data-memory-profile] h3[role=status]"] },
+  { id: "profile-none", profile: "none", define: () => ["[data-memory-profile] h3", "[data-profile-summarize]"] },
+  { id: "profile-running", profile: "running", define: () => ["[data-memory-profile] h3", "p[role=status]"] },
+  { id: "profile-error", profile: "error", define: () => ["[data-memory-profile] [role=alert]", "[data-profile-summarize]"] },
+  { id: "profile-stale", profile: "stale", define: () => ["[data-profile-stale]", "[data-profile-summarize]"] },
+  { id: "profile-empty", data: "empty", define: () => ["[data-memory-profile] h3", `[data-profile-level="${S7_PROJECT}"]`] },
+  { id: "profile-paused-source", data: "paused-source", define: () => ["[data-rules-window-off]", "[data-memory-profile] h3"] },
+  { id: "profile-paused-override", data: "paused-override", define: () => ["[data-rules-window-off]", "[data-memory-profile] h3"] },
+  { id: "profile-cold", coldRules: true, define: () => ["[data-rules-window-loading]", "[data-profile-ready] h3", "[data-profile-level]"] },
+];
+
+/** Reads one frame: every violation the variant's gates name, as short strings. */
+const measureS7 = (page: Page, args: { phone: boolean; scopes: Record<string, { active: string[]; left: string[] }>; total: number; topicIds?: string[]; endScroll: boolean; cold: boolean; expectCurrent: boolean }) => page.evaluate((args) => {
+  const out: string[] = [];
+  const checked = { texts: 0, scrollers: 0, rules: 0, removes: 0, rows: 0, levelGaps: 0, departedTone: 0, emptySaid: 0, insets: 0 };
+  const win = document.querySelector<HTMLElement>("[data-rules-window]")!;
+  const box = win.getBoundingClientRect();
+  const clips = (element: Element) => { const found: HTMLElement[] = []; for (let node = element.parentElement; node; node = node.parentElement) if (getComputedStyle(node).overflowX !== "visible") found.push(node); return found; };
+  /* Text cut sideways by a clipping ancestor or the viewport, except where the text is drawn with an ellipsis. */
+  const walker = document.createTreeWalker(win, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const parent = node.parentElement, text = (node.textContent ?? "").trim();
+    if (!parent || !text || parent.closest("svg") || getComputedStyle(parent).textOverflow === "ellipsis" || parent.closest("[class*=truncate]")) continue;
+    const range = document.createRange(); range.selectNodeContents(node);
+    checked.texts++;
+    const limits = [...clips(parent).map(ancestor => ancestor.getBoundingClientRect()), { left: 0, right: innerWidth }];
+    for (const rect of range.getClientRects()) if (rect.width > 1 && limits.some(limit => rect.left < limit.left - 1 || rect.right > limit.right + 1)) { out.push(`cut:${text.slice(0, 30)}`); break; }
+  }
+  const scrollers = [...win.querySelectorAll<HTMLElement>("[data-memory-profile], [data-level-pane]")];
+  checked.scrollers = scrollers.length;
+  /* A word cut through by the top of its scroller. */
+  if (!args.endScroll) for (const scroller of scrollers) {
+    const band = scroller.getBoundingClientRect(), texts = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+      if (!(node.textContent ?? "").trim() || node.parentElement?.closest("svg")) continue;
+      const range = document.createRange(); range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.height > 1 && rect.width > 1 && rect.top < band.top - 1 && rect.bottom > band.top + 1) { out.push(`cut-top:${(node.textContent ?? "").trim().slice(0, 24)}`); break; }
+    }
+  }
+  if (!args.endScroll) for (const scroller of scrollers) {
+    const band = scroller.getBoundingClientRect();
+    for (const row of scroller.querySelectorAll<HTMLElement>("[data-learned-rule], [data-left-rule], [data-profile-level], [data-profile-topic], [data-rules-undo]")) {
+      const rect = row.getBoundingClientRect();
+      if (rect.height && rect.top < band.top - 1 && rect.bottom > band.top + 1) out.push(`slice:${row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule") ?? row.getAttribute("data-profile-level") ?? "row"}`);
+    }
+  }
+  const seen = new Set<string>();
+  for (const row of win.querySelectorAll<HTMLElement>("[data-learned-rule]")) {
+    const id = row.getAttribute("data-learned-rule")!;
+    checked.rules++;
+    const text = row.querySelector("button > span")?.textContent ?? "";
+    if (seen.has(text)) out.push(`repeat:${id}`); seen.add(text);
+    const remove = row.querySelector("[data-learned-rule-delete]"), label = row.querySelector("button > span");
+    if (!remove || !label) continue;
+    const range = document.createRange(); range.selectNodeContents(label);
+    const line = range.getClientRects()[0], at = remove.getBoundingClientRect();
+    checked.removes++;
+    if (line && Math.abs(at.top + at.height / 2 - (line.top + line.height / 2)) > 2) out.push(`x:${id}`);
+  }
+  /* A closed rule keeps to two lines, and an archived one too: the clamp is the closed row's defining element in the `long` state. */
+  for (const [selector, label, lineHeight] of [["[data-learned-rule]:not([data-open])", "button > span", 17], ["[data-left-rule]", ":scope > span > span", 16]] as const) {
+    for (const row of win.querySelectorAll<HTMLElement>(selector)) {
+      const text = row.querySelector<HTMLElement>(label);
+      if (!text) continue;
+      const lines = Math.round(text.getBoundingClientRect().height / lineHeight);
+      if (text.getBoundingClientRect().height > lineHeight * 2 + 1) out.push(`clamp:${row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule")}:${lines}`);
+    }
+  }
+  /* The header's sentence shows whole: no ellipsis, and its text range stays inside the line and clear of the × beside it. */
+  const starts = win.querySelector<HTMLElement>("[data-rules-starts]"), closeBox = win.querySelector<HTMLElement>("[data-rules-window-close]")?.getBoundingClientRect();
+  if (starts) {
+    const range = document.createRange(); range.selectNodeContents(starts);
+    if (getComputedStyle(starts).textOverflow === "ellipsis" || starts.scrollWidth > starts.clientWidth + 1) out.push("starts-cut");
+    for (const line of range.getClientRects()) if (closeBox && line.right > closeBox.left + 0.5 && line.bottom > closeBox.top && line.top < closeBox.bottom) out.push("starts-under-close");
+  }
+  /* A heading that wraps keeps its count on the line of its last word. */
+  for (const heading of win.querySelectorAll<HTMLElement>("[data-rules-section] h3")) {
+    const count = heading.parentElement?.querySelector<HTMLElement>("[data-rules-count]");
+    if (!count) continue;
+    const range = document.createRange(); range.selectNodeContents(heading);
+    const lines = [...range.getClientRects()], last = lines[lines.length - 1]!, at = count.getBoundingClientRect();
+    if (Math.abs(at.left - last.right) > 12 || at.top < last.top - 2 || at.bottom > last.bottom + 2) out.push("count-detached");
+  }
+  /* On the phone, the room between one level row's last line and the next row's label is one, whether the row carries a summary line or not. */
+  if (args.phone) {
+    const rows = [...win.querySelectorAll<HTMLElement>("[data-profile-level]")];
+    const gaps: number[] = [];
+    for (const [index, row] of rows.entries()) {
+      const next = rows[index + 1];
+      if (!next) continue;
+      const lines = [...row.querySelectorAll<HTMLElement>("span.min-w-0 > span")].filter(line => line.textContent?.trim());
+      const label = next.querySelector<HTMLElement>("span.min-w-0 > span");
+      if (!lines.length || !label) continue;
+      const a = document.createRange(), b = document.createRange(); a.selectNodeContents(lines[lines.length - 1]!); b.selectNodeContents(label);
+      const rects = [...a.getClientRects()]; gaps.push(b.getClientRects()[0]!.top - rects[rects.length - 1]!.bottom);
+    }
+    checked.levelGaps = gaps.length;
+    if (gaps.length > 1 && Math.max(...gaps) - Math.min(...gaps) > 2) out.push(`level-gaps:${gaps.map(gap => Math.round(gap)).join(",")}`);
+  }
+  /* A rule that has left and is the one asked about stands out from its neighbours in the history. */
+  const departed = [...win.querySelectorAll<HTMLElement>("[data-left-rule]")], chosen = departed.find(row => row.hasAttribute("data-focused"));
+  if (chosen) {
+    const others = departed.filter(row => row !== chosen).map(row => getComputedStyle(row).backgroundColor);
+    checked.departedTone = others.length;
+    /* The hover tint is what a pointer passing over any row leaves; the chosen row has to read as more than that. */
+    const hover = document.createElement("span"); hover.className = "bg-sunken"; document.body.append(hover);
+    const hoverTone = getComputedStyle(hover).backgroundColor; hover.remove();
+    const tone = getComputedStyle(chosen).backgroundColor;
+    if (others.includes(tone) || tone === hoverTone) out.push("departed-focus-unmarked");
+  }
+  /* A profile with no rules says so once: the pane beside the list stays quiet where the list already says it. */
+  if (!args.phone && args.total === 0) {
+    const said = win.querySelector("[data-memory-profile] h3")?.textContent?.trim().toLowerCase() ?? "";
+    const pane = win.querySelector<HTMLElement>("[data-level-pane]")?.textContent?.toLowerCase().replace(/[.\s]+/g, " ") ?? "";
+    checked.emptySaid = 1;
+    if (said && pane.includes(said.replace(/[.\s]+/g, " ").trim())) out.push("empty-said-twice");
+  }
+  /* A selected level or focused rule lands above its scroller's bottom fade: the fade is the last 28 px of the scroller. */
+  for (const scroller of scrollers) {
+    const band = scroller.getBoundingClientRect();
+    for (const row of scroller.querySelectorAll<HTMLElement>("[aria-current=true], [data-focused]")) {
+      const rect = row.getBoundingClientRect();
+      if (rect.height && rect.bottom > band.bottom - 28 + 1 && rect.top < band.bottom) out.push(`under-fade:${row.getAttribute("data-profile-level") ?? row.getAttribute("data-profile-topic") ?? row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule") ?? "row"}:${Math.round(rect.bottom - (band.bottom - 28))}`);
+    }
+  }
+  /* On the phone the back link, the heading and the first rule's dot start where the curator line does. */
+  if (args.phone) {
+    const edge = (element: Element | null | undefined) => { if (!element) return null; const range = document.createRange(); range.selectNodeContents(element); return range.getClientRects()[0]?.left ?? null; };
+    const reference = win.querySelector("[data-curation-history] summary")?.getBoundingClientRect().left ?? null, rulesPane = win.querySelector<HTMLElement>("[data-level-pane]");
+    if (reference !== null && rulesPane) {
+      const readings: [string, number | null][] = [["back", edge(rulesPane.querySelector("[data-level-back]"))], ["heading", edge(rulesPane.querySelector("h3"))], ["dot", rulesPane.querySelector("[data-learned-rule] > span[aria-hidden]")?.getBoundingClientRect().left ?? null]];
+      checked.insets = readings.length;
+      for (const [name, left] of readings) if (left !== null && Math.abs(left - reference) > 1) out.push(`inset:${name}:${left.toFixed(1)}/${reference.toFixed(1)}`);
+    }
+  }
+  if (document.documentElement.scrollWidth > innerWidth) out.push("page-overflow");
+  const title = document.getElementById("rules-window-title")!, titleBox = title.getBoundingClientRect();
+  if (title.scrollWidth > title.clientWidth + 1 || titleBox.left < 0 || titleBox.right > innerWidth || titleBox.top < 0 || titleBox.bottom > innerHeight) out.push("title");
+  for (const scroller of scrollers) for (const node of scroller.querySelectorAll<HTMLElement>("*")) if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) out.push(`nested:${node.tagName.toLowerCase()}`);
+  const pane = win.querySelector<HTMLElement>("[data-level-pane]"), key = pane?.getAttribute("data-level-pane");
+  if (pane && key && !args.cold) {
+    const held = args.scopes[key];
+    for (const row of pane.querySelectorAll("[data-learned-rule]")) if (!(key === "topic" ? args.topicIds ?? [] : held?.active ?? []).includes(row.getAttribute("data-learned-rule")!)) out.push(`foreign:${row.getAttribute("data-learned-rule")}`);
+    for (const row of pane.querySelectorAll("[data-left-rule]")) if (!(held?.left ?? []).includes(row.getAttribute("data-left-rule")!)) out.push(`foreign-left:${row.getAttribute("data-left-rule")}`);
+  }
+  const rows = [...win.querySelectorAll<HTMLElement>("[data-profile-level]")];
+  checked.rows = rows.length;
+  if (!args.cold && rows.length) {
+    let sum = 0;
+    for (const row of rows) {
+      const scope = row.getAttribute("data-profile-level")!, count = Number(row.querySelector("span.tabular-nums")?.textContent);
+      sum += count;
+      if (count !== args.scopes[scope]?.active.length) out.push(`count:${scope}`);
+      if (key === scope) { const heading = pane?.querySelector("[data-rules-count]"); if (Number(heading?.textContent ?? 0) !== count) out.push(`heading-count:${scope}`); }
+    }
+    if (sum !== args.total) out.push(`total:${sum}/${args.total}`);
+  }
+  if (!args.phone && args.expectCurrent && win.querySelectorAll("[data-memory-profile] [aria-current=true]").length !== 1) out.push("current");
+  if (args.phone) {
+    for (const row of win.querySelectorAll<HTMLElement>("[data-profile-level], [data-profile-topic]")) {
+      if (!row.querySelector("svg")) out.push(`chevron:${row.getAttribute("data-profile-level") ?? row.getAttribute("data-profile-topic")}`);
+      if (row.getBoundingClientRect().height < 44 - 0.5) out.push(`target:${row.getAttribute("data-profile-level") ?? row.getAttribute("data-profile-topic")}`);
+    }
+    const back = win.querySelector<HTMLElement>("[data-level-back]"), heading = pane?.querySelector("h3");
+    if (back && heading) {
+      const a = document.createRange(), b = document.createRange(); a.selectNodeContents(back); b.selectNodeContents(heading);
+      if (Math.abs(a.getClientRects()[0]!.left - b.getClientRects()[0]!.left) > 1) out.push("back-align");
+    }
+  }
+  return { violations: out, checked, top: Math.round(box.top), height: Math.round(box.height), header: Math.round(win.querySelector("header")!.getBoundingClientRect().height) };
+}, args);
+
+describe("memory profile window: levels on the left, rules on the right", () => {
+  browserTest("every state at desktop and phone widths in both languages and themes keeps whole rows, one scroller per pane and the window's edges", async () => {
+    const out = memoryOut("s7-levels"); fs.mkdirSync(out, { recursive: true });
+    const at = "2026-10-11T00:01:00.000Z";
+    const rule = (id: string, text: string, roleId: string | null = "builder", extra: Partial<RuleView> = {}): RuleView => ({ ...sampleRule(id, text), roleId, ...extra });
+    const gone = (id: string, text: string, reason: NonNullable<RuleView["reason"]>, roleId = "reviewer", extra: Partial<RuleView> = {}): RuleView => ({ ...rule(id, text, roleId), state: "archived", reason, ...extra });
+    const scopeOf = (scope: string, active: RuleView[], left: RuleView[] = []): ScopeView => ({ ...sampleScope(scope, active), left });
+    const longText = "Before a change reaches review, name the check that proves it and run that check on the base and on the branch with the same isolation, so that a red result on one side and a green one on the other is a finding and never a guess. Keep both results next to the finding they belong to, record which reader of the stored scope each result covers, and say plainly which readers no check reached. When the change touches a write path, list every producer, consumer, copy and default that reaches it, and name what each of them passes, because a check on the submitted values alone misses the defaults, the copies and the parent paths that carry the same data to the same record by another route.";
+    const pathText = `src/lib/memory/${"a-very-long-directory-name-without-spaces/".repeat(3)}final-file.test.ts`;
+    const earlier = (id: string, text: string, revisedBy: RuleRevisionView) => ({ id, rule: text, why: "An earlier write placed guidance with the wrong readers.", hints: [], createdAt: "2026-01-01", revisedBy });
+    const curation = { lastAt: at, nextAt: null, newLessons: 0, passes: [{ id: "pass-1", state: "succeeded" as const, claimedAt: at, endedAt: at, failure: null, counts: { calls: 1, changed: 2, rewritten: 1, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } }] };
+    const rich = (): RoleMemoryProjectView => ({ project: "garden", enabled: true, curation, scopes: [
+      /* The store lists a level's rules oldest first and the pane shows them newest first, so the rule the frames open is last here. */
+      scopeOf(S7_BUILDER, [
+        rule("b-a", "Run each touched test file by path under isolated state."), rule("b-b", "Read the current scope revision before proposing a stored rewrite."),
+        rule("b-long", longText), rule("b-path", pathText),
+        rule("b-export-format", "Name the export format in the first line of the report.", "builder", { revisedBy: { by: "curator", at }, versions: [earlier("b-export-format-v1", "State the export format in the report.", { by: "curator", at }), earlier("b-export-format-v2", "Mention the export format.", { by: "agent", at, roleId: "reviewer" })] }),
+      ]),
+      scopeOf(S7_EVERY, [rule("be-1", "Keep a fix round to the handed findings."), rule("be-2", "Give a browser started from a stage a short temporary directory.")]),
+      scopeOf(S7_REVIEWER, [rule("r-1", "Judge the 390 px Ukrainian frame first.", "reviewer"), rule("r-2", "Check that a test turns red with the bug put back.", "reviewer")], [
+        gone("r-del", "A rule the operator removed.", "deleted"), gone("r-merged", "A rule that merged into another one.", "deleted", "reviewer", { state: "merged", reason: undefined, mergedInto: "r-1" }),
+        gone("r-task", "A rule that recorded one completed task.", "task-specific", "reviewer", { where: "this project" }), gone("r-budget", "A rule that left when the scope reached its bound.", "budget"),
+      ]),
+      scopeOf(S7_ARCHITECT, [], [gone("a-gone", "A design rule the curator archived.", "stale", "architect")]),
+      { ...scopeOf(S7_SWARM, [rule("sw-1", "Name the file a change reaches before changing it.")]), kind: "swarm", roleId: "builder" },
+      scopeOf(S7_PROJECT, [rule("p-1", "Run the test files you touched by path.", null)], [gone("p-0", "A project rule the curator archived.", "task-specific", "builder")]),
+      scopeOf("machine", []),
+    ] });
+    const ROLES = ["builder", "reviewer", "architect", "merger", "orchestrator", "maintainer", "verifier", "visual-critic", "curator", "deployer"];
+    const many = (): RoleMemoryProjectView => ({ project: "garden", enabled: true, curation, scopes: [
+      ...ROLES.flatMap(roleId => [
+        scopeOf(`role:garden:${roleId}`, roleId === "builder" ? Array.from({ length: 40 }, (_, index) => rule(`m-${index}`, `Rule ${index + 1} of 40: name the check that proves a change before writing the change itself.`)) : [rule(`${roleId}-here`, `A ${roleId} rule for this project.`, roleId)]),
+        scopeOf(`role:*:${roleId}`, [rule(`${roleId}-all`, `A ${roleId} rule for every project.`, roleId)]),
+      ]).map(entry => ({ ...entry, kind: "role" as const, roleId: entry.scope.split(":")[2]! })),
+      scopeOf(S7_PROJECT, [rule("p-1", "Run the test files you touched by path.", null)]), scopeOf("machine", [rule("mc-1", "Give a browser a short temporary directory.", null)]),
+    ] });
+    const empty = (): RoleMemoryProjectView => ({ project: "garden", enabled: true, curation, scopes: [scopeOf(S7_PROJECT, []), scopeOf("machine", [])] });
+    const dataOf = (kind: S7Data): RoleMemoryProjectView => kind === "many" ? many() : kind === "empty" ? empty() : kind === "rich" ? rich() : { ...rich(), enabled: false, ...(kind === "paused-source" ? { pausedBy: "memorySource" as const } : {}) };
+    /* The profile as the service stores it: one overall summary and one per level that holds rules, topics pointing at rules by their place in the basis. */
+    const profileOf = (view: RoleMemoryProjectView, lang: "en" | "uk", kind: S7Profile): MemoryProfileView => {
+      const T = (english: string, ukrainian: string) => lang === "uk" ? ukrainian : english;
+      const active = view.scopes.filter(entry => entry.active.length);
+      const ids = active.flatMap(entry => entry.active.map(item => item.id));
+      const basisOf = (rules: RuleView[]) => rules.map(({ id, changedAt }) => ({ id, changedAt }));
+      const part = (scope: string, basis: RuleView[], headline: string, text: string, topics: { title: string; text?: string; rules: number[] }[]) => ({ scope, model: "sample", promptVersion: PROFILE_PROMPT_VERSION, hash: scope, basis: basisOf(basis), createdAt: at, durationMs: 1, answer: { headline, text, topics } });
+      const place = (...names: string[]) => names.map(name => ids.indexOf(name) + 1).filter(Boolean);
+      const row: ProfileRow = { project: "garden", locale: lang, model: "sample", promptVersion: PROFILE_PROMPT_VERSION, parts: active.length ? [
+        part("overall", active.flatMap(entry => entry.active), T("Agents check before they change", "Агенти перевіряють, перш ніж змінювати"), T("Builders prove each change with a named check, reviewers hold the evidence to the same bar, and every level keeps its rules short and checkable.", "Білдери доводять кожну зміну названою перевіркою, рев’юери тримають докази на тій самій планці, а кожен рівень зберігає короткі й перевірні правила."), [
+          { title: T("Isolated tests", "Ізольовані тести"), text: T("Tests run apart from live state.", "Тести йдуть окремо від живого стану."), rules: place("b-a", "p-1") },
+          { title: T("Review evidence", "Докази для рев’ю"), text: T("A finding keeps the proof beside it.", "Зауваження зберігає доказ поруч."), rules: place("r-1", "r-2", "b-b") },
+          { title: T("Shared wording", "Спільні формулювання"), rules: place("be-1") },
+        ]),
+        ...active.map(entry => { const [headline, headlineUk] = HEADLINES[entry.scope] ?? [`Rules of ${entry.scope}`, `Правила рівня ${entry.scope}`]; return part(entry.scope, entry.active, T(headline, headlineUk), T("What this level keeps, in one short paragraph for the pane's subtitle.", "Що зберігає цей рівень, одним коротким абзацом для підзаголовка панелі."), [{ title: T("A pill topic", "Тема-пігулка"), rules: [1] }]); }),
+      ] : [] };
+      const view2 = profileView({ project: "garden", enabled: view.enabled, scopes: view.scopes }, lang, "sample", row);
+      if (kind === "none") { view2.overall = null; view2.slices.forEach(slice => { slice.summary = null; }); view2.run = null; }
+      if (kind === "running") { view2.overall = null; view2.slices.forEach(slice => { slice.summary = null; }); view2.run = { state: "running", startedAt: at, errors: [] }; }
+      if (kind === "error") view2.run = { state: "failed", startedAt: at, errors: [{ scope: "overall", code: "account" }] };
+      if (kind === "stale") { view2.stale = true; view2.changes = { added: 2, rewritten: 1, removed: 1 }; }
+      return view2;
+    };
+    const mode = { data: "rich" as S7Data, profile: "ready" as S7Profile, lang: "en" as "en" | "uk", rules: rich(), profileGate: Promise.resolve(), rulesGate: Promise.resolve() };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async (request: Request) => {
+        await mode.rulesGate;
+        if (request.method === "POST") {
+          const body = await request.json() as { action: string; ruleId: string };
+          if (body.action === "delete") mode.rules = { ...mode.rules, scopes: mode.rules.scopes.map(entry => { const found = entry.active.find(item => item.id === body.ruleId); return found ? { ...entry, active: entry.active.filter(item => item !== found), left: [{ ...found, state: "archived" as const, reason: "deleted" as const }, ...entry.left] } : entry; }) };
+        }
+        return Response.json(mode.rules);
+      },
+      "/api/role-memory/profile": async (request: Request) => {
+        await mode.profileGate;
+        if (request.method !== "GET") return Response.json({}, { status: 405 });
+        const lang = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        return Response.json(profileOf(mode.rules, lang, mode.profile));
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const frames: unknown[] = [], failures: string[] = [], edges = new Map<string, Set<string>>();
+    const pairs = [["en", "light"], ["en", "dark"], ["uk", "light"], ["uk", "dark"]] as const;
+    try {
+      /* Desktop, 1000 px and phone widths take every state in every pair; the widths between them take the states that carry their own layout, in two pairs. */
+      const plan: { width: number; height: number; pairs: readonly (readonly ["en" | "uk", "light" | "dark"])[]; only?: (state: S7State) => boolean }[] = [
+        { width: 1440, height: 900, pairs }, { width: 390, height: 844, pairs },
+        { width: 1000, height: 700, pairs },
+        { width: 768, height: 800, pairs: [["uk", "light"], ["en", "dark"]], only: state => !!state.edge },
+        { width: 640, height: 800, pairs: [["uk", "light"], ["en", "dark"]], only: state => !!state.edge },
+      ];
+      /* S7_SMOKE=1 renders a handful of states in one pair, to read the gates before the full matrix runs. */
+      const smoke = process.env.S7_SMOKE === "1";
+      /* S7_FRAMES=state@width,… renders only those states at those widths, in every pair the plan gives that width. */
+      const wanted = process.env.S7_FRAMES ? new Set(process.env.S7_FRAMES.split(",")) : null;
+      const smokeStates = ["default", "earlier", "archived", "many-end", "topic", "undo", "profile-reading", "profile-cold"];
+      for (const { width, height, pairs: sets, only } of smoke ? plan.slice(0, 2).map(entry => ({ ...entry, pairs: [["en", "light"]] as const })) : plan) for (const [lang, scheme] of sets) for (const state of S7_STATES.filter(item => (!only || only(item)) && (!wanted || wanted.has(`${item.id}@${width}`)) && (!smoke || smokeStates.includes(item.id)))) {
+        const phone = width === 390;
+        mode.data = state.data ?? "rich"; mode.profile = state.profile ?? "ready"; mode.lang = lang; mode.rules = dataOf(mode.data);
+        let release = () => {};
+        mode.profileGate = Promise.resolve(); mode.rulesGate = Promise.resolve();
+        if (state.profile === "reading") mode.profileGate = new Promise<void>(resolve => { release = resolve; });
+        if (state.coldRules) mode.rulesGate = new Promise<void>(resolve => { release = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1${state.focus ? `&focus=${state.focus}` : ""}`, { width, height }, scheme, lang, "reduce", phone);
+        try {
+          await page.locator("[data-rules-window]").waitFor();
+          if (state.coldRules) await page.locator("[data-rules-window-loading]").waitFor();
+          else if (state.profile === "reading") await page.locator("[data-memory-profile] h3[role=status]").waitFor();
+          /* A phone opened on a rule lands on that level's screen, with no list mounted. */
+          else if (phone && state.focus) await page.locator("[data-level-pane] [data-rules-section]").waitFor();
+          else await page.locator("[data-profile-level]:not(:disabled)").first().waitFor();
+          const openLevel = async (scope: string) => {
+            if (phone && await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
+            await page.locator(`[data-profile-level="${scope}"]`).click();
+            await page.locator(`[data-level-pane="${scope}"]`).waitFor();
+          };
+          await state.act?.(page, { phone, openLevel });
+          await page.waitForTimeout(250);
+          const scopes = Object.fromEntries(mode.rules.scopes.map(entry => [entry.scope, { active: entry.active.map(item => item.id), left: entry.left.map(item => item.id) }]));
+          const read = await measureS7(page, { phone, scopes, total: mode.rules.scopes.reduce((sum, entry) => sum + entry.active.length, 0), topicIds: state.topicIds, endScroll: !!state.endScroll, cold: !!state.coldRules, expectCurrent: !state.coldRules });
+          const defining = await page.evaluate((selectors) => selectors.map(selector => {
+            const last = selector.startsWith("last:"), query = last ? selector.slice(5) : selector;
+            const found = [...document.querySelectorAll<HTMLElement>(query)], element = last ? found.at(-1) : found[0];
+            if (!element) return { selector, whole: false };
+            const rect = element.getBoundingClientRect(), win = document.querySelector("[data-rules-window]")!.getBoundingClientRect();
+            const scroller = element.closest("[data-level-pane], [data-memory-profile]")?.getBoundingClientRect();
+            const within = (outer: { top: number; bottom: number; left: number; right: number }) => rect.top >= outer.top - 1 && rect.bottom <= outer.bottom + 1 && rect.left >= outer.left - 1 && rect.right <= outer.right + 1;
+            return { selector, whole: rect.height > 0 && within(win) && within({ top: 0, bottom: innerHeight, left: 0, right: innerWidth }) && (!scroller || within(scroller)) };
+          }), state.define(phone));
+          const frame = `${state.id}-${width}-${lang}-${scheme}.png`;
+          await page.screenshot({ path: path.join(out, frame) });
+          const issues = [...read.violations, ...defining.filter(item => !item.whole).map(item => `defining:${item.selector}`), ...pageErrors.map(error => `pageerror:${error}`)];
+          /* The modal keeps keyboard focus inside the window. */
+          for (let press = 0; press < 30; press++) await page.keyboard.press("Tab");
+          if (!await page.evaluate(() => !!document.activeElement && !!document.activeElement.closest("[data-rules-window]"))) issues.push("modal");
+          const edge = `${width}`; if (!phone) { (edges.get(edge) ?? edges.set(edge, new Set()).get(edge)!).add(`${read.top}/${read.height}/${read.header}`); }
+          frames.push({ file: frame, state: state.id, width, height, lang, theme: scheme, window: { top: read.top, height: read.height, header: read.header }, checked: read.checked, defining: state.define(phone), violations: issues });
+          if (issues.length) failures.push(`${frame}: ${issues.join(", ")}`);
+        } finally { release(); await context.close(); }
+      }
+      /* One top, one height and one header height at a width, whatever state or level is shown. */
+      for (const [width, readings] of edges) if (readings.size !== 1) failures.push(`window edges differ at ${width}: ${[...readings].join(" | ")}`);
+    } finally {
+      fs.writeFileSync(path.join(out, "manifest.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "memory profile window: levels on the left, rules on the right", states: S7_STATES.map(state => state.id), frames, failures }, null, 2) + "\n");
+      await browser.close(); server.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 3_600_000);
 });
 
 describe("finding recurrence (#2648)", () => {
@@ -2333,6 +5222,94 @@ describe("self-update reload notice", () => {
    The last state arrives while a "Check now" is held: its late answer, and
    then a late refusal of a second check, both carry the old installation and
    neither brings back the old revision, its badge or the Update button. */
+describe("administrator self-update policy", () => {
+  browserTest("administrator notice and hidden controls at 390px and desktop", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "administrator-self-update");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "server"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const at = "2030-01-01T00:00:00.000Z";
+    const revision = { version: "2.0.0", sha: "a".repeat(40), short: "aaaaaaa", date: at };
+    const snapshot = { selfUpdateDisabled: true, mode: "checkout", unsupportedReason: null, installed: revision,
+      serving: { web: revision, runtimeHost: revision }, available: revision, check: idleCheck(), update: idleUpdate(), busy: null,
+      processes: { web: stoppedProcess(), runtimeHost: stoppedProcess() },
+      meta: { branch: "main", remote: "https://github.com/example/fixture.git", checkout: null, pollMinutes: 60, serverTime: at } };
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1440]) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 700 }, colorScheme: theme, reducedMotion: "reduce",
+          ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(({ lang, snapshot }) => {
+            localStorage.setItem("llv_lang", lang);
+            let installed = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true, get: () => installed, set: (Source: typeof EventSource) => {
+              installed = class extends Source {
+                constructor(url: string | URL) {
+                  super(url);
+                  if (String(url).startsWith("/api/self-update/events")) Object.assign(this, {
+                    addEventListener: (type: string, listener: (event: { data: string }) => void) => {
+                      if (type === "state") queueMicrotask(() => listener({ data: JSON.stringify(snapshot) }));
+                    },
+                  });
+                }
+              } as typeof EventSource;
+            } });
+          }, { lang, snapshot });
+          const page = await context.newPage();
+          await page.clock.setFixedTime(new Date(at));
+          const pageErrors: string[] = [];
+          page.on("pageerror", error => pageErrors.push(error.message));
+          await page.goto(server.base);
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          const notice = dialog.locator("[data-section='updates-disabled']");
+          await notice.waitFor();
+          expect(await notice.innerText()).toContain(translate(lang, "selfUpdate.refusal.updates-disabled"));
+          expect(await dialog.locator("[data-action]").count()).toBe(0);
+          const measure = () => notice.evaluate(element => {
+            const texts: { text: string; whole: boolean }[] = [];
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (!node.textContent?.trim()) continue;
+              let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+              for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+              }
+              const range = document.createRange(); range.selectNodeContents(node);
+              texts.push({ text: node.textContent, whole: [...range.getClientRects()].every(r => r.left >= left - 1 && r.right <= right + 1 && r.top >= top - 1 && r.bottom <= bottom + 1) });
+            }
+            const heading = element.querySelector("h2")!.getBoundingClientRect(), body = element.querySelector("p")!.getBoundingClientRect();
+            return { texts, overlap: heading.bottom > body.top, horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          const opening = await measure();
+          expect(opening.texts.every(t => t.whole)).toBe(true); expect(opening.overlap).toBe(false); expect(opening.horizontalOverflow).toBe(false);
+          await dialog.press("PageDown");
+          const paged = await measure();
+          expect(paged.texts.every(t => t.whole)).toBe(true);
+          const frame = `${width}-${lang}-${theme}.png`;
+          await dialog.screenshot({ path: path.join(out, frame) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, height: phone ? 844 : 700, opening, paged, final: await measure(), frame, pageErrors });
+        } finally { await context.close(); }
+      }
+      const sourceDigests = Object.fromEntries(["src/components/selfUpdate/SelfUpdateView.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"]
+        .map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+      const record = { capturedAt: new Date().toISOString(), command: "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'administrator self-update policy' (isolated roots, gate-slot.sh)", sourceDigests, readings };
+      fs.mkdirSync("evidence/administrator-self-update", { recursive: true });
+      fs.writeFileSync("evidence/administrator-self-update/rendered.json", JSON.stringify(record, null, 2) + "\n");
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify(record, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("Updates dialog first state", () => {
   browserTest("pending, error and loaded states and their controls on desktop and phone in en and uk", async () => {
     const out = path.resolve(".artifacts/updates-dialog-first-state");
@@ -4907,13 +7884,18 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
     };
     const shot = (page: Page, side: string, id: string, scheme: Scheme) => page.screenshot({ path: path.join(OUT, `${side}-k5a-${id}-${scheme}.png`) });
 
+    /* «Graph» opens the graph full-screen, in the stages view; the card draws
+       none (docs/design/task-card-no-inline-conversations.md §3). */
+    const GRAPH = ".gsheet .gs-graph";
     const openGraph = async (page: Page, id: string) => {
+      if (await page.locator(".gsheet").count()) {
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => !document.querySelector(".gsheet"));
+      }
       const section = `${card(id)} .pblock`;
       await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "start" }));
-      if (await page.evaluate((selector) => document.querySelector(`${selector} [data-graph-toggle]`)?.getAttribute("aria-pressed") !== "true", section)) {
-        await page.click(`${section} [data-graph-toggle]`);
-      }
-      await page.waitForSelector(`${section} .pnode`, { timeout: 5_000 });
+      await page.click(`${section} [data-graph-toggle]`);
+      await page.waitForSelector(`${GRAPH} .pnode`, { timeout: 5_000 });
       await page.waitForTimeout(250);
     };
 
@@ -4922,7 +7904,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         await production(scheme, `retry graph ${scheme}`, async (page) => {
           /* Binding correction 4: every card starts on the summary. The lane
              row (#2072) draws the summary as its chain of pills with no graph
-             slot, and its toggle puts the graph in the chain's place. */
+             slot, and «Graph» opens the graph full-screen, leaving the card as it was. */
           await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.waitForTimeout(300);
           const view = (selector: string) => page.evaluate((scope) => ({
@@ -4934,12 +7916,12 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           }), selector);
           const fresh = await view(card("t-search"));
           await shot(page, "production", "summary-default", scheme);
-          if (fresh.chain !== 1 || fresh.graphs !== 0 || fresh.nodes !== 0 || fresh.pressed !== "false" || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
+          if (fresh.chain !== 1 || fresh.graphs !== 0 || fresh.nodes !== 0 || fresh.pressed !== null || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
           frames[`summary-default-${scheme}`] = { production: fresh };
           await openGraph(page, "t-search");
           const opened = await view(card("t-search"));
-          if (opened.chain !== 0 || opened.graphs !== 1 || opened.pressed !== "true") failures.push(`retry card graph ${scheme}: the graph did not take the summary's place ${JSON.stringify(opened)}`);
-          const graph = await measureGraph(page, card("t-search"));
+          if (JSON.stringify(opened) !== JSON.stringify(fresh)) failures.push(`retry card graph ${scheme}: the card changed under the graph ${JSON.stringify(opened)}`);
+          const graph = await measureGraph(page, ".gsheet");
           await shot(page, "production", "graph-branch-retry", scheme);
           frames[`graph-branch-retry-${scheme}`] = { production: graph };
           if (!graph) {
@@ -4961,11 +7943,11 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           const wires = graph.edges.map((edge) => `${edge.edge}:${edge.dashed ? "dashed" : "solid"}`).join();
           if (wires !== "implement:pass:review:dashed,review:pass:verify:solid,verify:pass:merge:dashed" || graph.edges.some((edge) => /\bback\b/.test(edge.classes))) failures.push(`retry graph ${scheme}: wires ${JSON.stringify(graph.edges)}`);
           if (JSON.stringify(graph.labels) !== JSON.stringify(["1"])) failures.push(`retry graph ${scheme}: labels ${JSON.stringify(graph.labels)}`);
-          /* The same toggle brings the summary back, all four stages with it. */
-          await page.click(`${card("t-search")} .pblock [data-graph-toggle]`);
-          await page.waitForSelector(`${card("t-search")} .pblock .pb-chain`, { timeout: 5_000 });
+          /* Closing the view leaves the card's summary, all four stages with it. */
+          await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector(".gsheet"));
           const back = await view(card("t-search"));
-          if (back.chain !== 1 || back.graphs !== 0 || back.nodes !== 0 || back.pressed !== "false" || back.chips !== 4) failures.push(`retry card summary again ${scheme}: ${JSON.stringify(back)}`);
+          if (back.chain !== 1 || back.graphs !== 0 || back.nodes !== 0 || back.pressed !== null || back.chips !== 4) failures.push(`retry card summary again ${scheme}: ${JSON.stringify(back)}`);
         });
         await prototype("scrollto=t-search", scheme, `prototype retry graph ${scheme}`, async (page) => {
           await page.locator(`${protoCard("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
@@ -4978,9 +7960,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "two-stage graph", async (page) => {
         await openGraph(page, "t-links");
-        await page.locator(`${card("t-links")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.waitForTimeout(250);
-        const graph = await measureGraph(page, card("t-links"));
+        const graph = await measureGraph(page, ".gsheet");
         await shot(page, "production", "graph-two-stage", "light");
         frames["graph-two-stage"] = { production: graph };
         if (graph?.dir !== "LR" || graph.nodes.some((node) => node.width !== 176 || node.height !== 76)) failures.push(`two-stage graph: ${JSON.stringify(graph)}`);
@@ -4994,8 +7974,6 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "five review rounds", async (page) => {
         await openGraph(page, "t-rounds");
-        await page.locator(`${card("t-rounds")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.waitForTimeout(250);
         const review = await page.evaluate((selector) => {
           const node = document.querySelector<HTMLElement>(`${selector} .pnode[data-stage="review"]`);
           if (!node) return null;
@@ -5005,7 +7983,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
             return { text: chip.textContent?.trim(), right: Math.round(rect.right), top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
           });
           return { dir: node.closest<HTMLElement>(".pgraph")?.dataset.dir ?? null, right: Math.round(box.right), bottom: Math.round(box.bottom), chips };
-        }, card("t-rounds"));
+        }, GRAPH);
         await shot(page, "production", "five-rounds", "light");
         frames["five-rounds"] = { production: review };
         const inside = review && review.chips.every((chip) => chip.right <= review.right - 1 && chip.bottom <= review.bottom);
@@ -5051,10 +8029,10 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
       });
 
       await production("light", "toggle and node", async (page) => {
-        const section = `${card("t-search")} .pblock`;
+        const section = GRAPH;
         await openGraph(page, "t-search");
         await page.click(`${section} .pnode[data-stage="implement"]`);
-        /* The node opens its conversation in the agent window; the window closes before the toggle is reached. */
+        /* The node opens its conversation in the agent window over the view; closing it comes back to the view. */
         await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
         await page.waitForTimeout(300);
         const node = await page.evaluate((selector) => ({
@@ -5064,8 +8042,10 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         await shot(page, "production", "node-reader", "light");
         await page.keyboard.press("Escape");
         await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
-        await page.click(`${section} [data-graph-toggle]`);
-        const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pb-pill`).length }), section);
+        if (!await page.locator(".gsheet").count()) failures.push("node: closing the window left the stages view");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => !document.querySelector(".gsheet"));
+        const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pb-pill`).length }), `${card("t-search")} .pblock`);
         /* The historical helper was adopted last; the node opens and marks Implement's own latest attempt. */
         if (node.pressed !== "true" || node.reader !== "conversation_search-impl-2") failures.push(`node: ${JSON.stringify(node)}`);
         if (summary.nodes !== 0 || summary.chips !== 4) failures.push(`toggle back: ${JSON.stringify(summary)}`);
@@ -5074,7 +8054,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "live edge", async (page) => {
         type Hook = { evidence: { addStageAttempt: (pipelineId: string, stageId: string, over: Record<string, unknown>) => void } };
-        const section = `${card("t-search")} .pblock`;
+        const section = GRAPH;
         /* Verify's fail edge is drawn as the strip under Verify; a live mark may land on it or on any wire. */
         const liveMarks = (selector: string) => document.querySelectorAll(`${selector} :is(.pedge, .pelabel, .pstrip).live`).length;
         await openGraph(page, "t-search");
@@ -5350,8 +8330,13 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
       await production("light", "stages retry", async (page) => {
         await openStages(page, "t-search");
-        /* The graph's node is the navigation while the graph is shown. */
+        /* The graph's node reaches its pane and opens its conversation in the
+           agent window over the sheet (docs/design/task-card-no-inline-conversations.md §4);
+           closing the window comes back to the sheet on that pane. */
         await page.click('.gsheet .gs-graph .pnode[data-stage="implement"]');
+        await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
+        await page.keyboard.press("Escape");
+        await page.waitForSelector("[data-agent-window]", { state: "detached" });
         await page.waitForTimeout(700);
         const sheet = await measureSheet(page);
         await shot(page, "production", "stages-retry", "light");
@@ -5378,7 +8363,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} .pb-pills [data-stage="review"]`);
-        const panel = `${card("t-links")} [data-stage-detail]`;
+        /* A waiting stage opens in the agent window, never in its card (docs/design/task-card-no-inline-conversations.md §2). */
+        const panel = "[data-agent-window] [data-stage-detail]";
         await page.waitForSelector(panel, { timeout: 5_000 });
         await page.locator(panel).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.waitForTimeout(400);
@@ -5409,7 +8395,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await shot(page, "production", "flow-stage-draft-editing", "light");
         await page.keyboard.press("Control+Enter");
         await page.waitForFunction((selector) => !document.querySelector(`${selector} textarea.draft-edit`), panel, { timeout: 5_000 });
-        await page.waitForTimeout(300);
+        /* The saved stamp follows the guarded read and write. */
+        await page.waitForFunction((selector) => /\d/.test(document.querySelector(`${selector} .bstatus`)?.textContent ?? ""), panel, { timeout: 5_000 }).catch(() => {});
         const saved = await page.evaluate(() => (window as unknown as Hook).evidence.pipelinePatches.at(-1) ?? null);
         const status = await page.locator(`${panel} .bstatus`).textContent();
         await shot(page, "production", "flow-stage-draft", "light");
@@ -5431,7 +8418,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} .pb-pills [data-stage="review"]`);
-        const panel = `${card("t-links")} [data-stage-detail]`;
+        /* A waiting stage opens in the agent window, never in its card (docs/design/task-card-no-inline-conversations.md §2). */
+        const panel = "[data-agent-window] [data-stage-detail]";
         await page.waitForSelector(panel);
         await page.click(`${panel} [data-draft-edit]`);
         await page.fill(`${panel} textarea.draft-edit`, "Too late for this one.");
@@ -5447,12 +8435,12 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         }), panel);
         await shot(page, "production", "flow-stage-started", "light");
         await clickText(page, `${panel} [data-draft-undelivered] button`, "Discard");
-        /* The panel leaves the card and the stage's agent joins the agent window's list. */
-        await page.waitForSelector('.reader-park [data-kanban-reader="conversation_links-review"]', { state: "attached", timeout: 10_000 });
+        /* The first message gives its place in the window to the stage's agent. */
+        await page.waitForSelector('[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader="conversation_links-review"]', { timeout: 10_000 });
         await page.waitForTimeout(400);
         const promoted = await page.evaluate((selector) => ({
-          panel: Boolean(document.querySelector(`${selector} [data-stage-detail]`)),
-          reader: document.querySelector<HTMLElement>(".reader-park [data-kanban-reader]")?.dataset.kanbanReader ?? null,
+          panel: Boolean(document.querySelector("[data-stage-detail]")),
+          reader: document.querySelector<HTMLElement>("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]")?.dataset.kanbanReader ?? null,
           inCard: Boolean(document.querySelector(`${selector} [data-kanban-reader]`)),
         }), card("t-links"));
         await shot(page, "production", "flow-stage-reader", "light");
@@ -5465,7 +8453,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} .pb-pills [data-stage="review"]`);
-        const panel = `${card("t-links")} [data-stage-detail]`;
+        /* A waiting stage opens in the agent window, never in its card (docs/design/task-card-no-inline-conversations.md §2). */
+        const panel = "[data-agent-window] [data-stage-detail]";
         await page.waitForSelector(panel);
         await page.click(`${panel} [data-draft-edit]`);
         await page.fill(`${panel} textarea.draft-edit`, "Mine, typed before the other save landed.");
@@ -5493,7 +8482,10 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
       await production("light", "changed elsewhere", async (page) => {
         await openStages(page, "t-upload");
+        /* The node opens the first message in the agent window; closed, the pane edits it. */
         await page.click('.gsheet .gs-graph .pnode[data-stage="docs"]');
+        await page.locator("[data-agent-window] [data-stage-detail]").press("Escape");
+        await page.waitForSelector("[data-agent-window]", { state: "detached" });
         await page.waitForTimeout(600);
         const pane = '.gsheet .pane[data-stage="docs"]';
         await page.click(`${pane} [data-draft-edit]`);
@@ -5507,6 +8499,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await shot(page, "production", "flow-stage-changed", "light");
         await clickText(page, `${pane} [data-draft-changed] button`, "Keep mine");
         await page.waitForFunction((selector) => !document.querySelector(`${selector} textarea.draft-edit`), pane, { timeout: 5_000 });
+        /* The editor closes at once; the guarded write lands after its read. */
+        await page.waitForFunction((before) => (window as unknown as Hook).evidence.pipelinePatches.length > before, writesBefore, { timeout: 5_000 }).catch(() => {});
         const written = await page.evaluate(() => (window as unknown as Hook).evidence.pipelinePatches.at(-1) ?? null);
         flows.changedElsewhere = { changed, writesBefore, written };
         if (changed !== "Changed elsewhere since you began: «Document the resume token and link the migration note.»" || writesBefore !== 0) failures.push(`changed elsewhere: ${JSON.stringify({ changed, writesBefore })}`);
@@ -7787,6 +10781,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
   const PHONE = { name: "390", width: 390, height: 844 } as const;
   const PANEL = "[data-rail-menu-panel]";
   const SHEET = "[data-mobile2-sheet='menu']";
+  const WINDOW = "[data-settings-window]";
+  const WINDOW_SHEET = "[data-mobile2-sheet='settings']";
   const TODAY_SHEET_PX = 743;
   /* docs/design/header-menu.md: 360 px for every desktop state, 560 px for the Settings page with its voice and memory source rows. */
   const DESKTOP_PX = 360;
@@ -7920,7 +10916,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
     }, selector);
 
     async function capture(page: Page, at: { frame: string; width: number; scheme: Scheme; lang: "en" | "uk" }, surface: State["surface"], state: string, now: Memory) {
-      const selector = surface === "desktop" ? PANEL : SHEET;
+      const windowOpen = await page.locator(`${WINDOW}, ${WINDOW_SHEET}`).count() > 0;
+      const selector = windowOpen ? surface === "desktop" ? WINDOW : WINDOW_SHEET : surface === "desktop" ? PANEL : SHEET;
       await page.waitForTimeout(160);
       const reading = await read(page, selector);
       const tag = `${surface} ${at.frame} ${at.scheme} ${at.lang} ${state}`;
@@ -7935,8 +10932,9 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       if (!reading.inside) failures.push(`${tag}: leaves the window ${JSON.stringify(reading.box)}`);
       if (reading.scrolls) failures.push(`${tag}: scrolls`);
       if (reading.cut.length) failures.push(`${tag}: cut labels ${JSON.stringify(reading.cut)}`);
-      if (surface === "desktop" && reading.box[3] > desktopBound(state) + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than ${desktopBound(state)}`);
-      if (surface === "phone" && reading.box[3] > TODAY_SHEET_PX + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than today's ${TODAY_SHEET_PX}`);
+      /* The window has its own height; these bounds are the menu's. */
+      if (!windowOpen && surface === "desktop" && reading.box[3] > desktopBound(state) + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than ${desktopBound(state)}`);
+      if (!windowOpen && surface === "phone" && reading.box[3] > TODAY_SHEET_PX + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than today's ${TODAY_SHEET_PX}`);
       /* The project rules' page carries «Asks you» and its own wording, which is not this menu's. */
       if (state !== "rules" && /\bJev\b|decisions|2026-10|\$\d+\.\d{3}/.test(reading.text)) failures.push(`${tag}: a banned word in ${JSON.stringify(reading.text.slice(0, 200))}`);
     }
@@ -7999,9 +10997,14 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "desktop", "stop-started", now);
           } else await capture(page, at, "desktop", `rest-${now}`, now);
           await page.locator("[data-rail-menu-settings]").click();
-          await page.locator("[data-rail-menu-back]").waitFor();
+          await page.locator(WINDOW).waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "desktop", now === "working" ? "settings" : `settings-${now}`, now);
+          if (now === "working") {
+            await page.locator("[data-settings-section-row='roles']").click();
+            await page.locator("[data-rail-menu-agent-mapping]").waitFor();
+            await capture(page, at, "desktop", "roles", now);
+          }
           await page.locator("[data-rail-menu-memory]").click();
           await page.locator("[data-memory-page]").waitFor();
           await agrees(page, tag, now);
@@ -8014,12 +11017,11 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
           if (now === "noKey") {
             /* «Open Keys» turns the menu to «Keys» with the OpenRouter key's field open: one place keys are entered. */
             await page.locator("[data-memory-enter-key]").click();
-            if (!await page.locator(`${PANEL} [data-header-menu-page='keys'] [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
+            if (!await page.locator(`${WINDOW} [data-header-menu-page='keys'] [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
             await capture(page, at, "desktop", "memory-noKey-keys", now);
             await refuseKey(page, tag, lang);
             await capture(page, at, "desktop", "keys-invalid", now);
-            await page.locator("[data-rail-menu-back]").click();
-          } else await page.locator("[data-rail-menu-back]").click();
+          }
           await page.locator("[data-rail-menu-keys]").click();
           await page.locator("[data-keys-page] [data-keys-row]").first().waitFor();
           await capture(page, at, "desktop", now === "noKey" ? "keys-missing" : now === "working" ? "keys" : `keys-${now}`, now);
@@ -8030,18 +11032,18 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "desktop", "keys-replace", now);
             /* Escape first closes the open field, then the menu onto ⋯, where Enter opens it again. */
             await page.keyboard.press("Escape");
-            if (await page.locator("[data-keys-field]").count() || !await page.locator(PANEL).count()) failures.push(`${tag}: Escape in the field did not close only the field`);
+            if (await page.locator("[data-keys-field]").count() || !await page.locator(WINDOW).count()) failures.push(`${tag}: Escape in the field did not close only the field`);
             await page.keyboard.press("Escape");
-            if (await page.locator(PANEL).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
+            if (await page.locator(WINDOW).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
             await page.keyboard.press("Enter");
-            /* Once per frame: «Install ping» opens the product's dialog, which keeps the install ping and subscription API consent. */
+            /* Once per frame: the section keeps the install ping and subscription API consent, and neither memory nor the keys. */
             await page.locator("[data-rail-menu-settings]").click();
             await page.locator("[data-rail-menu-ping]").click();
             const dialog = page.locator("[data-telemetry-settings]");
             if (!await dialog.waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Install ping» did not open the dialog`);
             else {
               if (await dialog.locator("[data-memory-page], [data-memory-setting], [data-keys-page]").count()) failures.push(`${tag}: the ping's dialog still draws memory or the keys`);
-              if ((await dialog.locator("#telemetry-title").textContent())?.trim() !== translate(lang, "headerMenu.ping")) failures.push(`${tag}: the dialog is not titled «${translate(lang, "headerMenu.ping")}»`);
+              if ((await page.locator(`${WINDOW} [data-settings-title]`).textContent())?.trim() !== translate(lang, "settings.section.privacy")) failures.push(`${tag}: the section is not titled «${translate(lang, "settings.section.privacy")}»`);
               await page.screenshot({ path: path.join(out, `desktop-${frame.name}-${scheme}-${lang}-dialog-ping.png`) });
             }
           }
@@ -8072,7 +11074,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "phone", "rest", now);
             /* By keyboard: a page opens with focus on its back row, and back returns it to the row that opened it. */
             const focused = () => page.evaluate(() => document.activeElement?.getAttribute("data-mobile2-menu-row") ?? document.activeElement?.tagName);
-            for (const opener of ["settings", "help"]) {
+            for (const opener of ["help"]) {
               await page.locator(`${SHEET} [data-mobile2-menu-row="${opener}"]`).focus();
               await page.keyboard.press("Enter");
               if (await focused() !== "back") failures.push(`${tag}: ${opener} opened with focus on ${await focused()}`);
@@ -8087,31 +11089,40 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
           }
           await page.locator(`${SHEET} [data-mobile2-menu-row="settings"]`).click();
-          await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).waitFor();
+          await page.locator(`${WINDOW_SHEET} [data-settings-section-row="general"]`).waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "phone", now === "working" ? "settings" : `settings-${now}`, now);
+          const section = (id: string) => page.locator(`${WINDOW_SHEET} [data-settings-section-row="${id}"]`).click();
+          const back = () => page.locator(`${WINDOW_SHEET} [data-settings-back]`).click();
           if (now === "working") {
-            /* On the phone the question is a page of Settings; Cancel returns to it. */
-            await page.locator(`${SHEET} [data-mobile2-menu-row="stop-all"]`).click();
-            await page.locator(`${SHEET} [data-stop-all-go]`).waitFor();
+            /* On the phone the question is a page of General; Cancel returns to it. */
+            await section("general");
+            await capture(page, at, "phone", "general", now);
+            await page.locator(`${WINDOW_SHEET} [data-mobile2-menu-row="stop-all"]`).click();
+            await page.locator(`${WINDOW_SHEET} [data-stop-all-go]`).waitFor();
             await capture(page, at, "phone", "stop-ask", now);
-            await page.locator(`${SHEET} [data-stop-all-cancel]`).click();
-            await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).waitFor();
+            await page.locator(`${WINDOW_SHEET} [data-stop-all-cancel]`).click();
+            await page.locator(`${WINDOW_SHEET} [data-mobile2-menu-row="stop-all"]`).waitFor();
+            await back();
+            await section("roles");
+            await page.locator(`${WINDOW_SHEET} [data-header-menu-workers]`).waitFor();
+            await capture(page, at, "phone", "roles", now);
+            await back();
           }
-          await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).click();
+          await section("memory");
           await page.locator("[data-memory-page]").waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "phone", `memory-${now}`, now);
           if (now === "noKey") {
             await page.locator("[data-memory-enter-key]").click();
-            if (!await page.locator(`${SHEET} [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
+            if (!await page.locator(`${WINDOW_SHEET} [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
             await capture(page, at, "phone", "memory-noKey-keys", now);
             await refuseKey(page, tag, lang);
             await capture(page, at, "phone", "keys-invalid", now);
           }
           if (now === "working" || now === "noKey") {
-            await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
-            await page.locator(`${SHEET} [data-mobile2-menu-row="keys"]`).click();
+            await back();
+            await section("keys");
             await page.locator("[data-keys-page] [data-keys-row]").first().waitFor();
             await capture(page, at, "phone", now === "noKey" ? "keys-missing" : "keys", now);
           }
@@ -12600,73 +15611,6 @@ describe("the agent window: a click on the board opens the agent in one window, 
     expect(failures).toEqual([]);
   }, 900_000);
 
-  /* A stage that has not started still opens its panel on the card, and the
-     panel folds to its head and one line of the stage's first message: one
-     row, cut with an ellipsis, in the secondary ink, at both widths. */
-  browserTest("a stage's panel folded on its card is its head and one ellipsised line", async () => {
-    const pngDir = process.env.AGENT_WINDOW_PNG_DIR ?? "/var/tmp/llv-agent-window-evidence";
-    const out = path.resolve(".artifacts/agent-window-folded");
-    fs.mkdirSync(out, { recursive: true });
-    fs.mkdirSync(pngDir, { recursive: true });
-    const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
-    const readings: Record<string, unknown> = {};
-    const failures: string[] = [];
-    const MERGE = `${card("t-search")} .pb-pills [data-stage="merge"]`;
-    try {
-      for (const [viewport, lang, scheme] of [[{ width: 1440, height: 900 }, "en", "light"], [{ width: 1000, height: 800 }, "uk", "dark"]] as const) {
-        const label = `folded-${viewport.width}-${lang}-${scheme}`;
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
-        try {
-          await page.waitForSelector(`${MERGE} >> visible=true`, { timeout: 30_000 });
-          await page.locator(MERGE).click();
-          const panel = page.locator(`${card("t-search")} [data-stage-detail]`);
-          await panel.waitFor();
-          await panel.locator("[data-panel-fold]").click();
-          await page.waitForSelector(`${card("t-search")} [data-stage-detail][data-collapsed="1"]`);
-          await page.mouse.move(viewport.width / 2, 12);
-          await page.waitForTimeout(300);
-          const reading = await panel.evaluate((node) => {
-            const line = node.querySelector<HTMLElement>(":scope > .rlatest")!;
-            const style = getComputedStyle(line);
-            const ink = document.createElement("span");
-            ink.style.color = "var(--color-secondary)";
-            line.append(ink);
-            const secondary = getComputedStyle(ink).color;
-            ink.remove();
-            const shown = [...node.children].filter((child) => getComputedStyle(child).display !== "none").map((child) => child.className);
-            return {
-              panel: Math.round(node.getBoundingClientRect().height),
-              gap: getComputedStyle(node).rowGap,
-              paddingBottom: getComputedStyle(node).paddingBottom,
-              line: { height: Math.round(line.getBoundingClientRect().height), whiteSpace: style.whiteSpace, textOverflow: style.textOverflow, overflow: style.overflowX, color: style.color, secondary, cut: line.scrollWidth > line.clientWidth },
-              shown,
-            };
-          });
-          await panel.screenshot({ path: path.join(pngDir, `${label}.png`) });
-          readings[label] = { ...reading, pageErrors };
-          if (reading.line.whiteSpace !== "nowrap" || reading.line.textOverflow !== "ellipsis" || reading.line.overflow !== "hidden") failures.push(`${label}: the folded line wraps (${JSON.stringify(reading.line)})`);
-          if (reading.line.height > 24) failures.push(`${label}: the folded line stands ${reading.line.height} px tall, more than one row`);
-          if (reading.line.color !== reading.line.secondary) failures.push(`${label}: the folded line is ${reading.line.color}, the secondary ink is ${reading.line.secondary}`);
-          if (reading.gap !== "2px" || reading.paddingBottom !== "6px") failures.push(`${label}: the folded panel spaces its rows ${reading.gap} apart over ${reading.paddingBottom}`);
-          if (reading.shown.length !== 2) failures.push(`${label}: the folded panel shows ${JSON.stringify(reading.shown)}`);
-          /* 70 px is what the folded panel measured before the agent window (a4e0477e6), at both faces. */
-          if (reading.panel !== 70) failures.push(`${label}: the folded panel stands ${reading.panel} px tall, 70 before the agent window`);
-          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-        } finally {
-          await context.close();
-        }
-      }
-    } finally {
-      await browser.close();
-      server.stop();
-    }
-    fs.mkdirSync("evidence/agent-window", { recursive: true });
-    fs.writeFileSync("evidence/agent-window/folded-panel.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
-    if (failures.length) throw new Error(failures.join("\n"));
-    expect(failures).toEqual([]);
-  }, 300_000);
-
   /* A link (#c=) opens its agent in the window and gives the reader the
      keyboard. Nobody has pressed a key, on a page just loaded or on one the
      link changed later, so the reader shows no focus ring; a key pressed
@@ -13769,6 +16713,44 @@ describe("#2187 a completed lane's automatic merge, and the project's merge sett
     }
     return out;
   });
+
+  browserTest("optional check failures remain a readable merge note after landing", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/merge-notes-bundle"));
+    // A relative temp path keeps Chromium's Unix socket below its path limit.
+    const browser = await chromium.launch({ ...LAUNCH, env: { ...process.env,
+      TMPDIR: path.relative(process.cwd(), process.env.TMPDIR ?? os.tmpdir()) || "." } });
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=merge-states&optional=1`, { width, height: 900 }, scheme, lang);
+        try {
+          const lane = page.locator('[data-pipeline="p-merge-done"]');
+          const note = lane.locator('[data-merge-note="optional-failures"]');
+          await note.waitFor({ state: "visible", timeout: 30_000 });
+          await note.scrollIntoViewIfNeeded();
+          const expected = translate(lang, "pipelineBlock.merge.optionalFailures", { names: "Minimum macOS SQLite, Windows (native), build" });
+          expect(await note.textContent()).toBe(expected);
+          expect(await lane.locator('[data-merge-state]').getAttribute('data-merge-state')).toBe("merged");
+          const geometry = await note.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            return { width: box.width, height: box.height, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth,
+              clientHeight: element.clientHeight, scrollHeight: element.scrollHeight, left: box.left, right: box.right };
+          });
+          expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+          expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.clientHeight + 1);
+          expect(geometry.left).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width);
+          await lane.screenshot({ path: path.join(OUT, `optional-failures-${label}.png`) });
+          expect(pageErrors).toEqual([]);
+          readings[label] = { text: expected, state: "merged", geometry };
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(EVIDENCE, "optional-failures.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+  }, 600_000);
 
   browserTest("each merge state says its words at 1440, en and uk, and the ⋯ carries the setting row on and off", async () => {
     fs.mkdirSync(OUT, { recursive: true });
@@ -17079,7 +20061,7 @@ describe("a task's album: every picture its agents made, one click from the card
                 /* The foot keeps one line: every visible child shares the album button's line. */
                 footLines: new Set([...foot.children].filter((child) => child.getBoundingClientRect().width > 0 && !child.classList.contains("spacer")).map((child) => { const rect = child.getBoundingClientRect(); return Math.round((rect.top + rect.bottom) / 2); })).size,
                 exportFresh: document.querySelector<HTMLElement>('[data-album-button="t-export"]')?.dataset.albumFresh ?? null,
-                buttonsOnBoard: document.querySelectorAll("[data-album-button]").length,
+                buttonsOnBoard: [...document.querySelectorAll("[data-album-button]")].filter((button) => /\d/.test(button.textContent ?? "")).length,
               };
             });
             readings[`${label}-card`] = cardReading;
@@ -17088,7 +20070,7 @@ describe("a task's album: every picture its agents made, one click from the card
             if (!cardReading.insideCard || cardReading.overlapsFoot) failures.push(`${label}: the card button leaves the card or overlaps the foot: ${JSON.stringify(cardReading)}`);
             if (cardReading.footLines !== 1) failures.push(`${label}: the card foot wraps onto ${cardReading.footLines} lines`);
             if (cardReading.exportFresh !== "0") failures.push(`${label}: the seen album still reads as new`);
-            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons on the board, expected the two tasks with pictures`);
+            if (cardReading.buttonsOnBoard !== 2) failures.push(`${label}: ${cardReading.buttonsOnBoard} album buttons with a picture count on the board, expected the two tasks with pictures`);
 
             await button.click();
             await page.waitForSelector("[data-album-item]", { timeout: 10_000 });
@@ -17198,6 +20180,24 @@ describe("a task's album: every picture its agents made, one click from the card
     fs.writeFileSync("evidence/task-album/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
+
+  /* docs/design/task-file-preview.md §11.5: the Files view and the preview it opens, over a real
+     repository the driver builds, at 1440 and 820 here and at 390 below, in both languages and themes.
+     Frames go to TASK_FILES_PNG_DIR (default `.artifacts/task-files/`). */
+  for (const phone of [false, true]) {
+    browserTest(`the task's Files view and the preview it opens, on ${phone ? "the phone" : "the desktop"}, in both languages and themes`, async () => {
+      const out = path.resolve(process.env.TASK_FILES_PNG_DIR ?? ".artifacts/task-files", phone ? "phone" : "desktop");
+      fs.rmSync(out, { recursive: true, force: true });
+      fs.mkdirSync(out, { recursive: true });
+      const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try {
+        const result = await captureTaskFilesFrames(browser, out, phone);
+        expect(result.failures).toEqual([]);
+      } finally {
+        await browser.close();
+      }
+    }, 1_800_000);
+  }
 });
 
 describe("optimistic UI fix line: refusals and older pages say so in place", () => {
@@ -18127,7 +21127,7 @@ describe("readable pipeline graph: loops fold into their sources, nodes say what
     const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
     try {
       for (const lang of ["en", "uk"] as const) {
-        /* The desktop board: each card's graph, opened. */
+        /* The desktop board: no card draws a graph; «Graph» opens each one in the Stages sheet. */
         const { context, page, pageErrors } = await openFixture(browser, base, { width: 1440, height: 2400 }, "light", lang);
         try {
           await context.addInitScript(seatFolded);
@@ -18135,17 +21135,11 @@ describe("readable pipeline graph: loops fold into their sources, nodes say what
           await page.waitForSelector(`${card("t-loops-done")} [data-pipeline]`, { timeout: 30_000 });
           await page.waitForTimeout(600);
           for (const lane of LANES) {
-            await page.locator(`${card(lane.task)} [data-graph-toggle="${lane.pipeline}"]`).evaluate((element) => (element as HTMLElement).click());
+            if (await page.locator(`${card(lane.task)} .pgraph`).count()) failures.push(`card-${lane.pipeline}-1440-${lang}: the card draws a graph`);
           }
-          await page.waitForTimeout(600);
+          /* The Stages sheet draws the lanes left to right. */
           for (const lane of LANES) {
-            const label = `card-${lane.pipeline}-1440-${lang}`;
-            gate(label, await page.evaluate(measureGraph(card(lane.task), lane.ended)) as GraphReading | null, lane, "TB");
-            await page.locator(card(lane.task)).screenshot({ path: path.join(pngDir, `${label}.png`) });
-          }
-          /* The Stages sheet draws the same lanes left to right. */
-          for (const lane of LANES) {
-            await page.locator(`${card(lane.task)} [data-open-stages="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
+            await page.locator(`${card(lane.task)} [data-graph-toggle="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
             await page.waitForSelector(`[data-stages-sheet="${lane.pipeline}"] .gs-graph .pgraph`, { timeout: 10_000 });
             await page.waitForTimeout(400);
             const label = `sheet-${lane.pipeline}-1440-${lang}`;
@@ -18776,25 +21770,9 @@ describe("model glyphs in place of the stage dot", () => {
         }
         if (lang === "uk" || !moving) return;
 
-        /* Every lane's own graph on the card: the node's state row, where the
-           state word stands beside the glyph and no badge is drawn. The
-           graphs stand taller than a column, so the window grows to hold them. */
-        await page.setViewportSize({ width: 1440, height: 4200 });
-        for (const holder of [RUN, REST, LIVE]) {
-          const toggles = page.locator(`${holder} [data-graph-toggle]`);
-          for (let index = 0; index < await toggles.count(); index++) await toggles.nth(index).click();
-        }
-        await page.waitForTimeout(500);
-        gate(`desktop-card-graphs-running-${scheme}`, await readGlyphs(page, `${RUN} .pgraph`), WANT.running, { labels: true, dot: true });
-        gate(`desktop-card-graph-waiting-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(WAIT)} .pgraph`), WANT.waiting, { labels: true, dot: true });
-        for (const lane of [SETTLED_LANE, SETTLED_MORE]) gate(`desktop-card-graph-${lane}-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(lane)} .pgraph`), WANT[lane], { labels: true });
-        for (const lane of LIVE_LANES) gate(`desktop-card-graph-${lane}-${scheme}`, await readGlyphs(page, `${LIVE} ${laneOf(lane)} .pgraph`), WANT[lane], { labels: true });
-        for (const [holder, name] of [[RUN, "running"], [REST, "waiting-settled"], [LIVE, "live"]] as const) {
-          await page.locator(holder).evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await shot(page.locator(holder), `desktop-card-graphs-${name}-${scheme}`);
-        }
-        await page.setViewportSize({ width: 1440, height: 1200 });
-        await page.waitForTimeout(300);
+        /* No card draws a graph of its own (docs/design/task-card-no-inline-conversations.md §3): its
+           nodes are the Stages sheet's, read below. */
+        for (const holder of [RUN, REST, LIVE]) if (await page.locator(`${holder} .pgraph`).count()) failures.push(`desktop ${scheme}: ${holder} draws a graph on the card`);
 
         /* The Stages sheet: its graph, its pane heads, then its chips. */
         const sheets = [["waiting", WAIT, REST], ["settled", SETTLED_LANE, REST], ["settled-more", SETTLED_MORE, REST], ["reviewing", "p-glyphs-review", LIVE], ["running", "p-glyph-fable", RUN]] as const;
@@ -20586,6 +23564,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
   }, 900_000);
 
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
     fs.mkdirSync(SHOTS, { recursive: true });
     const out = path.resolve(".artifacts/seat-tick-instructions");
     fs.mkdirSync(out, { recursive: true });
@@ -20609,7 +23588,11 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
           putRequests += 1;
           const body = await request.json() as { reason?: string; enabled?: boolean };
           if ((body.reason?.length ?? 0) > 500) {
-            return Response.json({ error: `instructions (reason) are ${body.reason!.length} characters; the limit is 500. Nothing was stored — shorten the instructions and send them again` }, { status: 400 });
+            const refusal = applySeatTickSettingsChange(defaultSeatTickSettings("atlas"), { reason: body.reason }, {
+              at: "2026-11-01T10:00:00.000Z", actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+            });
+            if (refusal.ok) throw new Error("Expected the production instructions limit to refuse the overage");
+            return Response.json({ error: refusal.error }, { status: 400 });
           }
           if (body.enabled === false && !body.reason?.trim()) {
             return Response.json({ error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" }, { status: 400 });
@@ -24382,6 +27365,376 @@ describe("parallel ask idle fallback", () => {
  * are never committed); the measurement records are written to `evidence/voice-companion/`.
  */
 describe("floating voice companion", () => {
+  browserTest("automatic voice reconnect: reconnecting, back and gave up on desktop in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/voice-reconnect/desktop"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    type Controls = ReturnType<typeof import("@/components/voiceCompanion/reconnectEvidence.fixture").reconnectEvidence>["controls"];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&reconnect=1", { viewport: { width: 1440, height: 700 }, lang, scheme, motion: "reduce", surface: "underlay", clock: Date.UTC(2026, 10, 4, 12) });
+        try {
+          if (await page.locator("[data-companion-expand]").count()) { await page.locator("[data-companion-expand]").click(); await page.clock.runFor(100); }
+          await page.locator("[data-companion-talk]").click();
+          await page.clock.runFor(100);
+          await page.waitForFunction(() => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === "idle");
+          const control = (action: "drop" | "release" | "fail") => page.evaluate(action => (window as unknown as { voiceReconnect: Controls }).voiceReconnect[action](), action);
+          const capture = async (state: string) => {
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } });
+            await page.clock.runFor(400);
+            const notice = page.locator("[data-companion-notice]").last(); await notice.waitFor();
+            const geometry = await notice.evaluate(node => {
+              const rect = node.getBoundingClientRect();
+              const clipped: string[] = [];
+              const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const text = walker.currentNode; if (!text.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(text);
+                for (const glyph of range.getClientRects()) for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+                  const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                  if (style.overflowY !== "visible" && (glyph.top < box.top - 1 || glyph.bottom > box.bottom + 1)
+                    || style.overflowX !== "visible" && (glyph.left < box.left - 1 || glyph.right > box.right + 1)) clipped.push(text.textContent!);
+                }
+              }
+              return { text: node.textContent, inside: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight, clipped };
+            });
+            expect(geometry.inside).toBe(true); expect(geometry.clipped).toEqual([]);
+            const frame = `${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, frame) });
+            readings.push({ lang, scheme, state, frame, ...geometry });
+          };
+          await control("drop"); await page.clock.runFor(300);
+          await page.waitForFunction(() => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === "reconnecting");
+          expect(await page.locator("[data-companion-resume]").count()).toBe(0); expect(await page.locator("[data-companion-end]").first().isEnabled()).toBe(true);
+          await capture("reconnecting");
+          /* Standing on no page text it keeps the glass: only the board case below stands over the page. */
+          expect(await page.locator("[data-companion-bubble]").last().evaluate(node => getComputedStyle(node).backdropFilter)).toContain("blur");
+          const mute = page.locator("[data-voice-companion] .vc-controls button[aria-pressed]");
+          expect(await mute.isEnabled()).toBe(true); await mute.click(); expect(await mute.getAttribute("aria-pressed")).toBe("true");
+          expect((await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read())).muted).toBe(true);
+          await control("release");
+          await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]'));
+          expect(await mute.getAttribute("aria-pressed")).toBe("true");
+          expect((await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read())).muted).toBe(true);
+          await capture("back");
+          await control("fail"); await control("drop"); await page.clock.runFor(60_000);
+          await page.waitForFunction(() => document.querySelector('[data-code="RECONNECT_GAVE_UP"]'));
+          expect(await page.locator("[data-companion-resume]").last().isEnabled()).toBe(true);
+          await capture("gave-up"); expect(pageErrors).toEqual([]);
+          const observed = await page.evaluate(() => (window as unknown as { voiceReconnect: Controls }).voiceReconnect.read());
+          expect(observed.opens).toBe(1); expect(observed.sounds.filter(sound => sound === "give-up")).toHaveLength(1);
+          await page.locator("[data-companion-resume]").last().click();
+          await page.waitForFunction(() => document.querySelector('[data-code="PROVIDER_ERROR"]'));
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/reconnect-desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+
+  /* The real board at 1000x700, reached by resizing during a call: a healthy call stands as its tile beside the
+     attention toast, and a call that has its state to say opens by itself in the sidebar's column, over no label. With
+     a real project list that column is taken: the line stands alone beside the tile, and a click opens the companion
+     on the page's work, under its title, search and tabs, on one surface that hides whole every line it meets. The
+     same project lists run again at 860x750, between the 1000 and 720 widths, where the line takes its narrower room. */
+  browserTest("automatic voice reconnect on the board at 1000x700 and 860x750: the line reads with no click, over no label, and End stands clear of the toast", async () => {
+    const out = path.resolve(".artifacts/voice-reconnect/board"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    type Controls = ReturnType<typeof import("@/components/voiceCompanion/reconnectEvidence.fixture").reconnectEvidence>["controls"];
+    /* Every point of a control's round shape, and its text, against what the browser would hit there. */
+    const readControl = (page: Page, selector: string) => page.locator(selector).last().evaluate(node => {
+      const box = node.getBoundingClientRect();
+      const corner = getComputedStyle(node).borderTopLeftRadius;
+      const half = Math.min(box.width, box.height) / 2;
+      const radius = Math.min(half, corner.endsWith("%") ? half : Number.parseFloat(corner) || 0);
+      const missed: string[] = [];
+      for (let x = box.left + 1; x < box.right; x += 2) for (let y = box.top + 1; y < box.bottom; y += 2) {
+        if (Math.hypot(Math.max(0, Math.abs(x - box.left - box.width / 2) - box.width / 2 + radius), Math.max(0, Math.abs(y - box.top - box.height / 2) - box.height / 2 + radius)) > radius - 1 && radius > 0) continue;
+        if (!document.elementFromPoint(x, y)?.closest("button")?.isSameNode(node)) missed.push(`${Math.round(x)},${Math.round(y)}`);
+      }
+      return { box: { x: box.x, y: box.y, width: box.width, height: box.height }, inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, disabled: (node as HTMLButtonElement).disabled, missed };
+    });
+    const readNotice = (page: Page) => page.locator("[data-companion-notice]").last().evaluate(node => {
+      const box = node.getBoundingClientRect();
+      const clipped: string[] = [], covered: string[] = [];
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const text = walker.currentNode; if (!text.textContent?.trim()) continue;
+        const range = document.createRange(); range.selectNodeContents(text);
+        for (const glyph of range.getClientRects()) {
+          if (!document.elementFromPoint(glyph.left + glyph.width / 2, glyph.top + glyph.height / 2)?.closest("[data-companion-notice]")?.isSameNode(node)) covered.push(text.textContent!);
+          for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+            const style = getComputedStyle(parent), clip = parent.getBoundingClientRect();
+            if (style.overflowY !== "visible" && (glyph.top < clip.top - 1 || glyph.bottom > clip.bottom + 1)
+              || style.overflowX !== "visible" && (glyph.left < clip.left - 1 || glyph.right > clip.right + 1)) clipped.push(text.textContent!);
+          }
+        }
+      }
+      return { code: node.getAttribute("data-code"), text: node.querySelector(".vc-notice-text")?.textContent, inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, clipped, covered };
+    });
+    const readTile = (page: Page) => page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+      const tile = root.querySelector(".vc-shape")!.getBoundingClientRect();
+      const toast = document.querySelector("[data-attention-toast]")!.getBoundingClientRect();
+      return { layout: root.dataset.layout, yielded: root.dataset.yielded !== undefined, words: root.querySelectorAll("[data-companion-notice]").length, toastX: toast.left,
+        toastClearance: Math.max(toast.left - tile.right, tile.left - toast.right, toast.top - tile.bottom, tile.top - toast.bottom) };
+    });
+    /* The open companion, every part of it drawn, against the page's labels and controls as they read with it gone, and against the toast. */
+    const readOpen = (page: Page) => page.evaluate(controls => {
+      const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+      const parts = [...root.querySelectorAll(".vc-veil, .vc-block, .vc-block *, .vc-shape, .vc-shape *, .vc-line .vc-notice, .vc-line .vc-notice *, .vc-floater:not([data-leaving]), .vc-floater:not([data-leaving]) *")].map(node => node.getBoundingClientRect()).filter(box => box.width > 0 && box.height > 0);
+      const meets = (box: DOMRect) => parts.some(part => Math.min(part.right, box.right) - Math.max(part.left, box.left) > 0 && Math.min(part.bottom, box.bottom) - Math.max(part.top, box.top) > 0);
+      const shows = (box: DOMRect, node: Element) => { const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2); return !!hit && (node.contains(hit) || hit.contains(node)); };
+      const underText: string[] = [], underControl: string[] = [], underHead: string[] = [];
+      /* What names the page and leads around it, written here apart from what the component is told. */
+      const inHead = (node: Element) => !!node.closest("header.bar, [role='tablist'], .col-head, aside");
+      root.style.visibility = "hidden";
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      while (walker.nextNode()) {
+        const text = walker.currentNode, parent = text.parentElement;
+        if (!parent || !text.textContent?.trim() || root.contains(parent) || parent.tagName === "STYLE" || parent.tagName === "SCRIPT") continue;
+        range.selectNodeContents(text);
+        for (const line of range.getClientRects()) if (line.width > 0 && meets(line) && shows(line, parent)) { underText.push(text.textContent!); if (inHead(parent)) underHead.push(text.textContent!); }
+      }
+      for (const node of document.querySelectorAll(controls)) { const box = node.getBoundingClientRect(); if (!root.contains(node) && box.width > 0 && meets(box) && shows(box, node)) { const name = node.getAttribute("aria-label") ?? node.textContent ?? node.tagName; underControl.push(name); if (inHead(node)) underHead.push(name); } }
+      root.style.visibility = "";
+      const toast = document.querySelector("[data-attention-toast]")?.getBoundingClientRect();
+      const lane = root.querySelector<HTMLElement>("[data-companion-lane]");
+      return { layout: root.dataset.layout, at: root.style.transform, lane: lane ? { width: lane.offsetWidth, height: lane.offsetHeight, side: lane.dataset.side } : null, overPage: lane?.hasAttribute("data-over-page") ?? false, underText, underControl, underHead,
+        toastClearance: toast ? Math.min(...parts.map(part => Math.max(toast.left - part.right, part.left - toast.right, toast.top - part.bottom, part.top - toast.bottom))) : null };
+    }, CONTROL_SELECTOR);
+    /* Each line of the page's text against the open companion's drawn parts: one a part meets lies wholly inside a
+       part with an opaque fill (else a part cuts it), and none shows inside the box around the parts without meeting one. */
+    const readCut = (page: Page) => page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+      const parts = [...root.querySelectorAll(".vc-veil, .vc-block, .vc-block *, .vc-floater:not([data-leaving]), .vc-floater:not([data-leaving]) *")].map(node => {
+        const fill = getComputedStyle(node).backgroundColor;
+        return { box: node.getBoundingClientRect(), opaque: /^rgb\(/u.test(fill) || /^color\(srgb [\d.]+ [\d.]+ [\d.]+\)$/u.test(fill) };
+      }).filter(part => part.box.width > 0 && part.box.height > 0);
+      const meet = (a: DOMRect, b: DOMRect) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0;
+      const within = (inner: DOMRect, outer: DOMRect) => inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5 && inner.top >= outer.top - 0.5 && inner.bottom <= outer.bottom + 0.5;
+      const around = new DOMRect(Math.min(...parts.map(part => part.box.left)), Math.min(...parts.map(part => part.box.top)), 0, 0);
+      around.width = Math.max(...parts.map(part => part.box.right)) - around.x; around.height = Math.max(...parts.map(part => part.box.bottom)) - around.y;
+      const cut: string[] = [], between: string[] = [];
+      let hidden = 0;
+      root.style.visibility = "hidden";
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      while (walker.nextNode()) {
+        const text = walker.currentNode, parent = text.parentElement;
+        if (!parent || !text.textContent?.trim() || root.contains(parent) || parent.tagName === "STYLE" || parent.tagName === "SCRIPT") continue;
+        range.selectNodeContents(text);
+        for (const line of range.getClientRects()) {
+          const hit = line.width > 0 ? document.elementFromPoint(line.left + line.width / 2, line.top + line.height / 2) : null;
+          if (!hit || !(parent.contains(hit) || hit.contains(parent))) continue;
+          const name = `${text.textContent!.trim().slice(0, 40)} @${Math.round(line.left)},${Math.round(line.top)}`;
+          if (parts.some(part => meet(part.box, line))) { if (parts.some(part => part.opaque && within(line, part.box))) hidden += 1; else cut.push(name); }
+          else if (meet(around, line)) between.push(name);
+        }
+      }
+      root.style.visibility = "";
+      const veil = root.querySelector("[data-companion-veil]")?.getBoundingClientRect();
+      return { cut, between, hidden, veil: veil ? { x: veil.x, y: veil.y, width: veil.width, height: veil.height } : null };
+    });
+    const hasToast = (page: Page) => page.locator("[data-attention-toast]").count();
+    try {
+      for (const rail of [null, "few", "many"] as const) for (const size of rail ? [{ width: 1000, height: 700 }, { width: 860, height: 750 }] : [{ width: 1000, height: 700 }]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const route of ["reconnecting", "gave-up", "held-open"] as const) {
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&reconnect=1${rail ? `&rail=${rail}` : ""}`, { viewport: { width: 1440, height: 900 }, lang, scheme, motion: "reduce", clock: Date.UTC(2026, 10, 4, 12) });
+        const viewport = `1440x900 resized to ${size.width}x${size.height}`;
+        try {
+          const label = `${rail ?? "one project"} ${size.width}x${size.height} ${lang} ${scheme} ${route}`;
+          const control = (action: "drop" | "release" | "fail" | "recover") => page.evaluate(action => (window as unknown as { voiceReconnect: Controls }).voiceReconnect[action](), action);
+          const rest = async () => { await page.clock.runFor(800); await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } }); await page.clock.runFor(400); };
+          const frame = async (state: string) => { const name = `${rail ? `${rail}-` : ""}${size.width === 1000 ? "" : `${size.width}x${size.height}-`}${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, name) }); return name; };
+          const phase = (name: string) => page.waitForFunction(name => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === name, name);
+          const giveUp = async () => { await control("fail"); await control("drop"); await page.clock.runFor(60_000); await phase("offline"); await rest(); };
+          /* Words in view, on no label and no control, the toast 8 px away. */
+          const expectClear = async (code: string, state: string) => {
+            const notice = await readNotice(page);
+            expect(notice.code, `${label} ${state}`).toBe(code); expect(notice.inside).toBe(true); expect(notice.clipped).toEqual([]); expect(notice.covered).toEqual([]);
+            const open = await readOpen(page);
+            expect(open.layout, `${label} ${state}`).toBe("expanded"); expect(open.underText, `${label} ${state}: labels under the companion`).toEqual([]); expect(open.underControl, `${label} ${state}: controls under the companion`).toEqual([]); expect(open.overPage).toBe(false);
+            expect(open.toastClearance ?? 8, `${label} ${state}: the toast`).toBeGreaterThanOrEqual(8);
+            return { notice, open };
+          };
+          const tile = page.locator("[data-companion-expand]");
+          if (await tile.count()) { await tile.click(); await page.clock.runFor(100); }
+          await page.locator("[data-companion-talk]").click();
+          await page.clock.runFor(100);
+          await phase("idle");
+          await page.setViewportSize(size); await rest();
+          /* A healthy call has nothing to say: no room for the open companion, its tile, and every point of End on top beside the toast. */
+          expect(await hasToast(page), `${label}: the toast this case proves clearance from`).toBe(1);
+          const healthy = await readTile(page);
+          expect([healthy.layout, healthy.yielded, healthy.words]).toEqual(["collapsed", true, 0]);
+          expect(healthy.toastClearance, `${label}: the tile against the toast`).toBeGreaterThanOrEqual(8);
+          const healthyEnd = await readControl(page, ".vc-shape-end");
+          expect(healthyEnd.missed).toEqual([]); expect(healthyEnd.inside).toBe(true);
+          /* A click on the healthy tile finds no room and changes nothing: the line of a later drop still reads by itself. */
+          if (route === "reconnecting") { await tile.click(); await rest(); expect((await readTile(page)).yielded).toBe(true); }
+          /* With the sidebar's column taken by real projects no lane fits: the tile keeps its place and the line stands by it. */
+          const expectLine = async (code: string, words: string, state: string) => {
+            const notice = await readNotice(page);
+            expect([notice.code, notice.text], `${label} ${state}`).toEqual([code, words]); expect(notice.inside).toBe(true); expect(notice.clipped).toEqual([]); expect(notice.covered).toEqual([]);
+            const placed = await readOpen(page);
+            expect(placed.layout, `${label} ${state}`).toBe("collapsed"); expect(placed.underText, `${label} ${state}: labels under the line`).toEqual([]); expect(placed.underControl, `${label} ${state}: controls under the line`).toEqual([]);
+            expect(placed.toastClearance, `${label} ${state}: the toast`).toBeGreaterThanOrEqual(8);
+            const tileEnd = code === "RECONNECT_GAVE_UP" ? null : await readControl(page, ".vc-shape-end");
+            if (tileEnd) { expect(tileEnd.disabled).toBe(false); expect(tileEnd.missed).toEqual([]); }
+            const offered = code === "RECONNECT_GAVE_UP" ? await readControl(page, "[data-companion-resume]") : null;
+            if (offered) { expect(offered.disabled).toBe(false); expect(offered.inside).toBe(true); expect(offered.missed).toEqual([]); }
+            return { notice, placed, tileEnd, offered };
+          };
+          const words = { RECONNECTING: { en: "Connection lost. Reconnecting…", uk: "Зʼєднання втрачено. Перепідключаюся…" }, CONNECTION_RESTORED: { en: "Connection restored.", uk: "Зʼєднання відновлено." }, RECONNECT_GAVE_UP: { en: "Couldn't reconnect.", uk: "Не вдалося підключитися." } } as const;
+          if (rail) {
+            await control("drop"); await page.clock.runFor(300); await phase("reconnecting");
+            if (route === "gave-up") { await control("release"); await phase("idle"); await giveUp(); }
+            await rest();
+            const code = route === "gave-up" ? "RECONNECT_GAVE_UP" : "RECONNECTING";
+            const first = await expectLine(code, words[code][lang], "first frame");
+            const firstFrame = await frame(`${route}-line`);
+            if (route === "held-open") {
+              /* Back, the line says so and leaves with its notice; the next give-up says that, and its Reconnect continues the call from the line. */
+              await control("release"); await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]')); await rest();
+              const back = await expectLine("CONNECTION_RESTORED", words.CONNECTION_RESTORED[lang], "back");
+              const backFrame = await frame("back-line");
+              await page.clock.runFor(13_000); await rest();
+              const after = await readTile(page);
+              expect([after.layout, after.yielded, after.words], `${label}: healthy again`).toEqual(["collapsed", true, 0]);
+              await giveUp();
+              const held = await expectLine("RECONNECT_GAVE_UP", words.RECONNECT_GAVE_UP[lang], "gave up after back");
+              await control("recover");
+              await page.locator("[data-companion-resume]").click();
+              await page.clock.runFor(100);
+              await control("release");
+              await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]')); await rest();
+              expect(await page.locator("[data-companion-resume]").count()).toBe(0);
+              const restored = await expectLine("CONNECTION_RESTORED", words.CONNECTION_RESTORED[lang], "reconnected from the line");
+              expect(pageErrors).toEqual([]);
+              readings.push({ rail, lang, scheme, route, viewport, healthy, first, back, after, held, restored, frames: [firstFrame, backFrame] });
+              continue;
+            }
+            /* A click opens it on the page's work, every word and control of the call with it, and nothing that names the page under it. */
+            await tile.click(); await rest();
+            const open = await readOpen(page);
+            expect(open.layout, label).toBe("expanded"); expect(open.overPage, label).toBe(true);
+            expect(open.underHead, `${label}: the page's title, count, search and tabs under the companion`).toEqual([]);
+            /* Every line it meets is hidden whole, and nothing of the page shows between its parts. */
+            const cover = await readCut(page);
+            expect(cover.veil, `${label}: the surface it stands on`).not.toBeNull();
+            expect(cover.cut, `${label}: lines a part cuts through`).toEqual([]); expect(cover.between, `${label}: lines between the parts`).toEqual([]);
+            expect(open.toastClearance ?? 8, `${label}: the toast`).toBeGreaterThanOrEqual(8);
+            const notice = await readNotice(page);
+            expect(notice.code).toBe(code); expect(notice.inside).toBe(true); expect(notice.clipped).toEqual([]); expect(notice.covered).toEqual([]);
+            const bubbles = page.locator("[data-companion-bubble]");
+            const bubble = await bubbles.count() ? await bubbles.last().evaluate(node => { const style = getComputedStyle(node); return { background: style.backgroundColor, backdrop: style.backdropFilter }; }) : null;
+            if (bubble) { expect(bubble.backdrop).toBe("none"); expect(bubble.background).not.toMatch(/\/|rgba|transparent/u); }
+            const end = route === "gave-up" ? null : await readControl(page, "[data-companion-end]");
+            if (end) { expect(end.disabled).toBe(false); expect(end.inside).toBe(true); expect(end.missed).toEqual([]); }
+            const reconnect = route === "gave-up" ? await readControl(page, "[data-companion-resume]") : null;
+            if (reconnect) { expect(reconnect.disabled).toBe(false); expect(reconnect.inside).toBe(true); expect(reconnect.missed).toEqual([]); }
+            const collapse = await readControl(page, "[data-companion-collapse]");
+            expect(collapse.inside).toBe(true); expect(collapse.missed).toEqual([]);
+            const openFrame = await frame(`${route}-open`);
+            /* Collapsed by choice it is a tile with no line, and opens again where it stood, wherever that tile went. */
+            await page.locator("[data-companion-collapse]").click(); await rest();
+            const chosen = await readTile(page);
+            expect([chosen.layout, chosen.yielded, chosen.words]).toEqual(["collapsed", false, 0]);
+            expect(chosen.toastClearance, `${label}: the tile against the toast`).toBeGreaterThanOrEqual(8);
+            await tile.click(); await rest();
+            const reopened = await readOpen(page);
+            expect(reopened.layout).toBe("expanded"); expect(reopened.at).toBe(open.at); expect(reopened.underHead).toEqual([]);
+            let back = null, backFrame = null, afterEnd = null;
+            if (route === "reconnecting") {
+              /* Back while open it says so where it stands, still off the page's head; ended, nothing is left to say. */
+              await control("release"); await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]')); await rest();
+              back = await readOpen(page);
+              expect(back.layout, label).toBe("expanded"); expect(back.underHead).toEqual([]); expect(back.toastClearance ?? 8).toBeGreaterThanOrEqual(8);
+              const backCover = await readCut(page);
+              expect(backCover.cut, `${label} back: lines a part cuts through`).toEqual([]); expect(backCover.between, `${label} back: lines between the parts`).toEqual([]);
+              const backEnd = await readControl(page, "[data-companion-end]");
+              expect(backEnd.disabled).toBe(false); expect(backEnd.missed).toEqual([]);
+              backFrame = await frame("back-open");
+              await page.locator("[data-companion-end]").last().click(); await phase("offline"); await rest();
+              afterEnd = await readTile(page);
+              expect([afterEnd.layout, afterEnd.yielded, afterEnd.words]).toEqual(["collapsed", true, 0]);
+            }
+            expect(pageErrors).toEqual([]);
+            readings.push({ rail, lang, scheme, route, viewport, healthy, first, open, cover, notice, bubble, end, reconnect, collapse, chosen, reopened, back, afterEnd, frames: [firstFrame, openFrame, ...(backFrame ? [backFrame] : [])] });
+            continue;
+          }
+          await control("drop"); await page.clock.runFor(300);
+          await phase("reconnecting");
+          if (route === "gave-up") { await control("release"); await phase("idle"); await giveUp(); }
+          await rest();
+          /* The first frame of the state says it: nobody has clicked anything. */
+          const code = route === "gave-up" ? "RECONNECT_GAVE_UP" : "RECONNECTING";
+          const first = await expectClear(code, "first frame");
+          const end = route !== "gave-up" ? await readControl(page, "[data-companion-end]") : null;
+          if (end) { expect(end.disabled).toBe(false); expect(end.inside).toBe(true); expect(end.missed).toEqual([]); }
+          const collapse = await readControl(page, "[data-companion-collapse]");
+          expect(collapse.inside).toBe(true); expect(collapse.missed).toEqual([]);
+          /* Back, it says that too, and then gives way to its tile; the next give-up opens it again. */
+          if (route === "held-open") {
+            await control("release"); await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]')); await rest();
+            const back = await expectClear("CONNECTION_RESTORED", "back");
+            const backFrame = await frame("back-open");
+            await page.clock.runFor(13_000); await rest();
+            const after = await readTile(page);
+            expect([after.layout, after.yielded, after.words], `${label}: healthy again`).toEqual(["collapsed", true, 0]);
+            await giveUp();
+            const held = await expectClear("RECONNECT_GAVE_UP", "gave up after back");
+            const offered = await readControl(page, "[data-companion-resume]");
+            expect(offered.disabled).toBe(false); expect(offered.missed).toEqual([]);
+            expect(pageErrors).toEqual([]);
+            readings.push({ lang, scheme, route, viewport, healthy, first, back, after, held, offered, frames: [backFrame] });
+            continue;
+          }
+          const openFrame = await frame(`${route}-open`);
+          let reconnect = null, afterEnd = null;
+          if (route === "gave-up") {
+            reconnect = await readControl(page, "[data-companion-resume]");
+            expect(reconnect.disabled).toBe(false); expect(reconnect.inside).toBe(true); expect(reconnect.missed).toEqual([]);
+          }
+          /* Collapsed by choice it stays a tile, clear of the toast, and opens where it stood on the first click. */
+          await page.locator("[data-companion-collapse]").click(); await rest();
+          const chosen = await readTile(page);
+          expect([chosen.layout, chosen.yielded, chosen.words]).toEqual(["collapsed", false, 0]);
+          expect(chosen.toastClearance, `${label}: the tile against the toast`).toBeGreaterThanOrEqual(8);
+          const tileFrame = await frame(`${route}-tile`);
+          await tile.click(); await rest();
+          const reopened = await expectClear(code, "opened again");
+          expect(reopened.open.at).toBe(first.open.at);
+          if (route === "reconnecting") {
+            /* The call ended leaves nothing to say: the open companion gives way to its tile again. */
+            await page.locator("[data-companion-end]").last().click(); await phase("offline"); await rest();
+            afterEnd = await readTile(page);
+            expect([afterEnd.layout, afterEnd.yielded]).toEqual(["collapsed", true]);
+          }
+          if (route === "gave-up") {
+            /* Its tap continues the call, and it stays open through the answer. */
+            await control("recover");
+            await page.locator("[data-companion-resume]").click();
+            await page.clock.runFor(100);
+            expect(await page.locator("[data-voice-companion]").getAttribute("data-layout")).toBe("expanded");
+            await control("release");
+            await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]'));
+            expect(await page.locator("[data-companion-resume]").count()).toBe(0);
+            const restored = await readControl(page, "[data-companion-end]");
+            expect(restored.disabled).toBe(false); expect(restored.missed).toEqual([]);
+          }
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, scheme, route, viewport, healthy, healthyEnd, first, end, collapse, reconnect, chosen, reopened, afterEnd, frames: [openFrame, tileFrame] });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/reconnect-board.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 2_400_000);
+
   browserTest("call memory settings show bounded notes and clear them on desktop and phone", async () => {
     const out = path.resolve(".artifacts/voice-call-memory");
     fs.mkdirSync(out,{ recursive: true });
@@ -24395,10 +27748,13 @@ describe("floating voice companion", () => {
         try {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
           const dialog = page.locator("[data-voice-companion-settings]");
-          const memory = page.locator("[data-call-memory]");
-          await memory.waitFor();
-          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
-          await memory.scrollIntoViewIfNeeded();
+          /* The switch stands on the section; the remembered calls are a page behind their row. */
+          const open = page.locator("[data-call-memory-row-open] [data-settings-row='link']");
+          await open.waitFor();
+          await open.scrollIntoViewIfNeeded();
+          await open.click();
+          const memory = page.locator("[data-call-memory]").last();
+          await page.locator("[data-call-memory-list]").waitFor({ state: "attached" });
           const read = await memory.evaluate((element,configuredWidth) => {
             const dialog = element.closest<HTMLElement>("[role=dialog]")!;
             const list = element.querySelector<HTMLElement>("[data-call-memory-list]")!;
@@ -24421,7 +27777,8 @@ describe("floating voice companion", () => {
             await page.waitForFunction(count => document.querySelectorAll("[data-call-memory-row]").length === count,read.rowCount - 1);
           } else await page.screenshot({ path:path.join(out,`${label}.png`) });
           if (state === "three") { await memory.getByRole("button",{ name:translate(lang,"voiceCompanion.memory.forgetAll"),exact:true }).click(); await page.waitForFunction(() => document.querySelectorAll("[data-call-memory-row]").length === 0); }
-          const toggle = memory.getByRole("switch"); await toggle.click(); await page.waitForFunction(() => !(document.querySelector("[data-call-memory] input") as HTMLInputElement)?.checked); expect(await toggle.isChecked()).toBe(false);
+          await page.locator("[data-settings-back]").click();
+          const toggle = page.locator("[data-call-memory] [role=switch]"); await toggle.click(); await page.waitForFunction(() => document.querySelector("[data-call-memory] [role=switch]")?.getAttribute("aria-checked") === "false"); expect(await toggle.isChecked()).toBe(false);
           expect(pageErrors).toEqual([]); measurements.push({ label,...read, cleared:true,switch:false });
           expect(await dialog.isVisible()).toBe(true);
         } finally { await context.close(); }
@@ -24493,7 +27850,18 @@ describe("floating voice companion", () => {
           textWidth: Math.round(canvas.measureText(selected).width), room: Math.round(room), truncated: canvas.measureText(selected).width > room, background: style.backgroundColor };
       });
       const button = section.querySelector<HTMLElement>("[data-voice-devices-allow]");
-      const controls = [...section.querySelectorAll<HTMLElement>("select, button")].map((node) => Math.round(node.getBoundingClientRect().height));
+      const controls = [...section.querySelectorAll<HTMLElement>("select, button")].map((node) => {
+        const box = node.getBoundingClientRect();
+        if (!node.matches("button") || box.height >= 24) return Math.round(box.height);
+        /* An inline link keeps its line's height: its target is what a thumb or a pointer reaches around it. */
+        node.scrollIntoView({ block: "nearest" });
+        const now = node.getBoundingClientRect();
+        const x = now.left + now.width / 2, y = now.top + now.height / 2;
+        let up = 0, down = 0;
+        while (up < 40 && node.contains(document.elementFromPoint(x, y - (up + 1)))) up += 1;
+        while (down < 40 && node.contains(document.elementFromPoint(x, y + (down + 1)))) down += 1;
+        return up + down + 1;
+      });
       /* Every text range of the section against the dialog's visible box and the window. */
       const outside: string[] = [];
       const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
@@ -24508,7 +27876,7 @@ describe("floating voice companion", () => {
         }
       }
       return { kinds, button: button ? { text: button.textContent, height: Math.round(button.getBoundingClientRect().height), left: button.getBoundingClientRect().left, right: button.getBoundingClientRect().right } : null,
-        controls, outside, title: section.querySelector("h3")?.textContent ?? null,
+        controls, outside, title: section.querySelector("[data-settings-section]")?.textContent ?? null,
         sideways: document.documentElement.scrollWidth - width, dialogSideways: dialog.scrollWidth - dialog.clientWidth,
         dialogBackground: getComputedStyle(dialog).backgroundColor, stored: { input: localStorage.getItem("llvVoiceInputDevice"), output: localStorage.getItem("llvVoiceOutputDevice") } };
     }, configuredWidth);
@@ -24770,7 +28138,7 @@ describe("floating voice companion", () => {
       pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example",
         translate(lang, "voiceCompanion.tools.secretValue", { name: "SPOTIFY_CLIENT_ID" }), "SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback"],
         foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
-      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.ready"), "spotify-mcp-example"],
         tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve"), ...dryRun(lang)] }),
       failed: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "--notes", "/srv/delegatus/mcp-servers/notes/server.ts", "NOTES_FORMAT=markdown"],
         foot: [translate(lang, "voiceCompanion.tools.dryRun.TIMEOUT"), ...dryRun(lang)] }),
@@ -24784,7 +28152,7 @@ describe("floating voice companion", () => {
         foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
       "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
-      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.ready"), "spotify-mcp-example"],
         tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.refused.SECRET_DESTINATION"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve")] }),
       "destination-result": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [translate(lang, "voiceCompanion.tools.dryRun.SECRET_DESTINATION"), ...dryRun(lang)] }),
@@ -24810,6 +28178,13 @@ describe("floating voice companion", () => {
           const section = page.locator("[data-voice-tools]");
           await section.waitFor();
           await page.waitForFunction(() => !document.querySelector("[data-voice-tools-status]")?.textContent?.includes("…"));
+          /* The server's page, with its record open behind «Details». */
+          const listed = page.locator("[data-voice-tools] [data-voice-tool-server] [data-settings-row='link']");
+          if (await listed.count()) {
+            await listed.first().scrollIntoViewIfNeeded();
+            if (phone) await listed.first().tap(); else await listed.first().click();
+            await page.locator("[data-settings-details-toggle]").last().click();
+          }
           const row = page.locator("[data-voice-tool-server]").first();
           if (refusedPress[state]) {
             const control = page.locator(refusedPress[state]);
@@ -24830,24 +28205,34 @@ describe("floating voice companion", () => {
             else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "secrets" ? "[data-voice-tool-reference]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
             await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
             const read = await page.evaluate(({ words, phone, part }) => {
-              const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
+              const dialog = document.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!;
               const box = dialog.getBoundingClientRect();
-              const section = document.querySelector<HTMLElement>("[data-voice-tools]")!;
+              const section = document.querySelector<HTMLElement>("[data-voice-tools], [data-voice-companion-settings] > [data-voice-tool-server]")!;
               const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.right <= innerWidth + 0.5;
               const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
               let outside = 0;
+              const outsideText: string[] = [];
               for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-                if (!node.textContent?.trim()) continue;
+                /* A literal too long for its column is elided by its own clip, and a row's label by its truncate. */
+                if (!node.textContent?.trim() || node.parentElement!.closest(".truncate")) continue;
                 const range = document.createRange(); range.selectNodeContents(node);
-                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) outside++;
+                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) { outside++; outsideText.push(`${node.textContent?.slice(0, 40)} ${Math.round(rect.right)}>${Math.round(box.right)}`); }
               }
-              /* Each defining phrase: every text range of it inside the dialog's visible box and the window; a short word on one line. */
+              /* Each defining phrase, brought into view as a person scrolling to it would: every text range of it inside the page's visible box and the window; a short word on one line. */
               const shown = words.map(word => {
                 const searchRoot = part === "tools" ? section.querySelector("[data-voice-tool-tools]") ?? section : section;
+                /* A literal is one value across its parts. */
+                const literal = [...searchRoot.querySelectorAll<HTMLElement>("[data-settings-literal]")].find(element => element.textContent?.includes(word));
+                if (literal) {
+                  literal.scrollIntoView({ block: "nearest" });
+                  const rect = literal.getBoundingClientRect();
+                  return rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect);
+                }
                 const all = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT);
                 for (let node = all.nextNode(); node; node = all.nextNode()) {
                   const at = node.textContent?.indexOf(word) ?? -1;
                   if (at < 0) continue;
+                  node.parentElement!.scrollIntoView({ block: "nearest" });
                   const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + word.length);
                   const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
                   return rects.length > 0 && rects.every(rect => rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect))
@@ -24859,12 +28244,12 @@ describe("floating voice companion", () => {
                 const rect = (control.closest("label") ?? control).getBoundingClientRect();
                 return rect.height < (phone ? 44 : 24) - 0.5;
               }).map(control => control.outerHTML.slice(0, 80));
-              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, shown, small,
-                background: getComputedStyle(dialog).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
+              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, outsideText, shown, small,
+                background: getComputedStyle(dialog.closest("[role=dialog]")!).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
             }, { words, phone, part });
             measurements.push({ label: `${label}-${part}`, ...read });
             if (read.viewportOverflow || read.dialogOverflow) failures.push(`${label}: scrolls sideways`);
-            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog`);
+            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog: ${read.outsideText.slice(0, 3).join(" | ")}`);
             read.shown.forEach((whole, at) => { if (!whole) failures.push(`${label}-${part}: «${words[at]}» is not whole on screen`); });
             if (read.small.length) failures.push(`${label}: small targets ${read.small.join(" | ")}`);
           }
@@ -24874,16 +28259,16 @@ describe("floating voice companion", () => {
             expect(await ask.isChecked()).toBe(state === "approved-ask");
             if (lang === "en" && scheme === "light") {
               if (phone) await ask.tap(); else await ask.click();
-              await page.waitForFunction(checked => (document.querySelector("[data-voice-tool-ask]") as HTMLInputElement | null)?.checked === checked && !(document.querySelector("[data-voice-tool-ask]") as HTMLInputElement).disabled, state !== "approved-ask");
+              await page.waitForFunction(checked => document.querySelector("[data-voice-tool-ask]")?.getAttribute("aria-checked") === String(checked) && !(document.querySelector("[data-voice-tool-ask]") as HTMLButtonElement | null)?.disabled, state !== "approved-ask");
               expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
               await page.locator("[data-voice-tool-actions]").evaluate(element => element.scrollIntoView({ block: "end" }));
               await page.screenshot({ path: path.join(out, `${label}-flipped.png`) });
             }
           }
           if (state === "review" && lang === "en" && scheme === "light") {
-            const play = page.locator("[data-voice-tool='play'] input");
+            const play = page.locator("[data-voice-tool='play'] [role=switch]");
             if (phone) await play.tap(); else await play.click();
-            await page.waitForFunction(() => (document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement | null)?.checked === true && !(document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement).disabled);
+            await page.waitForFunction(() => document.querySelector("[data-voice-tool='play'] [role=switch]")?.getAttribute("aria-checked") === "true" && !(document.querySelector("[data-voice-tool='play'] [role=switch]") as HTMLButtonElement | null)?.disabled);
             const approve = page.locator("[data-voice-tool-action='approve']");
             await approve.scrollIntoViewIfNeeded();
             if (phone) await approve.tap(); else await approve.click();
@@ -24940,14 +28325,14 @@ describe("floating voice companion", () => {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
           const dialog = page.locator("[data-voice-companion-settings]");
           await dialog.locator("[data-voice-companion-enable]").waitFor();
-          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
-          const control = press === "enable" ? dialog.locator("[data-voice-companion-enable]") : dialog.locator("[data-call-memory] input[role=switch]");
+          await page.waitForFunction(() => !document.querySelector("[data-call-memory-status]")?.textContent?.includes("…"));
+          const control = press === "enable" ? dialog.locator("[data-voice-companion-enable]") : dialog.locator("[data-call-memory] [role=switch]");
           const before = await control.isChecked();
           if (width === 390) await control.tap(); else await control.click();
           await page.waitForSelector("[data-voice-companion-setting-error]", { timeout: 10_000 });
           const reading = await page.evaluate(() => {
             const line = document.querySelector<HTMLElement>("[data-voice-companion-setting-error]")!;
-            const scroller = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const scroller = document.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!.getBoundingClientRect();
             const range = document.createRange(); range.selectNodeContents(line);
             const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
             const cut = rects.filter((rect) => rect.top < Math.max(0, scroller.top) - 0.5 || rect.bottom > Math.min(innerHeight, scroller.bottom) + 0.5 || rect.left < scroller.left - 0.5 || rect.right > scroller.right + 0.5).length;
@@ -25093,6 +28478,7 @@ describe("floating voice companion", () => {
     phone?: boolean;
     /** Run in the page before its own scripts, from the navigation on. */
     init?: () => void;
+    clock?: number;
   }) => {
     const context = await browser.newContext({
       ...(options.phone ? { isMobile: true, hasTouch: true } : {}),
@@ -25102,9 +28488,12 @@ describe("floating voice companion", () => {
     await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(options.lang)}); } catch {}`);
     if (options.init) await context.addInitScript(options.init);
     const page = await context.newPage();
+    if (options.clock !== undefined) { await page.clock.install({ time: options.clock }); await page.clock.pauseAt(options.clock + 60_000); }
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`${base}?scenario=voice-companion${query}${options.surface ? `&surface=${options.surface}` : ""}`);
+    if (options.clock !== undefined) await page.clock.runFor(1_500);
+    if (options.clock !== undefined) for (let frame = 0; frame < 50 && !(await page.locator("[data-voice-companion][data-placed]").count()); frame++) await page.clock.runFor(100);
     if (!options.product) await page.waitForSelector("[data-voice-companion][data-placed]", { timeout: 20_000 });
     if (!options.surface && !(options.product && options.viewport.width === 390)) await page.waitForSelector(card("t-search"), { timeout: 20_000 }).catch(() => undefined);
     /* The board arrives after the first placement; the companion re-reads the page 250 ms after it changes. */
@@ -25890,6 +29279,35 @@ describe("floating voice companion", () => {
     return probe as unknown as { frames: number; entries: number; entriesAwayFromCharacter: number; entryAwayMaxPx: number; towardCharacterFrames: number; towardCharacterMaxPx: number; awayMaxStepPx: number; rises: number; riseMaxFrameShare: number; riseMaxFrameShareStepPx: number; riseMaxFrameSharePathPx: number; riseLongestPathPx: number; risesCutByLeaving: number; lateFramesInRises: number; overlapFrames: number; overlapMaxPx: number; overlapWorstPair: string; bubblesRead: number; orphanLastLines: string[]; carriedFrames: number; carriedMaxPx: number; relocations: number };
   });
 
+  browserTest("review confirmation transitions preserve outward motion", async () => {
+    fs.mkdirSync(HANDOFF, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const rows: Array<{ script: string; width: number; lang: string; scheme: string; motion: Awaited<ReturnType<typeof stopMotionProbe>> }> = [];
+    try {
+      for (const script of ["withdraw", "voiceConfirm"] as const) for (const [width, lang, scheme] of [[1440, "en", "light"], [1220, "uk", "dark"]] as const) {
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&script=${script}`, { viewport: { width, height: 800 }, lang, scheme, motion: "no-preference", video: path.join(HANDOFF, "videos") });
+        try {
+          await startMotionProbe(page);
+          await page.locator("[data-companion-talk]").click();
+          await page.waitForSelector("[data-companion-send]", { timeout: 30_000 });
+          const asking = await readCompanion(page);
+          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 30_000, polling: 100 });
+          await page.waitForTimeout(700);
+          const motion = await stopMotionProbe(page);
+          const final = await readCompanion(page);
+          await page.screenshot({ path: path.join(HANDOFF, `motion-${script}-${width}-${lang}-${scheme}.png`) });
+          rows.push({ script, width, lang, scheme, motion });
+          expect(pageErrors, `${script} ${width} ${lang} ${scheme}`).toEqual([]);
+          expect(asking.floaters, `${script} ${width}: confirmation is shown`).toBeGreaterThan(0);
+          expect(final.floaters, `${script} ${width}: result remains visible`).toBeGreaterThan(0);
+        } finally { await context.close(); }
+      }
+    } finally { await close(); server.stop(); }
+    fs.writeFileSync(path.join(HANDOFF, "motion.json"), JSON.stringify(rows, null, 2) + "\n");
+    expect(rows.map(row => ({ script: row.script, width: row.width, toward: row.motion.towardCharacterFrames, px: row.motion.towardCharacterMaxPx }))).toEqual(rows.map(row => ({ script: row.script, width: row.width, toward: 0, px: 0 })));
+  }, 600_000);
+
   browserTest("by default the character and its lane cover no control and no page text, in one place on three loads and the same at 1.4 s and 6 s: open and collapsed, with the conversation as it starts, with the delegated row and its answer, and filled to its whole height, 1440 and 1000, en and uk, both themes", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
@@ -26069,6 +29487,26 @@ describe("floating voice companion", () => {
       cases, clicks,
     });
   }, 900_000);
+
+  browserTest("moved by hand over the page's text, the companion stands on no surface of its own", async () => {
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    try {
+      const { context, page, pageErrors } = await openVoice(browser, server.base, "", { viewport: VIEWPORT, scheme: "light", lang: "en", motion: "reduce", surface: "underlay" });
+      try {
+        await page.evaluate(() => { const line = document.createElement("p"); line.textContent = "A line of the page's own text, for the operator to move the companion over."; line.style.cssText = "position: fixed; left: 300px; top: 400px; width: 800px; margin: 0"; document.body.append(line); });
+        const figure = (await page.locator("[data-voice-companion] .vc-figure").boundingBox())!;
+        await page.mouse.move(figure.x + figure.width / 2, figure.y + figure.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(800, 410, { steps: 24 });
+        await page.mouse.up();
+        await page.waitForTimeout(800);
+        expect(await page.locator(".vc-lane[data-over-page]").count(), "the place the hand chose lies over the text").toBe(1);
+        expect(await page.locator("[data-companion-veil]").count(), "what stays in view around it is the operator's").toBe(0);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await close(); server.stop(); }
+  }, 120_000);
 
   browserTest("dropped on a control, the companion is the one that moves; collapsed it stays, flags a proposal and sends nothing; with no room it collapses", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
@@ -26762,11 +30200,11 @@ describe("floating voice companion", () => {
        board's 24-hour form: the whole-account note, one line a window, the reading time. */
     const planLines = (page: Page, lang: "en" | "uk") => page.evaluate((lang) => {
       const loaded = (window as unknown as { voiceCompanion: { loaded: number } }).voiceCompanion.loaded;
-      const time = (seconds: number) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(seconds * 1000));
       const date = (seconds: number) => new Intl.DateTimeFormat(lang, { day: "numeric", month: lang === "uk" ? "long" : "short" }).format(new Date(seconds * 1000));
+      /* One line: what each window used, and when the fuller one, the week, resets. */
       return lang === "uk"
-        ? ["План Pro, увесь акаунт разом з агентами", `5\u00a0год 23%, оновлення ${time(loaded + 7_200)}`, `тиждень 77%, оновлення ${date(loaded + 4 * 86_400)}`, `Станом на ${time(loaded)}.`]
-        : ["Pro plan, the whole account with its agents", `5\u00a0h 23%, resets ${time(loaded + 7_200)}`, `week 77%, resets ${date(loaded + 4 * 86_400)}`, `As of ${time(loaded)}.`];
+        ? [`План Pro, увесь акаунт: використано 5\u00a0год 23%, тиждень 77% · оновлення ${date(loaded + 4 * 86_400)}`]
+        : [`Pro plan, whole account: 5\u00a0h 23%, week 77% used · resets ${date(loaded + 4 * 86_400)}`];
     }, lang);
     /* The way the operator reaches the rows: the header's ⋯, its Settings page, then «Voice Delegatus», which opens the dialog. */
     const openSettings = async (page: Page) => {
@@ -26790,58 +30228,61 @@ describe("floating voice companion", () => {
           await openSettings(page);
           const section = page.locator("[data-voice-companion-setting]");
           expect(await section.locator("[data-voice-companion-enable]").isChecked(), `${label}: the switch is off`).toBe(false);
-          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap], [data-voice-companion-backend]").count(), `${label}: no further row while off`).toBe(0);
+          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap-row], [data-voice-companion-backend]").count(), `${label}: no further row while off`).toBe(0);
           await page.screenshot({ path: path.join(HANDOFF, `settings-off-${label}.png`) });
           await section.locator("[data-voice-companion-enable]").click();
           await section.locator("[data-voice-companion-key]").waitFor({ timeout: 10_000 });
           if (viewport.width > 639) await page.waitForSelector('[data-voice-companion][data-mode="official-realtime"]', { timeout: 10_000 });
           expect((await writes(page)).settings, `${label}: the switch wrote one setting`).toEqual([{ enabled: true }]);
-          /* The key: where it comes from, and «Open Keys»; no field here, since keys are entered in one place. */
-          const keyStatus = (await section.locator("[data-voice-companion-key-status]").innerText()).trim();
-          expect(keyStatus.startsWith(translate(lang, "voiceCompanion.settings.key.missing")), `${label}: no key yet`).toBe(true);
+          /* The key: where it comes from, and a row that opens «Keys»; no field here, since keys are entered in one place. */
+          const keyStatus = (await section.locator("[data-voice-companion-key] [data-settings-row-value]").innerText()).trim();
+          expect(keyStatus, `${label}: no key yet`).toBe(translate(lang, "settings.voice.keyWord.missing"));
           expect(await section.locator("[data-voice-companion-key] input").count(), `${label}: no key field`).toBe(0);
-          expect((await section.locator("[data-voice-companion-open-keys]").innerText()).trim(), `${label}: the way to «Keys»`).toBe(translate(lang, "keys.open"));
-          /* The cap and the month's usage. */
-          const cap = section.locator("[data-voice-companion-cap] input");
+          expect(await section.locator("[data-voice-companion-key]").innerText(), `${label}: the way to «Keys»`).toContain(translate(lang, "settings.opensKeys"));
+          /* The cap and the month's usage, on the cap's page. */
+          const monthWord = lang === "uk" ? "жовтень" : "October";
+          const usageWords = (cap: string) => translate(lang, "voiceCompanion.settings.usage", { month: monthWord, spent: "$3.40", cap });
+          expect(await section.locator("[data-voice-companion-cap-row]").innerText(), `${label}: the month's usage on its row`).toContain(translate(lang, "settings.voice.usedThisMonth", { spent: "$3.40" }));
+          await section.locator("[data-voice-companion-cap-row] [data-settings-row='link']").click();
+          const cap = page.locator("[data-voice-companion-cap-input]");
           expect(await cap.inputValue(), `${label}: the default cap`).toBe("20");
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: the month's usage`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$20.00" }));
           await cap.fill("35");
           await cap.press("Enter");
           await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.settingsWrites.length === 2, null, { timeout: 10_000 });
           expect((await writes(page)).settings[1], `${label}: the cap was written`).toEqual({ monthlyCapUsd: 35 });
-          await section.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$35.00" }));
-          const lastCall = await section.locator("[data-voice-companion-last-call]").innerText();
-          expect(lastCall, `${label}: the last call is in settings`).toContain("$0.40 · 7:51");
+          await page.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
+          expect(await page.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(usageWords("$35.00"));
+          const lastCall = await page.locator("[data-voice-companion-last-call]").innerText();
+          expect(lastCall, `${label}: the last call is in settings`).toContain(`$0.40 · ${translate(lang, "voiceCompanion.usage.minutes", { n: 7 })} ${translate(lang, "voiceCompanion.usage.seconds", { n: 51 })}`.replaceAll(" ", "\u00a0").replace("$0.40\u00a0·\u00a0", "$0.40 · "));
           expect(lastCall, `${label}: localized last call`).toContain(lang === "uk" ? "Остання розмова:" : "Last call:");
           await page.screenshot({ path: path.join(HANDOFF, `settings-real-${label}.png`) });
-          /* On is a real voice and never a demo: one two-option choice, the API chosen by default, its key and cap under it. */
+          await page.locator("[data-settings-back]").click();
+          /* On is a real voice and never a demo: one choice, the API chosen by default, its key and cap under it. */
+          const backendSelect = section.locator("[data-voice-backend-select]");
           const choices = await section.evaluate((node) => ({
-            choice: [...node.querySelectorAll<HTMLInputElement>("[role='radiogroup'][data-voice-companion-backend] input[type='radio']")].map((radio) => [radio.value, radio.checked, radio.closest("label")?.textContent ?? ""]),
-            controls: node.querySelectorAll("input, button, select").length,
+            choice: [...node.querySelector<HTMLSelectElement>("[data-voice-backend-select]")!.options].map((option) => [option.value, option.selected, option.textContent]),
             demoWords: /demo|демо/iu.test(node.textContent ?? ""),
           }));
-          /* The switch, the two choices, «Open Keys», the cap and the call-memory row's two controls (the count read 6 on main before the call-memory row came). */
-          expect(choices, `${label}: the switch, the choice with the API chosen, the way to the key and the cap`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], controls: 7, demoWords: false });
+          expect(choices, `${label}: the choice with the API chosen`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], demoWords: false });
           const dialog = await page.evaluate(() => {
-            const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const box = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
             const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
             return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sectionWidth: Math.round(section.getBoundingClientRect().width), overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
           });
           expect([dialog.insideViewport, dialog.overflowsDialog, dialog.cut], `${label}: the rows fit the dialog`).toEqual([true, false, []]);
           await page.screenshot({ path: path.join(HANDOFF, `settings-on-${label}.png`) });
-          const monthSpend = await section.locator("[data-voice-companion-usage]").innerText();
+          const monthSpend = await section.locator("[data-voice-companion-cap-row]").innerText();
           /* Codex V3 chosen: the key and the cap close, nothing asks for a key, and the last Codex call shows with the
              plan window of the account it ran on, which is the whole account's use. */
-          await section.locator("[data-voice-backend='codex'] input[type='radio']").click();
+          await backendSelect.selectOption("codex");
           await section.locator("[data-voice-companion-codex]").waitFor({ timeout: 10_000 });
           expect((await writes(page)).settings.at(-1), `${label}: the choice was written`).toEqual({ backend: "codex" });
-          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap]").count(), `${label}: no key and no cap on Codex`).toBe(0);
+          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap-row]").count(), `${label}: no key and no cap on Codex`).toBe(0);
           const codexLastCall = await section.locator("[data-voice-companion-codex] [data-voice-companion-last-call]").innerText();
-          expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7:51 · 10 жовтня." : "Last call: 7:51 · Oct 10.");
+          expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7\u00a0хв\u00a051\u00a0с · 10 жовтня." : "Last call: 7\u00a0min\u00a051\u00a0s · Oct 10.");
           const codexPlan = await section.locator("[data-voice-companion-plan]").evaluate((block) => {
-            const lines = [...block.children] as HTMLElement[];
+            const lines = [block as HTMLElement];
             /* Every number joined to its unit stays on one line box, and each window reads as one line. */
             const parted = [...block.querySelectorAll<HTMLElement>("[data-plan-window]")].flatMap((line) => {
               const node = line.firstChild!;
@@ -26856,22 +30297,19 @@ describe("floating voice companion", () => {
               lines: lines.map((line) => line.textContent ?? ""),
               windowLines: [...block.querySelectorAll<HTMLElement>("[data-plan-window]")].map((line) => Math.round(line.getBoundingClientRect().height / parseFloat(getComputedStyle(line).lineHeight))),
               figures: [...block.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((figure) => ({ text: figure.textContent, weight: Number(getComputedStyle(figure).fontWeight), color: getComputedStyle(figure).color })),
-              muted: getComputedStyle(lines[0]!).color, lastMuted: getComputedStyle(lines.at(-1)!).color,
+              muted: getComputedStyle(lines[0]!).color,
               parted, twelveHour: /AM|PM/u.test(block.textContent ?? ""),
             };
           });
-          expect(codexPlan.lines, `${label}: the plan window, one line a window`).toEqual(await planLines(page, lang));
+          expect(codexPlan.lines, `${label}: the plan in one line`).toEqual(await planLines(page, lang));
           expect([codexPlan.parted, codexPlan.windowLines, codexPlan.twelveHour], `${label}: no window name split, each window one line, 24-hour times`).toEqual([[], [1, 1], false]);
           expect(codexPlan.figures.map((figure) => [figure.text, figure.weight >= 600, figure.color !== codexPlan.muted]), `${label}: the figures read at a glance`).toEqual([["23%", true, true], ["77%", true, true]]);
-          expect(codexPlan.lastMuted, `${label}: the reading time is muted`).toBe(codexPlan.muted);
           const codexRows = await section.evaluate((node) => ({
-            controls: node.querySelectorAll("input, button, select").length,
-            keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.querySelector("[data-voice-companion-codex]")?.textContent ?? ""),
+            keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.textContent ?? ""),
           }));
-          /* The switch, the two choices and the call-memory row's two controls (3 on main before that row came). */
-          expect(codexRows, `${label}: the switch and the choice alone, and no word of a key`).toEqual({ controls: 5, keyWords: false });
+          expect(codexRows, `${label}: no word of a key anywhere on the page`).toEqual({ keyWords: false });
           const codexDialog = await page.evaluate(() => {
-            const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const box = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
             const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
             return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
@@ -26934,11 +30372,12 @@ describe("floating voice companion", () => {
           const row = env.page.locator('[data-voice-companion-key][data-key-source="env"]');
           await row.waitFor({ timeout: 10_000 });
           expect(await row.locator("input").count(), `environment key, ${lang}: no field`).toBe(0);
-          expect((await row.locator("[data-voice-companion-key-status] span").first().innerText()).trim(), `environment key, ${lang}`).toBe(translate(lang, "voiceCompanion.settings.key.env"));
+          expect((await row.locator("[data-settings-row-value]").innerText()).trim(), `environment key, ${lang}`).toBe(translate(lang, "settings.voice.keyWord.env"));
+          expect(await row.locator("[data-settings-dot]").getAttribute("aria-label"), `environment key, ${lang}: the variable is named`).toContain("OPENAI_API_KEY");
           await env.page.screenshot({ path: path.join(HANDOFF, `settings-env-key-${lang}.png`) });
           await row.locator("[data-voice-companion-open-keys]").click();
           await env.page.waitForSelector("[data-voice-companion-settings]", { state: "detached", timeout: 10_000 });
-          const openai = env.page.locator("[data-rail-menu-panel] [data-header-menu-page='keys'] [data-keys-row='openai']");
+          const openai = env.page.locator("[data-settings-window] [data-header-menu-page='keys'] [data-keys-row='openai']");
           await openai.waitFor({ timeout: 10_000 });
           expect((await openai.locator("[data-keys-env-tail]").innerText()).trim(), `environment key, ${lang}: «Keys» says the variable sets it`).toBe(`· ${translate(lang, "keys.state.envShort")}`);
           expect(await env.page.evaluate(() => document.activeElement?.getAttribute("data-keys-eye")), `environment key, ${lang}: focus on the OpenAI key's eye`).toBe("openai");
@@ -30716,6 +34155,186 @@ describe("queued hold kinds on the card", () => {
   }, 180_000);
 });
 
+describe("Waiting status hint", () => {
+  browserTest("phone Waiting hold receipt follows the saved status and Undo restores the previous row", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "hold-receipt-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await serveEvidenceFixture(scratch);
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [320, 390, 440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.locator('[data-phone-card="task:hold-editor-entry"]').click();
+          await page.locator("[data-phone-task-status-pill]").click();
+          await page.locator('[data-phone-task-status="blocked"]').click();
+          const editor = page.locator("[data-hold-editor]");
+          await editor.locator("select").selectOption("resource");
+          await editor.locator("input").fill("Wait for memory");
+          await page.evaluate(() => {
+            const state = (window as unknown as { evidence: { taskPatchGate: Promise<void> | null; releaseTaskPatch?: () => void } }).evidence;
+            state.taskPatchGate = new Promise(resolve => { state.releaseTaskPatch = resolve; });
+          });
+          await editor.locator('button[type="submit"]').click();
+          await page.waitForFunction(() => (window as unknown as { evidence: { taskPatches: unknown[] } }).evidence.taskPatches.length === 1);
+          const receipt = page.locator("[data-mobile2-receipt]");
+          expect(await receipt.count()).toBe(0);
+          await page.evaluate(() => {
+            (window as unknown as { evidence: { releaseTaskPatch: () => void } }).evidence.releaseTaskPatch();
+          });
+          await receipt.waitFor();
+          expect(await receipt.textContent()).toContain(translate(locale, "mobile2.kanban.moved", { column: translate(locale, "kanban.status.inbox") }));
+          await page.locator('[data-phone-task-status-pill="inbox"]').waitFor();
+          expect(await receipt.evaluate(node => node.getBoundingClientRect().left >= 0 && node.getBoundingClientRect().right <= innerWidth)).toBe(true);
+          if (width === 390 && process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-phone-saved-${locale}-${theme}.png`) });
+          }
+          await receipt.locator('[data-mobile2-receipt-undo="undo"]').click();
+          await page.locator('[data-phone-task-status-pill="assigned"]').waitFor();
+          await page.waitForFunction(() => (window as unknown as { evidence: { taskWrites: { answeredAt: number }[] } }).evidence.taskWrites[1]?.answeredAt > 0);
+          const undo = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: { body: unknown }[] } }).evidence.taskPatches[1]!.body);
+          expect(undo).toMatchObject({ status: "assigned", restoreHold: null, expectedRevision: expect.any(String) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("desktop Waiting editor keeps a refused clear draft and closes after a successful clear", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "hold-clear-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await serveEvidenceFixture(scratch);
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width: 1440, height: 844 }, theme, locale, "reduce");
+        try {
+          page.setDefaultTimeout(8000);
+          const row = page.locator(card("hold-slot-note"));
+          await row.waitFor({ state: "visible" });
+          await row.focus();
+          await row.press("s");
+          await page.locator('.menu [data-menu-item="hold"]').press("Enter");
+          const editor = row.locator("[data-hold-editor]");
+          const note = editor.locator("input").first();
+          await note.fill("Keep this local draft");
+          await page.evaluate(() => {
+            (window as unknown as { evidence: { refuseNextTaskPatch: boolean } }).evidence.refuseNextTaskPatch = true;
+          });
+          const clear = editor.getByRole("button", { name: translate(locale, "kanban.hold.clear") });
+          await clear.click();
+          await page.locator("[data-kanban-receipt].error").waitFor();
+          expect(await note.inputValue()).toBe("Keep this local draft");
+          expect(await row.evaluate(node => node.closest<HTMLElement>(".column")?.dataset.status)).toBe("blocked");
+          if (process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-clear-refused-${locale}-${theme}.png`) });
+          }
+          await clear.click();
+          await page.locator('.column[data-status="inbox"] .card[data-id="task:hold-slot-note"]').waitFor();
+          await editor.waitFor({ state: "detached" });
+          if (process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-clear-saved-${locale}-${theme}.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("Waiting explains the operator action on desktop and phone in both languages and themes", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "waiting-status-hint");
+    fs.mkdirSync(out, { recursive: true });
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "waiting-hint-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let browser: Browser | undefined;
+    try {
+      server = await serveEvidenceFixture(scratch);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="blocked"]').click();
+            await page.locator('[data-phone-card="task:hold-slot"]').click();
+            await page.locator("[data-phone-task-status-pill]").click();
+          } else {
+            const row = page.locator(card("hold-slot"));
+            await row.focus();
+            await row.press("s");
+          }
+          const expected = locale === "en" ? "Waiting for your decision, access or a setting you control"
+            : "Очікує на ваше рішення, доступ або налаштування";
+          const panel = page.locator(phone ? "[data-phone-task-status-sheet]" : ".kb .menu");
+          const hint = panel.getByText(expected, { exact: true });
+          await hint.waitFor({ state: "visible" });
+          expect(await hint.evaluate(node => node.scrollWidth <= node.clientWidth + 1 && node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser?.close();
+      server?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("opening the Waiting editor brings its reason and both actions into view at desktop widths", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "waiting-editor-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let browser: Browser | undefined;
+    try {
+      server = await serveEvidenceFixture(scratch);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [915, 1440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce");
+        try {
+          const collapsed = page.locator('[data-seat-collapse][aria-expanded="false"]');
+          if (await collapsed.count()) await collapsed.click();
+          const row = page.locator(card("hold-editor-entry"));
+          await row.focus();
+          await page.keyboard.press("s");
+          await page.locator('.menu [role="menuitemradio"]', { hasText: translate(locale, "kanban.status.blocked") }).click();
+          const editor = page.locator(`${card("hold-editor-entry")} [data-hold-editor]`);
+          await editor.waitFor();
+          const fields = [editor.locator("input").first(), editor.locator("button[type=submit]"), editor.getByRole("button", { name: translate(locale, "kanban.hold.cancel") })];
+          const bounds = await Promise.all(fields.map(async element => element.boundingBox()));
+          expect(bounds.every(box => !!box && box.y >= 0 && box.y + box.height <= 844)).toBe(true);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser?.close();
+      server?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
+
 describe("issue report advisory preview", () => {
   /* PR #2530: the operator decides on this message, so it has to show which
      lines become public, that approving publishes them, and what each hint
@@ -34445,7 +38064,7 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
  */
 describe("Celestia clone creation in the relay card", () => {
   browserTest("empty, list, form, waiting and created states on desktop and phone, light and dark, uk and en", async () => {
-    const out = path.resolve(".artifacts/celestia-clone-create");
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "celestia-clone-create");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
@@ -34533,7 +38152,7 @@ describe("Celestia clone creation in the relay card", () => {
               return win;
             }) as unknown as typeof window.open;
             Object.assign(window, { cloneFake: {
-              withClones: () => { fake.relay.targets = [target("league", names[0]!), target("beta", names[1]!, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null })]; },
+              withClones: () => { fake.relay.targets = [target("league", names[0]!, { grantStatus: "suspended" }), target("beta", names[1]!, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, grantStatus: "active" })]; },
               create: (name: string) => {
                 fake.relay.targets = [...fake.relay.targets, target("fresh", name, { engine: null, model: null, effort: null, answered_by: "install" })];
                 fake.status = { status: "created", target_id: "fresh", username: (fake.relay.cloneRequest as { username?: string } | undefined)?.username };
@@ -34579,13 +38198,13 @@ describe("Celestia clone creation in the relay card", () => {
 
           await page.evaluate(() => (window as unknown as Fake).cloneFake.withClones());
           await frame("list", "[data-external-relay-target='beta']");
-          expect(await card.locator("[data-external-relay-target='beta']").textContent()).toContain("Codex Cloud · GPT-6.1 Sol");
+          expect(await card.locator("[data-external-relay-target='beta']").textContent()).toContain("Codex Cloud · GPT-6.1-Sol");
           expect(await card.locator("[data-clone-open]").textContent()).toBe(translate(lang, "externalRelay.clone.create"));
 
-          for (const [id, key] of [["beta", "externalRelay.target.ownerTierCloudHint"], ["league", "externalRelay.target.ownerTierHint"]] as const) {
+          for (const [id, status] of [["beta", "active"], ["league", "suspended"]] as const) {
             const target = card.locator(`[data-external-relay-target='${id}']`);
             await target.locator("[data-external-relay-target-fold]").click();
-            expect(await target.locator("[data-external-relay-owner-tier-hint]").textContent()).toBe(translate(lang, key));
+            expect(await target.locator(`[data-external-relay-grant-status='${status}']`).textContent()).toBe(translate(lang, `externalRelay.target.grant.${status}`));
             await frame(`${id === "beta" ? "cloud" : "local"}-settings`, `[data-external-relay-target='${id}'][data-open]`);
             await target.locator("[data-external-relay-target-fold]").click();
           }
@@ -34617,7 +38236,7 @@ describe("Celestia clone creation in the relay card", () => {
           await card.locator("[data-external-relay-target='fresh'][data-fresh] [data-external-relay-fresh]").waitFor({ timeout: 15_000 });
           await card.locator("[data-external-relay-target='fresh'] [data-external-relay-answered-by='install']").waitFor({ timeout: 15_000 });
           /* The new clone takes the Cloud default, answered here. */
-          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Codex Cloud · GPT-6.1 Sol" }).waitFor({ timeout: 15_000 });
+          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Codex Cloud · GPT-6.1-Sol" }).waitFor({ timeout: 15_000 });
           expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.fresh())).toMatchObject({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" });
           expect(await card.locator("[data-external-relay-no-account], [data-external-relay-running].text-warning").count()).toBe(0);
           await frame("created", "[data-clone-created]");
@@ -37066,74 +40685,339 @@ describe("pipeline repository initialization", () => {
   }, 120_000);
 });
 
-describe("saved decision delivery", () => {
-  browserTest("C: the Decisions badge and panel retain saved answers until delivery", async () => {
-    const out = path.resolve(".artifacts/answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
-    const served = await serveEvidenceFixture(out);
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+describe("pipeline from a PR or issue link", () => {
+  /* docs/research/competitors-2026-10.md rank 4: the template picker reads a
+     pasted link and shows what the draft will use; the draft's editor names
+     the PR it delivers to. Frames go to LLV_LINK_SOURCE_OUT, else .artifacts. */
+  browserTest("the picker shows the resolved repository, base, head and task, and the draft editor names its PR", async () => {
+    const out = path.resolve(process.env.LLV_LINK_SOURCE_OUT ?? ".artifacts/pipeline-link-source");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle"));
+    const browserTemp = fs.mkdtempSync(path.join(os.tmpdir(), "browser-"));
+    const browserTempFd = fs.openSync(browserTemp, "r");
+    const socketRoot = process.platform === "linux" ? "/proc/" + process.pid + "/fd/" + browserTempFd : browserTemp;
+    let browser: Browser | undefined;
     const readings: unknown[] = [];
+    const cases = [
+      { name: "pr", link: "https://github.com/example/atlas/pull/41", state: "resolved" },
+      { name: "fork", link: "https://github.com/example/atlas/pull/42", state: "resolved" },
+      { name: "issue", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
+      { name: "refused", link: "https://github.com/example/atlas/pull/9", state: "refused" },
+      { name: "rewritten", link: "https://github.com/example/atlas/pull/43", state: "refused" },
+      { name: "attach", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
+      { name: "longfork", link: "https://github.com/example/atlas/pull/44", state: "resolved" },
+      { name: "longrefused", link: "https://github.com/example/atlas/pull/45", state: "refused" },
+    ] as const;
+    /* The fixture's 100-character repository name, the longest GitHub allows. */
+    const longRepository = "contributor/" + ("atlasmirror" + "forlongrepositorynames".repeat(5)).slice(0, 100);
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
+      for (const [width, height] of [[390, 844], [695, 800], [1000, 700], [1220, 860], [1440, 900]] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) for (const entry of cases) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base + "?pipelinelink=" + (entry.name === "attach" ? entry.name : "picker"),
+          { width, height }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator('[data-pipeline-picker-state="ready"]').waitFor();
+          await page.locator("[data-pipeline-link-input]").fill(entry.link);
+          await page.locator(`[data-pipeline-link-state="${entry.state}"]`).waitFor();
+          const scope = page.getByRole("dialog");
+          const preview = await page.locator(`[data-pipeline-link-state="${entry.state}"]`).innerText();
+          if (entry.name === "pr") {
+            expect(preview).toContain("feature/link-source-preview · 4f1c2a9");
+            expect(await page.locator("[data-pipeline-link-task] input[type='radio']").count()).toBe(3);
+            expect(await page.locator("[data-pipeline-link-task]").innerText()).toContain("Review the board's pull request flow on the phone");
+          }
+          if (entry.name === "fork") {
+            /* The row names the fork once and shows no raw URL, on one line. */
+            const push = page.locator("[data-pipeline-link-push]");
+            expect(await push.innerText()).toBe(translate(lang, "pipelineLink.fork", { repository: "contributor/atlas" }));
+            expect(await push.evaluate((node) => node.getClientRects().length === 1 && node.getBoundingClientRect().height < 1.6 * parseFloat(getComputedStyle(node).lineHeight))).toBe(true);
+            expect(await page.locator("[data-pipeline-link-warning]").count()).toBe(1);
+          }
+          /* A name with no place to break wraps inside the row, starting beside the word fork. */
+          if (entry.name === "longfork") {
+            const push = page.locator("[data-pipeline-link-push]");
+            expect(await push.innerText()).toBe(translate(lang, "pipelineLink.fork", { repository: longRepository }));
+            expect(await push.evaluate((node) => {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              const rects = [...range.getClientRects()];
+              return rects.length > 1 && rects[0]!.width > node.getBoundingClientRect().width / 2;
+            })).toBe(true);
+          }
+          if (entry.name === "issue") expect(await page.locator("[data-pipeline-link-no-task]").count()).toBe(1);
+          /* The draft exists and attaching the issue failed: the reason stays with Retry and Open, and nothing can make a second draft. */
+          if (entry.name === "attach") {
+            await page.locator("button", { hasText: translate(lang, "pipelineTemplates.blank") }).click();
+            const alert = page.locator("[data-pipeline-link-attach-failed]");
+            await alert.waitFor();
+            expect(await alert.innerText()).toContain(translate(lang, "pipelineLink.attachFailed", { link: "example/atlas#7", error: "the pipeline store is busy; retry" }));
+            expect(await page.locator("[data-pipeline-link-attach-retry]").innerText()).toBe(translate(lang, "pipelineTemplates.retry"));
+            expect(await page.locator("[data-pipeline-link-attach-skip]").innerText()).toBe(translate(lang, "pipelineLink.openDraft"));
+            expect(await page.locator("[data-pipeline-link-input]").isDisabled()).toBe(true);
+            /* The alert sits under the link input, Retry is the filled button, and the heading is whole. */
+            const placed = await page.evaluate(() => {
+              const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+              const fill = (selector: string) => getComputedStyle(document.querySelector(selector)!).backgroundColor;
+              const heading = document.querySelector("[role=dialog] .text-title")!;
+              const range = document.createRange();
+              range.selectNodeContents(heading);
+              const scroller = document.querySelector("[data-pipeline-picker-scroll]")!.getBoundingClientRect();
+              return {
+                alertBelowInput: box("[data-pipeline-link-attach-failed]").top >= box("[data-pipeline-link-input]").bottom,
+                retryFilled: fill("[data-pipeline-link-attach-retry]") !== fill("[data-pipeline-link-attach-skip]"),
+                headingWhole: range.getBoundingClientRect().top >= scroller.top && range.getBoundingClientRect().bottom <= scroller.bottom,
+                alertVisible: box("[data-pipeline-link-attach-failed]").bottom <= scroller.bottom,
+              };
+            });
+            expect(placed).toEqual({ alertBelowInput: true, retryFilled: true, headingWhole: true, alertVisible: true });
+            /* On a touch phone Retry and Open are full touch targets, side by side. */
+            if (width === 390) {
+              const retry = (await page.locator("[data-pipeline-link-attach-retry]").boundingBox())!;
+              const skip = (await page.locator("[data-pipeline-link-attach-skip]").boundingBox())!;
+              expect(Math.min(retry.height, skip.height)).toBeGreaterThanOrEqual(44);
+              expect(Math.abs(retry.y - skip.y)).toBeLessThan(1);
+            }
+          }
+          if (entry.name === "refused") expect(preview).toBe(translate(lang, "pipelineLink.refused.merged", { repository: "example/atlas", number: 9 }));
+          if (entry.name === "rewritten") expect(preview).toBe(translate(lang, "pipelineLink.refused.remote_rewritten", { repository: "contributor/atlas" }));
+          if (entry.name === "longrefused") expect(preview).toBe(translate(lang, "pipelineLink.refused.remote_rewritten", { repository: longRepository }));
+          /* A resolved link enables the templates; a refused one keeps them off. */
+          const blank = page.locator("button", { hasText: translate(lang, "pipelineTemplates.blank") });
+          expect(await blank.isEnabled()).toBe(entry.state === "resolved" && entry.name !== "attach");
+          const text = await scope.innerText();
+          expect(text).not.toMatch(/pipelineLink\.|groupOverride\.|pipelineTemplates\./);
+          /* The whole surface sits in the viewport, and no line inside it is cut sideways. */
+          const geometry = await scope.evaluate((dialog) => {
+            const root = dialog.querySelector("[data-pipeline-picker-scroll]")!;
+            const box = dialog.getBoundingClientRect();
+            const clipped = [...root.querySelectorAll("span, dd, dt, label, legend, div")]
+              .filter((node) => node.children.length === 0 && (node.textContent ?? "").trim() && node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).textOverflow !== "ellipsis")
+              .map((node) => (node.textContent ?? "").slice(0, 60));
+            /* Every drawn line of text, measured from its range, ends inside the scroller. */
+            const edge = root.getBoundingClientRect();
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            const outside: string[] = [];
+            for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+              if (!(text.textContent ?? "").trim()) continue;
+              const range = document.createRange();
+              range.selectNodeContents(text);
+              if ([...range.getClientRects()].some((rect) => rect.width && (rect.left < edge.left - 1 || rect.right > edge.left + root.clientWidth + 1))) outside.push((text.textContent ?? "").slice(0, 60));
+            }
+            /* The start hint ends on a line of more than two words. */
+            const hint = root.querySelector("[data-pipeline-link-state] > span:last-child:not([role])");
+            let lastLineWords: number | null = null;
+            if (hint?.firstChild) {
+              const lines = new Map<number, number>();
+              const content = hint.firstChild.textContent ?? "";
+              for (const match of content.matchAll(/\S+/g)) {
+                const range = document.createRange();
+                range.setStart(hint.firstChild, match.index!);
+                range.setEnd(hint.firstChild, match.index! + 1);
+                const top = Math.round(range.getBoundingClientRect().top);
+                lines.set(top, (lines.get(top) ?? 0) + 1);
+              }
+              lastLineWords = lines.size > 1 ? lines.get(Math.max(...lines.keys()))! : null;
+            }
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, scrollHeight: root.scrollHeight, clientHeight: root.clientHeight, scrollWidth: root.scrollWidth, clientWidth: root.clientWidth, clipped, outside, lastLineWords };
+          });
+          expect(geometry.left).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width + 1);
+          expect(geometry.top).toBeGreaterThanOrEqual(0);
+          expect(geometry.bottom).toBeLessThanOrEqual(height + 1);
+          expect(geometry.clipped).toEqual([]);
+          expect(geometry.outside).toEqual([]);
+          expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+          if (geometry.lastLineWords !== null) expect(geometry.lastLineWords).toBeGreaterThan(2);
+          expect(pageErrors).toEqual([]);
+          /* On a desktop window the first two templates are whole on the first screen. */
+          if (entry.name === "pr" && width >= 1000) {
+            const whole = await page.evaluate(() => {
+              const scroller = document.querySelector("[data-pipeline-picker-scroll]")!.getBoundingClientRect();
+              return [...document.querySelectorAll("[role=dialog] button.min-h-11")].slice(0, 2).map((button) => {
+                const rect = button.getBoundingClientRect();
+                return rect.top >= scroller.top && rect.bottom <= scroller.bottom;
+              });
+            });
+            expect(whole).toEqual([true, true]);
+          }
+          const screenshot = `${width}-${scheme}-${lang}-${entry.name}.png`;
+          await page.screenshot({ path: path.join(out, screenshot) });
+          /* A sheet taller than the phone scrolls: its end gets its own frame. */
+          let end: string | null = null;
+          if (geometry.scrollHeight > geometry.clientHeight + 1) {
+            await scope.evaluate((dialog) => { const root = dialog.querySelector("[data-pipeline-picker-scroll]")!; root.scrollTop = root.scrollHeight; });
+            end = `${width}-${scheme}-${lang}-${entry.name}-end.png`;
+            await page.screenshot({ path: path.join(out, end) });
+          }
+          readings.push({ width, scheme, lang, case: entry.name, screenshot, end, geometry });
+        } finally { await context.close(); }
+      }
+    } finally { await browser?.close(); server.stop(); fs.closeSync(browserTempFd); fs.rmSync(browserTemp, { recursive: true, force: true }); }
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+  }, 900_000);
+});
+
+describe("saved decision delivery", () => {
+  browserTest("waiting forms can be withdrawn from Decisions with retry after refusal", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "form-withdrawal");
+    fs.mkdirSync(out, { recursive: true });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: unknown[] = [];
+    try {
+      const served = await serveEvidenceFixture(out);
+      try {
+        for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+          const phone = width === 390;
+          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=1`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+          try {
+            if (phone) {
+              await page.locator("[data-mobile2-seat-open]").click();
+              await page.locator("[data-decision-strip]").click();
+            }
+            const scope = page.locator(phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]');
+            await scope.locator('[data-decision-list="3"]').waitFor();
+            expect(await scope.locator("[data-decision-tab-count]").textContent()).toBe("3");
+            await page.evaluate(() => {
+              const original = window.fetch;
+              let refused = false;
+              window.fetch = Object.assign(async (input: Parameters<typeof original>[0], init?: Parameters<typeof original>[1]) => {
+                if (!refused && String(input) === "/api/attention/dismissals") {
+                  refused = true;
+                  return new Response(JSON.stringify({ error: "private backend failure" }), { status: 503 });
+                }
+                return original(input, init);
+              }, original);
+            });
+            await scope.locator("[data-decision-withdraw]").click();
+            await scope.locator("[data-decision-withdraw-error]").waitFor();
+            expect(await scope.textContent()).not.toContain("private backend failure");
+            expect(await scope.locator("[data-decision-list]").getAttribute("data-decision-list")).toBe("3");
+            const prefix = `${lang}-${scheme}-${width}`;
+            await page.screenshot({ path: path.join(out, `${prefix}-refused.png`) });
+            for (const remaining of [2, 1, 0]) {
+              await scope.locator("[data-decision-withdraw]").click();
+              await scope.locator(`[data-decision-list="${remaining}"]`).waitFor();
+            }
+            await page.waitForFunction(() => !document.querySelector("[data-decision-tab-count]"));
+            await page.screenshot({ path: path.join(out, `${prefix}-cleared.png`) });
+            expect(pageErrors).toEqual([]);
+            readings.push({ width, lang, scheme, before: 3, after: 0, frames: [`${prefix}-refused.png`, `${prefix}-cleared.png`] });
+          } finally { await context.close(); }
+        }
+      } finally { served.stop(); }
+      fs.writeFileSync(path.join(out, "results.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+
+  browserTest("C: the Decisions badge and panel retain saved answers until delivery", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: sockets.env });
+    const readings: unknown[] = [];
+    const savedIds = [`pr_${"e".repeat(32)}`, `pr_${"d".repeat(32)}`, `pr_${"c".repeat(32)}`];
     try {
       for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         const phone = width === 390;
+        const served = await serveEvidenceFixture(out);
         const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=undelivered`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
         try {
-          if (phone) { await page.locator("[data-mobile2-seat-open]").click(); await page.locator("[data-decision-strip]").click(); }
-          const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
-          const column = page.locator(scope);
-          await column.locator('[data-decision-list="3"]').waitFor();
-          expect(await column.locator("[data-decision-tab-count]").textContent()).toBe("3");
-          expect(await column.locator("[data-decision-list-empty]").count()).toBe(0);
-          const ids = await column.locator("[data-decision-review], [data-decision-row]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-decision-review") ?? n.getAttribute("data-decision-row")));
+          if (phone) {
+            await page.locator("[data-mobile2-seat-open]").click();
+            await page.locator('[data-decision-pointer] [data-decision-card="answered"]').first().waitFor();
+          } else {
+            await page.locator("[data-kanban-board] .card[data-id]").first().waitFor({ state: "attached" });
+            await page.locator("[data-kanban-seat] [data-orchestrator-panel]").waitFor({ state: "attached" });
+            await page.locator('[data-kanban-seat] [data-feed-state="items"]').waitFor();
+          }
+          if (phone) expect(await page.locator("[data-decision-strip]").getAttribute("data-decision-strip")).toBe("3");
+          else expect(await page.locator("[data-decision-strip]").count()).toBe(0);
+          if (phone) expect(await page.locator("[data-decision-tab-count]").count()).toBe(0);
+          else expect(await page.locator("[data-decision-tab-count]").first().textContent()).toBe("3");
           const snapshot = await page.evaluate(async () => (await fetch("/api/projects/decisions?project=atlas")).json());
+          expect(snapshot.decisions.map((entry: { id: string }) => entry.id).sort()).toEqual([...savedIds].sort());
           const frames: string[] = [];
-          for (const [index, id] of ids.entries()) {
-            const folded = column.locator(`[data-decision-row="${id}"]`);
-            if (await folded.count()) await folded.click();
-            const record = column.locator(`[data-decision-card="answered"][data-decision-review="${id}"]`);
-            await record.waitFor();
+          if (phone) {
+            const pointer = page.locator('[data-decision-pointer] [data-decision-card="answered"]').first();
+            const record = pointer;
+            await record.scrollIntoViewIfNeeded();
+            expect(await record.locator("[data-decision-record-title]").textContent()).toBeTruthy();
             expect(await record.locator("[data-decision-send]").count()).toBe(0);
-            const retry = record.locator("[data-decision-retry]"); await retry.scrollIntoViewIfNeeded();
+            const retry = record.locator("[data-decision-retry]");
             expect(await retry.isEnabled()).toBe(true);
             expect(await record.textContent()).toContain(lang === "uk" ? "її вже збережено" : "it is already saved");
             expect(await record.evaluate(n => n.scrollWidth - n.clientWidth)).toBeLessThanOrEqual(1);
-            const file = `${lang}-${scheme}-${width}-${index}.png`;
-            await page.screenshot({ path: path.join(out, file) }); frames.push(file);
-          }
-          if (phone) {
-            await column.locator("[data-mobile2-close]").click();
-            const record = page.locator('[data-decision-card="answered"]').first();
-            await record.scrollIntoViewIfNeeded();
-            expect(await record.locator("[data-decision-record-title]").textContent()).toBeTruthy();
+            const reviewId = await record.locator("xpath=ancestor::*[@data-decision-pointer]").getAttribute("data-decision-pointer");
+            expect(reviewId).toBe(savedIds[1]);
+            const previous = snapshot.decisions.find((entry: { id: string }) => entry.id === reviewId);
+            expect(previous).toBeTruthy();
+            expect(await record.locator("[data-decision-delivery]").getAttribute("data-decision-delivery")).toBe(previous.decision.delivery.state);
             const file = `${lang}-${scheme}-${width}-feed.png`;
             await page.screenshot({ path: path.join(out, file) }); frames.push(file);
-            await page.locator("[data-decision-strip]").click();
+            await retry.click();
+            await page.waitForFunction(async ({ project, reviewId }) => {
+              const actual = await (await fetch(`/api/projects/decisions?project=${encodeURIComponent(project)}&review=${reviewId}`)).json();
+              return actual.round.decision.delivery.state === "sent";
+            }, { project: snapshot.project, reviewId });
+            const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+            expect(posts).toHaveLength(1);
+            expect(posts.every(body => (body as { retry?: boolean }).retry === true)).toBe(true);
+            const actual = await page.evaluate(async ({ project, reviewId }) => (await fetch(`/api/projects/decisions?project=${encodeURIComponent(project)}&review=${reviewId}`)).json(), { project: snapshot.project, reviewId });
+            expect(actual.round.decision).toMatchObject({ chosen: previous.decision.chosen, answers: previous.decision.answers,
+              comment: previous.decision.comment, at: previous.decision.at });
           }
-          // Explicit retries keep the answers; the destination receipt clears each obligation.
-          for (const id of ids) {
-            const folded = column.locator(`[data-decision-row="${id}"]`);
-            if (await folded.count()) await folded.click();
-            await column.locator(`[data-decision-review="${id}"] [data-decision-retry]`).click();
-            /* The delivered record leaves and the newest left opens in its place: wait, or the next row turns under the press. */
-            await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
-          }
-          await column.locator("[data-decision-list-empty]").waitFor();
-          await column.locator("[data-decision-tab-count]").waitFor({ state: "hidden" });
-          expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
-          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
-          expect(posts).toHaveLength(3);
-          expect(posts.every(body => (body as { retry?: boolean }).retry === true)).toBe(true);
-          for (const previous of snapshot.decisions) {
-            const actual = await page.evaluate(async ({ project, reviewId }) => (await fetch(`/api/projects/decisions?project=${encodeURIComponent(project)}&review=${reviewId}`)).json(), { project: snapshot.project, reviewId: previous.id });
-            expect(actual.round.decision).toMatchObject({ chosen: previous.decision.chosen, answers: previous.decision.answers, comment: previous.decision.comment, at: previous.decision.at });
-            expect(actual.round.decision.delivery.state).toBe("sent");
+          else {
+            await page.locator('[data-decision-column] [data-decision-tab="decisions"]').click();
+            const column = page.locator('[data-decision-column="decisions"]');
+            await column.locator('[data-decision-list="3"]').waitFor();
+            expect(await column.locator("[data-decision-tab-count]").textContent()).toBe("3");
+            expect(await column.locator("[data-decision-list-empty]").count()).toBe(0);
+            const ids = await column.locator("[data-decision-review], [data-decision-row]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-decision-review") ?? n.getAttribute("data-decision-row")));
+            expect(ids).toEqual(savedIds);
+            for (const [index, id] of ids.entries()) {
+              const folded = column.locator(`[data-decision-row="${id}"]`);
+              if (await folded.count()) await folded.click();
+              const record = column.locator(`[data-decision-card="answered"][data-decision-review="${id}"]`);
+              await record.waitFor();
+              expect(await record.locator("[data-decision-send]").count()).toBe(0);
+              const previous = snapshot.decisions.find((entry: { id: string }) => entry.id === id);
+              expect(await record.locator("[data-decision-delivery]").getAttribute("data-decision-delivery")).toBe(previous.decision.delivery.state);
+              const retry = record.locator("[data-decision-retry]"); await retry.scrollIntoViewIfNeeded();
+              expect(await retry.isEnabled()).toBe(true);
+              expect(await record.textContent()).toContain(lang === "uk" ? "її вже збережено" : "it is already saved");
+              expect(await record.evaluate(n => n.scrollWidth - n.clientWidth)).toBeLessThanOrEqual(1);
+              const file = `${lang}-${scheme}-${width}-${index}.png`;
+              await page.screenshot({ path: path.join(out, file) }); frames.push(file);
+            }
+            // Explicit retries keep the answers; the destination receipt clears each obligation.
+            for (const id of ids) {
+              const folded = column.locator(`[data-decision-row="${id}"]`);
+              if (await folded.count()) await folded.click();
+              await column.locator(`[data-decision-review="${id}"] [data-decision-retry]`).click();
+              /* The delivered record leaves and the newest left opens in its place: wait, or the next row turns under the press. */
+              await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
+            }
+            await column.locator("[data-decision-list-empty]").waitFor();
+            await page.waitForFunction(() => !document.querySelector("[data-decision-column] [data-decision-tab-count]"));
+            expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
+            const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+            expect(posts).toHaveLength(3);
+            expect(posts.every(body => (body as { retry?: boolean }).retry === true)).toBe(true);
+            for (const previous of snapshot.decisions) {
+              const actual = await page.evaluate(async ({ project, reviewId }) => (await fetch(`/api/projects/decisions?project=${encodeURIComponent(project)}&review=${reviewId}`)).json(), { project: snapshot.project, reviewId: previous.id });
+              expect(actual.round.decision).toMatchObject({ chosen: previous.decision.chosen, answers: previous.decision.answers, comment: previous.decision.comment, at: previous.decision.at });
+              expect(actual.round.decision.delivery.state).toBe("sent");
+            }
           }
           expect(pageErrors).toEqual([]);
-          readings.push({ width, lang, scheme, count: 3, savedRecords: ids.length, afterRetry: 0, frames });
-        } finally { await context.close(); }
+          readings.push({ width, lang, scheme, waitingCount: 3, savedRecords: phone ? 1 : snapshot.decisions.length, afterRetry: phone ? "receipt sent" : 0, frames });
+        } finally { await context.close(); served.stop(); }
       }
       fs.mkdirSync("evidence/answer-delivery", { recursive: true });
       fs.writeFileSync("evidence/answer-delivery/panel.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
-    } finally { await browser.close(); served.stop(); }
+    } finally { await browser.close(); sockets.close(); }
   }, 180_000);
 });
 
@@ -37538,7 +41422,7 @@ describe("role memory curator in the seat tick panel", () => {
     const zeroCounts = { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 };
     const completed = { id: "curate_fixture", state: "succeeded", claimedAt: "2026-10-17T10:00:00Z", endedAt: "2026-10-17T10:15:00Z",
       conversationId: "conversation_curator_fixture", failure: null, counts };
-    const states = ["on", "off", "starting", "running", "failed", "never"] as const;
+    const states = ["on", "off", "starting", "running", "failed", "never", "read-error", "read-error-known"] as const;
     const curationFor = (state: typeof states[number]) => {
       const base = { enabled: state !== "off", intervalHours: 12, intervalMs: 43200000, defaultIntervalHours: 6, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: null,
         live: null, lastRun: null, nextRunAt: "2026-10-17T22:15:00Z", waitingOn: null as string | null, runsError: null };
@@ -37547,14 +41431,22 @@ describe("role memory curator in the seat tick panel", () => {
       if (state === "running") return { ...base, live: { ...completed, id: "curate_live", state: "running", endedAt: null, conversationId: "conversation_curator_live", counts: zeroCounts }, lastRun: completed, waitingOn: "live-run" };
       if (state === "failed") return { ...base, lastRun: { ...completed, id: "curate_failed", state: "failed", endedAt: "2026-10-17T10:15:00Z", conversationId: "conversation_curator_failed", failure: "fixture failure", counts: zeroCounts } };
       if (state === "never") return { ...base, nextRunAt: null, waitingOn: "no-rules" };
+      if (state === "read-error" || state === "read-error-known") return { ...base,
+        lastRun: state === "read-error-known" ? completed : null, nextRunAt: null, runsError: "curation status read timed out" };
       return { ...base, lastRun: completed };
     };
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
     const readings: unknown[] = [];
     try {
       for (const state of states) {
+        const readFailed = state === "read-error" || state === "read-error-known";
         const server = await serveEvidenceFixture(out, undefined, {
-          "/api/monitor/seat-tick/settings": { ...tick, curation: curationFor(state) },
+          "/api/monitor/seat-tick/settings": { ...tick, curation: curationFor(state), ...(readFailed ? {
+            checkErrorAlarm: { since: "2026-10-17T10:00:00Z", detail: "project check deadline exceeded" },
+            state: { lastCheckAt: "2026-10-17T09:55:00Z", lastWakeAt: "2026-10-17T09:50:00Z", lastWakeReasons: [],
+              outstandingWake: null, retryGuard: [], accountingGap: null,
+              sourceGap: { source: "pull-requests", gap: "timed-out", since: "2026-10-17T09:00:00Z" } },
+          } : {}) },
           "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
           "/api/board/maintenance/worktrees": () => { throw new Error("Maintenance UI called the recovery diagnostic"); },
         });
@@ -37600,6 +41492,13 @@ describe("role memory curator in the seat tick panel", () => {
               } else if (state === "failed") {
                 expect(await last.innerText()).toContain(lang === "en" ? "failed" : "не вдалося");
                 expect(await last.locator("[data-seat-tick-curation-counts]").count()).toBe(0);
+              } else if (state === "read-error" || state === "read-error-known") {
+                expect(await last.innerText()).toContain(state === "read-error-known"
+                  ? (lang === "en" ? "done" : "готово") : (lang === "en" ? "unknown" : "невідомо"));
+                expect(await last.innerText()).not.toContain(lang === "en" ? "never" : "ще не було");
+                expect(await last.locator("[data-seat-tick-curation-counts]").count()).toBe(0);
+                expect(await panel.innerText()).toContain(lang === "en" ? "Could not refresh curator status." : "Не вдалося оновити статус куратора.");
+                if (state === "read-error-known") expect(await last.locator("a").getAttribute("href")).toBe("#c=conversation_curator_fixture");
               } else {
                 expect(await last.innerText()).toContain(lang === "en" ? "never" : "ще не було");
                 expect(await next.innerText()).toContain(lang === "en" ? "waiting for role memory rules" : "очікує на правила пам’яті ролей");
@@ -37608,6 +41507,14 @@ describe("role memory curator in the seat tick panel", () => {
               expect(fits).toBe(true);
               expect(pageErrors).toEqual([]);
               await panel.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${state}-curation.png`) });
+              if (readFailed) {
+                const status = page.locator("[data-seat-tick-status]:visible").first();
+                await status.scrollIntoViewIfNeeded();
+                expect(await status.innerText()).toContain(lang === "en" ? "scheduled checks keep failing" : "перевірки тікера завершуються помилкою");
+                expect(await status.innerText()).not.toContain(lang === "en" ? "source gap" : "джерело недоступне");
+                expect(await status.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+                await status.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${state}-ticker-status.png`) });
+              }
               readings.push({ width, lang, theme, state, reachable: true, intervalHours: 12, fits, pageErrors });
             } finally { await context.close(); }
           }
@@ -37676,7 +41583,7 @@ describe("finished work leaves In progress", () => {
         file.attentionDismissal = { at: ended, by: { kind: "system", rule: "container-finished" } } as FileEntry["attentionDismissal"];
       }
     }
-    const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: { tmux: { status: "healthy" } } };
+    const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: {} };
     const server = await serveEvidenceFixture(out, undefined, { "/api/files": payload, "/api/tasks": { tasks } });
     const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
     let browser: Browser | null = null;
@@ -38096,6 +42003,31 @@ describe("team workspaces slice (a)", () => {
             if (!await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete stays disabled on an empty workspace`);
             await frame(page, tag, "D7-empty", [["[data-workspace-empty]", words(lang, "workspaces.page.empty")], ["[data-workspace-delete]", words(lang, "workspaces.delete")]]);
             if (pageErrors.length) failures.push(`${tag} D6: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D8 (workspaces W1): the line on a workspace's page naming the projects without an account list, one line for both engines here, each name a link.
+           The owner and the workspace's manager read it; a plain member and a page whose pool read fails read nothing. */
+        for (const [who, query, shown] of [["owner", "", true], ["manager", "&manager=1", true], ["member", "&member=1", false], ["unreadable", "&poolrefused=harbor-docs", false]] as const) {
+          const { context, page, pageErrors } = await open(`scenario=workspaces-page&rail=1&page=client&nopool=acme-ledger,harbor-docs${query}`);
+          try {
+            await page.locator("[data-workspace-title]").waitFor();
+            if (shown) {
+              await page.locator("[data-workspace-account-list-note]").first().waitFor();
+              const projects = "Acme Ledger, Harbor Docs";
+              /* Both engines lack a list in the same projects: one line names both, and each project leads to its own view. */
+              if (await page.locator("[data-workspace-account-list-note]").count() !== 1) failures.push(`${tag} D8 ${who}: the engines are not told in one line`);
+              const links = await page.locator("[data-workspace-account-list-note] a").evaluateAll((nodes) => nodes.map((node) => [node.textContent, node.getAttribute("href")]));
+              if (JSON.stringify(links) !== JSON.stringify([["Acme Ledger", "/#p=acme-ledger"], ["Harbor Docs", "/#p=harbor-docs"]])) failures.push(`${tag} D8 ${who}: the project names do not lead to their views ${JSON.stringify(links)}`);
+              await frame(page, tag, `D8-${who}`, [
+                ["[data-workspace-account-list-note='both']", words(lang, "workspaces.page.noAccountListBoth", { projects })],
+              ]);
+            } else {
+              /* Both pool reads have had every chance to answer before the absence is read. */
+              await page.waitForTimeout(600);
+              if (await page.locator("[data-workspace-account-list-note]").count()) failures.push(`${tag} D8 ${who}: a line stands where none belongs`);
+              await frame(page, tag, `D8-${who}`, [["[data-workspace-title]", names[lang].client]]);
+            }
+            if (pageErrors.length) failures.push(`${tag} D8 ${who}: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
       }
@@ -38750,6 +42682,28 @@ describe("team workspaces slice (b)", () => {
   }, 600_000);
 });
 
+/* The one Settings window (docs/design/settings-redo/build-brief.md §7): every state of Privacy, Telegram and Voice on
+   real components, at 1440, 900 and a short 1000 × 700, in both languages and themes. `LLV_SETTINGS_WINDOW_ONLY=<substring,…>`
+   reruns a subset and `LLV_SETTINGS_WINDOW_OUT` says where its frames go. */
+describe("the Settings window", () => {
+  browserTest("every state renders whole on the desktop, with its numbers read", async () => {
+    const { captureSettingsWindowFrames, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_SETTINGS_WINDOW_OUT ?? ".artifacts/settings-window", "desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); server.stop(); throw error; });
+    const subset = (process.env.LLV_SETTINGS_WINDOW_ONLY ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+    try {
+      const { readings, failures } = await captureSettingsWindowFrames(browser, server.base, out, false, subset.length ? (frame) => subset.some((part) => frame.includes(part)) : undefined);
+      expect(readings.length).toBeGreaterThan(0);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 3_000_000);
+});
+
 // docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
 describe("Telegram multiple bots", () => {
   browserTest("Telegram multiple bots settings and refused chats", async () => {
@@ -38843,8 +42797,9 @@ describe("the sound map's one control: «Agent typing»", () => {
               await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
               await page.locator('[data-mobile2-open="menu"]').first().click();
               await page.locator("[data-mobile2-sheet='menu'] [data-mobile2-menu-row='settings']").click();
-              await page.locator("[data-mobile2-sheet='menu'] [data-testid='sound-settings-trigger']").click();
-              panel = "[data-mobile2-sheet='menu'] [data-testid='sound-settings']";
+              await page.locator("[data-mobile2-sheet='settings'] [data-settings-section-row='general']").click();
+              await page.locator("[data-mobile2-sheet='settings'] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-mobile2-sheet='settings'] [data-testid='sound-settings']";
             } else {
               await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
               await openBoardMenu(page);
@@ -39338,6 +43293,20 @@ describe("sound captions", () => {
       failures,
     }, null, 2) + "\n");
   }
+});
+
+describe("project setup stage hosts", () => {
+  browserTest("stage sheet shows each setup state as one line, a failure open on its tail", async () => {
+    const out = path.resolve(".artifacts/project-setup/desktop"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      const evidence = await captureProjectSetupHosts(browser, server.base, out, ["stages"],
+        [{ width: 390, height: 844 }, { width: 640, height: 700 }, { width: 1000, height: 700 }, { width: 1220, height: 800 }, { width: 1440, height: 900 }]);
+      fs.mkdirSync("evidence/project-setup", { recursive: true });
+      fs.writeFileSync("evidence/project-setup/rendered.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 1_800_000);
 });
 
 describe("retired review history", () => {
@@ -40809,6 +44778,466 @@ describe("installer guide: old state, project search, newcomer clarity", () => {
   }, 600_000);
 });
 
+describe("first-run guide: variant 1 on the real components", () => {
+  type Lang = "en" | "uk";
+  /* One frame set per state: the fixture's `firstrun` token, the surface it draws and the lines that define it. */
+  type Spec = { token: string; label: Record<Lang, string>; bot?: "none" | "fallback"; narrowOnly?: boolean; phoneOnly?: boolean };
+  const SPECS: Spec[] = [
+    { token: "engines-both", label: { en: "Engines · both connected", uk: "Рушії · обидва підключені" } },
+    { token: "engines-claude-only", label: { en: "Engines · Claude only, Codex not installed", uk: "Рушії · лише Claude, Codex не встановлено" } },
+    { token: "engines-codex-only", label: { en: "Engines · Codex only, Claude signed out", uk: "Рушії · лише Codex, Claude без входу" } },
+    { token: "engines-signed-out", label: { en: "Engines · both installed, signed out", uk: "Рушії · обидва встановлені, без входу" } },
+    { token: "engines-no-cli", label: { en: "Engines · no agent CLI", uk: "Рушії · жодного CLI" } },
+    { token: "orchestrator-one-press", label: { en: "Orchestrator · one press, both engines", uk: "Оркестратор · одне натискання, обидва рушії" } },
+    { token: "orchestrator-claude-only", label: { en: "Orchestrator · Claude only", uk: "Оркестратор · лише Claude" } },
+    { token: "orchestrator-codex-only", label: { en: "Orchestrator · Codex only", uk: "Оркестратор · лише Codex" } },
+    { token: "later-memory-before", label: { en: "Later · Memory, no orchestrator yet", uk: "Пізніше · Пам’ять, оркестратора ще немає" } },
+    { token: "later-memory-after", label: { en: "Later · Memory, orchestrator exists", uk: "Пізніше · Пам’ять, оркестратор є" } },
+    { token: "later-telegram-later", label: { en: "Later · Telegram, no bot connected", uk: "Пізніше · Telegram, бота не підключено" }, bot: "none" },
+    { token: "telegram-numbered", label: { en: "Telegram step · a bot is connected", uk: "Крок Telegram · бота підключено" }, bot: "fallback" },
+    { token: "form-board", label: { en: "First task · the seat on the phone's board", uk: "Перша задача · місце на дошці телефона" }, phoneOnly: true },
+    { token: "form-greeting", label: { en: "First task · the greeting", uk: "Перша задача · привітання" }, narrowOnly: true },
+    { token: "form-decisions", label: { en: "First task · the Decisions form", uk: "Перша задача · форма в «Рішеннях»" } },
+    { token: "form-needs-you", label: { en: "First task · Needs you", uk: "Перша задача · «Чекають на вас»" } },
+    { token: "settings-memory-before", label: { en: "Settings · Delegatus memory, no orchestrator", uk: "Налаштування · пам’ять Delegatus, без оркестратора" } },
+    { token: "settings-memory-after", label: { en: "Settings · Delegatus memory, orchestrator exists", uk: "Налаштування · пам’ять Delegatus, оркестратор є" } },
+  ];
+  /* The named widths in both languages and themes; 645 and 900 stand between them, in English and Ukrainian, light. */
+  const WIDTHS: Array<{ width: number; themes: Array<"light" | "dark"> }> = [
+    { width: 1440, themes: ["light", "dark"] },
+    { width: 390, themes: ["light", "dark"] },
+    { width: 900, themes: ["light"] },
+    { width: 645, themes: ["light"] },
+  ];
+  /* Names, product words and code a Ukrainian line may keep in Latin letters. */
+  const LATIN = /^(?:Claude|Code|Codex|Copilot|GitHub|Delegatus|Telegram|Opus|GPT-6\.1-Sol|Sol|README|CLI|CSV|API|Max|Pro|atlas|atlas-api|src\/billing|curl|fsSL|https|bash|sh|install\.sh|claude\.ai|chatgpt\.com|codex|Account|A|B|Report|Bot|Team|Reports|OpenCode|Go|Messages|repo|uk|en|low|medium|high|xhigh|BotFather|team-reports)$/;
+
+  /* What one frame reads of the lines that define it, in the page. */
+  const MEASURE = (args: { defining: string[] }) => {
+    const out = { missing: [] as string[], offFirstScreen: [] as string[] };
+    const within = (rect: DOMRect, box: { left: number; right: number; top: number; bottom: number }, slack = 0.5) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+    const screen = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    const clippers = (node: Element) => {
+      const boxes: DOMRect[] = [];
+      for (let up = node.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+      }
+      return boxes;
+    };
+    /* Text kept for screen readers only (an sr-only legend) is never drawn. */
+    const unseen = (node: Node, root: Element) => {
+      for (let up = node.parentElement; up && up !== root.parentElement; up = up.parentElement) {
+        const box = up.getBoundingClientRect();
+        if (getComputedStyle(up).clip.startsWith("rect") || box.width <= 1 || box.height <= 1) return true;
+      }
+      return false;
+    };
+    const lines = (element: Element) => {
+      const found: Array<{ node: Text; rect: DOMRect; text: string }> = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode as Text;
+        const text = node.textContent?.trim();
+        if (!text || !(node.parentElement?.getClientRects().length) || unseen(node, element)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) if (rect.width > 0.5 && rect.height > 0.5) found.push({ node, rect, text });
+      }
+      return found;
+    };
+    for (const selector of args.defining) {
+      const element = document.querySelector(selector);
+      if (!element) { out.missing.push(selector); continue; }
+      const own = lines(element);
+      if (!own.length) { out.missing.push(`${selector} (no text)`); continue; }
+      const boxes = clippers(element);
+      if (!own.every((line) => within(line.rect, screen) && boxes.every((box) => within(line.rect, box)))) out.offFirstScreen.push(selector);
+    }
+    return out;
+  };
+
+  /* The guide's first screen as it opens: the filled buttons a person sees, and
+     every text line a scroll edge, the footer or the window cuts part-way. */
+  const FIRST_SCREEN = () => {
+    const dialog = document.querySelector("[data-onboarding-dialog]");
+    if (!dialog) return { filled: [] as string[], cut: [] as string[] };
+    const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+    const boxesOf = (node: Element) => {
+      const boxes = [screen];
+      for (let up = node.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+      }
+      return boxes;
+    };
+    const overlap = (a: DOMRect, b: DOMRect) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+    const inside = (a: DOMRect, b: DOMRect) => a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && a.top >= b.top - 0.5 && a.bottom <= b.bottom + 0.5;
+    const filled = [...dialog.querySelectorAll<HTMLElement>("button")].filter((button) => {
+      if (!button.getClientRects().length || !/(^|\s)bg-brand(\s|$)/.test(button.className)) return false;
+      const rect = button.getBoundingClientRect();
+      return boxesOf(button).every((box) => overlap(rect, box));
+    }).map((button) => button.textContent?.trim() ?? "");
+    const cut: string[] = [];
+    const walker = document.createTreeWalker(dialog, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (!node.textContent?.trim() || !(node.parentElement?.getClientRects().length)) continue;
+      const style = getComputedStyle(node.parentElement!);
+      if (style.visibility === "hidden" || style.clip.startsWith("rect")) continue;
+      const boxes = boxesOf(node.parentElement!);
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+        /* Seen at all, yet not whole: part of the line is past an edge. */
+        if (boxes.every((box) => overlap(rect, box)) && !boxes.every((box) => inside(rect, box))) cut.push(node.textContent.trim().slice(0, 50));
+      }
+    }
+    return { filled, cut };
+  };
+
+  /* The same lines once each is scrolled into view: cut, covered, the line ends and the targets. */
+  const INSPECT = (args: { selector: string; coarse: boolean; lang: Lang; latin: string }) => {
+    const latinAllowed = new RegExp(args.latin);
+    const report = { cut: [] as string[], covered: [] as string[], ellipsis: [] as string[], small: [] as string[], oneLetterEnds: [] as string[], latin: [] as string[], texts: [] as string[] };
+    const element = document.querySelector(args.selector);
+    if (!element) return report;
+    const within = (rect: DOMRect, box: { left: number; right: number; top: number; bottom: number }, slack = 0.5) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+    const boxes: DOMRect[] = [];
+    for (let up = element.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+      const style = getComputedStyle(up);
+      if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+    }
+    const screen = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    const unseen = (node: Node) => {
+      for (let up = node.parentElement; up && up !== element.parentElement; up = up.parentElement) {
+        const box = up.getBoundingClientRect();
+        if (getComputedStyle(up).clip.startsWith("rect") || box.width <= 1 || box.height <= 1) return true;
+      }
+      return false;
+    };
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const words: Array<{ text: string; top: number; block: Element }> = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      const value = node.textContent ?? "";
+      if (!value.trim() || !(node.parentElement?.getClientRects().length) || unseen(node)) continue;
+      report.texts.push(value.trim());
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+        if (!within(rect, screen) || boxes.some((box) => !within(rect, box))) report.cut.push(value.trim().slice(0, 60));
+        for (const x of [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]) {
+          const hit = document.elementFromPoint(x, (rect.top + rect.bottom) / 2);
+          if (hit && !element.contains(hit) && !hit.contains(element)) { report.covered.push(`${value.trim().slice(0, 40)} under ${hit.tagName.toLowerCase()}.${String(hit.className).slice(0, 40)}`); break; }
+        }
+      }
+      const block = node.parentElement!.closest("p, li, label, span, div, button, h2, code") ?? node.parentElement!;
+      for (const match of value.matchAll(/\S+/g)) {
+        const word = document.createRange();
+        word.setStart(node, match.index!);
+        word.setEnd(node, match.index! + match[0].length);
+        const rect = word.getClientRects()[0];
+        if (rect) words.push({ text: match[0], top: Math.round(rect.top), block });
+        if (args.lang === "uk" && !node.parentElement!.closest("code")) for (const piece of match[0].split(/[\s·,;:()?!«»"—]+/)) {
+          const part = piece.replace(/\.+$/, "");
+          if (/^[A-Za-z][A-Za-z0-9./-]*$/.test(part) && !latinAllowed.test(part)) report.latin.push(part);
+        }
+      }
+    }
+    /* A Ukrainian line never ends on a one-letter word. */
+    if (args.lang === "uk") for (let index = 0; index < words.length - 1; index += 1) {
+      const word = words[index]!, next = words[index + 1]!;
+      if (/^[вузіайоВУЗІАЙО]$/.test(word.text) && next.top > word.top + 2 && next.block === word.block) report.oneLetterEnds.push(`${word.text} ${next.text}`);
+    }
+    for (const node of element.querySelectorAll<HTMLElement>(".truncate")) if (node.scrollWidth > node.clientWidth + 1) report.ellipsis.push(node.textContent?.trim().slice(0, 60) ?? "");
+    if (args.coarse) for (const control of element.querySelectorAll<HTMLElement>("button, a[href], select, input")) {
+      const box = control.getBoundingClientRect();
+      if (box.width && box.height && Math.min(box.width, box.height) < 44) report.small.push(`${(control.textContent || control.getAttribute("aria-label") || "").trim().slice(0, 30)} ${Math.round(box.width)}×${Math.round(box.height)}`);
+    }
+    return report;
+  };
+
+  /* Every visible text line of the surface the frame is about: no two lines from different nodes overlap. */
+  const OVERLAPS = (selector: string) => {
+    const anchor = document.querySelector(selector);
+    const root = anchor?.closest('[role="dialog"], [data-decision-column], [data-orchestrator-panel], [data-mobile2-sheet], [data-attention-panel]') ?? anchor?.parentElement ?? null;
+    if (!root) return { overlaps: [] as string[], sideways: 0 };
+    const rects: Array<{ rect: DOMRect; node: Text }> = [];
+    /* Only what is drawn: a line a clipping ancestor hides, or text kept for screen readers, is not on screen. */
+    const clips = new Map<Element, DOMRect[]>();
+    const clipsOf = (element: Element) => {
+      let found = clips.get(element);
+      if (found) return found;
+      found = [];
+      for (let up: Element | null = element; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        const box = up.getBoundingClientRect();
+        if (box.width <= 1 || box.height <= 1) found.push(new DOMRect(0, 0, 0, 0));
+        else if (up !== element && (style.overflowX !== "visible" || style.overflowY !== "visible")) found.push(box);
+      }
+      clips.set(element, found);
+      return found;
+    };
+    const shown = (rect: DOMRect, element: Element) => clipsOf(element).every((box) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (!node.textContent?.trim() || !(node.parentElement?.getClientRects().length)) continue;
+      const style = getComputedStyle(node.parentElement!);
+      if (style.visibility === "hidden" || Number(style.opacity) === 0 || style.clip.startsWith("rect")) continue;
+      /* The body of a closed <details> keeps its boxes and draws nothing. */
+      if (node.parentElement!.closest("details:not([open])") && !node.parentElement!.closest("summary")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width > 1 && rect.height > 1 && rect.bottom > 0 && rect.top < innerHeight && shown(rect, node.parentElement!)) rects.push({ rect, node });
+    }
+    const overlaps: string[] = [];
+    for (let i = 0; i < rects.length; i += 1) for (let j = i + 1; j < rects.length; j += 1) {
+      const a = rects[i]!, b = rects[j]!;
+      if (a.node === b.node) continue;
+      const x = Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left);
+      const y = Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top);
+      if (x > 2 && y > 2) overlaps.push(`«${a.node.textContent!.trim().slice(0, 30)}» × «${b.node.textContent!.trim().slice(0, 30)}»`);
+    }
+    const scrollers = [root, ...root.querySelectorAll<HTMLElement>("*")].filter((node) => { const style = getComputedStyle(node); return style.overflowX === "auto" || style.overflowX === "scroll"; });
+    const sideways = Math.max(document.documentElement.scrollWidth - innerWidth, ...scrollers.map((node) => node.scrollWidth - node.clientWidth));
+    return { overlaps: overlaps.slice(0, 12), sideways };
+  };
+
+  /* Every Ukrainian line of a surface, in or out of view: none ends on a one-letter word. */
+  const LINE_ENDS = (selector: string) => {
+    const root = document.querySelector(selector);
+    if (!root) return [] as string[];
+    const words: Array<{ text: string; top: number; block: Element }> = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      const value = node.textContent ?? "";
+      if (!value.trim() || !(node.parentElement?.getClientRects().length) || node.parentElement.closest("code, [aria-hidden=true]")) continue;
+      const block = node.parentElement!.closest("p, li, label, div, button, h2") ?? node.parentElement!;
+      for (const match of value.matchAll(/\S+/g)) {
+        const range = document.createRange();
+        range.setStart(node, match.index!);
+        range.setEnd(node, match.index! + match[0].length);
+        const rect = range.getClientRects()[0];
+        if (rect) words.push({ text: match[0], top: Math.round(rect.top), block });
+      }
+    }
+    const found: string[] = [];
+    for (let index = 0; index < words.length - 1; index += 1) {
+      const word = words[index]!, next = words[index + 1]!;
+      if (/^[вузіайоясВУЗІАЙОЯС]$/.test(word.text) && next.top > word.top + 2 && next.block === word.block) found.push(`${word.text} ${next.text}`);
+    }
+    return found;
+  };
+
+  /* The defining lines of each state, by selector: the ones the frame is about. */
+  const DEFINING = (token: string, phone: boolean): string[] => {
+    if (token === "engines-both") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-engine="claude"] [data-onboarding-engine-header]', '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
+    if (token === "engines-claude-only") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-install="codex"]', "[data-onboarding-recheck]", '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
+    if (token === "engines-codex-only") return ['[data-onboarding-engine="claude"] [data-onboarding-engine-header]', "[data-onboarding-claude-signin]"];
+    if (token === "engines-signed-out") return ["[data-onboarding-engines-note]", '[data-onboarding-engine="claude"] [data-onboarding-engine-header]'];
+    if (token === "engines-no-cli") return ["[data-onboarding-engines-note]", '[data-onboarding-install="claude"]', '[data-onboarding-install="codex"]', "[data-onboarding-recheck]", '[data-onboarding-engine="copilot"] [data-onboarding-engine-header]'];
+    if (token === "orchestrator-one-press") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-create]"];
+    if (token === "orchestrator-claude-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
+    if (token === "orchestrator-codex-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-advice]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
+    if (token === "later-memory-before") return ["[data-memory-source-line]", "[data-onboarding-memory-go]"];
+    if (token === "later-memory-after") return ["[data-memory-source-line]"];
+    if (token === "later-telegram-later") return ["[data-onboarding-telegram]", "[data-onboarding-primary]"];
+    if (token === "telegram-numbered") return ["[data-onboarding-report-chat]", "[data-onboarding-primary]"];
+    if (token === "settings-memory-before" || token === "settings-memory-after") return ["[data-memory-source-line]"];
+    if (token === "form-decisions") return phone ? ["[data-prototype-question=first]"] : ["[data-prototype-question=first]"];
+    if (token === "form-needs-you") return ["[data-needs-you-row]"];
+    if (token === "form-board") return ["[data-mobile2-seat-card]"];
+    return phone ? ["[data-mobile2-title-text]", "[data-mobile2-chat-state]"] : ["[data-decision-strip]"];
+  };
+
+  browserTest("every state of the first-run guide is whole at 1440, 390 and between, in English and Ukrainian, light and dark", async () => {
+    const out = path.resolve(path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "first-run-guide"));
+    const only = (process.env.LLV_FIRST_RUN_FRAMES ?? "").split(",").map((term) => term.trim()).filter(Boolean);
+    const wanted = (name: string) => !only.length || only.some((term) => name.includes(term));
+    const frames = path.join(out, "frames");
+    if (!only.length) fs.rmSync(frames, { recursive: true, force: true });
+    fs.mkdirSync(frames, { recursive: true });
+    const served = await serveEvidenceFixture(fs.mkdtempSync(path.join(os.tmpdir(), "first-run-guide-")));
+    let browser: Browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    const notes: string[] = [];
+    try {
+      for (const { width, themes } of WIDTHS) for (const theme of themes) for (const lang of width === 1440 || width === 390 ? ["en", "uk"] as Lang[] : ["en", "uk"] as Lang[]) for (const spec of SPECS) {
+        const name = `${spec.token}-${lang}-${theme}-${width}`;
+        if (!wanted(name)) continue;
+        /* The greeting alone is a frame only where the column cannot stand beside the chat; the board is the phone's. */
+        if (spec.narrowOnly && width >= 1170) continue;
+        if (spec.phoneOnly && width >= 640) continue;
+        if (!browser.isConnected()) browser = await chromium.launch(LAUNCH);
+        const phone = width < 640;
+        const form = spec.token.startsWith("form-");
+        const settings = spec.token.startsWith("settings-");
+        /* Where an orchestrator exists the board behind the dialog carries it; before one, the fresh install. */
+        const seated = spec.token === "later-memory-after" || spec.token === "settings-memory-after";
+        const scenario = form || seated ? "orchestrator-first-walk" : "orchestrator-first&guide=installer";
+        const url = `${served.base}?scenario=${scenario}&firstrun=${spec.token}${spec.bot ? `&bot=${spec.bot}` : ""}#p=atlas`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date("2026-11-11T10:00:00Z"));
+        const at = name;
+        const file = (suffix = "") => path.join(frames, `${name}${suffix}.png`);
+        try {
+          await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main", { timeout: 60_000 });
+          const goStep = async (step: string) => {
+            const target = page.locator(`[data-onboarding-step=${step}]`);
+            if (!(await target.isVisible())) await page.locator("[data-onboarding-step-list-toggle]").click();
+            await target.click();
+          };
+          const chooseProject = async () => {
+            await goStep("project");
+            await page.locator("[data-onboarding-project]").first().click();
+          };
+          let shell = false;
+          if (!form && !settings) {
+            await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "engines" } })));
+            await page.waitForSelector("[data-onboarding-dialog]");
+            await page.waitForFunction(() => document.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state") !== "loading");
+            if (spec.token.startsWith("orchestrator-")) {
+              await chooseProject();
+              await goStep("orchestrator");
+              await page.waitForSelector("[data-onboarding-orchestrator-create]:not([disabled]), [data-onboarding-orchestrator-signin], [data-onboarding-orchestrator-go]", { timeout: 30_000 });
+              if (spec.token !== "orchestrator-one-press") await page.waitForSelector("[data-onboarding-orchestrator-roles]", { timeout: 30_000 });
+            } else if (spec.token.startsWith("later-memory")) {
+              await goStep("memory");
+              await page.waitForFunction(() => { const row = document.querySelector("[data-memory-source-state]"); return row && row.getAttribute("data-memory-source-state") !== "loading"; });
+            } else if (spec.token === "later-telegram-later") {
+              await chooseProject();
+              await goStep("telegram");
+            } else if (spec.token === "telegram-numbered") {
+              await chooseProject();
+              /* The bot read has answered once the counter reads four steps: Telegram is a numbered step only with a bot. */
+              await page.waitForFunction(() => /\b4\b/.test(document.querySelector("[data-onboarding-dialog] footer span, [data-onboarding-step-list-toggle]")?.textContent ?? ""), null, { timeout: 30_000 });
+              await goStep("telegram");
+              await page.waitForSelector("[data-onboarding-report-chat]", { timeout: 30_000 });
+            }
+          } else if (form) {
+            const mobileShell = (await page.locator("[data-mobile2-open]").count()) > 0;
+            if (spec.token === "form-needs-you") {
+              await page.locator(mobileShell ? '[data-mobile2-open="attention"]' : "button:has([data-attention-chip-label])").first().click();
+              await page.waitForSelector("[data-needs-you-row]", { timeout: 30_000 });
+            } else if (mobileShell && spec.token !== "form-board") {
+              /* The seat card opens the seat's conversation; the strip under its bar opens the form in a sheet. */
+              await page.locator("[data-mobile2-seat-open]").first().click();
+              await page.waitForSelector("[data-mobile2-title-text]", { timeout: 30_000 });
+              if (spec.token === "form-decisions") {
+                await page.locator("[data-decision-strip]").first().click();
+                await page.waitForSelector("[data-prototype-question=first]", { timeout: 30_000 });
+              }
+            } else if (!mobileShell && spec.token === "form-decisions") {
+              /* Wide enough, the column stands beside the chat; narrower, the strip under the seat's bar opens the form. */
+              await page.waitForSelector("[data-prototype-question=first], [data-decision-strip]", { timeout: 30_000 });
+              if (!(await page.locator("[data-prototype-question=first]").count())) await page.locator("[data-decision-strip]").first().click();
+              await page.waitForSelector("[data-prototype-question=first]", { timeout: 30_000 });
+            } else if (!mobileShell && spec.token === "form-greeting") {
+              await page.waitForSelector("[data-decision-strip]", { timeout: 30_000 });
+            }
+            shell = mobileShell;
+          } else if (settings) {
+            await page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-settings-window", { detail: { section: "memory" } })));
+            await page.waitForSelector("[data-header-menu-memory-source]", { timeout: 30_000 });
+            await page.waitForFunction(() => document.querySelector("[data-memory-source-state]")?.getAttribute("data-memory-source-state") !== "loading");
+          }
+          await page.waitForTimeout(300);
+          const defining = DEFINING(spec.token, shell);
+          const first = await page.evaluate(MEASURE, { defining });
+          for (const selector of first.missing) failures.push(`${name}: ${selector} is missing`);
+          /* Below 860 px the Orchestrator step's facts are whole on the first screen. */
+          if (spec.token.startsWith("orchestrator-") && width < 860) for (const selector of first.offFirstScreen) failures.push(`${name}: ${selector} is not whole on the first screen`);
+          if (!form && !settings) {
+            const firstScreen = await page.evaluate(FIRST_SCREEN);
+            if (firstScreen.filled.length > 1 || (spec.token === "telegram-numbered" && firstScreen.filled.length !== 1)) failures.push(`${name}: ${firstScreen.filled.length} filled buttons on the first screen: ${firstScreen.filled.join(" | ")}`);
+            if (spec.token === "telegram-numbered" && firstScreen.cut.length) failures.push(`${name}: lines cut on the first screen: ${firstScreen.cut.join(" | ")}`);
+            else if (firstScreen.cut.length) notes.push(`${name}: lines cut on the first screen: ${firstScreen.cut.join(" | ")}`);
+          }
+          if (spec.token === "engines-signed-out" || spec.token === "engines-no-cli") {
+            if (first.offFirstScreen.includes("[data-onboarding-engines-note]")) failures.push(`${name}: the no-engine warning is not whole on the first screen`);
+          }
+          if (spec.token === "telegram-numbered") {
+            const contradicted = await page.evaluate((words) => document.body.innerText.includes(words), lang === "uk" ? "Не підключено" : "Not connected");
+            if (contradicted) failures.push(`${name}: the page says Telegram is not connected while a bot is`);
+          }
+          /* Beside the facts the advice starts in the value column, on the line of «Codex»; on a phone and in the middle it keeps the full width. */
+          if (spec.token === "orchestrator-codex-only") {
+            const starts = await page.evaluate(() => {
+              const left = (el: Element | null) => { const r = el?.getBoundingClientRect(); return r ? Math.round(r.left * 10) / 10 : null; };
+              return { advice: left(document.querySelector("[data-onboarding-orchestrator-advice] > span")), value: left(document.querySelector("[data-onboarding-orchestrator-runs-on]")), label: left(document.querySelector("[data-onboarding-orchestrator-runs-on]")?.parentElement?.previousElementSibling ?? null) };
+            });
+            if (starts.advice === null || starts.value === null) failures.push(`${name}: the advice or the Runs on value is missing`);
+            else if (width >= 860 && Math.abs(starts.advice - starts.value) > 1.5) failures.push(`${name}: the advice starts at ${starts.advice}px but the value column at ${starts.value}px`);
+            else if (width < 860 && starts.label !== null && starts.advice > starts.label + 1.5) failures.push(`${name}: the advice is indented to ${starts.advice}px below 860 px (label at ${starts.label}px)`);
+          }
+          /* With an orchestrator the board behind the dialog has it: no draft panel asks to create one, and the guide's first three steps are ticks. */
+          if (seated) {
+            const behind = await page.evaluate((draft) => ({
+              draft: document.body.innerText.includes(draft),
+              none: document.querySelectorAll("[data-orchestrator-badge=draft]").length > 0,
+            }), translate(lang, "orchPanel.draftTitle").replace("{project}", "atlas"));
+            if (behind.draft) failures.push(`${name}: the board behind still asks to create the orchestrator`);
+            if (behind.none) failures.push(`${name}: the board behind says the orchestrator does not exist yet`);
+            if (spec.token === "later-memory-after") {
+              const ticks = await page.evaluate(() => [...document.querySelectorAll("[data-onboarding-dialog] [data-step-mark=done]")].length);
+              if (width >= 640 && ticks < 3) failures.push(`${name}: ${ticks} settled steps in the guide, expected at least 3`);
+            }
+          }
+          if (spec.token === "settings-memory-after") {
+            const line = await page.evaluate(() => document.querySelector("[data-memory-source-line]")?.textContent ?? "");
+            if (!line.includes(translate(lang, "memorySource.limit"))) failures.push(`${name}: the Settings memory line does not say the import spends the plan's limit`);
+          }
+          if (spec.token.startsWith("engines-")) {
+            const rechecks = await page.evaluate((label) => [...document.querySelectorAll<HTMLElement>("[data-onboarding-dialog] button")].filter((button) => button.getClientRects().length && button.textContent?.trim() === label).length, translate(lang, "onboarding.engines.recheck"));
+            if (rechecks > 1) failures.push(`${name}: ${rechecks} Check again buttons`);
+          }
+          await page.screenshot({ path: file() });
+          const reading: Record<string, unknown> = { frame: name, width, lang, theme, token: spec.token, label: spec.label[lang], defining, offFirstScreen: first.offFirstScreen };
+          for (const selector of defining) {
+            if (first.missing.includes(selector)) continue;
+            if (first.offFirstScreen.includes(selector)) {
+              await page.locator(selector).first().evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+              await page.waitForTimeout(150);
+              await page.screenshot({ path: file(`-scrolled-${defining.indexOf(selector) + 1}`) });
+              notes.push(`${name}: ${selector} is off the first screen`);
+            }
+            await page.locator(selector).first().evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+            await page.waitForTimeout(100);
+            const inspected = await page.evaluate(INSPECT, { selector, coarse: phone, lang, latin: LATIN.source });
+            const where = `${name} ${selector}`;
+            if (inspected.cut.length) failures.push(`${where}: cut: ${inspected.cut.join(" | ")}`);
+            if (inspected.covered.length) failures.push(`${where}: covered: ${inspected.covered.join(" | ")}`);
+            if (inspected.ellipsis.length) failures.push(`${where}: ellipsis: ${inspected.ellipsis.join(" | ")}`);
+            if (inspected.small.length) failures.push(`${where}: targets under 44 px: ${inspected.small.join(" | ")}`);
+            if (inspected.oneLetterEnds.length) failures.push(`${where}: a line ends on a one-letter word: ${inspected.oneLetterEnds.join(" | ")}`);
+            if (inspected.latin.length) failures.push(`${where}: Latin words in Ukrainian: ${[...new Set(inspected.latin)].join(", ")}`);
+            reading[selector] = { texts: inspected.texts };
+          }
+          if (lang === "uk") {
+            const ends = await page.evaluate(LINE_ENDS, form ? "main, body" : settings ? "[role=dialog]" : "[data-onboarding-dialog]");
+            if (ends.length) failures.push(`${name}: lines end on a one-letter word: ${ends.join(" | ")}`);
+          }
+          const surfaceCheck = await page.evaluate(OVERLAPS, defining[0]!);
+          if (surfaceCheck.overlaps.length) failures.push(`${name}: text overlaps: ${surfaceCheck.overlaps.join(" | ")}`);
+          if (surfaceCheck.sideways > 1) failures.push(`${name}: scrolls sideways by ${surfaceCheck.sideways}px`);
+          if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
+          readings.push({ ...reading, overlaps: surfaceCheck.overlaps, sideways: surfaceCheck.sideways, pageErrors });
+        } catch (error) {
+          failures.push(`${at}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          await page.screenshot({ path: file("-failed") }).catch(() => {});
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ frames: readings, notes, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 5_400_000);
+});
+
 describe("new task default deadline", () => {
   browserTest("default, picked and reset deadlines render in both languages and themes", async () => {
     const out = path.resolve(".artifacts/task-due-composer/desktop");
@@ -41521,8 +45950,12 @@ describe("start a pipeline from a conversation", () => {
       await shot("conflict", ["[data-draft-changed] .msg-text"], phone(combo) ? ["[data-draft-changed] button"] : []);
       await page.locator("[data-draft-changed] button").first().click();
       await page.locator("[data-draft-changed]").waitFor({ state: "detached" });
-      /* 6. Choosing the stages: + Stage, then a waiting stage's configuration. */
+      /* 6. Choosing the stages: + Stage, then a waiting stage's configuration. On
+         the board the first message stood in the agent window
+         (docs/design/task-card-no-inline-conversations.md §7): it closes first. */
       if (!phone(combo)) {
+        await page.locator("[data-agent-window] [data-stage-detail]").press("Escape");
+        await page.locator("[data-agent-window]").waitFor({ state: "detached" });
         await page.locator('.card[data-id="task:t-csv-export"] [data-open-stages="p-export"]').first().click();
         await page.locator("[data-stages-sheet]").waitFor();
       }
@@ -41673,8 +46106,8 @@ describe("start a pipeline from a conversation", () => {
 
 /* docs/design/model-icon-motion-brief.md, variant B: a stage's model glyph
    turns only while its agent works, at the applied tier's pace (4 s, 2 s,
-   0.5 s), on the desktop board's pills, an opened card's graph and the Stages
-   sheet, at 1440 and 820 px, light and dark, uk and en. Frames, phase strips
+   0.5 s), on the desktop board's pills, the Stages sheet's graph and its
+   panes, at 1440 and 820 px, light and dark, uk and en. Frames, phase strips
    and readings go to `.artifacts/model-icon-motion/desktop` unless
    LLV_MODEL_MOTION_OUT names another directory. */
 describe("model icon motion", () => {
@@ -41687,4 +46120,1556 @@ describe("model icon motion", () => {
     try { await captureModelIconMotion(browser, server.base, out, false); }
     finally { await browser.close(); server.stop(); }
   }, 900_000);
+});
+
+/* docs/design/create-project-by-name.md §5, §7: the create form with the name
+   as its only required field, on the rail (1440 and 1000 px) and the phone's
+   project sheet (390 px), in both languages and themes. The driver's server
+   answers the create request with the state each frame needs; the member
+   frames sign a member in through the workspaces scenario. Frames and
+   readings go to `.artifacts/create-project-by-name`. */
+describe("create a project by name alone", () => {
+  browserTest("every state fits, names its defining words and never asks for a path on the default flow", async () => {
+    const out = path.resolve(".artifacts/create-project-by-name");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    type Answer = { status: number; body: unknown } | "held";
+    let answer: Answer = { status: 500, body: { error: "STORE_ERROR" } };
+    const held: { release: (() => void) | null } = { release: null };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/projects/directories": { dirs: ["/home/user/Projects/atlas", "/home/user/Projects/harbor"] },
+      "/api/projects/create": async () => {
+        if (answer === "held") await new Promise<void>((resolve) => { held.release = resolve; });
+        const settled = answer === "held" ? { status: 500, body: { error: "STORE_ERROR" } } : answer;
+        return Response.json(settled.body, { status: settled.status });
+      },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    /* Every text range of the form must sit inside the window and inside the form's box, the
+       folder-name preview included: its slug is the point of the line. */
+    const readForm = (page: Page, selector: string) => page.evaluate((selector) => {
+      const form = document.querySelector<HTMLElement>(selector);
+      if (!form) return null;
+      const box = form.getBoundingClientRect();
+      const cut: string[] = [];
+      const walker = document.createTreeWalker(form, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const label = node.textContent?.trim();
+        if (!label || node.parentElement?.closest("[data-directory-picker]")) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width === 0) continue;
+          const outside = rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.bottom > innerHeight + 0.5;
+          /* A scroller or a clipping box between the text and the window hides what it overlaps. */
+          let clipped = false;
+          for (let parent = node.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+            const style = getComputedStyle(parent);
+            if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
+            const clip = parent.getBoundingClientRect();
+            if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5) clipped = true;
+          }
+          if (outside || clipped) cut.push(label);
+        }
+      }
+      const controls = [...form.querySelectorAll<HTMLElement>("button, input, select")].filter((element) => element.getClientRects().length > 0)
+        .map((element) => { const r = element.getBoundingClientRect(); return { tag: element.tagName, height: Math.round(r.height * 10) / 10, width: Math.round(r.width * 10) / 10 }; });
+      return { form: [box.left, box.top, box.width, box.height].map(Math.round), cut, text: form.innerText, controls, pageScrolls: document.documentElement.scrollWidth > innerWidth };
+    }, selector);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        const phone = width === 390;
+        const tag = `${lang}-${theme}-${width}`;
+        const text = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(lang, key, values);
+        const slug = "pr-gram";
+        const formSel = phone ? "[data-mobile2-project-form]" : "[data-create-project-form]";
+        const nameSel = `${formSel} input`;
+        const open = async (query: string) => {
+          const opened = await openFixture(browser, `${server.base}?${query}`, { width, height }, theme, lang, "reduce", phone);
+          if (phone) {
+            await opened.page.locator("[data-mobile2-title]").click();
+            await opened.page.locator("[data-mobile2-project-create]").click();
+          } else {
+            await opened.page.locator('[data-testid="rail-create-project"]').click();
+          }
+          await opened.page.locator(formSel).waitFor();
+          return opened;
+        };
+        const frame = async (page: Page, state: string, defining: string[]) => {
+          const reading = await readForm(page, formSel);
+          if (!reading) { failures.push(`${tag} ${state}: the form is not drawn`); return; }
+          for (const words of defining) if (!reading.text.includes(words)) failures.push(`${tag} ${state}: «${words}» is not on the first screen of the form`);
+          if (reading.cut.length) failures.push(`${tag} ${state}: text is cut or leaves the window ${JSON.stringify(reading.cut)}`);
+          if (reading.pageScrolls) failures.push(`${tag} ${state}: the page scrolls sideways`);
+          if (phone) for (const control of reading.controls) if (control.height < 43.5) failures.push(`${tag} ${state}: a ${control.tag} is ${control.height} px tall ${JSON.stringify(control)}`);
+          if (/Root directory|Коренева тека/.test(reading.text)) failures.push(`${tag} ${state}: the form is labelled «Root directory» ${JSON.stringify(reading.text)}`);
+          if (state !== "existing" && /path|шлях/i.test(reading.text)) failures.push(`${tag} ${state}: the default flow mentions a path ${JSON.stringify(reading.text)}`);
+          await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+          readings.push({ tag, state, defining, form: reading.form, controls: reading.controls.length });
+        };
+        /* The owner, on a solo installation. */
+        {
+          answer = { status: 500, body: { error: "STORE_ERROR" } };
+          const { context, page, pageErrors } = await open("rail=few");
+          try {
+            await frame(page, "default", [text("rail.useExistingFolder"), text(phone ? "mobile2.projects.createSubmit" : "rail.create")]);
+            await page.locator(nameSel).first().fill("PR GRAM");
+            await frame(page, "typing", [text("rail.newFolderPreview", { slug })]);
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} [role=alert]`).waitFor();
+            await frame(page, "error", [text("rail.createFailed")]);
+            answer = { status: 409, body: { error: "DUPLICATE_NAME", message: "x", project: "atlas", displayName: "PR GRAM", root: null } };
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} ${phone ? "[data-mobile2-project-open-existing]" : "[data-create-open-existing]"}`).waitFor();
+            await frame(page, "collision", [text("rail.duplicateName", { name: "PR GRAM" }), text("rail.openExisting")]);
+            /* A taken name leaves «Open it» as the one filled control, with no Create and no folder line. */
+            const collision = await page.locator(formSel).evaluate((form) => ({
+              filled: [...form.querySelectorAll<HTMLElement>("button")].filter((button) => button.classList.contains("bg-brand")).map((button) => button.textContent),
+              create: form.querySelectorAll("button[type=submit]").length,
+              preview: form.querySelectorAll("[data-create-folder-preview]").length,
+            }));
+            /* Cancel sits beside «Open it» where it sat beside Create, not alone on a row of its own. */
+            if (!phone) {
+              const row = await page.locator(formSel).evaluate((form) => {
+                const open = form.querySelector<HTMLElement>("[data-create-open-existing]")!.getBoundingClientRect();
+                const cancel = [...form.querySelectorAll<HTMLElement>("button")].find((button) => !button.hasAttribute("data-create-open-existing") && !button.hasAttribute("data-create-existing-toggle"))?.getBoundingClientRect();
+                return cancel ? { sameRow: cancel.top < open.bottom && cancel.bottom > open.top, openLeft: open.left, cancelLeft: cancel.left } : null;
+              });
+              if (!row?.sameRow) failures.push(`${tag} collision: Cancel is not beside «Open it» ${JSON.stringify(row)}`);
+            }
+            if (JSON.stringify(collision.filled) !== JSON.stringify([text("rail.openExisting")]) || collision.create || collision.preview) failures.push(`${tag} collision: expected «Open it» alone and no folder line, got ${JSON.stringify(collision)}`);
+            answer = "held";
+            await page.locator(`${nameSel}`).first().fill("PR GRAM 2");
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} button[type=submit][disabled]`).waitFor();
+            await frame(page, "creating", [text("rail.creating")]);
+            answer = { status: 500, body: { error: "STORE_ERROR" } };
+            held.release?.();
+            await page.locator(`${formSel} [role=alert]`).waitFor();
+            await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).click();
+            await page.locator("[data-directory-trigger]").waitFor();
+            await frame(page, "existing", [text("rail.useNewFolder"), text("rail.newFolderOptional", { slug: "pr-gram-2" }), text("dirPicker.empty")]);
+            if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* The owner's projects folder sits inside a Git repository: a short line, no path, no folder line. */
+        {
+          answer = { status: 409, body: { error: "PARENT_IN_REPOSITORY", message: "x", parent: "/home/user/Projects" } };
+          const { context, page, pageErrors } = await open("rail=few");
+          try {
+            await page.locator(nameSel).first().fill("PR GRAM 2");
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} [role=alert]`).waitFor();
+            await frame(page, "git", [text("rail.parentInRepository"), text("dirPicker.empty")]);
+            const git = await page.locator(formSel).evaluate((form) => {
+              const alert = form.querySelector<HTMLElement>("[role=alert]")!;
+              return { lines: Math.round(alert.getBoundingClientRect().height / parseFloat(getComputedStyle(alert).lineHeight)), preview: form.querySelectorAll("[data-create-folder-preview]").length, text: alert.textContent ?? "" };
+            });
+            if (git.preview || git.text.includes("/home/user") || (!phone && width >= 1440 && git.lines > 2)) failures.push(`${tag} git: expected a two-line refusal without the path or a folder line, got ${JSON.stringify(git)}`);
+            if (pageErrors.length) failures.push(`${tag} git: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* A team member: the workspace choice, no existing-folder control. */
+        {
+          answer = { status: 500, body: { error: "STORE_ERROR" } };
+          const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all&member=1");
+          try {
+            await page.locator(nameSel).first().fill("Мій проєкт");
+            await page.locator("[data-create-workspace]").waitFor();
+            await frame(page, "member", [text("rail.workspaceLabel")]);
+            /* The chosen workspace reads in the same ink as the name above it. */
+            const ink = await page.locator(formSel).evaluate((form) => ({ name: getComputedStyle(form.querySelector("input")!).color, select: getComputedStyle(form.querySelector("select")!).color }));
+            /* The workspace choice has the name field's weight and edges, and a long name ends in an ellipsis. */
+            const shape = await page.locator(formSel).evaluate((form) => {
+              const name = form.querySelector("input")!, select = form.querySelector("select")!;
+              const a = name.getBoundingClientRect(), b = select.getBoundingClientRect(), style = getComputedStyle(select);
+              return { weights: [getComputedStyle(name).fontWeight, style.fontWeight], inset: [Math.abs(a.left - b.left), Math.abs(a.right - b.right)], overflow: style.textOverflow };
+            });
+            if (shape.weights[0] !== shape.weights[1] || shape.inset.some((gap) => gap > 0.5) || shape.overflow !== "ellipsis") failures.push(`${tag} member: the workspace choice differs from the name field ${JSON.stringify(shape)}`);
+            if (ink.name !== ink.select) failures.push(`${tag} member: the workspace choice is drawn in ${ink.select}, the name in ${ink.name}`);
+            if (await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).count()) failures.push(`${tag} member: the existing-folder control is drawn`);
+            if (pageErrors.length) failures.push(`${tag} member: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      /* The setup guide's New project step: the footer's Continue is the one filled control while a
+         name is typed and creates the project; a taken name hands the fill to «Open it». */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        const tag = `guide-${lang}-${theme}-${width}`;
+        const text = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(lang, key, values);
+        const formSel = "[data-onboarding-project-form] [data-create-project-form]";
+        const opened = await openFixture(browser, `${server.base}?scenario=orchestrator-first&guide=installer#p=atlas`, { width, height }, theme, lang, "reduce", width === 390);
+        const { context, page, pageErrors } = opened;
+        try {
+          await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main");
+          await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "project" } })));
+          await page.locator("[data-onboarding-project-other]").click();
+          await page.locator(formSel).waitFor();
+          const frame = async (state: string, defining: string[], filled: string[]) => {
+            await page.locator("[data-onboarding-project-form]").evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+            const reading = await readForm(page, formSel);
+            if (!reading) { failures.push(`${tag} ${state}: the form is not drawn`); return; }
+            for (const words of defining) if (!reading.text.includes(words)) failures.push(`${tag} ${state}: «${words}» is not on the first screen of the form`);
+            if (reading.cut.length) failures.push(`${tag} ${state}: text is cut or leaves the window ${JSON.stringify(reading.cut)}`);
+            const filledNow = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-onboarding-project-form] button, [data-onboarding-primary]")]
+              .filter((button) => button.classList.contains("bg-brand")).map((button) => button.textContent));
+            if (JSON.stringify(filledNow) !== JSON.stringify(filled)) failures.push(`${tag} ${state}: filled controls are ${JSON.stringify(filledNow)}, expected ${JSON.stringify(filled)}`);
+            await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+            readings.push({ tag, state, defining, form: reading.form, filled: filledNow });
+          };
+          const next = text("onboarding.continue");
+          await frame("default", [text("rail.create"), text("rail.useExistingFolder")], [next]);
+          await page.locator(`${formSel} input`).first().fill("PR GRAM");
+          await frame("typing", [text("rail.newFolderPreview", { slug: "pr-gram" })], [next]);
+          answer = { status: 409, body: { error: "DUPLICATE_NAME", message: "x", project: "atlas", displayName: "PR GRAM", root: null } };
+          await page.locator(`${formSel} button[type=submit]`).click();
+          await page.locator("[data-create-open-existing]").waitFor();
+          await frame("collision", [text("rail.duplicateName", { name: "PR GRAM" })], [text("rail.openExisting")]);
+          answer = { status: 200, body: { project: "dir-0123456789abcdef0123456789abcdef", root: "/home/user/Projects/pr-gram-2" } };
+          await page.locator(`${formSel} input`).first().fill("PR GRAM 2");
+          await page.locator("[data-onboarding-primary]").click();
+          /* Continue created the project and moved on: the New project form leaves the screen. */
+          const moved = await page.locator("[data-onboarding-project-form]").waitFor({ state: "detached", timeout: 10_000 }).then(() => true, () => false);
+          if (!moved) failures.push(`${tag} created: Continue left the New project form on screen`);
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+
+describe("board summary attempt provenance", () => {
+  browserTest("summary and full records render equal history and stage previews in both locales and themes", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const now = Date.parse("2026-11-03T10:00:00Z");
+    const role = { roleId: "builder" as const, engine: "codex" as const, model: "gpt-5.6", effort: "high", access: "read-write" as const, promptScaffold: "Stage instructions remain available." };
+    const lane = buildPipeline({
+      id: "summary-lane", task: "Retained attempt history", project: "atlas", repoDir: "/fixture/atlas",
+      srcPath: null, srcConversationId: null, now: new Date(now - 3600_000).toISOString(),
+      stages: [
+        { id: "build", kind: "run", prompt: "Build the task.", next: "review", effectiveRole: role },
+        { id: "review", kind: "run", prompt: "Review the task.", next: null, effectiveRole: { ...role, access: "read-only" } },
+      ],
+    });
+    lane.taskIds = ["summary-task"]; lane.state = "running";
+    lane.cursor = { stageId: "review", state: "pending", input: null, activatedBy: null };
+    lane.runs = [{ stageId: "build", attempts: [1, 2].map(n => ({
+      n, state: n === 1 ? "failed" as const : "passed" as const,
+      effectiveRole: { ...role, model: n === 1 ? "gpt-5" : "gpt-5.6", promptScaffold: "Historical execution instructions. ".repeat(1000) },
+      launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+      input: null, output: null, activatedBy: null, error: n === 1 ? "The original failure stays visible." : null,
+      verdict: { status: n === 1 ? "fail" as const : "pass" as const, findings: n === 1 ? ["Retained finding"] : [] },
+      startedAt: new Date(now - (4 - n) * 600_000).toISOString(), completedAt: new Date(now - (3 - n) * 600_000).toISOString(),
+    })) }];
+    const tasks: BoardTask[] = [{ id: "summary-task", project: "atlas", text: lane.task, details: "Complete task detail.",
+      status: "assigned", placement: "unplaced", assignments: [], createdAt: lane.createdAt, updatedAt: lane.createdAt }];
+    const payload = (summary: boolean) => ({
+      files: [], tasks, flows: [], workflows: [], pipelines: summary ? filesReadSummary([], [lane]).pipelines : [lane],
+      projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }],
+      projectCwds: { atlas: "/fixture/atlas" },
+    });
+    let summary = false;
+    const out = path.resolve(".artifacts/board-summary-provenance");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/files": () => Response.json(payload(summary)), "/api/tasks": () => Response.json({ tasks }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        let expected: {
+          text: string;
+          controls: { text: string; label: string | null; disabled: boolean; attempt: string | null; pressed: string | null }[];
+        } | undefined;
+        for (const projected of [false, true]) {
+          summary = projected;
+          const { page, context, pageErrors } = await openFixture(browser, "about:blank", { width, height: 900 }, theme, lang, "reduce", width === 390);
+          try {
+            await page.clock.setFixedTime(new Date(now));
+            await page.goto(`${server.base}?scenario=board-timeline&cards=open#p=atlas`);
+            if (width === 390) {
+              await page.locator('[data-phone-kanban-tab="assigned"]').click();
+              await page.locator('[data-phone-card="task:summary-task"]').click();
+            }
+            const open = page.locator('[data-open-stages="summary-lane"]').first();
+            await open.waitFor();
+            await open.evaluate(element => (element as HTMLElement).click());
+            const selector = width === 390 ? '[data-mobile2-pipeline="summary-lane"]' : "[data-stages-sheet]";
+            await page.locator(selector).waitFor();
+            if (width !== 390) {
+              await page.locator('[data-stages-sheet] [data-stage="build"] [data-attempt="1"]').click();
+              await page.locator("[data-draft-added] summary").click();
+              expect(await page.locator("[data-draft-added] pre").innerText()).toContain("Stage instructions remain available.");
+            }
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+            const rendered = await page.locator(selector).evaluate(element => ({
+              text: (element as HTMLElement).innerText,
+              controls: Array.from(element.querySelectorAll("button")).map(button => ({
+                text: button.textContent, label: button.getAttribute("aria-label"), disabled: button.disabled,
+                attempt: button.getAttribute("data-attempt"), pressed: button.getAttribute("aria-pressed"),
+              })),
+            }));
+            if (!projected) expected = rendered;
+            else {
+              if (expected === undefined) throw new Error("The full-record comparison must run first");
+              expect(rendered).toEqual(expected);
+              const name = `${width}-${lang}-${theme}`;
+              await page.screenshot({ path: path.join(out, name + ".png") });
+              readings.push({ name, equal: true, ...rendered });
+            }
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
+/* docs/design/task-card-no-inline-conversations.md: a task card holds no
+   conversation, no first-message panel and no graph. A click on a stage
+   opens the agent window, the not-started one on its first message; «Graph»
+   opens the stages view with its graph, where a node also opens its stage in
+   the window; and the view's panes are as wide as a conversation column, the
+   lane scrolling sideways. The `stages` scenario at 1920, 1440, 1000 and
+   820 px, en and uk, light and dark, with scrollbars drawn. Frames go to
+   LLV_NO_INLINE_OUT (default `.artifacts/task-card-no-inline-conversations`),
+   the readings to evidence/task-card-no-inline-conversations/rendered.json. */
+describe("a task card without inline conversations", () => {
+  browserTest("every card keeps its geometry, stages open in the agent window, «Graph» opens the stages view, and its panes hold a conversation's measure", async () => {
+    const out = path.resolve(process.env.LLV_NO_INLINE_OUT ?? ".artifacts/task-card-no-inline-conversations");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    /* A short browser-owned temp path avoids the Linux singleton socket limit. */
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const SEARCH = card("t-search");
+    const WINDOW_DRAFT = "[data-agent-window] [data-stage-draft-slot] [data-stage-detail]";
+    const WINDOW_READER = "[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]";
+    /* A defining element as the operator reads it: present, its text inside
+       the window and every ancestor that clips it, measured from its text
+       ranges. */
+    const readText = (page: Page, selectors: string[]) => page.evaluate((list) => list.map((selector) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) return { selector, missing: true, cut: false, text: "" };
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+      const clips: DOMRect[] = [new DOMRect(0, 0, innerWidth, innerHeight)];
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) clips.push(node.getBoundingClientRect());
+      }
+      const cut = !rects.length || rects.some((rect) => clips.some((clip) => rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5 || rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5));
+      return { selector, missing: false, cut, text: element.innerText.replace(/\s+/g, " ").trim() };
+    }), selectors);
+    const boxes = (page: Page) => page.evaluate((selector) => {
+      const root = document.querySelector(selector);
+      if (!root) return null;
+      return [root, ...root.querySelectorAll(":scope > *")].map((element) => {
+        const rect = element.getBoundingClientRect();
+        return `${Math.round(rect.x * 10) / 10},${Math.round(rect.y * 10) / 10},${Math.round(rect.width * 10) / 10},${Math.round(rect.height * 10) / 10}`;
+      }).join(" ");
+    }, SEARCH);
+    const inline = (page: Page) => page.evaluate(() => document.querySelectorAll(".card :is([data-stage-detail], .readers, [data-graph], .pgraph-box, .pgraph, [data-kanban-reader], [data-draft-message])").length);
+    const settle = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 300)))));
+    try {
+      /* LLV_NO_INLINE_WIDTHS narrows a rerun to the widths it names. */
+      const only = (process.env.LLV_NO_INLINE_WIDTHS ?? "").split(",").filter(Boolean).map(Number);
+      for (const [width, height] of [[1920, 1080], [1440, 900], [1000, 800], [820, 1000]] as const) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        if (only.length && !only.includes(width)) continue;
+        const key = `${width}-${lang}-${theme}`;
+        const t = (name: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, name, params);
+        const fail = (problem: string) => failures.push(`${key}: ${problem}`);
+        const shot = (page: Page, name: string) => page.screenshot({ path: path.join(out, `${key}-${name}.png`) });
+        const cutOf = (read: Awaited<ReturnType<typeof readText>>, step: string) => {
+          for (const entry of read) if (entry.missing || entry.cut) fail(`${step}: ${entry.selector} ${entry.missing ? "is missing" : `is cut («${entry.text.slice(0, 60)}»)`}`);
+        };
+        const reading: Record<string, unknown> = {};
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width, height }, theme, lang, "reduce");
+        try {
+          const pill = (stage: string) => `${SEARCH} .pb-pills [data-stage="${stage}"]`;
+          await page.waitForSelector(pill("merge"), { timeout: 30_000 });
+          await page.locator(pill("merge")).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await settle(page);
+          /* 1. Every card: no conversation, no first message, no graph. */
+          if (await inline(page)) fail(`${await inline(page)} cards hold a conversation, a first message or a graph`);
+          const before = await boxes(page);
+          await shot(page, "card");
+
+          /* 2. A not-started stage opens in the agent window on its first message. */
+          await page.click(pill("merge"));
+          await page.waitForSelector(WINDOW_DRAFT, { timeout: 10_000 });
+          await settle(page);
+          const draft = await readText(page, [`${WINDOW_DRAFT} .ch-state`, `${WINDOW_DRAFT} .ch-title`, `${WINDOW_DRAFT} [data-draft-message] .btext`, `${WINDOW_DRAFT} [data-draft-edit]`, `${WINDOW_DRAFT} [data-draft-status]`, `${WINDOW_DRAFT} [data-draft-added] summary`]);
+          cutOf(draft, "draft");
+          const words = draft.map((entry) => entry.text);
+          if (words[0] !== t("kanban.draft.state")) fail(`draft head says «${words[0]}»`);
+          if (words[3] !== t("kanban.draft.edit")) fail(`draft Edit says «${words[3]}»`);
+          if (!words[4]?.startsWith(t("kanban.draft.status"))) fail(`draft status says «${words[4]}»`);
+          if (await boxes(page) !== before) fail("the card moved when its waiting stage opened");
+          if (!await page.locator(pill("merge")).evaluate((element) => element.classList.contains("selected"))) fail("the waiting stage's pill is not marked open");
+          if (await inline(page)) fail("a card holds the first message");
+          const row = await page.locator("[data-agent-window] [data-open-agent-jump]").first().getAttribute("aria-label");
+          if (!row?.includes(t("kanban.draft.state"))) fail(`the window's row says «${row}»`);
+          reading.draft = { words, row, focus: await page.evaluate(() => document.activeElement?.closest("[data-stage-detail]") !== null) };
+          await shot(page, "window-draft");
+          /* The window stays modal with a first message on screen. */
+          const escaped: string[] = [];
+          for (let press = 0; press < 24; press++) {
+            await page.keyboard.press("Tab");
+            const inside = await page.evaluate(() => Boolean(document.activeElement?.closest("[data-agent-window-frame]")));
+            if (!inside) escaped.push(await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80) ?? "none"));
+          }
+          if (escaped.length) fail(`Tab left the window: ${escaped.slice(0, 2).join(" | ")}`);
+          /* Edit, Escape cancels the edit and keeps the window; then a save. */
+          await page.click(`${WINDOW_DRAFT} [data-draft-edit]`);
+          await page.waitForSelector(`${WINDOW_DRAFT} textarea.draft-edit`);
+          await settle(page);
+          cutOf(await readText(page, [`${WINDOW_DRAFT} [data-draft-save]`, `${WINDOW_DRAFT} [data-draft-cancel]`]), "editing");
+          await shot(page, "window-draft-editing");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(`${WINDOW_DRAFT} [data-draft-edit]`);
+          if (!await page.locator("[data-agent-window]").count()) fail("Escape in the editor closed the window");
+          await page.click(`${WINDOW_DRAFT} [data-draft-edit]`);
+          await page.fill(`${WINDOW_DRAFT} textarea.draft-edit`, lang === "uk" ? "Злити після перемикання псевдоніма й одного теплого запиту." : "Merge after the alias swap and one warm query.");
+          await page.keyboard.press("Control+Enter");
+          await page.waitForFunction((selector) => /\d/.test(document.querySelector(`${selector} [data-draft-status]`)?.textContent ?? ""), WINDOW_DRAFT, { timeout: 10_000 });
+          await settle(page);
+          const saved = await readText(page, [`${WINDOW_DRAFT} [data-draft-status]`, `${WINDOW_DRAFT} [data-draft-message] .btext`]);
+          cutOf(saved, "saved");
+          reading.saved = saved.map((entry) => entry.text);
+          await shot(page, "window-draft-saved");
+          await page.locator(`${WINDOW_DRAFT} [data-draft-edit]`).press("Escape");
+          await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          if (await boxes(page) !== before) fail("the card moved after its first message closed");
+
+          /* 3. A passed and a running stage open their conversations in the window. */
+          for (const stage of ["implement", "verify"]) {
+            await page.click(pill(stage));
+            await page.waitForSelector(WINDOW_READER, { timeout: 15_000 });
+            await settle(page);
+            if (await boxes(page) !== before) fail(`the card moved when ${stage} opened`);
+            if (await inline(page)) fail(`a card holds ${stage}'s conversation`);
+            await shot(page, `window-${stage}`);
+            await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          }
+
+          /* 4. «Graph» opens the stages view with its graph shown, at every width. */
+          await page.click(`${SEARCH} [data-graph-toggle]`);
+          await page.waitForSelector(".gsheet .gs-graph .pnode", { timeout: 10_000 });
+          await settle(page);
+          if (await page.getAttribute("[data-sheet-graph]", "aria-pressed") !== "true") fail("the stages view opened from «Graph» hides its graph");
+          if (await boxes(page) !== before) fail("the card moved under the stages view");
+          cutOf(await readText(page, [".gsheet header h2", '.gsheet .gs-graph .pnode[data-stage="implement"] .pname', '.gsheet .gs-graph .pnode[data-stage="merge"] .pname']), "graph");
+          await shot(page, "graph");
+          /* 5. A node reaches its pane and opens its stage in the window over the view. */
+          await page.click('.gsheet .gs-graph .pnode[data-stage="implement"]');
+          await page.waitForSelector(WINDOW_READER, { timeout: 15_000 });
+          await settle(page);
+          const over = await page.evaluate(() => {
+            const frame = document.querySelector("[data-agent-window-frame]")!.getBoundingClientRect();
+            const hit = document.elementFromPoint(frame.left + frame.width / 2, frame.top + frame.height / 2);
+            return { sheet: Boolean(document.querySelector(".gsheet")), onTop: Boolean(hit?.closest("[data-agent-window-frame]")) };
+          });
+          if (!over.sheet || !over.onTop) fail(`the node's window does not stand over the view: ${JSON.stringify(over)}`);
+          await shot(page, "graph-node-window");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          const back = await page.evaluate(() => {
+            const lane = document.querySelector(".gsheet .lane")?.getBoundingClientRect();
+            const pane = document.querySelector('.gsheet .pane[data-stage="implement"]')?.getBoundingClientRect();
+            return { sheet: Boolean(document.querySelector(".gsheet")), inView: Boolean(lane && pane && pane.left >= lane.left - 1 && pane.left < lane.right - 40), focus: (document.activeElement as HTMLElement | null)?.dataset.stage ?? null };
+          });
+          if (!back.sheet || !back.inView || back.focus !== "implement") fail(`after the window the view is not on Implement: ${JSON.stringify(back)}`);
+          await shot(page, "graph-after-window");
+          /* A waiting node opens its first message; its pane does not edit it a second time. */
+          await page.click('.gsheet .gs-graph .pnode[data-stage="merge"]');
+          await page.waitForSelector(WINDOW_DRAFT, { timeout: 10_000 });
+          await settle(page);
+          if (!await page.locator('.gsheet .pane[data-stage="merge"] [data-pane-away]').count()) fail("the waiting pane edits the first message the window shows");
+          await shot(page, "graph-node-draft");
+          await page.locator(WINDOW_DRAFT).press("Escape");
+          await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".gsheet", { state: "detached" });
+
+          /* A parked lane and a completed lane open their graphs the same way. */
+          /* The completed lane's card stands in Done, which the one-column board below 1200 px
+             keeps off screen; it is gated where its column is drawn. */
+          const ended = width >= 1200 ? [["t-compact", "p-compact", "done"]] as const : [];
+          reading.endedLaneGated = ended.length > 0;
+          for (const [task, pipeline, status] of [["t-links", "p-links", "assigned"] as const, ...ended]) {
+            const toggle = page.locator(`${card(task)} [data-graph-toggle="${pipeline}"]`);
+            /* Where the board shows one column at a time, the card's column is a tab (the attention toast can stand over it). */
+            if (!await page.locator(card(task)).count()) await page.locator(`[role="tab"][data-tab="${status}"]`).evaluate((element) => (element as HTMLElement).click());
+            if (!await page.waitForSelector(card(task), { timeout: 10_000 }).then(() => true, () => false)) {
+              fail(`${pipeline}: its card is not on the ${status} tab`);
+              await shot(page, `tab-${status}`);
+              continue;
+            }
+            if (!await toggle.count()) {
+              /* A folded done card shows its lane once it is opened. */
+              await page.locator(`${card(task)} button.icon-btn.fold[aria-expanded="false"]`).first().click().catch(() => {});
+            }
+            await toggle.first().scrollIntoViewIfNeeded();
+            await toggle.first().click();
+            await page.waitForSelector(`[data-stages-sheet="${pipeline}"] .gs-graph .pnode`, { timeout: 10_000 });
+            await settle(page);
+            if (await page.getAttribute("[data-sheet-graph]", "aria-pressed") !== "true") fail(`${pipeline}: the stages view hides its graph`);
+            await shot(page, `graph-${pipeline}`);
+            await page.keyboard.press("Escape");
+            await page.waitForSelector(".gsheet", { state: "detached" });
+          }
+
+          /* 6. «Expand all» on an eight-stage lane: wide panes, a sideways lane, a conversation's measure. */
+          if (!await page.locator(card("t-upload")).count()) await page.locator('[role="tab"][data-tab="assigned"]').evaluate((element) => (element as HTMLElement).click());
+          await page.locator(`${card("t-upload")} [data-graph-toggle]`).scrollIntoViewIfNeeded();
+          await page.click(`${card("t-upload")} [data-graph-toggle]`);
+          await page.waitForSelector('[data-stages-sheet="p-upload"] .pane', { timeout: 10_000 });
+          await page.click("[data-expand-all]");
+          await settle(page);
+          /* Read once every pane is open, one has drawn its agent's prose, and
+             the lane's width has held still for two frames. */
+          await page.waitForFunction(() => {
+            const element = document.querySelector<HTMLElement>(".gsheet .lane");
+            const store = window as unknown as { __laneWidths?: number[] };
+            if (!element) return false;
+            const panes = [...element.querySelectorAll<HTMLElement>(".pane[data-stage]")];
+            const ready = panes.length > 0 && panes.every((pane) => pane.dataset.collapsed === "0")
+              && element.querySelector('.pane[data-collapsed="0"] [data-tts-message]') !== null;
+            const widths = ready ? [...(store.__laneWidths ?? []), element.scrollWidth].slice(-3) : [];
+            store.__laneWidths = widths;
+            return widths.length === 3 && widths.every((width) => width === widths[0]);
+          }, undefined, { polling: "raf", timeout: 30_000 });
+          const lane = await page.evaluate(() => {
+            const element = document.querySelector<HTMLElement>(".gsheet .lane")!;
+            const probe = (host: Element) => {
+              const span = document.createElement("span");
+              span.style.cssText = "position:absolute;visibility:hidden;width:68ch;white-space:nowrap";
+              host.appendChild(span);
+              const measure = span.getBoundingClientRect().width;
+              span.remove();
+              return measure;
+            };
+            const panes = [...element.querySelectorAll<HTMLElement>('.pane[data-collapsed="0"]')].map((pane) => {
+              const prose = pane.querySelector<HTMLElement>("[data-tts-message]");
+              const draft = pane.querySelector<HTMLElement>("[data-draft-message] .bubble");
+              return {
+                stage: pane.dataset.stage!, width: Math.round(pane.getBoundingClientRect().width),
+                prose: prose ? { width: Math.round(prose.getBoundingClientRect().width), measure: Math.round(probe(prose)) } : null,
+                draft: draft ? Math.round(draft.getBoundingClientRect().width) : null,
+              };
+            });
+            return { panes, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, gutter: element.offsetHeight - element.clientHeight };
+          });
+          reading.lane = lane;
+          if (lane.panes.length < 3) fail(`«Expand all» left ${lane.panes.length} panes open`);
+          for (const pane of lane.panes) {
+            if (pane.width < 600) fail(`the ${pane.stage} pane is ${pane.width} px`);
+            if (pane.prose && pane.prose.width < pane.prose.measure - 1) fail(`the ${pane.stage} pane sets its agent's prose at ${pane.prose.width} px, under 68ch (${pane.prose.measure} px)`);
+          }
+          if (!lane.panes.some((pane) => pane.prose)) fail("no pane drew its agent's prose to measure");
+          if (lane.scrollWidth <= lane.clientWidth) fail(`the lane does not scroll sideways (${lane.scrollWidth} ≤ ${lane.clientWidth})`);
+          if (lane.gutter < 8) fail(`the lane draws no scrollbar (${lane.gutter} px)`);
+          /* The lane opened on the running stage; from its start, the first pane reads whole. */
+          await page.evaluate(() => { document.querySelector<HTMLElement>(".gsheet .lane")!.scrollLeft = 0; });
+          await settle(page);
+          cutOf(await readText(page, [".gsheet header h2", ".gsheet [data-expand-all]", '.gsheet .pane[data-stage="plan"] .pname']), "expanded");
+          await shot(page, "expanded");
+          await page.evaluate(() => { const element = document.querySelector<HTMLElement>(".gsheet .lane")!; element.scrollLeft = element.scrollWidth; });
+          await settle(page);
+          await shot(page, "expanded-end");
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await page.screenshot({ path: path.join(out, `${key}-failed.png`) }).catch(() => {});
+        } finally { await context.close(); }
+        readings[key] = reading;
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      if (fd !== null) fs.closeSync(fd);
+    }
+    fs.mkdirSync("evidence/task-card-no-inline-conversations", { recursive: true });
+    fs.writeFileSync("evidence/task-card-no-inline-conversations/rendered.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_500_000);
+});
+
+
+describe("MCP engine refusal card", () => {
+  browserTest("the persisted refusal and recovery reason remain readable in both locales and themes", async () => {
+    const { ensureSeatTickCard } = await import("@/lib/monitor/seatTickController");
+    const { seatMcpHealth } = await import("@/lib/monitor/seatMcpHealth");
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const { statePath } = await import("@/lib/configDir");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR!, "mcp-health-card");
+    fs.mkdirSync(out, { recursive: true });
+    const health = seatMcpHealth(null, null, "unused", Date.parse("2026-11-06T00:00:00Z"), "http", {
+      seq: 1, observedAt: "2026-11-06T00:00:00Z", denied: [{ tool: "get_task", seq: 1 }], unverified: false,
+    });
+    ensureSeatTickCard("atlas", { kind: "mcp-unavailable", ref: "seat-viewer-mcp-unavailable", state: "open", instance: "1",
+      detail: `${health.detail}; check the seat conversation and rotate the seat if recovery remains unavailable` }, "2026-11-06T00:00:00Z");
+    const notice = loadTasks(statePath("tasks.json")).find(task => task.project === "atlas"
+      && task.text.includes("monitor-ref: seat-viewer-mcp-unavailable"))!.text;
+    const server = await serveEvidenceFixture(out);
+    // A short alias to this test's owned temp directory keeps Chromium sockets
+    // within the platform limit without allocating outside the stage sandbox.
+    const tempFd = process.platform === "linux" ? fs.openSync(process.env.TMPDIR!, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1280, 390]) {
+        const texts = { notice, failed: "Maintenance finished", live: "Maintenance running" };
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(Buffer.from(JSON.stringify(texts)).toString("base64"))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: width === 390 ? 844 : 700 }, theme, lang, "reduce", width === 390, 1, new Date("2026-11-06T00:00:00Z"));
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="inbox"]').tap();
+          let node = page.locator(width === 390 ? '[data-phone-card="task:t-tick-notice"]' : card("t-tick-notice"));
+          await node.waitFor();
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-card.png`) });
+          if (width === 390) {
+            expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+            await node.tap();
+            await page.locator('[data-phone-task-description]').tap();
+            node = page.locator('[data-phone-task-editor="description"] textarea');
+          } else {
+            await node.locator("[data-describe]").click();
+            node = node.locator("textarea");
+          }
+          await node.waitFor();
+          expect(await node.inputValue()).toBe(notice.split("\n").slice(2).join("\n"));
+          expect(notice).toContain("engine approval denied: get_task");
+          expect(notice).toContain("Wakes to a live host with broken MCP remain withheld");
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}-reason.png`) });
+          readings.push({ lang, theme, width, text: await node.inputValue(), errors: pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 180_000);
+});
+
+describe("cold conversation link", () => {
+  /*
+   * A pasted `#c=` link whose conversation the plain catalog does not carry asks
+   * for a scope of its own, and that cold scope can be the server's controlled
+   * 503 (docs/design/cold-conversation-opening.md). In the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=cold-link`, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "cold conversation link"
+   *
+   * Each run opens one link, changes the hash to a second one, and lets the second
+   * scope answer 503 once before it is available: frame 1 is the link opening
+   * (the scope has not answered), frame 2 the link retrying (the 503 arrived),
+   * frame 3 the conversation opened at its latest message. The first link's
+   * scope is released afterwards and must never open or be asked again. The
+   * notice is measured from text ranges against every other text on screen, for
+   * its contrast, and the reader for its scroll position.
+   *
+   * Frames go to `$LLV_EVIDENCE_DIR/cold-conversation-link/`, measurements to
+   * `evidence/cold-conversation-link/rendered.json`. `LLV_COLD_LINK_ONLY` takes a
+   * comma-separated list of run names (`1440x900-en-light`) to rerun some of them.
+   */
+  const OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "cold-conversation-link");
+  const EVIDENCE = path.resolve("evidence/cold-conversation-link");
+  const FIRST = "conversation_cold-link-first";
+  const SECOND = "conversation_cold-link-second";
+  const VIEWPORTS = [
+    { width: 1440, height: 900 },
+    { width: 1200, height: 800 },
+    { width: 1000, height: 700 },
+    { width: 700, height: 800 },
+    { width: 390, height: 844 },
+  ];
+  const MIN_CONTRAST = 4.5;
+
+  type NoticeReading = {
+    state: string | null;
+    text: string;
+    inViewport: boolean;
+    whole: boolean;
+    overlaps: string[];
+    contrast: number;
+    box: { left: number; top: number; right: number; bottom: number };
+  };
+
+  /** The notice, measured from its text range and its pill, against every other text drawn on screen. */
+  const readNotice = (page: Page, state: "opening" | "retrying") => page.evaluate((expected) => {
+    const host = document.querySelector<HTMLElement>(`[data-link-pending-notice="${expected}"]`);
+    if (!host) return null;
+    const pill = host;
+    const pillBox = pill.getBoundingClientRect();
+    const textRange = document.createRange();
+    textRange.selectNodeContents(pill);
+    const textBoxes = [...textRange.getClientRects()].filter((rect) => rect.width > 0);
+    const rgba = (css: string): [number, number, number, number] => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d", { willReadFrequently: true })!;
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = css;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+      return [r!, g!, b!, a! / 255];
+    };
+    const over = (top: number[], below: number[]) => {
+      const alpha = top[3]! + below[3]! * (1 - top[3]!);
+      return [0, 1, 2].map((i) => (top[i]! * top[3]! + below[i]! * below[3]! * (1 - top[3]!)) / alpha).concat(alpha);
+    };
+    const luminance = (c: number[]) => {
+      const [r, g, b] = c.slice(0, 3).map((v) => { const s = v! / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    };
+    const style = getComputedStyle(pill);
+    const canvas = rgba(getComputedStyle(document.body).backgroundColor);
+    const backdrop = over(rgba(style.backgroundColor), canvas.some(Number.isNaN) || canvas[3] === 0 ? [255, 255, 255, 1] : canvas);
+    const text = over(rgba(style.color), backdrop);
+    const [hi, lo] = [luminance(text), luminance(backdrop)].sort((a, b) => b - a);
+    /* The notice owns its strip: no visible text range of any other element, in the board, the sidebar, an open
+       conversation or a field, may share a pixel with it. */
+    const overlaps: string[] = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const element = node.parentElement;
+      if (!element || host.contains(element) || !node.textContent?.trim()) continue;
+      if (!element.checkVisibility({ visibilityProperty: true, opacityProperty: true })) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0) continue;
+        /* Only the part of the text a person can see counts: each ancestor that clips its content cuts the range to its box. */
+        let [left, top, right, bottom] = [rect.left, rect.top, rect.right, rect.bottom];
+        for (let ancestor: HTMLElement | null = element; ancestor && ancestor !== document.documentElement; ancestor = ancestor.parentElement) {
+          const { overflowX, overflowY } = getComputedStyle(ancestor);
+          if (overflowX === "visible" && overflowY === "visible") continue;
+          const box = ancestor.getBoundingClientRect();
+          if (overflowX !== "visible") { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+          if (overflowY !== "visible") { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+        }
+        const x = Math.min(right, pillBox.right) - Math.max(left, pillBox.left);
+        const y = Math.min(bottom, pillBox.bottom) - Math.max(top, pillBox.top);
+        if (right - left <= 0 || bottom - top <= 0 || x <= 0.5 || y <= 0.5) continue;
+        overlaps.push((node.textContent ?? "").trim().slice(0, 40));
+      }
+    }
+    return {
+      state: host.getAttribute("data-link-pending-notice"),
+      text: pill.textContent ?? "",
+      inViewport: pillBox.left >= 0 && pillBox.top >= 0 && pillBox.right <= innerWidth && pillBox.bottom <= innerHeight,
+      whole: textBoxes.length > 0 && textBoxes.every((rect) => rect.left >= pillBox.left - 0.5 && rect.right <= pillBox.right + 0.5 && rect.top >= pillBox.top - 0.5 && rect.bottom <= pillBox.bottom + 0.5),
+      overlaps: [...new Set(overlaps)],
+      contrast: Math.round(((hi! + 0.05) / (lo! + 0.05)) * 100) / 100,
+      box: { left: Math.round(pillBox.left), top: Math.round(pillBox.top), right: Math.round(pillBox.right), bottom: Math.round(pillBox.bottom) },
+    };
+  }, state) as Promise<NoticeReading | null>;
+
+  /** The opened conversation's reader: its latest message is on screen and the feed rests at its end. */
+  const readOpened = (page: Page) => page.evaluate(() => {
+    const scrollers = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")]
+      .filter((element) => /Latest message|Останнє повідомлення/.test(element.textContent ?? ""));
+    const scroller = scrollers.find((element) => element.checkVisibility({ visibilityProperty: true })) ?? null;
+    if (!scroller) return { scrollers: scrollers.length, visible: false, atEnd: false, latestInView: false, gap: -1 };
+    const frame = scroller.getBoundingClientRect();
+    const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    let latest: DOMRect | null = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!/Latest message|Останнє повідомлення/.test(node.textContent ?? "")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      latest = range.getBoundingClientRect();
+    }
+    const gap = Math.round(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop);
+    return {
+      scrollers: scrollers.length,
+      visible: frame.width > 0 && frame.height > 0 && frame.bottom > 0 && frame.top < innerHeight,
+      atEnd: gap <= 2,
+      latestInView: Boolean(latest && latest.top >= Math.max(frame.top, 0) - 1 && latest.bottom <= Math.min(frame.bottom, innerHeight) + 1),
+      gap,
+    };
+  });
+
+  const coldLink = (page: Page) => page.evaluate(() => (window as unknown as { __coldLink: { calls: string[] } }).__coldLink.calls);
+  const pass = (page: Page, call: "fail" | "release", id: string) => page.evaluate(([name, target]) => (window as unknown as { __coldLink: Record<string, (id: string) => void> }).__coldLink[name!]!(target!), [call, id]);
+  const scopeCalls = (calls: string[], id: string) => calls.filter((call) => call.includes(`path=${id}`));
+
+  browserTest("a link whose scope is unavailable shows opening, retrying, then the conversation, in every width, language and theme", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const bundle = fs.mkdtempSync(path.join(os.tmpdir(), "cold-link-"));
+    const server = await serveEvidenceFixture(bundle);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const key = `${viewport.width}x${viewport.height}-${lang}-${scheme}`;
+        if (process.env.LLV_COLD_LINK_ONLY && !process.env.LLV_COLD_LINK_ONLY.split(",").includes(key)) continue;
+        let step = "opening the first link";
+        const fail = (message: string) => failures.push(`${key}: ${message}`);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cold-link#c=${FIRST}`, viewport, scheme, lang, "no-preference", viewport.width === 390);
+        const reading: Record<string, unknown> = {};
+        const shot = (name: string) => page.screenshot({ path: path.join(OUT, `${key}-${name}.png`) });
+        try {
+          await page.waitForFunction((id) => (window as unknown as { __coldLink?: { calls: string[] } }).__coldLink?.calls.some((call) => call.includes(`path=${id}`)), FIRST, { timeout: 30_000 });
+          step = "changing the hash to the second link";
+          const changedAt = (await coldLink(page)).length;
+          await page.evaluate((id) => { location.hash = `#c=${id}`; }, SECOND);
+          await page.waitForFunction((id) => (window as unknown as { __coldLink: { calls: string[] } }).__coldLink.calls.some((call) => call.includes(`path=${id}`)), SECOND, { timeout: 30_000 });
+
+          /* Frame 1: the scope has not answered; the link says it is opening. */
+          step = "waiting for the opening notice";
+          await page.waitForSelector('[data-link-pending-notice="opening"]', { timeout: 15_000 });
+          const opening = await readNotice(page, "opening");
+          reading.opening = opening;
+          await shot("1-opening");
+
+          /* Frame 2: the server's first 503 for the link's scope has arrived. */
+          step = "waiting for the retrying notice";
+          await pass(page, "fail", SECOND);
+          await page.waitForSelector('[data-link-pending-notice="retrying"]', { timeout: 15_000 });
+          const retrying = await readNotice(page, "retrying");
+          reading.retrying = retrying;
+          await shot("2-retrying");
+          for (const [name, notice] of [["opening", opening], ["retrying", retrying]] as const) {
+            if (!notice) { fail(`the ${name} notice was not drawn`); continue; }
+            if (!notice.text.trim()) fail(`the ${name} notice has no text`);
+            if (!notice.inViewport) fail(`the ${name} notice leaves the viewport ${JSON.stringify(notice.box)}`);
+            if (!notice.whole) fail(`the ${name} notice's text leaves its pill`);
+            if (notice.overlaps.length) fail(`the ${name} notice covers text: ${notice.overlaps.join(" | ")}`);
+            if (notice.contrast < MIN_CONTRAST) fail(`the ${name} notice reads ${notice.contrast}:1`);
+          }
+          if (opening && retrying && opening.text === retrying.text) fail("opening and retrying read the same");
+
+          /* The first link is released while the second is pending: it never opens and is never asked again. */
+          await pass(page, "release", FIRST);
+          await page.waitForTimeout(2_500);
+          const onFirst = await page.locator(`[data-kanban-reader="${FIRST}"]`).count();
+          if (onFirst) fail("the replaced link opened after its scope became available");
+          const afterChange = (await coldLink(page)).slice(changedAt);
+          if (scopeCalls(afterChange, FIRST).length) fail(`the replaced link's scope was asked again: ${scopeCalls(afterChange, FIRST).join(" ")}`);
+
+          /* Frame 3: the second scope answers; the conversation opens at its latest message. */
+          step = "waiting for the conversation to open";
+          await pass(page, "release", SECOND);
+          await page.waitForFunction(() => document.querySelector("[data-link-pending-notice]") === null
+            && [...document.querySelectorAll("[data-log-feed-scroller]")].some((element) => /Latest message|Останнє повідомлення/.test(element.textContent ?? "")), undefined, { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          const opened = await readOpened(page);
+          reading.opened = opened;
+          await shot("3-opened");
+          if (!opened.visible) fail("the opened conversation's reader is not on screen");
+          if (!opened.atEnd) fail(`the reader does not rest at its latest message (${opened.gap} px short)`);
+          if (!opened.latestInView) fail("the latest message is not in view");
+          const hash = await page.evaluate(() => location.hash);
+          if (hash !== `#c=${SECOND}`) fail(`the hash is ${hash}`);
+          const calls = await coldLink(page);
+          reading.calls = calls.length;
+          if (calls.some((call) => call.includes("path=%2F"))) fail(`a request pinned a transcript path: ${calls.filter((call) => call.includes("path=%2F")).join(" ")}`);
+          if (await page.locator("[data-stale-focus-notice]").count()) fail("the not-found notice appeared");
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(`${step}: ${error instanceof Error ? error.message.split("\n")[0]! : String(error)}`);
+          await page.screenshot({ path: path.join(OUT, `${key}-failed.png`) }).catch(() => {});
+          reading.calls = await coldLink(page).catch(() => null);
+        } finally { await context.close(); }
+        readings[key] = reading;
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.rmSync(bundle, { recursive: true, force: true });
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "rendered.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=cold-link", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_500_000);
+});
+
+
+describe("hidden lane visibility", () => {
+  browserTest("the desktop keeps a roundless hidden decision cleared and restores it with Undo", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "hidden-lane");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    let browser: Browser | undefined;
+    const readings: unknown[] = [];
+    try {
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { page, context } = await openFixture(browser, `${server.base}?scenario=hidden-lane&lang=${lang}`, { width: 1440, height: 900 }, scheme, lang, "reduce");
+        try {
+          await page.clock.setFixedTime(new Date("2026-09-24T10:00:00.000Z"));
+          await page.reload();
+          const card = page.locator('[data-kanban-board] .card[data-id="task:t-visibility"]');
+          await card.waitFor();
+          await card.scrollIntoViewIfNeeded();
+          expect(await card.locator('[data-chronology-kind="lane-cleared"]').count()).toBe(1);
+          expect(await page.locator('[data-needs-you-row="lane-visibility"]').count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-hidden.png`) });
+          await card.locator("[data-menu]").click();
+          await page.locator('.menu [data-cm-item="undoFlag"]').click();
+          await page.waitForFunction(() => !document.querySelector('[data-id="task:t-visibility"] [data-chronology-kind="lane-cleared"]'));
+          await page.locator("[data-attention-count]").click();
+          await page.locator('[data-needs-you-row="lane-visibility"]').waitFor();
+          expect(await page.locator('[data-needs-you-row="lane-visibility"]').count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-restored.png`) });
+          readings.push({ lang, scheme, hiddenRows: 0, restoredRows: 1, action: "undoFlag" });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser?.close(); sockets.close(); server.stop(); }
+  }, 180_000);
+});
+
+describe("seat tick summary arrives before panel details", () => {
+  browserTest("closed state and held, loaded and failed panels at phone and desktop sizes", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const baseline = process.env.LLV_TICK_BASELINE === "1";
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", baseline ? "tick-before-frames" : "tick-after-frames");
+    fs.mkdirSync(out, { recursive: true });
+    const now = new Date("2026-11-12T10:00:00Z");
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    writeSeatTickSettings("atlas", { ...defaultSeatTickSettings("atlas"), enabled: true, wakeIntervalMinutes: 10,
+      reason: "Review queued work", updatedAt: now.toISOString(), monitorPrompt: "Review the next queued task. ".repeat(500) });
+    const full = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime() });
+    const summary = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true });
+    let release: (() => void) | undefined;
+    let held = Promise.resolve();
+    let calls: string[] = [];
+    let notifyPanel!: () => void;
+    let enteredPanel = Promise.resolve();
+    let fail = false;
+    let refuseWrite = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT" && refuseWrite) return Response.json({ error: "Cadence held for review" }, { status: 400 });
+        const small = new URL(request.url).searchParams.get("view") === "summary";
+        calls.push(small ? "summary" : "panel");
+        if (small) return Response.json(summary);
+        notifyPanel();
+        await held;
+        return Response.json(fail ? { error: "fixture panel unavailable" } : full, { status: fail ? 500 : 200 });
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [320, 390, 1000, 1440]) for (const outcome of baseline ? ["baseline"] : ["loaded", "failed", "refused"]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        if (outcome === "refused" && width <= 390) continue;
+        calls = []; fail = outcome === "failed"; refuseWrite = outcome === "refused";
+        held = new Promise<void>(resolve => { release = resolve; });
+        enteredPanel = new Promise<void>(resolve => { notifyPanel = resolve; });
+        const phone = width <= 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`,
+          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone, 1, now);
+        const tag = `${width}-${lang}-${theme}-${outcome}`;
+        const frame = async (state: string) => {
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } });
+          // Long panels scroll. Frame complete lines at both ends instead of
+          // treating a native scroll crop as a truncated label.
+          const scroll = state === "panel-ready" || state === "panel-end" || state === "panel-write-refused" ? await page.evaluate((end) => {
+            const scroller = document.querySelector<HTMLElement>('[data-mobile2-sheet="tick"] [data-mobile2-sheet-body], [data-seat-tick-popover]');
+            if (!scroller) return null;
+            const box = scroller.getBoundingClientRect();
+            const top = box.top + scroller.clientTop, bottom = top + scroller.clientHeight;
+            const lines: Array<{ top: number; bottom: number }> = [];
+            const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+            let node: Node | null;
+            while ((node = walker.nextNode())) {
+              if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const r of range.getClientRects()) if (r.width && r.height) lines.push({ top: r.top + scroller.scrollTop, bottom: r.bottom + scroller.scrollTop });
+            }
+            const maximum = scroller.scrollHeight - scroller.clientHeight;
+            const desired = end ? maximum : 0;
+            let chosen = desired;
+            for (let distance = 0; distance <= maximum; distance++) {
+              const offset = end ? maximum - distance : distance;
+              const cuts = lines.some(line => (line.top < top + offset - 0.5 && line.bottom > top + offset + 0.5)
+                || (line.top < bottom + offset - 0.5 && line.bottom > bottom + offset + 0.5));
+              if (!cuts) { chosen = offset; break; }
+            }
+            scroller.scrollTop = chosen;
+            return { desired, actual: scroller.scrollTop, maximum };
+          }, state === "panel-end" || state === "panel-write-refused") : null;
+          const geometry = await page.evaluate(() => {
+            const control = document.querySelector<HTMLElement>('[role="slider"][data-seat-tick-switch]');
+            const row = control?.closest<HTMLElement>("[data-seat-tick-row]");
+            const panel = document.querySelector<HTMLElement>("[data-seat-tick-popover], [data-testid=mobile-seat-tick-sheet]");
+            const roots = panel ? [panel] : [row ?? control].filter(Boolean) as HTMLElement[];
+            const cuts: string[] = [];
+            const clipDetails: unknown[] = [];
+            const ranges: Array<{ text: string; left: number; top: number; right: number; bottom: number }> = [];
+            for (const root of roots) {
+              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+              let node: Node | null;
+              while ((node = walker.nextNode())) {
+                if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const r of range.getClientRects()) {
+                  if (r.bottom <= 0 || r.top >= innerHeight || r.width === 0 || r.height === 0) continue;
+                  let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                  for (let ancestor: HTMLElement | null = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                    const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                    if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+                    if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+                  }
+                  // Wholly scrolled-away rows are outside the visible surface.
+                  if (r.bottom <= top || r.top >= bottom) continue;
+                  const text = node.textContent!.trim().slice(0, 80);
+                  if (r.left < left - 0.5 || r.right > right + 0.5 || r.top < top - 0.5 || r.bottom > bottom + 0.5) { cuts.push(text); clipDetails.push({ text, glyph: { left: r.left, top: r.top, right: r.right, bottom: r.bottom }, clip: { left, top, right, bottom } }); }
+                  ranges.push({ text, left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+                }
+              }
+            }
+            const overlaps: string[] = [];
+            for (let a = 0; a < ranges.length; a++) for (let b = a + 1; b < ranges.length; b++) {
+              const x = ranges[a]!, y = ranges[b]!;
+              if (Math.min(x.right, y.right) - Math.max(x.left, y.left) > 0.5 && Math.min(x.bottom, y.bottom) - Math.max(x.top, y.top) > 0.5) overlaps.push(`${x.text} / ${y.text}`);
+            }
+            const rect = control?.getBoundingClientRect();
+            return { cuts, clipDetails, overlaps, word: control?.querySelector("[data-seat-tick-face]")?.textContent, visibleText: ranges.map(r => r.text),
+              controlOnFirstScreen: !!rect && rect.top >= 0 && rect.bottom <= innerHeight,
+              pageOverflow: document.documentElement.scrollWidth > innerWidth, scrollbarGutter: innerWidth - document.documentElement.clientWidth,
+              panelScrollbarGutter: panel ? panel.offsetWidth - panel.clientWidth - parseFloat(getComputedStyle(panel).borderLeftWidth) - parseFloat(getComputedStyle(panel).borderRightWidth) : null,
+              fields: panel ? [...panel.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea")].filter(input => input.checkVisibility()).map(input => ({ value: input.value, placeholder: input.placeholder, width: input.clientWidth, height: input.clientHeight })) : [] };
+          });
+          await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+          readings.push({ width, height: phone ? 844 : 700, lang, theme, state, outcome, calls: [...calls], scroll, ...geometry, pageErrors });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+          const target = page.locator("[data-seat-tick-popover]:visible, [data-testid=mobile-seat-tick-sheet]:visible, [data-seat-tick-row]:visible").first();
+          if (await target.count()) await target.screenshot({ path: path.join(out, `${tag}-${state}-detail.png`) });
+          if (!baseline) {
+            expect(geometry.cuts, `${tag} ${state} clipped text`).toEqual([]);
+            expect(geometry.overlaps, `${tag} ${state} overlapping text`).toEqual([]);
+          }
+          expect(geometry.pageOverflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          return geometry;
+        };
+        try {
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          await page.evaluate(() => document.fonts.ready);
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const control = page.locator('[role="slider"][data-seat-tick-switch]:visible').first();
+          if (baseline) {
+            await enteredPanel;
+            await frame("waiting-for-panel");
+            continue;
+          }
+          await control.waitFor();
+          await page.waitForFunction(() => document.querySelector('[role="slider"][data-seat-tick-switch]')?.getAttribute("aria-valuenow") === "3");
+          expect(calls.every(call => call === "summary")).toBe(true);
+          expect((await frame("closed-ready")).controlOnFirstScreen).toBe(true);
+          if (refuseWrite) {
+            await control.focus();
+            await page.keyboard.press("ArrowLeft");
+            await page.keyboard.press("Enter");
+          } else await control.click();
+          await page.locator(phone ? "[data-testid=mobile-seat-tick-sheet]" : "[data-seat-tick-popover]").waitFor();
+          await enteredPanel;
+          expect(calls.filter(call => call === "panel").length).toBe(1);
+          await frame("panel-pending");
+          if (phone) {
+            for (const key of ["Tab", "Tab", "Shift+Tab"]) {
+              await page.keyboard.press(key);
+              expect(await page.evaluate(() => !!document.activeElement?.closest('[data-mobile2-sheet="tick"]'))).toBe(true);
+            }
+            expect(await page.evaluate(() => !!document.elementFromPoint(8, 8)?.closest("[data-mobile2-scrim]"))).toBe(true);
+          }
+          const answered = page.waitForResponse(response => response.url().includes("/api/monitor/seat-tick/settings") && !response.url().includes("view=summary"));
+          release!();
+          await answered;
+          if (fail) {
+            await page.locator("[data-seat-tick-summary]:visible").filter({ hasText: translate(lang, "seatTick.summary.unreadable") }).waitFor();
+            expect(await page.locator("[data-seat-tick-interval]:visible").count()).toBe(0);
+            await frame("panel-failed");
+          } else {
+            await page.locator("[data-seat-tick-interval]:visible").waitFor();
+            if (refuseWrite) {
+              await frame("panel-write-refused");
+              expect(await page.locator("[data-seat-tick-error]:visible").innerText()).toBe("Cadence held for review");
+            } else {
+              await frame("panel-ready");
+              await frame("panel-end");
+            }
+          }
+        } finally { release?.(); await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { release?.(); await browser.close(); sockets.close(); server.stop(); }
+  }, 600_000);
+});
+
+describe("seat tick toggle shows its state in the card's first frame", () => {
+  browserTest("the seat answer's summary paints the toggle while its own read is still held, at phone, tablet and desktop widths", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "tick-first-frame");
+    fs.mkdirSync(out, { recursive: true });
+    const now = new Date("2026-11-12T10:00:00Z");
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    /* The seat answer carries the stored record (every ten minutes, a stop that is not the default). */
+    writeSeatTickSettings("atlas", { ...defaultSeatTickSettings("atlas"), enabled: true, wakeIntervalMinutes: 10,
+      reason: "Review queued work", updatedAt: now.toISOString() });
+    const seed = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true, skipJournal: true });
+    /* The separate read answers later with the record as it then stands: the default hour. */
+    writeSeatTickSettings("atlas", defaultSeatTickSettings("atlas"));
+    const refreshed = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true });
+    let release!: () => void;
+    let held = Promise.resolve();
+    let notifyAsked!: () => void;
+    let asked = Promise.resolve();
+    let summaryCalls = 0;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/__seat-tick-seed": seed,
+      "/api/monitor/seat-tick/settings": async () => {
+        summaryCalls += 1;
+        notifyAsked();
+        await held;
+        return Response.json(refreshed);
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    /* Every distinct state the switch is drawn in, in order, from its first appearance. */
+    const watch = `(() => {
+      const states = []; window.__tickStates = states;
+      const read = () => {
+        const control = document.querySelector('[role="slider"][data-seat-tick-switch]');
+        if (!control) return;
+        const state = { value: control.getAttribute("aria-valuenow"), face: control.querySelector("[data-seat-tick-face]")?.textContent ?? null };
+        const last = states[states.length - 1];
+        if (!last || last.value !== state.value || last.face !== state.face) states.push(state);
+      };
+      new MutationObserver(read).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    })();`;
+    try {
+      for (const width of [390, 900, 1440]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        summaryCalls = 0;
+        held = new Promise<void>(resolve => { release = resolve; });
+        asked = new Promise<void>(resolve => { notifyAsked = resolve; });
+        const phone = width <= 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver&tickSeed=1`,
+          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone, 1, now);
+        const tag = `${width}-${lang}-${theme}`;
+        try {
+          await context.addInitScript(watch);
+          await page.reload();
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          await page.evaluate(() => document.fonts.ready);
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const control = page.locator('[role="slider"][data-seat-tick-switch]:visible').first();
+          await control.waitFor();
+          await asked;
+          /* The card is drawn and the toggle's own read has not answered. */
+          const placeholder = translate(lang, "seatTick.chip.loading");
+          const first = await page.evaluate(() => (window as unknown as { __tickStates: Array<{ value: string | null; face: string | null }> }).__tickStates[0]);
+          expect(first, `${tag} first drawn state`).toEqual({ value: "3", face: expect.not.stringContaining(placeholder) });
+          expect(first?.face).toBeTruthy();
+          const geometry = await page.evaluate(() => {
+            const slider = document.querySelector<HTMLElement>('[role="slider"][data-seat-tick-switch]')!;
+            const row = slider.closest<HTMLElement>("[data-seat-tick-row], [data-orchestrator-controls]") ?? slider;
+            const cuts: string[] = [];
+            const ranges: Array<{ text: string; left: number; top: number; right: number; bottom: number }> = [];
+            const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+            let node: Node | null;
+            while ((node = walker.nextNode())) {
+              if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const r of range.getClientRects()) {
+                if (!r.width || !r.height) continue;
+                let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                for (let ancestor: HTMLElement | null = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                  const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+                }
+                const text = node.textContent!.trim().slice(0, 80);
+                if (r.left < left - 0.5 || r.right > right + 0.5 || r.top < top - 0.5 || r.bottom > bottom + 0.5) cuts.push(text);
+                ranges.push({ text, left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+              }
+            }
+            const overlaps: string[] = [];
+            for (let a = 0; a < ranges.length; a++) for (let b = a + 1; b < ranges.length; b++) {
+              const x = ranges[a]!, y = ranges[b]!;
+              if (Math.min(x.right, y.right) - Math.max(x.left, y.left) > 0.5 && Math.min(x.bottom, y.bottom) - Math.max(x.top, y.top) > 0.5) overlaps.push(`${x.text} / ${y.text}`);
+            }
+            const rect = slider.getBoundingClientRect();
+            return { cuts, overlaps, face: slider.querySelector("[data-seat-tick-face]")?.textContent, value: slider.getAttribute("aria-valuenow"),
+              onFirstScreen: rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth, pageOverflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          await page.screenshot({ path: path.join(out, `${tag}-held.png`) });
+          await (page.locator("[data-seat-tick-row]:visible, [data-orchestrator-controls]:visible").first()).screenshot({ path: path.join(out, `${tag}-held-detail.png`) });
+          expect(geometry.cuts, `${tag} clipped text`).toEqual([]);
+          expect(geometry.overlaps, `${tag} overlapping text`).toEqual([]);
+          expect(geometry.onFirstScreen, `${tag} toggle on the first screen`).toBe(true);
+          expect(geometry.pageOverflow).toBe(false);
+          expect(summaryCalls).toBeGreaterThanOrEqual(1);
+          /* The held read then refreshes what the seat answer seeded: the hour. */
+          release();
+          await page.waitForFunction(() => document.querySelector('[role="slider"][data-seat-tick-switch]')?.getAttribute("aria-valuenow") === "2");
+          await page.screenshot({ path: path.join(out, `${tag}-refreshed.png`) });
+          const states = await page.evaluate(() => (window as unknown as { __tickStates: unknown[] }).__tickStates);
+          expect((states as Array<{ face: string | null }>).some(state => state.face === placeholder), `${tag} no placeholder frame`).toBe(false);
+          readings.push({ width, height: phone ? 844 : 700, lang, theme, first, geometry, states, summaryCalls, pageErrors });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+          expect(pageErrors).toEqual([]);
+        } finally { release?.(); await context.close(); }
+      }
+    } finally { release?.(); await browser.close(); sockets.close(); server.stop(); }
+  }, 600_000);
+});
+
+
+describe("Relay targets answered by another install", () => {
+  browserTest("answer sources and explicit per-clone moves in English and Ukrainian", async () => {
+    const out = process.env.LLV_EVIDENCE_DIR ? path.join(process.env.LLV_EVIDENCE_DIR, "relay-answer-source") : path.resolve(".artifacts/relay-answer-source");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: scheme, ...(phone ? { isMobile: true, hasTouch: true } : {}) });
+        try {
+          await context.addInitScript(({ lang }) => {
+            localStorage.setItem("llv_lang", lang);
+            const names = lang === "uk" ? ["Спільний клон", "Місцевий клон", "Клон сервісу"] : ["Shared clone", "Local clone", "Service clone"];
+            const targets = names.map((name, i) => ({ id: `clone-${i}`, name, answered_by: i === 1 ? "install" : "service", answered_elsewhere: i === 0,
+              engine: "codex-cloud", model: "gpt-6.1-sol", fallback: "service", enabled: true, effort: null, project: null, concurrency: 1, hardCapMinutes: 30 }));
+            const relay = { id: "fixture-relay", origin: "https://relay.example", name: "Relay", description: "", paused: false,
+              owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-11-17T12:00:00Z", targets };
+            const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+            let refusals = 0;
+            const writes: unknown[] = [];
+            Object.assign(window, { relayOwnershipWrites: writes });
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true, get: () => fetcher, set: (next: typeof fetch) => {
+              fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                const url = new URL(String(input), location.origin);
+                if (url.pathname === "/api/external-relay") return json({ relays: [relay], pending: [], status: [{ id: relay.id, state: { state: "polling" }, running: {} }] });
+                if (url.pathname === "/api/external-relay/known") return json({ known: [] });
+                if (url.pathname.startsWith("/api/external-relay/")) {
+                  if (init?.method === "PATCH" && url.pathname.endsWith("/targets/clone-0")) {
+                    const patch = JSON.parse(String(init.body)); writes.push(patch);
+                    // The first confirmed move meets the relay's refusal; the clone stays with the other install.
+                    if (refusals++ === 0) return new Response(JSON.stringify({ error: "answered_elsewhere" }), { status: 409, headers: { "content-type": "application/json" } });
+                    Object.assign(targets[0]!, { answered_by: "install", answered_elsewhere: false });
+                    return json({ target: targets[0] });
+                  }
+                  return json({ error: "not_found" });
+                }
+                return next(input, init);
+              }) as typeof fetch;
+            } });
+          }, { lang });
+          const page = await context.newPage();
+          await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
+          await page.goto(server.base);
+          await page.waitForSelector(phone ? "[data-mobile2-shell], [data-mobile-shell], [data-phone-card]" : "[data-kanban-board]");
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const rows = page.locator("[data-external-relay-target]");
+          await rows.first().waitFor();
+          expect(await page.locator("[data-external-relay-release-elsewhere]").textContent()).toBe(lang === "en"
+            ? "Switching on moves it here from the other install." : "Увімкнення перенесе його сюди з іншої інсталяції.");
+          expect(await page.getByText(lang === "en" ? "Answered by this install" : "Відповідає ця інсталяція", { exact: true }).count()).toBe(1);
+          const labels = await page.locator("[data-external-relay-answer-source]").allTextContents();
+          expect(labels).toEqual(lang === "en" ? ["Answered by another install", "Answered by this install", "Answered by the service"]
+            : ["Відповідає інша інсталяція", "Відповідає ця інсталяція", "Відповідає сервіс"]);
+          const geometry = await rows.evaluateAll((rows, phone) => rows.map(row => {
+            const label = row.querySelector<HTMLElement>("[data-external-relay-answer-source]")!;
+            const control = row.querySelector<HTMLElement>("[data-external-relay-answered-by]")!;
+            const box = control.getBoundingClientRect();
+            const edgeHits = [[box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2], [box.left + box.width / 2, box.top + 1], [box.left + box.width / 2, box.bottom - 1]].every(([x, y]) => control.contains(document.elementFromPoint(x!, y!)));
+            const range = document.createRange(); range.selectNodeContents(row.querySelector("[data-external-relay-target-fold]")!);
+            const text = range.getBoundingClientRect(); const own = row.getBoundingClientRect();
+            return { label: label.textContent, clipped: label.scrollWidth > label.clientWidth + 1, width: box.width, height: box.height, edgeHits,
+              clearTop: text.top - own.top, clearBottom: own.bottom - text.bottom,
+              phone, touch: navigator.maxTouchPoints > 0, coarse: matchMedia("(pointer: coarse)").matches };
+          }), phone);
+          fs.writeFileSync(path.join(out, "latest-geometry.json"), JSON.stringify({ width, lang, scheme, geometry }, null, 2));
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-${width}.png`), fullPage: true });
+          for (const row of geometry) {
+            expect(row.clipped).toBe(false); expect(row.edgeHits).toBe(true);
+            expect(row.clearTop).toBeGreaterThanOrEqual(4); expect(row.clearBottom).toBeGreaterThanOrEqual(4);
+            if (phone) { expect(row.width).toBeGreaterThanOrEqual(44); expect(row.height).toBeGreaterThanOrEqual(44); expect(row.touch && row.coarse).toBe(true); }
+          }
+          const frame = `${lang}-${scheme}-${width}.png`;
+          const control = rows.first().locator("[data-external-relay-answered-by]");
+          const press = () => phone ? control.tap() : control.click();
+          const writes = () => page.evaluate(() => (window as unknown as { relayOwnershipWrites: unknown[] }).relayOwnershipWrites);
+          const nativeDialogs: string[] = [];
+          page.on("dialog", dialog => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); });
+          const confirmation = page.locator("[data-external-relay-move-confirm]");
+          await press();
+          await confirmation.waitFor();
+          const text = (await confirmation.textContent()) ?? "";
+          expect(text).toContain(lang === "en" ? "from the other install to this install" : "з іншої інсталяції до цієї");
+          expect(text).toContain(lang === "en" ? "Shared clone" : "Спільний клон");
+          const goLabel = lang === "en" ? "Move here" : "Перенести сюди";
+          const cancelLabel = lang === "en" ? "Cancel" : "Скасувати";
+          expect(await confirmation.locator("button").allTextContents()).toEqual([cancelLabel, goLabel]);
+          const confirmBox = await confirmation.evaluate(el => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, inside: r.left >= 0 && r.right <= innerWidth }; });
+          expect(confirmBox.inside).toBe(true);
+          await page.screenshot({ path: path.join(out, `confirm-${frame}`), fullPage: true });
+          await (phone ? confirmation.locator("[data-external-relay-move-cancel]").tap() : confirmation.locator("[data-external-relay-move-cancel]").click());
+          await confirmation.waitFor({ state: "detached" });
+          expect(await writes()).toEqual([]);
+          const go = () => phone ? confirmation.locator("[data-external-relay-move-go]").tap() : confirmation.locator("[data-external-relay-move-go]").click();
+          const refusedNotice = page.locator("[data-external-relay-move-refused]");
+          await press();
+          await confirmation.waitFor();
+          await go();
+          await refusedNotice.waitFor();
+          await confirmation.waitFor({ state: "detached" });
+          expect(await writes()).toEqual([{ answered_by: "install", confirmTakeover: true }]);
+          expect(await refusedNotice.textContent()).toBe(lang === "en"
+            ? "Not moved. Switch off “Answered by this install” on the other install first, then switch it on here."
+            : "Не перенесено. Спочатку вимкніть «Відповідає ця інсталяція» на іншій інсталяції, потім увімкніть тут.");
+          expect(await refusedNotice.getAttribute("role")).toBe("alert");
+          expect(await page.locator("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]").getAttribute("aria-checked")).toBe("false");
+          expect(await page.locator("[data-external-relay-release-elsewhere]").count()).toBe(0);
+          expect(await page.locator("[data-external-relay] [role=alert]").count()).toBe(1);
+          await refusedNotice.scrollIntoViewIfNeeded();
+          const refusedBox = await refusedNotice.evaluate(el => {
+            const range = document.createRange(); range.selectNodeContents(el.querySelector("span")!);
+            const text = range.getBoundingClientRect(); const own = el.getBoundingClientRect();
+            const row = el.closest("[data-external-relay-target]")!.getBoundingClientRect();
+            const next = el.closest("[data-external-relay-target]")!.nextElementSibling?.getBoundingClientRect() ?? null;
+            return { inside: own.left >= 0 && own.right <= innerWidth && own.top >= 0 && own.bottom <= innerHeight,
+              textWhole: text.left >= own.left && text.right <= own.right && text.top >= own.top && text.bottom <= own.bottom,
+              inRow: own.bottom <= row.bottom + 1, clearOfNext: next === null || own.bottom <= next.top + 1, scrollClipped: el.scrollWidth > el.clientWidth + 1 };
+          });
+          expect(refusedBox).toEqual({ inside: true, textWhole: true, inRow: true, clearOfNext: true, scrollClipped: false });
+          await page.screenshot({ path: path.join(out, `refused-${frame}`), fullPage: true });
+          await press();
+          await confirmation.waitFor();
+          expect(await refusedNotice.count()).toBe(0);
+          await go();
+          await page.waitForFunction(() => document.querySelector("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]")?.getAttribute("aria-checked") === "true");
+          expect(await writes()).toEqual([{ answered_by: "install", confirmTakeover: true }, { answered_by: "install", confirmTakeover: true }]);
+          expect(nativeDialogs).toEqual([]);
+          readings.push({ frame, width, lang, scheme, geometry });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); server.stop(); sockets.close(); }
+  }, 300_000);
+});
+
+describe("relay requester enrolment on the board", () => {
+  browserTest("renders the enrolment states at desktop and phone widths", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "relay-requester-enrolment");
+    fs.mkdirSync(out, { recursive: true });
+    const build = fs.mkdtempSync(path.join(os.tmpdir(), "requester-board-"));
+    const server = await serveEvidenceFixture(build);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: { frame: string; width: number; overflow: boolean; shortControls: number; splitTimes: number; danglingSeparators: number }[] = [];
+    try {
+      for (const width of [1440, 1000, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : width === 1000 ? 700 : 900 },
+          colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(locale => {
+            localStorage.setItem("llv_lang", locale);
+            const network = window.fetch.bind(window);
+            let fetcher = network;
+            Object.defineProperty(window, "fetch", {
+              configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => {
+                  const url = new URL(input instanceof Request ? input.url : String(input), location.origin);
+                  return url.pathname.startsWith("/api/external-relay") ? network(input, init) : next(input, init);
+                }) as typeof fetch;
+              },
+            });
+          }, lang);
+          const project = "Workshop";
+          const label = lang === "uk" ? "Рецензент збірки" : "Build reviewer";
+          const scope = { relay: "fixture-relay", target: "fixture-clone" };
+          const target = { id: scope.target, name: "Workshop clone", answered_by: "install", fallback: "none",
+            enabled: true, engine: "codex", model: "gpt-5.4", effort: null, project, concurrency: 1, hardCapMinutes: 30 };
+          const relay = { id: scope.relay, origin: "https://relay.example", name: "Chat relay", description: "",
+            owner: { namespace: "telegram", id: "owner", display_name: "Owner", handle: null }, paused: false, targets: [target] };
+          const at = "2026-10-01T08:00:00Z";
+          const expiresAt = "2030-10-01T08:10:00Z";
+          let status: "empty" | "waiting" | "candidate" | "entries" | "other-session" = "empty";
+          const proposalId = "a".repeat(48);
+          await context.route("**/api/external-relay**", async route => {
+            const req = route.request();
+            const url = new URL(req.url());
+            const send = (json: unknown, status = 200) => route.fulfill({ status, json });
+            if (url.pathname === "/api/external-relay") return send({ relays: [relay], pending: [], status: [] });
+            if (url.pathname === "/api/external-relay/known") return send({ known: [] });
+            if (url.pathname !== "/api/external-relay/trusted-requesters") return send({}, 404);
+            // An agent's confirm proposal: the owner's preview names the candidate the code bound.
+            if (url.searchParams.get("proposal") === proposalId) return send({
+              operation: { action: "confirm", ...scope, entryId: "fixture-proposed" }, targetName: target.name, project, label,
+              status: "candidate", candidate: { name: "Demo participant", chatTitle: "Workshop group", at } });
+            if (req.method() === "POST") {
+              const { confirmed, operation } = req.postDataJSON();
+              expect(confirmed).toBe(true);
+              if (operation.action === "start_enrolment") {
+                expect(operation.label).toBe(label);
+                status = "waiting";
+                return send({ issued: { code: "SAMPLE-ONLY", expiresAt } });
+              }
+              if (operation.action === "confirm") status = "entries";
+              if (operation.action === "remove") status = "empty";
+              return send({ issued: null });
+            }
+            return send({ ...scope, targetName: target.name, project, revision: status === "entries" ? 1 : 0, canStart: true,
+              entries: status === "entries" ? [{ id: "fixture-entry", label, kind: "requester", tier: "requester", project, active: true, addedAt: at }] : [],
+              pending: status === "waiting" || status === "candidate" ? { id: "fixture-entry", label, status, expiresAt,
+                candidate: status === "candidate" ? { name: "Demo participant", chatTitle: "Workshop group", at } : null } : null,
+              otherSession: status === "other-session" ? { expiresAt } : null,
+              history: [],
+            });
+          });
+          const page = await context.newPage();
+          await page.goto(server.base);
+          await page.locator(phone ? "[data-mobile2-shell], [data-mobile-shell], [data-phone-card]" : "[data-kanban-board]").first().waitFor();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const row = page.locator(`[data-external-relay-target="${target.id}"]`);
+          await row.locator("[data-external-relay-target-fold]").click();
+          const panel = row.locator("[data-trusted-requesters]");
+          const frame = async (name: string, shown = panel) => {
+            const filename = `${width}-${lang}-${scheme}-${name}.png`;
+            const measurement = await shown.evaluate((element, phone) => ({
+              overflow: element.scrollWidth > element.clientWidth + 1,
+              shortControls: phone ? [...element.querySelectorAll("button, input")]
+                .filter(control => control.getBoundingClientRect().height < 44).length : 0,
+              // A date and time renders as one line box, never split across lines.
+              splitTimes: [...element.querySelectorAll("[data-requester-time]")]
+                .filter(time => time.getClientRects().length !== 1).length,
+              // No rendered line ends in a separator dot: a wrap never strands a "·" before the next line.
+              danglingSeparators: (() => {
+                const glyphs: { block: Element; char: string; top: number; left: number; right: number }[] = [];
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                  const text = node.textContent ?? "";
+                  const block = node.parentElement?.closest("p, li, summary, div") ?? element;
+                  for (let index = 0; index < text.length; index += 1) {
+                    if (/\s/.test(text[index]!)) continue;
+                    const range = document.createRange();
+                    range.setStart(node, index);
+                    range.setEnd(node, index + 1);
+                    const rect = range.getBoundingClientRect();
+                    if (rect.width > 0) glyphs.push({ block, char: text[index]!, top: Math.round(rect.top), left: rect.left, right: rect.right });
+                  }
+                }
+                return glyphs.filter(dot => dot.char === "·"
+                  && !glyphs.some(other => other.block === dot.block && other.top === dot.top && other.left >= dot.right - 0.5)).length;
+              })(),
+            }), phone);
+            expect(measurement).toEqual({ overflow: false, shortControls: 0, splitTimes: 0, danglingSeparators: 0 });
+            // A time reads as date and hour:minute, never with seconds.
+            const times = await shown.locator("[data-requester-time]").allTextContents();
+            for (const text of times) expect(text).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
+            await shown.screenshot({ path: path.join(out, filename) });
+            readings.push({ frame: filename, width, ...measurement });
+          };
+          const action = (name: "start_enrolment" | "confirm" | "remove") =>
+            translate(lang, `externalRelay.requesters.action.${name}`);
+          await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+          await frame("1-empty");
+          await panel.getByRole("textbox").fill(label);
+          await panel.getByRole("button", { name: action("start_enrolment") }).click();
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("start_enrolment") }).click();
+          await panel.locator("[data-requester-code]").waitFor();
+          // The code is the emphasised element of its box, and a copy control sits beside it, 44 px on a phone.
+          const code = panel.locator("[data-requester-code]");
+          expect(await code.evaluate(element => parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.closest("[data-requester-pending]")!).fontSize)
+            && parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.previousElementSibling ?? element.parentElement!).fontSize))).toBe(true);
+          const copy = panel.locator("[data-requester-code] + button");
+          expect(await copy.count()).toBe(1);
+          if (phone) expect((await copy.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+          await frame("2-code");
+          status = "candidate";
+          await panel.getByText("Demo participant", { exact: false }).waitFor();
+          await frame("3-candidate");
+          await panel.getByRole("button", { name: action("confirm") }).click();
+          await panel.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          expect(await panel.getByRole("alertdialog").locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("confirm") }).click();
+          await panel.getByText(label, { exact: true }).waitFor();
+          await frame("4-entries");
+          await panel.getByRole("button", { name: action("remove") }).click();
+          await panel.locator('[data-requester-confirm="remove"]').waitFor();
+          // One Remove button, no add form, and the confirmation sits inside the entry it removes.
+          expect(await panel.getByRole("button", { name: action("remove") }).count()).toBe(1);
+          expect(await panel.getByRole("textbox").count()).toBe(0);
+          expect(await panel.locator('li [data-requester-confirm="remove"]').count()).toBe(1);
+          await frame("5-remove-confirmation");
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("remove") }).click();
+          await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+          status = "other-session";
+          await row.locator("[data-external-relay-target-fold]").click();
+          await row.locator("[data-external-relay-target-fold]").click();
+          await panel.locator('[data-requester-pending="other-session"]').waitFor();
+          expect(await panel.getByRole("textbox").count()).toBe(0);
+          await frame("6-other-session");
+          await page.evaluate(id => { window.location.hash = `relay-requester=${id}`; }, proposalId);
+          const proposed = page.locator("[data-requester-proposal]");
+          const dialog = proposed.locator('[data-requester-confirm="confirm"]');
+          await dialog.waitFor();
+          // One approval panel: the proposal and the relay settings beside it keep distinct keys.
+          expect(await proposed.count()).toBe(1);
+          expect(await dialog.locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
+          await dialog.getByText(translate(lang, "externalRelay.requesters.verify"), { exact: true }).waitFor();
+          await dialog.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          await dialog.getByText(translate(lang, "externalRelay.requesters.proposedBy"), { exact: true }).waitFor();
+          await frame("7-proposal-confirm", proposed);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+      expect(readings).toHaveLength(84);
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(build, { recursive: true, force: true });
+    }
+  }, 180_000);
 });

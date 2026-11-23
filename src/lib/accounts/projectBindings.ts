@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
+import { workspaceDefaultsForProject } from "@/lib/team/workspaceDefaultsRead";
 
 import { ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
 import { BINDINGS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
@@ -446,7 +447,9 @@ export function allowedAccountIdsForProject(
   const allowed = bindings
     .filter((binding) => binding.engine === engine && binding.project === key)
     .map((binding) => binding.accountId);
-  return allowed.length ? [...new Set(allowed)].sort() : null;
+  const inherited = workspaceDefaultsForProject(key)?.accounts[engine];
+  if (allowed.length) return [...new Set(allowed)].filter(id => !inherited?.length || inherited.includes(id)).sort();
+  return inherited?.length ? [...inherited] : null;
 }
 
 /** Fallback status belongs to the binding, never to the account globally. */
@@ -494,6 +497,63 @@ export function explicitAccountChoice(
   }
   if (allowed === null || allowed.includes(accountId)) return { kind: "within-pool" };
   return { kind: "outside-pool", allowedAccountIds: allowed };
+}
+
+/**
+ * How a MEMBER's named-account choice stands against a project's pool. A
+ * member picks from the list they were shown; where the project has no list
+ * there is nothing to pick from, and Delegatus chooses the account. This reads
+ * the pool alone, never the list of accounts, so the answer takes the same time
+ * and says the same thing whether or not the named account exists. A damaged
+ * record throws, as it does everywhere a pool is read.
+ */
+export type MemberAccountChoice =
+  | { kind: "allowed" }
+  | { kind: "no_account_list" }
+  | { kind: "outside_account_list"; allowedAccountIds: string[] };
+
+export type MemberAccountRefusalReason = Exclude<MemberAccountChoice["kind"], "allowed">;
+
+export function memberAccountChoice(project: string | null | undefined, engine: BindingEngine, accountId: string): MemberAccountChoice {
+  const allowed = allowedAccountIdsForProject(project, engine);
+  if (allowed === null) return { kind: "no_account_list" };
+  return allowed.includes(accountId) ? { kind: "allowed" } : { kind: "outside_account_list", allowedAccountIds: allowed };
+}
+
+/** The refusal of a member's choice, in the one wording agents and the browser share. */
+export class MemberAccountRefusedError extends Error {
+  readonly reason: MemberAccountRefusalReason;
+  constructor(choice: Exclude<MemberAccountChoice, { kind: "allowed" }>, engine: BindingEngine, accountId: string, project: string) {
+    super(choice.kind === "no_account_list"
+      ? `${engine} account ${accountId} cannot be chosen on project ${project}: the project has no ${engine} account list, so its work runs on an automatically chosen account`
+      : projectAccountRefusalDetail({ kind: "not_allowed", accountId, allowedAccountIds: choice.allowedAccountIds }, engine, project));
+    this.name = "MemberAccountRefusedError";
+    this.reason = choice.kind;
+  }
+}
+
+/**
+ * True when a caller bound to a workspace chooses among accounts the project's
+ * pool does not show them: the project has no list for the engine. Every
+ * refusal of an automatic choice they receive then names no account.
+ */
+export function accountsHiddenFromMember(project: string | null | undefined, engine: BindingEngine): boolean {
+  return allowedAccountIdsForProject(project, engine) === null;
+}
+
+/**
+ * The refusal of an automatic account choice for a caller who may not see which
+ * accounts exist. Capacity and availability read the same: it carries no id,
+ * label, count, catalog or limit window, and none that tells the two apart.
+ */
+export function hiddenAccountsSelectionRefusal(engine: BindingEngine, project: string): string {
+  return `no ${engine} account can take work for project ${project} right now`;
+}
+
+/** Throws {@link MemberAccountRefusedError} unless the project's pool holds the account. */
+export function assertMemberAccountChoice(project: string | null | undefined, engine: BindingEngine, accountId: string): void {
+  const choice = memberAccountChoice(project, engine, accountId);
+  if (choice.kind !== "allowed") throw new MemberAccountRefusedError(choice, engine, accountId, project ?? "");
 }
 
 /** Projects an account is bound to, for the accounts-side view of the relation. */

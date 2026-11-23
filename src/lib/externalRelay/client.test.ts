@@ -9,6 +9,7 @@ import {
   ExternalRelayError,
   fetchRelayTargets,
   relayCall,
+  readRelayJsonUrl,
 } from "./client";
 import {
   startRelayPairing,
@@ -341,6 +342,20 @@ test("publication cancellation settles while DNS is held and late DNS cannot emi
   } finally { release([]); lookup.mockRestore(); }
 });
 
+test("descriptor cancellation covers held DNS and prevents a late request", async () => {
+  let release!: (addresses: Array<{ address: string; family: number }>) => void;
+  const held = new Promise<Array<{ address: string; family: number }>>(resolve => { release = resolve; });
+  const lookup = spyOn(dns, "lookup").mockImplementation((() => held) as unknown as typeof dns.lookup);
+  const controller = new AbortController();
+  try {
+    const read = readRelayJsonUrl("https://fixture.invalid/.well-known/delegatus-relay.json", { signal: controller.signal }).catch(error => error);
+    controller.abort(new Error("descriptor deadline"));
+    expect(await read).toMatchObject({ message: "descriptor deadline" });
+    release([{ address: "127.0.0.1", family: 4 }]);
+    await Promise.resolve();
+  } finally { release([]); lookup.mockRestore(); }
+});
+
 
 test("confirmed publication waits asynchronously for its reference transaction", async () => {
   const server = await startTestRelay(() => ({ body: { message_key: "lock_reference", replayed: false } }));
@@ -379,5 +394,65 @@ test("lease-bound binary PUT preserves bytes and refuses redirects and error env
     await expect(relayPutBytes(`${server.origin}/v1`, "/busy", payload, headers)).rejects.toMatchObject({ status: 429, code: "rate_limited", retryAfterSeconds: 2 });
     await expect(relayPutBytes(`${server.origin}/v1`, "/bytes", payload, headers, undefined, { signal: AbortSignal.abort() })).rejects.toThrow();
     expect(seen).toHaveLength(3);
+  } finally { await server.close(); }
+});
+
+test("streamed sends retain length, authority, redirect refusal and error key state", async () => {
+  const bytes = Buffer.from([0, 255, 3, 10]); let calls = 0, opened = 0;
+  const server = await startTestRelay((req, body) => {
+    calls++; expect(body).toEqual(bytes); expect(req.headers["content-length"]).toBe(String(bytes.length));
+    if (req.url?.endsWith("/redirect")) return { status: 302, headers: { location: "/other" } };
+    return { status: 409, body: { error: { code: "send_in_progress", key_state: "pending", retry_after_s: 120 } } };
+  });
+  const upload = { byteLength: bytes.length, contentType: "application/octet-stream", body: async function* () { opened++; yield bytes.subarray(0, 2); yield bytes.subarray(2); } };
+  try {
+    await expect(relayCall(`${server.origin}/v1`, "/send", "POST", undefined, undefined, { upload }))
+      .rejects.toMatchObject({ code: "send_in_progress", retryAfterSeconds: 120, payload: { error: { key_state: "pending" } } });
+    await expect(relayCall(`${server.origin}/v1`, "/redirect", "POST", undefined, undefined, { upload })).rejects.toMatchObject({ status: 302 });
+    await expect(relayCall(`${server.origin}/v1`, "/send", "POST", undefined, undefined, { upload, beforeSend: () => { throw new Error("withdrawn"); } })).rejects.toThrow("withdrawn");
+    expect(calls).toBe(2); expect(opened).toBe(2);
+    await expect(relayCall(`${server.origin}/v1`, "/send", "POST", undefined, undefined, { upload, signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(calls).toBe(2); expect(opened).toBe(2);
+  } finally { await server.close(); }
+});
+
+
+test("detailed claim errors preserve timeout and DNS classes without copying transport details", async () => {
+  const server = await startTestRelay(async () => { await Bun.sleep(80); return { status: 204 }; });
+  try {
+    await expect(relayCall(`${server.origin}/v1`, "/requests/claim", "POST", {}, secret,
+      { detailedErrors: true, timeoutMs: 10 })).rejects.toMatchObject({ code: "timeout", status: 0 });
+    // Existing callers retain the generic timeout contract.
+    await expect(relayCall(`${server.origin}/v1`, "/requests/claim", "POST", {}, secret,
+      { timeoutMs: 10 })).rejects.toMatchObject({ code: "unreachable", status: 0 });
+  } finally { await server.close(); }
+  const lookup = spyOn(dns, "lookup").mockRejectedValue(new Error("private DNS detail"));
+  try {
+    await expect(relayCall("https://relay.invalid/v1", "/requests/claim", "POST", {}, secret,
+      { detailedErrors: true })).rejects.toMatchObject({ code: "dns_error", status: 0 });
+  } finally { lookup.mockRestore(); }
+});
+
+
+test("claim, heartbeat and completion refusals retain 409 and only allowlisted body reasons", async () => {
+  const { relayHttpRefusal } = await import("./httpDiagnostics");
+  let payload: unknown = { error: { code: "lease_lost", message: "private response detail" } };
+  const server = await startTestRelay(() => ({ status: 409, body: payload }));
+  try {
+    for (const route of ["/requests/claim", "/requests/private-request/heartbeat", "/requests/private-request/complete"]) {
+      for (const [body, expected] of [[{ error: { code: "lease_lost", message: "private response detail" } }, "lease_lost"],
+        [{ error: [{ code: "lease_lost" }] }, "lease_lost"], [{ reason: "lease_lost" }, "lease_lost"],
+        [{ error: { code: "private_response_detail" } }, "other"]] as const) {
+        payload = body;
+        const records: unknown[] = [];
+        const pending = relayCall(`${server.origin}/v1`, route, "POST", {}, secret,
+          { onHttpRefusal: record => { records.push(record); } });
+        await expect(pending).rejects.toMatchObject({ status: 409 });
+        expect(records).toEqual([relayHttpRefusal(route, 409, body)]);
+        const text = JSON.stringify(records);
+        for (const excluded of [server.origin, "private-request", "private response detail", "private_response_detail", secret]) expect(text).not.toContain(excluded);
+        expect(records[0]).toMatchObject({ status: 409, reason: expected });
+      }
+    }
   } finally { await server.close(); }
 });

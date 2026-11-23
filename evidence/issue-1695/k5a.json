@@ -11,17 +11,17 @@
         "chain": 1,
         "graphs": 0,
         "nodes": 0,
-        "pressed": "false",
+        "pressed": null,
         "chips": 4
       }
     },
     "graph-branch-retry-light": {
       "production": {
-        "dir": "TB",
+        "dir": "LR",
         "nodes": [
           {
             "stage": "implement",
-            "width": 268,
+            "width": 176,
             "height": 76,
             "state": "passed",
             "attempt": "2",
@@ -29,7 +29,7 @@
           },
           {
             "stage": "review",
-            "width": 268,
+            "width": 176,
             "height": 76,
             "state": "passed",
             "attempt": "",
@@ -37,7 +37,7 @@
           },
           {
             "stage": "verify",
-            "width": 268,
+            "width": 176,
             "height": 76,
             "state": "running",
             "attempt": "2",
@@ -45,7 +45,7 @@
           },
           {
             "stage": "merge",
-            "width": 268,
+            "width": 176,
             "height": 76,
             "state": "waiting",
             "attempt": "",
@@ -90,17 +90,17 @@
         "chain": 1,
         "graphs": 0,
         "nodes": 0,
-        "pressed": "false",
+        "pressed": null,
         "chips": 4
       }
     },
     "graph-branch-retry-dark": {
       "production": {
-        "dir": "TB",
+        "dir": "LR",
         "nodes": [
           {
             "stage": "implement",
-            "width": 268,
+            "width": 176,
             "height": 76,
             "state": "passed",
             "attempt": "2",
@@ -108,7 +108,7 @@
           },
           {
             "stage": "review",
-            "width": 268,
+            "width": 176,
             "height": 76,
             "state": "passed",
             "attempt": "",
@@ -116,7 +116,7 @@
           },
           {
             "stage": "verify",
-            "width": 268,
+            "width": 176,
             "height": 76,
             "state": "running",
             "attempt": "2",
@@ -124,7 +124,7 @@
           },
           {
             "stage": "merge",
-            "width": 268,
+            "width": 176,
             "height": 76,
             "state": "waiting",
             "attempt": "",
@@ -199,20 +199,20 @@
     "five-rounds": {
       "production": {
         "dir": "LR",
-        "right": 1023,
-        "bottom": 573,
+        "right": 551,
+        "bottom": 169,
         "chips": [
           {
             "text": "5",
-            "right": 999,
-            "top": 548,
-            "bottom": 564
+            "right": 528,
+            "top": 144,
+            "bottom": 160
           },
           {
             "text": "✓",
-            "right": 1012,
-            "top": 548,
-            "bottom": 563
+            "right": 540,
+            "top": 145,
+            "bottom": 159
           }
         ]
       }
@@ -220,51 +220,66 @@
     "failed-latest": {
       "production": [
         {
-          "kind": "attempt",
-          "label": "Build",
-          "verdict": "failed"
+          "kind": "task-created",
+          "text": "Task created"
+        },
+        {
+          "kind": "attempt-stopped",
+          "text": "Diagnose stopped: stoppedAnswers Build"
+        },
+        {
+          "kind": "attempt-failed",
+          "text": "Build failed"
         }
       ]
     },
     "history-open": {
-      "production": [
-        {
-          "kind": "round",
-          "label": "Review · round 1",
-          "verdict": "approved",
-          "open": true
-        },
-        {
-          "kind": "attempt",
-          "label": "Implement · 1",
-          "verdict": "passed",
-          "open": true
-        },
-        {
-          "kind": "attempt",
-          "label": "Implement · 2",
-          "verdict": "passed",
-          "open": true
-        },
-        {
-          "kind": "attempt",
-          "label": "Review",
-          "verdict": "passed",
-          "open": true
-        },
-        {
-          "kind": "attempt",
-          "label": "Verify · 1",
-          "verdict": "failed",
-          "open": true
-        },
-        {
-          "kind": "helper",
-          "label": "Implement · helper conversation 1",
-          "verdict": "passed",
-          "open": true
-        }
-      ]
+      "production": {
+        "entries": [
+          {
+            "key": "task:created",
+            "kind": "task-created",
+            "open": false
+          },
+          {
+            "key": "p-search:running:verify:2",
+            "kind": "attempt-running",
+            "open": false
+          },
+          {
+            "key": "p-search:implement:attempt:1",
+            "kind": "attempt-passed",
+            "open": true
+          },
+          {
+            "key": "p-search:implement:attempt:2",
+            "kind": "attempt-passed",
+            "open": true
+          },
+          {
+            "key": "p-search:review:attempt:1",
+            "kind": "attempt-passed",
+            "open": true
+          },
+          {
+            "key": "p-search:verify:attempt:1",
+            "kind": "attempt-failed",
+            "open": true
+          },
+          {
+            "key": "p-search:review:attempt:1:round:1",
+            "kind": "round",
+            "open": true
+          }
+        ],
+        "helpers": [
+          {
+            "kind": "helper",
+            "label": "Implement · helper conversation 1",
+            "open": true
+          }
+        ]
+      }
     }
   },
   "geometry": null,
@@ -293,7 +308,7 @@
         "helperAttempt": " · 2",
         "implementAttempt": " · 3"
       },
-      "clearedAfterMs": 2378
+      "clearedAfterMs": 2380
     }
   },
   "failures": []

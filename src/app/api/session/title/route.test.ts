@@ -11,13 +11,11 @@ import type { TitleTarget, TitleTargetInput } from "@/lib/session/titleTarget";
 const UUID = "11111111-2222-0333-8444-555555555555";
 const SESSION_PATH = `/fixture/.claude/projects/proj/${UUID}.jsonl`;
 
-/* Session resolution and tmux propagation live behind @/lib/session/titleTarget
-   so this route test can stub them without importing @/lib/scanner/roots or
-   @/lib/tmux — modules that sibling suites replace through bun's shared module
-   registry. `target` drives what resolveTitleTarget returns; `renamed` records
-   propagation calls. */
+/* Session resolution lives behind @/lib/session/titleTarget so this route test
+   can stub it without importing @/lib/scanner/roots, a module that sibling
+   suites replace through bun's shared module registry. `target` drives what
+   resolveTitleTarget returns. */
 let target: TitleTarget | null = { engine: "claude", path: SESSION_PATH, conversationId: "conversation_owner", aliasConversationIds: [], ownedPaths: [] };
-let renamed: { path: string; name: string }[] = [];
 
 mock.module("@/lib/session/titleTarget", () => ({
   resolveTitleTarget: (input: TitleTargetInput) => {
@@ -26,11 +24,6 @@ mock.module("@/lib/session/titleTarget", () => ({
     if (input.conversationId === "conversation_missing") return null;
     if (typeof input.path === "string" && input.path === "/etc/passwd") return null;
     return target;
-  },
-  propagateTitleToWindow: async (resolved: TitleTarget, name: string) => {
-    // Records the resolved target and window name — the route resolves the pane
-    // from the target, never from the request.
-    renamed.push({ path: resolved.path, name });
   },
 }));
 
@@ -43,7 +36,6 @@ beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-title-state-"));
   process.env.LLV_STATE_DIR = stateDir;
   target = { engine: "claude", path: SESSION_PATH, conversationId: "conversation_owner", aliasConversationIds: [], ownedPaths: [] };
-  renamed = [];
 });
 
 afterEach(() => {
@@ -167,21 +159,6 @@ test("retrying against the current revision after a conflict succeeds", async ()
   const json = (await res.json()) as { override: { title: string; revision: number } };
   expect(json.override.title).toBe("second");
   expect(json.override.revision).toBe(2);
-});
-
-test("propagates the server-sanitized title to the resolved target, ignoring a crafted windowName", async () => {
-  // The client asks for one window label but the persisted title is another —
-  // the window must follow the sanitized stored title, not the raw request; and
-  // propagation targets the resolved session, not a request-supplied pid.
-  await patch({ conversationId: "conversation_owner", title: "**Bold** name", windowName: "arbitrary label" });
-  expect(renamed).toEqual([{ path: SESSION_PATH, name: "Bold name" }]);
-});
-
-test("a reset sanitizes the client-provided window name before it reaches tmux", async () => {
-  await patch({ conversationId: "conversation_owner", title: "temp" });
-  renamed = [];
-  await patch({ conversationId: "conversation_owner", title: "", baseRevision: 1, windowName: "**Auto** derived" });
-  expect(renamed).toEqual([{ path: SESSION_PATH, name: "Auto derived" }]);
 });
 
 test("clearing after the registry claims ownership migrates and clears the fallback-key override", async () => {

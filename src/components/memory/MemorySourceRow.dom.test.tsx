@@ -39,7 +39,7 @@ type Name = keyof typeof VIEWS;
    Ukrainian apostrophe is the menu's own (’), as «Спільна пам’ять» has it. */
 const DESIGN: Record<"en" | "uk", Record<Name, string>> = {
   en: {
-    unchosen: "Off: agents use Claude's and Codex's own memory and Delegatus rules together. Turn on to keep one memory.",
+    unchosen: "Off: agents use Claude's and Codex's own memory and Delegatus rules together. Turn on to keep one memory. Agents run the import, so it uses your plan's limit.",
     preparing: "Backing up Claude and Codex notes for the curator. Their memory stays on until the import finishes.",
     importing: "Importing Claude and Codex notes through the curator: 120 of 351. Their memory stays on until this finishes.",
     draining: "New agent starts use Delegatus rules only; waiting for 2 agents that started earlier to restart so their last notes can be imported.",
@@ -47,7 +47,7 @@ const DESIGN: Record<"en" | "uk", Record<Name, string>> = {
     engines: "Off: agents use Claude's and Codex's own memory. Delegatus rules are paused. New Claude and Codex notes are imported daily (last 3 hours ago, 4 new).",
   },
   uk: {
-    unchosen: "Вимкнено: агенти мають і власну пам’ять Claude та Codex, і правила Delegatus. Увімкніть, щоб лишилася одна пам’ять.",
+    unchosen: "Вимкнено: агенти мають і власну пам’ять Claude та Codex, і правила Delegatus. Увімкніть, щоб лишилася одна пам’ять. Імпорт виконують агенти, тож він витрачає ліміт вашого плану.",
     preparing: "Резервне копіювання нотаток Claude і Codex для куратора. Їхня пам’ять працює, доки імпорт не завершиться.",
     importing: "Імпорт нотаток Claude і Codex через куратора: 120 з 351. Їхня пам’ять працює, доки імпорт не завершиться.",
     draining: "Нові агенти користуються лише правилами Delegatus; чекаємо, поки 2 агенти, запущені раніше, перезапустяться, щоб імпортувати їхні останні нотатки.",
@@ -68,9 +68,9 @@ function serve(read: Handler, write: Handler = () => Response.json({ error: "une
   }) as typeof fetch;
 }
 const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-async function render(phone = false) {
+async function render(phone = false, inset = false) {
   const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
-  await act(async () => { root!.render(<MemorySourceRow phone={phone} />); });
+  await act(async () => { root!.render(<MemorySourceRow phone={phone} inset={inset} />); });
   await settle();
   return host;
 }
@@ -88,7 +88,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: every state reads in th
   for (const name of Object.keys(VIEWS) as Name[]) {
     const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
     /* The pure line at a frozen clock is the design's sentence. */
-    expect(memorySourceLine(VIEWS[name], false, t, lang, NOW)).toBe(DESIGN[lang][name]);
+    expect(memorySourceLine(VIEWS[name], false, t, lang, NOW, true)).toBe(DESIGN[lang][name]);
     if (name === "engines") continue;
     serve(() => VIEWS[name]);
     const host = await render();
@@ -108,6 +108,24 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: every state reads in th
   expect(switchOf(host).getAttribute("aria-checked")).toBe("false");
 });
 
+for (const lang of ["en", "uk"] as const) test(`${lang}: the Settings row says the import spends the plan's limit, the setup step does not repeat its lead`, async () => {
+  setLocale(lang);
+  const limit = translate(lang, "memorySource.limit");
+  /* The setup step's lead already ends on this sentence, so the row inside it keeps its own line unchanged. */
+  expect(translate(lang, "onboarding.memory.lead").endsWith(limit)).toBe(true);
+  serve(() => ({ choice: null, phase: null, orchestrator: true } satisfies MemorySourceView));
+  const settings = await render();
+  expect(lineOf(settings)).toBe(`${translate(lang, "memorySource.unchosen")} ${limit}`);
+  act(() => root?.unmount()); document.body.innerHTML = "";
+  serve(() => ({ choice: null, phase: null, orchestrator: true } satisfies MemorySourceView));
+  const inset = await render(false, true);
+  expect(lineOf(inset)).toBe(translate(lang, "memorySource.unchosen"));
+  act(() => root?.unmount()); document.body.innerHTML = "";
+  /* Once the import runs the limit is spent, so the sentence is not repeated. */
+  serve(() => VIEWS.active);
+  expect(lineOf(await render())).not.toContain(limit);
+});
+
 test("the two off states differ in their own sentences", () => {
   for (const lang of ["en", "uk"] as const) {
     const unchosen = translate(lang, "memorySource.unchosen"), engines = translate(lang, "memorySource.engines");
@@ -120,7 +138,7 @@ test("the two off states differ in their own sentences", () => {
 
 for (const lang of ["en", "uk"] as const) test(`${lang}: counts, parts, agents left, holds, failures and the sync's variants`, () => {
   const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
-  const line = (view: MemorySourceView) => memorySourceLine(view, false, t, lang, NOW);
+  const line = (view: MemorySourceView) => memorySourceLine(view, false, t, lang, NOW, true);
   /* Parts in brackets only while a file of several has one left (§4.4). */
   const split = line({ ...VIEWS.importing, import: { ...VIEWS.importing.import, counts: { ...COUNTS, files: 566, parts: 575, pendingFiles: 446, pendingParts: 455 } } });
   expect(split).toContain(lang === "en" ? "120 of 566 (455 parts left)" : "120 з 566 (лишилося 455 частин)");
@@ -152,7 +170,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: counts, parts, agents l
   /* A failed import put the switch back: the off line names why. */
   for (const reason of ["integrity", "backup_refused", "source_changed", "interrupted", "failed"] as const) {
     const text = line({ ...VIEWS.unchosen, lastFailure: { reason, at: "2026-10-23T11:00:00.000Z" } });
-    expect(text).toBe(`${t("memorySource.unchosen")} ${t("memorySource.lastFailure", { reason: t(`memorySource.reason.${reason}`) })}`);
+    expect(text).toBe(`${t("memorySource.unchosen")} ${t("memorySource.limit")} ${t("memorySource.lastFailure", { reason: t(`memorySource.reason.${reason}`) })}`);
     expect(text).not.toMatch(/integrity|backup_refused|source_changed/);
   }
   const sync = (patch: Partial<NonNullable<MemorySourceView["sync"]>>) => line({ ...VIEWS.engines, sync: { ...VIEWS.engines.sync, ...patch } });
@@ -264,7 +282,7 @@ test("a later failed read is unknown with the switch where it was, and the next 
   expect(lineOf(host)).toBe(DESIGN.en.active);
 });
 
-test("the phone's row takes the sheet's 44 px switch and its type; the desktop's the panel's", async () => {
+test("the phone's row takes the sheet's 44 px switch; both take the Settings rows' type", async () => {
   serve(() => VIEWS.importing);
   const phone = await render(true);
   expect(switchOf(phone).className).toContain("h-11");
@@ -272,7 +290,8 @@ test("the phone's row takes the sheet's 44 px switch and its type; the desktop's
   act(() => root?.unmount()); root = undefined; document.body.innerHTML = "";
   const desktop = await render(false);
   expect(switchOf(desktop).className).toContain("h-6");
-  expect(desktop.querySelector("[data-memory-source-line]")!.className).toContain("text-[11px]");
+  expect(desktop.querySelector("[data-memory-source-title]")!.parentElement!.className).toContain("text-body");
+  expect(desktop.querySelector("[data-memory-source-line]")!.className).toContain("text-ui");
 });
 
 test("a write that landed before the connection dropped: the next read moves the switch and clears the notice", async () => {
@@ -287,4 +306,36 @@ test("a write that landed before the connection dropped: the next read moves the
   expect(switchOf(host).getAttribute("aria-checked")).toBe("false");
   expect(host.querySelector("[data-memory-source-failed]")).toBeNull();
   expect(lineOf(host)).not.toContain(translate("en", "memorySource.saveFailed"));
+});
+
+/* Before any orchestrator exists the import has nowhere to run: the switch is off
+   and disabled, the line says why, and a press sends nothing. With a seat the
+   same view is the ordinary unchosen state. */
+for (const lang of ["en", "uk"] as const) test(`${lang}: without an orchestrator the switch is disabled with the reason; with one it can be turned on`, async () => {
+  setLocale(lang);
+  /* The Ukrainian line carries no-break spaces after one-letter words, so it never ends a row on one. */
+  const reason = lang === "en" ? "Needs an orchestrator first: create one in a project." : "Спершу потрібен оркестратор: створіть його в\u00a0проєкті.";
+  const states: string[] = [];
+  serve(() => ({ choice: null, phase: null, orchestrator: false } satisfies MemorySourceView));
+  const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+  await act(async () => { root!.render(<MemorySourceRow onState={(state) => states.push(state)} />); });
+  await settle();
+  expect(stateOf(host)).toBe("needs-orchestrator");
+  expect(lineOf(host)).toBe(reason);
+  expect(switchOf(host).disabled).toBe(true);
+  expect(switchOf(host).getAttribute("aria-checked")).toBe("false");
+  await act(async () => { switchOf(host).click(); });
+  await settle();
+  expect(puts).toEqual([]);
+  expect(states.at(-1)).toBe("needs-orchestrator");
+  act(() => root?.unmount()); document.body.innerHTML = "";
+
+  serve(() => ({ choice: null, phase: null, orchestrator: true } satisfies MemorySourceView), () => ({ choice: "delegatus", phase: "importing", orchestrator: true, import: { counts: null, remainingGenerations: 0, hold: null } }));
+  const second = await render();
+  expect(stateOf(second)).toBe("unchosen");
+  expect(lineOf(second)).toBe(`${translate(lang, "memorySource.unchosen")} ${translate(lang, "memorySource.limit")}`);
+  expect(switchOf(second).disabled).toBe(false);
+  await act(async () => { switchOf(second).click(); });
+  await settle();
+  expect(puts).toEqual([{ source: "delegatus" }]);
 });

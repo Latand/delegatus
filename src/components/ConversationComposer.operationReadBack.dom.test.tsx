@@ -1,0 +1,1059 @@
+/**
+ * A row whose receipt fell out of the session tail is read back by its own
+ * operation id, and a release or restart never sends it again.
+ *
+ * The session's receipt tail keeps a handful of receipts. On a busy
+ * conversation an older message's receipt is evicted long before anyone looks
+ * at it again, and after a reload or a re-host the row that still sits in
+ * browser storage was only ever re-checked against that same tail: it showed
+ * "delivering" for hours while `GET /api/runtime/operations/<id>` answered
+ * `delivered` at revision 1. Everything queued behind it waited too.
+ *
+ * These cases run the production pieces end to end: the structured delivery
+ * queue over a real runtime journal and agent registry, the production
+ * operations route with its settlement read, and the production composer
+ * mounted over storage seeded the way a stale browser tab holds it. Every
+ * request that is not a GET is recorded, and none may name the old operation.
+ */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { act } from "react";
+import { installActEnv } from "@/test-helpers/actEnv";
+import { Window } from "happy-dom";
+import { createRoot } from "react-dom/client";
+
+import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
+import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
+import { FakeEngineHost, createFakeDeliveryLedger } from "@/lib/runtime/fixtures/fakeEngineHost";
+import { handleRuntimeDiscard, handleRuntimeOperationQuery } from "@/lib/runtime/http";
+import { NextRequest } from "next/server";
+import { resolveSendReceipt, sendReceiptFor } from "@/lib/runtime/sendSettlement";
+import { structuredContentDigest } from "@/lib/runtime/structuredContent";
+import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "@/lib/runtime/structuredDeliveryQueue";
+import type { FileEntry } from "@/lib/types";
+import { setLocale, translate } from "@/lib/i18n";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { startComposerPayloadRuntime } from "@/lib/runtime/fixtures/composerPayloadRuntime";
+import { installConversationComposerRuntimeForTests, resetConversationComposerRuntimeForTests } from "@/test-helpers/conversationComposerRuntime";
+import { settleNativeQueueEntry } from "@/lib/runtime/nativeQueueSettlement";
+
+import { readOutbox, resetOutboxForTests } from "./conversation/outbox";
+import { messageRowModel } from "./conversation/messageRow";
+import { messageRowRecovery } from "./conversation/rowRecovery";
+import { ConversationComposer } from "./ConversationComposer";
+import { setConversationComposerRuntimeDependenciesForTests } from "./conversationComposerRuntime";
+import { agentCapabilitiesFromViews } from "./useAgentCapabilities";
+
+const dom = new Window();
+installActEnv();
+Object.assign(globalThis, {
+  window: dom,
+  document: dom.document,
+  navigator: dom.navigator,
+  Node: dom.Node,
+  HTMLElement: dom.HTMLElement,
+  HTMLButtonElement: dom.HTMLButtonElement,
+  HTMLTextAreaElement: dom.HTMLTextAreaElement,
+  Event: dom.Event,
+  CustomEvent: dom.CustomEvent,
+  MouseEvent: dom.MouseEvent,
+  KeyboardEvent: dom.KeyboardEvent,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
+  localStorage: dom.localStorage,
+  sessionStorage: dom.sessionStorage,
+});
+(dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
+  matches: false,
+  media: query,
+  addEventListener() {},
+  removeEventListener() {},
+});
+
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-operation-read-back-"));
+afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+const realFetch = globalThis.fetch;
+
+beforeEach(() => {
+  installConversationComposerRuntimeForTests({ useRuntimeView: () => null, useRuntimeReceipts: () => [] });
+});
+
+afterEach(() => {
+  resetConversationComposerRuntimeForTests();
+  setLocale("en");
+  globalThis.fetch = realFetch;
+  document.body.replaceChildren();
+  localStorage.clear();
+  sessionStorage.clear();
+  resetOutboxForTests();
+});
+
+function journalClient(journal: RuntimeJournal): RuntimeHostClient {
+  return {
+    operationStatus: async (operationId: string, options?: { currentRetryLeaf?: boolean }) =>
+      (options?.currentRetryLeaf ? journal.currentRetryResult(operationId) : journal.operationResult(operationId)),
+    /* Production forwards the whole call: the confirmed-delivery flag is what
+       lets the journal accept `delivered` after an `uncertain` ending. */
+    transitionOperation: async (operationId: string, status: Parameters<RuntimeJournal["transitionOperation"]>[1], details?: Parameters<RuntimeJournal["transitionOperation"]>[2], options?: Parameters<RuntimeJournal["transitionOperation"]>[3]) =>
+      journal.transitionOperation(operationId, status, details, options),
+    claimDeliveryAction: async (...args: Parameters<RuntimeHostClient["claimDeliveryAction"]>) => journal.claimDeliveryAction(...args),
+  } as unknown as RuntimeHostClient;
+}
+
+function queuePort(journal: RuntimeJournal, hostClaim: string, failDelivered = false): StructuredDeliveryQueuePort {
+  return {
+    effects: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
+    transition: async (operationId, status, details) => {
+      if (failDelivered && status === "delivered") throw new Error("the Viewer was replaced before confirmation commit");
+      journal.transitionOperation(operationId, status, details);
+    },
+    status: async (operationId) => journal.operationResult(operationId)?.receipt ?? null,
+    hostClaim: () => hostClaim,
+  };
+}
+
+interface Delivery {
+  conversationId: string;
+  operationId: string;
+  key: string;
+  text: string;
+  registry: AgentRegistry;
+  journalFile: string;
+  ledger: ReturnType<typeof createFakeDeliveryLedger>;
+}
+
+/** One admitted operator message: a reservation in the registry and the
+    operation in the runtime journal, exactly as the send route leaves them. */
+function admit(name: string, origin?: MessageOrigin): Delivery {
+  const directory = path.join(sandbox, name);
+  const sessionId = `${name}-session`;
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const profile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: artifactPath,
+    accountId: "account-a",
+    launchProfile: profile,
+    turn: { state: "idle", source: "empty", terminalAt: null },
+    observedAt: "2026-09-21T19:00:00.000Z",
+  }]);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key,
+    artifactPath,
+    cwd: directory,
+    accountId: "account-a",
+    launchProfile: profile,
+    status: "idle",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "fake:host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fake-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const text = "is the earlier step finished yet?";
+  const operationId = `${name}-operation`;
+  const clientKey = `${name}-key`;
+  const held = registry.holdDelivery(
+    conversation.id,
+    text,
+    clientKey,
+    "text",
+    [],
+    structuredContentDigest({ text, images: [] }),
+    { operationId, kind: "send", policy: "interrupt-active", turnId: null, ...(origin ? { origin } : {}) },
+  );
+  expect(registry.beginDeliveryAttempt(held.id, held.generationId!)?.state).toBe("delivery-uncertain");
+  const journalFile = path.join(directory, "events.sqlite");
+  const journal = new RuntimeJournal(journalFile, { structuredHosts: true });
+  journal.append({
+    scope: { type: "session", id: conversation.id },
+    kind: "session-status",
+    payload: {
+      conversationId: conversation.id,
+      sessionKey: key,
+      hostKind: "codex-app-server",
+      host: "hosted",
+      turn: "idle",
+      provenance: "structured",
+      artifactPath,
+      capabilities: { steer: true, structuredAttention: true },
+    },
+  });
+  journal.executeOperation({ kind: "send", operationId, idempotencyKey: clientKey, conversationId: conversation.id, text, policy: "interrupt-active", ...(origin ? { origin } : {}) });
+  journal.close();
+  return { conversationId: conversation.id, operationId, key: clientKey, text, registry, journalFile, ledger: createFakeDeliveryLedger() };
+}
+
+/** What the tab still holds from before the release: the first message on
+    the wire at revision 2 under its original owner, and a second one queued
+    locally behind it. Written straight into storage, as a reload finds it. */
+function seedStaleTab(delivery: Delivery, admittedAt: string): void {
+  const stale: RuntimeReceipt = {
+    operationId: delivery.operationId,
+    idempotencyKey: delivery.key,
+    conversationId: delivery.conversationId,
+    kind: "send",
+    status: "delivering",
+    reason: "delivering-owner:executor-a@claim-a:1",
+    text: delivery.text,
+    at: admittedAt,
+    admittedAt,
+    revision: 2,
+  };
+  // Submitted nine hours before the tab reopens, like the incident's row.
+  const submittedAt = Date.now() - 9 * 60 * 60_000;
+  sessionStorage.setItem(`llvOutbox:${delivery.conversationId}`, JSON.stringify([
+    { id: delivery.key, text: delivery.text, images: 0, at: submittedAt, state: "delivering", deliveryReceipt: stale, operationId: delivery.operationId },
+    { id: "second-key", text: "and the next thing?", images: 0, at: submittedAt + 60_000, state: "queued" },
+  ]));
+  sessionStorage.setItem(`llvRecoveryReceipts:${delivery.conversationId}`, JSON.stringify([stale]));
+}
+
+interface Recorded { method: string; url: string; body: string }
+
+/** GETs of an operation go to the production route; everything else is
+    recorded and left pending, so a send can be counted and never completes. */
+function serveOperations(answer: (operationId: string) => Promise<Response>): Recorded[] {
+  const requests: Recorded[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
+    requests.push({ method, url, body: typeof init?.body === "string" ? init.body : "" });
+    const operation = /^\/api\/runtime\/operations\/([^/?]+)$/.exec(url);
+    if (operation && method === "GET") return answer(decodeURIComponent(operation[1]!));
+    return new Promise(() => {}) as unknown as Response;
+  }) as typeof fetch;
+  return requests;
+}
+
+function composerFile(conversationId: string): FileEntry {
+  return {
+    path: "/sessions/stale-tab.jsonl", root: "codex-sessions", name: "stale-tab.jsonl", project: "viewer",
+    title: "Codex", engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1,
+    size: 1, activity: "idle", proc: "running", pid: null, conversationId,
+    pendingQuestion: null, waitingInput: null,
+  } as FileEntry;
+}
+
+async function mountComposer(conversationId: string): Promise<() => Promise<void>> {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<ConversationComposer file={composerFile(conversationId)} />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return async () => act(async () => root.unmount());
+}
+
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100 && !condition(); attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+  }
+}
+
+const touchesOperation = (requests: Recorded[], delivery: Delivery) => requests.filter((request) =>
+  request.method !== "GET" && (request.url.includes(delivery.operationId) || request.body.includes(delivery.key)));
+
+for (const locale of ["en", "uk"] as const) {
+  test(`checking delivery discard clears a relay card through the production DELETE route (${locale})`, async () => {
+    setLocale(locale);
+    const delivery = admit(`discard-relay-${locale}`, {
+      kind: "agent", role: "orchestrator", project: "repo-source", conversationId: "conversation_source",
+    });
+    const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+    journal.transitionOperation(delivery.operationId, "delivering");
+    journal.transitionOperation(delivery.operationId, "uncertain", { reason: "confirmation lost" });
+    const held = Object.values(delivery.registry.readOnlySnapshot().heldDeliveries)[0]!;
+    delivery.registry.recordDeliveryOutcome(held.id, "failed", "confirmation lost");
+    const original = { ...journal.operationResult(delivery.operationId)!.receipt, text: delivery.text } as RuntimeReceipt;
+    sessionStorage.setItem(`llvRecoveryReceipts:${delivery.conversationId}`, JSON.stringify([original]));
+    const requests = serveOperations(async () => Response.json({ operationId: delivery.operationId, receipt: original }));
+    const serve = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      if (init?.method === "DELETE") {
+        requests.push({ method: "DELETE", url: String(input), body: "" });
+        return handleRuntimeDiscard(new NextRequest(`http://127.0.0.1${String(input)}`,
+          { method: "DELETE", headers: { host: "127.0.0.1" } }), delivery.operationId,
+        { enabled: () => true, client: () => journalClient(journal), registry: () => delivery.registry,
+          kick: () => { throw new Error("discard must not wake delivery"); } });
+      }
+      return serve(input, init);
+    }) as typeof fetch;
+    const unmount = await mountComposer(delivery.conversationId);
+    try {
+      const button = document.querySelector<HTMLButtonElement>("[data-receipt-discard]")!;
+      expect(button).toBeTruthy();
+      await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+      await waitFor(() => !document.querySelector("[data-runtime-receipt-stack]"));
+      expect(Boolean(document.querySelector("[data-runtime-receipt-stack]"))).toBe(false);
+      expect(touchesOperation(requests, delivery)).toEqual([
+        { method: "DELETE", url: `/api/runtime/operations/${delivery.operationId}`, body: "" },
+      ]);
+      expect(sendReceiptFor(delivery.registry.readOnlySnapshot(), delivery.operationId)?.reason).toBe("delivery-discarded");
+    } finally {
+      await unmount();
+      journal.close();
+    }
+  });
+
+  for (const method of ["DELETE", "POST"] as const) test(`checking delivery errors use localized recovery copy (${locale}, ${method})`, async () => {
+    setLocale(locale);
+    const conversationId = `conversation_discard_error_${locale}_${method}`;
+    const original: RuntimeReceipt = { operationId: "discard-error-operation", idempotencyKey: "discard-error-key",
+      conversationId, kind: "send", status: "uncertain", text: "relay handoff",
+      at: new Date().toISOString(), revision: 1 };
+    sessionStorage.setItem(`llvRecoveryReceipts:${conversationId}`, JSON.stringify([original]));
+    serveOperations(async () => Response.json({ receipt: original }));
+    const serve = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => init?.method === method && String(input).startsWith("/api/runtime/operations/")
+      ? Response.json({ error: "delivery discard could not be recorded durably" }, { status: 503 })
+      : serve(input, init)) as typeof fetch;
+    const unmount = await mountComposer(conversationId);
+    try {
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>(method === "DELETE" ? "[data-receipt-discard]" : "[data-receipt-uncertain-retry]")!.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+      expect(document.body.textContent).not.toContain("delivery discard could not be recorded durably");
+      expect(document.body.textContent).toContain(translate(locale, method === "DELETE" ? "composer.deliveryDiscardFailed" : "composer.deliveryRetryFailed"));
+    } finally { await unmount(); }
+  });
+
+  for (const actuated of [false, true]) test(`checking delivery settles its stalled original attempt through the production GET route (${locale}, actuated=${actuated})`, async () => {
+    setLocale(locale);
+    const delivery = admit(`stuck-check-${locale}-${actuated}`);
+    const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+    if (actuated) journal.transitionOperation(delivery.operationId, "delivering");
+    const original = { ...journal.operationResult(delivery.operationId)!.receipt,
+      status: "uncertain", text: delivery.text, admittedAt: new Date(Date.now() - 11 * 60_000).toISOString() } as RuntimeReceipt;
+    sessionStorage.setItem(`llvRecoveryReceipts:${delivery.conversationId}`, JSON.stringify([original]));
+    const requests = serveOperations(operationId => handleRuntimeOperationQuery(operationId, {
+      rolledBack: () => false, client: () => journalClient(journal),
+      settle: (id, client) => resolveSendReceipt(id, { registry: delivery.registry, client,
+        now: () => Date.now() + 11 * 60_000 }),
+    }));
+    const unmount = await mountComposer(delivery.conversationId);
+    try {
+      await waitFor(() => sendReceiptFor(delivery.registry.readOnlySnapshot(), delivery.operationId)?.state === "failed");
+      expect(sendReceiptFor(delivery.registry.readOnlySnapshot(), delivery.operationId)?.state).toBe("failed");
+      expect(document.body.textContent).not.toContain(translate(locale, "composer.deliveryChecking"));
+      expect(document.body.textContent).toContain(translate(locale, actuated ? "composer.deliveryCheckEnded" : "composer.deliveryNotDelivered"));
+      expect(touchesOperation(requests, delivery)).toEqual([]);
+      expect(journal.effectBatch()).toEqual([]);
+    } finally { await unmount(); journal.close(); }
+  });
+}
+
+test("a stale delivering row reloaded after a release reads its delivered record back and drains the queue once", async () => {
+  const delivery = admit("delivered-before-release");
+  // Executor A hands the message over and the journal records its arrival.
+  const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+  await new StructuredDeliveryQueue(queuePort(journal, "claim-a:1"), () => new FakeEngineHost(delivery.ledger)).drain();
+  expect(journal.operationResult(delivery.operationId)?.receipt.status).toBe("delivered");
+  expect(delivery.ledger.writes).toHaveLength(1);
+
+  const admittedAt = journal.operationResult(delivery.operationId)!.receipt.admittedAt ?? new Date().toISOString();
+  seedStaleTab(delivery, admittedAt);
+  const requests = serveOperations((operationId) => handleRuntimeOperationQuery(operationId, {
+    client: () => journalClient(journal),
+    rolledBack: () => false,
+    settle: (id, client) => resolveSendReceipt(id, { client, registry: delivery.registry }),
+  }));
+  const unmount = await mountComposer(delivery.conversationId);
+  try {
+    await waitFor(() => readOutbox(delivery.conversationId).find((entry) => entry.id === delivery.key)?.state === "delivered");
+
+    const [first, second] = readOutbox(delivery.conversationId);
+    expect(first).toMatchObject({ id: delivery.key, state: "delivered" });
+    expect(first!.deliveryUncertain).toBeUndefined();
+    /* The coordinator's browser acceptance reads exactly this: the stored
+       recovery receipt of the original operation and key says delivered. */
+    const stored = (JSON.parse(sessionStorage.getItem(`llvRecoveryReceipts:${delivery.conversationId}`) ?? "[]") as RuntimeReceipt[])
+      .find((candidate) => candidate.operationId === delivery.operationId && candidate.idempotencyKey === delivery.key
+        && candidate.conversationId === delivery.conversationId);
+    expect(stored?.status).toBe("delivered");
+    // The answer the route gave was the settled record at revision 1.
+    expect(requests.filter((request) => request.method === "GET" && request.url.includes(delivery.operationId)).length).toBeGreaterThan(0);
+    /* The message behind it is released under its own key: the serial
+       dispatcher claims it (queued → delivering) exactly once, and only
+       because the row ahead of it no longer holds the wire. */
+    expect(second?.id).toBe("second-key");
+    await waitFor(() => readOutbox(delivery.conversationId)[1]?.state !== "queued");
+    expect(readOutbox(delivery.conversationId)[1]).toMatchObject({ id: "second-key", state: "delivering" });
+    expect(requests.filter((request) => request.method !== "GET" && request.body.includes("second-key")).length).toBeLessThanOrEqual(1);
+    // Nothing was ever sent, retried or discarded for the delivered operation.
+    expect(touchesOperation(requests, delivery)).toEqual([]);
+    expect(delivery.ledger.writes).toHaveLength(1);
+  } finally {
+    await unmount();
+    journal.close();
+  }
+});
+
+test("a locally failed row with an admitted operation stays pending across a host restart and reads its delivery back", async () => {
+  const delivery = admit("failed-local-after-restart");
+  const first = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+  first.close(); // The runtime host goes away after accepting the operator's key.
+  const successor = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+  const submittedAt = Date.now() - 60_000;
+  sessionStorage.setItem(`llvOutbox:${delivery.conversationId}`, JSON.stringify([{
+    id: delivery.key, text: delivery.text, images: 0, at: submittedAt,
+    state: "failed", error: "runtime host is unavailable", operationId: delivery.operationId,
+  }]));
+  sessionStorage.setItem(`llvPendingSend:${delivery.conversationId}`, JSON.stringify([{
+    key: delivery.key, text: delivery.text, images: [], operationId: delivery.operationId,
+  }]));
+  const t = (key: Parameters<typeof translate>[1]) => translate("uk", key);
+  expect(messageRowModel(t, readOutbox(delivery.conversationId)[0]!).phase).toBe("pending");
+  expect(messageRowModel(t, readOutbox(delivery.conversationId)[0]!).failure).toBeNull();
+  let releaseRead!: () => void;
+  const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+  const requests = serveOperations(async (operationId) => {
+    await readGate;
+    return handleRuntimeOperationQuery(operationId, {
+      client: () => journalClient(successor), rolledBack: () => false,
+      settle: (id, client) => resolveSendReceipt(id, { client, registry: delivery.registry }),
+    });
+  });
+  const unmount = await mountComposer(delivery.conversationId);
+  try {
+    expect(messageRowModel(t, readOutbox(delivery.conversationId)[0]!).phase).toBe("pending");
+    await new StructuredDeliveryQueue(queuePort(successor, "claim-a:1"), () => new FakeEngineHost(delivery.ledger)).drain();
+    releaseRead();
+    await waitFor(() => readOutbox(delivery.conversationId)[0]?.state === "delivered");
+    expect(readOutbox(delivery.conversationId)[0]?.state).toBe("delivered");
+    expect(messageRowModel(t, readOutbox(delivery.conversationId)[0]!).failure).toBeNull();
+    expect(sessionStorage.getItem(`llvPendingSend:${delivery.conversationId}`)).toBeNull();
+    expect(requests.some((request) => request.method === "GET" && request.url.includes(delivery.operationId))).toBe(true);
+    expect(touchesOperation(requests, delivery)).toEqual([]);
+    expect(delivery.ledger.writes).toHaveLength(1);
+  } finally {
+    releaseRead();
+    await unmount();
+    successor.close();
+  }
+});
+
+test("a genuine failed retry leaf can be resent from its original message row after the receipt tail is lost", async () => {
+  const delivery = admit("retry-leaf-tail-evicted");
+  const failed: RuntimeReceipt & { retryOfOperationId: string } = {
+    operationId: "failed-retry-leaf", retryOfOperationId: delivery.operationId,
+    idempotencyKey: "retry-leaf-key", conversationId: delivery.conversationId,
+    kind: "send", status: "failed", resend: "safe", reason: "host failed before delivery",
+    text: delivery.text, at: new Date(Date.now() - 60_000).toISOString(), revision: 2,
+  };
+  sessionStorage.setItem(`llvOutbox:${delivery.conversationId}`, JSON.stringify([{
+    id: delivery.key, text: delivery.text, images: 0, at: Date.now() - 60_000,
+    state: "failed", operationId: delivery.operationId, deliveryReceipt: failed,
+  }]));
+  const requests: Recorded[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
+    requests.push({ method, url, body: typeof init?.body === "string" ? init.body : "" });
+    if (url === `/api/runtime/operations/${failed.operationId}` && method === "POST") {
+      return Response.json({ operationId: "delivered-retry-leaf", receipt: {
+        ...failed, operationId: "delivered-retry-leaf", retryOfOperationId: failed.operationId,
+        idempotencyKey: "delivered-retry-key", status: "delivered", resend: "not-needed",
+        reason: null, at: new Date().toISOString(), revision: 1,
+      } });
+    }
+    return Response.json({ error: "not found" }, { status: 404 });
+  }) as typeof fetch;
+  const unmount = await mountComposer(delivery.conversationId);
+  try {
+    const row = readOutbox(delivery.conversationId)[0]!;
+    expect(messageRowModel((key) => translate("uk", key), row).failure?.action).toBe("retry-operation");
+    await act(async () => {
+      messageRowRecovery(delivery.conversationId)?.retryOperation?.(row.id);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(requests.some((request) => request.method === "POST" && request.url.includes(failed.operationId))).toBe(true);
+    await waitFor(() => readOutbox(delivery.conversationId)[0]?.state === "delivered");
+    expect(readOutbox(delivery.conversationId)[0]?.state).toBe("delivered");
+  } finally {
+    await unmount();
+  }
+});
+
+test("a delivered real retry leaf settles its original row after remount without a second send", async () => {
+  const runtime = await startComposerPayloadRuntime(path.join(sandbox, "real-retry-lineage"));
+  const key = "retry-readback-lineage";
+  const text = "deliver once, then read the retry lineage";
+  const call = async (method: "GET" | "POST", url: string, body?: unknown) => runtime.handle(new Request(`http://localhost${url}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }));
+  try {
+    /* Admit through the production send handler. The fixture starts with its
+       engine unavailable, matching a deploy that replaces the runtime host. */
+    const admitted = await call("POST", "/api/runtime/send", {
+      conversationId: runtime.conversationId, text, images: [], idempotencyKey: key,
+    });
+    expect(admitted.status).toBe(202);
+    const operationId = (await admitted.json() as { operationId: string }).operationId;
+    await waitFor(() => runtime.journal.operationResult(operationId)?.receipt.status === "failed");
+
+    /* The host returns and the real retry route delivers its deterministic
+       retry leaf. The operation query projects it back onto the admitted row. */
+    await runtime.hostUp();
+    const retried = await call("POST", `/api/runtime/operations/${operationId}`);
+    expect([200, 202]).toContain(retried.status);
+    const retryResponse = await retried.json() as { operationId: string };
+    const leafId = retryResponse.operationId;
+    await waitFor(() => runtime.journal.operationResult(leafId)?.receipt.status === "delivered");
+    expect(runtime.journal.operationResult(leafId)?.receipt).toMatchObject({
+      idempotencyKey: expect.stringMatching(/^retry_/), retryOfOperationId: operationId,
+    });
+    const queried = await call("GET", `/api/runtime/operations/${leafId}`);
+    const queriedBody = await queried.json() as { receipt: RuntimeReceipt };
+    expect(queriedBody.receipt).toMatchObject({ idempotencyKey: key, status: "delivered" });
+    const storedRetry = runtime.journal.operationResult(leafId)!.receipt;
+    expect(storedRetry.idempotencyKey).not.toBe(queriedBody.receipt.idempotencyKey);
+
+    /* A reloaded browser has only the original row and no live receipt tail. */
+    const submittedAt = Date.now() - 60_000;
+    sessionStorage.setItem(`llvOutbox:${runtime.conversationId}`, JSON.stringify([{
+      id: key, text, images: 0, at: submittedAt, state: "delivering", operationId: leafId,
+      deliveryReceipt: {
+        ...storedRetry, status: "delivering",
+        conversationId: runtime.conversationId,
+        text, at: new Date(submittedAt).toISOString(), revision: 2,
+      },
+    }]));
+    const readbackReceipts: RuntimeReceipt[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/runtime/operations/${leafId}` && (init?.method ?? "GET").toUpperCase() === "GET") {
+        const response = await call("GET", url);
+        readbackReceipts.push(((await response.clone().json()) as { receipt: RuntimeReceipt }).receipt);
+        return response;
+      }
+      return Response.json({ error: "unexpected request" }, { status: 404 });
+    }) as typeof fetch;
+    const unmount = await mountComposer(runtime.conversationId);
+    try {
+      await waitFor(() => readOutbox(runtime.conversationId)[0]?.state === "delivered");
+      expect(readOutbox(runtime.conversationId)[0]).toMatchObject({ id: key, state: "delivered" });
+      expect(readbackReceipts).toHaveLength(1);
+      expect(readbackReceipts[0]).toMatchObject({ idempotencyKey: key, status: "delivered" });
+      expect(sessionStorage.getItem(`llvPendingSend:${runtime.conversationId}`)).toBeNull();
+      expect(runtime.delivered).toHaveLength(1);
+      expect(runtime.delivered[0]?.text).toContain(text);
+    } finally {
+      await unmount();
+    }
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("manual status check settles a retry leaf after its first readback fails without resending", async () => {
+  const runtime = await startComposerPayloadRuntime(path.join(sandbox, "manual-retry-lineage"));
+  const key = "manual-retry-readback-lineage";
+  const text = "check retry delivery without sending twice";
+  const call = async (method: "GET" | "POST", url: string, body?: unknown) => runtime.handle(new Request(`http://localhost${url}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }));
+  try {
+    const admitted = await call("POST", "/api/runtime/send", {
+      conversationId: runtime.conversationId, text, images: [], idempotencyKey: key,
+    });
+    expect(admitted.status).toBe(202);
+    const operationId = (await admitted.json() as { operationId: string }).operationId;
+    await waitFor(() => runtime.journal.operationResult(operationId)?.receipt.status === "failed");
+    await runtime.hostUp();
+    const retried = await call("POST", `/api/runtime/operations/${operationId}`);
+    expect([200, 202]).toContain(retried.status);
+    const leafId = (await retried.json() as { operationId: string }).operationId;
+    await waitFor(() => runtime.journal.operationResult(leafId)?.receipt.status === "delivered");
+    const storedRetry = runtime.journal.operationResult(leafId)!.receipt;
+    expect(storedRetry).toMatchObject({ idempotencyKey: expect.stringMatching(/^retry_/), retryOfOperationId: operationId });
+
+    const submittedAt = Date.now() - 60_000;
+    sessionStorage.setItem(`llvOutbox:${runtime.conversationId}`, JSON.stringify([{
+      id: key, text, images: 0, at: submittedAt, state: "delivering", operationId: leafId,
+      deliveryReceipt: {
+        ...storedRetry, status: "delivering", conversationId: runtime.conversationId,
+        text, at: new Date(submittedAt).toISOString(), revision: 2,
+      },
+    }]));
+    const readbacks: Array<{ method: string; url: string }> = [];
+    let firstRead = true;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url === `/api/runtime/operations/${leafId}` && method === "GET") {
+        readbacks.push({ method, url });
+        if (firstRead) {
+          firstRead = false;
+          return Response.json({ error: "temporary readback failure" }, { status: 503 });
+        }
+        return call("GET", url);
+      }
+      return Response.json({ error: "unexpected request" }, { status: 404 });
+    }) as typeof fetch;
+    const unmount = await mountComposer(runtime.conversationId);
+    try {
+      await waitFor(() => readbacks.length === 1);
+      expect(readOutbox(runtime.conversationId)[0]?.state).toBe("delivering");
+
+      await act(async () => {
+        messageRowRecovery(runtime.conversationId)?.check?.(key);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      await waitFor(() => readOutbox(runtime.conversationId)[0]?.state === "delivered");
+      expect(readbacks).toHaveLength(2);
+      expect(readOutbox(runtime.conversationId)[0]).toMatchObject({ id: key, state: "delivered" });
+      expect(sessionStorage.getItem(`llvPendingSend:${runtime.conversationId}`)).toBeNull();
+      expect(runtime.delivered).toHaveLength(1);
+      expect(runtime.delivered[0]?.text).toContain(text);
+    } finally {
+      await unmount();
+    }
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("a row whose journal operation was compacted settles from the delivery record alone", async () => {
+  /* The incident's exact shape: the operation was delivered and settled on
+     the delivery record, and the journal has since compacted its row. The
+     route then answers from the record (`runtimeReceiptForSend`, revision 1). */
+  const delivery = admit("compacted-journal");
+  const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+  await new StructuredDeliveryQueue(queuePort(journal, "claim-a:1"), () => new FakeEngineHost(delivery.ledger)).drain();
+  const admittedAt = journal.operationResult(delivery.operationId)!.receipt.admittedAt ?? new Date().toISOString();
+  await resolveSendReceipt(delivery.operationId, { client: journalClient(journal), registry: delivery.registry });
+  journal.close();
+  const compacted = { operationStatus: async () => null } as unknown as RuntimeHostClient;
+
+  seedStaleTab(delivery, admittedAt);
+  const answers: RuntimeReceipt[] = [];
+  const requests = serveOperations(async (operationId) => {
+    const response = await handleRuntimeOperationQuery(operationId, {
+      client: () => compacted,
+      rolledBack: () => false,
+      settle: (id, client) => resolveSendReceipt(id, { client, registry: delivery.registry }),
+    });
+    answers.push(((await response.clone().json()) as { receipt: RuntimeReceipt }).receipt);
+    return response;
+  });
+  const unmount = await mountComposer(delivery.conversationId);
+  try {
+    await waitFor(() => readOutbox(delivery.conversationId)[0]?.state === "delivered");
+    expect(answers[0]).toMatchObject({ operationId: delivery.operationId, idempotencyKey: delivery.key,
+      conversationId: delivery.conversationId, status: "delivered", revision: 1 });
+    expect(readOutbox(delivery.conversationId)[0]).toMatchObject({ id: delivery.key, state: "delivered" });
+    expect(touchesOperation(requests, delivery)).toEqual([]);
+    expect(delivery.ledger.writes).toHaveLength(1);
+  } finally {
+    await unmount();
+  }
+});
+
+/* The incident's case keeps the host claim across the release: the structured
+   host survived, so the claim still matched and the successor left the row to
+   an executor that was gone. A release that also replaced the host changes the
+   claim; the successor then ends the row unverified itself, and the read still
+   carries that answer to the tab. */
+test.each([
+  { name: "owner-replaced", successorClaim: "claim-a:1", successorLeaves: "delivering" },
+  { name: "owner-and-host-replaced", successorClaim: "claim-b:2", successorLeaves: "uncertain" },
+])("a row left delivering by an executor the release replaced ends uncertain, never resent (successor claim $successorClaim)", async ({ name, successorClaim, successorLeaves }) => {
+  const delivery = admit(name);
+  /* Executor A hands the message to the engine and dies with the Viewer
+     before it can record the answer: the row stays `delivering` under A. */
+  const first = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+  await expect(new StructuredDeliveryQueue(queuePort(first, "claim-a:1", true), () => new FakeEngineHost(delivery.ledger)).drain())
+    .rejects.toThrow("the Viewer was replaced");
+  const stuck = first.operationResult(delivery.operationId)!.receipt;
+  expect(stuck.status).toBe("delivering");
+  first.close();
+
+  /* The successor Viewer runs a new executor. With the same claim it leaves
+     the row to its owner, who is gone; with a new claim it ends it. */
+  const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+  await new StructuredDeliveryQueue(queuePort(journal, successorClaim), () => new FakeEngineHost(delivery.ledger)).drain();
+  expect(journal.operationResult(delivery.operationId)?.receipt.status).toBe(successorLeaves);
+
+  /* The tab reloads after the settlement window. The only thing that can end
+     the row now is a read of the operation by id. */
+  const admittedAt = stuck.admittedAt ?? stuck.at;
+  seedStaleTab(delivery, admittedAt);
+  const afterWindow = Date.parse(admittedAt) + 11 * 60_000;
+  const requests = serveOperations((operationId) => handleRuntimeOperationQuery(operationId, {
+    client: () => journalClient(journal),
+    rolledBack: () => false,
+    settle: (id, client) => resolveSendReceipt(id, { client, registry: delivery.registry, now: () => afterWindow }),
+  }));
+  const unmount = await mountComposer(delivery.conversationId);
+  try {
+    await waitFor(() => readOutbox(delivery.conversationId).find((entry) => entry.id === delivery.key)?.deliveryUncertain === true);
+
+    expect(readOutbox(delivery.conversationId)[0]).toMatchObject({ id: delivery.key, state: "delivering", deliveryUncertain: true });
+    expect(journal.operationResult(delivery.operationId)?.receipt.status).toBe("uncertain");
+    // An unknown fate does not hold the wire: the queued message goes, once.
+    await waitFor(() => readOutbox(delivery.conversationId)[1]?.state !== "queued");
+    expect(readOutbox(delivery.conversationId)[1]).toMatchObject({ id: "second-key", state: "delivering" });
+    expect(requests.filter((request) => request.method !== "GET" && request.body.includes("second-key")).length).toBeLessThanOrEqual(1);
+    expect(touchesOperation(requests, delivery)).toEqual([]);
+    expect(delivery.ledger.writes).toHaveLength(1);
+  } finally {
+    await unmount();
+    journal.close();
+  }
+});
+
+test("a delivered operation from another sender is not shown as unknown after a reload", async () => {
+  /* A message sent from elsewhere (an agent, another device) whose last
+     observation this tab kept was `uncertain`. Its receipt has left the tail,
+     and its own record says delivered at revision 1. */
+  const conversationId = "conversation-other-sender";
+  const admittedAt = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+  const uncertain: RuntimeReceipt = {
+    operationId: "other-sender-operation",
+    idempotencyKey: "other-sender-key",
+    conversationId,
+    kind: "send",
+    status: "uncertain",
+    reason: "delivery was started by an earlier executor; whether it reached the recipient is unverified",
+    text: "coordination update",
+    at: admittedAt,
+    admittedAt,
+    revision: 4,
+  };
+  sessionStorage.setItem(`llvRecoveryReceipts:${conversationId}`, JSON.stringify([uncertain]));
+  const requests = serveOperations(async (operationId) => Response.json({
+    operationId,
+    receipt: { ...uncertain, status: "delivered", reason: null, resend: "not-needed", at: new Date(Date.parse(admittedAt) + 60_000).toISOString(), revision: 1 },
+  }));
+  const unknown = "Checking delivery…";
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<ConversationComposer file={composerFile(conversationId)} />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  try {
+    await waitFor(() => !host.textContent?.includes(unknown));
+    expect(host.textContent).not.toContain(unknown);
+    expect(requests.filter((request) => request.method !== "GET" && request.url.includes(uncertain.operationId))).toEqual([]);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+/* The reads follow the hidden-traffic policy and are shared per operation. */
+function seedStaleRow(conversationId: string): RuntimeReceipt {
+  const admittedAt = new Date(Date.now() - 9 * 60 * 60_000).toISOString();
+  const stale: RuntimeReceipt = {
+    operationId: "gated-operation", idempotencyKey: "gated-key", conversationId, kind: "send",
+    status: "delivering", reason: "delivering-owner:executor-a@claim-a:1", text: "gated", at: admittedAt, admittedAt, revision: 2,
+  };
+  sessionStorage.setItem(`llvOutbox:${conversationId}`, JSON.stringify([
+    { id: stale.idempotencyKey, text: "gated", images: 0, at: Date.parse(admittedAt), state: "delivering", deliveryReceipt: stale, operationId: stale.operationId },
+  ]));
+  sessionStorage.setItem(`llvRecoveryReceipts:${conversationId}`, JSON.stringify([stale]));
+  return stale;
+}
+
+function answerDelivered(stale: RuntimeReceipt): Recorded[] {
+  return serveOperations(async (operationId) => Response.json({
+    operationId,
+    receipt: { ...stale, status: "delivered", reason: null, resend: "not-needed", at: new Date().toISOString(), revision: 1 },
+  }));
+}
+
+const operationReads = (requests: Recorded[]) => requests.filter((request) => request.url.startsWith("/api/runtime/operations/"));
+
+test("a hidden phone tab makes no operation read, and reads once it is shown again", async () => {
+  const conversationId = "conversation-hidden-phone";
+  const stale = seedStaleRow(conversationId);
+  const requests = answerDelivered(stale);
+  const matchMedia = (dom as unknown as { matchMedia: unknown }).matchMedia;
+  (dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
+    matches: query === "(pointer: coarse)", media: query, addEventListener() {}, removeEventListener() {},
+  });
+  Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+  const unmount = await mountComposer(conversationId);
+  try {
+    await waitFor(() => false);
+    expect(operationReads(requests)).toEqual([]);
+    expect(readOutbox(conversationId)[0]?.state).toBe("delivering");
+
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    await act(async () => { document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event); });
+    await waitFor(() => readOutbox(conversationId)[0]?.state === "delivered");
+    expect(operationReads(requests).map((request) => request.method)).toEqual(["GET"]);
+  } finally {
+    await unmount();
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    (dom as unknown as { matchMedia: unknown }).matchMedia = matchMedia;
+  }
+});
+
+test("an inactive composer makes no operation read", async () => {
+  const conversationId = "conversation-inactive";
+  const stale = seedStaleRow(conversationId);
+  const requests = answerDelivered(stale);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(<ConversationComposer file={composerFile(conversationId)} viewActive={false} pollPaused />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  try {
+    await waitFor(() => false);
+    expect(operationReads(requests)).toEqual([]);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+test("two composers showing the same operation share one read", async () => {
+  const conversationId = "conversation-two-mounts";
+  const stale = seedStaleRow(conversationId);
+  const requests = answerDelivered(stale);
+  const first = await mountComposer(conversationId);
+  const second = await mountComposer(conversationId);
+  try {
+    await waitFor(() => readOutbox(conversationId)[0]?.state === "delivered");
+    expect(readOutbox(conversationId)[0]?.state).toBe("delivered");
+    expect(operationReads(requests)).toEqual([{ method: "GET", url: `/api/runtime/operations/${stale.operationId}`, body: "" }]);
+  } finally {
+    await second();
+    await first();
+  }
+});
+
+for (const locale of ["uk", "en"] as const) {
+  test(`a real uncertain delivery clears its ${locale} composer banner on canonical readback after restart`, async () => {
+    setLocale(locale);
+    const delivery = admit(`late-canonical-${locale}`);
+    const journal = new RuntimeJournal(delivery.journalFile, { structuredHosts: true });
+    journal.transitionOperation(delivery.operationId, "delivering");
+    journal.transitionOperation(delivery.operationId, "uncertain");
+    delivery.registry.recordDeliveryOutcomeForOperation(delivery.conversationId as `conversation_${string}`,
+      delivery.operationId, "failed", "delivery was started by an earlier executor", "unverified");
+    const admittedAt = new Date(Date.now() - 60_000).toISOString();
+    seedStaleTab(delivery, admittedAt);
+    const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+    const { deliveryDedupToken } = await import("@/lib/runtime/deliveryDedup");
+    const wire = await encodeCodexStructuredUserText(delivery.text, undefined, null, { kind: "operator" }, deliveryDedupToken(delivery.operationId));
+    const transcript = delivery.registry.conversation(delivery.conversationId as `conversation_${string}`)!.generations[0]!.path;
+    fs.writeFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+    const requests = serveOperations(id => handleRuntimeOperationQuery(id, {
+      client: () => journalClient(journal), rolledBack: () => false,
+      settle: (operationId, client) => resolveSendReceipt(operationId, { registry: delivery.registry, client }),
+    }));
+    const unmount = await mountComposer(delivery.conversationId);
+    try {
+      await waitFor(() => readOutbox(delivery.conversationId)[0]?.state === "delivered");
+      expect(document.querySelector("[data-delivery-notice]")).toBeNull();
+      expect(touchesOperation(requests, delivery)).toEqual([]);
+    } finally { await unmount(); journal.close(); }
+  });
+}
+
+/* An ordinary send the journal handed to Codex's own queue while a turn ran.
+   Codex consumed it, its sender ended unverified before any proof landed, and
+   only later did the canonical item prove it (the incident of 2026-10-30).
+   Each surface is driven from production records: the runtime journal's
+   native entries and receipts, the delivery registry behind the operation
+   route, and the settlement the reconcile pass runs once the proof lands. */
+for (const locale of ["en", "uk"] as const) {
+  test(`a consumed queued send leaves the queue row, its hint and the undelivered count by its own id only (${locale})`, async () => {
+    setLocale(locale);
+    const directory = path.join(sandbox, `consumed-queue-${locale}`);
+    const sessionId = `consumed-queue-${locale}-thread`;
+    const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+    const profile = emptyLaunchProfile({ cwd: directory });
+    registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: "account-a", launchProfile: profile,
+      turn: { state: "busy", source: "empty", terminalAt: null }, observedAt: "2026-10-30T05:14:00.000Z" }]);
+    const conversationId = registry.conversationForPath(artifactPath)!.id;
+    let clock = Date.now() - 90 * 60_000;
+    const journal = new RuntimeJournal(path.join(directory, "events.sqlite"), { structuredHosts: true, now: () => clock });
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: { engine: "codex", sessionId }, hostKind: "codex-app-server", host: "hosted", turn: "running",
+      accountId: "account-a", provenance: "structured", artifactPath,
+      capabilities: { steer: true, nativeQueue: true, structuredAttention: true },
+    } });
+    const text = "Seat tick snapshot: seven workers running";
+    const queued = (operationId: string, origin?: MessageOrigin) => {
+      const held = registry.holdDelivery(conversationId, text, `${operationId}-key`, "text", [],
+        structuredContentDigest({ text, images: [] }), { operationId, kind: "send", policy: "queue", turnId: null, ...(origin ? { origin } : {}) });
+      registry.beginDeliveryAttempt(held.id, held.generationId!);
+      journal.executeOperation({ kind: "send", operationId, idempotencyKey: `${operationId}-key`, conversationId, text, policy: "queue",
+        contentDigest: structuredContentDigest({ text, images: [] }), ...(origin ? { origin } : {}) });
+      journal.nativeQueueTransition(operationId, { phase: "prepared", input: [{ type: "text", text, text_elements: [] }] });
+      journal.nativeQueueTransition(operationId, { phase: "acknowledged", nativeSubmissionId: `native-${operationId}` });
+    };
+    // The consumed send, and a later one with the same words that Codex still holds.
+    queued("consumed-tick", { kind: "agent", role: "seat-tick" });
+    clock += 60_000;
+    queued("held-same-text");
+    // Its sender gave up on reading evidence and ended it unverified.
+    registry.recordDeliveryOutcomeForOperation(conversationId, "consumed-tick", "failed",
+      "delivery was started by an earlier executor; whether it reached the recipient is unverified", "unverified");
+    // An unrelated send whose fate nobody can establish.
+    const unknownText = "an unrelated message nobody confirmed";
+    const unknownHeld = registry.holdDelivery(conversationId, unknownText, "unknown-send-key", "text", [],
+      structuredContentDigest({ text: unknownText, images: [] }), { operationId: "unknown-send", kind: "send", policy: "interrupt-active", turnId: null });
+    registry.beginDeliveryAttempt(unknownHeld.id, unknownHeld.generationId!);
+    journal.executeOperation({ kind: "send", operationId: "unknown-send", idempotencyKey: "unknown-send-key", conversationId, text: unknownText, policy: "interrupt-active" });
+    journal.transitionOperation("unknown-send", "delivering");
+    journal.transitionOperation("unknown-send", "uncertain", { reason: "confirmation lost" });
+    registry.recordDeliveryOutcomeForOperation(conversationId, "unknown-send", "failed", "confirmation lost", "unverified");
+    clock = Date.now();
+
+    // What the tab kept from the stream before the tail evicted both.
+    const kept = (operationId: string) => ({ ...journal.operationResult(operationId)!.receipt }) as RuntimeReceipt;
+    const keptConsumed = kept("consumed-tick");
+    expect(keptConsumed.status).toBe("queued");
+    sessionStorage.setItem(`llvRecoveryReceipts:${conversationId}`, JSON.stringify([keptConsumed, kept("unknown-send")]));
+    const requests = serveOperations(operationId => handleRuntimeOperationQuery(operationId, {
+      rolledBack: () => false, client: () => journalClient(journal),
+      settle: (id, client) => resolveSendReceipt(id, { registry, client, progress: null }),
+    }));
+
+    let tail: RuntimeReceipt[] = [];
+    let queueRevision = 1;
+    let unreadable = false;
+    const queueReads: string[] = [];
+    const queueWrites: Record<string, unknown>[] = [];
+    const nativeItems = () => [{ id: "native-held-same-text", clientUserMessageId: "held-same-text", input: [{ type: "text" as const, text, text_elements: [] }] }];
+    const view = () => ({
+      session: { conversationId, sessionKey: { engine: "codex", sessionId }, hostKind: "codex-app-server", host: "hosted", turn: "running",
+        provenance: "structured", accountId: "account-a", parentConversationId: null, cwd: directory, artifactPath,
+        capabilities: { steer: true, structuredAttention: true, nativeQueue: true }, activeTurnId: "turn-live",
+        nativeQueueRevision: queueRevision, attentionIds: [], recentReceipts: [], revision: queueRevision },
+      uiState: "working", attentions: [], receipts: [], legacy: false, structuredControlsEnabled: true,
+    }) as never;
+    setConversationComposerRuntimeDependenciesForTests({
+      useAgentCapabilities: ((entry: FileEntry) => agentCapabilitiesFromViews(entry, view(), null, true)) as never,
+      useRuntimeReceiptsForArtifact: () => tail,
+      nativeQueue: {
+        read: async () => {
+          queueReads.push(unreadable ? "unreadable" : "read");
+          if (unreadable) throw new Error("runtime host is unavailable");
+          return { entries: journal.nativeQueueRead(conversationId), native: { threadId: sessionId, stale: false, items: nativeItems() } };
+        },
+        write: async (body) => { queueWrites.push(body); return new Promise(() => {}); },
+      },
+    });
+    const file = { ...composerFile(conversationId), path: artifactPath, engine: "codex" } as FileEntry;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const render = async () => act(async () => {
+      root.render(<ConversationComposer file={{ ...file, mtime: queueRevision }} />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const rows = () => [...host.querySelectorAll('[data-testid="native-queue-row"]')].map((row) => row.getAttribute("data-entry"));
+    const notice = () => host.querySelector('[data-testid="native-queue-notice"]')?.textContent?.trim() ?? null;
+    const card = (operationId: string) => document.querySelector(`[data-delivery-check-card][data-operation="${operationId}"]`);
+    const chip = () => document.querySelector("[data-receipts-chip]")?.getAttribute("aria-label") ?? null;
+    const hint = translate(locale, "queue.noticePending", { count: 1 });
+    let mounted = true;
+    await render();
+    try {
+      // The state the operator photographed, each indicator under its own id.
+      await waitFor(() => rows().length === 2 && card("consumed-tick") !== null && card("unknown-send") !== null);
+      expect(rows()).toEqual(["held-same-text", "consumed-tick"]);
+      expect(notice()).toBe(hint);
+      expect(card("consumed-tick")?.textContent).toContain(translate(locale, "composer.deliveryCheckEnded"));
+      expect(chip()).toBe(translate(locale, "runtime.receipt.chipUnconfirmedAria", { count: 2 }));
+      const draft = () => host.querySelector("textarea")!;
+      const propsKey = Object.keys(draft()).find((key) => key.startsWith("__reactProps$"))!;
+      await act(async () => {
+        (draft() as unknown as Record<string, { onChange(event: unknown): void }>)[propsKey]!
+          .onChange({ target: { value: "an unsent draft" }, currentTarget: { value: "an unsent draft" } });
+      });
+      expect(draft().value).toBe("an unsent draft");
+
+      // A queue read that fails says so; it never empties the queue.
+      unreadable = true;
+      queueRevision += 1;
+      await render();
+      await waitFor(() => host.querySelector('[data-testid="native-queue-retry"]') !== null);
+      expect(host.querySelector('[data-testid="native-queue-retry"]')).not.toBeNull();
+      expect(rows()).toEqual([]);
+
+      // The canonical item proves the original id; the reconcile pass settles it.
+      const entry = journal.nativeQueueRead(conversationId).find((candidate) => candidate.entryId === "consumed-tick")!;
+      journal.nativeQueueTransition("consumed-tick", { phase: "proven", proof: { threadId: sessionId, clientUserMessageId: "consumed-tick",
+        revision: 1, turnId: "turn-consumed", itemId: "item-consumed", input: entry.versions[0]!.input! } });
+      expect(await settleNativeQueueEntry(registry, { ...entry, state: "delivered" })).toBe(true);
+      const delivered = kept("consumed-tick");
+      expect(delivered.status).toBe("delivered");
+      unreadable = false;
+      queueRevision += 1;
+      tail = [delivered];
+      await render();
+      await waitFor(() => rows().length === 1 && card("consumed-tick") === null);
+      expect(rows()).toEqual(["held-same-text"]);
+      expect(notice()).toBeNull();
+      expect(card("consumed-tick")).toBeNull();
+      expect(card("unknown-send")?.textContent).toContain(translate(locale, "composer.deliveryCheckEnded"));
+      expect(chip()).toBe(translate(locale, "runtime.receipt.chipUnconfirmedAria", { count: 1 }));
+      expect(draft().value).toBe("an unsent draft");
+
+      // A late moving receipt for the same id cannot bring any of it back.
+      tail = [keptConsumed];
+      queueRevision += 1;
+      await render();
+      await waitFor(() => false);
+      expect(card("consumed-tick")).toBeNull();
+      expect(chip()).toBe(translate(locale, "runtime.receipt.chipUnconfirmedAria", { count: 1 }));
+      expect(rows()).toEqual(["held-same-text"]);
+
+      // A remount from what the tab retains shows the same truth.
+      await act(async () => root.unmount());
+      mounted = false;
+      tail = [];
+      const again = await mountComposer(conversationId);
+      try {
+        await waitFor(() => card("unknown-send") !== null);
+        expect(card("consumed-tick")).toBeNull();
+        expect(card("unknown-send")).not.toBeNull();
+        expect(chip()).toBe(translate(locale, "runtime.receipt.chipUnconfirmedAria", { count: 1 }));
+      } finally { await again(); }
+      expect(queueReads).toContain("unreadable");
+      expect(queueWrites).toEqual([]);
+      // Nothing was sent, retried or discarded for either operation.
+      expect(requests.filter((request) => request.method !== "GET"
+        && ["consumed-tick", "held-same-text", "unknown-send"].some((id) => request.url.includes(id) || request.body.includes(id)))).toEqual([]);
+    } finally {
+      if (mounted) await act(async () => root.unmount());
+      journal.close();
+    }
+  });
+}

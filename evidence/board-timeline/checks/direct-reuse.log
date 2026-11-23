@@ -1,0 +1,16 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/KanbanBoard.renders.dom.test.tsx:
+(pass) a catalog answer with nothing new renders no card, however many the board holds [214.26ms]
+(pass) a catalog answer that changes one task renders that card and no other [106.55ms]
+(pass) a task that moves to another column renders as the one card that changed [99.83ms]
+(pass) presence waits through column motion and measures the settled cards [109.45ms]
+(pass) column width changes keep the mounted seat view [112.71ms]
+(pass) a catalog answer that moves no card measures no card [138.08ms]
+(pass) a task that moves to another column still flies there, and only that card is measured [127.70ms]
+
+ 7 pass
+ 0 fail
+ 19 expect() calls
+Ran 7 tests across 1 file. [1.96s]
+exit: 0

@@ -32,6 +32,21 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 const TARGET = "a".repeat(40);
 const OLD = "b".repeat(40);
 
+test("installation policy releases an unadmitted checkout hold without changing the saved preference", async () => {
+  const h = scenario(); h.setTurn(true);
+  let service = h.service();
+  try {
+    await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    service.stop(); h.deps.env = { ...h.deps.env, LLV_DISABLE_SELF_UPDATE: "1" }; service = h.service();
+    await service.autoTick(); h.setTurn(false); h.advance(60_000); await service.autoTick();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+    expect(h.pending()).toBeNull();
+    expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(true);
+    expect(await service.setAuto(true)).toMatchObject({ ok: false, code: "updates-disabled" });
+  } finally { service.stop(); }
+});
+
 test("a busy checkout survives reconstruction and protects turns until they finish", async () => {
   const h = scenario(); h.setTurn(true);
   let service = h.service();
@@ -238,7 +253,7 @@ test("checkout drain holds through web and host restarts and releases only when 
   service.stop();
 });
 
-test.each(["pending-web", "between-roles"] as const)("switch-off at %s retains early checkout custody through cold recovery and both roles", async (point) => {
+test.each([["pending-web", "dialog"], ["between-roles", "dialog"], ["pending-web", "installation"], ["between-roles", "installation"]] as const)("switch-off at %s via %s retains early checkout custody through cold recovery and both roles", async (point, policy) => {
   const h = scenario();
   let service = h.service();
   const lease = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
@@ -247,14 +262,20 @@ test.each(["pending-web", "between-roles"] as const)("switch-off at %s retains e
   await service.autoTick();
   expect(h.pending()?.role).toBe("web");
   expect(lease()).not.toBeNull();
-  if (point === "pending-web") expect(await service.setAuto(false)).toEqual({ ok: true });
+  const disable = async () => {
+    if (policy === "dialog") expect(await service.setAuto(false)).toEqual({ ok: true });
+    else {
+      service.stop(); h.deps.env = { ...h.deps.env, LLV_DISABLE_SELF_UPDATE: "1" }; service = h.service();
+    }
+  };
+  if (point === "pending-web") await disable();
   let watcher = watchRestartRequests(h.record.requestFile, async ({ requestId }) => {
     h.record.web = { ...h.record.web, requestId, revision: TARGET.slice(0, 7) };
   }, { intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId) });
   try { await watcher.poll(); } finally { watcher.stop(); }
   await service.autoTick();
   expect(h.pending()).toBeNull();
-  if (point === "between-roles") expect(await service.setAuto(false)).toEqual({ ok: true });
+  if (point === "between-roles") await disable();
   expect(lease()).not.toBeNull();
   service.stop();
   h.advance(DRAIN_LEASE_MS + 1);
@@ -274,7 +295,8 @@ test.each(["pending-web", "between-roles"] as const)("switch-off at %s retains e
   await service.autoTick();
   await service.autoTick();
   expect(lease()).toBeNull();
-  expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(false);
+  expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(policy === "installation");
+  if (policy === "installation") expect(await service.setAuto(true)).toMatchObject({ ok: false, code: "updates-disabled" });
   service.stop();
 });
 

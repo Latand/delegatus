@@ -88,9 +88,11 @@ confirm the original payload.
 
 `bun scripts/verify-native-codex-runtime.ts <absolute-codex-binary>` runs the
 named queue, history, host, status and inherited Voice tests under private
-HOME/XDG/provider/state roots and a short TMPDIR. CI installs Codex 0.154.0 and
-0.159.0 in separate matrix jobs and runs this same check with the Dockerfile's Bun version. Dependencies come from
-the repository lockfile.
+HOME/XDG/provider/state roots and a short TMPDIR. CI installs the latest three
+reviewed Codex pins in separate matrix jobs and runs this same check with the
+Dockerfile's Bun version. The supported minimum is 0.165.0; see
+[codex-pinned-protocol.md#ci-coverage](codex-pinned-protocol.md#ci-coverage).
+Dependencies come from the repository lockfile.
 
 On cold adoption, an observed idle native queue can retain its head without
 auto-dispatching it. Delegatus starts that exact submission through the native

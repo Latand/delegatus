@@ -92,7 +92,7 @@ const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
 const { KanbanBoard } = await import("./KanbanBoard");
 const { READER_STORAGE_PREFIX } = await import("./readerMemory");
-const { cycleOpenAgent } = await import("./openAgents");
+const { cycleOpenAgent, isStageDraftAgent, parseStageDraftAgent, stageDraftAgentKey } = await import("./openAgents");
 const { setLocale } = await import("@/lib/i18n");
 
 const roots: Root[] = [];
@@ -521,4 +521,16 @@ test("the cycle wraps round the ends", () => {
   expect(cycleOpenAgent(["a", "b", "c"], "c", 1)).toBe("a");
   expect(cycleOpenAgent(["a", "b", "c"], "a", -1)).toBe("c");
   expect(cycleOpenAgent(["a", "b", "c"], "gone", 1)).toBe("a");
+});
+
+test("a stage's first message has a window key no conversation identity can take, and it reads back to its card, pipeline and stage", () => {
+  const key = stageDraftAgentKey("task:t-1", "p-search", "merge");
+  expect(isStageDraftAgent(key)).toBe(true);
+  expect(parseStageDraftAgent(key)).toEqual({ cardId: "task:t-1", pipelineId: "p-search", stageId: "merge" });
+  /* A conversation id, a transcript path, and a path that merely starts with the word, are conversations. */
+  for (const identity of ["conversation_merge-1", "/srv/agents/projects/x/stage.jsonl", "stage/merge.jsonl", "stage", null, undefined]) {
+    expect(isStageDraftAgent(identity)).toBe(false);
+  }
+  expect(parseStageDraftAgent("conversation_merge-1")).toBeNull();
+  expect(parseStageDraftAgent(stageDraftAgentKey("", "p-search", "merge"))).toBeNull();
 });

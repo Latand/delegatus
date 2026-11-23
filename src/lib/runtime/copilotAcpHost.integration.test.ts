@@ -248,7 +248,7 @@ describe.skipIf(!BIN)("Copilot CLI over ACP through the structured spawn path (B
     const recover = (request: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(request, {
       registry,
       client,
-      transport: () => "structured",
+      transportAvailable: () => true,
       resolveAccount: () => accountA,
       spawn: (input) => spawnStructuredConversation(input, { startHost }),
       requestDeliveryDrain: () => kickStructuredDeliveryQueue(),
@@ -385,7 +385,7 @@ describe.skipIf(!BIN)("Copilot CLI over ACP through the structured spawn path (B
         registry,
         releaseHost: async () => { await resumed.release(); return true; },
         recover: (request, dependencies) => recoverDeadStructuredConversation(request, {
-          registry, client, transport: () => "structured", resolveAccount: () => accountA,
+          registry, client, transportAvailable: () => true, resolveAccount: () => accountA,
           spawn: (input) => spawnStructuredConversation(input, { startHost }),
           requestDeliveryDrain: () => kickStructuredDeliveryQueue(),
           ...dependencies,
@@ -474,7 +474,7 @@ describe.skipIf(!BIN || !REAL_HOME)("Copilot CLI over ACP through the structured
     };
     const receipt = (operationId: string) => journal.operationResult(operationId)?.receipt;
     const recover = (request: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(request, {
-      registry, client, transport: () => "structured", resolveAccount: () => account,
+      registry, client, transportAvailable: () => true, resolveAccount: () => account,
       spawn: (input) => spawnStructuredConversation(input, { startHost }),
       requestDeliveryDrain: () => kickStructuredDeliveryQueue(),
     });

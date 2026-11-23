@@ -7,7 +7,7 @@ import type { CompanionEvent, Delivery, Payload, Proposal, Recipient } from "./c
 import { COMPANION_MESSAGES, companionErrorMessage } from "./errors";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
 import { bezierProgress, bezierSlope, maxFrameShare, riseCurve, RISE_FRAME_SHARE, RISE_FROM_REST, RISE_IN_FLIGHT, RISE_MS } from "./motion";
-import { BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, bubbleChars, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, lineCut, nearestFree, pathCrosses, NARROW_LANE_WIDTHS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
+import { BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, bubbleChars, CALL_LANE_HEIGHTS, CALL_LINE, CALL_LINE_NARROW, CONTROL_CLEARANCE, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, lineCut, nearestFree, pathCrosses, NARROW_LANE_WIDTHS, placeCollapsed, placeExpanded, splitSpeech, veilOver, type Rect } from "./placement";
 
 const TEXT_FOR_NARROW = "The orchestrator replied. The plan holds, with one gap: last month's saved exports need a migration test before the merge, and the old keys stay readable for anyone who still has them.";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "./reducer";
@@ -1083,6 +1083,64 @@ describe("geometry", () => {
     expect(isFree({ ...placed.at, ...block }, text)).toBe(true);
     expect(isFree(placed.lane.rect, text)).toBe(true);
     expect(intersectionArea(placed.lane.rect, { ...placed.at, ...block })).toBe(0);
+  });
+
+  test("a column just too short for every lane holds the character with a shorter lane, only when asked for one", () => {
+    const viewport = { width: 1000, height: 700 };
+    /* The sidebar's free block at 1000x700: 248 px wide, 188 to 524 once 8 px are kept from what stands around it. */
+    const text = [rect(0, 0, 1000, 180), rect(0, 532, 1000, 168), rect(274, 180, 726, 352)];
+    const desired = defaultAnchor(viewport, block);
+    expect(placeExpanded({ viewport, block, obstacles: [], text, desired })).toBeNull();
+    const placed = placeExpanded({ viewport, block, obstacles: [], text, desired, heights: CALL_LANE_HEIGHTS })!;
+    expect(placed.lane.side).toBe("above");
+    expect(placed.lane.rect.height).toBe(CALL_LANE_HEIGHTS[0]);
+    expect(placed.lane.rect.width).toBe(240);
+    expect(isFree({ ...placed.at, ...block }, text)).toBe(true);
+    expect(isFree(placed.lane.rect, text)).toBe(true);
+  });
+
+  test("a call's line takes the free row beside a tile no lane can open from, and no place with no such row", () => {
+    const viewport = { width: 1000, height: 700 };
+    /* The board at 1000 by 700, rail full: the bar, the row with the orchestrator and the tile, the tabs, the column's words and its actions, the first card. */
+    const page = [rect(0, 0, 248, 700), rect(248, 0, 752, 40), rect(260, 56, 180, 50), rect(680, 56, 304, 62), rect(260, 114, 713, 36), rect(273, 181, 302, 16), rect(932, 175, 28, 28), rect(273, 216, 677, 484)];
+    const tile = rect(616, 48, 56, 56);
+    const desired = { x: tile.x + (tile.width - CALL_LINE.width) / 2, y: tile.y + tile.height + CONTROL_CLEARANCE };
+    const at = placeCollapsed({ viewport, size: CALL_LINE, obstacles: [...page, tile], desired })!;
+    expect(at).toEqual({ x: 584, y: 160 });
+    expect(isFree({ ...at, ...CALL_LINE }, [...page, tile])).toBe(true);
+    /* Another word in that column's head takes the row, and the tile stands alone. */
+    expect(placeCollapsed({ viewport, size: CALL_LINE, obstacles: [...page, tile, rect(575, 181, 120, 16)], desired })).toBeNull();
+  });
+
+  test("beside a narrower board the line takes the narrower room in the column's head, which the usual one does not fit", () => {
+    const viewport = { width: 860, height: 750 };
+    /* The board at 860 by 750 in Ukrainian, sixteen projects: the rail, the bar, the orchestrator's row, the toast, the
+       tabs, the column's words and its menu, the first card; the tile stands by the toast. */
+    const page = [rect(0, 0, 248, 750), rect(248, 0, 612, 48), rect(262, 66, 173, 28), rect(540, 56, 304, 62), rect(260, 114, 573, 36), rect(273, 180, 302, 18), rect(792, 175, 28, 28), rect(273, 215, 537, 535)];
+    const tile = rect(476, 48, 56, 56);
+    const room = (size: typeof CALL_LINE) => placeCollapsed({ viewport, size, obstacles: [...page, tile], desired: { x: tile.x + (tile.width - size.width) / 2, y: tile.y + tile.height + CONTROL_CLEARANCE } });
+    expect(room(CALL_LINE)).toBeNull();
+    const at = room(CALL_LINE_NARROW)!;
+    expect(at).toEqual({ x: 584, y: 160 });
+    expect(isFree({ ...at, ...CALL_LINE_NARROW }, [...page, tile])).toBe(true);
+  });
+
+  test("an opened companion over the page stands on one surface that hides whole every line it meets, and no other", () => {
+    const viewport = { width: 1000, height: 700 };
+    const block = rect(556, 426, 116, 150), lane = rect(250, 426, 280, 150);
+    /* A card's lines: one above, one the parts cut at the bottom, one far right on the same row as a part, one below. */
+    const lines = [rect(286, 400, 160, 14), rect(286, 568, 510, 14), rect(820, 455, 40, 14), rect(286, 640, 300, 14)];
+    const veil = veilOver([block, lane], lines, viewport);
+    const inside = (outer: Rect, inner: Rect) => inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
+    for (const part of [block, lane]) expect(inside(veil, part)).toBe(true);
+    for (const line of lines) expect(intersectionArea(veil, line) === 0 || inside(veil, line)).toBe(true);
+    /* The cut line is taken in whole, with room beside it for the rounded corners; the lines it never met stay out. */
+    expect(inside(veil, rect(282, 568, 518, 14))).toBe(true);
+    expect(intersectionArea(veil, lines[2])).toBe(0);
+    expect(intersectionArea(veil, lines[3])).toBe(0);
+    /* It stays within the viewport. */
+    const edge = veilOver([rect(900, 600, 96, 96)], [rect(880, 690, 200, 14)], viewport);
+    expect(edge.x + edge.width).toBeLessThanOrEqual(1000); expect(edge.y + edge.height).toBeLessThanOrEqual(700);
   });
 
   test("no frame of a rise carries more than 12 % of its path, from rest or taking over a rise in flight, even when one frame is missed", () => {

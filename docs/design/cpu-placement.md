@@ -77,6 +77,11 @@ server; a pane sharing the server's cgroup is always placed.
 
 ## Classification
 
+Every local gate service also has `TasksMax=768`, sized from real pre-push and
+browser peaks. Its kernel readback, per-gate peak line, named task-limit failure
+and controller fallback are specified in [Gate task limit](gate-task-limit.md).
+This bound is independent of CPU placement.
+
 A structured host or a tmux pane is work when its conversation holds a
 `pipeline` or `flow` membership; every other host serves the operator,
 orchestrator seats included. Headless runs and workflow stage agents are always
@@ -153,17 +158,15 @@ After gate admission, the test preload drops that binding before fixtures run,
 so their priority reads stay inside their own state roots.
 Per-stage urgency remains a follow-up.
 
-Stage and workflow admission retains its ten-minute fairness bound. A local
-heavy check requires a permissive measured sample at readiness and again when
-it claims a free slot, even after ten minutes and after its helper restarts.
-Its ticket records that rule (`low_pressure`). A ticket past its own bound that
-does not need low pressure passes such tickets in its lane, so a check held by
-pressure never holds a publication install beyond the install's bound. A stage
-never waits on a check at all, because the two sit in different lanes. Checks
-keep FIFO within their effective class.
+Stages, workflows and local heavy checks have a ten-minute pressure bound. A
+heavy check uses that same bound at readiness and when claiming a free slot,
+including after a helper restart. Its ticket is marked `low_pressure` so a
+publication install past its own bound can pass checks waiting for a slot.
+Stages and checks have independent lanes. Checks keep FIFO within their
+effective class.
 The gate samples PSI asynchronously; if PSI is unreadable or malformed, it
 requires the one-minute load divided by online CPUs to be below 0.75. If both
-metrics are unavailable, it waits. `DELEGATUS_CPU_PRESSURE=off` explicitly
+metrics are unavailable, it waits until the pressure bound. `DELEGATUS_CPU_PRESSURE=off` explicitly
 disables sampling. A stable reason is logged once per hold; polling yields
 the event loop. Nested commands retain their validated parent's slot.
 Admissions remain separated by two seconds.
@@ -250,7 +253,9 @@ still needs its slot lock and the spacing.
 When the head of a ticket's lane is past its ten-minute bound and nothing has
 been admitted on the machine for a minute since, the wait no longer promises minutes: the state detail reads
 `Waiting for the CPU queue · 7th · stalled for 62 min · high priority`, the card says the
-queue is stalled, and gate-slot prints the same line.
+queue is stalled, and gate-slot prints the same line. When a ready check is
+waiting on slots, gate-slot keeps the slot cause in the line, for example
+`Waiting for a heavy command slot · all 1 busy · stalled for 2 min`.
 
 A stage waits before its spawn reservation and wakes every five seconds. Its
 state detail and board card name the queue position, what holds it, and the
@@ -360,20 +365,19 @@ younger tickets. X's position therefore never grows from arrivals after
 `t0 + r·T`. X is admitted no later than the (k+1)-th admission in L after that
 instant among callers using the same pressure policy, where k is the number
 of earlier tickets of L still waiting then. The existing escape for a bounded
-publication command can pass low-pressure-only checks; those bypass admissions
+publication command can pass checks marked `low_pressure`. Those admissions
 do not count toward a heavy check's admission bound. This holds as long as X
 keeps checking (stages every 5 s, gate helpers every 2 s)
 and L's own admission conditions hold that many times:
 
 - Start lane: the CPU-pressure gate allows a start, or the head is past its own
   10-minute bound (the existing stage rule, unchanged), plus spacing.
-- Command lane: a slot is free, and measured pressure is low at readiness and
-  at claim, plus spacing.
+- Heavy checks in the command lane: a slot is free, spacing has elapsed, and
+  measured pressure allows admission or the ticket has reached its own
+  ten-minute bound. Readiness and claim apply the same pressure rule.
 
-There is no wall-clock promise for heavy checks. Occupied slots or a
-nonpermissive measured pressure sample can hold them indefinitely, and the
-waiting text names that cause (§3). The start lane retains its existing escape
-at the head's ten-minute bound, with spacing and worker limits still applying.
+The ten-minute bound caps the pressure hold. Occupied slots, FIFO position and
+spacing can extend the total wait. The waiting text names the cause (§3).
 
 **Before aging, urgent work keeps its preference.** A high ticket that arrives
 while X is still younger than `r·T` is ordered ahead of X. So for one full
@@ -420,9 +424,9 @@ for polls, pass-overs and `stage_admissions`.
   lane or any release are closer than 2 s, so a stage start and a check claim
   still never land together. Stall detection keeps reading that same row; the
   stalled text reads "nothing started" for the machine.
-- Pressure is checked per caller, as today. A stage start uses the stage
-  sensor and its 10-minute rule. A gate check uses the strict measured policy at
-  readiness and claim. Separating the lanes skips neither.
+- Pressure is checked per caller. A stage start uses the stage sensor and a
+  gate check uses the measured policy at readiness and claim. Both lift the
+  pressure hold at the ticket's ten-minute bound.
 - Slots stay kernel locks. A gate command runs only after `flock -n` on a slot
   descriptor and a committed `--claim`. The queue never grants a slot, so the
   6-slot limit holds whatever order any version computes.
@@ -433,10 +437,9 @@ behave as before: they wait for a slot, and FIFO holds within their effective
 class.
 
 Publication installs and release steps (`waitForCpuPressure`) keep owned
-`command:` keys, so they stay in the command lane. They can wait behind a check
-that is waiting for a slot, but never longer than their own 10-minute bound,
-because the existing passing rule lets them pass `low_pressure` tickets. That
-is the behaviour they have today; moving them is deferred.
+`command:` keys, so they stay in the command lane. Once they reach their own
+ten-minute bound, the existing passing rule ignores `low_pressure` tickets
+that may be waiting for a slot.
 
 An operator-visible consequence of the existing rule follows. The start lane's
 head, once past its own 10-minute bound, starts even under pressure. Before
@@ -490,13 +493,14 @@ text changes, as today, so at most once a minute:
 gate-slot: Waiting for the CPU queue · 3rd · waited 12 min · normal priority
 gate-slot: <pressure reason from GateCpuPressure> · 1st in CPU queue · waited 4 min
 gate-slot: Waiting for a heavy command slot · all 6 busy · waited 8 min
+gate-slot: Waiting for a heavy command slot · all 6 busy · stalled for 2 min
 ```
 
-The slot case is the one where the queue answers "ready" (`null`) and so
-carries no `since`. `gate-slot.sh` records `queued_at=$(date +%s)` once, before
-its admission loop, and passes it as a fourth argument to `--wait`. A helper
-called without it counts from its own start. The shell and the helper always
-come from the same checkout, so the argument needs no compatibility handling.
+When the queue answers "ready" and the slots are full, the helper reads the
+ticket's persisted `since` and the last admission from the queue. The elapsed
+wait survives helper restarts. The slot line switches to `stalled for` once
+more than one minute has passed since both the wait bound and the last
+admission.
 
 ### 4. Mixed versions on one file
 
@@ -563,9 +567,9 @@ on main.
 
 ### 5. Invariants the builder keeps
 
-1. The command lane admits only position 1 of that lane, only while a slot
-   descriptor is locked, and only after a permissive measured sample at
-   readiness and at claim (`requireLowPressure`).
+1. A heavy check must be at position 1 of the command lane and hold a slot
+   descriptor at claim. Readiness and claim require a permissive pressure
+   sample or a ticket at its own wait bound.
 2. The start lane admits only position 1 of that lane, when the stage pressure
    check allows it or the ticket is past its own bound. A stage admission
    remains recoverable through `stage_admissions` until its checkpoint.
@@ -620,10 +624,10 @@ and `heldBy`.
   in FIFO place. A 15-minute-old low competes with normals in FIFO. A
   12-minute-old normal lowered to low falls to class 1. `since` and
   `fifo_seq` never change.
-- **No wall-clock promise.** Under continuous pressure, an aged command ticket
-  with `requireLowPressure` is never admitted (`heldBy: "pressure"`). A stage
-  under its bound is held. A stage past its bound at the head of the start lane
-  is admitted. That pins the existing rule.
+- **Bounded pressure wait.** At the head of either lane, pressure can hold a
+  ticket until its bound. Once the bound is reached, a heavy check still needs
+  its turn, spacing and a slot. A stage still uses its own lane and the shared
+  spacing.
 - **Lane independence.** The audit's case (b): an owned high command checks
   with `consume=false`, answers ready and holds no slot. A normal stage then
   checks and is admitted after spacing. An owned command never counts a stage,
@@ -664,8 +668,12 @@ Other tests:
     `Waiting for a heavy command slot · all 1 busy · waited 0 min`;
   - a V3 stage check on the same queue file is admitted meanwhile;
   - a holder count sampled from the lock files never exceeds 1;
-  - under high fake pressure an aged command stays held, and its line names the
-    pressure reason.
+  - sustained high fake pressure holds both commands before ten minutes.
+    After their tickets reach the bound, both start in FIFO order while PSI
+    stays high;
+  - with different slot caps, an aged command waits for the stricter active
+    cap at readiness and at the final claim. A lone aged head waiting for a
+    locked slot reports the slot cause and the stalled duration after the grace.
 - `src/lib/pipelines/engine.cpuQueue.test.ts`: a pending stage behind an owned
   command ticket waiting for a slot launches. A held stage's `stateDetail`
   shows the queue and pressure forms with waited minutes.
@@ -706,14 +714,70 @@ minute 10; (b) the stage check returns `null`.
 
 `scripts/gate-slot.sh` locks `/var/tmp/llv-heavy-gate.slot<N>.lock`, the files
 the installed `/var/tmp/llv-gate` uses, so both gates count against the same six
-slots. `LLV_GATE_LOCK_DIR` still overrides the directory, and the hooks pass the
-shared directory into their isolated environment.
+slots by default. Before accepting a final claim, gate-slot serializes the
+check of occupied slots and applies the lowest cap among the caller and active
+current gate-slot jobs. On Unix, each admitted job holds a per-slot cap lock
+alongside its slot through owned runner cleanup. Hosts without the flock CLI
+take the same kernel locks through Bun. An occupied slot without a cap marker
+fences current claims because the older holder's cap is unknown. Native
+Windows records the cap and wrapper owner in the shared queue and checks
+capacity inside the claim transaction.
+
+On Linux, a pre-cap wrapper launched without the flock CLI runs without a
+slot lock. The new wrapper waits for that pool to drain before its first
+claim. It checks the kernel's process view for wrappers that have consumed
+their tickets, owned runners and their cleanup supervisors. Signal-sandboxed
+callers use the verified host process view. A waiting shell still has its
+ticket. The pre-commit hook and publication preparer bootstrap an owned copy
+before heavy admission. Their original hook process identifies the cleanup
+client and service so they can wait for their own nested gate. A held slot
+whose admission already passed the drain check carries that proof forward.
+The same final claim transaction rejects a drain observation if another caller
+admitted work during the check.
+
+Managed Linux stages supply the installed gate helper through a host-local Bun
+launcher in `LLV_GATE_BUN`. The launcher retains an explicit interpreter;
+without one it runs `bun` from the caller's `PATH`, as gate-slot does, so a
+host agent bridged from the image never receives the container-only
+interpreter. Ordinary hook commands resolve Bun through their own `PATH`.
+Check keys and Cloud check inputs read the interpreter the launcher recorded,
+never its per-release path, so routing neither refuses Cloud publication nor
+changes a check's reuse key across releases. Wrappers send
+both readiness and final claim through the installed helper, including from
+older checkouts. Each new engine launch receives this routing automatically.
+An already-running waiter keeps its launch environment and completes under the
+helper it started with. Slotless wrappers retain their original claim format.
+Wrappers from #3353 up to #4174 pass their queue start after
+`--wait key pid`; the helper reads a fourth argument as a slot only on
+`--claim`, so those waits keep working under routing. A fixture that starts
+its own gates (`withoutInheritedGate`) replaces a routed `LLV_GATE_BUN` with
+the interpreter the launcher recorded, so a test of a changed helper runs the
+checkout's own `cpu-admission.ts`.
+
+Older installed and checkout wrappers can keep polling during the transition.
+After reaching the wait bound, a current ticket can pass older pressure-only
+tickets, even if the two wrappers use different pressure settings. Current
+tickets keep their FIFO order within their effective priority and use the same
+spacing. Older tickets keep their stored place for when their own pressure
+check permits a start. A current claim records a live fence at the
+front of the older command queue, in the same transaction that consumes its
+ticket. The queue keeps the fence visible to older wrappers when they cannot
+verify its owner across PID namespaces. The wrapper retires the fence after
+cleanup. Current wrappers also reclaim abandoned claims once they observe a
+free cap lock on Unix or a dead wrapper identity on Windows. An interrupted
+wrapper relies on a current gate invocation for this recovery. A change to the
+last admission during the kernel slot probe forces a fresh claim. Stage
+admission keeps its own queue order.
+
+`LLV_GATE_LOCK_DIR` overrides the directory, and the hooks pass the shared
+directory into their isolated environment.
 
 ## Installation files (written by the operator, applied at a quiet moment)
 
 `bin/install-cpu-placement.mjs` writes three files into
 `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`. It writes files only and
-prints the steps that apply them:
+prints the steps that apply them. With `--memory-high` it also writes the
+service's soft memory ceiling ([resource limits](../agent-resource-limits.md)):
 
 `delegatus.service.d/cpu.conf`
 

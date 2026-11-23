@@ -31,7 +31,7 @@ The mounted path is `src/app/page.tsx` → `Viewer.tsx` → `ProjectDashboard.ts
 | `src/lib/pipelines/engine.ts:13436`, `types.ts:1345` | `createPipelineFromRequest` with `autoStart:false`, ordinary stages and task links. It stores a draft with no worktree or attempt. `engine.creation.test.ts:2184` asserts no provisioning/spawn, including after ticks. |
 | `src/lib/pipelines/engine.ts:13520` | A draft with `baseBranch` requires `baseRef`. Supply both from local Git. `engine.creation.test.ts:2321` asserts the pin survives Start. |
 | `src/lib/pipelines/store.ts:2032`, `:2290` | Atomic creation-key replay and normal generated pipeline branch/worktree identity. No new draft store or checkout ownership mode. |
-| `src/lib/pipelines/preflight.ts:140`, `git.ts:173` | Read-only repository admission and local resolution of a pinned commit. Call preflight directly before creation: the generic engine can initialize plain folders, which this action must refuse. |
+| `src/lib/pipelines/preflight.ts:140`, `git.ts:173` | Read-only repository admission and local resolution of a pinned commit. G0 extends admission to plain folders. Preview uses the read-only initialiser check, and explicit creation prepares a local baseline before pinning its branch and commit. |
 | `src/lib/pipelines/engine.ts:15025` | Existing `start` mutation validates graph, engines and task location, then enters provisioning. The controller provisions a fresh worktree from the pinned SHA; `git.ts:196` shows the checkout operation. `engine.creation.test.ts:2351` exercises draft start through provisioning/spawn. |
 | `src/components/kanban/stageDrafts.ts:106`, `StageDraft.tsx:70` | Shared draft editor, optimistic Save, stage digest checking, conflict recovery and unconfirmed-write checking. `KanbanStages.dom.test.tsx:600`, `:626`, `:649`, `:670` cover these behaviors. |
 | `src/components/pipelines/StagePlaceholderPane.tsx:86`, `StagesSheet.tsx` | The placeholder pane already edits roles/runtime and offers removal/reorder; StagesSheet currently displays stages and messages. Mount the existing pane from desktop configuration as the phone already does. Add the small append-stage control over existing `add-stage`; reuse existing mutation guards. `engine.settlement.test.ts:635` covers draft graph editing. |
@@ -170,7 +170,8 @@ The wrapper already recognizes `conversationId` and `taskId`. Also assert access
 | Malformed/extra fields or invalid request key | 400, no write |
 | Foreign origin, unauthenticated/agent caller, or forbidden workspace | 403 through the existing authority errors, no source content |
 | Unknown conversation/task | 404 after authorization, no write |
-| Missing/deleted cwd, non-Git/bare directory, detached/unborn HEAD | 409 `SOURCE_WORKING_COPY_UNAVAILABLE` or `SOURCE_BRANCH_UNAVAILABLE`; never initialize a repository |
+| Missing/deleted cwd, refused plain folder, bare directory, detached/unborn HEAD | 409 `SOURCE_WORKING_COPY_UNAVAILABLE` or `SOURCE_BRANCH_UNAVAILABLE`; an unborn branch names how to create its first commit |
+| Admissible plain folder (G0) | Preview writes nothing and explains local repository creation. Explicit creation initialises the folder and pins the new baseline |
 | Dirty source | 409 `SOURCE_HAS_CHANGES`, keep source untouched |
 | Card no longer holds source, or project mismatch | 409 `SOURCE_NOT_ON_TASK` / `SOURCE_PROJECT_MISMATCH`, no write |
 | Preview facts changed, transcript replaced or source unreadable | 409 `SOURCE_CHANGED` / `SOURCE_TEXT_UNAVAILABLE`; refresh preview explicitly |

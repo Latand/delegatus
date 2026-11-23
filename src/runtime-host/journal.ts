@@ -11,6 +11,7 @@ import { measureBlocking } from "@/lib/blockingWaits";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
+import { IdleLiveTurnCompaction, installEntityWriteSchema, liveTurnStillOpen, markOwnSessionEvents } from "./journalEntityWrites";
 import { NativeQueueJournal } from "./nativeQueueJournal";
 import type { NativeQueueCommand, NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
 import { parseRuntimeCommand } from "@/lib/runtime/commands";
@@ -22,7 +23,7 @@ import { Database } from "bun:sqlite";
 
 import { codexAnswerMatchesDispatch, sameCodexRequest } from "@/lib/runtime/codexRequestReceipt";
 import {
-  RUNTIME_SCHEMA_VERSION,
+  RUNTIME_SCHEMA_VERSION, DeploymentAdmissionClosedError,
   compactViewerDeploymentError, parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit,
   type ViewerDeploymentList, type ViewerDeploymentListOptions,
   RUNTIME_DELIVERY_DISCARDED_REASON,
@@ -85,11 +86,34 @@ function nativeQueueReceipt(entry: NativeQueueRecord): NonNullable<RuntimeOperat
     dispatchedRevision: entry.dispatchedRevision, profilePolicy: entry.profilePolicy };
 }
 
+const STARTUP_EFFECT_REVISION = "startup_effect_revision";
+const startupEffectWriteTriggers = [
+  ["outbox_insert", "AFTER INSERT ON outbox WHEN NEW.state = 'pending'"],
+  ["outbox_update", "AFTER UPDATE ON outbox WHEN OLD.state = 'pending' OR NEW.state = 'pending'"],
+  ["outbox_delete", "AFTER DELETE ON outbox WHEN OLD.state = 'pending'"],
+  ["operation_insert", `AFTER INSERT ON operations WHEN EXISTS (
+    SELECT 1 FROM outbox WHERE id = 'effect:' || NEW.operation_id AND state = 'pending')`],
+  ["operation_update", `AFTER UPDATE OF receipt_json, operation_id ON operations WHEN EXISTS (
+    SELECT 1 FROM outbox WHERE id IN ('effect:' || OLD.operation_id, 'effect:' || NEW.operation_id) AND state = 'pending')`],
+  ["operation_delete", `AFTER DELETE ON operations WHEN EXISTS (
+    SELECT 1 FROM outbox WHERE id = 'effect:' || OLD.operation_id AND state = 'pending')`],
+] as const;
+
 export class RuntimeJournalFault extends RuntimeDataCorruptionError {}
 
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
 export const RUNTIME_SNAPSHOT_TERMINAL_DEPLOYMENT_LIMIT = 50;
 export const RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+/** The parsed-entity cache has to hold one whole snapshot population in both
+    session representations. A cap below that population makes every rebuild
+    evict the rows it is about to read, in the same order, so each rebuild
+    parses every stored row again. One entity above the admission size is
+    never retained. */
+export const RUNTIME_ENTITY_READ_CACHE_ENTRIES = 65_536;
+export const RUNTIME_ENTITY_READ_CACHE_BYTES = 64 * 1024 * 1024;
+export const RUNTIME_ENTITY_READ_ADMISSION_BYTES = 16 * 1024 * 1024;
+// The eviction loop ends only when one admitted entity fits an empty cache.
+if (RUNTIME_ENTITY_READ_ADMISSION_BYTES > RUNTIME_ENTITY_READ_CACHE_BYTES) throw new Error("runtime entity read admission limit exceeds the cache size");
 /** A spawn or kill may wait through a short host succession. After one
     continuous hour with no runtime host and no current live registry
     conversation, the maintenance sweep terminalizes the orphaned work so
@@ -294,17 +318,22 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
   const capabilities = record(payload.capabilities);
   const liveTurn = normalizeRuntimeLiveTurn(payload.liveTurn);
   const protocol = normalizeCodexProtocolReceipt(record(payload.diagnostics).protocol);
+  /* A row journalled for a terminal-pane host names a kind that no longer
+     exists. Nothing hosts that session and nothing can end its turn, so it
+     reads as unhosted (or dead, if that was recorded) with no open turn. */
+  const storedKind = typeof payload.hostKind === "string" ? payload.hostKind : null;
+  const retiredKind = storedKind !== null && storedKind !== "unhosted" && !isStructuredHostKind(storedKind);
   return {
     conversationId: typeof payload.conversationId === "string" ? payload.conversationId : id,
     sessionKey: {
       engine: key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex",
       sessionId: typeof key.sessionId === "string" ? key.sessionId : id,
     },
-    hostKind: isStructuredHostKind(typeof payload.hostKind === "string" ? payload.hostKind : null) || payload.hostKind === "tmux-legacy"
-      ? payload.hostKind as RuntimeSession["hostKind"]
-      : "unhosted",
-    host: payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",
-    turn: payload.turn === "idle" || payload.turn === "running" || payload.turn === "interrupt_requested" ? payload.turn : "unknown",
+    hostKind: isStructuredHostKind(storedKind) ? storedKind as RuntimeSession["hostKind"] : "unhosted",
+    host: retiredKind ? (payload.host === "dead" ? "dead" : "unhosted")
+      : payload.host === "registering" || payload.host === "hosted" || payload.host === "recovering" || payload.host === "conflict" || payload.host === "dead" ? payload.host : "unhosted",
+    turn: retiredKind ? "unknown"
+      : payload.turn === "idle" || payload.turn === "running" || payload.turn === "interrupt_requested" ? payload.turn : "unknown",
     provenance: payload.provenance === "derived" || payload.provenance === "replayed" ? payload.provenance : "structured",
     revision,
     attentionIds: strings(payload.attentionIds),
@@ -347,7 +376,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
         : record(payload.diagnostics).authRecovery === "completed-unverified" ? "completed-unverified" as const : "unknown" as const,
       ...(protocol ? { protocol } : {}),
     } } : {}),
-    activeTurnId: typeof payload.activeTurnId === "string" ? payload.activeTurnId : null,
+    activeTurnId: !retiredKind && typeof payload.activeTurnId === "string" ? payload.activeTurnId : null,
     pendingReconfigure: payload.pendingReconfigure && typeof payload.pendingReconfigure === "object"
       ? payload.pendingReconfigure as RuntimeSession["pendingReconfigure"]
       : null,
@@ -427,6 +456,7 @@ export class RuntimeJournal {
   private readonly db: Database;
   private readonly nativeQueue: NativeQueueJournal;
   private readonly sessionHostMetadata: SessionHostMetadata;
+  private readonly liveTurnCompaction: IdleLiveTurnCompaction;
   private readonly maxEvents: number;
   private readonly now: () => number;
   private readonly structuredHosts: boolean;
@@ -438,15 +468,27 @@ export class RuntimeJournal {
   private snapshotCaches = new Map<string, { changes: string; expiresAt: number | null; json: string }>();
   // This journal owns one LRU of parsed entities, capped by both payload bytes
   // and row count. Connection-local triggers evict even direct SQL writes and
-  // retention deletes; rollback can only cause an extra read. A peer commit
-  // drops the cache before the next read transaction uses it.
-  private entityReads = new Map<string, { value: unknown; bytes: number }>();
+  // retention deletes; rollback can only cause an extra read. A write from any
+  // other connection (an older release during succession, raw SQL) takes a new
+  // tick in entity_write_ticks, and the next snapshot evicts exactly the rows
+  // whose tick moved, so an unrelated peer commit re-reads nothing (#3803).
+  // Each entry also keeps the row's checkpoint_seq and is reused only while
+  // the row still carries it.
+  private entityReads = new Map<string, { value: unknown; bytes: number; stamp: number }>();
   private entityReadBytes = 0;
-  private entityReadVersion: number | null = null;
+  /** The newest entity_write_ticks tick this cache has accounted for. */
+  private entityWriteTick: number | null = null;
   private entityReadTriggers = false;
   private entityReadMaintenanceChanges = 0;
   private readingSnapshot = false;
+  // False only while snapshotJson collects a frame that is serialized and then
+  // dropped: cached values are handed out without a copy because nothing
+  // mutates them before JSON.stringify. snapshot() callers get detached copies.
+  private detachedSnapshot = true;
   snapshotProjectionReads = 0;
+  /** Entities the cache dropped to make room. A count that grows on every
+      rebuild means one snapshot population no longer fits the cache. */
+  snapshotEntityEvictions = 0;
   /** How often a snapshot request was answered from the cache, and how often it rebuilt. */
   snapshotCacheHits = 0;
   snapshotRebuilds = 0;
@@ -550,6 +592,9 @@ export class RuntimeJournal {
           request_hash TEXT NOT NULL, status_json TEXT NOT NULL,
           active INTEGER NOT NULL, updated_at INTEGER NOT NULL
         )`,
+        `CREATE TABLE IF NOT EXISTS viewer_deployment_refusals (
+          idempotency_key TEXT PRIMARY KEY, requested_revision TEXT NOT NULL
+        )`,
         `CREATE TABLE IF NOT EXISTS viewer_deployment_requests (
           idempotency_key TEXT PRIMARY KEY, deployment_id TEXT NOT NULL,
           requested_revision TEXT NOT NULL, request_hash TEXT NOT NULL
@@ -564,6 +609,8 @@ export class RuntimeJournal {
       operationRetryIndexes.install(this.db, dirname(filename));
       this.migrateLegacyEvents();
       this.migrateEntityUpdatedAt();
+      installEntityWriteSchema(this.db, dirname(filename));
+      markOwnSessionEvents(this.db);
       this.retainLegacyStopAdmissions();
       journalEventIndexes.install(this.db, dirname(filename));
       this.metaSetDefault("schema_version", String(RUNTIME_SCHEMA_VERSION));
@@ -576,6 +623,7 @@ export class RuntimeJournal {
       this.metaSetDefault("health", "ready");
       this.metaSetDefault("files_revision", "0");
       this.sessionHostMetadata = new SessionHostMetadata(this.db);
+      this.liveTurnCompaction = new IdleLiveTurnCompaction(this.db);
       this.prepareEntityReads();
       this.initialization = this.initialize();
     } catch (error) {
@@ -596,7 +644,9 @@ export class RuntimeJournal {
     yield* this.verify();
     if (!this.fault) {
       sessionArtifactIndexes.install(this.db, dirname(this.db.filename));
+      if (this.structuredHosts) this.installStartupEffectRevision();
       this.sessionHostMetadata.start();
+      this.liveTurnCompaction.start();
     }
   }
 
@@ -778,6 +828,8 @@ export class RuntimeJournal {
        lawfully differ between a call and its replay), so it must never turn a
        legitimate idempotent replay into a request-hash conflict. */
     delete requestValue.origin;
+    // The first admission owns this Viewer snapshot, including on replay.
+    if (command.kind === "kill") delete requestValue.pendingSendIds;
     if (command.kind === "answer") requestValue.resolution = { sha256: createHash("sha256").update(stableJson(command.resolution)).digest("hex") };
     const requestJson = stableJson(requestValue);
     const requestHash = createHash("sha256").update(requestJson).digest("hex");
@@ -808,9 +860,10 @@ export class RuntimeJournal {
       const parentReceipt = retryParent
         ? JSON.parse(retryParent.receipt_json) as RuntimeOperationReceipt
         : null;
-      const receipt = this.operationReceipt(command, operationId, retryOfOperationId, parentReceipt);
+      const retirement = command.kind === "kill" ? null : this.retirementInProgress(command.conversationId);
+      const receipt = this.operationReceipt(command, operationId, retirement, retryOfOperationId, parentReceipt);
       if (command.kind === "send" || command.kind === "steer") receipt.deliveryUnverified = false;
-      const nativeCommand = this.nativeCommandAtAdmission(command, operationId);
+      const nativeCommand = retirement ? null : this.nativeCommandAtAdmission(command, operationId);
       if (nativeCommand && receipt.status !== "rejected") {
         const entry = this.nativeQueue.admit(nativeCommand, operationId);
         if (entry) receipt.nativeQueue = nativeQueueReceipt(entry);
@@ -839,6 +892,11 @@ export class RuntimeJournal {
         payload: receipt as unknown as Record<string, unknown>,
         ...(effect ? { effect } : {}),
       }));
+      if (retirement && effect) {
+        // The kill already owns the host. Keep the reply and its key durable,
+        // but publish its effect only once the signal ladder has released it.
+        this.db.query("UPDATE outbox SET state = ? WHERE id = ?").run(`retiring:${retirement}`, effect.id);
+      }
       const committedReceipt: RuntimeOperationReceipt = { ...receipt, revision: event.revision };
       this.upsertEntity("operation", operationId, event.revision, committedReceipt, event.seq);
       // Operator intent invalidates a captured idle revision before a host
@@ -870,7 +928,7 @@ export class RuntimeJournal {
     if (command.kind === "native-queue") return { ...command, operationId };
     if (command.kind !== "send" || command.policy !== "queue" || command.onlyIfIdle) return null;
     const session = this.entity<RuntimeSession>("session", command.conversationId);
-    if (!session?.capabilities.nativeQueue || session.hostKind !== "codex-app-server") return null;
+    if (session?.host !== "hosted" || !session.capabilities.nativeQueue || session.hostKind !== "codex-app-server") return null;
     return { kind: "native-queue", action: "add", conversationId: command.conversationId, operationId,
       idempotencyKey: command.idempotencyKey, binding: { threadId: session.sessionKey.sessionId, accountId: session.accountId },
       text: command.text, images: command.images ?? [], contentDigest: command.contentDigest,
@@ -1130,6 +1188,10 @@ export class RuntimeJournal {
       const row = this.db.query<{ request_json: string; receipt_json: string }, [string]>("SELECT request_json, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
+      if (options.requirePristineAdmission && (previous.revision !== 1
+        || previous.deliveryUnverified === true || previous.reason === "delivery-auto-retry")) {
+        throw new Error("runtime operation is no longer a pristine admission");
+      }
       const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
       const confirming = options.confirmedDelivery === true;
       if (confirming) {
@@ -1202,7 +1264,7 @@ export class RuntimeJournal {
           details = { ...details, reason: "idle-retirement-deferred" };
         }
       }
-      if (status === "delivering" && command.kind === "send" && command.onlyIfIdle) {
+      if (status === "delivering" && command.kind === "send" && command.onlyIfIdle && command.origin?.role !== "owner-relay") {
         const session = this.entity<RuntimeSession>("session", command.conversationId);
         if (!session || !runtimeIdleKillMatches(session, session.sessionKey, command.onlyIfIdle)
           || this.retirementBlocked(command.conversationId, operationId)
@@ -1236,10 +1298,10 @@ export class RuntimeJournal {
       if (stopCompleted && !killBoundary) {
         throw new Error("runtime kill effect is missing");
       }
-      // Steer-first fallback follows the next live turn. Keep the observed turn
-      // on its receipt, without pinning the durable effect to the ended turn.
+      // Policies that select a running turn at dispatch retain its identity on
+      // the receipt. A proven pre-write refusal can then retry when idle.
       if (beginning && (command.kind === "send" || command.kind === "steer")
-        && command.policy !== "steer-or-queue" && details.turnId !== undefined) {
+        && command.policy !== "steer-or-queue" && command.policy !== "context-or-queue" && details.turnId !== undefined) {
         const effect = this.db.query<{ payload_json: string }, [string]>("SELECT payload_json FROM outbox WHERE id = ?")
           .get(`effect:${operationId}`);
         if (!effect) throw new Error("runtime operation effect is missing");
@@ -1304,6 +1366,9 @@ export class RuntimeJournal {
       this.db.query("UPDATE operations SET receipt_json = ?, event_seq = ?, projection_pending = COALESCE(?, projection_pending) WHERE operation_id = ?")
         .run(stableJson(committed), event.seq, completing && (options.awaitProjection === true || discarding) ? this.now() : null, operationId);
       if (completing || nativeTransition?.phase === "acknowledged" || nativeTransition?.phase === "observed-queued" || nativeTransition?.phase === "proven") this.db.query("UPDATE outbox SET state = 'completed', payload_json = '{}' WHERE id = ?").run(`effect:${operationId}`);
+      if (automaticKill && previous.status === "delivering" && status !== "delivering") {
+        this.db.query("UPDATE outbox SET state = 'pending' WHERE state = ?").run(`retiring:${operationId}`);
+      }
       if (killBoundary) {
         this.retainStopBoundary(command, committed, killBoundary.event_seq);
       }
@@ -1595,7 +1660,8 @@ export class RuntimeJournal {
       || (artifactPath !== undefined && (typeof artifactPath !== "string" || !artifactPath.trim()))) {
       throw new Error("runtime session identity is invalid");
     }
-    const session = conversationId ? this.entity<RuntimeSession>("session", conversationId) : null;
+    // Presentation drops an ended turn's body, so its handoff is not read.
+    const session = conversationId ? this.entity<RuntimeSession>("session", conversationId, false) : null;
     if (session) return { ...this.presentSession(session), retirementBlocked: this.retirementBlocked(session.conversationId) };
     if (!artifactPath) return null;
     const row = this.db.query<{ state_json: string }, [string]>(
@@ -1626,13 +1692,14 @@ export class RuntimeJournal {
     return this.snapshotAt(this.now());
   }
 
-  private snapshotAt(now: number, voiceBodiesFor?: readonly string[]): RuntimeSnapshot {
+  private snapshotAt(now: number, voiceBodiesFor?: readonly string[], detached = true): RuntimeSnapshot {
     this.db.exec("BEGIN");
     try {
-      // Pin the main database before validating the peer-commit witness.
+      // Pin the main database: every stamp and body below comes from this read.
       const snapshotSeq = Number(this.meta("published_seq"));
       this.prepareEntityReads();
       this.readingSnapshot = true;
+      this.detachedSnapshot = detached;
       const snapshot: RuntimeSnapshot = {
         schemaVersion: RUNTIME_SCHEMA_VERSION,
         snapshotSeq,
@@ -1659,6 +1726,7 @@ export class RuntimeJournal {
       throw error;
     } finally {
       this.readingSnapshot = false;
+      this.detachedSnapshot = true;
     }
   }
 
@@ -1687,7 +1755,7 @@ export class RuntimeJournal {
     /* Collection and serialization are measured apart: the two have different
        fixes, and a cache hit above costs neither. */
     this.snapshotRebuilds += 1;
-    const snapshot = measureBlocking("snapshot-collect", "runtime-journal", () => performanceSpans.sync("runtime.collect", () => this.snapshotAt(now, voiceBodiesFor)));
+    const snapshot = measureBlocking("snapshot-collect", "runtime-journal", () => performanceSpans.sync("runtime.collect", () => this.snapshotAt(now, voiceBodiesFor, false)));
     const json = measureBlocking("snapshot-serialize", "runtime-journal", () => performanceSpans.sync("runtime.stringify", () => JSON.stringify(snapshot)));
     if (voiceBodiesFor === undefined || voiceBodiesFor.length === 0)
       this.snapshotCaches.set(scope, { changes, expiresAt: this.snapshotEdgeExpiry(now), json });
@@ -1696,7 +1764,8 @@ export class RuntimeJournal {
 
   private totalChanges(): number {
     return Number(this.db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()?.changes ?? 0)
-      - this.sessionHostMetadata.excludedChanges - this.entityReadMaintenanceChanges + Number(this.sessionHostMetadata.ready);
+      - this.sessionHostMetadata.excludedChanges - this.liveTurnCompaction.excludedChanges
+      - this.entityReadMaintenanceChanges + Number(this.sessionHostMetadata.ready);
   }
 
   private snapshotReadStamp(): string {
@@ -1748,6 +1817,7 @@ export class RuntimeJournal {
     const requestHash = createHash("sha256").update(stableJson({ requestedRevision: input.requestedRevision, revision: input.revision })).digest("hex");
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      this.assertViewerDeploymentOpen(input.idempotencyKey, input.requestedRevision);
       const existing = this.db.query<{ deployment_id: string; request_hash: string; status_json: string }, [string]>(
         `SELECT requests.deployment_id, requests.request_hash, deployments.status_json
           FROM viewer_deployment_requests requests
@@ -1840,6 +1910,39 @@ export class RuntimeJournal {
     return row ? JSON.parse(row.status_json) as ViewerDeploymentStatus : null;
   }
 
+  assertViewerDeploymentOpen(key: string, requestedRevision: string): void {
+    const row = this.db.query<{ requested_revision: string }, [string]>(
+      "SELECT requested_revision FROM viewer_deployment_refusals WHERE idempotency_key = ?").get(key);
+    if (!row) return;
+    if (row.requested_revision !== requestedRevision) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another deployment");
+    throw new DeploymentAdmissionClosedError();
+  }
+
+  /** This bypasses slow resolution, but shares the admission/join transaction. */
+  async reconcileViewerDeployment(key: string, requestedRevision: string): Promise<ViewerDeploymentReceipt> {
+    this.assertHealthy();
+    await waitForStateLock("runtime.viewer-deployment-reconcile", () => {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try { stateLockAttempt("runtime.viewer-deployment-reconcile", () => this.db.exec("BEGIN IMMEDIATE"), "viewer deployments"); }
+      finally { this.db.exec(`PRAGMA busy_timeout = ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS}`); }
+    }, { waitMs: RUNTIME_JOURNAL_BUSY_TIMEOUT_MS, subject: "viewer deployments" });
+    let receipt: ViewerDeploymentReceipt | null = null;
+    try {
+      this.assertViewerDeploymentOpen(key, requestedRevision);
+      const existing = this.viewerDeploymentByIdempotencyKey(key);
+      if (existing) {
+        if (existing.requestedRevision !== requestedRevision) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another deployment");
+        receipt = { state: "accepted", deploymentId: existing.deploymentId, revision: existing.revision, replayed: true };
+      } else this.db.query("INSERT INTO viewer_deployment_refusals(idempotency_key, requested_revision) VALUES (?, ?)").run(key, requestedRevision);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      throw error;
+    }
+    if (!receipt) throw new DeploymentAdmissionClosedError();
+    return receipt;
+  }
+
   viewerDeploymentByIdempotencyKey(idempotencyKey: string): ViewerDeploymentStatus | null {
     const row = this.db.query<{ status_json: string; requested_revision: string }, [string]>(`SELECT deployments.status_json, requests.requested_revision
       FROM viewer_deployment_requests requests JOIN viewer_deployments deployments USING (deployment_id)
@@ -1860,6 +1963,7 @@ export class RuntimeJournal {
       }
     }, { waitMs: RUNTIME_JOURNAL_BUSY_TIMEOUT_MS, subject: "viewer deployments" });
     try {
+      this.assertViewerDeploymentOpen(input.idempotencyKey, input.requestedRevision);
       const existing = this.db.query<{ deployment_id: string; requested_revision: string; request_hash: string; status_json: string }, [string]>(
         `SELECT requests.deployment_id, requests.requested_revision, requests.request_hash, deployments.status_json
           FROM viewer_deployment_requests requests
@@ -2163,11 +2267,11 @@ export class RuntimeJournal {
     return cursor;
   }
 
-  /** Settle only old spawn/kill work whose two liveness authorities agree it
-      has no owner: the journal has no hosted/recovering session and the durable
-      agent registry is absent, marks the host dead, or marks the conversation
-      superseded. Pending sends and interrupts retain their existing unknown-
-      fate rules. */
+  /** Settle pending spawn/kill work after a continuous absence horizon. A
+      current registry record always fences settlement. A dead or superseded
+      registry record allows settlement even with a hosted or recovering journal
+      session. With no registry record, either of those journal states fences
+      settlement. Sends and interrupts retain their unknown-fate rules. */
   settleStalePendingEffects(
     registryConversations: Pick<ReadonlyMap<string, RuntimeRegistryConversationRetentionState>, "get">,
     horizonMs = RUNTIME_PENDING_EFFECT_STALE_MS,
@@ -2196,7 +2300,8 @@ export class RuntimeJournal {
         const receipt = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
         const session = this.entity<RuntimeSession>("session", row.conversation_id);
         const registryState = registryConversations.get(row.conversation_id);
-        if (session?.host === "hosted" || session?.host === "recovering" || registryState === "current") {
+        if (registryState === "current" || (registryState !== "dead" && registryState !== "superseded"
+          && (session?.host === "hosted" || session?.host === "recovering"))) {
           if (row.orphaned_since !== null) {
             this.db.query("UPDATE operations SET orphaned_since = NULL WHERE operation_id = ?")
               .run(row.operation_id);
@@ -2212,9 +2317,9 @@ export class RuntimeJournal {
         const ageMinutes = Math.ceil(horizon / 60_000);
         let reason = `stale: ${receipt.kind} target has no runtime host and no agent registry record after ${ageMinutes} minutes`;
         if (registryState === "superseded") {
-          reason = `stale: ${receipt.kind} target has no runtime host and its registry conversation is superseded after ${ageMinutes} minutes`;
+          reason = `stale: ${receipt.kind} target's registry conversation is superseded after ${ageMinutes} minutes`;
         } else if (registryState === "dead") {
-          reason = `stale: ${receipt.kind} target has no runtime host and its registry host is dead after ${ageMinutes} minutes`;
+          reason = `stale: ${receipt.kind} target's registry host is dead after ${ageMinutes} minutes`;
         }
         this.transitionOperation(row.operation_id, "failed", { reason });
         settled += 1;
@@ -2232,6 +2337,45 @@ export class RuntimeJournal {
   effectPageVersion(): string {
     const peer = this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
     return `${this.effectReaderGeneration}:${this.totalChanges()}:${peer}`;
+  }
+
+  /** Every writer of a pending effect participates, including a predecessor
+      connection and operation receipts that change effect visibility. Live
+      session writes leave this witness alone, so they do not rewind paging. */
+  private installStartupEffectRevision(): void {
+    const exists = this.db.query<{ name: string }, [string]>("SELECT name FROM sqlite_master WHERE type='trigger' AND name=?");
+    const missing = startupEffectWriteTriggers.filter(([name]) => !exists.get(`startup_effect_${name}`));
+    if (!missing.length && this.metaOr(STARTUP_EFFECT_REVISION, "")) return;
+    assertStateStartupMutation(dirname(this.db.filename), "runtime journal startup effect tracking");
+    this.db.transaction(() => {
+      this.metaSetDefault(STARTUP_EFFECT_REVISION, "0");
+      for (const [name, definition] of missing) {
+        this.db.exec(`CREATE TRIGGER IF NOT EXISTS startup_effect_${name} ${definition}
+          BEGIN UPDATE journal_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = '${STARTUP_EFFECT_REVISION}'; END`);
+      }
+    }).immediate();
+  }
+
+  startupSessionEvidence(conversationIds: readonly string[], includeEvidence = false) {
+    this.assertHealthy();
+    // Existing rows with no write tick predate the tracking schema.
+    const read = this.db.query<{ stamp: number }, [string]>(`
+      SELECT COALESCE(t.tick, 0) AS stamp FROM entities AS e
+      LEFT JOIN entity_write_ticks AS t ON t.kind=e.kind AND t.id=e.id
+      WHERE e.kind='session' AND e.id=?`);
+    return this.db.transaction(() => {
+      const effectsVersion = `${this.effectReaderGeneration}:${this.meta(STARTUP_EFFECT_REVISION)}`;
+      const version = this.effectPageVersion();
+      const sessions = conversationIds.map(id => read.get(id)?.stamp ?? null);
+      const result = { generation: this.effectReaderGeneration, version, effectsVersion, sessions };
+      if (!includeEvidence) return result;
+      const session = this.entity<RuntimeSession>("session", conversationIds[0]!, false);
+      const evidence = session && {
+        conversationId: session.conversationId, host: session.host, turn: session.turn,
+        recentReceipts: visibleReceipts(session.recentReceipts).map(runtimePresentationReceipt).map(receipt => this.presentReceipt(receipt)),
+      };
+      return { ...result, evidence };
+    })();
   }
 
   effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0, conversationId?: string): Array<RuntimeEffect & { eventSeq: number }> {
@@ -2387,7 +2531,7 @@ export class RuntimeJournal {
       this.db.query(
         `DELETE FROM operations
          WHERE event_seq <= ?
-           AND operation_id NOT IN (SELECT substr(id, 8) FROM outbox WHERE state = 'pending' AND id LIKE 'effect:%')
+           AND operation_id NOT IN (SELECT substr(id, 8) FROM outbox WHERE (state = 'pending' OR state GLOB 'retiring:*') AND id LIKE 'effect:%')
            AND operation_id NOT IN (SELECT operation_id FROM native_queue_operation_holds)
            AND operation_id NOT IN (
              SELECT operation_id FROM operations WHERE projection_pending IS NOT NULL ORDER BY event_seq DESC LIMIT ?
@@ -2436,7 +2580,7 @@ export class RuntimeJournal {
     for (const row of rows) {
       const cursor = engineProducerCursor(row.producer_kind, row.producer_key);
       if (cursor) {
-        const group = `${row.producer_kind} ${cursor.prefix}`;
+        const group = `${row.producer_kind}\x00${cursor.prefix}`;
         let latestKey = latestByPrefix.get(group);
         if (latestKey === undefined) {
           latestKey = this.db.query<{ producer_key: string }, [string, string, string, string]>(
@@ -2468,7 +2612,7 @@ export class RuntimeJournal {
     return { scanned: rows.length, deleted: stale.length, cycled };
   }
 
-  close(): void { this.entityReads.clear(); this.entityReadBytes = 0; this.sessionHostMetadata.close(); this.db.close(); }
+  close(): void { this.entityReads.clear(); this.entityReadBytes = 0; this.sessionHostMetadata.close(); this.liveTurnCompaction.close(); this.db.close(); }
 
   private appendInTransaction(admitted: NormalizedRuntimeEventInput): RuntimeEvent {
     let input = admitted;
@@ -2647,6 +2791,7 @@ export class RuntimeJournal {
   private operationReceipt(
     command: RuntimeOperationCommand,
     operationId: string,
+    retirement: string | null,
     retryOfOperationId?: string,
     retryParent: RuntimeOperationReceipt | null = null,
   ): RuntimeOperationReceipt {
@@ -2655,10 +2800,15 @@ export class RuntimeJournal {
     let reason: string | null = null;
     let turnId = "turnId" in command && typeof command.turnId === "string" ? command.turnId : session?.activeTurnId ?? null;
     let queuePosition: number | null = null;
-    if (command.kind !== "kill" && this.retirementInProgress(command.conversationId)) {
+    const relayReply = command.kind === "send" && command.policy === "queue" && command.origin?.role === "owner-relay";
+    if (relayReply && (retirement || session?.host === "dead" || session?.host === "unhosted")) {
+      status = "queued";
+      queuePosition = this.queuedSendCount(command.conversationId) + 1;
+      turnId = null;
+    } else if (retirement) {
       status = "rejected";
       reason = "idle-retirement-in-progress";
-    } else if (command.kind === "send" && command.onlyIfIdle
+    } else if (command.kind === "send" && command.onlyIfIdle && !relayReply
       && (!session || !runtimeIdleKillMatches(session, session.sessionKey, command.onlyIfIdle)
         || this.retirementBlocked(command.conversationId)
         || this.idleContinuationStopped(command.conversationId, command.onlyIfIdle.revision, operationId))) {
@@ -2842,6 +2992,7 @@ export class RuntimeJournal {
       idempotencyKey: command.idempotencyKey,
       conversationId: command.conversationId,
       kind: command.kind,
+      ...(command.kind === "kill" && command.pendingSendIds !== undefined ? { pendingSendIds: command.pendingSendIds } : {}),
       ...(command.kind === "kill" ? { origin: command.onlyIfIdle || command.origin?.kind === "agent" ? "system" as const : "operator" as const } : {}),
       ...(command.kind === "interrupt" ? { origin: command.origin?.kind === "agent" ? "system" as const : "operator" as const } : {}),
       ...((command.kind === "kill" || command.kind === "interrupt") && (command.origin || command.kind === "kill" && command.onlyIfIdle)
@@ -2876,13 +3027,13 @@ export class RuntimeJournal {
     return { threadId: session.sessionKey.sessionId, accountId: session.accountId, writerClaim: session.writerClaim };
   }
 
-  private retirementInProgress(conversationId: string): boolean {
-    return !!this.db.query<{ present: number }, [string]>(`
-      SELECT 1 AS present FROM operations WHERE conversation_id = ?
+  private retirementInProgress(conversationId: string): string | null {
+    return this.db.query<{ operation_id: string }, [string]>(`
+      SELECT operation_id FROM operations WHERE conversation_id = ?
         AND json_extract(request_json, '$.kind') = 'kill'
         AND json_type(request_json, '$.onlyIfIdle') = 'object'
         AND json_extract(receipt_json, '$.status') = 'delivering' LIMIT 1
-    `).get(conversationId);
+    `).get(conversationId)?.operation_id ?? null;
   }
 
   /** A stop admitted after the observed idle session fences automatic work
@@ -3441,16 +3592,49 @@ export class RuntimeJournal {
     }
   }
 
-  private entity<T>(kind: string, id: string): T | null {
+  private entity<T>(kind: string, id: string, handoff = true): T | null {
+    if (kind === "session" && handoff) return this.sessionWithHandoff(id) as T | null;
     const row = this.db.query<{ state_json: string }, [string, string]>("SELECT state_json FROM entities WHERE kind = ? AND id = ?").get(kind, id);
     return row ? JSON.parse(row.state_json) as T : null;
+  }
+
+  /** The journal's own session reads see the whole session: an ended turn's
+      body, kept apart from the row, comes back as its liveTurn. The row and
+      its handoff come from one statement, so they share one read snapshot even
+      outside a transaction: a peer that starts the next turn moves the body
+      back into the row and drops the handoff in one commit, and a reader sees
+      either side of it, never the row before and the handoff after. */
+  private sessionWithHandoff(id: string): RuntimeSession | null {
+    const row = this.db.query<{ state_json: string; live_turn_json: string | null }, [string]>(
+      `SELECT entities.state_json, session_live_handoffs.live_turn_json FROM entities
+        LEFT JOIN session_live_handoffs ON session_live_handoffs.id = entities.id
+        WHERE entities.kind = 'session' AND entities.id = ?`,
+    ).get(id);
+    if (!row) return null;
+    const session = JSON.parse(row.state_json) as RuntimeSession;
+    if (session.liveTurn || row.live_turn_json === null) return session;
+    return { ...session, liveTurn: JSON.parse(row.live_turn_json) as RuntimeSession["liveTurn"] };
+  }
+
+  /** A session row stores a live-turn body only while its turn is open (#3803).
+      Every session writer reads through entity(), so the value written is the
+      whole session and the handoff row always matches it. */
+  private storedSession(id: string, session: RuntimeSession): RuntimeSession {
+    if (!liveTurnStillOpen(session.turn) && session.liveTurn) {
+      this.db.query("INSERT INTO session_live_handoffs(id, live_turn_json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET live_turn_json = excluded.live_turn_json WHERE live_turn_json <> excluded.live_turn_json")
+        .run(id, stableJson(session.liveTurn));
+      // A null keeps the key where a body was, so presentation keeps its order.
+      return { ...session, liveTurn: null };
+    }
+    this.db.query("DELETE FROM session_live_handoffs WHERE id = ?").run(id);
+    return session;
   }
 
   private entityValues<T>(kind: string): T[] {
     if (!this.readingSnapshot) return this.db.query<{ state_json: string }, [string]>("SELECT state_json FROM entities WHERE kind = ? ORDER BY id").all(kind)
       .map(row => JSON.parse(row.state_json) as T);
-    return this.db.query<{ id: string }, [string]>("SELECT id FROM entities WHERE kind = ? ORDER BY id").all(kind)
-      .map(row => this.snapshotEntity<T>(kind, row.id));
+    return this.db.query<{ id: string; stamp: number }, [string]>("SELECT id, checkpoint_seq AS stamp FROM entities WHERE kind = ? ORDER BY id").all(kind)
+      .map(row => this.snapshotEntity<T>(kind, row.id, row.stamp));
   }
 
   private prepareEntityReads(): void {
@@ -3469,9 +3653,24 @@ export class RuntimeJournal {
       }
       this.entityReadTriggers = true;
     }
-    const version = this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
-    if (version !== this.entityReadVersion) {
-      this.clearEntityReads(); this.entityReadVersion = version;
+    /* A peer commit no longer clears the cache (#3803). The ticks read here
+       come from the same read transaction as the rows, and every write from
+       any connection moves its row's tick, so an unrelated commit (the vacuum
+       child's last_vacuum_at write) re-reads nothing and a peer's write
+       re-reads only the rows it touched, whatever it did to revision or
+       checkpoint_seq. */
+    const ticks = this.db.query<{ kind: string; id: string; tick: number }, [number]>(
+      "SELECT kind, id, tick FROM entity_write_ticks WHERE tick > ? ORDER BY tick",
+    );
+    if (this.entityWriteTick === null) {
+      // Nothing is cached yet: start from the newest tick.
+      this.entityWriteTick = this.db.query<{ tick: number | null }, []>("SELECT MAX(tick) AS tick FROM entity_write_ticks").get()!.tick ?? 0;
+    } else {
+      const cachedKeys = this.db.query<{ key: string }, [string, string]>("SELECT key FROM snapshot_entity_keys WHERE kind = ? AND id = ?");
+      for (const { kind, id, tick } of ticks.all(this.entityWriteTick)) {
+        for (const { key } of cachedKeys.all(kind, id)) this.evictEntityRead(key);
+        this.entityWriteTick = tick;
+      }
     }
     for (const { key } of this.db.query<{ key: string }, []>("SELECT key FROM snapshot_entity_invalidations").all()) this.evictEntityRead(key);
     this.entityReadMaintenanceChanges += this.db.run("DELETE FROM snapshot_entity_invalidations").changes;
@@ -3490,13 +3689,15 @@ export class RuntimeJournal {
     this.entityReadMaintenanceChanges += this.db.query("DELETE FROM snapshot_entity_invalidations WHERE key=?").run(key).changes;
   }
 
-  private snapshotEntity<T>(kind: string, id: string, summary = false, sessionPresentation = false): T {
+  /** `stamp` is the row's checkpoint_seq read under the same snapshot. */
+  private snapshotEntity<T>(kind: string, id: string, stamp: number, summary = false, sessionPresentation = false): T {
     const key = JSON.stringify([kind, id, sessionPresentation ? summary ? "session-summary" : "session-full" : "full"]);
     const cached = this.entityReads.get(key);
-    if (cached) {
+    if (cached?.stamp === stamp) {
       this.entityReads.delete(key); this.entityReads.set(key, cached);
-      return structuredClone(cached.value) as T;
+      return (this.detachedSnapshot ? structuredClone(cached.value) : cached.value) as T;
     }
+    if (cached) this.evictEntityRead(key);
     const projection = summary ? `json_set(state_json,
       '$.voiceDeliveries', json(COALESCE((SELECT json_group_array(json_set(delivery.value,
         '$.responses', json(COALESCE((SELECT json_group_array(json_set(response.value, '$.text', ''))
@@ -3512,14 +3713,15 @@ export class RuntimeJournal {
     const value = sessionPresentation && (parsed as RuntimeSession).turn !== "running"
       ? { ...(parsed as RuntimeSession), liveTurn: null } as T : parsed;
     const bytes = sessionPresentation ? Buffer.byteLength(JSON.stringify(value)) : Buffer.byteLength(row.state_json);
-    if (bytes <= 16 * 1024 * 1024) {
-      while (this.entityReads.size >= 8192 || this.entityReadBytes + bytes > 16 * 1024 * 1024) {
+    if (bytes <= RUNTIME_ENTITY_READ_ADMISSION_BYTES) {
+      while (this.entityReads.size >= RUNTIME_ENTITY_READ_CACHE_ENTRIES || this.entityReadBytes + bytes > RUNTIME_ENTITY_READ_CACHE_BYTES) {
         const oldest = this.entityReads.keys().next().value!;
         this.evictEntityRead(oldest);
+        this.snapshotEntityEvictions++;
       }
-      this.entityReads.set(key, { value, bytes }); this.entityReadBytes += bytes;
+      this.entityReads.set(key, { value, bytes, stamp }); this.entityReadBytes += bytes;
       this.entityReadMaintenanceChanges += this.db.query("INSERT OR REPLACE INTO snapshot_entity_keys(key,kind,id) VALUES (?,?,?)").run(key,kind,id).changes;
-      return structuredClone(value);
+      return this.detachedSnapshot ? structuredClone(value) : value;
     }
     return value;
   }
@@ -3527,15 +3729,18 @@ export class RuntimeJournal {
   private snapshotSessionValues(voiceBodiesFor?: readonly string[]): RuntimeSession[] {
     // SQLite removes the heavy bodies before they cross into JS. The original
     // entity, receipts, tombstones and full snapshot API remain unchanged.
-    return this.snapshotSessionRows("entities.id AS state_json", [])
-      .map(row => this.snapshotEntity<RuntimeSession>("session", row.state_json,
-        voiceBodiesFor !== undefined && row.state_json !== (voiceBodiesFor[0] ?? ""), true))
+    // The stamp comes from the compact metadata row once it is ready, so
+    // checking it never walks a large body's overflow pages.
+    const stamp = this.sessionHostMetadata.ready ? "metadata.checkpoint_seq" : "entities.checkpoint_seq";
+    return this.snapshotSessionRows<{ id: string; stamp: number }>(`entities.id AS id, ${stamp} AS stamp`, [])
+      .map(row => this.snapshotEntity<RuntimeSession>("session", row.id, row.stamp,
+        voiceBodiesFor !== undefined && row.id !== (voiceBodiesFor[0] ?? ""), true))
       .sort((left, right) => left.conversationId.localeCompare(right.conversationId));
   }
 
   /** Every snapshot scope uses the same selected identities. Apply a requested
       subset after the inactive LIMIT so old inactive rows remain absent. */
-  private snapshotSessionRows(projection: string, parameters: (string | number)[], conversationIds?: readonly string[]): { state_json: string }[] {
+  private snapshotSessionRows<Row extends object = { state_json: string }>(projection: string, parameters: (string | number)[], conversationIds?: readonly string[]): Row[] {
     if (conversationIds?.length === 0) return [];
     const active = this.sessionHostMetadata.ready
       ? SESSION_HOST_ACTIVE_FROM
@@ -3549,12 +3754,12 @@ export class RuntimeJournal {
     // adds work without narrowing their output.
     if (conversationIds === undefined) {
       return [
-        ...this.db.query<{ state_json: string }, (string | number)[]>(`SELECT ${projection} ${active}`).all(...parameters),
-        ...this.db.query<{ state_json: string }, (string | number)[]>(`SELECT ${projection} ${inactive}`)
+        ...this.db.query<Row, (string | number)[]>(`SELECT ${projection} ${active}`).all(...parameters),
+        ...this.db.query<Row, (string | number)[]>(`SELECT ${projection} ${inactive}`)
           .all(...parameters, RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT),
       ];
     }
-    return this.db.query<{ state_json: string }, (string | number)[]>(`
+    return this.db.query<Row, (string | number)[]>(`
       WITH selected AS (SELECT id FROM (SELECT entities.id ${active}) UNION ALL SELECT id FROM (SELECT entities.id ${inactive}))
       SELECT ${projection} FROM selected
       CROSS JOIN entities ON entities.kind = 'session' AND entities.id = selected.id
@@ -3636,11 +3841,12 @@ export class RuntimeJournal {
   }
 
   private scopedValues<T>(kind: string): Array<{ revision: number; value: T }> {
-    return this.db.query<{ id: string; revision: number }, [string]>("SELECT id, revision FROM entities WHERE kind = ? ORDER BY id").all(kind)
-      .map(row => ({ revision: row.revision, value: this.snapshotEntity<T>(kind, row.id) }));
+    return this.db.query<{ id: string; revision: number; stamp: number }, [string]>("SELECT id, revision, checkpoint_seq AS stamp FROM entities WHERE kind = ? ORDER BY id").all(kind)
+      .map(row => ({ revision: row.revision, value: this.snapshotEntity<T>(kind, row.id, row.stamp) }));
   }
 
   private upsertEntity(kind: string, id: string, revision: number, value: unknown, seq: number): void {
+    if (kind === "session") value = this.storedSession(id, value as RuntimeSession);
     this.db.query(`
       INSERT INTO entities(kind, id, revision, state_json, checkpoint_seq, updated_at)
       VALUES (?, ?, ?, ?, ?, (SELECT created_at FROM events WHERE seq = ?))

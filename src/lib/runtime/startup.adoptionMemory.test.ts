@@ -89,7 +89,9 @@ test.skipIf(Boolean(process.env.STARTUP_ADOPTION_MINIFIED_MODULE))(
     });
     const compiled = path.join(directory, "startup.min.mjs");
     fs.writeFileSync(compiled, result.code);
-    const child = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "completed adoption predicates"], {
+    const child = spawn(process.execPath, ["test", import.meta.path,
+      path.join(import.meta.dir, "startup.quarantine.test.ts"), "--test-name-pattern",
+      "completed adoption predicates|scheduled row retry releases"], {
       cwd: path.resolve(import.meta.dir, "../../.."),
       env: { ...process.env, STARTUP_ADOPTION_MINIFIED_MODULE: compiled },
       stdio: ["ignore", "pipe", "pipe"],

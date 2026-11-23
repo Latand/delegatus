@@ -10,7 +10,7 @@ import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import { runClaimedRequest, runningCount, advertisedSlots } from "./runner";
 import { reserveRun, dropRun, readRunLedger, externalRelayFile, updateRelayStore, type PairedRelay } from "./store";
 import { reserveChainConversation, releaseConversation } from "./conversations";
-import { declineHeldRelayRequests } from "./hold";
+import { capacityWaiters, declineHeldRelayRequests } from "./hold";
 import { setRelaySwitch } from "./switches";
 import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
@@ -31,7 +31,7 @@ const command = path.join(root, "answer-stub");
 fs.writeFileSync(command, `#!/usr/bin/env bun\nconst a=process.argv;await Bun.stdin.text();console.log(JSON.stringify({type:'thread.started',thread_id:crypto.randomUUID()}));await Bun.write(a[a.indexOf('--output-last-message')+1], JSON.stringify({action:'reply',text:'Done',reply_to:'m1'}));`); fs.chmodSync(command, 0o700);
 function paired(api_base: string): PairedRelay {
   return { id: "hold-relay", origin: api_base.replace(/\/v1$/, ""), api_base, name: "Test", description: "Test", credential: "x".repeat(43),
-    features: ["progress_steps"], owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(),
+    features: ["progress_steps"], owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(),
     paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, engine: "codex", model: "gpt-6-sol", effort: "low", project: null, concurrency: 1, hardCapMinutes: 1, memberLimitPerHour: 0 }] };
 }
@@ -219,7 +219,12 @@ for (const outcome of ["no_capacity", "member_limit"] as const) test(`${outcome}
     releaseDrain(drainFile(), "early-outcome"); accountManager.resolveHeadlessSpawn = previous;
     reserveRun(blocker(relay, "recheck-blocker"));
     const held = claim(`${outcome}-recheck`, 20000);
-    if (outcome === "member_limit") held.input.requester.key = "another-member";
+    if (outcome === "member_limit") {
+      // Another member's request: that member is both the requester and the trigger's author.
+      held.input.requester.key = "another-member";
+      Object.assign(held.input, { conversation: held.input.conversation.map(message => message.id === held.input.respond_to
+        ? { ...message, author: { ...message.author, key: "another-member" } } : message) });
+    }
     const pending = runClaimedRequest(relay, held, undefined, { command });
     await Bun.sleep(200);
     if (outcome === "no_capacity") accountManager.resolveHeadlessSpawn = (() => ({ kind: "unavailable" })) as typeof previous;
@@ -269,15 +274,19 @@ test("acknowledgements, lock waits, reentry after a drain and completion failure
 test("capacity returning at the admission cutoff cannot start expired waiting work", async () => {
   let now = Date.now(); const clock = spyOn(Date, "now").mockImplementation(() => now);
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
-  const relay = paired(`${server.origin}/v1`); reserveRun(blocker(relay, "cutoff-blocker"));
+  const relay = paired(`${server.origin}/v1`); relay.id = "cutoff-readiness";
+  reserveRun(blocker(relay, "cutoff-blocker"));
   // Keep the service timestamp on the same clock as the mocked local cutoff.
   const pending = runClaimedRequest(relay, { ...claim("cutoff-return", 11000),
     deadline_at: new Date(now + 11000).toISOString() }, undefined, { command });
   try {
-    await Bun.sleep(150); now += 1000; dropRun("cutoff-blocker");
+    const readyBy = performance.now() + 5000;
+    while (capacityWaiters(relay.id, "target_1") !== 1 && performance.now() < readyBy) await Bun.sleep(1);
+    expect(capacityWaiters(relay.id, "target_1")).toBe(1);
+    now += 1000; dropRun("cutoff-blocker");
     expect(await pending).toMatchObject({ outcome: "declined", reason: "busy" });
   } finally { dropRun("cutoff-blocker"); await pending; clock.mockRestore(); await server.close(); }
-}, 5000);
+}, 15000);
 
 test("an orphan conversation has free chat capacity and is recovered before admission", async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));

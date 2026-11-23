@@ -230,10 +230,12 @@ test("project succession keeps unseen lessons under both keys until curation", (
     return ids;
   };
   /* Both keys already hold lessons, each close to the bound. */
-  const oldIds = fill(old, "old", 1, 6);
+  const cost = scopeChars([{ id: "r_0000000000000000", rule: text("old", 0), why: "" }]) + 1;
+  const rounds = Math.ceil((ROLE_MEMORY_BOUND + cost + 1) / (6 * cost));
+  const oldIds = fill(old, "old", 1, rounds);
   const removed = oldIds[oldIds.length - 1]!;
   deleteRule(removed, "2026-10-07T01:00:00.000Z");
-  const currentIds = fill(current, "current", 20, 6);
+  const currentIds = fill(current, "current", 20, rounds);
   expect(projectView(old).scopes.find((scope) => scope.roleId === "builder")!.active.length).toBeGreaterThan(10);
 
   expect(persistProjectAliases([{ source: old, target: current, displayName: "succession" }])).toBe(true);

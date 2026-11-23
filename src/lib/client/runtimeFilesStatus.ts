@@ -16,6 +16,17 @@ type Settlement = {
   projectedRow?: FileEntry;
 };
 
+function sameBoardStatus(a: RuntimeSession, b: RuntimeSession): boolean {
+  if (a === b) return true;
+  const included = (s: RuntimeSession) => s.provenance === "structured" && s.hostKind !== "unhosted";
+  if (!included(a) || !included(b)) return included(a) === included(b);
+  return a.conversationId === b.conversationId && a.artifactPath === b.artifactPath
+    && a.sessionKey.engine === b.sessionKey.engine && a.sessionKey.sessionId === b.sessionKey.sessionId
+    && a.turn === b.turn && a.activeTurnId === b.activeTurnId && a.settledTurnId === b.settledTurnId
+    && Boolean(a.attentionIds.length) === Boolean(b.attentionIds.length)
+    && Boolean(a.liveTurn?.text || a.liveTurn?.items?.length) === Boolean(b.liveTurn?.text || b.liveTurn?.items?.length);
+}
+
 /** Inventory generations deliberately coalesce transcript revisions for five
  * minutes. Turn status must instead follow the structured runtime in the same
  * frame as its live feed. This projection stays outside the certified files
@@ -26,14 +37,16 @@ export function createRuntimeFilesStatusProjection() {
   let signature = "";
   let byConversation = new Map<string, Status>();
   let byPath = new Map<string, Status | null>();
-  let projected = new WeakMap<FilesData, FilesData>();
+  let revision = 0;
+  const projected = new WeakMap<FilesData, { revision: number; value: FilesData }>();
   let rows = new WeakMap<FileEntry, FileEntry>();
-  let arrays = new WeakMap<FileEntry[], FileEntry[]>();
+  const arrays = new WeakMap<FileEntry[], { revision: number; value: FileEntry[] }>();
   const settlements = new Map<string, Settlement>();
   const observedTurns = new Set<string>();
   const activeTurnIds = new Map<string, string>();
   const terminalGenerations = new Map<string, { turnId: string; keys: Set<string> }>();
   let live = false;
+  let lastSessions: Record<string, RuntimeSession> | null = null;
   const identity = (session: Pick<RuntimeSession, "conversationId" | "artifactPath">) =>
     JSON.stringify([session.conversationId, session.artifactPath]);
 
@@ -45,15 +58,24 @@ export function createRuntimeFilesStatusProjection() {
     if (!runtime.enabled || runtime.connection !== "live" || !runtime.store) {
       if (!live) return false;
       live = false;
-      projected = new WeakMap();
-      arrays = new WeakMap();
+      lastSessions = null;
+      revision++;
       return true;
     }
-    const sessions = runtime.enabled && runtime.connection === "live" && runtime.store
-      ? Object.values(runtime.store.sessions).filter((session) =>
-        session.provenance === "structured"
-        && session.hostKind !== "tmux-legacy" && session.hostKind !== "unhosted")
-      : [];
+    // Several mounted readers project the same immutable runtime frame. Text
+    // deltas replace a session but usually leave its board status unchanged.
+    const current = runtime.store.sessions;
+    if (current === lastSessions) return false;
+    const previous = lastSessions;
+    lastSessions = current;
+    if (previous) {
+      const keys = Object.keys(current);
+      const previousKeys = Object.keys(previous);
+      if (keys.length === previousKeys.length && keys.every((key, index) =>
+        key === previousKeys[index] && sameBoardStatus(current[key]!, previous[key]!))) return false;
+    }
+    const sessions = Object.values(current).filter(session =>
+      session.provenance === "structured" && session.hostKind !== "unhosted");
     const currentIdentities = new Set(sessions.map(identity));
     for (const key of observedTurns) if (!currentIdentities.has(key)) observedTurns.delete(key);
     for (const key of activeTurnIds.keys()) if (!currentIdentities.has(key)) activeTurnIds.delete(key);
@@ -102,9 +124,8 @@ export function createRuntimeFilesStatusProjection() {
         if (status.artifactPath) byPath.set(status.artifactPath,
           byPath.has(status.artifactPath) ? null : status);
       }
-      projected = new WeakMap();
+      revision++;
       rows = new WeakMap();
-      arrays = new WeakMap();
       return true;
     }
     return false;
@@ -113,7 +134,7 @@ export function createRuntimeFilesStatusProjection() {
   const project = (data: FilesData, runtime: RuntimeBusState): FilesData => {
     updateRuntime(runtime);
     const cached = projected.get(data);
-    if (cached) return cached;
+    if (cached?.revision === revision) return cached.value;
     const generationKey = (file: FileEntry) => JSON.stringify([
       // A bounded tail can lose its opening prompt. In that case transcript
       // bytes identify the generation; label-only replacements still match.
@@ -147,11 +168,13 @@ export function createRuntimeFilesStatusProjection() {
       return settlement && (!file.conversationId || settlement.conversationId === file.conversationId)
         ? settlement : undefined;
     };
+    const now = Date.now() / 1000;
+    const activity = (file: FileEntry) => now - file.mtime < 900 ? "recent" : "idle";
     const applySettlement = (file: FileEntry, settlement: Settlement): FileEntry => {
       if (settlement.sourceRow === file && settlement.projectedRow) return settlement.projectedRow;
       const projectedRow: FileEntry = {
         ...file,
-        activity: Date.now() / 1000 - file.mtime < 900 ? "recent" : "idle",
+        activity: activity(file),
         activityReason: "runtime_turn_idle",
         authoritativeTurn: file.authoritativeTurn?.state === "terminal" ? file.authoritativeTurn : settlement.authoritativeTurn,
         ...(settlement.clearAttention ? { pendingQuestion: null, waitingInput: null } : {}),
@@ -159,7 +182,8 @@ export function createRuntimeFilesStatusProjection() {
       return projectedRow;
     };
     let changed = false;
-    const files = arrays.get(data.files) ?? data.files.map((file) => {
+    const priorArray = arrays.get(data.files);
+    const files = priorArray?.revision === revision ? priorArray.value : data.files.map((file) => {
       if (!live) {
         const settlement = settlementFor(file);
         const retained = settlement ? applySettlement(file, settlement) : file;
@@ -187,8 +211,10 @@ export function createRuntimeFilesStatusProjection() {
         return file;
       }
       const priorSettlement = settlementFor(file);
-      if (status.settledTurnId && priorSettlement?.settledTurnId === status.settledTurnId
-        && priorSettlement.clearAttention === !status.hasAttention) {
+      const settledTurnId = status.settledTurnId ?? status.activeTurnId ?? activeTurnIds.get(identity(status)) ?? null;
+      if (priorSettlement?.conversationId === status.conversationId && priorSettlement.settledTurnId === settledTurnId
+        && priorSettlement.clearAttention === !status.hasAttention
+        && (status.settledTurnId || (priorSettlement.sourceRow === file && priorSettlement.projectedRow?.activity === activity(file)))) {
         const retained = applySettlement(file, priorSettlement);
         rows.set(file, retained);
         changed = true;
@@ -201,7 +227,7 @@ export function createRuntimeFilesStatusProjection() {
         conversationId: status.conversationId,
         path: file.path,
         engine: file.engine,
-        settledTurnId: status.settledTurnId ?? status.activeTurnId ?? activeTurnIds.get(identity(status)) ?? null,
+        settledTurnId,
         authoritativeTurn: file.authoritativeTurn?.state === "terminal" ? file.authoritativeTurn
           : { state: "idle", source: "lifecycle", terminalAt: null },
         clearAttention: !status.hasAttention,
@@ -216,10 +242,15 @@ export function createRuntimeFilesStatusProjection() {
     });
     // Local task/pipeline overlays can allocate fresh wrappers around the same
     // files array. Preserve the projected rows/array independently of them.
-    if (!arrays.has(data.files)) arrays.set(data.files, changed ? files : data.files);
-    const projectedFiles = arrays.get(data.files)!;
-    const result = projectedFiles !== data.files ? { ...data, files: projectedFiles } : data;
-    projected.set(data, result);
+    let projectedFiles = files;
+    if (priorArray?.revision !== revision) {
+      if (!changed) projectedFiles = data.files;
+      else if (priorArray && files.length === priorArray.value.length && files.every((row, index) => row === priorArray.value[index])) projectedFiles = priorArray.value;
+      arrays.set(data.files, { revision, value: projectedFiles });
+    }
+    const result = cached?.value.files === projectedFiles ? cached.value
+      : projectedFiles === data.files ? data : { ...data, files: projectedFiles };
+    projected.set(data, { revision, value: result });
     return result;
   };
   return Object.assign(project, { updateRuntime });

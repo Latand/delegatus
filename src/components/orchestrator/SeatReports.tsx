@@ -40,6 +40,7 @@ export type ProjectReportsRead = {
   settings: ProjectReportSettings | null;
   saving: boolean;
   failed: string | null;
+  notice: "topic_removed" | null;
   /** Writes the choice; null stores "Log only". True once stored. `drawn`, when
       the client can tell the result (Log only, a chat the bot already lists),
       is shown at once and taken back on a refusal (audit B30, B42). */
@@ -61,6 +62,7 @@ export function useProjectReports(project: string): ProjectReportsRead {
   const appliedPress = useRef(0);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ project: string; value: "topic_removed" | null } | null>(null);
   const [generation, setGeneration] = useState(0);
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +84,7 @@ export function useProjectReports(project: string): ProjectReportsRead {
     if (drawn) setPresses((held) => [...held, { id: mine, project, settings: drawn }]);
     else setSaving(true);
     setFailed(null);
+    setNotice(null);
     try {
       const response = await fetch("/api/projects/settings", {
         method: "PUT",
@@ -92,9 +95,14 @@ export function useProjectReports(project: string): ProjectReportsRead {
         const body = await response.json().catch(() => ({})) as { message?: unknown };
         throw new Error(outcome && "link" in outcome && typeof body.message === "string" ? body.message : "");
       }
-      const answered = settingsOf(await response.json().catch(() => ({})) as Partial<ProjectReportSettings>);
+      const body = await response.json().catch(() => ({})) as Partial<ProjectReportSettings> & { notice?: unknown };
+      const answered = settingsOf(body);
       /* An answer older than one already taken never overwrites it. */
-      if (mine > appliedPress.current) { appliedPress.current = mine; setRead({ project, settings: answered }); }
+      if (mine > appliedPress.current) {
+        appliedPress.current = mine;
+        setRead({ project, settings: answered });
+        setNotice({ project, value: body.notice === "topic_removed" ? "topic_removed" : null });
+      }
       return true;
     } catch (error) {
       setFailed(error instanceof Error ? error.message : "");
@@ -108,7 +116,7 @@ export function useProjectReports(project: string): ProjectReportsRead {
     const newest = presses.filter((press) => press.project === project).at(-1);
     return newest ? { project, settings: newest.settings } : stored;
   }, [stored, presses, project]);
-  return { settings: read?.project === project ? read.settings : null, saving, failed, save, reload };
+  return { settings: read?.project === project ? read.settings : null, saving, failed, notice: notice?.project === project ? notice.value : null, save, reload };
 }
 
 /** The chat the project posts to, or null for the log only. */
@@ -328,9 +336,12 @@ export function SeatReportsBody({ project, projectName, reports, surface }: {
 
       {reports.failed !== null ? <p role="alert" className="text-ui font-semibold text-danger">{reports.failed || t("seatReports.failed")}</p> : null}
       {saved && reports.failed === null ? (
-        <p data-seat-reports-saved="" className="text-ui font-semibold text-success">
-          {stored ? t("onboarding.telegram.savedChat", { chat: title(stored) }) : t("onboarding.telegram.savedLog")}
-        </p>
+        <>
+          <p data-seat-reports-saved="" className="text-ui font-semibold text-success">
+            {stored ? t("onboarding.telegram.savedChat", { chat: title(stored) }) : t("onboarding.telegram.savedLog")}
+          </p>
+          {reports.notice === "topic_removed" ? <p data-seat-reports-notice="" className="text-ui text-warning">{t("seatReports.topicRemoved")}</p> : null}
+        </>
       ) : null}
     </div>
   );

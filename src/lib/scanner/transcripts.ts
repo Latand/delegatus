@@ -22,7 +22,7 @@ import { claudeProjectRootFor, codexSessionRootFor } from "./roots";
 
 /**
  * Pid attribution for interactive transcripts (claude-projects and
- * codex-sessions .jsonl), so the tmux composer and the kill control work for
+ * codex-sessions .jsonl), so the composer and the kill control work for
  * live REPL agents the same way they do for background tasks. Signals, most
  * trusted first:
  *

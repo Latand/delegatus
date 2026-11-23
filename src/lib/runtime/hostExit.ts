@@ -33,7 +33,26 @@ function slot(process: ProcessIdentity, kind: "stop" | "exit" | "writer"): strin
 /** The independent native waiter receives only its own immutable output slot. */
 export function bindHostExitWriter(directory: string, process: ProcessIdentity, writer = captureProcessIdentity(globalThis.process.pid)): void {
   record(slot(process, "writer"), writer);
-  fs.writeFileSync(path.join(directory, "host-exit.json"), JSON.stringify({ file: slot(process, "exit") }), { mode: 0o600 });
+  record(path.join(directory, "host-exit.json"), { file: slot(process, "exit") }, true);
+}
+
+/** Read-only custody evidence; absence or invalid evidence grants no custody. */
+export function readHostExitWriterBinding(process: ProcessIdentity): { process: ProcessIdentity; exitFile: string } | null {
+  if (!process.startIdentity) return null;
+  try {
+    const writer = read<ProcessIdentity>(slot(process, "writer"));
+    if (!writer || !Number.isSafeInteger(writer.pid) || writer.pid <= 0
+        || typeof writer.startIdentity !== "string" || !writer.startIdentity
+        || (writer.bootEpoch != null && typeof writer.bootEpoch !== "string")) return null;
+    return { process: { pid: writer.pid, startIdentity: writer.startIdentity, bootEpoch: writer.bootEpoch ?? null },
+      exitFile: slot(process, "exit") };
+  } catch { return null; }
+}
+
+/** A waiter may read this binding as soon as its native child exits. Publish
+ * replacements atomically, including a decision to discard outer evidence. */
+export function discardHostExitWriter(directory: string): void {
+  record(path.join(directory, "host-exit.json"), { discard: true }, true);
 }
 
 export function hostExitWriterPending(process: ProcessIdentity): boolean {

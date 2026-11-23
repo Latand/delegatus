@@ -37,6 +37,11 @@ export function selectPrototypeAnswer(questions: readonly PrototypeQuestion[], a
   });
 }
 
+export function DecisionQuestionLinks({ question }: { question: PrototypeQuestion }) {
+  return <>{question.links?.map((link, index) => <a key={link.href} data-prototype-link={index} href={link.href} target="_blank" rel="noopener noreferrer"
+    className="mb-2 flex min-h-11 items-center rounded-control px-2 text-ui text-accent underline [overflow-wrap:anywhere] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{link.label}</a>)}</>;
+}
+
 export function DecisionQuestions({ questions, answers, open, onSelect, boxed = true, columns = 1 }: {
   questions: readonly PrototypeQuestion[];
   /** The decision's answers once there is one, else the draft's. */
@@ -86,12 +91,13 @@ export function DecisionQuestions({ questions, answers, open, onSelect, boxed = 
     return <fieldset key={question.id} data-prototype-question={question.id} {...(skipped ? { "data-prototype-question-skipped": "" } : {})} className={`m-0 min-w-0 ${boxed ? "rounded-control border border-border bg-card p-3" : "border-0 p-0"}`}>
       <legend className="sr-only">{question.text}</legend>
       <div className={`${boxed ? "mb-2" : "mb-1.5"} flex items-start gap-1.5`}><span data-prototype-question-number="" className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm bg-sunken text-caption font-bold">{at + 1}</span><p className="m-0 min-w-0 flex-1 text-ui font-semibold text-primary [overflow-wrap:anywhere]">{question.text}</p></div>
+      <DecisionQuestionLinks question={question} />
       {question.multiple && !closed && !skipped ? <p data-prototype-hint="" className={`m-0 ${boxed ? "mb-2" : "mb-1.5"} text-label text-muted`}>{t("proto.q.multiple")}</p> : null}
       <div role={question.multiple ? "group" : "radiogroup"} aria-label={question.text} className={`flex flex-col ${boxed ? "gap-1.5" : "gap-1"} ${skipped && open ? "opacity-60" : ""}`}>
         {question.options.map((option, index) => choice(index, shortenHashesInText(option.label), option.recommended))}
         {question.other ? choice("other", t("proto.q.other")) : null}
       </div>
-      {open || skipped ? <button type="button" role="checkbox" aria-checked={skipped} disabled={!open} data-prototype-question-skip={question.id}
+      {(open || skipped) && question.skippable !== false ? <button type="button" role="checkbox" aria-checked={skipped} disabled={!open} data-prototype-question-skip={question.id}
         aria-label={t(skipped ? "proto.q.skippedOne" : "proto.q.skipOneAria")} title={t(skipped ? "proto.q.skippedOne" : "proto.q.skipOneAria")}
         className={`mt-1.5 flex ${row} w-full items-start gap-2 rounded-control border px-2.5 text-left text-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${skipped ? "border-strong bg-sunken font-semibold text-primary" : "border-dashed border-border bg-transparent text-secondary enabled:hover:border-accent/45"}`}
         onClick={() => onSelect(question.id, "skip")}>

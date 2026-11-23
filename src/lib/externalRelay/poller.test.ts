@@ -2,6 +2,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { externalRelayTempRoot } from "./runner";
+import { createOwnerRunDirectory } from "./runDirectory";
 import { accountManager } from "@/lib/accounts/manager";
 import { procBackend } from "@/lib/proc";
 import {
@@ -17,10 +18,17 @@ import {
   waitForExternalRelayRuns,
   wakeExternalRelayPoller,
 } from "./poller";
-import { externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
+import { changeRun, dropRun, externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
 import { startTestRelay } from "./testRelay";
 import { noteRelayOutcome, noteRelayProgress } from "./activity";
-import { sampleRequest } from "./request.fixture";
+import { contextRequest, sampleRequest } from "./request.fixture";
+import { clonePairing, cloneReceipt } from "./clone.fixture";
+import { cloneClientKey, type CloneSendInput } from "./cloneSend";
+import { ownerTierFor } from "./profile";
+import { requestSchema } from "./protocol";
+import { ownerTurnDiagnostic } from "./diagnostic";
+import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
+import { ownerRequestTimeoutText } from "./requestTimeout";
 import { answerRecorder, pruneAnswerRecords, readAnswerRecord, relayAnswersRoot } from "./answers";
 import { setRelaySwitch } from "./switches";
 import { createRelaySteps } from "./progressSteps";
@@ -28,6 +36,115 @@ import { RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
+
+for (const prepared of [false, true]) for (const ukrainian of [false, true]) for (const uncertain of [false, true]) for (const status of [false, true]) for (const diagnosticOnly of [false, true])
+test(`legacy unsent reply is safe once (prepared=${prepared}, uk=${ukrainian}, uncertain=${uncertain}, status=${status}, diagnosticOnly=${diagnosticOnly})`, async () => {
+  const priorStore = readRelayStore();
+  const sends: CloneSendInput[] = [];
+  const server = await startTestRelay((req, payload) => {
+    expect(req.url).toEndWith("/send");
+    sends.push(payload as CloneSendInput);
+    return uncertain ? { status: 409, body: { error: { code: "send_uncertain" } } } : { body: cloneReceipt() };
+  });
+  const relay = clonePairing(server.origin);
+  relay.targets[0]!.ownerTier = true;
+  relay.targets[0]!.enabled = true;
+  const id = `legacy_failure_${prepared}_${ukrainian}_${uncertain}_${status}`;
+  const text = ukrainian ? "Допоможи із запитом" : "Help with this request";
+  const request = requestSchema.parse({ ...contextRequest, request_id: id, target_id: relay.targets[0]!.id,
+    answer: { max_chars: 4000, progress: "none" },
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+      conversation: [{ ...contextRequest.input.conversation[0], text }] } });
+  const owner = ownerTierFor({ ownerTier: true }, request)!;
+  const answer = { action: "reply" as const, text: "Failure: RelayStoreBusy: relay store is busy", reply_to: owner.messageId };
+  const body = { lease_id: request.lease_id, outcome: "answered" as const,
+    answer: status ? { ...answer, text: ownerRequestTimeoutText(4000) } : answer, duration_ms: 1000 };
+  const delivery = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null };
+  const payload: CloneSendInput = { chat_id: delivery.chat_id, reply_to_message_id: delivery.reply_to_message_id,
+    client_key: cloneClientKey(relay.id, "owner-late-answer", id, 0), text: body.answer.text, parse_mode: null, silent: false };
+  const storedPayload = status ? { ...payload, text: answer.text } : payload;
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "legacy-failure-"));
+  runDirs.push(directory);
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-04T12:02:00Z"));
+  answerRecorder({ requestId: id, relayId: relay.id, targetId: request.target_id, targetName: null,
+    claimedAt: request.claimed_at, input: request.input, features: request.features })!.begin("codex", null, { webSearch: true, owner: true });
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  reserveRun({ requestId: id, leaseId: request.lease_id, relayId: relay.id, targetId: request.target_id,
+    ownerPid: 999999999, ownerIdentity: "dead", childPid: null, childIdentity: null,
+    startedAt: "2026-11-04T12:00:00Z", runDir: directory,
+    ownerTurn: { clientAttemptId: `relay-owner-${id}`, ...(!prepared ? { rawRequest: request } : {}), context: owner,
+      request: { text: owner.text, requestText: owner.requestText }, delivery,
+      cancel: "kill", confirmed: true, diagnostic: ownerTurnDiagnostic("exception", answer.text),
+      ...(!diagnosticOnly ? { failureReply: { answer, until: "2026-11-04T12:00:01Z" } } : {}),
+      lateAnswer: { body, files: [], ...(prepared ? { payload: storedPayload, parts: [{ payload: storedPayload }] } : {}) } } });
+  try {
+    await sweepExternalRelayOrphans();
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({ ...payload, text: status ? ownerRequestTimeoutText(4000) : ukrainian
+      ? "Не вдалося завершити запит. Спробуйте ще раз." : "Your request could not be completed. Please try again." });
+    expect(readRunLedger().runs.some(row => row.requestId === id)).toBe(uncertain);
+    if (!uncertain) expect(readAnswerRecord(relay.id, request.target_id, id)).toMatchObject({
+      delivery: "accepted", answer: { text: sends[0]!.text } });
+    if (uncertain) {
+      const pending = readRunLedger().runs.find(row => row.requestId === id)!.ownerTurn!.lateAnswer!;
+      expect(pending.status).toBe("uncertain");
+      expect(pending.body).toMatchObject({ answer: { text: sends[0]!.text } });
+      expect(pending.parts?.map(part => part.payload)).toEqual(sends);
+      changeRun(id, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn!.lateAnswer!, nextAttemptAt: 0 } } }));
+      expect(await deliverOwnerLateAnswer(relay, id, { ...body, answer: { ...answer, text: "Another payload" } }, [], () => true))
+        .toMatchObject({ delivery: "unconfirmed", body: pending.body });
+      expect(readRunLedger().runs.find(row => row.requestId === id)?.ownerTurn?.lateAnswer?.parts).toEqual(pending.parts);
+    }
+    await sweepExternalRelayOrphans();
+    expect(sends).toHaveLength(1);
+  } finally { clock.mockRestore(); dropRun(id); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+for (const attempted of ["body", "part", "receipt", "uncertain", "uncertain-no-context"] as const)
+test(`legacy failure with ${attempted} evidence never sends another payload or key`, async () => {
+  const priorStore = readRelayStore();
+  const sends: unknown[] = [];
+  const server = await startTestRelay((_req, payload) => { sends.push(payload); return { body: cloneReceipt() }; });
+  const relay = clonePairing(server.origin);
+  relay.targets[0]!.ownerTier = true;
+  relay.targets[0]!.enabled = true;
+  const id = `legacy_attempted_${attempted}`;
+  const request = requestSchema.parse({ ...contextRequest, request_id: id, target_id: relay.targets[0]!.id,
+    answer: { max_chars: 4000, progress: "none" }, input: { ...contextRequest.input,
+      requester: { ...contextRequest.input.requester, is_owner: true } } });
+  const owner = ownerTierFor({ ownerTier: true }, request)!;
+  const answer = { action: "reply" as const, text: "Failure: structured message text exceeds the 32000-byte envelope bound", reply_to: owner.messageId };
+  const body = { lease_id: request.lease_id, outcome: "answered" as const, answer, duration_ms: 1000 };
+  const delivery = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null };
+  const payload: CloneSendInput = { chat_id: delivery.chat_id, reply_to_message_id: delivery.reply_to_message_id,
+    client_key: cloneClientKey(relay.id, "owner-late-answer", id, 0), text: answer.text, parse_mode: null, silent: false };
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "legacy-attempted-"));
+  runDirs.push(directory);
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-04T12:02:00Z"));
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  reserveRun({ requestId: id, leaseId: request.lease_id, relayId: relay.id, targetId: request.target_id,
+    ownerPid: 999999999, ownerIdentity: "dead", childPid: null, childIdentity: null,
+    startedAt: "2026-11-04T12:00:00Z", runDir: directory,
+    ownerTurn: { clientAttemptId: `relay-owner-${id}`, rawRequest: request, context: owner,
+      ...(attempted !== "uncertain-no-context" ? { delivery } : {}),
+      cancel: "kill", confirmed: true, diagnostic: ownerTurnDiagnostic("exception", answer.text),
+      failureReply: { answer, until: "2026-11-04T12:00:01Z" },
+      lateAnswer: { body, files: [], ...(attempted === "uncertain-no-context" ? { status: "uncertain" as const } : { payload,
+        ...(attempted === "body" ? { firstAttemptAt: Date.now() } : {}),
+        ...(attempted === "uncertain" ? { status: "uncertain" as const } : {}),
+        parts: [{ payload, ...(attempted === "part" ? { firstAttemptAt: Date.now() } : {}),
+          ...(attempted === "receipt" ? { receipt: { kind: "sent" as const, messageId: 101, messageKey: "fixture_message_101", sentAt: Date.parse("2026-11-04T12:00:00Z"), replayed: false } } : {}) }] }) } } });
+  try {
+    const before = readRunLedger().runs.find(row => row.requestId === id)!.ownerTurn!.lateAnswer!;
+    for (let replay = 0; replay < 2; replay++) {
+      await sweepExternalRelayOrphans();
+      const pending = readRunLedger().runs.find(row => row.requestId === id)?.ownerTurn?.lateAnswer;
+      expect(pending).toEqual({ ...before, status: "uncertain" });
+      expect(sends).toHaveLength(0);
+      changeRun(id, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, delivery } }));
+    }
+  } finally { clock.mockRestore(); dropRun(id); updateRelayStore(() => priorStore); await server.close(); }
+});
 test("unreadable cancellation custody leaves relay settings accessible and preserves ledger bytes", () => {
   const file = externalRelayFile("runs");
   const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
@@ -99,7 +216,7 @@ test("polling learns progress_steps within five minutes with owner tools OFF and
     expect(descriptorReads).toBe(2);
     expect(observed.map(row => row.features)).toEqual([["requester_context"], ["requester_context"], features]);
     for (const row of observed) expect(row.claim).toEqual({ wait_s: 25, kinds: ["answer"],
-      features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"], slots: [{ target_id: "target_1", free: 1 }] });
+      features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers"], slots: [{ target_id: "target_1", free: 1 }] });
     expect(completed).toBe(true);
     expect(heartbeat).toMatchObject({ seq: 1, progress: { kind: "step", label: "accepted" } });
   } finally {
@@ -323,13 +440,14 @@ test("the real claim loop adds F4 after descriptor refresh only while the local 
         const deadline = Date.now() + 2000;
         while (!claim && Date.now() < deadline) await Bun.sleep(5);
         expect(order).toEqual(["targets", "descriptor", "claim"]);
-        expect(claim).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline",
+        expect(claim).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers",
           ...(enabled ? ["relay_owner_tools"] : [])], slots: [] });
       } finally { stopExternalRelayPollers(); await server.close(); }
     }
   } finally { setRelaySwitch("relay:owner_tools:enabled", false); updateRelayStore((store) => ({ ...store, relays: previous })); }
 });
-test("boot sweep settles dead owners, keeps live owners, and removes run directories", async () => {
+for (const location of ["temporary", "shared-home"] as const)
+test(`boot sweep settles dead owners, keeps live owners, and removes ${location} run directories`, async () => {
   let completed = 0;
   const server = await startTestRelay(
     () => (completed++, { body: { status: "accepted", duplicate: false } }),
@@ -362,13 +480,14 @@ test("boot sweep settles dead owners, keeps live owners, and removes run directo
         },
       ],
     }));
-    const staleDir = fs.mkdtempSync(
+    const staleDir = location === "shared-home" ? await createOwnerRunDirectory() : fs.mkdtempSync(
       path.join(externalRelayTempRoot(), "llv-external-relay-test-"),
     );
-    const liveDir = fs.mkdtempSync(
+    const liveDir = location === "shared-home" ? await createOwnerRunDirectory() : fs.mkdtempSync(
       path.join(externalRelayTempRoot(), "llv-external-relay-test-"),
     );
     runDirs.push(staleDir, liveDir);
+    for (const directory of [staleDir, liveDir]) fs.writeFileSync(path.join(directory, "owner-context.txt"), "Private quoted data", { mode: 0o600 });
     const row = {
       requestId: "stale",
       leaseId: "lease",
@@ -408,11 +527,13 @@ test("boot sweep settles dead owners, keeps live owners, and removes run directo
 test("orphan records distinguish terminal refusal from uncertain delivery and a removed pairing", async () => {
   const priorStore = readRelayStore();
   let status = 409;
-  const server = await startTestRelay(() => ({ status, body: { error: { code: "unavailable", message: "No receipt" } } }));
+  const server = await startTestRelay(() => ({ status, body: { error: { code: status === 422 ? "invalid_format" : "unavailable", reason: status === 422 ? "rich_limit_exceeded" : undefined, message: "private parser response" } } }));
+  const journal: string[] = [];
+  const info = spyOn(console, "info").mockImplementation((...args) => { journal.push(args.join(" ")); });
   try {
-    const paired = readRelayStore().relays[0]!;
+    const paired = { ...clonePairing(server.origin), id: "relay", api_base: `${server.origin}/v1` };
     updateRelayStore((store) => ({ ...store, relays: [{ ...paired, api_base: `${server.origin}/v1` }] }));
-    for (const code of [400, 401, 404, 409, 413, 426, 503, null]) {
+    for (const code of [400, 401, 404, 409, 413, 422, 426, 503, null]) {
       status = code ?? 503;
       if (code === null) updateRelayStore((store) => ({ ...store, relays: [] }));
       const requestId = `orphan_${code ?? "removed"}`;
@@ -427,12 +548,22 @@ test("orphan records distinguish terminal refusal from uncertain delivery and a 
       await sweepExternalRelayOrphans();
       expect(readAnswerRecord("relay", "target", requestId)).toMatchObject({
         state: "finished", outcome: "failed:install_restarted",
-        delivery: code === 503 || code === null ? "unconfirmed" : "refused",
+        delivery: code === 400 || code === 401 || code === 404 || code === 409 || code === 413 || code === 422 || code === 426 ? "refused" : "unconfirmed",
+        ...(code === 422 ? { completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] } : {}),
       });
+      if (code === 422) {
+        expect(journal.some(line => line.includes('"event":"relay_completion_refused"') && line.includes('"code":"invalid_format"')
+          && line.includes('"reason":"rich_limit_exceeded"'))).toBe(true);
+        expect(journal.join(" ")).not.toContain("private parser response");
+        const child = Bun.spawnSync([process.execPath, "-e", `import { readAnswerRecord } from './src/lib/externalRelay/answers.ts'; console.log(JSON.stringify(readAnswerRecord('relay', 'target', ${JSON.stringify(requestId)})));`], { env: { ...process.env } });
+        expect(child.exitCode).toBe(0);
+        expect(JSON.parse(child.stdout.toString())).toMatchObject({ completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
+      }
       expect(readRunLedger().runs.some((run) => run.requestId === requestId)).toBe(false);
       expect(fs.existsSync(runDir)).toBe(false);
     }
   } finally {
+    info.mockRestore();
     updateRelayStore(() => priorStore);
     await server.close();
   }
@@ -825,7 +956,7 @@ test("the claim loop refreshes targets first, merges them, and advertises slots 
     // "gone" is no longer offered and "added" remains routed to the service.
     expect(slots[0]).toEqual([{ target_id: "kept", free: 2 }, { target_id: "added", free: 1 }]);
     // The claim lists what this install implements (§A.2 rule 11).
-    expect(features[0]).toEqual(["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"]);
+    expect(features[0]).toEqual(["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers"]);
     expect(relayPollerStatus("loop_refresh").state).toBe("polling");
   } finally {
     stopExternalRelayPollers();
@@ -982,7 +1113,7 @@ test("chain and legacy local switches never advertise an unagreed wire feature",
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ v: 1, chat_conversations: true, chain_conversations: true, compact: true }));
-    expect(relayClaimCapabilities()).toEqual({ kinds: ["answer", "compact"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"] });
+    expect(relayClaimCapabilities()).toEqual({ kinds: ["answer", "compact"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers"] });
     setRelaySwitch("compact", false); expect(relayClaimCapabilities().kinds).toEqual(["answer"]);
   } finally { if (previous) fs.writeFileSync(file, previous); else fs.rmSync(file, { force: true }); }
 });
@@ -991,6 +1122,15 @@ test("claim advertises on-demand tools only when the stored descriptor offers th
   expect(relayClaimCapabilities({ features: ["relay_tool_calls", "relay_tools_on_demand"] }).features).toContain("relay_tools_on_demand");
   expect(relayClaimCapabilities({ features: ["relay_tool_calls"] }).features).not.toContain("relay_tools_on_demand");
   expect(relayClaimCapabilities().features).not.toContain("relay_tools_on_demand");
+});
+
+test("claim keeps isolated guest requester routing off until the paired release", () => {
+  const legacy = relayClaimCapabilities({ features: [] }).features;
+  expect(legacy).toContain("relay_guest_answers");
+  expect(legacy).toContain("requester_context");
+  expect(legacy).not.toContain("relay_isolated_requesters");
+  expect(relayClaimCapabilities().features).toEqual(legacy);
+  expect(relayClaimCapabilities({ features: [] }).features).toEqual(legacy);
 });
 
 test("inbound media is advertised only when the descriptor offers it and includes requester context", () => {
@@ -1003,5 +1143,152 @@ test("any-document claims require both inbound capabilities in the descriptor", 
     .toEqual(expect.arrayContaining(["relay_media_in", "requester_context", RELAY_MEDIA_ANY_DOCUMENT]));
   for (const features of [[], ["relay_media_in"], [RELAY_MEDIA_ANY_DOCUMENT]]) {
     expect(relayClaimCapabilities({ features }).features).not.toContain(RELAY_MEDIA_ANY_DOCUMENT);
+  }
+});
+
+/** A retained owner row whose late answer never got a delivery context. */
+function staleLateRow(relay: PairedRelay, id: string, startedAt: string, custody: "quarantined" | "confirmed", directory: string) {
+  const at = new Date(Date.parse(startedAt) + 600_000).toISOString();
+  const answer = { action: "reply" as const, text: "Fixture failure notice", reply_to: null };
+  reserveRun({ requestId: id, leaseId: `lease-${id}`, relayId: relay.id, targetId: relay.targets[0]!.id,
+    ownerPid: 999999999, ownerIdentity: "dead", childPid: null, childIdentity: null, startedAt, runDir: directory,
+    capacityReleased: true,
+    ownerTurn: { clientAttemptId: `relay-owner-${id}`, admissionComplete: true, cancelledAt: at,
+      ...(custody === "quarantined" ? { cancel: "interrupt" as const, quarantinedAt: at } : { cancel: "kill" as const, confirmed: true }),
+      released: { at, reason: "stop_unconfirmed" }, diagnostic: ownerTurnDiagnostic("launch", "fixture"),
+      failureReply: { answer, until: at },
+      lateAnswer: { body: { lease_id: `lease-${id}`, outcome: "answered", answer, duration_ms: 1000 }, files: [],
+        clientKey: cloneClientKey(relay.id, "owner-late-answer", id, 0), status: "pending-delivery-context" } } });
+}
+const lateStatus = (id: string) => readRunLedger().runs.find(row => row.requestId === id)?.ownerTurn?.lateAnswer?.status;
+
+test("late answers that can never be delivered are written off on the first sweep and keep their custody", async () => {
+  const priorStore = readRelayStore();
+  let sends = 0;
+  const server = await startTestRelay(() => { sends++; return { body: cloneReceipt() }; });
+  const relay = { ...clonePairing(server.origin), id: "stale-late-relay" };
+  relay.targets[0]!.ownerTier = true;
+  const paused = { ...clonePairing(server.origin), id: "stale-late-paused", paused: true };
+  updateRelayStore(store => ({ ...store, relays: [relay, paused] }));
+  const old = new Date(Date.now() - 17 * 24 * 60 * 60_000).toISOString();
+  const ids = ["stale_quarantined", "stale_confirmed", "stale_paused"];
+  const directories = ids.map(() => fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-stale-")));
+  runDirs.push(...directories);
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    staleLateRow(relay, ids[0]!, old, "quarantined", directories[0]!);
+    staleLateRow(relay, ids[1]!, old, "confirmed", directories[1]!);
+    staleLateRow(paused, ids[2]!, old, "confirmed", directories[2]!);
+    answerRecorder({ requestId: ids[1]!, relayId: relay.id, targetId: relay.targets[0]!.id, targetName: null, claimedAt: null, input: null })!
+      .begin("codex", null, { webSearch: true, owner: true });
+    await sweepExternalRelayOrphans();
+    expect(ids.map(lateStatus)).toEqual(["retry-expired", "retry-expired", "retry-expired"]);
+    // The write-off is readable in the answer record as well as the ledger.
+    expect(readAnswerRecord(relay.id, relay.targets[0]!.id, ids[1]!)).toMatchObject({ state: "finished", outcome: "failed:delivery_expired" });
+    expect(relayPollerStatus(paused.id).alarm).toBeNull();
+    const before = fs.statSync(externalRelayFile("runs")).ino;
+    await sweepExternalRelayOrphans();
+    // Terminal rows are neither retried nor rewritten, and nothing is deleted.
+    expect(fs.statSync(externalRelayFile("runs")).ino).toBe(before);
+    expect(ids.map(lateStatus)).toEqual(["retry-expired", "retry-expired", "retry-expired"]);
+    expect(directories.every(directory => fs.existsSync(directory))).toBe(true);
+    expect(readRunLedger().runs.find(row => row.requestId === ids[0])?.ownerTurn?.lateAnswer?.body).toMatchObject({ outcome: "answered" });
+    expect(sends).toBe(0);
+  } finally { log.mockRestore(); for (const id of ids) dropRun(id); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+test("an unsent deliverable answer still reaches the owner after the install was off for days", async () => {
+  const priorStore = readRelayStore();
+  const sends: CloneSendInput[] = [];
+  const server = await startTestRelay((req, payload) => { sends.push(payload as CloneSendInput); return { body: cloneReceipt() }; });
+  const relay = { ...clonePairing(server.origin), id: "offline-late-relay" };
+  relay.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const id = "offline_unsent";
+  const request = requestSchema.parse({ ...contextRequest, request_id: id, target_id: relay.targets[0]!.id,
+    answer: { max_chars: 4000, progress: "none" },
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } });
+  const owner = ownerTierFor({ ownerTier: true }, request)!;
+  const answer = { action: "reply" as const, text: "Fixture failure notice", reply_to: owner.messageId };
+  const startedAt = new Date(Date.now() - 3 * 24 * 60 * 60_000).toISOString();
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-offline-"));
+  runDirs.push(directory);
+  try {
+    reserveRun({ requestId: id, leaseId: request.lease_id, relayId: relay.id, targetId: request.target_id,
+      ownerPid: 999999999, ownerIdentity: "dead", childPid: null, childIdentity: null, startedAt, runDir: directory,
+      ownerTurn: { clientAttemptId: `relay-owner-${id}`, rawRequest: request, context: owner,
+        request: { text: owner.text, requestText: owner.requestText },
+        delivery: { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null },
+        cancel: "kill", confirmed: true, diagnostic: ownerTurnDiagnostic("exception", "fixture"),
+        failureReply: { answer, until: startedAt },
+        lateAnswer: { body: { lease_id: request.lease_id, outcome: "answered", answer, duration_ms: 1000 }, files: [] } } });
+    await sweepExternalRelayOrphans();
+    expect(sends).toHaveLength(1);
+    expect(readRunLedger().runs.some(row => row.requestId === id)).toBe(false);
+  } finally { dropRun(id); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+test("a settled terminal late answer is marked as holding no target slot, once", async () => {
+  const priorStore = readRelayStore();
+  const server = await startTestRelay(() => ({ body: cloneReceipt() }));
+  const relay = { ...clonePairing(server.origin), id: "terminal-slot-relay" };
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-slot-"));
+  runDirs.push(directory);
+  try {
+    staleLateRow(relay, "terminal_slot", new Date(Date.now() - 3 * 24 * 60 * 60_000).toISOString(), "confirmed", directory);
+    changeRun("terminal_slot", ({ capacityReleased: _released, ...row }) => ({ ...row,
+      ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn!.lateAnswer!, status: "retry-expired" } } }));
+    await sweepExternalRelayOrphans();
+    expect(readRunLedger().runs.find(row => row.requestId === "terminal_slot")).toMatchObject({ capacityReleased: true,
+      ownerTurn: { lateAnswer: { status: "retry-expired" } } });
+    const before = fs.statSync(externalRelayFile("runs")).ino;
+    await sweepExternalRelayOrphans();
+    expect(fs.statSync(externalRelayFile("runs")).ino).toBe(before);
+  } finally { dropRun("terminal_slot"); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+test("a late answer inside its window keeps retrying and reports its alarm beside the last result", async () => {
+  const priorStore = readRelayStore();
+  const server = await startTestRelay(() => ({ body: cloneReceipt() }));
+  const relay = { ...clonePairing(server.origin), id: "fresh-late-relay" };
+  relay.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-fresh-"));
+  runDirs.push(directory);
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    staleLateRow(relay, "fresh_late", new Date(Date.now() - 60 * 60_000).toISOString(), "confirmed", directory);
+    noteRelayOutcome(relay.id, "answered");
+    await sweepExternalRelayOrphans();
+    expect(lateStatus("fresh_late")).toBe("pending-delivery-context");
+    expect(relayPollerStatus(relay.id)).toMatchObject({ lastOutcome: "answered", alarm: "pending-delivery-context" });
+  } finally { log.mockRestore(); dropRun("fresh_late"); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+test("a terminal late answer inside its window is retained without another ledger write", async () => {
+  const priorStore = readRelayStore();
+  const server = await startTestRelay(() => ({ body: cloneReceipt() }));
+  const relay = { ...clonePairing(server.origin), id: "terminal-late-relay" };
+  relay.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-terminal-"));
+  runDirs.push(directory);
+  try {
+    staleLateRow(relay, "terminal_late", new Date(Date.now() - 60 * 60_000).toISOString(), "confirmed", directory);
+    changeRun("terminal_late", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn!.lateAnswer!, status: "uncertain" } } }));
+    const before = fs.statSync(externalRelayFile("runs")).ino;
+    await sweepExternalRelayOrphans();
+    expect(fs.statSync(externalRelayFile("runs")).ino).toBe(before);
+    expect(lateStatus("terminal_late")).toBe("uncertain");
+  } finally { dropRun("terminal_late"); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+
+test("history media claims require both history and inbound capabilities in the descriptor", () => {
+  expect(relayClaimCapabilities({ features: ["relay_media_in", "relay_history_media"] }).features)
+    .toEqual(expect.arrayContaining(["relay_media_in", "requester_context", "relay_history_media"]));
+  for (const features of [[], ["relay_media_in"], ["relay_history_media"]]) {
+    expect(relayClaimCapabilities({ features }).features).not.toContain("relay_history_media");
   }
 });

@@ -104,3 +104,29 @@ export function dispositionFilename(name: string): string {
   const safe = name.replace(/[^\x20-\x7e]|["\\]/g, "_");
   return safe.length > 0 ? safe : "artifact";
 }
+
+/** The headers every artifact response carries, shared by every route that
+    serves previewable bytes. */
+export function artifactResponseHeaders(mime: string, etag: string, name: string, download: boolean): Headers {
+  const headers = new Headers({
+    "content-type": mime,
+    "x-content-type-options": "nosniff",
+    "accept-ranges": "bytes",
+    "cache-control": "private, no-store",
+    etag,
+    "content-disposition": `${download ? "attachment" : "inline"}; filename="${dispositionFilename(name)}"`,
+  });
+  /* Everything the preview serves is inert data. PDF is exempted from the
+     sandbox directive only because browser PDF viewers refuse sandboxed
+     documents on "open externally", and a PDF response can never script the
+     app origin; SVG (and everything else) stays fully sandboxed, so even a
+     direct navigation to the raw URL renders in an origin-less, script-less
+     document. */
+  headers.set(
+    "content-security-policy",
+    mime === "application/pdf"
+      ? "default-src 'none'; object-src 'none'"
+      : "sandbox; default-src 'none'; script-src 'none'; style-src 'unsafe-inline'",
+  );
+  return headers;
+}

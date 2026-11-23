@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Locale } from "@/lib/i18n/core";
 import { proseLanguage } from "@/lib/i18n/proseLanguage";
 import { isCrossProjectRoleScope } from "./roleScopes";
-import type { RoleMemoryProjectView, RuleView } from "./roleTypes";
+import type { RoleMemoryProjectView, RuleView, ScopeView } from "./roleTypes";
 import type { MemoryProfileView, ProfileAnswer, ProfileBasis, ProfileError, ProfilePart, ProfileRow } from "./profileTypes";
 
 export const PROFILE_PROMPT_VERSION = 1;
@@ -78,7 +78,10 @@ export function basisChanges(before: ProfileBasis, after: ProfileBasis) {
   const current = new Map(after.map(rule => [rule.id, rule.changedAt]));
   return { added: after.filter(rule => !prior.has(rule.id)).length, rewritten: after.filter(rule => prior.has(rule.id) && prior.get(rule.id) !== rule.changedAt).length, removed: before.filter(rule => !current.has(rule.id)).length };
 }
-export function profileView(view: RoleMemoryProjectView, locale: Locale, model: string, row: ProfileRow | null): MemoryProfileView {
+export type ProfileRulesView = Pick<RoleMemoryProjectView, "project" | "enabled"> & {
+  scopes: Array<Pick<ScopeView, "scope" | "kind" | "roleId"> & { active: Array<Pick<RuleView, "id" | "changedAt">> }>;
+};
+export function profileView(view: ProfileRulesView, locale: Locale, model: string, row: ProfileRow | null): MemoryProfileView {
   const active = new Set(view.scopes.flatMap(scope => scope.active.map(rule => rule.id)));
   const currentBasis = view.scopes.filter(scope => scope.active.length).flatMap(scope => scope.active.map(({ id, changedAt }) => ({ id, changedAt })));
   const changed = { added: new Set<string>(), rewritten: new Set<string>(), removed: new Set<string>() };

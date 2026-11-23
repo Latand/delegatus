@@ -1,7 +1,10 @@
 import { candidateState, candidateById } from "../importCuration";
+import { roleScopePassLastAt, scopeRowForRewrite } from "../roleViewSource";
 import { importCollection, readImportRecord } from "../importStore";
 import { prepareImportEdits } from "./importApply";
+import { scopeRowWithEntry } from "../roleHistoryRows";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import fs from "node:fs";
 import path from "node:path";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -12,10 +15,10 @@ import { swarmRulesForRole } from "../swarmPack";
 import { archivedRule, lettersAndDigits, scopeChars } from "../roleConsolidate";
 import { taskIdentifier } from "../roleStage";
 import { assertGenericRule, problemInput } from "../roleProblems";
-import { canonicalScope, joinMovedScopes, newRuleId, refreshLessonKnownValues, roleMemoryCollection, RoleMemoryRefusal, versionedRule, rulePrivacyHints } from "../roleStore";
+import { canonicalScope, joinMovedScopes, newRuleId, refreshLessonKnownValues, lessonKnownValuesFile, roleMemoryCollection, RoleMemoryRefusal, versionedRule, rulePrivacyHints } from "../roleStore";
 import { scopeKind, scopeProject, scopeRole, isCrossProjectRoleScope } from "../roleScopes";
 import { lessonText, lessonTextLength, ROLE_MEMORY_BOUND, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type CuratorReason, type RoleMemoryRule, type RoleMemoryRow, type RoleMemoryScopeRow, type ProblemInput } from "../roleTypes";
-import { patchPass, readPass, readPassAuthority, passIsLive, curationCollection, type CuratorPass } from "./store";
+import { patchPass, readPass, readPassAuthority, passIsLive, curationCollection, curationOperationId, validCurationOperation, type CurationOperation, type CuratorPass } from "./store";
 
 export interface CurationApply {
   scopes: { scope: string; revision: number; order: string[] }[];
@@ -29,6 +32,42 @@ export interface CurationApply {
   defer?: { candidate: string; occurrences: string[] }[];
   restore?: string[];
   problem?: (ProblemInput & { id: string; note: string })[];
+}
+/** Supplied by the production binding, never decoded from tool arguments. */
+export interface CurationOperationContext {
+  pass: string;
+  conversationId: string;
+  project: string;
+  requestId: string;
+  digest: string;
+  assertCurrent: () => void;
+}
+export function readCurationOperation(context: CurationOperationContext): CurationOperation | null {
+  context.assertCurrent();
+  const id = curationOperationId(context.pass, context.requestId);
+  const row = curationCollection()?.get(`o:${id}`);
+  if (!row) return null;
+  if (row.kind !== "operation" || row.id !== id || row.pass !== context.pass || row.conversationId !== context.conversationId
+    || canonicalProject(row.project) !== canonicalProject(context.project)) {
+    refuse("CURATE_CALLER", "the saved operation belongs to another curator authority");
+  }
+  if (row.digest !== context.digest) refuse("idempotency_conflict", "clientRequestId was already used with different arguments");
+  context.assertCurrent();
+  return row;
+}
+export function curationOperationResult(row: CurationOperation) {
+  return { operationId: row.id, pass: row.pass, disposition: row.disposition, committedAt: row.committedAt,
+    revisions: row.revisions, placeholders: row.placeholders, counts: row.counts, maintenance: row.maintenance };
+}
+/** One bounded acknowledgement update. Failure leaves conservative pending
+ * metadata; it cannot erase or change the committed editorial disposition. */
+export function completeCurationMaintenance(context: CurationOperationContext, complete: Partial<CurationOperation["maintenance"]>) {
+  context.assertCurrent();
+  curationCollection()!.boundedPatch(2, tx => {
+    context.assertCurrent();
+    const row = readCurationOperation(context);
+    if (row) tx.put({ ...row, maintenance: { ...row.maintenance, ...complete } });
+  });
 }
 function refuse(code: string, message: string): never { throw new RoleMemoryRefusal(code, message); }
 function note(value: unknown): string {
@@ -57,17 +96,32 @@ function evidence(repo: string | null, where: string | undefined) {
   if (path.isAbsolute(relative) || !resolved.startsWith(`${root}${path.sep}`) || !fs.statSync(resolved).isFile()) refuse("CURATE_EVIDENCE", "evidence must name a file inside this repository");
 }
 
+type CurationApplyResult = { placeholders: Record<string, string>; counts: CuratorPass["counts"] };
+type CurationApplyOptions = { refreshKnownValues?: boolean; operation?: CurationOperationContext };
+
+export function applyCuration(pass: CuratorPass, input: CurationApply, now: string | undefined,
+  options: CurationApplyOptions & { operation: CurationOperationContext }): ReturnType<typeof curationOperationResult>;
+export function applyCuration(pass: CuratorPass, input: CurationApply, now?: string,
+  options?: CurationApplyOptions): CurationApplyResult | ReturnType<typeof curationOperationResult>;
 /** The partition, all text and every level boundary are checked before any row is committed. */
-export function applyCuration(pass: CuratorPass, input: CurationApply, now = new Date().toISOString(), options: { refreshKnownValues?: boolean } = {}) {
+export function applyCuration(pass: CuratorPass, input: CurationApply, now = new Date().toISOString(), options: CurationApplyOptions = {}): CurationApplyResult | ReturnType<typeof curationOperationResult> {
+  const operation = options.operation;
+  operation?.assertCurrent();
   const fresh = readPassAuthority(pass.id);
   if (!fresh || !passIsLive(fresh)) refuse("CURATE_ENDED", "this curator pass has ended");
+  if (operation) {
+    if (operation.pass !== fresh.id || operation.conversationId !== fresh.conversationId || operation.project !== canonicalProject(fresh.project)) refuse("CURATE_CALLER", "operation authority does not own this pass");
+    const saved = readCurationOperation(operation);
+    if (saved) return curationOperationResult(saved);
+  }
   joinMovedScopes(now);
   const allowedScopes = new Set(fresh.scopes.map(canonicalScope));
   if (!input.scopes?.length || input.scopes.length > 64) refuse("CURATE_INVALID", "name 1–64 scopes");
   const held = roleMemoryCollection(true)!;
   const imports = fresh.importBatch ? importCollection(true)! : undefined;
-  let result!: { placeholders: Record<string, string>; counts: CuratorPass["counts"] };
-  withViewerOperation("memory.import.curation", () => held.patchSync(() => {
+  const operations = operation ? curationCollection(true)! : undefined;
+  let result!: CurationApplyResult;
+  const prepare = () => {
     const records = new Map<string, RoleMemoryRow>();
     let remaining = 4096;
     const consume = () => { if (--remaining < 0) refuse("CURATE_BOUND", "curation row budget exceeded"); };
@@ -76,8 +130,14 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       put: (row: RoleMemoryRow) => { consume(); records.set(row.kind === "rule" ? `r:${row.id}` : row.kind === "scope" ? `s:${row.scope}` : `q:${row.pipelineId}:${row.stageId}:${row.attempt}`, row); },
     };
 
-    if (!passIsLive(readPassAuthority(pass.id))) refuse("CURATE_ENDED", "this curator pass has ended");
-    const previousAt = Math.max(0, ...[...allowedScopes].flatMap(scope => { const row = tx.get(`s:${scope}`); return row?.kind === "scope" ? row.history.filter(h => h.pass === pass.id).map(h => Date.parse(h.at)) : []; }));
+    operation?.assertCurrent();
+    if (JSON.stringify(readPassAuthority(pass.id)) !== JSON.stringify(fresh)) refuse("CURATE_STALE", "the curator pass changed before commit");
+    // Only the named scopes are rewritten below, and a scope row holds only
+    // its newest entries. The pass's last timestamp in every scope comes from
+    // the per-row digest, which covers the whole history.
+    const previousAt = Math.max(0, ...[...allowedScopes].flatMap(scope => {
+      consume(); const at = roleScopePassLastAt(scope, pass.id); return at === null ? [] : [at];
+    }));
     now = new Date(Math.max(Date.parse(now), previousAt + 1)).toISOString();
     const scopes = new Map<string, RoleMemoryScopeRow>();
     const before = new Map<string, RoleMemoryRule>();
@@ -238,20 +298,77 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
     const counts = { calls: 1, changed: touched.size + created.size, rewritten: input.rewrite?.length ?? 0, merged: input.merge?.reduce((n, m) => n + m.from.length, 0) ?? 0, moved: input.move?.length ?? 0, split: input.split?.length ?? 0, archived: (input.archive?.length ?? 0) + (input.problem?.length ?? 0), restored: input.restore?.length ?? 0 };
     for (const [scope, row] of scopes) {
       const revision = row.revision + 1;
-      tx.put({ ...row, active: orders.get(scope)!, curatedAt: now, revision, history: [...row.history, { revision, revisionScope: row.revisionScope ?? scope, at: now, by: "curator", pass: pass.id, ...(scope === input.scopes[0].scope ? { counts } : {}), before: row.active, prior: [...prior.values()].filter(p => canonicalScope(p.fields.scope) === scope), created: [...created.values()].filter(r => r.scope === scope).map(r => r.id), added: [],
+      tx.put(scopeRowWithEntry(row, { active: orders.get(scope)!, curatedAt: now, revision }, { revision, revisionScope: row.revisionScope ?? scope, at: now, by: "curator", pass: pass.id, ...(scope === input.scopes[0].scope ? { counts } : {}), before: row.active, prior: [...prior.values()].filter(p => canonicalScope(p.fields.scope) === scope), created: [...created.values()].filter(r => r.scope === scope).map(r => r.id), added: [],
         rewritten: [...prior.values()].flatMap(p => p.version && canonicalScope(p.fields.scope) === scope ? [{ id: p.id, version: p.version }] : []),
         moved: (input.move ?? []).filter(m => get(m.id).scope === scope).map(m => ({ id: m.id, from: scope, to: m.to })),
         split: (input.split ?? []).filter(s => get(s.id).scope === scope).map(s => ({ id: s.id, parts: [s.id, ...s.parts.slice(1).map((_, index) => placeholders[`split:${s.id}:${index + 1}`])] })),
-        merged: (input.merge ?? []).flatMap(m => m.from.map(from => ({ from, into: m.into }))), archived: [...(input.archive ?? []).map(a => a.id), ...(input.problem ?? []).map(p => p.id)], restored: input.restore ?? [] }] });
+        merged: (input.merge ?? []).flatMap(m => m.from.map(from => ({ from, into: m.into }))), archived: [...(input.archive ?? []).map(a => a.id), ...(input.problem ?? []).map(p => p.id)], restored: input.restore ?? [] }, { window: false }));
     }
     result = { placeholders, counts };
     const record = fresh.importBatch ? readImportRecord(fresh.importBatch.importId) : null;
     return { records: [...records.values()], ...(imports ? { companion: { records: [...importRows, ...(record && importRows.length ? [{ ...record, curationDirty: true }] : [])] } } : {}) };
-  }, { companion: imports }));
+  };
+  if (!operation) {
+    withViewerOperation("memory.import.curation", () => held.patchSync(prepare, { companion: imports }));
+  } else {
+    // Prepare under BEGIN IMMEDIATE, after every collection lease is held.
+    // The same admitted snapshot validates scope CAS, import occurrences and
+    // every other input before any merge; there is no detached plan to trust.
+    const memoryRows: RoleMemoryRow[] = [];
+    const importRows: unknown[] = [];
+    const operationRows: CurationOperation[] = [];
+    const patches = [{ collection: held as SqliteStateCollection<unknown>, records: memoryRows as unknown[] },
+      { collection: operations as SqliteStateCollection<unknown>, records: operationRows as unknown[] },
+      ...(imports ? [{ collection: imports as SqliteStateCollection<unknown>, records: importRows }] : [])];
+    try {
+      withViewerOperation("memory.import.curation", () => SqliteStateCollection.commitPatchesSync(patches, {
+        beforeMerge: () => {
+          operation.assertCurrent();
+          const saved = readCurationOperation(operation);
+          if (saved) { result = saved; return; }
+          const prepared = prepare();
+          const witness: CurationOperation = { kind: "operation", version: 1,
+            id: curationOperationId(operation.pass, operation.requestId), pass: operation.pass,
+            conversationId: operation.conversationId, project: operation.project, digest: operation.digest,
+            committedAt: now, disposition: "committed", revisions: input.scopes.map(item => ({ scope: item.scope, input: item.revision, result: item.revision + 1 })),
+            ...result, maintenance: { counts: "pending", knownValues: "pending", cleanup: "pending" } };
+          if (!validCurationOperation(witness)) refuse("CURATE_BOUND", "the operation acknowledgement exceeds its encoded bound");
+          // This derived file cannot describe the new transaction yet. Remove
+          // it before effects, including the crash window after COMMIT. A
+          // rollback can leave regeneration pending; publication stays closed.
+          fs.rmSync(lessonKnownValuesFile(), { force: true });
+          memoryRows.push(...prepared.records);
+          importRows.push(...prepared.companion?.records ?? []);
+          operationRows.push(witness);
+        },
+        beforeCommit: () => operation.assertCurrent(),
+      }));
+    } catch (error) {
+      // Lease/file cleanup can fail after COMMIT. Only the indexed witness
+      // proves that this exact request committed; never infer from rule text.
+      const saved = readCurationOperation(operation);
+      if (!saved) throw error;
+      return curationOperationResult(saved);
+    }
+    if (!operationRows.length) return curationOperationResult(readCurationOperation(operation)!);
+  }
   // History is authoritative if the separate counts update is interrupted.
-  const latest = readPass(pass.id);
-  if (latest) patchPass(pass.id, { counts: latest.counts });
-  if (options.refreshKnownValues !== false) refreshLessonKnownValues();
+  const maintenance: Partial<CurationOperation["maintenance"]> = { cleanup: "complete" };
+  try {
+    operation?.assertCurrent();
+    const latest = readPass(pass.id);
+    if (latest) patchPass(pass.id, { counts: latest.counts });
+    maintenance.counts = "complete";
+  } catch (error) { if (!operation) throw error; }
+  if (options.refreshKnownValues !== false) {
+    try { operation?.assertCurrent(); refreshLessonKnownValues(); maintenance.knownValues = "complete"; }
+    catch (error) { if (!operation) throw error; }
+  }
+  if (operation) {
+    operation.assertCurrent();
+    try { completeCurationMaintenance(operation, maintenance); } catch { /* Durable pending metadata remains authoritative. */ }
+    return curationOperationResult(readCurationOperation(operation)!);
+  }
   return result;
 }
 
@@ -266,8 +383,12 @@ export function revertCuratorPass(id: string, now = new Date().toISOString(), op
   // A pass can contain many individually bounded calls. Prepare its whole undo
   // under the collection lease, then persist every changed row atomically.
   held.patchSync(() => {
+    // An undo reads and rewrites whole histories, undo payloads included, so
+    // each scope it touches is taken with every entry in its row. A scope it
+    // changes is stored that way; the drain moves the entries out again.
+    const whole = (row: RoleMemoryRow | null) => row?.kind === "scope" ? scopeRowForRewrite(row, now) : row;
     const snapshot = [...new Set(pass.scopes.map(canonicalScope))].flatMap(scope => {
-      const row = held.get(`s:${scope}`); return row?.kind === "scope" ? [row] : [];
+      const row = whole(held.get(`s:${scope}`)); return row?.kind === "scope" ? [row] : [];
     });
     const allHistories = snapshot.flatMap(row => row.kind === "scope" ? row.history.filter(h => h.pass === id).map(h => ({ scope: row.scope, history: h })) : []);
     const histories = allHistories.filter(h => !h.history.revertedAt).sort((a, b) => b.history.at.localeCompare(a.history.at));
@@ -279,7 +400,7 @@ export function revertCuratorPass(id: string, now = new Date().toISOString(), op
     const rows = new Map<string, RoleMemoryRow | null>(snapshot.map(row => [key(row), row]));
     const changed = new Map<string, RoleMemoryRow>();
     const tx = {
-      get: (key: string) => { if (!rows.has(key)) rows.set(key, held.get(key)); return rows.get(key) ?? null; },
+      get: (key: string) => { if (!rows.has(key)) rows.set(key, whole(held.get(key))); return rows.get(key) ?? null; },
       put: (row: RoleMemoryRow) => { rows.set(key(row), row); changed.set(key(row), row); },
     };
     const last = new Map<string, string>();

@@ -1,4 +1,5 @@
 import { withHostStopOrigin } from "./hostExit";
+import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -6,11 +7,14 @@ import { resolveContinuityAccount } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ResumeSpec } from "@/lib/agent/cli";
-import { agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { conversationIdsResolvingTo, agentRegistry, storedPaneAgentRuns, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { livenessProbe, receiptProcessEvidence } from "@/lib/agent/accountLiveness";
+import { entryOwners } from "@/lib/lifecycle/owners";
+import { procBackend } from "@/lib/proc";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
-import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus } from "@/lib/processIdentity";
 import { derivedSpawnTitle, durableSemanticTitle } from "@/lib/title";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
@@ -18,10 +22,13 @@ import type { MessageOrigin } from "./messageOrigin";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
-import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
+import { CHECKOUT_MERGER_OPERATION_PREFIX, checkoutMergerCustody, checkoutMergerCutForOperation, currentCheckoutMerger } from "./checkoutMergerRecovery";
+import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
+import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop, stopOrphanedStructuredHost, type StructuredOrphanStopDependencies } from "./registry";
+import { forgetOrphanedHostGrace, ORPHANED_HOST_IN_FLIGHT_GRACE_MS, ORPHANED_HOST_STOP_REFUSED_HOLD_MS, structuredHostOrphaned } from "./orphanedHost";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
-import { stageGitEnvironment } from "./stageGitEnvironment";
+import { assertStageAttemptNotSettled, StageAttemptSettledError, stageGitEnvironment } from "./stageGitEnvironment";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -31,14 +38,62 @@ import {
   spawnStructuredConversation,
   structuredHostCell,
 } from "./structuredSpawn";
-import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
-import { findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
+import { structuredTransportAvailable } from "./spawnTransport";
+import { statePath } from "@/lib/configDir";
+import { recipientPipelineEvidenceRevision } from "@/lib/state/sqliteStateStore";
+import { loadPipelineOwnershipForStartupAsync, pipelineStartupAttemptMatches, findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 import { instanceCpuPrioritySource } from "./cpuAdmissionScope";
 import { cpuPriorityEnv } from "./cpuPriority";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { CodexAppServerHost } from "./codexAppServerHost";
+
+export const DEAD_STAGE_HOST_REASON = "stage host is gone; retry the stage, then send the message again";
+
+/** A negative delivery result, fenced against any journal actuation that won meanwhile. */
+export class StructuredStageHostGoneError extends Error {
+  constructor(reason: string) { super(reason); this.name = "StructuredStageHostGoneError"; }
+}
+
+/** An unactuated follow-up belongs to the stage controller once its published
+    host is proven gone. Missing or unreadable identity never supplies that proof. */
+export function deadStageHostReason(registry: AgentRegistry, conversationId: string, pathname: string,
+  generationId?: string | null): string | null {
+  try {
+    const conversation = registry.conversation(conversationId as ViewerConversationId);
+    const generation = conversation?.generations.at(-1);
+    if (!conversation || !generation || generation.path !== pathname
+      || generationId !== undefined && generation.id !== generationId) return null;
+    const membership = registry.conversationMemberships(conversation.id).filter(row => row.kind === "pipeline");
+    if (membership.length !== 1) return null;
+    const member = membership[0]!;
+    const pipeline = findPipelineRecord(member.containerId);
+    const run = pipeline?.runs.find(row => row.stageId === member.stageId);
+    const attempt = run?.attempts.at(-1);
+    if (!pipeline || !["running", "paused", "needs_decision"].includes(pipeline.state)
+      || pipeline.closedAt || pipeline.cursor?.stageId !== member.stageId
+      || !attempt || attempt.n !== member.round || attempt.paneId || !attempt.startedAt
+      || attempt.sessionId !== generation.id || attempt.agentPath !== generation.path
+      || !attempt.conversationId || registry.canonicalConversationId(attempt.conversationId as ViewerConversationId) !== conversation.id) return null;
+    const snapshot = registry.livenessConversationSnapshot(conversation.id);
+    const current = snapshot.conversations[conversation.id]?.generations.at(-1);
+    if (current?.id !== generation.id || current.path !== pathname) return null;
+    const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
+    const published = entry?.structuredHost?.process ?? entry?.hostExitProcess;
+    if (!entry || !published || entry.claimEpoch < 1 || entry.pendingAction !== null
+      || entry.status === "starting" || entry.status === "handoff"
+      || processIdentityStatus(published) !== "dead") return null;
+    const probe = livenessProbe();
+    if (entryOwners(entry, probe).owners.some(owner => owner.identities.some(identity => processIdentityStatus(identity) !== "dead"))) return null;
+    // A launch still publishing, or any surviving receipt owner, keeps custody.
+    if (Object.values(snapshot.receipts).some(receipt =>
+      receiptProcessEvidence(receipt, probe)?.state !== "gone")) return null;
+    return DEAD_STAGE_HOST_REASON;
+  } catch {
+    return null;
+  }
+}
 
 export interface StructuredRecoveryRequest {
   /** Reconnect a verified native listener without a successor. Ordinary
@@ -48,6 +103,9 @@ export interface StructuredRecoveryRequest {
   admissionGuard?: DeliveryAdmissionGuard;
   /** Seat authority after reservation, independent of this launch's new identity. */
   authorityGuard?: () => void;
+  /** Hand predecessor evidence to the verified successor before attachment
+      writes its ledger. Called synchronously after this recovery proves custody. */
+  acceptSuccessorClaim?: (key: SessionKey) => void;
   path: string;
   conversationId?: string | null;
   origin?: MessageOrigin;
@@ -58,8 +116,8 @@ export interface StructuredRecoveryRequest {
 
 /** No successor receipt exists yet; callers keep the original message queued. */
 export class StructuredRecoveryHeldForUpdateError extends Error {
-  constructor(message = "new autonomous recovery is held for the automatic update") {
-    super(message);
+  constructor(message = "new autonomous recovery is held for the automatic update", options?: ErrorOptions) {
+    super(message, options);
     this.name = "StructuredRecoveryHeldForUpdateError";
   }
 }
@@ -119,9 +177,11 @@ const defaultParkResolver: StructuredHostParkResolver = (engine, accountId, snap
 });
 
 export interface StructuredRecoveryDependencies {
+  /** Whether this deployment can host the recovered conversation. Without a
+      structured transport there is nothing to start, and recovery answers null. */
+  transportAvailable?: () => boolean;
   registry?: AgentRegistry;
   client?: RuntimeHostClient | null;
-  transport?: () => "tmux" | "structured";
   resolveAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null, project: string | null) => AccountContext;
   spawn?: typeof spawnStructuredConversation;
   processIdentity?: () => ProcessIdentity;
@@ -145,6 +205,8 @@ export interface StructuredRecoveryDependencies {
   failStagedLaunch?: typeof failStagedResume;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Termination ladder seams for an orphan whose owner process is gone. */
+  orphanStop?: StructuredOrphanStopDependencies;
 }
 
 /** A resume whose publication ended in failure (#2046), including an immediate
@@ -242,6 +304,34 @@ export class StructuredRecoverySynchronizingError extends Error {
   }
 }
 
+/** The host's recorded owner process is gone while its engine still has work
+    in flight; recovery stops it once the grace ends. The
+    caller keeps its message held and asks again. */
+export class StructuredOrphanGraceError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "StructuredOrphanGraceError";
+  }
+}
+
+/** The host's recorded owner process is gone, and its stop was refused: a
+    pending action owns the row, the engine's identity cannot be verified, or
+    processes survived the ladder. While `holding`, the caller keeps its
+    message held and asks again; past `until` it fails the message with this
+    reason. The row's seat holds an alarm naming the conversation. */
+export class StructuredOrphanStopRefusedError extends Error {
+  readonly until: number;
+  readonly holding: boolean;
+  constructor(detail: string, until: number, holding: boolean) {
+    super(holding
+      ? `the orphaned host could not be stopped (${detail}); the send is held until ${new Date(until).toISOString()} and the seat is alerted`
+      : `the orphaned host could not be stopped (${detail}); its seat is alerted to stop or rotate it`);
+    this.name = "StructuredOrphanStopRefusedError";
+    this.until = until;
+    this.holding = holding;
+  }
+}
+
 class StructuredRecoverySupersededError extends Error {
   constructor() {
     super("structured recovery operation is superseded");
@@ -264,6 +354,10 @@ interface RecoveryCandidate {
       unverifiable, so recovery must not issue a successor spawn while the
       durable row is unsettled. */
   hostProcessLive: boolean;
+  /** The engine process is alive, but its recorded claim owner is proven
+      gone: nobody can reach it, so ordinary recovery never hands it back as
+      live. An explicit ownership takeover still releases it as before. */
+  ownerOrphaned: boolean;
   /** The registered host is process-alive, claim-owned and not terminal. */
   hostLive: boolean;
   /** The provider limit parking that live host's account, if any. */
@@ -302,14 +396,15 @@ function candidateFor(
      old root is already dead. Only a successful termination retry can verify
      and clear this evidence. */
   if ((entry?.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
-  if (entry?.host) return null;
-  /* Structured cutover covers every registered transcript. Historical Codex
-     and Claude sessions reach their pane-less host through this recovery path,
-     including conversations that predate registry entries. A verified live
-     tmux owner returned above keeps ownership until that process exits. */
+  /* A stored row can name a pane agent that still runs after the upgrade. It
+     may write this transcript, so no second writer is started beside it. */
+  if (storedPaneAgentRuns(entry, procBackend)) return null;
+  /* Every registered transcript reaches its host through this recovery path,
+     including conversations that predate registry entries. */
   const terminal = entry?.status === "dead" || entry?.status === "unhosted";
   const hostProcessLive = Boolean(!terminal
     && structuredHostProcessAlive(entry?.structuredHost?.process ?? null));
+  const ownerOrphaned = hostProcessLive && structuredHostOrphaned(entry);
   const hostLive = Boolean(hostProcessLive
     && entry?.claimOwner
     && entry.pendingAction === null
@@ -374,6 +469,7 @@ function candidateFor(
       launchProfile: profile,
     },
     hostProcessLive,
+    ownerOrphaned,
     hostLive,
     park: hostPark,
     publishReady,
@@ -426,7 +522,27 @@ async function recoverCandidate(
         const { publishStructuredDeliveryHost, structuredDeliveryHostForConversation } = await import("./structuredDeliveryController");
         if (!structuredDeliveryHostForConversation(current.conversationId)) {
           const account = (dependencies.resolveAccount ?? resolveContinuityAccount)(current.engine, current.accountId, current.project);
+          const recipientSelection = () => {
+            const snapshot = registry.startupHostSnapshot(current!.key);
+            const conversationIds = conversationIdsResolvingTo(snapshot,current!.conversationId);
+            const entry = snapshot.entries[sessionKeyId(current!.key)];
+            const generation = registry.conversation(current!.conversationId)?.generations.at(-1);
+            return { ids: [...new Set(conversationIds.flatMap(id => (snapshot.memberships[id] ?? [])
+              .filter(item => item.kind === "pipeline").map(item => item.containerId)))], conversationIds,
+              agentPaths: [...new Set([entry?.artifactPath, generation?.path].filter((value): value is string => !!value))],
+              sessionIds: [current!.key.sessionId] };
+          };
+          const recipient = recipientSelection();
+          const recipientIdentity = JSON.stringify(recipient);
+          const recipientVersion = recipientPipelineEvidenceRevision(statePath("state.sqlite"), recipient);
           const authorize = () => {
+            if (!recipientVersion) throw new StructuredRecoveryHeldForUpdateError("recipient pipeline ownership index is unavailable for native reconnect");
+            if (recipientPipelineEvidenceRevision(statePath("state.sqlite"), recipient) !== recipientVersion) {
+              throw new StructuredRecoveryHeldForUpdateError("recipient pipeline authority changed during native reconnect");
+            }
+            if (JSON.stringify(recipientSelection()) !== recipientIdentity) throw new StructuredRecoverySupersededError();
+            if (registry.conversation(current!.conversationId)?.generations.at(-1)?.id !== current!.key.sessionId
+              || registry.conversation(current!.conversationId)?.supersededBy) throw new StructuredRecoverySupersededError();
             assertRecoveryAdmission(request, registry);
             request.authorityGuard?.();
             request.admissionGuard?.();
@@ -436,11 +552,20 @@ async function recoverCandidate(
           authorize();
           const claim = await withPipelineStartupAdmission(async available => {
             if (!available) throw new StructuredRecoveryHeldForUpdateError("pipeline authority is unavailable for native reconnect");
+            const owners = await loadPipelineOwnershipForStartupAsync(recipient.ids,new Set(recipient.conversationIds),recipient);
+            if (owners.some(row => row.survivors.some(identity => processIdentityStatus(identity) !== "dead")
+              || row.attempts.some(attempt => pipelineStartupAttemptMatches(attempt,recipient) && attempt.suspended))) {
+              throw new StructuredRecoveryHeldForUpdateError("recipient pipeline custody is unresolved for native reconnect");
+            }
             return registry.deliveryWriteOrBusy({ label: "registry.reconnect-startup-host" }, () => {
               authorize();
+              if (JSON.stringify(recipientSelection()) !== recipientIdentity
+                || registry.conversation(current!.conversationId)?.generations.at(-1)?.id !== current!.key.sessionId) {
+                throw new StructuredRecoverySupersededError();
+              }
               return registry.claimStructuredHost(current!.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner });
             });
-          }, "reconnecting requested startup host", undefined, true);
+          }, "reconnecting requested startup host", undefined, true, { recipient });
           if (claim?.structuredHost && claim.claimOwner) {
             let host: CodexAppServerHost | undefined;
             const releaseConnection = async () => {
@@ -449,12 +574,23 @@ async function recoverCandidate(
                 () => registry.releaseStructuredHostClaim(current!.key, claim.claimOwner!, claim.claimEpoch));
             };
             try {
+              if (!registry.ownsStructuredHostClaim(current.key, claim.claimOwner, claim.claimEpoch)) {
+                throw new StructuredRecoverySupersededError();
+              }
+              request.acceptSuccessorClaim?.(current.key);
+              request.admissionGuard?.(current.key);
               authorize();
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
+                omitSkillsInstructions: current.spec.launchProfile?.omitSkillsInstructions === true
+                  || sessionOriginFor(registry.conversation(current.conversationId) ?? {}) === "delegated",
+                ...(current.spec.launchProfile?.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
                 cwd: current.spec.cwd, codexHome: account.home,
+                mcpServers: current.spec.launchProfile?.mcpServers ?? ["viewer"],
+                plugins: current.spec.launchProfile?.plugins ?? [],
                 env: { ...withoutUnsupportedApiCredentials(account.env),
                   ...await stageGitEnvironment(registry, current.conversationId, entry.structuredHostOperationId, current.spec.cwd) }, socketOwner,
+                assertCurrent: authorize,
                 initialEventCursor: claim.structuredHost.eventCursor,
                 readProtocolVersion: () => retainedProtocolVersion ?? "unknown",
                 memoryCell: structuredHostCell(registry, "codex", sessionKeyId(current.key), current.conversationId),
@@ -468,6 +604,16 @@ async function recoverCandidate(
               await publishStructuredDeliveryHost({ key: current.key, host, writerEpoch: claim.claimEpoch }, owns);
               const reconnected = structuredDeliveryHostForConversation(current.conversationId) === host;
               if (!reconnected) await releaseConnection();
+              else {
+                /* The host is claimed again: an orphan alarm raised before the
+                   reconnect no longer holds. */
+                try {
+                  const { closeOrphanedHostAlarm } = await import("./orphanedHostAlarm");
+                  await closeOrphanedHostAlarm(registry, current.key);
+                } catch (error) {
+                  console.error("[structured recovery] orphaned host alarm closure deferred", { key: sessionKeyId(current.key), error: String(error) });
+                }
+              }
               dependencies.requestDeliveryDrain?.();
               return { ...liveHostResult(current), reconnected, ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}) };
             } catch (error) {
@@ -478,6 +624,58 @@ async function recoverCandidate(
           }
         }
       }
+    }
+    /* A settled stage attempt is never rehosted (stageGitEnvironment.ts). Say
+       so before a parked fence is settled, a dead claim is retired or a resume
+       is reserved, so the send that asked ends now instead of waiting on a
+       host that cannot come back. */
+    if (!ownership && !current.hostLive) {
+      await assertStageAttemptNotSettled(registry, current.conversationId, current.spec.cwd);
+    }
+    /* A live engine whose recorded owner process is gone, typically one
+       that outlived a release handover. A Codex socket that could be reconnected was reconnected above;
+       anything else is stopped through the identity-fenced orphan ladder, after
+       a bounded grace when it still has work in flight, and then resumed
+       below. A host whose owner may still run never reaches this. */
+    if (current.ownerOrphaned && !ownership) {
+      request.admissionGuard?.();
+      const operationAdmittedAt = request.operationId ? registry.deliveryAdmissionAtForOperation(request.operationId) : null;
+      const orphanKey = current.key;
+      const now = dependencies.now ?? Date.now;
+      const stop = await stopOrphanedStructuredHost(registry, orphanKey, {
+        admittedAt: operationAdmittedAt ?? request.admittedAt ?? null,
+        now,
+        graceMs: ORPHANED_HOST_IN_FLIGHT_GRACE_MS,
+        refusedHoldMs: ORPHANED_HOST_STOP_REFUSED_HOLD_MS,
+        recheck: () => {
+          request.admissionGuard?.();
+          request.authorityGuard?.();
+          assertRestartCutEvidenceDecided(orphanKey);
+        },
+      }, dependencies.orphanStop);
+      if (stop.state === "grace") throw new StructuredOrphanGraceError(stop.detail);
+      if (stop.state === "refused") {
+        const holding = now() < stop.until;
+        /* The seat hears of it once, when the refusal is first seen, and again
+           when the held send gives up, so a lost first card is replaced. */
+        if (stop.firstObserved || !holding) {
+          try {
+            const { raiseOrphanedHostAlarm } = await import("./orphanedHostAlarm");
+            await raiseOrphanedHostAlarm(registry, orphanKey, stop.detail);
+          } catch (error) {
+            console.error("[structured recovery] orphaned host alarm publication deferred", { key: sessionKeyId(orphanKey), error: String(error) });
+          }
+        }
+        throw new StructuredOrphanStopRefusedError(stop.detail, stop.until, holding);
+      }
+      await assertOwnership();
+      current = candidateFor(registry, request, Boolean(ownership), park);
+      if (!current) return null;
+    } else if (!current.ownerOrphaned) {
+      /* An orphan that exited on its own, or was claimed again, leaves its
+         grace and refusal records behind; a later orphan of the same row
+         would replace them, but nothing else reads them. */
+      await forgetOrphanedHostGrace(registry.filename, sessionKeyId(current.key));
     }
     if (current.hostProcessLive && !current.hostLive
       && await settleParkedResumeFence(registry, current.key, client, dependencies)) {
@@ -640,7 +838,7 @@ async function recoverCandidate(
             successorEpoch = claimEpoch;
             ownsSuccessor = () => !!claimOwner && registry.ownsStructuredHostClaim(current.key, claimOwner, claimEpoch);
             // The spawn supplies the claim it just acquired, before yielding.
-            // Later checks accept only this reservation and this writer.
+            // Later checks accept only this reservation, writer and current generation.
             admissionGuard = () => {
               assertAuthority();
               if (!request.authorityGuard) request.admissionGuard?.();
@@ -648,6 +846,7 @@ async function recoverCandidate(
               const receipt = snapshot.receipts[launchId];
               const entry = snapshot.entries[sessionKeyId(current.key)];
               if (!claimOwner || !receipt || receipt.conversationId !== current.conversationId
+                || registry.conversation(current.conversationId)?.generations.at(-1)?.id !== current.key.sessionId
                 || receipt.accountId !== account.accountId || receipt.purpose !== "resume-successor"
                 || receipt.state === "failed" || receipt.state === "conflicted"
                 || entry?.claimOwner !== claimOwner || entry.claimEpoch !== claimEpoch
@@ -657,6 +856,8 @@ async function recoverCandidate(
               }
             };
             claimed = true;
+            admissionGuard();
+            request.acceptSuccessorClaim?.(current.key);
             admissionGuard();
           },
         },
@@ -680,6 +881,8 @@ async function recoverCandidate(
         && (!entry?.structuredHostOperationId || entry.structuredHostOperationId === launchId || entry.structuredHostOperationId === predecessorOperation)
         && !entry?.host && !entry?.claimOwner && !entry?.structuredHost?.process
         && !entry?.pendingAction && !(entry?.structuredTerminationSurvivors?.length)) {
+        /* The attempt settled after the check above: the same answer, by name. */
+        if (error instanceof StageAttemptSettledError) throw error;
         throw new StructuredResumeUnpublishedError(receipt.error ?? (error instanceof Error ? error.message : "host resume did not publish"));
       }
       throw error;
@@ -729,8 +932,31 @@ export async function recoverDeadStructuredConversation(
   request: StructuredRecoveryRequest,
   dependencies: StructuredRecoveryDependencies = {},
 ): Promise<StructuredRecoveryResult | null> {
-  if ((dependencies.transport ?? spawnTransport)() !== "structured") return null;
+  if (!(dependencies.transportAvailable ?? structuredTransportAvailable)()) return null;
   const registry = dependencies.registry ?? agentRegistry();
+  if (request.operationId?.startsWith(CHECKOUT_MERGER_OPERATION_PREFIX)) {
+    const { conversationId, operationId, admissionGuard, authorityGuard } = request;
+    const cut = conversationId && checkoutMergerCutForOperation(registry.filename, conversationId, operationId);
+    const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
+    if (!cut || !client) return null;
+    const snapshot = () => registry.livenessConversationSnapshot(cut.conversationId);
+    if (checkoutMergerCustody(snapshot(), cut) !== "ended"
+      || await hasRuntimeSwitchKill(client, cut.conversationId, cut.capturedAt, [], true, true)
+      || checkoutMergerCustody(snapshot(), cut) !== "ended") return null;
+    const authorize = () => {
+      const file = snapshot();
+      const current = currentCheckoutMerger(file, cut);
+      if (!checkoutMergerCutForOperation(registry.filename, cut.conversationId, operationId)
+        || !current || current.claimEpoch !== cut.claimEpoch + 1 && checkoutMergerCustody(file, cut) !== "ended") {
+        throw new DeliveryAdmissionRefusedError("checkout merger recovery authority changed");
+      }
+    };
+    request = { ...request,
+      admissionGuard: key => { admissionGuard?.(key); authorize(); },
+      authorityGuard: () => { (authorityGuard ?? admissionGuard)?.(); authorize(); },
+    };
+    authorize();
+  }
   if (dependencies.ownership && !await dependencies.ownership.owns()) {
     throw new StructuredRecoverySupersededError();
   }
@@ -788,7 +1014,7 @@ export async function recoverDeadStructuredConversation(
       },
     });
   }
-  if (candidate.hostLive && !dependencies.ownership && !admittedRequest.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
+  if (candidate.hostLive && !candidate.ownerOrphaned && !dependencies.ownership && !admittedRequest.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
   const recovery = recoverCandidate(admittedRequest, dependencies, registry, candidate);
   recoveries.set(recoveryKey, recovery);
   try {

@@ -1,12 +1,14 @@
 /*
  * The short sounds that mark a voice session connecting and disconnecting (item 5 of
- * docs/design/voice-delegatus-live-feedback.md). Two sine tones through one gain, made by the page itself: no file,
- * no fetch, no decoding. A cue is best effort and never fails a session, and the header's sound switch governs it.
+ * docs/design/voice-delegatus-live-feedback.md), and a timer coming up (docs/design/voice-timers.md). Sine tones through
+ * one gain, made by the page itself: no file, no fetch, no decoding. A cue is best effort and never fails a session, and the header's sound switch governs it.
  */
 
 import { readAudioPrefs } from "@/lib/audio/prefs";
 
 export const CUE_TONES = { low: 660, high: 990 } as const;
+/** Three steps up, so a timer never sounds like a call connecting or dropping. */
+export const TIMER_CUE_TONES = [880, 1108, 1319] as const;
 /** Quiet: well under the voice. */
 export const CUE_PEAK_GAIN = 0.05;
 const TONE_S = 0.07;
@@ -21,6 +23,10 @@ export interface CompanionCues {
   prepare(): void;
   connect(): void;
   disconnect(): void;
+  /** A voice timer came up during the call. */
+  timer(): void;
+  tick?(): void;
+  giveUp?(): void;
   /** Closes the context. */
   dispose(): void;
 }
@@ -36,7 +42,7 @@ export function createBrowserCues(
       return context;
     } catch { return null; }
   };
-  const play = (hz: readonly [number, number]) => {
+  const play = (hz: readonly number[], peak = CUE_PEAK_GAIN) => {
     try {
       if (!enabled()) return;
       const audio = open();
@@ -52,7 +58,7 @@ export function createBrowserCues(
         oscillator.frequency.value = frequency;
         oscillator.connect(gain);
         gain.gain.setValueAtTime(FLOOR, at);
-        gain.gain.linearRampToValueAtTime(CUE_PEAK_GAIN, at + ATTACK_S);
+        gain.gain.linearRampToValueAtTime(peak, at + ATTACK_S);
         gain.gain.exponentialRampToValueAtTime(FLOOR, at + TONE_S);
         oscillator.start(at);
         oscillator.stop(at + TONE_S + 0.01);
@@ -63,6 +69,9 @@ export function createBrowserCues(
     prepare() { open(); },
     connect() { play([CUE_TONES.low, CUE_TONES.high]); },
     disconnect() { play([CUE_TONES.high, CUE_TONES.low]); },
+    timer() { play(TIMER_CUE_TONES); },
+    tick() { play([660], 0.012); },
+    giveUp() { play([990, 825, 660]); },
     dispose() {
       const audio = context;
       context = null;

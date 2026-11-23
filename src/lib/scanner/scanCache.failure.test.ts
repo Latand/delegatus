@@ -92,13 +92,11 @@ test("a retained scan failure stays diagnostic while controller ticks succeed an
     return success;
   });
   const sweeps: string[] = [];
-  let flows = 0;
   const errors: unknown[] = [];
   const controller = new FlowPipelineController({
     now: () => now,
     scan: controllerFileScan,
     tickPipelines: async () => ({ changed: false }),
-    tickFlows: async () => { flows++; return { changed: false }; },
     sweepForgeLinks: () => { sweeps.push("forge"); },
     sweepAutoMerge: () => { sweeps.push("merge"); },
     sweepSpawnNotices: () => { sweeps.push("notice"); },
@@ -114,7 +112,6 @@ test("a retained scan failure stays diagnostic while controller ticks succeed an
     expect(deferred.status).toBe(200);
     expect(await deferred.json()).toEqual({ ok: true });
     expect(sweeps).toEqual(["forge", "merge", "notice"]);
-    expect(flows).toBe(0);
     await expect(completedFileScan({ wait: false })).rejects.toMatchObject({
       generation: 1, failedAt: 100_000, ageMs: 2_000, cause: failure,
     });
@@ -136,7 +133,6 @@ test("a retained scan failure stays diagnostic while controller ticks succeed an
     release();
     await completed;
     expect((await tick()).status).toBe(200);
-    expect(flows).toBe(0);
     expect(scans).toBe(2);
     expect(sweeps).toHaveLength(12);
   } finally {

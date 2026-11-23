@@ -6,9 +6,8 @@ import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-import { mergeRuntimeReceipts } from "@/components/TmuxComposer";
+import { mergeRuntimeReceipts } from "@/components/ConversationComposer";
 import { applyEvent, installSnapshot } from "@/components/runtime/runtimeModel";
-import type { Flow } from "@/lib/flows/types";
 import { UnixRuntimeHostClient } from "@/lib/runtime/client";
 import { runtimePresentationReceipt, runtimeScope, terminalRetryOperationId, type RuntimeWriterStatus } from "@/lib/runtime/contracts";
 import { projectEngineHostEvent } from "@/lib/runtime/engineHostEvents";
@@ -2166,13 +2165,11 @@ test("engine output acknowledges before a slow unrelated consumer and checkpoint
   let releaseConsumer!: () => void;
   const consumerRelease = new Promise<void>(resolve => { releaseConsumer = resolve; });
   const host = new RuntimeHost(journal, {
-    flowReady: () => undefined,
     taskDeliveryAcknowledged: async () => {
       started();
       await consumerRelease;
       unrelatedFinished = true;
     },
-    workflowStageCompleted: () => undefined,
   });
   const unrelated = host.handle({ id: "unrelated", method: "append", params: { event: {
     scope: runtimeScope("task", "other"), kind: "task.delivery.acked",
@@ -2215,9 +2212,7 @@ test("engine publication allowlist preserves terminal, operation and unknown-eve
   const consumerStarted = new Promise<void>((resolve) => { started = resolve; });
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const host = new RuntimeHost(journal, {
-    flowReady: () => undefined,
     taskDeliveryAcknowledged: async () => { started(); await gate; },
-    workflowStageCompleted: () => undefined,
   });
   const unrelated = host.handle({ id: "unrelated", method: "append", params: { event: {
     scope: runtimeScope("task", "other"), kind: "task.delivery.acked",
@@ -2268,9 +2263,7 @@ test("a serial engine producer waits for its terminal projection before publishi
   const consumerStarted = new Promise<void>((resolve) => { started = resolve; });
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const host = new RuntimeHost(journal, {
-    flowReady: () => undefined,
     spawnTurnEnded: async () => { started(); await gate; },
-    workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
   });
   const events = [
@@ -2312,9 +2305,7 @@ test.each([20_000, 2])("acknowledged engine events survive a crash with a %i-eve
     let started;
     const ready = new Promise(resolve => { started = resolve; });
     const host = new RuntimeHost(journal, {
-      flowReady: () => undefined,
       taskDeliveryAcknowledged: async () => { started(); await new Promise(() => {}); },
-      workflowStageCompleted: () => undefined,
     });
     void host.handle({ id: "unrelated", method: "append", params: { event: {
       scope: "task:other", kind: "task.delivery.acked", payload: { taskId: "other", assignmentId: "assignment" },
@@ -2359,9 +2350,7 @@ test.each([20_000, 2])("acknowledged engine events survive a crash with a %i-eve
   });
   let workflowCalls = 0;
   const host = new RuntimeHost(journal, {
-    flowReady: () => undefined,
     taskDeliveryAcknowledged: () => { workflowCalls += 1; },
-    workflowStageCompleted: () => undefined,
   });
   try {
     expect(events.map((event) => event.kind)).toEqual(["task.delivery.acked", "delta", "delta", "delta", "turn-ended"]);
@@ -2416,7 +2405,7 @@ test("first upgrade retains legacy pending events through epoch claim, crash and
     const journal = new RuntimeJournal(process.env.TEST_JOURNAL, { maxEvents: 4, structuredHosts: true });
     journal.claimHostEpoch();
     const host = new RuntimeHost(journal, {
-      flowReady: () => undefined, workflowStageCompleted: () => undefined, taskDeliveryAcknowledged: () => undefined,
+      taskDeliveryAcknowledged: () => undefined,
     });
     console.log(JSON.stringify({ status: journal.operationResult("compact-one").receipt.status }));
     setInterval(() => {}, 1000);
@@ -2440,8 +2429,6 @@ test("first upgrade retains legacy pending events through epoch claim, crash and
   journal.claimHostEpoch();
   const calls: number[] = [];
   const host = new RuntimeHost(journal, {
-    flowReady: () => undefined,
-    workflowStageCompleted: (_workflow, stage) => { calls.push(stage); },
     taskDeliveryAcknowledged: () => undefined,
   });
   const checkpoints: string[] = [];
@@ -2464,8 +2451,6 @@ test("first upgrade retains legacy pending events through epoch claim, crash and
   try {
     reopened.claimHostEpoch();
     const host = new RuntimeHost(reopened, {
-      flowReady: () => undefined,
-      workflowStageCompleted: (_workflow, stage) => { calls.push(stage); },
       taskDeliveryAcknowledged: () => undefined,
     });
     expect(await host.recoverConsumers()).toBe(0);
@@ -2562,8 +2547,6 @@ test("a compacted consumer checkpoint stays completed when its producer retries 
   let calls = 0;
   const ports = {
     taskDeliveryAcknowledged: () => { calls += 1; },
-    workflowStageCompleted: () => undefined,
-    flowReady: () => undefined,
   };
   const terminal = {
     scope: runtimeScope("session", "worker"), kind: "task.delivery.acked", payload: { taskId: "flow-one", assignmentId: "assignment" },
@@ -2595,11 +2578,6 @@ test("runtime host consumes a retired flow terminal event without advancing or p
   const calls: string[] = [];
   let progressSignals = 0;
   const host = new RuntimeHost(journal, {
-    flowReady: (flowId, note) => {
-      calls.push(`${flowId}:${note}`);
-      return { id: flowId, state: "spawn_pending" } as unknown as Flow;
-    },
-    workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
   }, undefined, false, () => { progressSignals += 1; });
   await host.handle({
@@ -2658,12 +2636,10 @@ test("a newly committed terminal event wakes promptly once while a completion no
   const flowReadyGate = new Promise<void>((resolve) => { releaseFlowReady = resolve; });
   let progressSignals = 0;
   const host = new RuntimeHost(journal, {
-    flowReady: () => undefined,
     spawnTurnEnded: async () => {
       markFlowReadyStarted();
       await flowReadyGate;
     },
-    workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
   }, undefined, false, () => { progressSignals += 1; });
   const request = {
@@ -2727,8 +2703,6 @@ test("runtime host retries an uncheckpointed consumer after a committed event", 
       if (attempts === 1) throw new Error("consumer interrupted");
       return { id: flowId, state: "spawn_pending" } as never;
     },
-    workflowStageCompleted: () => undefined,
-    flowReady: () => undefined,
   });
   const request = {
     method: "append" as const,
@@ -2756,8 +2730,6 @@ test("runtime host quarantines a deterministic consumer failure without poisonin
   let attempts = 0;
   const host = new RuntimeHost(journal, {
     taskDeliveryAcknowledged: () => { attempts += 1; throw new Error("poison event"); },
-    workflowStageCompleted: () => undefined,
-    flowReady: () => undefined,
   });
   const event = {
     scope: runtimeScope("session", "implementer"),
@@ -2787,8 +2759,6 @@ test("runtime host serializes concurrent duplicate consumer delivery", async () 
       await consumerGate;
       return { id: flowId, state: "spawn_pending" } as never;
     },
-    workflowStageCompleted: () => undefined,
-    flowReady: () => undefined,
   });
   const event = {
     scope: runtimeScope("session", "implementer"),
@@ -2822,8 +2792,6 @@ test("runtime command acknowledgements do not wait for a slow committed-event co
       await consumerGate;
       return { id: "flow-one", state: "spawn_pending" } as never;
     },
-    workflowStageCompleted: () => undefined,
-    flowReady: () => undefined,
   }, undefined, true);
   journal.append({
     scope: runtimeScope("session", "slow-consumer"),
@@ -2866,8 +2834,6 @@ test("runtime host acknowledges a durable command while consumer recovery is slo
       await consumerGate;
       return { id: flowId, state: "spawn_pending" } as never;
     },
-    workflowStageCompleted: () => undefined,
-    flowReady: () => undefined,
   });
   const pendingConsumerEvent = journal.append({
     scope: runtimeScope("session", "implementer"),
@@ -2931,11 +2897,6 @@ test("runtime host consumes legacy flow events after restart without actuation",
   const reopened = new RuntimeJournal(filename, { maxEvents: 100, now: () => 200 });
   const calls: string[] = [];
   const host = new RuntimeHost(reopened, {
-    flowReady: (flowId, note) => {
-      calls.push(`${flowId}:${note}`);
-      return { id: flowId, state: "spawn_pending" } as unknown as Flow;
-    },
-    workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
   });
   expect(await host.recoverConsumers()).toBe(2);
@@ -3075,8 +3036,6 @@ test("journal detects a modified hash chain and serves read-only host diagnostic
   startup.bindHostEpoch(corrupted.snapshot().runtime.hostEpoch);
   for (const phase of RUNTIME_HOST_STARTUP_PHASES) startup.record(phase);
   const host = new RuntimeHost(corrupted, {
-    flowReady: () => { throw new Error("faulted journal must not consume"); },
-    workflowStageCompleted: () => { throw new Error("faulted journal must not consume"); },
     taskDeliveryAcknowledged: () => { throw new Error("faulted journal must not consume"); },
   }, undefined, true, undefined, undefined, () => startup.readyEvidence());
   const socketPath = path.join(dir, "runtime.sock");
@@ -3752,6 +3711,84 @@ test.each((["operator", "agent"] as const).flatMap(origin => (["running", "idle"
   journal.close();
 });
 
+test("stop lookup scopes every runtime RPC page and preserves legacy and current authorship", async () => {
+  const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
+  const dir = sandbox("scoped-stop-lookup");
+  const filename = path.join(dir, "events.sqlite");
+  const options = { structuredHosts: true, now: () => 1000 };
+  const conversationId = "conversation_scoped_stop";
+  const since = new Date(1000).toISOString();
+  new RuntimeJournal(filename, options).close();
+  const legacyIds = Array.from({ length: 101 }, (_, index) => `legacy-interrupt-${index}`);
+  // Old software wrote a separate receipt for each interrupt, even on one
+  // conversation. Opening the current journal materializes those boundaries.
+  const database = new Database(filename);
+  const insert = database.query("INSERT INTO operations(operation_id, conversation_id, idempotency_key, request_hash, request_json, receipt_json, event_seq) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  database.transaction(() => {
+    for (const [index, id] of legacyIds.entries()) {
+      for (const scope of [conversationId, "unrelated"]) {
+        const operationId = `${scope}-${id}`;
+        const request = { conversationId: scope, kind: "interrupt", idempotencyKey: operationId };
+        const receipt = { ...request, operationId, admittedAt: since, at: since, status: "interrupted" };
+        insert.run(operationId, scope, operationId, operationId, JSON.stringify(request), JSON.stringify(receipt),
+          2 * index + (scope === conversationId ? 2 : 1));
+      }
+    }
+  })();
+  database.close();
+
+  const socketPath = path.join(dir, "runtime.sock");
+  const journal = new RuntimeJournal(filename, options);
+  const server = serveRuntimeHost(socketPath, new RuntimeHost(journal, undefined, undefined, true));
+  const client = new UnixRuntimeHostClient(socketPath);
+  const effects = client.effectBatch.bind(client);
+  const batches: Array<{ scope?: string; after: number; sequences: number[] }> = [];
+  const traced: Pick<UnixRuntimeHostClient, "effectBatch" | "operationStatus"> = {
+    async effectBatch(kinds, after = 0, options) {
+      const rows = await effects(kinds, after, options);
+      batches.push({ scope: options?.conversationId, after, sequences: rows.map(row => row.eventSeq) });
+      return rows;
+    },
+    operationStatus: client.operationStatus.bind(client),
+  };
+  try {
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    const ignored = legacyIds.map(id => `${conversationId}-${id}`);
+    await expect(hasRuntimeSwitchKill(traced, conversationId, since, ignored.slice(0, -1), true)).rejects.toThrow("legacy stop authorship");
+    expect(batches.splice(0)).toEqual([
+      { scope: conversationId, after: 0, sequences: Array.from({ length: 100 }, (_, index) => 2 * index + 2) },
+      { scope: conversationId, after: 200, sequences: [202] },
+    ]);
+    expect(await hasRuntimeSwitchKill(traced, conversationId, since, ignored, true)).toBe(false);
+    expect(await hasRuntimeSwitchKill(traced, conversationId, new Date(1001).toISOString(), [], true)).toBe(false);
+    expect(await hasRuntimeSwitchKill(traced, "unrelated' OR 1=1 --", since, [], true)).toBe(false);
+    expect(batches.at(-1)).toEqual({ scope: "unrelated' OR 1=1 --", after: 0, sequences: [] });
+
+    const current = "conversation_current_stop";
+    const sessionKey = { engine: "codex" as const, sessionId: "current-stop" };
+    journal.append({ scope: runtimeScope("session", current), kind: "session-status", payload: {
+      conversationId: current, sessionKey, host: "hosted", turn: "running", activeTurnId: "stop-turn",
+    } });
+    await client.command({ kind: "interrupt", conversationId: current, operationId: "system-interrupt",
+      idempotencyKey: "system-interrupt", origin: { kind: "agent" } });
+    expect(await hasRuntimeSwitchKill(traced, current, since, [], true)).toBe(false);
+    await client.command({ kind: "kill", conversationId: current, sessionKey, operationId: "operator-kill",
+      idempotencyKey: "operator-kill", origin: { kind: "operator" } });
+    expect(await hasRuntimeSwitchKill(traced, current, since, [], true)).toBe(true);
+    expect(await hasRuntimeSwitchKill(traced, current, since, ["operator-kill"], true)).toBe(false);
+    expect(await hasRuntimeSwitchKill(traced, current, since)).toBe(false);
+    await client.transitionOperation("operator-kill", "delivering");
+    await client.transitionOperation("operator-kill", "delivered");
+    expect(await hasRuntimeSwitchKill(traced, current, since)).toBe(true);
+    expect(await hasRuntimeSwitchKill(traced, current, new Date(1001).toISOString())).toBe(false);
+    expect(batches.slice(-2).map(batch => batch.scope)).toEqual([current, current]);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a base-release interrupt keeps its cancellation fence after upgrade and compaction", async () => {
   const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
   const filename = path.join(sandbox("legacy-stop-upgrade"), "events.sqlite");
@@ -4072,8 +4109,6 @@ test("a settled turn reaches the completion-notice port once, and a failed consu
   const seen: string[] = [];
   let failNext = true;
   const ports = {
-    flowReady: () => undefined,
-    workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
     spawnTurnEnded: (turn: { conversationId: string; turnId: string; outcome: string }) => {
       if (failNext) { failNext = false; throw new Error("state store busy"); }
@@ -4409,6 +4444,9 @@ test.each(["live", "unverified", "dead"])("automatic retirement claim protects t
       child.kill(9);
       await child.exited;
       expect(journal.transitionOperation("exclusive-retire", "queued", {}, { retirementClaim: contender }).receipt.retirementClaim).toBeNull();
+      expect(journal.executeOperation({ kind: "send", operationId: "owner-held-send", idempotencyKey: "owner-held-send",
+        conversationId, policy: "queue", text: "after actuation" }).receipt.status).toBe("queued");
+      journal.transitionOperation("exclusive-retire", "failed", { reason: "fixture-released" }, { fromStatuses: ["queued"] });
     } else {
       // The executor releases only after its own actuation has returned.
       expect(journal.transitionOperation("exclusive-retire", "failed", {}, { retirementClaim: owner }).receipt.retirementClaim).toBeNull();
@@ -4652,4 +4690,35 @@ test.each([false, true])("idle continuation pre-execution proof survives journal
   expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
   journal.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+
+test("a kill receipt retains its first send cohort across transitions and a process restart", () => {
+  const dir = sandbox("kill-cohort-restart");
+  const filename = path.join(dir, "events.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  try {
+    const command = { kind: "kill" as const, conversationId: "conversation_cohort", operationId: "cohort-stop", idempotencyKey: "cohort-stop",
+      sessionKey: { engine: "codex" as const, sessionId: "cohort-generation" }, pendingSendIds: ["send-before"] };
+    expect(journal.executeOperation(command).receipt.pendingSendIds).toEqual(["send-before"]);
+    journal.transitionOperation(command.operationId, "failed", { reason: "target unavailable" });
+    journal.close();
+    const child = Bun.spawnSync({ cmd: [process.execPath, "-e", `
+      import { RuntimeJournal } from "./src/runtime-host/journal.ts";
+      const journal = new RuntimeJournal(process.env.LLV_TEST_JOURNAL, { structuredHosts: true });
+      try {
+        const command = ${JSON.stringify(command)};
+        command.pendingSendIds = ["send-later"];
+        const replay = journal.executeOperation(command);
+        console.log(JSON.stringify({ replay, status: journal.operationResult(command.operationId) }));
+      } finally { journal.close(); }
+    `], cwd: process.cwd(), env: { ...process.env, LLV_TEST_JOURNAL: filename }, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    const result = JSON.parse(new TextDecoder().decode(child.stdout));
+    expect(result.replay).toMatchObject({ replayed: true, receipt: { status: "failed", pendingSendIds: ["send-before"] } });
+    expect(result.status.receipt.pendingSendIds).toEqual(["send-before"]);
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

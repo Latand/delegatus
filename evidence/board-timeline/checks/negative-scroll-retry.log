@@ -1,0 +1,31 @@
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+$ bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+319 |           const longTitle = (lang === "uk" ? "Довга назва задачі з описом роботи " : "Long task title describing the work ").repeat(80);
+320 |           payload.tasks[0]!.text = longTitle;
+321 |           await page.reload(); await chart.waitFor();
+322 |           await timeScroll.evaluate(element => element.scrollTop = 100);
+323 |           await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+324 |           expect(await timeScroll.evaluate(element => element.scrollTop)).toBe(100);
+                                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: 100
+Received: 1048
+
+      at <anonymous> (src/components/kanban/kanbanBoard.browser.test.tsx:324:75)
+(fail) board timeline hybrid > real board and phone timeline, folds, zoom, history and empty states in every locale and theme [9365.05ms]
+
+ 0 pass
+ 278 filtered out
+ 1 fail
+ 508 expect() calls
+Ran 1 test across 1 file. [10.76s]
+error: script "test" exited with code 1
+
+exit: 1

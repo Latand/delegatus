@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 
 import { NextRequest } from "next/server";
 
@@ -12,6 +13,7 @@ import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
 import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { POST } from "./route";
+import { POST as reconcilePost } from "./reconcile/route";
 import { beginSeatDeployment, seatDeploymentsFile, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { UnixRuntimeHostClient } from "@/lib/runtime/client";
@@ -32,7 +34,7 @@ const originalStateDir = process.env.LLV_STATE_DIR;
 const originalSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
 const originalRollback = process.env.LLV_RUNTIME_EVENTS;
 
-let requested: { revision?: string; ref?: string; idempotencyKey: string }[] = [];
+let requested: { revision?: string; ref?: string; idempotencyKey: string; reconcileOnly?: boolean }[] = [];
 
 beforeEach(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-deployments-route-"));
@@ -74,6 +76,29 @@ function deployRequest(body: unknown): NextRequest {
 }
 
 describe.serial("HTTP deployment route", () => {
+test.each(["checkout", "managed"] as const)("a closed %s admission keeps its code across module realms", async mode => {
+  const closed = runInNewContext('new (class extends Error { code = "deploy_not_admitted"; constructor() { super("Deployment was not admitted; this request key is permanently closed."); } })()', { Error });
+  const service = new SelfUpdateService({ ...productionDeps(), mode: async () => ({ mode, record: null, reason: null }) });
+  spyOn(service, "deployRevision").mockRejectedValue(closed);
+  setSelfUpdateServiceForTests(service);
+  setDeploymentRuntimeForTests(async () => { throw closed; });
+  const response = await reconcilePost(deployRequest({ revision: SHA, idempotencyKey: `closed-realm-${mode}` }));
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ code: "deploy_not_admitted", outcome: "not-executed", nextAction: "new-request-permitted" });
+});
+
+test("the reconciliation address forces observation even when the body asks for admission", async () => {
+  expect((await reconcilePost(deployRequest({ revision: SHA, idempotencyKey: "force-reconcile", reconcileOnly: false }))).status).toBe(202);
+  expect(requested).toEqual([{ revision: SHA, idempotencyKey: "force-reconcile", reconcileOnly: true }]);
+});
+
+test("cross-origin reconciliation reaches no deployment backend", async () => {
+  const request = deployRequest({ revision: SHA, idempotencyKey: "foreign-reconcile" });
+  request.headers.set("origin", "http://foreign.example");
+  expect((await reconcilePost(request)).status).toBe(403);
+  expect(requested).toEqual([]);
+});
+
 test.each(["adopted", "rejected", "revoked-during-admission"] as const)("attributable deployment rechecks proactive authority: %s", async phase => {
   const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
   const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");

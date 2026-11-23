@@ -1,0 +1,7 @@
+source: a381c16e5ae34de6d26274f97e62d63240fb6679
+command: ["bunx","tsc","--noEmit"]
+startedAt: 2026-11-01T05:26:23.482Z
+gate-slot: Waiting for a heavy command slot · all 6 busy · waited 0 min
+
+exit: 0
+finishedAt: 2026-11-01T05:30:58.621Z

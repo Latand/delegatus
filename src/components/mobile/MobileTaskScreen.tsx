@@ -22,7 +22,7 @@ import { useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type S
 import { isSeatTickNotice } from "@/components/orchestrator/openSeatTick";
 import { addTaskChip } from "@/components/orchestrator/taskChips";
 import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
-import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { PipelineBlock, PipelineCreationBlock } from "@/components/pipelines/PipelineBlock";
 import { BranchName } from "@/components/pipelines/BranchName";
 import { conversationSourceFile, type ConversationDraftAttempt, type ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
 import { conversationRefusalText, useConversationDraftAttempt, useConversationPreview, useDroppedFocus, useLandedDraft } from "@/components/pipelines/useConversationDraft";
@@ -32,7 +32,7 @@ import { PhonePrototypeRow } from "@/components/prototypeReview/PrototypeReviewB
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
 import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import { blockAgeSeconds, laneMergeUnsettled, pipelineEnded, pipelineNeedsYou, screenCurrentStageId } from "@/components/pipelines/pipelineBlockModel";
-import { attemptNavTarget, latestAttempt, resolveStageNavFile, stageNames } from "@/components/pipelines/pipelineModel";
+import { attemptNavTarget, latestAttempt, resolveStageNavFile, stageConfigurable, stageNames } from "@/components/pipelines/pipelineModel";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fileModelLabel } from "@/components/utils";
 import { WorkLinkRow, WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
@@ -50,6 +50,7 @@ import { BADGE_LABEL, ConversationRow } from "./MobileBoard";
 import { launchedAt, mobileRowState, nowFragment, type MobileBoardConversation } from "./mobileBoardModel";
 import { attentionReason } from "../attention";
 import { takeRequestedLane } from "./taskLaneRequest";
+import { requestPipelineStage } from "./pipelineStageRequest";
 import { TaskChronology } from "@/components/kanban/TaskChronology";
 import { laneState } from "@/components/kanban/cardState";
 import { progressLine } from "@/components/kanban/TaskProgressBar";
@@ -703,19 +704,11 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const move = (from: TaskStatus, to: TaskStatus, receipt: boolean, options: StatusMoveOptions = {}): void => {
     const raw = stored.current.get(taskId);
     if (!raw || (from === to && !Object.hasOwn(options, "hold") && !Object.hasOwn(options, "restoreHold"))) return;
-    const previousHold = controller.holdFor(raw) ?? null;
-    let settled: StatusMoveOutcome | null = null;
-    const operation = controller.move(raw, to, options);
-    const undo = (outcome: StatusMoveOutcome) => {
-      if (outcome.kind !== "saved") return;
-      move(to, from, false, { fenced: true, lineage: outcome.lineage, restoreHold: previousHold });
-    };
-    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => {
-      if (settled) undo(settled);
-      else void operation.then(undo);
-    } });
-    void operation.then((outcome: StatusMoveOutcome) => {
-      settled = outcome;
+    void controller.move(raw, to, options).then((outcome: StatusMoveOutcome) => {
+      if (outcome.kind === "saved" && receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[outcome.task.status]) }), {
+        kind: "undo",
+        run: () => move(outcome.task.status, outcome.from, false, { fenced: true, lineage: outcome.lineage, restoreHold: outcome.fromHold }),
+      });
       if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title: receiptTitle, error: outcome.error }), null, { error: true });
       else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title: receiptTitle, status: t(STATUS_LABEL[outcome.serverStatus]) }), null, { error: true });
     });
@@ -780,9 +773,14 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const stageFile = (pipeline: Pipeline, stageId: string): FileEntry | null => resolveStageNavFile(attemptNavTarget(latestAttempt(pipeline, stageId)), files);
   const openStage = (pipeline: Pipeline, stage: PipelineStage): void => {
     const file = stageFile(pipeline, stage.id);
-    /* A stage with no conversation yet is configured on its pipeline's screen. */
-    if (file) props.onOpenConversation(file);
-    else props.onOpenPipeline(pipeline);
+    /* A stage with no conversation yet is configured on its pipeline's screen,
+       which opens on that stage's ⚙ sheet when it has not started. */
+    if (file) {
+      props.onOpenConversation(file);
+      return;
+    }
+    if (stageConfigurable(pipeline, stage.id)) requestPipelineStage(pipeline.id, stage.id);
+    props.onOpenPipeline(pipeline);
   };
   /* «Answer» on the board's card can open this screen with a lane's sheet open (§4.3). */
   const [laneFor, setLaneFor] = useState<string | null>(() => props.openLane ?? takeRequestedLane(taskId));
@@ -974,8 +972,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   selected={entry === status}
                   trailing={entry === status ? <Check className="h-4 w-4 text-accent" aria-hidden /> : undefined}
                   onSelect={() => {
-                    close();
-                    move(status, entry, true);
+                    if (entry === "blocked") setHoldEditing(true);
+                    else { close(); move(status, entry, true); }
                   }}
                   attrs={{ "data-phone-task-status": entry }}
                 />
@@ -1304,6 +1302,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 </section>
               ) : null}
               {/* 2. The pipelines: what needs the operator first; finished ones folded. */}
+              {card?.creations?.map(creation => <PipelineCreationBlock key={creation.id} creation={creation} />)}
               {live.length || ended.length ? (
                 <section data-phone-task-lanes={lanes.length} className="flex shrink-0 flex-col gap-2">
                   {live.map(laneBlock)}
@@ -1379,7 +1378,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 {task ? <PhonePrototypeRow task={task} title={title} rowClass={`${ROW} shrink-0 min-h-12`} /> : null}
 
                 {/* The task's album: every picture its agents made or looked at. */}
-                <PhoneAlbumRow taskId={taskId} title={title} pipelines={lanes.map((summary) => summary.pipeline)} files={files} rowClass={`${ROW} shrink-0 min-h-12`} />
+                <PhoneAlbumRow taskId={taskId} title={title} pipelines={lanes.map((summary) => summary.pipeline)} files={files} filesAvailable={!remote && lanes.length > 0} rowClass={`${ROW} shrink-0 min-h-12`} />
 
                 {/* The task's limit spend: the numbers its card's marks stand for. */}
                 {remote ? null : <PhoneTaskSpend taskId={taskId} headingClass={SECTION} />}

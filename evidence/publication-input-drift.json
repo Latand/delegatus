@@ -1,0 +1,125 @@
+{
+  "sourceRevision": "22a75ad38fbfce35573e53c8e2d591ea021f44dc",
+  "checkedRevision": "52cc7d10498855f417459890e4ab346a819ca958",
+  "baseRevision": "22a75ad38fbfce35573e53c8e2d591ea021f44dc",
+  "entryPoint": "scripts/local-gate.ts",
+  "mode": "pre-push --publication-prepare",
+  "runner": "scripts/gate-slot.sh",
+  "reproduction": "Real publication checks with a second process refreshing a private copy of shared privacy known values after the initial snapshot; other lanes remained active.",
+  "componentDigest": "SHA-256 of each JSON-encoded input component; tools are SHA-256 of executable bytes.",
+  "before": {
+    "at": "2026-11-02T10:39:24.157Z",
+    "key": "654982338a5ff62a2c06cbc049bd75a927835e550ea7b66cdfcbd1a91c11a958",
+    "components": {
+      "head": "514b1622438acb98f711e4c312913d14f87d3c4615cc9a788dd67f0231cc1e48",
+      "tree": "7e6f89ae01b3a2564733bc5077da9f782c2f7fb9c1a15f0cd06250f051a42ec4",
+      "base": "aff155d1be2a72863c71a3fdbf6741d5c2cc2734cd3ba46147824c77fa763769",
+      "branch": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "bun": "2d01580d3f7af3b843c9ce1aae086168af4028afa1416ff099ccbaacadd96b44",
+      "platform": "f32af962aa06e4f20ceda568d6493687257ce3aff79853b582d13ee6fbf5171b",
+      "arch": "dd35f5a18fdcecb5ddf8c98daa8cd906f5e07fa37a2b662ef4b2d3b836e119dc",
+      "toolchain": "4bd1addc929c92948601929d5642275920a6aff7c622e9a559816e0864525db8",
+      "installed": "56279162b8356eb6c86cb20ae9f8688936e0e5156591dc6eac1ed560105fecd4",
+      "working": "7f61f378a8d25cbf8b5b5ed4e00f535a2a828b2fc933611d85cdc1bf69689e3a",
+      "environment": "0f48ec5b15349649ff94ed445ec1a557633c256714716014f82a618dbe5747a7",
+      "gitConfig": "becb7ba26295c6f8e31853b98e5f044ac00fff868b681f32a01598b25be1e176"
+    },
+    "tools": {
+      "0": "33d56b070be6a9e3da0ab013038b43d1645d0534ca811ecdba4472599117eb4b",
+      "1": "33d56b070be6a9e3da0ab013038b43d1645d0534ca811ecdba4472599117eb4b",
+      "2": "33d56b070be6a9e3da0ab013038b43d1645d0534ca811ecdba4472599117eb4b",
+      "3": "8142d37c6f2f372ef040419e7a111a6baf17df89f8078d02447d6c639ae20c1d",
+      "4": "eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201",
+      "5": "missing",
+      "6": "822ef7ca6452205657b6288b066481ecf508bfbf43455d715cf7d3ec457561e6",
+      "7": "0fb1b93cbe54f5bd8b399a2af1d503e4fb41e95698814399562ac02bc05a0dea"
+    },
+    "observation": "b229ae7fbc47ea8a8ba821e19da980a7dfa88580c672fdbe502fda6fb760e0da",
+    "observationComponents": {
+      "privacy configuration": "473f7fd62154d1c97d57556f1eb5f55ff2b4d942b432ab556517c0601b106d82",
+      "execution configuration": "32993a26fb101087c6f22bd3b4cd2313e979861873cadda97f44b7bb5f0f96e8",
+      "LLV_PRIVACY_KNOWN_VALUES_FILE": "bae3885bde66174ca7144021c75052c4e6c6cac955f41b39501a2af3cff70cbd"
+    }
+  },
+  "after": {
+    "at": "2026-11-02T11:06:25.103Z",
+    "key": "654982338a5ff62a2c06cbc049bd75a927835e550ea7b66cdfcbd1a91c11a958",
+    "components": {
+      "head": "514b1622438acb98f711e4c312913d14f87d3c4615cc9a788dd67f0231cc1e48",
+      "tree": "7e6f89ae01b3a2564733bc5077da9f782c2f7fb9c1a15f0cd06250f051a42ec4",
+      "base": "aff155d1be2a72863c71a3fdbf6741d5c2cc2734cd3ba46147824c77fa763769",
+      "branch": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "bun": "2d01580d3f7af3b843c9ce1aae086168af4028afa1416ff099ccbaacadd96b44",
+      "platform": "f32af962aa06e4f20ceda568d6493687257ce3aff79853b582d13ee6fbf5171b",
+      "arch": "dd35f5a18fdcecb5ddf8c98daa8cd906f5e07fa37a2b662ef4b2d3b836e119dc",
+      "toolchain": "4bd1addc929c92948601929d5642275920a6aff7c622e9a559816e0864525db8",
+      "installed": "56279162b8356eb6c86cb20ae9f8688936e0e5156591dc6eac1ed560105fecd4",
+      "working": "7f61f378a8d25cbf8b5b5ed4e00f535a2a828b2fc933611d85cdc1bf69689e3a",
+      "environment": "0f48ec5b15349649ff94ed445ec1a557633c256714716014f82a618dbe5747a7",
+      "gitConfig": "becb7ba26295c6f8e31853b98e5f044ac00fff868b681f32a01598b25be1e176"
+    },
+    "tools": {
+      "0": "33d56b070be6a9e3da0ab013038b43d1645d0534ca811ecdba4472599117eb4b",
+      "1": "33d56b070be6a9e3da0ab013038b43d1645d0534ca811ecdba4472599117eb4b",
+      "2": "33d56b070be6a9e3da0ab013038b43d1645d0534ca811ecdba4472599117eb4b",
+      "3": "8142d37c6f2f372ef040419e7a111a6baf17df89f8078d02447d6c639ae20c1d",
+      "4": "eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201",
+      "5": "missing",
+      "6": "822ef7ca6452205657b6288b066481ecf508bfbf43455d715cf7d3ec457561e6",
+      "7": "0fb1b93cbe54f5bd8b399a2af1d503e4fb41e95698814399562ac02bc05a0dea"
+    },
+    "observation": "0dab154d69cc736c2f021c4bdf8d27a1dbc330092a05c6a657e4a9aeab89b3ad",
+    "observationComponents": {
+      "privacy configuration": "473f7fd62154d1c97d57556f1eb5f55ff2b4d942b432ab556517c0601b106d82",
+      "execution configuration": "32993a26fb101087c6f22bd3b4cd2313e979861873cadda97f44b7bb5f0f96e8",
+      "LLV_PRIVACY_KNOWN_VALUES_FILE": "3cabb731ef6d5b117088dd3af089ba5beb6b4222bbdcbcee4eaae41e4de0daf3"
+    }
+  },
+  "knownValues": {
+    "code": 0,
+    "at": "2026-11-02T10:39:24.176Z",
+    "before": "bae3885bde66174ca7144021c75052c4e6c6cac955f41b39501a2af3cff70cbd",
+    "after": "3cabb731ef6d5b117088dd3af089ba5beb6b4222bbdcbcee4eaae41e4de0daf3"
+  },
+  "actualExit": 1,
+  "completedChecks": [
+    {
+      "name": "types",
+      "seconds": 479
+    },
+    {
+      "name": "eslint",
+      "seconds": 6
+    }
+  ],
+  "longRunCompletedAt": "2026-11-02T11:03:12.771Z",
+  "longRunResult": "Five owned test-runner deadlines stopped the run before its final drift guard; this run is not a passing check verdict. The end snapshot was taken after exit.",
+  "reproducedRefusals": [
+    "publication inputs changed during checks; gate failed",
+    "publication check inputs changed; gate failed"
+  ],
+  "refusalReproduction": "Both original real gate-process regressions completed with only the intended known-values refresh and refused.",
+  "verification": {
+    "baseRegressionExit": 1,
+    "baseRegressionsFailed": 2,
+    "revertedFixExit": 1,
+    "revertedRegressionsFailed": 3,
+    "headPublicationExit": 0
+  },
+  "observationEvidence": "The held environment and file hashes reconstruct both captured aggregate observation digests exactly; only known-values bytes differ.",
+  "cause": {
+    "component": "LLV_PRIVACY_KNOWN_VALUES_FILE",
+    "producer": "src/lib/memory/roleStore.ts:1008",
+    "behavior": "Role-memory publication refreshes one installation-wide file after lessons change."
+  },
+  "toolLabels": [
+    "gate interpreter",
+    "Bun on PATH",
+    "bunx on PATH",
+    "Node on PATH",
+    "Git on PATH",
+    "installed dependency lock",
+    "TypeScript package metadata",
+    "ESLint package metadata"
+  ]
+}

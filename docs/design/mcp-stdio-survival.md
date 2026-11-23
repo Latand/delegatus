@@ -31,6 +31,23 @@ malformed and rotated capabilities produce protocol errors. Legacy clients
 without a launch capability keep native attribution, and the admitted runtime
 health probe keeps its existing probe contract.
 
+After successful admission, discovery retries connection failures and HTTP
+502/503/504 through a Viewer or runtime-host relaunch for up to 55 seconds.
+Attempts retain their ten-second bound; spacing starts at 200 milliseconds and
+caps at one second under that single recovery deadline. Closing stdio cancels
+the recovery. Authorization refusals and malformed successful responses still
+fail immediately. Each retry asks the Viewer again, including after capability
+rotation; discovery stores no authority. Initial admission keeps its original
+ten-second check and refusal diagnostics. Calls in flight report retryable read
+failure or unknown mutation outcome through the existing forwarding service.
+
+`src/lib/mcp/relaunch.integration.test.ts` restarts a real process serving the
+exported HTTP route with policy and durable receipts while the SDK client stays
+alive. It covers Claude and Codex HTTP definitions, the stable stdio launcher
+and direct entry, including discovery during an outage, an interrupted call,
+subsequent tool use and capability revocation. The Claude launcher case holds
+the outage for 44 seconds, matching the observed update readiness gap.
+
 Managed Claude hosts initialize the CLI control channel and wait for its
 `mcp_status` Viewer entry to leave `pending`, under one request deadline. Codex
 hosts inspect the opened thread's `mcpServerStatus/list`, selecting Viewer
@@ -84,3 +101,41 @@ authorize `POST /api/conversation-host`: that write must carry an agent's
 verified spawn capability, an authenticated member session, or a verified
 internal service claim. A seat should use its MCP tools after reconnection;
 an operator can rotate a seat whose MCP process has died.
+
+
+## Engine approval refusals
+
+A current Codex thread can report an approval refusal before the stdio launcher
+observes a call. Delegatus retains bounded engine evidence alongside the claimed
+host checkpoint. The seat tick reads the current native generation by key and
+withholds wakes when that evidence reports an unavailable Viewer MCP capability.
+This applies to HTTP connections too. Host reachability remains a separate check.
+
+The incident names the engine approval refusal and affected tool names. It copies
+no error body or call arguments. A successful structured Viewer result clears
+only its own tool, after a matching start observed after the denial. Other tools,
+transport heartbeats, ordinary server refusals and old completions cannot clear
+that denial. Invalid or overflowed evidence leaves recovery unverified. The
+existing checkpoint retry path retains write failures for retry. The live owner
+read below keeps pending evidence visible while that checkpoint is unavailable.
+See `issue-3687-diagnosis.md` for the reproduced fault and isolated verification.
+
+The authenticated operator can use the Viewer's existing seat rotation control
+(`POST /api/orchestrator/rotate`) independently of the affected seat's MCP
+connection. Rotation preserves the existing approval lineage and delivery
+receipts. A stale-generation or verify-first receipt requires accounting for the
+original operation before any resend. This detector never retries an action,
+changes engine approval policy, or grants tool access. Installed read-only tool
+availability requires a separately authorized observation under the intended
+identity.
+
+
+The seat monitor reads the current adapter through its owning delivery controller,
+using the native generation and writer fence from the keyed registry projection.
+This read sees pending engine evidence even when a checkpoint cannot be written.
+A missing or replaced owner, failed read or stale restored observation leaves
+management health unverified and withholds automatic wakes. The existing queue
+rechecks that observation in its synchronous authorization callback immediately
+before sending or injecting a seat tick, including after asynchronous preparation.
+The original key and receipt remain owed; the guard creates no replacement send.
+Operator controls continue through their existing permission checks.

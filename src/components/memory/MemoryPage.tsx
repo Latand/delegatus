@@ -3,8 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { memoryBlocked, memoryTone, money, monthName, monthResets, type MemoryTone, type MemoryView } from "@/components/headerMenu/headerMenuModel";
-import { openKeys } from "@/components/keys/openKeys";
-import { ProjectSettingRow } from "@/components/ProjectSettingRow";
+import { onServiceSettled, openKeys } from "@/components/keys/openKeys";
+import { SwitchRow } from "@/components/settings/settingsRows";
 import { useLocale } from "@/lib/i18n";
 
 /* Shared memory as a row of the header's menu
@@ -36,41 +36,58 @@ export function MemoryReadingProvider({ project, children }: { project: string |
   /* A read that started before a write, or before the project changed, never lands over what came after it. */
   const revision = useRef(0);
   const writing = useRef(false);
+  /* Reads on their way, and whether a write kept one from landing: a provider chosen under «Keys» meanwhile is read once the write settles. */
+  const reading = useRef(0);
+  const missed = useRef(false);
+  const reread = useRef<(keepSave: boolean) => void>(() => {});
   useEffect(() => {
     const abort = new AbortController();
     writing.current = false;
-    const readMemory = async () => {
-      if (!project || writing.current) return;
+    missed.current = false;
+    const readMemory = async (keepSave = false) => {
+      if (!project) return;
+      if (writing.current) { missed.current = true; return; }
       const current = ++revision.current;
+      reading.current++;
       try {
         const response = await fetch(`/api/memory/settings?project=${encodeURIComponent(project)}`, { signal: abort.signal, cache: "no-store" });
         if (!response.ok) throw Error();
         const value = await response.json() as MemoryView;
-        if (current === revision.current && !abort.signal.aborted) { setMemory({ ...value, project }); setMemoryError(null); }
+        /* The read after a refused write keeps the refusal on the switch. */
+        if (current === revision.current && !abort.signal.aborted) { setMemory({ ...value, project }); setMemoryError((error) => keepSave && error === "save" ? error : null); }
       } catch { if (current === revision.current && !abort.signal.aborted) setMemoryError("read"); }
+      finally { reading.current--; }
     };
-    /* A key saved in «Keys» lifts memory's «no key» at once. */
+    reread.current = (keepSave) => { void readMemory(keepSave); };
+    /* A key saved in «Keys» lifts memory's «no key» at once; a provider chosen there names the one now serving memory. */
     const refresh = () => { void readMemory(); };
     refresh();
     window.addEventListener("delegatus:provider-key-changed", refresh);
+    const offService = onServiceSettled("memory", refresh);
     const timer = setInterval(refresh, 15_000);
-    return () => { revision.current++; abort.abort(); clearInterval(timer); window.removeEventListener("delegatus:provider-key-changed", refresh); };
+    return () => { revision.current++; abort.abort(); clearInterval(timer); offService(); window.removeEventListener("delegatus:provider-key-changed", refresh); };
   }, [project]);
   const setEnabled = useCallback(async (enabled: boolean) => {
     if (!project || writing.current) return;
     writing.current = true;
+    /* The write drops a read already on its way, which may name a provider chosen since. */
+    if (reading.current > 0) missed.current = true;
     const current = ++revision.current;
     /* The switch flips at once (audit B19); a refusal flips it back and the row says so. */
     let before: (MemoryView & { project: string }) | null = null;
     setMemory((held) => { before = held; return held && held.project === project ? { ...held, enabled } : held; });
     setBusy(true); setMemoryError(null);
+    let refused = false;
     try {
       const response = await fetch("/api/memory/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, enabled }) });
       if (!response.ok) throw Error();
       const value = await response.json() as MemoryView;
       if (current === revision.current) setMemory({ ...value, project });
-    } catch { if (current === revision.current) { setMemory(before); setMemoryError("save"); } }
-    finally { writing.current = false; setBusy(false); }
+    } catch { refused = true; if (current === revision.current) { setMemory(before); setMemoryError("save"); } }
+    finally {
+      writing.current = false; setBusy(false);
+      if (missed.current && current === revision.current) { missed.current = false; reread.current(refused); }
+    }
   }, [project]);
   const value: Reading = {
     project,
@@ -127,8 +144,9 @@ const ACT = {
   menu: "h-7 rounded-[7px] border border-border bg-card px-2.5 text-[11.5px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
   sheet: "min-h-11 rounded-[8px] border border-border bg-card px-3.5 text-body font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
 } as const;
-const PAD = { menu: "px-2", sheet: "px-4" } as const;
-const LINE = { menu: "text-[11px] leading-snug", sheet: "text-label leading-snug" } as const;
+/* The Settings window's rows: 20 px in from the window's edge, 16 on the sheet, the muted line at the rows' size. */
+const PAD = { menu: "px-5", sheet: "px-4" } as const;
+const LINE = { menu: "text-ui leading-snug", sheet: "text-label leading-snug" } as const;
 
 /** One step in from the memory row. */
 export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
@@ -153,54 +171,54 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
   const sheet = size === "sheet";
   const detailsToggle = (
     <button type="button" data-memory-details="" aria-expanded={details} onClick={() => setDetails((open) => !open)}
-      className={`font-semibold text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${sheet ? "min-h-11 self-start text-body" : "inline text-[11.5px]"}`}>
+      className={`font-semibold text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${sheet ? "min-h-11 self-start text-body" : "inline text-ui"}`}>
       {t("memoryPage.details")}
     </button>
   );
   return (
     <div data-memory-page="" data-memory-tone={tone} className={`flex flex-col font-normal ${sheet ? "gap-2.5 pb-4" : "gap-1.5 pb-1.5"}`}>
-      <ProjectSettingRow
+      <SwitchRow
         label={t("memoryPage.forProject")}
-        hint={memoryError === "save" ? t("memory.save.failed") : blocked ? "" : t("memoryPage.explains")}
+        hint={memoryError === "save" ? <span role="status" className="text-danger">{t("memory.save.failed")}</span>
+          : blocked ? undefined : <span role="status">{t(memory?.provider === "openai" ? "memoryPage.openai.explains" : "memoryPage.explains")}</span>}
         enabled={Boolean(memory?.enabled)}
         disabled={!memory}
-        failed={memoryError === "save"}
-        variant={size}
         blocked={Boolean(memory?.enabled) && blocked}
-        rowProps={{ "data-memory-setting": "" }}
-        switchProps={{ "data-memory-switch": "", onClick: () => { if (memory) setEnabled(!memory.enabled); } }}
+        attrs={{ "data-memory-setting": "" }}
+        switchAttrs={{ "data-memory-switch": "" }}
+        onToggle={() => { if (memory) setEnabled(!memory.enabled); }}
       />
       {!readFailed && memory?.lastTurn ? (
-        <p role="status" data-memory-status data-memory-setting className={`${PAD[size]} ${LINE[size]} text-muted`}>
+        <p role="status" data-memory-status data-memory-setting data-settings-unit="" className={`${PAD[size]} ${LINE[size]} text-muted`}>
           <span data-memory-last-turn>{t(`memory.last.${memory.lastTurn}`)}</span>
         </p>
       ) : null}
       {reason ? (
-        <div className={PAD[size]}>
-          <div role={readFailed ? "alert" : "status"} data-memory-reason={tone} className={`flex flex-col items-start gap-1.5 rounded-[8px] bg-warning-soft ${sheet ? "px-3 py-2.5 text-body" : "px-2 py-1.5 text-[12px]"} leading-snug text-primary`}>
+        <div data-settings-unit="" className={PAD[size]}>
+          <div role={readFailed ? "alert" : "status"} data-memory-reason={tone} className={`flex flex-col items-start gap-1.5 rounded-[8px] bg-warning-soft ${sheet ? "px-3 py-2.5 text-body" : "px-2 py-1.5 text-body"} leading-snug text-primary`}>
             <span>{reason}</span>
-            {tone === "noKey" && !staging ? <button type="button" data-memory-enter-key="" className={ACT[size]} onClick={() => openKeys("openrouter")}>{t("keys.open")}</button> : null}
+            {tone === "noKey" && !staging ? <button type="button" data-memory-enter-key="" className={ACT[size]} onClick={() => openKeys(memory?.provider ?? "openrouter")}>{t("keys.open")}</button> : null}
           </div>
         </div>
       ) : null}
       {numbers ? (
         <div className={`flex flex-col ${sheet ? "gap-2" : "gap-1"} ${PAD[size]}`}>
-          <div data-memory-numbers="" className="grid grid-cols-3 gap-1">
+          <div data-memory-numbers="" data-settings-unit="" className="grid grid-cols-3 gap-1">
             {([[counts.delivered, t("memoryPage.added")], [counts.decisions, t("memoryPage.checked")], [money(memory.spentUsd!), t("memoryPage.spentOf", { cap: money(memory.capUsd!) })]] as const).map(([value, label]) => (
               <div key={label} className={`min-w-0 rounded-[7px] bg-sunken ${sheet ? "px-2.5 py-2" : "px-1.5 py-1"}`}>
                 <b className={`block whitespace-nowrap font-bold tabular-nums text-primary ${sheet ? "text-[20px] leading-6" : "text-[15px] leading-[18px]"}`}>{value}</b>
-                <span className={`block text-muted ${sheet ? "text-label leading-4" : "text-[10.5px] leading-[13px]"}`}>{label}</span>
+                <span className={`block text-muted ${sheet ? "text-label leading-4" : "text-ui leading-4"}`}>{label}</span>
               </div>
             ))}
           </div>
           {/* In the menu, Details ends the scope's own line: a refused key under a counted month still fits 360 px. */}
-          <span data-memory-scope="" className={`${LINE[size]} text-muted`}>
+          <span data-memory-scope="" data-settings-unit="" className={`${LINE[size]} text-muted`}>
             {t("memoryPage.scope", { month: monthName(memory.month, lang) })}
             {sheet ? null : <>{" "}{detailsToggle}</>}
           </span>
           {sheet ? detailsToggle : null}
           {details ? (
-            <dl data-memory-table="" className={`m-0 grid grid-cols-[1fr_auto_1fr_auto] tabular-nums text-muted ${sheet ? "gap-x-3 gap-y-1.5 text-label" : "gap-x-1.5 gap-y-0.5 text-[11px] leading-[14px]"}`}>
+            <dl data-memory-table="" data-settings-unit="" className={`m-0 grid grid-cols-[1fr_auto_1fr_auto] tabular-nums text-muted ${sheet ? "gap-x-3 gap-y-1.5 text-label" : "gap-x-1.5 gap-y-0.5 text-ui leading-4"}`}>
               {([["memoryPage.picked", counts.prepared], ["memoryPage.noCandidates", counts.noCandidates], ["memoryPage.noMatches", counts.noMatches], ["memoryPage.skipped", counts.skipped], ["memoryPage.failed", counts.failed]] as const).map(([name, value]) => (
                 <div key={name} className="contents"><dt className="whitespace-nowrap">{t(name)}</dt><dd className="m-0 mr-1.5 text-right font-semibold text-primary">{value}</dd></div>
               ))}

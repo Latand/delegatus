@@ -6,6 +6,8 @@ import { flushSync } from "react-dom";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { translate } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
+import { setTeamViewForTests } from "@/components/team/teamClient";
+import { resetFilesClientCacheForTests } from "@/hooks/useFiles";
 
 /*
  * Issue #419 (reopened) — Sol finding 1. The phone's host sheet (which took
@@ -223,6 +225,11 @@ test("desktop: the board renders with no shelf modal, no bar, no menu and no ret
 test("the desktop has no + Pipeline of its own, and the phone's New pipeline submits the operator draft shape", async () => {
   const previousFetch = globalThis.fetch;
   try {
+    // This standalone dashboard has no shell to establish the session.
+    setTeamViewForTests({ mode: "solo", me: null, members: [], methods: {
+      approval: false, telegram: { available: false, botUsername: null }, passkey: { available: false },
+    } });
+    resetFilesClientCacheForTests();
     /* Pipelines are created by agents through MCP (#1695); their drafts and stages are edited on the Board. */
     mobile = false;
     globalThis.fetch = (async (input: string | URL | Request) => {
@@ -280,6 +287,8 @@ test("the desktop has no + Pipeline of its own, and the phone's New pipeline sub
       expect(posts[0]).not.toHaveProperty("src");
     }
   } finally {
+    resetFilesClientCacheForTests();
+    setTeamViewForTests(null);
     globalThis.fetch = previousFetch;
   }
 });

@@ -49,6 +49,10 @@ export interface RegistryPerformanceDatasetShape {
       most recently active projects, so a history that fits in them keeps
       every row on the board whichever project a write makes the newest. */
   projects: number;
+  /** How many of the oldest deliveries are a launch's first message, joined to
+      its receipt the way a spawn records them. A live installation keeps one
+      for most launches it ever made. Defaults to none. */
+  spawnMessages?: number;
 }
 
 /** Retained census used for managed-update qualification. */
@@ -301,9 +305,12 @@ export function buildRegistryPerformanceDataset(
   const uncertainDeliveryIds: string[] = [];
   const coldOperationIds: string[] = [];
   const hotOperationIds: string[] = [];
+  const spawnMessages = Math.min(shape.spawnMessages ?? 0, shape.receipts, shape.heldDeliveries);
+  const operationIdOf = (index: number) => index < spawnMessages
+    ? `spawn_message_performance-launch-${index}` : `performance-operation-${index}`;
   for (let index = 0; index < shape.heldDeliveries; index++) {
     const key = `performance-delivery-${index}`;
-    const operationId = `performance-operation-${index}`;
+    const operationId = operationIdOf(index);
     const fromEnd = shape.heldDeliveries - index;
     const state = fromEnd <= shape.uncertainDeliveries ? "delivery-uncertain"
       : fromEnd <= shape.uncertainDeliveries + shape.pendingDeliveries ? "held" : "delivered";
@@ -315,12 +322,13 @@ export function buildRegistryPerformanceDataset(
       id: key,
       conversationId: conversationId(index % count),
       command: { ...structuredClone(heldTemplate.command), operationId },
+      ...(index < spawnMessages ? { clientMessageId: `spawn_performance-launch-${index}` } : {}),
       text: "synthetic delivery text ".repeat(40),
       state,
     };
   }
   for (let index = 0; index < shape.deliveryOperationOwners; index++) {
-    const key = `performance-operation-${index}`;
+    const key = operationIdOf(index);
     const delivered = index < shape.heldDeliveries - shape.pendingDeliveries - shape.uncertainDeliveries
       || index >= shape.heldDeliveries;
     file.deliveryOperationOwners[key] = {

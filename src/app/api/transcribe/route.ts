@@ -4,6 +4,9 @@ import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
+import { resolveService } from "@/lib/openaiServices/policy";
+import { configFilePath } from "@/lib/configDir";
+import { openAiTranscribe } from "@/lib/transcribe/openai";
 import { readCodexAuth } from "@/lib/codexAuth";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { callTranscribe } from "@/lib/transcribe/chatgpt";
@@ -12,7 +15,6 @@ import { transcriptionLanguage, transcriptionResult } from "@/lib/transcribe/lan
 import { localTranscribe } from "@/lib/transcribe/local";
 import { sonioxTranscribe } from "@/lib/transcribe/soniox";
 import type { TranscribeResponse } from "@/lib/transcribe/types";
-import { readElevenLabsApiKey, readSonioxApiKey, resolveTranscribeBackend } from "@/lib/transcribeBackend";
 import type { ApiError } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -51,10 +53,16 @@ export async function POST(req: NextRequest): Promise<NextResponse<TranscribeRes
   const mime = containerAudioType || type || "audio/webm";
   const rawLanguage = form.get("language");
   const language = transcriptionLanguage(rawLanguage);
-  const backend = resolveTranscribeBackend();
+  const resolution = resolveService("dictation");
+  const backend = resolution.effective;
+  if (backend === "openai") {
+    if (!resolution.apiKey) return NextResponse.json({ error: "missing OpenAI key", keyPath: configFilePath("openai-api-key") }, { status: 503 });
+    try { return NextResponse.json(await openAiTranscribe(resolution.apiKey, new File([file], file.name, { type: mime }), language)); }
+    catch { return NextResponse.json({ error: "OpenAI transcription unavailable" }, { status: 502 }); }
+  }
 
   if (backend === "elevenlabs") {
-    const key = readElevenLabsApiKey();
+    const key = resolution.apiKey;
     if (!key) {
       return NextResponse.json(
         { error: "missing ElevenLabs key (~/.config/agent-log-viewer/elevenlabs-api-key or ELEVENLABS_API_KEY)" },
@@ -72,7 +80,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<TranscribeRes
   }
 
   if (backend === "soniox") {
-    const key = readSonioxApiKey();
+    const key = resolution.apiKey;
     if (!key) {
       return NextResponse.json(
         { error: "missing Soniox key (~/.config/agent-log-viewer/soniox-api-key or SONIOX_API_KEY)" },

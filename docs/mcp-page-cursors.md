@@ -43,7 +43,7 @@ task HTTP and the task channel before returning a page to an MCP caller.
 
 | MCP family | Existing continuation producer and consumer | Public field |
 | --- | --- | --- |
-| `list_tasks`, `list_pipelines`, `list_flows` | SQLite board selection, with the in-memory list adapter as fallback | `nextCursor` |
+| `list_tasks`, `list_pipelines` | SQLite board selection, with the in-memory list adapter as fallback | `nextCursor` |
 | `list_conversations` | Conversation catalog, then byte-budget page splitting | `nextCursor` |
 | `search_transcripts` | Indexed transcript search snapshot | `nextCursor` |
 | `conversation_messages` | Reverse transcript message reader | `cursor` |

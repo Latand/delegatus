@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
 
 import type { RuntimeEvent } from "./engineHost";
-import { durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord, reconcileRuntimeEventCursor } from "./eventStore";
+import { durableRuntimeEventTailSeq, FileRuntimeEventStore, readCodexRetirementTurnLedger, readHostTurnRecord, reconcileRuntimeEventCursor } from "./eventStore";
 import { streamingVoiceDelivery } from "./voiceDelivery";
 
 test("runtime event store durably replays ordered events and ignores a partial tail", () => {
@@ -379,6 +379,37 @@ function frame(uuid: string, type: "user" | "assistant", turnId: string | null):
   return { kind: "item", turnId, phase: "completed", item: { type, uuid, timestamp: "2026-10-07T00:00:00.000Z", message: { content: "x" } } };
 }
 
+test.each(["idle-before-terminal", "idle-after-terminal"] as const)("Codex retirement correlates a large turn's %s checkpoint", async order => {
+  const events = [
+    { kind: "turn-started", turnId: "turn-one" },
+    { kind: "delta", turnId: "turn-one", text: "x".repeat(256 * 1024) },
+    ...(order === "idle-before-terminal" ? [{ kind: "session-status", status: "idle" }] : []),
+    { kind: "turn-ended", turnId: "turn-one", status: "completed" },
+    ...(order === "idle-after-terminal" ? [{ kind: "session-status", status: "idle" }] : []),
+  ];
+  const { directory } = turnLedger(events);
+  expect(await readCodexRetirementTurnLedger("session", "turn-one", events.length, directory)).toMatchObject({ status: "completed" });
+});
+
+test("Codex retirement rejects a mismatched idle checkpoint and newer work", async () => {
+  for (const events of [
+    [
+      { kind: "turn-started", turnId: "turn-one" },
+      { kind: "session-status", status: "active" },
+      { kind: "turn-ended", turnId: "turn-one", status: "completed" },
+    ],
+    [
+      { kind: "turn-started", turnId: "turn-one" },
+      { kind: "turn-ended", turnId: "turn-one", status: "completed" },
+      { kind: "session-status", status: "idle" },
+      { kind: "turn-started", turnId: "turn-two" },
+    ],
+  ]) {
+    const { directory } = turnLedger(events);
+    expect(await readCodexRetirementTurnLedger("session", "turn-one", events.length, directory)).toBeNull();
+  }
+});
+
 test("the host turn record of a session with no ledger is absent", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-turn-record-"));
   expect(readHostTurnRecord("session", { directory })).toEqual({ state: "absent" });
@@ -547,4 +578,27 @@ test("the host turn record exposes an idle checkpoint and its closing sequence w
   expect(readHostTurnRecord("session", { directory })).toMatchObject({
     state: "read", complete: false, lastSeq: 4, turn: { closed: { status: "error", seq: 3 } },
   });
+});
+
+
+test("Claude result correlation round-trips with legacy rows and repairs a torn tail", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "claude-result-events-"));
+  try {
+    const store = new FileRuntimeEventStore(directory);
+    const legacy: RuntimeEvent = { kind: "turn-ended", turnId: "legacy", status: "completed", seq: 1 };
+    const current: RuntimeEvent = { kind: "turn-ended", turnId: "current", status: "error", claudeResultUuid: "result-one", seq: 2 };
+    store.append("session", legacy);
+    fs.appendFileSync(path.join(directory, "session.jsonl"), "{torn");
+    store.append("session", current);
+    expect(new FileRuntimeEventStore(directory).load("session")).toEqual([legacy, current]);
+    for (const value of [null, 4, "", "r".repeat(129)]) {
+      const malformed = { ...current, seq: 3, claudeResultUuid: value };
+      fs.appendFileSync(path.join(directory, "session.jsonl"), JSON.stringify(malformed) + "\n");
+      expect(() => new FileRuntimeEventStore(directory).load("session")).toThrow("runtime event ledger contains an invalid event");
+      fs.writeFileSync(path.join(directory, "session.jsonl"), [legacy, current].map(e => JSON.stringify(e)).join("\n") + "\n");
+    }
+    const bounded: RuntimeEvent = { ...current, claudeResultUuid: "r".repeat(128), seq: 3 };
+    store.append("session", bounded);
+    expect(new FileRuntimeEventStore(directory).load("session").at(-1)).toEqual(bounded);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

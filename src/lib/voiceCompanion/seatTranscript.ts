@@ -182,6 +182,12 @@ const text = (value: unknown) => typeof value === "string" ? value : "";
 const quoted = (value: unknown) => text(value) ? ` «${byteShort(text(value).split("\n")[0], 80)}»` : "";
 const writeFields = (input: Record<string, unknown>, fields: string[]) => fields.some(key => Object.hasOwn(input, key) && input[key] !== undefined);
 export const ACTION_LINES: Record<string, ActionLine> = {
+  grant_agent_browser_access: () => "Granted browser checks access to the project's workspace",
+  recorded_check: input => input.action === "handoff" ? "Handed off a recorded check"
+    : input.action === "acknowledge" ? "Acknowledged recorded check evidence" : null,
+  voice_tools: input => input.action === "propose" ? "Proposed a voice tool server" : null,
+  codex_cloud_environment: input => input.action === "set" ? "Changed the project's Codex cloud environment" : null,
+  github_app_connect: () => "Asked to connect a GitHub repository",
   pipeline_checks: (input, title) => `Changed ${input.scope === "project" ? "project default" : input.scope === "stage" ? `stage ${text(input.stageId)}` : "lane"} checks${title("pipeline", input.pipelineId)} to ${input.execution ?? "inherit"}`,
   create_pipeline: input => `Started lane${quoted(input.task ?? input.title)}`,
   pipeline_action: (input, title) => {

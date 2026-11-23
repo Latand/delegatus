@@ -94,8 +94,6 @@ test("headless process reaper selects stale viewer exec groups and orphaned MCP 
   expect(selectHeadlessProcessCandidates({
     processes,
     flows: [finishedFlow(100), activeFlow(200)],
-    hosts: [],
-    panePids: [300],
     flowArtifactsRoot,
     thresholdMs: 2 * 60 * 60_000,
   })).toEqual([
@@ -115,8 +113,6 @@ test("headless process reaper ignores MCP text in generic command arguments", ()
   expect(selectHeadlessProcessCandidates({
     processes,
     flows: [],
-    hosts: [],
-    panePids: [],
     flowArtifactsRoot,
     thresholdMs: 2 * 60 * 60_000,
   })).toEqual([]);
@@ -131,8 +127,6 @@ test("headless process reaper selects the deployed uv run Telegram MCP root", ()
   expect(selectHeadlessProcessCandidates({
     processes,
     flows: [],
-    hosts: [],
-    panePids: [],
     flowArtifactsRoot,
     thresholdMs: 2 * 60 * 60_000,
   })).toEqual([{ pid: 820, identity: "820:start", kind: "orphan-mcp" }]);
@@ -143,7 +137,6 @@ test("headless reaper revalidates ownership and applies TERM then KILL to the st
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const timers: Array<() => void> = [];
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [finishedFlow(900)],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -153,8 +146,6 @@ test("headless reaper revalidates ownership and applies TERM then KILL to the st
       processIdentity: () => "900:start",
       processAgeMs: () => old,
       loadFlows: () => [finishedFlow(900)],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid, signal) => { signals.push({ pid, signal }); },
       setTimeout: (callback) => {
         timers.push(callback);
@@ -177,7 +168,6 @@ test("stale review cleanup aborts when the leader identity changes before TERM",
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   let identityReads = 0;
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [finishedFlow(940)],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -190,8 +180,6 @@ test("stale review cleanup aborts when the leader identity changes before TERM",
       },
       processAgeMs: () => old,
       loadFlows: () => [finishedFlow(940)],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid, signal) => { signals.push({ pid, signal }); },
     },
   });
@@ -207,7 +195,6 @@ test("headless reaper protects an active flow launched through a custom Codex bi
   ];
   const signals: number[] = [];
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [activeFlow(910)],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -217,8 +204,6 @@ test("headless reaper protects an active flow launched through a custom Codex bi
       processIdentity: (pid) => `${pid}:start`,
       processAgeMs: () => old,
       loadFlows: () => [activeFlow(910)],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid) => { signals.push(pid); },
     },
   });
@@ -232,7 +217,6 @@ test("orphan cleanup aborts when the root identity changes before TERM", async (
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   let identityReads = 0;
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -245,8 +229,6 @@ test("orphan cleanup aborts when the root identity changes before TERM", async (
       },
       processAgeMs: () => old,
       loadFlows: () => [],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid, signal) => { signals.push({ pid, signal }); },
     },
   });
@@ -262,7 +244,6 @@ test("orphan cleanup skips a descendant whose identity changes before TERM", asy
   const timers: Array<() => void> = [];
   const identityReads = new Map<number, number>();
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -276,8 +257,6 @@ test("orphan cleanup skips a descendant whose identity changes before TERM", asy
       },
       processAgeMs: () => old,
       loadFlows: () => [],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid, signal) => { signals.push({ pid, signal }); },
       setTimeout: (callback) => {
         timers.push(callback);
@@ -301,7 +280,6 @@ test("orphan cleanup captures and kills an unrecognized descendant", async () =>
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const timers: Array<() => void> = [];
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -311,8 +289,6 @@ test("orphan cleanup captures and kills an unrecognized descendant", async () =>
       processIdentity: (pid) => `${pid}:start`,
       processAgeMs: () => old,
       loadFlows: () => [],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid, signal) => { signals.push({ pid, signal }); },
       setTimeout: (callback) => {
         timers.push(callback);
@@ -340,7 +316,6 @@ test("orphan cleanup aborts when its tree contains an active flow reviewer", asy
   const reviewer = process(971, 970, ["codex", "exec", "-"]);
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [activeFlow(971)],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -350,8 +325,6 @@ test("orphan cleanup aborts when its tree contains an active flow reviewer", asy
       processIdentity: (pid) => `${pid}:start`,
       processAgeMs: () => old,
       loadFlows: () => [activeFlow(971)],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid, signal) => { signals.push({ pid, signal }); },
     },
   });
@@ -365,7 +338,6 @@ test("orphan cleanup aborts when its tree contains a Claude owner", async () => 
   const claude = process(981, 980, ["claude", "--print", "continue"]);
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -375,8 +347,6 @@ test("orphan cleanup aborts when its tree contains a Claude owner", async () => 
       processIdentity: (pid) => `${pid}:start`,
       processAgeMs: () => old,
       loadFlows: () => [],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid, signal) => { signals.push({ pid, signal }); },
     },
   });
@@ -391,7 +361,6 @@ test("orphan cleanup aborts when its root becomes a Claude owner before TERM", a
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   let processScans = 0;
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -404,8 +373,6 @@ test("orphan cleanup aborts when its root becomes a Claude owner before TERM", a
       processIdentity: () => "985:start",
       processAgeMs: () => old,
       loadFlows: () => [],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid, signal) => { signals.push({ pid, signal }); },
     },
   });
@@ -422,7 +389,6 @@ test("orphan cleanup protects a descendant that becomes a Claude owner before KI
   const timers: Array<() => void> = [];
   let processScans = 0;
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -435,8 +401,6 @@ test("orphan cleanup protects a descendant that becomes a Claude owner before KI
       processIdentity: (pid) => `${pid}:start`,
       processAgeMs: () => old,
       loadFlows: () => [],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid, signal) => { signals.push({ pid, signal }); },
       setTimeout: (callback) => {
         timers.push(callback);
@@ -465,7 +429,6 @@ test("orphan cleanup skips an unrecognized descendant whose identity changes bef
   const timers: Array<() => void> = [];
   const identityReads = new Map<number, number>();
   const report = await runHeadlessProcessReaper({
-    hosts: [],
     flows: [],
     thresholdMs: 2 * 60 * 60_000,
     flowArtifactsRoot,
@@ -479,8 +442,6 @@ test("orphan cleanup skips an unrecognized descendant whose identity changes bef
       },
       processAgeMs: () => old,
       loadFlows: () => [],
-      readHosts: async () => [],
-      readPanePids: async () => [],
       signalProcess: (pid, signal) => { signals.push({ pid, signal }); },
       setTimeout: (callback) => {
         timers.push(callback);

@@ -15,7 +15,7 @@ import { createTaskWorkflowProjector, projectTaskWorkflows } from "@/components/
 import { buildPhoneKanban } from "@/components/mobile/phoneKanbanModel";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
-import { buildKanbanModel, createKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, taskReasonFiltersOfCard, workingStageConversations, type KanbanCard, type KanbanModelInput } from "./kanbanModel";
+import { buildKanbanModel, createKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, taskReasonFiltersOfCard, timelineGroup, workingStageConversations, type KanbanCard, type KanbanModelInput } from "./kanbanModel";
 import { pipelineProgress } from "./PipelineSection";
 import { translate, type TFunction } from "@/lib/i18n";
 
@@ -1033,7 +1033,7 @@ test("a conversation with no recorded task is a card of its own under Not on a t
 });
 
 test("a hidden group leaves its column for the hidden list, a resurfaced one comes back with its reason, and no task is lost", () => {
-  const files = [file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never }), file(2), file(3), file(4), file(5)];
+  const files = [file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, askedAt: "2026-09-14T12:30:00.000Z" } as never }), file(2), file(3), file(4), file(5)];
   const hiddenAt = "2026-09-14T12:00:00.000Z";
   const snapshot = (paths: readonly string[]) => paths.flatMap((path) => [path, `conversation_fixture_${path.match(/(\d+)/)![1]}`]).sort();
   const tasks = [
@@ -1172,7 +1172,7 @@ test("a launched card whose turn ended keeps its place under the agent being rea
 
 
 test("a launched card with its reader open stands first when no other card is read, above a card worked more recently", () => {
-  const asking = file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, paneTarget: null, askedAt: "2026-09-14T12:30:00.000Z" } as never, mtime: NOW - 3_000, lastAgentWorkAt: (NOW - 100) * 1000 });
+  const asking = file(1, { pendingQuestion: { kind: "question", toolUseId: "tool", transcriptPath: "/fixture/conversation-1.jsonl", pid: 1, askedAt: "2026-09-14T12:30:00.000Z" } as never, mtime: NOW - 3_000, lastAgentWorkAt: (NOW - 100) * 1000 });
   const launchedFile = file(2, { mtime: NOW - 1 });
   const tasks = [task("asking", "assigned", [asking.path]), task("launched", "assigned", [launchedFile.path])];
   const files = [asking, launchedFile];
@@ -1482,7 +1482,7 @@ test("a needs_review lane's card needs the operator and says the last review fai
 /* docs/design/needs-attention.md §4: a card names why it needs the operator,
    and what someone cleared, from the same reason model the phone reads. */
 test("a card lists its reasons oldest first and keeps what was cleared, with who cleared it", () => {
-  const asked = (path: string, askedAt: string) => ({ kind: "question", toolUseId: `tool-${path}`, transcriptPath: path, pid: 1, paneTarget: null, askedAt }) as never;
+  const asked = (path: string, askedAt: string) => ({ kind: "question", toolUseId: `tool-${path}`, transcriptPath: path, pid: 1, askedAt }) as never;
   const questioner = file(301, { pendingQuestion: asked("/fixture/conversation-301.jsonl", "2026-09-14T12:30:00.000Z") });
   const cleared = file(302, {
     pendingQuestion: asked("/fixture/conversation-302.jsonl", "2026-09-14T12:00:00.000Z"),
@@ -1895,4 +1895,22 @@ test("a warm unchanged host-gone row loses its working count at the grace deadli
   const later = { ...input, now: NOW + 60 };
   expect(build(later)).toEqual(buildKanbanModel(later));
   expect(build(later).columns.assigned.working).toBe(0);
+});
+
+test("the chart's group is the kanban's own working count, then the operator's queue, then the board's three-day span", () => {
+  const nowMs = 1_800_000_000_000;
+  const span = 3 * 24 * 60 * 60 * 1000;
+  const card = (working: number, motion: string, workingSinceMs: number | null, lastAgentWorkAtMs: number) =>
+    ({ working, motion: { key: motion }, workingSinceMs, lastAgentWorkAtMs }) as unknown as KanbanCard;
+  expect(timelineGroup(card(2, "working", nowMs - 1000, nowMs - 1000), nowMs)).toBe("working");
+  // A live agent keeps the card on top even while it also waits for the operator.
+  expect(timelineGroup(card(1, "needs-you", nowMs - 1000, nowMs), nowMs)).toBe("working");
+  // The operator's queue stays his however long it has stood.
+  expect(timelineGroup(card(0, "needs-you", null, nowMs - 30 * span), nowMs)).toBe("needs-you");
+  // Work in flight without a live agent (a lane between turns) stands, recently.
+  expect(timelineGroup(card(0, "working", nowMs - 5000, 0), nowMs)).toBe("still");
+  expect(timelineGroup(card(0, "stopped", null, nowMs - span + 1), nowMs)).toBe("still");
+  expect(timelineGroup(card(0, "stopped", null, nowMs - span), nowMs)).toBe("still");
+  expect(timelineGroup(card(0, "stopped", null, nowMs - span - 1), nowMs)).toBe("still-long");
+  expect(timelineGroup(card(0, "waiting", null, 0), nowMs)).toBe("still-long");
 });

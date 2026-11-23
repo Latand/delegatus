@@ -135,6 +135,27 @@ export async function laneFileDiff(pipeline: LanePipeline, base: string, head: s
   });
 }
 
+/** Read one file's bytes from a pinned revision. Binary previews use this
+    alongside laneFileDiff, which deliberately returns no binary patch rows. */
+export async function laneFileVersion(pipeline: LanePipeline, base: string, head: string, revision: string, path: string,
+  exec: ExecPort, listed: readonly LaneChangeFile[]): Promise<Buffer | LaneChangeError> {
+  return withViewerOperation("pipelines.laneChanges", async () => {
+    if (!SHA_RE.test(base) || !SHA_RE.test(head) || !SHA_RE.test(revision) || revision !== base && revision !== head) {
+      return { error: "revision must be one of the pinned comparison commits", code: "git_failed" };
+    }
+    if (!listed.some((entry) => entry.path === path)) return { error: "this path is not in the pinned comparison", code: "path_not_changed" };
+    const object = await exec("git", ["rev-parse", "--verify", "--quiet", "--end-of-options", `${revision}:${path}`], pipeline.repoDir, undefined, GIT_OPTIONS);
+    const oid = object.stdout.trim();
+    if (object.code !== 0 || !SHA_RE.test(oid)) return { error: "git could not resolve the file at this revision", code: "git_failed" };
+    const type = await exec("git", ["cat-file", "-t", oid], pipeline.repoDir, undefined, GIT_OPTIONS);
+    if (type.code !== 0 || type.stdout.trim() !== "blob") return { error: "the pinned path is not a file", code: "git_failed" };
+    const content = await exec("git", ["cat-file", "blob", oid], pipeline.repoDir, undefined,
+      { ...GIT_OPTIONS, stdoutEncoding: "latin1", maxOutputBytes: 8 * 1024 * 1024 });
+    if (content.code !== 0) return { error: "git could not read the file at this revision", code: "git_failed" };
+    return Buffer.from(content.stdout, "latin1");
+  });
+}
+
 /**
  * The agent a review goes to: the newest non-historical attempt that may write
  * to the branch and has a conversation. Unlike `stagePullRequestProducer`, a

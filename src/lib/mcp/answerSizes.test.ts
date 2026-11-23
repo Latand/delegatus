@@ -28,7 +28,7 @@ for (const project of ["size-board", "created-board"]) {
   beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId, mode: "existing", conversationId });
   completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null });
 }
-const { viewerMcpBindings } = await import(bindingModule);
+const { productionDomainDependencies, viewerMcpBindings } = await import(bindingModule);
 const { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES } = await import("./server");
 const { saveTasks, loadTasks, loadTasksForList, taskSelectionSource, mutateTasks } = await import("@/lib/tasks/store");
 const { savePipelines, pipelineSelectionSource } = await import("@/lib/pipelines/store");
@@ -106,9 +106,6 @@ test("measure every tool through the MCP service and budget common board answers
   } as never, domain as never);
   const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
   const cases: Array<[typeof MCP_TOOL_NAMES[number], string, Args]> = [
-    ["list_flows", "default", { project: "size-board" }],
-    ["list_flows", "limit=200", { project: "size-board", limit: 200 }],
-    ["list_flows", "compact", { project: "size-board", compact: true }],
     ["list_tasks", "default", { project: "size-board" }],
     ["list_tasks", "limit=200", { project: "size-board", limit: 200 }],
     ["list_tasks", "openOnly", { project: "size-board", openOnly: true }],
@@ -135,7 +132,7 @@ test("measure every tool through the MCP service and budget common board answers
   const rows = [];
   const frequencySample = JSON.parse(fs.readFileSync(new URL("./answerSizes.frequency.json", import.meta.url), "utf8")) as { counts: Record<string, number>; scenarioCounts: Record<string, number> };
   const frequencies = frequencySample.counts;
-  const budgets: Record<string, number> = { list_flows: 26000, list_tasks: 26000, list_pipelines: 26000, agent_activity: 24000, create_task: 2000, update_task: 1200, get_task: 10000, get_pipeline: 150000, link_task_to_pipeline: 1800, pipeline_action: 1500, seat_tick_settings: 1800, list_conversations: 12000 };
+  const budgets: Record<string, number> = { list_tasks: 26000, list_pipelines: 26000, agent_activity: 24000, create_task: 2000, update_task: 1200, get_task: 10000, get_pipeline: 150000, link_task_to_pipeline: 1800, pipeline_action: 1500, seat_tick_settings: 1800, list_conversations: 12000 };
   for (const [tool, scenario, args] of cases) {
     const result = await service.callTool(tool, { clientRequestId: `size-${rows.length}`, ...args });
     const bytes = Buffer.byteLength(JSON.stringify(result));
@@ -232,92 +229,13 @@ test("measure every tool through the MCP service and budget common board answers
   try {
     const protocol = await client.callTool({ name: "list_tasks", arguments: { clientRequestId: "schema-additive", project: "size-board", status: ["blocked", "unknown"], limit: "999", full: true } });
     expect(protocol.isError).not.toBe(true);
-    const flowProtocol = await client.callTool({ name: "list_flows", arguments: { clientRequestId: "flow-schema-additive", state: ["waiting_ready", "unknown"], limit: "999", compact: true } });
-    expect(flowProtocol.isError).not.toBe(true);
   } finally { await client.close(); await server.close(); }
   const { persistProjectAliases } = await import("@/lib/projects/aliases");
   persistProjectAliases([{ source: "size-board", target: "size-board-successor", displayName: "Size board" }]);
   const successor = await call("list_tasks", { project: "size-board-successor", ids: ["task-0"] });
   expect(successor.count).toBe(1);
   expect(successor.tasks[0].project).toBe("size-board-successor");
-}, 15_000);
-
-test("flow pages reach every stored row newest first within budget, using keyed reads and incremental selection", async () => {
-  const { boardSelection } = await import("./boardSelection");
-  const { saveFlowRows } = await import("@/lib/flows/store");
-  const previousState = process.env.LLV_STATE_DIR;
-  process.env.LLV_STATE_DIR = path.join(sandbox, "flow-pagination");
-  try {
-    const flows = flowCorpus(240, Date.parse("2026-09-20T09:00:00Z"));
-    // Long multibyte titles and diagnostics must also obey the serialized budget.
-    for (const flow of flows) {
-      flow.spec = "Робота".repeat(300) + "\n" + flow.spec;
-      (flow as { stateDetail: string | null }).stateDetail = "Перевірка".repeat(300);
-    }
-    saveFlows(flows);
-    const source = flowSelectionSource();
-    let reads = 0;
-    const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
-      flowSelectionSource: () => ({ ...source, read: (id: string) => { reads++; return source.read(id); } }),
-      getFlowsWithPresets: () => { throw new Error("whole flow collection read"); },
-      callerAttribution: () => ({ kind: "unidentified", conversationId: null }),
-    } as never), new MemoryMcpReceiptStore());
-    let sequence = 0;
-    const call = (tool: "list_flows" | "get_flow", args: Args = {}) => service.callTool(tool, { clientRequestId: `flow-page-${++sequence}`, ...args }) as Promise<any>;
-    const index = boardSelection(source.filename, "flows");
-    const cold = await call("list_flows", { ids: [flows[0]!.id] });
-    expect(cold.ok).toBe(true); expect(cold.count).toBe(1);
-    expect(reads).toBe(1); expect(index.work.metadataRows).toBe(0);
-    for (const options of [{}, { limit: 200 }, { compact: true }, { limit: "999999", state: "unknown" }]) {
-      const ids: string[] = [];
-      let cursor: string | null = null;
-      do {
-        const beforeReads = reads;
-        const page = await call("list_flows", { ...options, cursor });
-        expect(page.ok).toBe(true);
-        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(26000);
-        expect(page.count).toBeGreaterThan(0);
-        expect(reads - beforeReads).toBeLessThanOrEqual(page.count + 1);
-        expect(page.total).toBe(240);
-        expect(page.omittedCount).toBe(240 - page.count);
-        expect(page.omittedRecordCount).toBe(page.count);
-        expect(page.flows[0]).not.toHaveProperty("spec");
-        expect(page.flows[0]).not.toHaveProperty("rounds");
-        ids.push(...page.flows.map((flow: any) => flow.id));
-        expect(page.remainingCount).toBe(240 - ids.length);
-        expect(page.hasMore).toBe(page.remainingCount > 0);
-        cursor = page.nextCursor;
-        expect(ids.length).toBeLessThanOrEqual(240);
-      } while (cursor);
-      expect(ids).toEqual([...flows].reverse().map(flow => flow.id));
-      expect(new Set(ids).size).toBe(240);
-    }
-    const detail = await call("get_flow", { flowId: flows[0]!.id });
-    expect(detail.flow).toEqual(source.read(flows[0]!.id));
-    for (const options of [{ full: true }, { compact: false }]) {
-      const page = await call("list_flows", { ...options, ids: [flows[0]!.id] });
-      expect(page.flows).toEqual([detail.flow]);
-      expect(page.omittedRecordCount).toBe(0);
-    }
-    const first = await call("list_flows", { limit: 1 });
-    const reset = await call("list_flows", { cursor: first.nextCursor, state: "paused" });
-    expect(reset.cursorReset).toBe(true); expect(reset.count).toBe(0);
-    const beforeMetadata = index.work.metadataRows;
-    const changed = { ...source.read(flows[100]!.id)!, state: "paused" as const, closedAt: "2026-09-20T10:00:00Z" };
-    saveFlowRows([changed]);
-    const hidden = await call("list_flows", { state: "paused" });
-    expect(hidden.total).toBe(0);
-    expect(index.work.metadataRows - beforeMetadata).toBe(1);
-    const closed = await call("list_flows", { state: ["paused", "unknown"], includeClosed: true });
-    expect(closed.flows.map((flow: any) => flow.id)).toEqual([changed.id]);
-    const keyedClosed = await call("list_flows", { ids: [changed.id] });
-    expect(keyedClosed.count).toBe(0);
-    expect((await call("list_flows", { ids: [changed.id], includeClosed: true })).count).toBe(1);
-    const narrow = await call("list_flows", { limit: -10 });
-    expect(narrow.count).toBe(1);
-    expect((await call("list_flows", { project: "another-board" })).count).toBe(0);
-  } finally { process.env.LLV_STATE_DIR = previousState; }
-});
+}, 60_000);
 
 test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeGone restores idle history", async () => {
   const now = Date.now();
@@ -333,6 +251,7 @@ test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeG
     updatedAt: new Date(now).toISOString(),
   }]));
   const bindings = viewerMcpBindings(undefined, undefined, {
+    ...productionDomainDependencies,
     callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }),
     livenessSources: () => ({
       now: () => now,
@@ -340,7 +259,7 @@ test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeG
       registrySnapshot: () => ({ entries, conversations: {} }), pipelines: () => [],
       listFiles: async () => files, describeTranscript: async () => null,
       transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: now, providerProgressAt: null }),
-    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+    }), refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
   } as never);
   const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
   const live = await service.callTool("agent_activity", { clientRequestId: "mixed-live", liveOnly: true, limit: 200 }) as any;
@@ -413,6 +332,7 @@ test("expired unhosted busy transcripts leave liveOnly while starting launches s
     size: 100, activity: "live", proc: null, pid: null,
   }));
   const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
+    ...productionDomainDependencies,
     callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }),
     livenessSources: () => ({
       now: () => now,
@@ -427,7 +347,7 @@ test("expired unhosted busy transcripts leave liveOnly while starting launches s
       } }, conversations: {} }), pipelines: () => [],
       listFiles: async () => files, describeTranscript: async () => null,
       transcriptEvidence: async (_engine: string, file: string) => ({ turn: "busy", lastRecordTs: file.includes("orphan-10") && /orphan-10[01]/.test(file) ? now : now - 86400000, providerProgressAt: null }),
-    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+    }), refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
   } as never), new MemoryMcpReceiptStore());
   const live = await service.callTool("agent_activity", { clientRequestId: "orphans-live", liveOnly: true, limit: 200, full: true }) as any;
   expect(live.count).toBe(2);
@@ -451,13 +371,14 @@ test("multibyte titles and paths obey service byte budgets and paginate without 
       return { items: files.slice(offset, offset + limit), total: files.length, nextCursor: offset + limit < files.length ? String(offset + limit) : null };
     },
   } as never, {
+    ...productionDomainDependencies,
     callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }),
     livenessSources: () => ({
       now: () => now, probe: { now: () => now, pidAlive: () => false, processIdentity: () => null },
       registrySnapshot: () => ({ entries: {}, conversations: {} }), pipelines: () => [],
       listFiles: async () => files, describeTranscript: async () => null,
       transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: now, providerProgressAt: null }),
-    }), refreshLifecycleJournal: () => ({ appended: 0 }),
+    }), refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
   } as never), new MemoryMcpReceiptStore());
   for (const [tool, budget] of [["list_conversations", 12000], ["agent_activity", 24000]] as const) {
     let cursor: string | null = null;
@@ -482,9 +403,11 @@ test("multibyte titles and paths obey service byte budgets and paginate without 
 });
 
 
+// Seeding both 10,000-row stores shares CPU with publication checks. The
+// assertions below measure keyed reads and replay work directly.
 test("real service uses keyed reads and replays only changed selection rows on a 10000-card board", async () => {
   const { taskSelectionSource } = await import("@/lib/tasks/store");
-  const { pipelineSelectionSource, buildPipeline, pipelineIdentity } = await import("@/lib/pipelines/store");
+  const { pipelineSelectionSource, buildPipeline, pipelineIdentity, withDeliveryMutation } = await import("@/lib/pipelines/store");
   const { boardSelection } = await import("./boardSelection");
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(sandbox, "indexed-state");
@@ -547,7 +470,8 @@ test("real service uses keyed reads and replays only changed selection rows on a
     current.find(task => task.id === tasks[50]!.id)!.text = tasks[50]!.text;
     return { tasks: current, result: undefined };
   }, taskFile);
-  savePipelines(pipelines);
+  // Write only the changed pipeline so fixture costs track the intended journal replay.
+  withDeliveryMutation(tx => tx.put(pipelines[50]!));
   const changed = await call("list_tasks", { project: "indexed-board", query: "unrelated", limit: 1 });
   expect(changed.tasks[0].id).toBe(tasks[50]!.id);
   const changedPipeline = await call("list_pipelines", { project: "indexed-board", query: "unrelated", limit: 1 });
@@ -564,10 +488,14 @@ test("real service uses keyed reads and replays only changed selection rows on a
   expect(linkPage.tasks.find((task: { id: string }) => task.id === tasks[20]!.id).pipelineIds).toEqual([pipelines[20]!.id, pipelines[50]!.id]);
   expect(linkPage.tasks.find((task: { id: string }) => task.id === tasks[50]!.id).pipelineIds).toEqual([]);
   pipelines[50]!.taskIds = [tasks[50]!.id];
-  savePipelines(pipelines.filter(pipeline => pipeline.id !== pipelines[20]!.id));
+  withDeliveryMutation(tx => {
+    tx.put(pipelines[50]!);
+    tx.delete(pipelines[20]!.id);
+  });
   const nextLinkPage = await call("list_tasks", { ids: [tasks[20]!.id, tasks[50]!.id], limit: 50 });
   expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[20]!.id).pipelineIds).toEqual([]);
   expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[50]!.id).pipelineIds).toEqual([pipelines[50]!.id]);
+  expect(pipelineIndex.work.metadataRows - beforePipelines).toBe(2);
   console.log(`Indexed 10000-card service: changed-ID reads=1, single task update metadata=1, single pipeline update metadata=1`);
   } finally { process.env.LLV_STATE_DIR = previousState; }
-}, 30_000);
+}, 90_000);

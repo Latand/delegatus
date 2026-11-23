@@ -1,4 +1,4 @@
-import { hasInboundMedia, validateMediaInput } from "./mediaInputValidation";
+import { hasHistoryMedia, hasInboundMedia, MAX_INPUT_MEDIA_REFS, normalizeInputMediaDescriptor, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
 import { z } from "zod";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
@@ -25,6 +25,8 @@ export const targetSchema = z.object({
   target_id: id,
   name: label,
   answered_by: z.enum(["install", "service"]),
+  // Relative to this pairing: service routing may belong to another install (§B.2 rule 10).
+  answered_elsewhere: z.boolean().optional(),
   fallback: z.enum(["service", "none"]),
 });
 // Endpoint 6. One entry per target id: a list naming a target twice cannot
@@ -97,10 +99,11 @@ const inputMediaSchema = z.object({
   mime_type: boundedString(100).optional(), filename: boundedString(128).optional(),
   byte_size: z.number().int().positive().max(20971520).optional(), expires_at: time.optional(),
 }).strict();
+const claimMediaSchema = inputMediaSchema.extend({ byte_size: z.number().int().positive().safe().optional() });
 const mentionSchema = z.object({ author_key: id, offset: z.number().int().min(0).max(31999), length: z.number().int().min(1).max(128) }).strict();
 const messageSchema = z.object({
   id,
-  media: z.array(inputMediaSchema).max(4).optional(),
+  media: z.array(inputMediaSchema).max(MAX_INPUT_MEDIA_REFS).optional(),
   author: z.object({
     key: id,
     name: boundedString(128),
@@ -122,6 +125,26 @@ const requesterSchema = z.object({
   is_anonymous_admin: z.boolean(),
   is_owner: z.boolean(),
 });
+type RequesterAnchor = {
+  requester?: z.infer<typeof requesterSchema> | null;
+  respond_to: string | null;
+  conversation: readonly z.infer<typeof messageSchema>[];
+};
+
+/** A requester identifies the unique, human-authored trigger in this claim. */
+export function requesterTrigger(input: RequesterAnchor) {
+  if (!input.requester || input.respond_to === null) return null;
+  const matches = input.conversation.filter(message => message.id === input.respond_to);
+  const trigger = matches[0];
+  return matches.length === 1 && trigger && !trigger.author.self && trigger.author.key === input.requester.key
+    ? trigger : null;
+}
+
+export function ownerRequesterTrigger(input: RequesterAnchor) {
+  return input.requester?.is_owner === true && !input.requester.is_anonymous_admin ? requesterTrigger(input) : null;
+}
+
+export const INVALID_REQUESTER_DETAIL = "Requester does not match the triggering author or the owner delivery context.";
 const toolSchema = z.object({
   name: boundedString(64).refine((value) => value.length > 0),
   summary: boundedString(240),
@@ -131,11 +154,13 @@ const toolSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).refine((value) => Buffer.byteLength(JSON.stringify(value)) <= 8192).optional(),
   audience: z.enum(["admin", "owner"]).optional(),
 });
+export const relayAnswerDescription = "Only while you answer a relay message as its owner: text is your reply posted in the chat (without it, your last message is posted); format, buttons, mentions and attachments choose how it is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; mentions annotates person labels at original Unicode-scalar offsets; attachments select exactly one path under your document roots or an unexpired media_ref downloaded in this request. Photo references use stable attachment_id values from the receipt; several photos form one carousel with your message. Each call replaces the previous one. Refused in every other conversation and after the answer.";
 export const relayAnswerSchema = z.object({
+  text: z.string().min(1).max(32000).optional().describe("Your reply as posted in the chat."),
   mentions: z.array(mentionSchema).max(16).optional(),
   format: z.enum(["plain","rich_markdown"]).optional(),
   buttons: z.array(z.array(z.object({text:boundedString(64).refine(v => v.length > 0),url:boundedString(2048).refine(v => v.length > 0)})).min(1).max(3)).max(2).optional(),
-  attachments: z.array(z.object({path:z.string().min(1).max(4096),kind:z.enum(["photo","document","audio","video"]),caption:z.string().max(1024).optional(),filename:boundedString(128).refine(v => v.length > 0).optional()})).max(4).optional(),
+  attachments: z.array(z.object({path:z.string().min(1).max(4096).optional(),media_ref:z.string().regex(/^media_[0-9a-f]{32}$/).optional(),kind:z.enum(["photo","document","audio","video"]),caption:z.string().max(1024).optional(),filename:boundedString(128).refine(v => v.length > 0).optional()}).refine(v => (v.path !== undefined) !== (v.media_ref !== undefined), { message: "Choose exactly one path or media_ref" })).max(4).optional(),
 });
 
 export const mediaKindSchema = z.enum(["photo", "document", "audio", "video"]);
@@ -178,9 +203,9 @@ export const inputSchema = z.object({
     )
     .optional(),
 }).superRefine((input, context) => {
+  const ownerTrigger = ownerRequesterTrigger(input);
   for (const [index, message] of input.conversation.entries()) {
-    const prototypeReply = input.requester?.is_owner === true && input.requester.is_anonymous_admin === false
-      && message.id === input.respond_to && message.author.key === input.requester.key && !message.author.self
+    const prototypeReply = message === ownerTrigger
       && /#proto-[a-f0-9]{8}\b/i.test(message.text.replace(/\\([#-])/g, "$1"));
     if ([...message.text].length > 16000 && !prototypeReply) context.addIssue({ code: "custom",
       path: ["conversation", index, "text"], message: "expected at most 16000 Unicode code points" });
@@ -196,6 +221,7 @@ export const ownerDeliverySchema = z.object({
 });
 export type OwnerDelivery = z.infer<typeof ownerDeliverySchema>;
 const answerRequestSchema = z.object({
+  delivery: z.literal("guest").optional(),
   owner_delivery: ownerDeliverySchema.optional().catch(undefined),
   features: z.array(boundedString(64)).max(32).refine(v => new Set(v).size === v.length).optional().catch(undefined),
   request_id: id,
@@ -206,7 +232,7 @@ const answerRequestSchema = z.object({
   liveness: livenessSchema,
   // The chat key of §A.8, kept for the member limit and the records. A
   // malformed one is dropped, as an unknown field would be.
-  chat: z.object({ key: chatKey }).optional().catch(undefined),
+  chat: z.object({ key: chatKey, title: boundedString(200).optional().catch(undefined) }).optional().catch(undefined),
   input: inputSchema,
   answer: z.object({
     attachments: relayAttachmentLimitsSchema.optional().catch(undefined),
@@ -214,44 +240,111 @@ const answerRequestSchema = z.object({
     progress: z.enum(["notes", "none"]),
   }),
 });
-/** Strip media outside the trigger/direct-parent scope before validating its
- * descriptors. Legacy claims still ignore all additive media fields. */
-export const requestSchema = z.preprocess(raw => {
+/** Normalize item policy refusals on anchors; malformed anchors stay fail-closed. */
+export const requestSchema = z.preprocess((raw, context) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const value = raw as Record<string, unknown>;
-  const inbound = Array.isArray(value.features) && value.features.includes("relay_media_in");
+  let value = raw as Record<string, unknown>;
+  const mediaPolicy = {
+    delivery: value.delivery === "guest" ? "guest" as const : undefined,
+    features: Array.isArray(value.features) ? value.features : undefined,
+  };
+  // The ordinary schema tolerates a malformed destination extension. Guest
+  // delivery cannot carry an owner destination, including a malformed one.
+  if (mediaPolicy.delivery === "guest" && value.owner_delivery !== undefined)
+    context.addIssue({ code: "custom", path: ["owner_delivery"], message: INVALID_REQUESTER_DETAIL });
+  const inbound = hasInboundMedia(mediaPolicy);
   if (!value.input || typeof value.input !== "object" || Array.isArray(value.input)) return raw;
-  const input = value.input as Record<string, unknown>;
+  let input = value.input as Record<string, unknown>;
   const trigger = Array.isArray(input.conversation) ? input.conversation.find(message =>
     message && typeof message === "object" && message.id === input.respond_to) : undefined;
   const allowed = new Set([trigger?.id, trigger?.reply_to].filter(candidate => typeof candidate === "string"));
+  if (inbound && Array.isArray(input.conversation)) {
+    input = { ...input, conversation: input.conversation.map(message => {
+      if (!message || !allowed.has(message.id) || !Array.isArray(message.media)) return message;
+      return { ...message, media: message.media.map((rawMedia: unknown) => {
+        const parsed = claimMediaSchema.safeParse(rawMedia);
+        if (!parsed.success) return rawMedia;
+        try { return normalizeInputMediaDescriptor(parsed.data, mediaPolicy.features); }
+        catch { return rawMedia; }
+      }) };
+    }) };
+    value = { ...value, input };
+  }
+  const history = hasHistoryMedia(mediaPolicy);
+  // Anchor descriptors take precedence over conflicting historical copies.
+  const refs = new Map<string, InputMedia>();
+  if (Array.isArray(input.conversation)) for (const message of input.conversation) {
+    if (!message || !allowed.has(message.id) || !Array.isArray(message.media)) continue;
+    for (const rawMedia of message.media) {
+      const parsed = inputMediaSchema.safeParse(rawMedia);
+      if (parsed.success) refs.set(parsed.data.ref, parsed.data);
+    }
+  }
   const requestId = id.safeParse(value.request_id).success ? value.request_id : "invalid";
   return { ...value, input: { ...input,
     ...(Array.isArray(input.conversation) ? { conversation: input.conversation.map((message, entryIndex) => {
       if (!message || typeof message !== "object") return message;
-      if (inbound && allowed.has(message.id)) return message;
-      if (inbound && Object.hasOwn(message, "media")) {
-        const count = Array.isArray(message.media) ? message.media.length : 1;
-        // Log each dropped item without its contents or other conversation data.
-        for (let item = 0; item < count; item++) console.info("External relay history media dropped", JSON.stringify({
-          request: requestId,
-          entryIndex, count: 1,
-        }));
+      if (inbound && allowed.has(message.id) || !inbound && value.delivery === "guest") return message;
+      const kept: InputMedia[] = [];
+      if (Object.hasOwn(message, "media")) {
+        for (const rawMedia of Array.isArray(message.media) ? message.media : [message.media]) {
+          const parsed = history ? inputMediaSchema.safeParse(rawMedia) : null;
+          let media = parsed?.success && parsed.data.kind === "photo" ? parsed.data : null;
+          if (media) {
+            try { validateInputMediaDescriptor(media, mediaPolicy.features); }
+            catch { media = null; }
+          }
+          const previous = media && refs.get(media.ref);
+          if (media && (!previous || JSON.stringify(previous) === JSON.stringify(media))) {
+            refs.set(media.ref, media); kept.push(media);
+          } else if (inbound) {
+            // Never log descriptor contents or conversation data.
+            console.info("External relay history media dropped", JSON.stringify({ request: requestId, entryIndex, count: 1 }));
+          }
+        }
       }
+      if (kept.length) return { ...message, media: kept };
       const copy = { ...message }; delete copy.media; return copy;
     }) } : {}),
-    ...(!inbound && Array.isArray(input.documents) ? { documents: input.documents.map(document => {
+    ...(!inbound && value.delivery !== "guest" && Array.isArray(input.documents) ? { documents: input.documents.map(document => {
       if (!document || typeof document !== "object") return document;
       const copy = { ...document }; delete copy.message_id; delete copy.media_ref; delete copy.extraction; return copy;
     }) } : {}),
   } };
 }, answerRequestSchema.superRefine((request, context) => {
+  const { input } = request;
+  const { requester } = input;
+  const invalidRequester = request.delivery === "guest"
+    ? !requester || !requesterTrigger(input) || requester.is_anonymous_admin
+      || !requester.is_owner && (requester.is_admin || requester.can_restrict_members || requester.can_delete_messages)
+    : requester && (!requesterTrigger(input) || requester.is_owner && requester.is_anonymous_admin
+        || request.owner_delivery && !requester.is_owner);
+  if (invalidRequester)
+    context.addIssue({ code: "custom", path: ["input", "requester"], message: INVALID_REQUESTER_DETAIL });
+  if (request.delivery === "guest") {
+    if (request.answer.progress !== "none" || request.owner_delivery || request.input.format || request.answer.attachments
+      || request.input.tools?.some(tool => tool.mode !== "handoff")
+      || !hasInboundMedia(request) && (request.input.conversation.some(message => message.media?.length)
+        || request.input.documents.some(document => document.media_ref !== undefined)))
+      context.addIssue({ code: "custom", message: "invalid guest delivery contract" });
+  }
   if (!hasInboundMedia(request)) return;
   try { validateMediaInput(request); }
   catch { context.addIssue({ code: "custom", message: "invalid negotiated media input" }); }
 }));
 export type ExternalRelayRequest = z.infer<typeof requestSchema>;
 export type ExternalRelayTool = z.infer<typeof toolSchema>;
+export function relayToolAudience(request: ExternalRelayRequest) {
+  const requester = request.input.requester;
+  const matched = requesterTrigger(request.input) !== null;
+  const owner = matched && requester?.is_owner === true && !requester.is_anonymous_admin && request.delivery !== "guest";
+  const admin = matched && requester?.is_admin === true;
+  return (audience?: string) => audience === undefined || (audience === "admin" && admin) || (audience === "owner" && owner);
+}
+export function visibleRelayTools(request: ExternalRelayRequest) {
+  const mayQuote = relayToolAudience(request);
+  return (request.input.tools ?? []).filter(tool => mayQuote(tool.audience));
+}
 export const RELAY_TOOLS_ON_DEMAND = "relay_tools_on_demand";
 export const RELAY_OWNER_TOOLS = "relay_owner_tools";
 /** I9 uses the offered audience; operation names and schemas stay service-owned. */
@@ -339,13 +432,17 @@ export const handoffAnswerSchema = {
     action: { type: "string", enum: ["reply", "ignore", "handoff"] },
   },
 } as const;
+export const guestAnswerSchema = {
+  ...answerSchema,
+  properties: { ...answerSchema.properties, action: { type: "string", enum: ["reply", "handoff"] }, reply_to: { type: "null" } },
+} as const;
 export const replyAnswerSchema = {
   ...answerSchema,
   properties: { ...answerSchema.properties, action: { type: "string", enum: ["reply"] } },
 } as const;
-/** Hand-off is offered only for a request whose service listed its tools. */
+/** Guest delivery can return to the hosted assistant even without a tool index. */
 export const offersHandoff = (request: ExternalRelayRequest) =>
-  (request.input.tools?.length ?? 0) > 0;
+  request.delivery === "guest" || visibleRelayTools(request).length > 0;
 export type RelayMention = { author_key: string; offset: number; length: number };
 export type RelayUrlButton = { text: string; url: string };
 export type RelayAttachment = { attachment_id: string; kind: RelayMediaKind; caption?: string };
@@ -372,7 +469,7 @@ export function checkedAnswer(
     return options.handoff && offersHandoff(request)
       ? { action: "handoff", text: "", reply_to: null }
       : null;
-  if (answer.action === "ignore" && !options.ignore) return null;
+  if (answer.action === "ignore" && (!options.ignore || request.delivery === "guest")) return null;
   if (
     (answer.action !== "reply" && answer.action !== "ignore") ||
     typeof answer.text !== "string" ||
@@ -389,7 +486,7 @@ export function checkedAnswer(
     action: answer.action,
     text: answer.action === "ignore" ? "" : answer.text,
     reply_to:
-      reply &&
+      request.delivery !== "guest" && reply &&
       request.input.conversation.some((message) => message.id === reply)
         ? reply
         : null,
@@ -454,13 +551,26 @@ export const ownerHistoryPageSchema = z.object({
   chat_id: z.number().int(), title: z.string(), timezone: z.string(), start: time, end: time,
   oldest_stored_at: z.iso.datetime().nullable(),
   messages: z.array(z.object({
-    message_id: z.number().int(), sent_at: z.iso.datetime(),
+    message_id: z.number().int(), sent_at: z.iso.datetime(), edited_at: z.iso.datetime().nullable().optional(),
     author: z.object({ user_id: z.number().int(), name: z.string().nullable(), username: z.string().nullable() }).strict(),
     from_assistant: z.boolean(), thread_id: z.number().int().nullable(), reply_to_message_id: z.number().int().nullable(),
-    text: boundedString(4096), media: z.object({ kind: z.string(), description: boundedString(1000).nullable() }).strict().nullable(),
+    text: boundedString(4096), media: z.object({ kind: z.string(), description: boundedString(1000).nullable(),
+      file_name: boundedString(128).nullable().optional(), mime_type: boundedString(100).nullable().optional(),
+      size: z.number().int().nonnegative().safe().nullable().optional(), duration: z.number().int().nonnegative().nullable().optional(),
+      width: z.number().int().nonnegative().nullable().optional(), height: z.number().int().nonnegative().nullable().optional(),
+      fetch: z.enum(["available", "too_large", "protected", "unsupported_kind", "unavailable"]).optional(),
+    }).strict().nullable(),
     truncated: z.boolean(),
   }).strict()).max(100),
   next_cursor: z.string().regex(/^[1-9][0-9]{0,9}$/).nullable(),
 }).strict();
 export type OwnerHistoryGroups = z.infer<typeof ownerHistoryGroupsSchema>;
 export type OwnerHistoryPage = z.infer<typeof ownerHistoryPageSchema>;
+
+/** H4 never accepts arbitrary provider text as a refusal or filename path. */
+export const ownerMediaPreparingSchema = z.object({ status: z.literal("preparing"), retry_after_s: z.number().int().min(1).max(30) }).strict();
+export const ownerMediaRefusalSchema = z.object({ error: z.object({
+  code: z.enum(["no_media", "unsupported_kind", "protected", "too_large", "media_unavailable", "rate_limited"]),
+  message: z.string().optional(), retry_after_s: z.number().int().positive().optional(),
+  limit_bytes: z.number().int().nonnegative().safe().optional(), size_bytes: z.number().int().nonnegative().safe().optional(),
+}).strict() }).strict();

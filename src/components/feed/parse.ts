@@ -419,7 +419,7 @@ function num(value: unknown): number | undefined {
 const TMSG_RE = /<(teammate-message|agent-message)\b([^>]*)>([\s\S]*?)<\/\1>/g;
 
 /* Inbox image paths the composer appends to a delivered message, one per line
-   after the text (src/lib/tmux.ts buildImagePayload). The captured basename is
+   after the text. The captured basename is
    what /api/inbox accepts. Every inbox home matches: delegatus/inbox (a new
    install), agent-log-viewer/inbox (an install from before the rename) and the
    legacy .claude/viewer-inbox that old transcripts still reference. */

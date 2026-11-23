@@ -16,10 +16,15 @@ const LONG_MESSAGE_CHARS = 160;
  * speaks for, so that card keeps the word for assistive technology only
  * (`statusShown` false); any other delivery shows its own.
  *
+ * Under the undelivered chip the list is a bounded scroller, so the card leads
+ * with what the operator has to know and press (`actionsFirst`): the status and
+ * the two controls, then the message and the sentence on what the controls do.
+ * Whatever the list's height, the first thing in it is the decision.
+ *
  * An orchestrator relay opens with a fixed preamble. Here it is a short label
  * naming the source project, and the handoff's own words are the message.
  */
-export function DeliveryCheckCard({ operationId, text, status, statusShown, detail, pending = false, children }: {
+export function DeliveryCheckCard({ operationId, text, status, statusShown, detail, pending = false, actionsFirst = false, children }: {
   operationId: string;
   text: string | null;
   status: string;
@@ -27,6 +32,8 @@ export function DeliveryCheckCard({ operationId, text, status, statusShown, deta
   detail: string;
   /** The operation has not settled, which a message row publishes. */
   pending?: boolean;
+  /** The status and the controls come before the message and the sentence. */
+  actionsFirst?: boolean;
   /** The delivery's own controls, drawn by the caller that owns their rules. */
   children: ReactNode;
 }) {
@@ -53,6 +60,39 @@ export function DeliveryCheckCard({ operationId, text, status, statusShown, deta
     measure();
     return () => observer.disconnect();
   }, [body, expanded]);
+  const messageNode = body ? (
+    <p
+      ref={message}
+      /* Collapsed, paragraphs run together: a blank line between them
+         would otherwise be the whole second line. Expanded, a long
+         handoff scrolls in its own box so the two controls stay in view. */
+      className={`min-w-0 break-words text-secondary ${expanded ? "max-h-24 overflow-y-auto overscroll-contain whitespace-pre-wrap" : "line-clamp-2"}`}
+      data-receipt-message
+    >
+      {body}
+    </p>
+  ) : null;
+  const statusNode = <span role="status" className={statusShown ? "text-caption font-semibold text-warning" : "sr-only"}>{status}</span>;
+  const whyNode = <p className="min-w-0 break-words text-caption text-muted" data-receipt-uncertain-why>{detail}</p>;
+  const controlsNode = (
+    <div
+      className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] font-semibold"
+      {...(actionsFirst ? { "data-delivery-check-lead": "" } : {})}
+    >
+      {children}
+      {body && (multiline || clamped || expanded) ? (
+        <button
+          type="button"
+          data-receipt-message-toggle
+          aria-expanded={expanded}
+          className="ml-auto min-h-11 rounded-control px-1 font-normal text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {t(expanded ? "composer.messageCollapse" : "composer.messageExpand")}
+        </button>
+      ) : null}
+    </div>
+  );
   return (
     <div
       className="flex min-w-0 flex-col gap-1 rounded-control bg-card/70 px-2 py-1 text-left"
@@ -70,34 +110,7 @@ export function DeliveryCheckCard({ operationId, text, status, statusShown, deta
           {t("composer.relayLabel", { project: relay.project })}
         </span>
       ) : null}
-      {body ? (
-        <p
-          ref={message}
-          /* Collapsed, paragraphs run together: a blank line between them
-             would otherwise be the whole second line. Expanded, a long
-             handoff scrolls in its own box so the two controls stay in view. */
-          className={`min-w-0 break-words text-secondary ${expanded ? "max-h-24 overflow-y-auto overscroll-contain whitespace-pre-wrap" : "line-clamp-2"}`}
-          data-receipt-message
-        >
-          {body}
-        </p>
-      ) : null}
-      <span role="status" className={statusShown ? "text-caption font-semibold text-warning" : "sr-only"}>{status}</span>
-      <p className="min-w-0 break-words text-caption text-muted" data-receipt-uncertain-why>{detail}</p>
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] font-semibold">
-        {children}
-        {body && (multiline || clamped || expanded) ? (
-          <button
-            type="button"
-            data-receipt-message-toggle
-            aria-expanded={expanded}
-            className="ml-auto min-h-11 rounded-control px-1 font-normal text-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-0"
-            onClick={() => setExpanded((open) => !open)}
-          >
-            {t(expanded ? "composer.messageCollapse" : "composer.messageExpand")}
-          </button>
-        ) : null}
-      </div>
+      {actionsFirst ? <>{statusNode}{controlsNode}{messageNode}{whyNode}</> : <>{messageNode}{statusNode}{whyNode}{controlsNode}</>}
     </div>
   );
 }

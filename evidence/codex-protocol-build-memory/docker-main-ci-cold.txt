@@ -1,0 +1,308 @@
+{"node":"v22.16.0","heapMiB":4144,"constrainedMiB":14336}
+1.4.0
+$ next build --webpack && bun run build:mcp && bun run build:gate
+▲ Next.js 16.4.2 (webpack)
+✓ Running next.config.ts took 148ms
+- Experiments (use with caution):
+  · cpus: 2
+  · proxyClientMaxBodySize: 83886080
+
+  Creating an optimized production build ...
+  Using tsconfig file: tsconfig.production.json
+Found 1 warning while optimizing generated CSS:
+
+│   }
+│ }
+│ ::highlight(tts-karaoke) {
+┆             ^-- 'highlight' is not recognized as a valid pseudo-element. Did you mean ':highlight' (pseudo-class) or is this a typo?
+┆
+│   background-color: color-mix(in srgb, #5a51e0 26%, transparent);
+│   @supports (color: color-mix(in lab, red, red)) {
+
+✓ Compiled successfully in 2.9min
+  Running TypeScript ...
+  Finished TypeScript in 82s ...
+  Collecting page data using 2 workers ...
+[state ownership] build resolved the operator's directory $CHECK_ROOT/config/delegatus/inbox without LLV_STATE_OWNER; using the throw-away $CHECK_ROOT/tmp/llv-unowned-state-WNvGAm/inbox instead.
+[state ownership] build resolved the operator's directory $CHECK_ROOT/config/delegatus/inbox without LLV_STATE_OWNER; using the throw-away $CHECK_ROOT/tmp/llv-unowned-state-uSpqXg/inbox instead.
+  Generating static pages using 2 workers (0/14) ...
+  Generating static pages using 2 workers (3/14)
+  Generating static pages using 2 workers (6/14)
+  Generating static pages using 2 workers (10/14)
+✓ Generating static pages using 2 workers (14/14) in 2.6s
+  Finalizing page optimization ...
+  Collecting build traces ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /activity
+├ ƒ /api/access
+├ ƒ /api/access/phone
+├ ƒ /api/account-migrations/[intentId]
+├ ƒ /api/account-project-bindings
+├ ƒ /api/accounts
+├ ƒ /api/accounts/claude
+├ ƒ /api/accounts/claude/[id]/status
+├ ƒ /api/accounts/claude/active
+├ ƒ /api/accounts/claude/limits
+├ ƒ /api/accounts/claude/login/[operationId]
+├ ƒ /api/accounts/claude/login/[operationId]/input
+├ ƒ /api/accounts/claude/policy
+├ ƒ /api/accounts/claude/terminal
+├ ƒ /api/accounts/cli
+├ ƒ /api/accounts/codex
+├ ƒ /api/accounts/codex/active
+├ ƒ /api/accounts/codex/limits
+├ ƒ /api/accounts/codex/models
+├ ƒ /api/accounts/codex/policy
+├ ƒ /api/accounts/codex/reset-credits
+├ ƒ /api/accounts/codex/terminal
+├ ƒ /api/accounts/copilot
+├ ƒ /api/accounts/copilot/models
+├ ƒ /api/activity
+├ ƒ /api/activity/tokens
+├ ƒ /api/agent
+├ ƒ /api/agent/snapshot
+├ ƒ /api/answer
+├ ƒ /api/artifact
+├ ƒ /api/artifact/frame/[...rest]
+├ ƒ /api/asks-you
+├ ƒ /api/asks-you/key
+├ ƒ /api/attach-command
+├ ƒ /api/attention
+├ ƒ /api/attention/[id]
+├ ƒ /api/attention/dismissals
+├ ƒ /api/attention/done
+├ ƒ /api/attention/needs-you
+├ ƒ /api/board
+├ ƒ /api/board/maintenance/worktrees
+├ ƒ /api/bridge
+├ ƒ /api/codex-update/check
+├ ƒ /api/composer-upload
+├ ƒ /api/conversation-host
+├ ƒ /api/conversation-host/targets
+├ ƒ /api/conversations
+├ ƒ /api/conversations/[conversationId]/migration
+├ ƒ /api/external-relay
+├ ƒ /api/external-relay/conversations
+├ ƒ /api/external-relay/known
+├ ƒ /api/external-relay/owner-history
+├ ƒ /api/external-relay/pairings
+├ ƒ /api/external-relay/pairings/[id]
+├ ƒ /api/external-relay/relays/[id]
+├ ƒ /api/external-relay/relays/[id]/clone-avatars
+├ ƒ /api/external-relay/relays/[id]/clone-requests
+├ ƒ /api/external-relay/relays/[id]/clone-requests/[requestId]
+├ ƒ /api/external-relay/relays/[id]/targets/[targetId]
+├ ƒ /api/external-relay/relays/[id]/targets/[targetId]/answers
+├ ƒ /api/external-relay/relays/[id]/targets/[targetId]/answers/[requestId]
+├ ƒ /api/files
+├ ƒ /api/flows
+├ ƒ /api/flows/[id]
+├ ƒ /api/image
+├ ƒ /api/inbox
+├ ƒ /api/keys
+├ ƒ /api/keys/[id]
+├ ƒ /api/keys/[id]/reveal
+├ ƒ /api/keys/export
+├ ƒ /api/keys/import
+├ ƒ /api/lifecycle/reaper
+├ ƒ /api/limits
+├ ƒ /api/limits/history
+├ ƒ /api/links
+├ ƒ /api/links/agents
+├ ƒ /api/links/codes
+├ ƒ /api/links/grants
+├ ƒ /api/links/peers
+├ ƒ /api/links/peers/[id]
+├ ƒ /api/links/shared
+├ ƒ /api/log
+├ ƒ /api/log/preflight
+├ ƒ /api/log/project-delete
+├ ƒ /api/log/provenance
+├ ƒ /api/logs
+├ ƒ /api/logs/stream
+├ ƒ /api/mcp
+├ ƒ /api/memory/inject
+├ ƒ /api/memory/settings
+├ ƒ /api/memory/source
+├ ƒ /api/monitor/runs
+├ ƒ /api/monitor/seat-tick
+├ ƒ /api/monitor/seat-tick/settings
+├ ƒ /api/onboarding
+├ ƒ /api/onboarding/diagnostics
+├ ƒ /api/onboarding/health
+├ ƒ /api/operator/settings
+├ ƒ /api/operator/worker-limit
+├ ƒ /api/orchestrator/ghost
+├ ƒ /api/orchestrator/message
+├ ƒ /api/orchestrator/reports
+├ ƒ /api/orchestrator/rotate
+├ ƒ /api/orchestrator/seat
+├ ƒ /api/orchestrator/seat/status
+├ ƒ /api/peer
+├ ƒ /api/peer/[...path]
+├ ƒ /api/peer/v1/[...path]
+├ ƒ /api/peer/v1/self-check
+├ ƒ /api/pipelines
+├ ƒ /api/pipelines/[id]
+├ ƒ /api/pipelines/[id]/changes
+├ ƒ /api/pipelines/[id]/checks
+├ ƒ /api/pipelines/[id]/review
+├ ƒ /api/pipelines/from-conversation
+├ ƒ /api/pipelines/preflight
+├ ƒ /api/pipelines/tick
+├ ƒ /api/proc
+├ ƒ /api/projects/cloud-environments
+├ ƒ /api/projects/create
+├ ƒ /api/projects/crown
+├ ƒ /api/projects/decisions
+├ ƒ /api/projects/directories
+├ ƒ /api/projects/reports
+├ ƒ /api/projects/settings
+├ ƒ /api/prototype-reviews
+├ ƒ /api/prototype-reviews/read
+├ ƒ /api/prototype-reviews/scope
+├ ƒ /api/prototype-reviews/telegram
+├ ƒ /api/push
+├ ƒ /api/recorded-check
+├ ƒ /api/resources
+├ ƒ /api/resources/worktrees
+├ ƒ /api/review-history
+├ ƒ /api/review-history/[id]
+├ ƒ /api/review-history/[id]/export
+├ ƒ /api/role-memory
+├ ƒ /api/role-memory/lessons
+├ ƒ /api/role-memory/profile
+├ ƒ /api/roles
+├ ƒ /api/runtime/answer
+├ ƒ /api/runtime/delivery-progress
+├ ƒ /api/runtime/deployments
+├ ƒ /api/runtime/deployments/[deploymentId]
+├ ƒ /api/runtime/deployments/capabilities/v1
+├ ƒ /api/runtime/hosts
+├ ƒ /api/runtime/inject
+├ ƒ /api/runtime/interrupt
+├ ƒ /api/runtime/operations
+├ ƒ /api/runtime/operations/[operationId]
+├ ƒ /api/runtime/queue
+├ ƒ /api/runtime/realtime
+├ ƒ /api/runtime/send
+├ ƒ /api/runtime/snapshot
+├ ƒ /api/runtime/spawn
+├ ƒ /api/runtime/steer
+├ ƒ /api/runtime/stream
+├ ƒ /api/runtime/waits
+├ ƒ /api/search/memory
+├ ƒ /api/search/transcripts
+├ ƒ /api/self-update
+├ ƒ /api/self-update/action
+├ ƒ /api/self-update/auto
+├ ƒ /api/self-update/check
+├ ƒ /api/self-update/events
+├ ƒ /api/self-update/launcher-admission
+├ ƒ /api/self-update/restart
+├ ƒ /api/self-update/steps/[step]/log
+├ ƒ /api/self-update/update
+├ ƒ /api/session
+├ ƒ /api/session/supersedence
+├ ƒ /api/session/title
+├ ƒ /api/spawn
+├ ƒ /api/spawn/policy
+├ ƒ /api/spawn/validate
+├ ƒ /api/staging
+├ ƒ /api/stop-all
+├ ƒ /api/streams
+├ ƒ /api/structured-user/provenance
+├ ƒ /api/subscription-api-consent
+├ ƒ /api/task-album
+├ ƒ /api/task-attachments
+├ ƒ /api/task-icons
+├ ƒ /api/task-spend
+├ ƒ /api/tasks
+├ ƒ /api/tasks/[id]
+├ ƒ /api/tasks/[id]/album
+├ ƒ /api/tasks/[id]/album/image
+├ ƒ /api/tasks/[id]/assignment
+├ ƒ /api/tasks/[id]/proactive
+├ ƒ /api/tasks/[id]/prototypes
+├ ƒ /api/tasks/[id]/prototypes/[reviewId]/video/[mediaId]
+├ ƒ /api/tasks/[id]/send
+├ ƒ /api/tasks/[id]/spawn
+├ ƒ /api/tasks/curator
+├ ƒ /api/team
+├ ƒ /api/team/claim
+├ ƒ /api/team/events
+├ ƒ /api/team/invites
+├ ƒ /api/team/invites/[id]
+├ ƒ /api/team/join-requests/[id]
+├ ƒ /api/team/join/[code]
+├ ƒ /api/team/members/[id]
+├ ƒ /api/team/passkeys
+├ ƒ /api/team/public
+├ ƒ /api/team/session/approval
+├ ƒ /api/team/session/approval/[id]
+├ ƒ /api/team/session/approve
+├ ƒ /api/team/session/handoff
+├ ƒ /api/team/session/passkey
+├ ƒ /api/team/session/sign-out
+├ ƒ /api/team/session/telegram
+├ ƒ /api/team/session/telegram/[id]
+├ ƒ /api/team/sessions
+├ ƒ /api/team/telegram
+├ ƒ /api/team/workspace-projects
+├ ƒ /api/team/workspaces
+├ ƒ /api/team/workspaces/[id]
+├ ƒ /api/team/workspaces/[id]/members
+├ ƒ /api/telegram
+├ ƒ /api/telegram/bot
+├ ƒ /api/telegram/bot/agent
+├ ƒ /api/telegram/bot/confirmation
+├ ƒ /api/telegram/reports
+├ ƒ /api/telemetry
+├ ƒ /api/timeline
+├ ƒ /api/tmux
+├ ƒ /api/tmux/targets
+├ ƒ /api/transcribe
+├ ƒ /api/transcribe/backend
+├ ƒ /api/transcribe/key
+├ ƒ /api/transcribe/token
+├ ƒ /api/transfer/accounts
+├ ƒ /api/transfer/apply
+├ ƒ /api/transfer/export
+├ ƒ /api/transfer/preview
+├ ƒ /api/transfer/report
+├ ƒ /api/tts
+├ ƒ /api/tts/backend
+├ ƒ /api/tts/voices
+├ ƒ /api/view/presence
+├ ƒ /api/view/typing-latency
+├ ƒ /api/voice-companion/calls
+├ ƒ /api/voice-companion/key
+├ ƒ /api/voice-companion/memory
+├ ƒ /api/voice-companion/resume
+├ ƒ /api/voice-companion/session
+├ ƒ /api/voice-companion/settings
+├ ƒ /api/voice-tools
+├ ƒ /api/voice-tools/proposals
+├ ƒ /api/workflows
+├ ƒ /api/workflows/[id]
+├ ○ /apple-icon
+├ ○ /icon.svg
+├ ƒ /join/[code]
+├ ƒ /sign-in
+├ ƒ /team
+├ ƒ /team/workspaces/[id]
+└ ○ /telegram-file-confirmation
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+$ bun scripts/build-mcp.ts
+Built dist/mcp-server.mjs (19150049 bytes)
+$ bun scripts/build-gate.ts
+Built namespace-aware gate tooling in dist/gate

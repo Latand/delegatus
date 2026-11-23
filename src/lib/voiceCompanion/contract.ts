@@ -20,6 +20,13 @@ import type { RetainedCall } from "./callHistoryTypes";
 export type Id = string;
 export type Locale = "en" | "uk";
 
+export const BROWSER_DROP_CAUSES = ["ice-failed", "ice-grace", "channel-closed", "viewer-unreachable", "audio-refused"] as const;
+export type DropCause = typeof BROWSER_DROP_CAUSES[number] | "watchdog" | "sideband" | "provider-connection_lost" | "provider-expired" | "provider-remote_hangup" | "provider-content" | "provider-error" | "viewer-restart" | "answer-lost" | "mint-failed";
+export interface ConnectionEpisode { ms: number; speaking: "voice" | "operator" | null }
+/** Browser drop facts replayed with a resume start when the close request was lost. */
+export interface DropDiagnostic { cause: typeof BROWSER_DROP_CAUSES[number]; episode?: ConnectionEpisode }
+export interface ReconnectRecord { tier: 2; attempts: number; automatic: boolean; noticedToStartMs: number }
+
 export type Recipient = {
   project: Id;
   conversationId: Id;
@@ -93,13 +100,13 @@ export type Payload =
   | { type: "usage.updated"; usage: CompanionUsage }
   | { type: "context.updated"; project: string | null }
   | { type: "session.ready"; mode: CompanionMode }
-  | { type: "session.closed"; reason: "operator" | "tool" | "cap" | "limit" | "transport" | "error"; incomplete?: boolean }
+  | { type: "session.closed"; reason: "operator" | "tool" | "cap" | "limit" | "transport" | "error" | "content"; incomplete?: boolean; cause?: DropCause; episode?: ConnectionEpisode }
   | { type: "input.speech.started"; itemId: Id }
   | { type: "input.speech.stopped"; itemId: Id }
   | { type: "transcript.delta"; speaker: "operator" | "companion"; itemId: Id; responseId?: Id; delta: string }
   | { type: "transcript.final"; speaker: "operator" | "companion"; itemId: Id; responseId?: Id; text: string }
   /** Whole display segment; final marks a display boundary, never consent. */
-  | { type: "transcript.snapshot"; speaker: "operator" | "companion"; itemId: Id; text: string; final: boolean; startMs?: number; endMs?: number }
+  | { type: "transcript.snapshot"; speaker: "operator" | "companion"; itemId: Id; text: string; final: boolean; startMs?: number; endMs?: number; audioMs?: number }
   | { type: "response.started"; responseId: Id; itemId: Id }
   | { type: "response.generated"; responseId: Id; status: "completed" | "cancelled" | "failed" }
   /** A started playback names the line it plays. The same response again names
@@ -127,6 +134,8 @@ export type Payload =
   | { type: "delegation.delivery.settled"; delivery: Delivery; status: "delivered" | "failed"; code?: string }
   | { type: "orchestrator.report"; reportId: Id; status: "progress" | "result" | "question" | "blocked" | "message"; text: string; at: number; project: string }
   | { type: "orchestrator.answer"; delivery: Delivery; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string }
+  /** A timer came up and the voice was handed its words: the page plays the timer cue. */
+  | { type: "timer.fired"; timerId: Id }
   /** `resetsAt` (Unix seconds) names when a refused plan limit resets. */
   | { type: "error"; code: string; recoverable: boolean; resetsAt?: number };
 
@@ -145,6 +154,7 @@ export type CompanionEvent = Payload & {
 };
 
 export type CompanionCommand =
+  | ({ type: "episode" } & ConnectionEpisode)
   | { type: "confirmation"; proposalId: Id; decision: "send" | "cancel"; via: "tap" | "speech"; confirmationItemId?: Id }
   | { type: "interrupt"; responseId: Id }
   | { type: "mute"; muted: boolean };
@@ -155,10 +165,29 @@ export interface ResumableCall { sessionId: Id; project: string | null }
  * Until then the Viewer answers that nothing dropped, so a page that reloaded mid-call asks again after it. */
 export const STALE_BROWSER_MS = 5_000;
 
+/** Browser playback evidence, interpreted only against the part named by resume. */
+export interface ResumeCursor {
+  heard?: { itemId: Id; playedMs: number };
+  unplayed?: Id[];
+  operatorOpen?: Id;
+}
+/** Shared by HTTP admission and the service; no text or authority comes from a cursor. */
+export function resumeCursorValid(value: unknown): value is ResumeCursor {
+  const object = (row: unknown): row is Record<string, unknown> => !!row && typeof row === "object" && !Array.isArray(row);
+  const id = (row: unknown) => typeof row === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(row);
+  if (!object(value) || Object.keys(value).some(key => !["heard", "unplayed", "operatorOpen"].includes(key))) return false;
+  return (value.heard === undefined || object(value.heard) && Object.keys(value.heard).every(key => ["itemId", "playedMs"].includes(key))
+    && id(value.heard.itemId) && Number.isSafeInteger(value.heard.playedMs) && (value.heard.playedMs as number) >= 0)
+    && (value.unplayed === undefined || Array.isArray(value.unplayed) && value.unplayed.length <= 64 && value.unplayed.every(id))
+    && (value.operatorOpen === undefined || id(value.operatorOpen));
+}
+
 export interface VoiceCompanionAdapter {
   readonly mode: CompanionMode;
   /** `resume` continues a dropped call: the new session starts with its conversation. */
-  start(options: { locale: Locale; project: Id; resume?: Id }): Promise<void>;
+  start(options: { locale: Locale; project: Id; resume?: Id; cursor?: ResumeCursor; drop?: DropDiagnostic; reconnect?: ReconnectRecord; signal?: AbortSignal }): Promise<void>;
+  /** Call-wide retry sounds and release of retained media on give-up. */
+  reconnect?(status: "trying" | "tick" | "gave-up" | "cancelled"): void;
   /** Updates browser context on the same call, including while it starts. */
   setProject?(project: string | null): Promise<void>;
   subscribe(emit: (event: CompanionEvent) => void): () => void;

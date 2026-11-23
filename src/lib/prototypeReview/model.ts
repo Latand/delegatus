@@ -1,4 +1,4 @@
-import { PROTOTYPE_DELIVERY_MAX_ATTEMPTS } from "./deliveryPolicy";
+import { PROTOTYPE_DELIVERY_MAX_ATTEMPTS, prototypeDeliverySettled } from "./deliveryPolicy";
 import { nativeAssociationDecisionApproves } from "@/lib/attention/nativeAssociationForm";
 import { firstLineTitle } from "@/lib/tasks/helpers";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -11,6 +11,7 @@ export const PROTOTYPE_DELIVERY_ATTENTION_MS = 5 * 60_000;
 /** The review's quiet word for a saved decision's message. */
 export function prototypeDeliveryPhase(delivery: PrototypeDecision["delivery"], now: number): PrototypeDeliveryPhase {
   if (delivery.state === "sent") return "delivered";
+  if (delivery.state === "acknowledged" || delivery.settlement) return "retired";
   if (delivery.exhaustedAt || (delivery.attempts ?? 0) >= PROTOTYPE_DELIVERY_MAX_ATTEMPTS || delivery.failingSince && now - Date.parse(delivery.failingSince) >= PROTOTYPE_DELIVERY_ATTENTION_MS) return "attention";
   if (!delivery.conversationId) return "waiting-seat";
   return delivery.state === "pending" && !delivery.dispatchedAt && !delivery.operationId ? "saved" : "delivering";
@@ -27,7 +28,7 @@ export function prototypeRoundMetadata(round: PrototypeReviewRound): PrototypeRo
     ...(decision ? { decision: { chosen: decision.chosen, ...(decision.originalReply !== undefined ? { originalReply: decision.originalReply } : {}),
       ...(decision.recommendedWithReservation ? { recommendedWithReservation: decision.recommendedWithReservation } : {}),
       ...(decision.rejected ? { rejected: decision.rejected } : {}), ...(decision.answers ? { answers: decision.answers } : {}), ...(decision.skipped ? { skipped: decision.skipped } : {}), comment: decision.comment, at: decision.at,
-      delivery: { state: decision.delivery.state, retryable: ["failed", "uncertain", "no-orchestrator", "pending"].includes(decision.delivery.state) } } } : {}) };
+      delivery: { state: decision.delivery.state, retryable: !prototypeDeliverySettled(decision.delivery) && ["failed", "uncertain", "no-orchestrator", "pending"].includes(decision.delivery.state) } } } : {}) };
 }
 export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica | undefined {
   const summary = prototypeReviewSummary(task.prototypeReviews ?? []);
@@ -38,7 +39,7 @@ export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica 
 }
 
 /** What the summary reads of a round: a stored round and its public view both carry it. */
-type SummaryRound = Pick<PrototypeReviewRound, "id" | "title" | "createdAt" | "questions"> & { variants: ReadonlyArray<{ number: number; name: string }>;
+type SummaryRound = Pick<PrototypeReviewRound, "id" | "title" | "createdAt" | "questions" | "source"> & { variants: ReadonlyArray<{ number: number; name: string }>;
   decision?: Pick<PrototypeDecision, "chosen" | "comment" | "at" | "rejected" | "originalReply"> & { delivery: { state: PrototypeDeliveryState } } };
 /** Pure selectors: at most one waiting round per task, and only the newest.
     A newer round replaces every undecided round before it, and a decision
@@ -71,10 +72,10 @@ export function prototypeRoundsSuperseded(rounds: ReadonlyArray<{ id: string; de
 }
 /** A seat's own unanswered question as a notice: no task to land on, so it
     opens in the seat's «Рішення» column (docs/design/operator-decision-forms.md §2.2). */
-export function seatRoundNotice(round: Pick<PrototypeReviewRound, "id" | "project" | "title" | "createdAt" | "questions">): PrototypeReviewNotice {
+export function seatRoundNotice(round: Pick<PrototypeReviewRound, "id" | "project" | "title" | "createdAt" | "questions" | "source">): PrototypeReviewNotice {
   return { id: `prototype:${round.id}`, project: round.project, taskId: null, reviewId: round.id, title: round.title,
     ...(round.questions?.length ? { asks: "questions" as const } : {}), createdAt: round.createdAt,
-    target: { kind: "seat-decision", project: round.project, reviewId: round.id } };
+    source: round.source, target: { kind: "seat-decision", project: round.project, reviewId: round.id } };
 }
 /** Every round waiting on the operator: one per task, then each open seat
     question the page's read carried beside the tasks. */
@@ -97,6 +98,7 @@ export function prototypeReviewNotices(tasks: readonly BoardTask[], seatOrNow: r
     const roundTitle = waiting?.title ?? (reviewId === summary.latestReviewId ? summary.title : undefined);
     return [...failures, { id: `prototype:${reviewId}`, project: task.project, taskId: task.id, reviewId, title: firstLineTitle(task.text), ...(roundTitle ? { roundTitle } : {}),
       ...(waiting?.questions?.length || summary.asks === "questions" ? { asks: "questions" as const } : {}),
+      ...(waiting?.source ? { source: waiting.source } : {}),
       createdAt: summary.createdAt, target: { kind: "prototype-review" as const, taskId: task.id, reviewId } }];
   }), ...seat];
 }

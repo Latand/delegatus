@@ -28,7 +28,7 @@ let killResult: { status: number; body: Record<string, unknown> } = { status: 20
     action — never the real one — served the kill. */
 const MOCK_MARKER = "stub-conversation-action";
 mock.module("@/lib/conversation/actions", () => ({
-  CONVERSATION_ACTIONS: ["interrupt", "kill", "resume", "compact", "dialog-key"] as const,
+  CONVERSATION_ACTIONS: ["interrupt", "kill", "resume", "compact"] as const,
   applyConversationAction: async (request: KillRequest) => {
     killed.push(request);
     settleKill?.();
@@ -39,14 +39,14 @@ mock.module("@/lib/conversation/actions", () => ({
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { procBackend } = await import("@/lib/proc");
 const { sessionKeyId } = await import("@/lib/agent/sessionKey");
-const { defaultPipelinePorts, stopPipelineStageAgent, stopPipelineStagePane } = await import("./engine");
+const { defaultPipelinePorts, stopPipelineStageAgent } = await import("./engine");
 type RuntimeHostClient = import("@/lib/runtime/client").RuntimeHostClient;
 
 type Registry = InstanceType<typeof AgentRegistry>;
 
 /** Seats a structured conversation whose host process is this test process, so
     the liveness probe reports a resident host without spawning anything. */
-function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; pane?: TmuxHostEvidence | null; process?: { pid: number; startIdentity: string | null; bootEpoch?: string | null } } = {}): {
+function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; process?: { pid: number; startIdentity: string | null; bootEpoch?: string | null } } = {}): {
   registry: Registry;
   conversationId: string;
   launchId: string;
@@ -64,7 +64,7 @@ function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolea
     cwd: sandbox,
     accountId: "codex-subscription",
     status: options.status ?? "live",
-    host: options.pane ?? null,
+    host: null,
     structuredHost: options.hosted === false ? null : {
       kind: "codex-app-server",
       endpoint: "fake:stdio",
@@ -231,6 +231,64 @@ test("a queued kill whose operation terminally failed leaves the host still runn
   setAgentRegistryForTests(null);
 });
 
+test("queued stop confirmation gives each status read only its remaining budget", async () => {
+  const fixture = hostedConversation();
+  queuedKill();
+  let clock = 0;
+  const budgets: number[] = [];
+  const client = {
+    operationStatus: async (_id: string, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
+      expect(options?.signal?.aborted).toBe(false);
+      const remaining = options?.timeoutMs ?? 2_800;
+      budgets.push(remaining);
+      clock += Math.min(600, remaining);
+      return { receipt: { status: "queued" } };
+    },
+  } as unknown as RuntimeHostClient;
+  try {
+    const result = await stopPipelineStageAgent(target(fixture.conversationId), {
+      client, budgetMs: 1_500, intervalMs: 250, now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+    });
+    expect(result).toMatchObject({ outcome: "unconfirmed", operationId: "kill-op-queued" });
+    expect(budgets).toEqual([1_500, 650]);
+    expect(clock).toBe(1_500);
+    expect(killed).toHaveLength(1);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("cancellation releases an unresponsive confirmation and keeps its accepted operation", async () => {
+  const fixture = hostedConversation();
+  queuedKill();
+  const abort = new AbortController();
+  let enter!: () => void, reply!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const pending = new Promise<void>(resolve => { reply = resolve; });
+  let reads = 0, signal: AbortSignal | undefined;
+  const client = {
+    operationStatus: async (_id: string, options?: { signal?: AbortSignal }) => {
+      reads++;
+      signal = options?.signal;
+      enter();
+      await pending;
+      return { receipt: { status: "queued" } };
+    },
+  } as unknown as RuntimeHostClient;
+  const result = stopPipelineStageAgent(target(fixture.conversationId), { client, signal: abort.signal });
+  try {
+    await entered;
+    abort.abort();
+    expect(await result).toMatchObject({ outcome: "unconfirmed", operationId: "kill-op-queued" });
+    expect(signal?.aborted).toBe(true);
+    expect(reads).toBe(1);
+    expect(killed).toHaveLength(1);
+  } finally {
+    reply();
+    await result;
+    setAgentRegistryForTests(null);
+  }
+});
+
 test("a stage whose host is already gone reports not-running without dispatching a kill (#670)", async () => {
   /* Gone means the recorded process is gone too: a pid no machine hands out. */
   const dead = hostedConversation({ status: "dead", process: { pid: 2_000_000_123, startIdentity: "exited-host" } });
@@ -347,84 +405,7 @@ test("the residency probe reads host state without dispatching anything (#670)",
   setAgentRegistryForTests(null);
 });
 
-type TmuxHostEvidence = import("@/lib/agent/registry").TmuxHostEvidence;
-
-/** Durable tmux evidence shaped like a real spawn record. */
-function paneEvidence(paneId: string): TmuxHostEvidence {
-  const identity = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  return {
-    kind: "tmux",
-    endpoint: { tmuxTmpdir: path.join(sandbox, "tmux"), socketName: "default" },
-    windowName: "stage-build",
-    server: identity,
-    agent: identity,
-    paneId,
-    panePid: identity,
-    target: paneId,
-  } as unknown as TmuxHostEvidence;
-}
-
-test("a stage pane is killed only when its recorded identity still matches (#670)", async () => {
-  const fixture = hostedConversation({ status: "dead", hosted: false, pane: paneEvidence("%3") });
-  const attempted: TmuxHostEvidence[] = [];
-
-  const stopped = await stopPipelineStagePane(
-    { stageId: "build", attempt: 1, conversationId: fixture.conversationId, agentPath: null, paneId: "%3" },
-    {
-      killHostIfMatches: async (host) => { attempted.push(host); return true; },
-      paneSnapshot: async () => ({ windowName: "stage-build", command: "codex" }),
-    },
-  );
-
-  expect(stopped).toEqual({ outcome: "stopped" });
-  expect(attempted).toHaveLength(1);
-  expect(attempted[0]!.paneId).toBe("%3");
-  setAgentRegistryForTests(null);
-});
-
-test("a recycled pane id is reported unknown and never signalled (#670)", async () => {
-  /* The tmux server restarted and %3 now belongs to someone else's window, so
-     the identity check refuses. Nothing may be killed here. */
-  const changed = hostedConversation({ status: "dead", hosted: false, pane: paneEvidence("%3") });
-  let signalled = 0;
-
-  const mismatch = await stopPipelineStagePane(
-    { stageId: "build", attempt: 1, conversationId: changed.conversationId, agentPath: null, paneId: "%3" },
-    {
-      killHostIfMatches: async () => { signalled += 1; return false; },
-      paneSnapshot: async () => ({ windowName: "stage-build", command: "codex" }),
-    },
-  );
-  expect(mismatch).toMatchObject({ outcome: "unknown" });
-  expect((mismatch as { detail: string }).detail).toContain("%3");
-  setAgentRegistryForTests(null);
-
-  /* No durable evidence at all: the stored id names a pane we cannot claim. */
-  const unknown = hostedConversation({ status: "dead", hosted: false });
-  const orphan = await stopPipelineStagePane(
-    { stageId: "build", attempt: 1, conversationId: unknown.conversationId, agentPath: null, paneId: "%3" },
-    {
-      killHostIfMatches: async () => { signalled += 1; return true; },
-      paneSnapshot: async () => ({ windowName: "stage-build", command: "codex" }),
-    },
-  );
-  expect(orphan).toMatchObject({ outcome: "unknown" });
-  /* The mismatching kill probe ran once and refused; the evidence-less case
-     never reached a kill at all. */
-  expect(signalled).toBe(1);
-
-  /* Nothing running in the pane at all is simply nothing to stop. */
-  const quiet = await stopPipelineStagePane(
-    { stageId: "build", attempt: 1, conversationId: unknown.conversationId, agentPath: null, paneId: "%3" },
-    { killHostIfMatches: async () => { signalled += 1; return true; }, paneSnapshot: async () => null },
-  );
-  expect(quiet).toEqual({ outcome: "not-running" });
-  expect(signalled).toBe(1);
-  expect(killed).toEqual([]);
-  setAgentRegistryForTests(null);
-});
-
-test("an unstamped attempt requires positive idle evidence before retiring a host without a stream", async () => {
+test.each([true, false])("owned orphan retirement checks the recorded attempt authority (idle evidence required %s)", async requireIdleEvidence => {
   const pid = 2_000_000_124;
   const signals: number[] = [];
   let alive = true;
@@ -437,15 +418,18 @@ test("an unstamped attempt requires positive idle evidence before retiring a hos
     const processRef = captureProcessIdentity(pid);
     const fixture = hostedConversation({ status: "dead", process: processRef });
     const { retirePipelineStageAgent } = await import("./engine");
-    const result = await retirePipelineStageAgent({ ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId }, {
-      requireIdleEvidence: true,
+    const { terminalIdleStopKey } = await import("./stageControlCustody");
+    const recorded = { ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId };
+    const result = await retirePipelineStageAgent(recorded, {
+      operationId: terminalIdleStopKey(recorded),
+      ...(requireIdleEvidence ? { requireIdleEvidence: true as const } : {}),
       termination: { processIdentity: identity, bootEpoch: () => processRef.bootEpoch ?? null, pidAlive: living,
         ppidMap: () => new Map(), processGroupId: () => null,
         signal: candidate => { signals.push(candidate); alive = false; }, sleep: async () => {}, terminateOwnedHost: async () => false,
         retireRegistryEntry: () => true },
     });
-    expect(signals).toEqual([]);
-    expect(result).toEqual({ outcome: "deferred" });
+    expect(signals).toEqual(requireIdleEvidence ? [] : [pid]);
+    expect(result.outcome).toBe(requireIdleEvidence ? "deferred" : "stopped");
     expect(killed).toEqual([]);
   } finally { identitySpy.mockRestore(); aliveSpy.mockRestore(); }
 });

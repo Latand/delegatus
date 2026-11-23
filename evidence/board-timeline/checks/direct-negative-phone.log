@@ -1,0 +1,39 @@
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+bun test v1.4.0 (34cbb9a40)
+
+src/components/mobile/MobileKanban.dom.test.tsx:
+323 |   lane.cursor = state === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null };
+324 |   lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
+325 |     agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
+326 |   const { host } = mount({ files: [file], tasks: [owner], pipelines: [lane] });
+327 |   click(q(host, '[data-phone-kanban-tab="timeline"]'));
+328 |   expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
+                                                                                         ^
+error: expect(received).toBe(expected)
+
+Expected: "1"
+Received: undefined
+
+      at <anonymous> (src/components/mobile/MobileKanban.dom.test.tsx:328:84)
+(fail) Timeline expands resumed work from a completed stage and keeps its completed bar [113.28ms]
+323 |   lane.cursor = state === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null };
+324 |   lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
+325 |     agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
+326 |   const { host } = mount({ files: [file], tasks: [owner], pipelines: [lane] });
+327 |   click(q(host, '[data-phone-kanban-tab="timeline"]'));
+328 |   expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
+                                                                                         ^
+error: expect(received).toBe(expected)
+
+Expected: "1"
+Received: "0"
+
+      at <anonymous> (src/components/mobile/MobileKanban.dom.test.tsx:328:84)
+(fail) Timeline expands resumed work from a needs_decision stage and keeps its completed bar [46.18ms]
+
+ 0 pass
+ 31 filtered out
+ 2 fail
+ 2 expect() calls
+Ran 2 tests across 1 file. [1037.00ms]
+exit: 1

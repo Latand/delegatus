@@ -50,7 +50,7 @@ const TYPE_ONLY_IMPORT = /\bimport\s*\(\s*["'`][^"'`$]+["'`]\s*\)\s*\.(?!then\b|
 const WORKFLOW_PATH = /(?:^|[\s"'`=(:,])\.?\/?((?:src|bin|scripts|docs|evidence)\/[\w@.\-/]+\.(?:ts|tsx|mts|cts|js|mjs|cjs|json|py|sh))/gm;
 
 function isFile(file: string): boolean {
-  try { return fs.statSync(file).isFile(); } catch { return false; }
+  try { return fs.statSync(file, { throwIfNoEntry: false })?.isFile() ?? false; } catch { return false; }
 }
 
 /** Every repo path a file may resolve `specifier` to, existing or not: a
@@ -70,12 +70,18 @@ export function executedPaths(root: string, entries: readonly string[]): Set<str
   const reached = new Set<string>();
   const queue = entries.map((entry) => path.resolve(root, entry));
   const visited = new Set<string>();
+  const fileStatus = new Map<string, boolean>();
+  const exists = (file: string) => {
+    let present = fileStatus.get(file);
+    if (present === undefined) { present = isFile(file); fileStatus.set(file, present); }
+    return present;
+  };
   while (queue.length > 0) {
     const file = queue.pop()!;
     if (visited.has(file)) continue;
     visited.add(file);
     reached.add(path.relative(root, file));
-    if (!isFile(file)) continue;
+    if (!exists(file)) continue;
     const source = fs.readFileSync(file, "utf8").replace(TYPE_ONLY_STATEMENT, "").replace(TYPE_ONLY_IMPORT, "");
     const targets: string[] = [];
     for (const match of source.matchAll(IMPORT_SPECIFIER)) targets.push(...candidates(root, file, match[1]!));
@@ -99,7 +105,7 @@ export function executedPaths(root: string, entries: readonly string[]): Set<str
     }
     for (const target of targets) {
       if (!target.startsWith(root + path.sep)) continue;
-      if (isFile(target)) {
+      if (exists(target)) {
         if (!visited.has(target)) queue.push(target);
       } else {
         reached.add(path.relative(root, target));
@@ -124,7 +130,9 @@ export function platformScope(input: {
   workflow: string;
   prefixes: readonly string[];
   changed: readonly string[] | null;
+  always?: boolean;
 }): PlatformScope {
+  if (input.always) return { run: true, reason: "the workflow invocation requires an unconditional build" };
   if (input.changed === null) return { run: true, reason: "the pull request's changed files could not be read" };
   if (input.changed.length === 0) return { run: true, reason: "the pull request's diff is empty" };
   const workflowText = fs.readFileSync(path.join(input.root, input.workflow), "utf8");
@@ -155,19 +163,21 @@ export function changedSinceBase(root: string, base: string): string[] | null {
 function main(argv: readonly string[]): void {
   let base: string | undefined;
   let workflow: string | null = null;
+  let always = false;
   const prefixes: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--base") {
       base = argv[++index];
       if (!base || base.startsWith("--")) throw new Error("--base needs a revision");
     }
+    else if (argv[index] === "--always") always = argv[++index] === "true";
     else if (argv[index] === "--workflow") workflow = argv[++index] ?? null;
     else if (argv[index] === "--prefix") prefixes.push(argv[++index] ?? "");
     else throw new Error(`unknown argument ${argv[index]}`);
   }
   if (!workflow) throw new Error("--workflow is required");
   const root = path.resolve(import.meta.dir, "..");
-  const scope = platformScope({ root, workflow, prefixes: prefixes.filter(Boolean), changed: base ? changedSinceBase(root, base) : changedInMergeCommit(root) });
+  const scope = platformScope({ root, workflow, prefixes: prefixes.filter(Boolean), changed: base ? changedSinceBase(root, base) : changedInMergeCommit(root), always });
   console.log(`${scope.run ? "run" : "skip"}: ${scope.reason}`);
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `run=${scope.run}\n`);
 }

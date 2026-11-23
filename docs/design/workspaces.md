@@ -959,3 +959,123 @@ over the copied files before the push.
 | The UI changes a little | three new pieces (chip and menu, tab, page); everything else reuses existing controls (§13.5) |
 | Survives project-key succession | §13.1.2, §13.2, tests 2 (a)–(e) |
 | Level 2's fence, accounts, chats, usage (Q1, Q5, Q6) | slices (c) and (d), not started here |
+
+## 14. Slice (c): MCP authority and defaults
+
+A team launch records `LaunchProfile.workspace = { memberId, workspaceId }`
+from authenticated server attribution. Task-card launches, pipeline stages,
+seat creation and rotation carry it too; migration and resume retain the
+profile. Pipeline and pending-seat records retain the same scope across
+restart. Existing member-directed conversations resolve their latest server-admitted
+member input, including sends without a browser message id, reused ids, queue
+edits, task fan-out and question answers. Parallel asks retain the authenticated
+member and workspace in their durable deputy record; registration, delivery,
+replay and retry preserve that binding independently of the seat's later inputs.
+Parallel request keys join or replay only within the same project and member;
+a collision returns no saved ask or deputy identity.
+Member decision answers and stage edits bind an installation pipeline in the
+same transaction as the accepted edit. These input routes and the project
+report route keep the admitted member identity across body and catalog waits.
+An unavailable team store refuses their writes.
+That per-conversation authority is persisted before
+dispatch and is independent of the feed's first-author attribution. Retired-seat
+redirects carry that authority to the successor before enqueueing, and refuse a
+revoked member. An uncertain
+or refused dispatch conservatively retains the admitted member fence. Older
+conversations fall back to their latest recorded message author. Owner
+conversations and installation-owned seats without a member binding retain
+their existing reach.
+
+A project's current seat states its own reach, and resolution ends at it. The
+manager authority resolver validates its project, generation, epoch and absence
+of conflicting designations before its persisted designation decides its call permissions independently of human message authors
+and earlier refusals. A member-bound seat retains its workspace restriction;
+an installation-owned seat retains installation authority. Explicit member
+launch bindings remain restrictive even if the conversation becomes a seat.
+Rotations carry the designation's reach. A legacy binding inherited from a
+message remains restrictive while the conversation is the active seat; an
+authorized redesignation or rotation can change that binding. The handover
+parent carries no additional authority. This stable override applies only to
+calls by the seat itself. Existing workers and deeper descendants keep their
+ordinary ancestry, latest-author, project and account restrictions.
+
+An inherited message binding (`workspaceFromMessage`) retains its existing
+Telegram grant while its member still holds the project. Workers and seats
+explicitly designated for a member acquire no such grant. The grant adds no
+chat scoping: it covers the chats the agent route serves. Once a conversation
+leaves the seat map, its launch marker (`workspace.fromMessage`) restores
+ordinary message-authority resolution. Ordinary conversations continue to use
+their launch binding or latest admitted member, including revocation checks.
+
+`publish_prototype_review` and `read_prototype_review` also pass through their
+HTTP workspace fence. Taskless form routes resolve their project from the
+authenticated current seat. A current seat's exact keyed replay reads its
+settled receipt for that caller, project and task before workspace admission,
+including after a restart. An omitted task uses the same pipeline-stage task inference as the
+HTTP scope handler, including when that stage conversation is also a seat.
+Changed arguments conflict; a different caller or a seat in another project
+cannot read that receipt. The HTTP scope supplies the verified project when
+the receipt is written; replay rechecks the current seat project after reading
+it. The actual HTTP read or publication also checks the admitted caller,
+project and task before accessing its target, so a change between scope
+resolution and dispatch cannot put another target's result in that receipt.
+Legacy receipts without a proven project require ordinary HTTP admission.
+A scope response that omits its project is refused before a receipt is stored.
+Pending or retryable publications still use normal recovery and
+admission. New calls retain all workspace checks. MCP and HTTP workspace
+refusals name the failed check without exposing target identities.
+
+A record's agent author carries the sender's project as a label; the result
+scan does not read it as a project key, and the answer withholds an author from
+outside the caller's reach.
+
+Authority resolution shares one lazy seat map across the parent chain. The
+process retains one map for the seats file's path and filesystem identity;
+unchanged files are never reparsed by repeated calls. Each resolution checks
+device, inode, size, modification time, change time and mode, so peer rebinding
+or revocation is visible to the next call. Failed reads are retried.
+Solo installations and teams without workspaces skip that read. Unreadable
+seat authority returns a retryable refusal.
+
+History pruning keeps the latest author row for each conversation as authority,
+including tied timestamps in admission order. Older message rows and unbound
+history still expire; expiry and restart never widen a legacy member session.
+
+The production MCP dispatcher checks the binding before pagination and
+receipt replay. It uses slice (b)'s `workspaceScope` for current membership
+and the bound workspace for project placement. Explicit projects, tasks,
+pipelines, conversations, selected-card references, nested targets and launch
+directories all need authority. Collections default to the caller's project;
+a caller can explicitly select another project in the same workspace.
+Installation-wide tools refuse for a member-bound caller. Checks repeat at
+binding and HTTP dispatch, inside task writes and before a read result is
+returned. Unknown or inaccessible targets disclose no resource content.
+Full result identities are checked before display compaction, so a foreign or
+Unassigned project's short prefix cannot impersonate an allowed project.
+Transcript search discards the unscoped fallback and installation-wide corpus
+and duplicate metadata.
+
+`GET` and `PUT /api/team/workspaces/[id]/defaults` admit the owner and that
+workspace's managers. The durable value holds `accounts` (Claude and Codex
+lists), `reportChat` (chat, report name and optional topic), and
+`directiveChats`. A report chat must be known and postable in the bot catalog.
+Managers cannot select another workspace's destination, an explicit report
+destination of a project outside their workspace, or the owner's linked private
+chat; aliases, ids and usernames resolve to the same chat. The owner may select
+any postable destination. Explicit project report overrides apply the same
+reservation and recheck manager authority after Telegram verification.
+Empty account lists preserve the unrestricted shared pool.
+Per-project account bindings narrow a workspace's allowed pool; an empty
+intersection permits no account. An explicit report choice takes precedence,
+including "Log only". Defaults are inherited at the existing project
+account and report resolvers, rather than copied into those stores: this keeps
+new placements, aliases and edits consistent while preserving explicit project
+choices. No workspace read writes a project setting.
+
+Launch admission uses the inherited pool. A member-bound named account cannot
+bypass it. Telegram report replies must originate in an allowed directive chat
+when a workspace names such a list. Queued replies retain their source chat and
+recheck it after readiness; a withdrawn permission terminally refuses the row
+with its reason. The bot's existing sender, report-reply and posting checks
+continue to apply. Usage grouping, worker shares and resource slices remain
+slice (d).

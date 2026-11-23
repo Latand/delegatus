@@ -1,4 +1,4 @@
-import { registryLivenessRows } from "./sqliteRegistryStore";
+import { registryLivenessRows, registryRowProjection, type RegistryRowProjector } from "./sqliteRegistryStore";
 import { procBackend } from "@/lib/proc";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -150,7 +150,6 @@ function withinGrace(timestamp: string | null | undefined, probe: LivenessProbe)
  */
 export function entryIsLive(entry: AgentRegistryEntry, probe: LivenessProbe): boolean {
   if (!HOSTED_ENTRY_STATUSES.has(entry.status)) return false;
-  if (identityAlive(entry.host?.agent, probe) || identityAlive(entry.host?.panePid, probe)) return true;
   if (identityAlive(entry.structuredHost?.process ?? null, probe)) return true;
   return withinGrace(entry.updatedAt, probe);
 }
@@ -280,12 +279,28 @@ export function conversationIsLive(
 /** Artifact paths held by a live registry entry, computed once per evaluation. */
 function liveEntryPaths(file: RegistryFile, engine: AgentEngine, probe: LivenessProbe): Set<string> {
   const paths = new Set<string>();
-  for (const entry of Object.values(file.entries)) {
-    if (entry.key.engine !== engine || !entryIsLive(entry, probe)) continue;
+  // Only a hosted status can be live, and the projection keeps that answer for
+  // every archived entry, so the dead history is not read again.
+  for (const [key, hosted] of registryRowProjection(file, HOSTED_ENTRIES)) {
+    const entry = hosted ? file.entries[key] : undefined;
+    if (!entry || entry.key.engine !== engine || !entryIsLive(entry, probe)) continue;
     paths.add(entry.artifactPath);
   }
   return paths;
 }
+
+const HOSTED_ENTRIES: RegistryRowProjector<"entries", boolean> = {
+  id: "liveness-hosted-entries-v1", collection: "entries",
+  project: entry => HOSTED_ENTRY_STATUSES.has(entry.status),
+};
+
+/* An uncertain delivery is a handful of rows among the whole delivery history.
+   The projection keeps an archived row's answer, so a pass reads no archive. */
+const UNCERTAIN_DELIVERIES: RegistryRowProjector<"heldDeliveries", { id: string; conversationId: ViewerConversationId; createdAt: string } | null> = {
+  id: "liveness-uncertain-deliveries-v1", collection: "heldDeliveries",
+  project: delivery => delivery.state === "delivery-uncertain"
+    ? { id: delivery.id, conversationId: delivery.conversationId, createdAt: delivery.createdAt } : null,
+};
 
 /** What keeps the account live, for the removal dialog (issue #1857):
     `live_sessions` for a running entry or open launch receipt, `queued_pin`
@@ -358,8 +373,8 @@ export function staleUndeliverableHeldDeliveryIds(
     return paths;
   };
   const ids: string[] = [];
-  for (const delivery of Object.values(file.heldDeliveries)) {
-    if (delivery.state !== "delivery-uncertain") continue;
+  for (const [, delivery] of registryRowProjection(file, UNCERTAIN_DELIVERIES)) {
+    if (!delivery) continue;
     if (withinGrace(delivery.createdAt, probe)) continue;
     const conversation = file.conversations[canonicalId(file, delivery.conversationId)];
     if (!conversation) continue;

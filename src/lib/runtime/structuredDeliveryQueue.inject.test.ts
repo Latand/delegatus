@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 
 import type { DeliveryReceipt, EngineHost, HostState, QueueEntry, RuntimeEvent, RuntimeInjectOutcome, RuntimeInjectRequest } from "./engineHost";
-import { StructuredInjectError } from "./engineHost";
-import type { StructuredDeliveryEffect } from "./structuredDeliveryQueue";
+import { hostSupportsInject, StructuredDispatchDeferredError, StructuredInjectError } from "./engineHost";
+import type { StructuredDeliveryEffect, StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
 import {
   INJECTION_ACKNOWLEDGED_BUT_UNOBSERVED,
   INJECTION_INTO_HISTORY,
@@ -79,10 +79,11 @@ function probeHost(options: {
   return { host, sends, interrupts, injections };
 }
 
-function injectQueue(probe: HostProbe, payload: Record<string, unknown> = {}) {
+function injectQueue(probe: HostProbe, payload: Record<string, unknown> = {}, authorizeDispatch?: StructuredDeliveryQueuePort["authorizeDispatch"]) {
   const transitions: Transition[] = [];
   const text = typeof payload.text === "string" ? payload.text : "extra context";
   const queue = new StructuredDeliveryQueue({
+    authorizeDispatch,
     effects: async () => [{
       id: "effect:inject-one",
       kind: "runtime.inject",
@@ -339,4 +340,30 @@ test("the admitted binding is also compared with the actual host thread", async 
   await queue.drain();
   expect(probe.injections).toEqual([]);
   expect(transitions).toEqual([{ operationId: "inject-one", status: "failed", reason: "stale-generation" }]);
+});
+
+
+for (const denied of [false, true]) test(`context injection rechecks the durable wake origin before writing (denied=${denied})`, async () => {
+  const probe = probeHost({ activeTurnRef: "turn-live" });
+  if (!hostSupportsInject(probe.host)) throw new Error("injection fixture lacks its declared capability");
+  const inject = probe.host.inject.bind(probe.host);
+  let afterWait = false;
+  let checks = 0;
+  probe.host.inject = async (request, authorize) => {
+    await Promise.resolve();
+    afterWait = true;
+    authorize?.();
+    return inject(request);
+  };
+  const origin = { kind: "agent", role: "seat-tick" } as const;
+  const { queue, transitions } = injectQueue(probe, { origin }, (_operation, _conversation, observed) => {
+    checks++;
+    expect(observed).toEqual(origin);
+    if (afterWait && denied) throw new StructuredDispatchDeferredError("seat-mcp-unavailable");
+  });
+  await queue.drain();
+  expect(checks).toBeGreaterThanOrEqual(2);
+  expect(probe.injections).toHaveLength(denied ? 0 : 1);
+  expect(transitions.at(-1)).toMatchObject(denied ? { status: "queued", reason: "seat-mcp-unavailable" } : { status: "delivered" });
+  expect(probe.sends).toHaveLength(0);
 });

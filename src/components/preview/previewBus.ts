@@ -18,14 +18,26 @@ export interface ArtifactPreviewRequest {
       rendered, with that page's host context; the host re-reads `path` only
       when this is absent. */
   target?: FileLinkTarget;
+  /** Where this preview reads from when it is not a local path: a meta URL and
+      a content URL that answer like `/api/artifact` (a task's committed
+      files). Absent, the sheet reads `/api/artifact` as every link does. */
+  source?: ArtifactPreviewSource;
+  /** `overlay` paints the sheet above a modal dialog that opened it. */
+  layer?: "overlay";
+}
+
+export interface ArtifactPreviewSource {
+  metaUrl: string;
+  contentUrl: string;
 }
 
 type Listener = (request: ArtifactPreviewRequest) => void;
 
 const listeners = new Set<Listener>();
 
-export function openArtifactPreview(path: string, target?: FileLinkTarget): void {
-  for (const listener of [...listeners]) listener(target ? { path, target } : { path });
+export function openArtifactPreview(path: string, target?: FileLinkTarget, options: { source?: ArtifactPreviewSource; layer?: "overlay" } = {}): void {
+  const request: ArtifactPreviewRequest = { path, ...(target ? { target } : {}), ...(options.source ? { source: options.source } : {}), ...(options.layer ? { layer: options.layer } : {}) };
+  for (const listener of [...listeners]) listener(request);
 }
 
 export function onArtifactPreview(listener: Listener): () => void {

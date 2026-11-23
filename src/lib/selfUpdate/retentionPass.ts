@@ -73,7 +73,8 @@ export async function runRetentionPass(record: LauncherRecord, inputs: Retention
           }
         });
         input.write(JSON.stringify({ kind: "retain", record, inputs, reportFile: options.reportFile, now: options.now,
-          env: { LLV_SELF_UPDATE_KEEP_RELEASES: options.env.LLV_SELF_UPDATE_KEEP_RELEASES } }) + "\n");
+          env: { LLV_SELF_UPDATE_KEEP_RELEASES: options.env.LLV_SELF_UPDATE_KEEP_RELEASES,
+            LLV_RETENTION_RUN_ID: options.env.LLV_RETENTION_RUN_ID } }) + "\n");
       });
     } finally {
       cancelDeadline?.();
@@ -104,7 +105,11 @@ export async function serveRetentionPass(inspection?: RetentionInspection): Prom
             current: claim => new Promise<Current>((resolve, reject) => {
               const id = ++sequence; pending.set(id, { resolve, reject }); send({ kind: "current", id, ...(claim === undefined ? {} : { claim }) });
             }),
-          })).then(report => { send({ kind: "report", report }); resolve(); }, reject);
+          })).then(report => {
+            send({ kind: "report", report });
+            if (typeof report.runId === "string") console.error(`[self-update] retention pass ${report.runId} complete; ${report.errors.length} error(s)`);
+            resolve();
+          }, reject);
         } else {
           const request = pending.get(message.id);
           if (!request) throw new Error("unknown retention safety reply");

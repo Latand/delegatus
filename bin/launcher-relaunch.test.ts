@@ -15,6 +15,7 @@ import { terminalClosed, terminalExited } from "./__fixtures__/terminal-lifecycl
 const roots: string[] = [];
 const children = new Set<ReturnType<typeof spawn>>();
 const owners = new Map<number, string>();
+const observeOwners = new Set<() => unknown>();
 function ownerExited(pid: number, identity: string) {
   if (!isAlive(pid)) return true;
   const current = readStartIdentity(pid);
@@ -40,8 +41,11 @@ async function stopRecorded(record: LauncherRecord) {
     await until(() => !isAlive(entry.pid!) ? true : null);
   }
 }
-afterEach(async () => {
+async function cleanup() {
   for (const child of children) await stop(child);
+  // A failed wait can precede the test's next read of the replacement record.
+  // Collect that detached launcher and its children even on the failure path.
+  for (const observe of observeOwners) observe();
   // Detached supervisors are owned by the bootstrap. Capture their genuine
   // records while observing them and signal only those recorded identities.
   for (const [pid, identity] of owners) {
@@ -51,6 +55,9 @@ afterEach(async () => {
     while (isAlive(pid) && Date.now() < deadline) await Bun.sleep(25);
     if (isAlive(pid) && readStartIdentity(pid) === identity) { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } }
     await until(() => ownerExited(pid, identity) ? true : null);
+    // A launcher may publish a child between the first observation and its
+    // retirement. Map iteration also visits owners added by this final read.
+    for (const observe of observeOwners) observe();
   }
   for (const [pid, identity] of owners) {
     if (!ownerExited(pid, identity)) throw new Error("Fixture owner is still running before removal");
@@ -60,11 +67,13 @@ afterEach(async () => {
   for (const child of children) await terminalClosed(child);
   children.clear();
   owners.clear();
+  observeOwners.clear();
   // Exited Windows processes can leave NTFS handles pending release. Retry
   // removal only for our recorded temp roots, after all owners have exited.
   for (const root of roots) await rm(root, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 8 : 0, retryDelay: 250 });
   roots.length = 0;
-}, 90000);
+}
+afterEach(cleanup, 90000);
 
 async function until<T>(read: () => T | null | false, budget = 90000): Promise<T> {
   const deadline = Date.now() + budget;
@@ -139,6 +148,7 @@ async function fixture(equalsPort = false) {
     for (const entry of [record.launcher, record.web, record.runtimeHost]) if (entry.pid && entry.startIdentity) owners.set(entry.pid, entry.startIdentity);
     return record;
   };
+  observeOwners.add(readRecord);
   const old = start(path.join(base, "bin", "cli.mjs"));
   let output = "";
   old.stdout!.on("data", data => { output = (output + data).slice(-4096); });
@@ -184,8 +194,9 @@ async function fixture(equalsPort = false) {
         const files = ["stdout", "stderr"].map(stream => openSync(path.join(directory, name + "." + stream), "a"));
         const trace = value => appendFileSync(path.join(directory, name + ".jsonl"), JSON.stringify(value) + "\\n");
         try {
+          const started = performance.now();
           const child = original(command, args, { ...options, stdio: ["ignore", ...files] });
-          trace({ method, pid: child.pid, entry: args.findLast(arg => /\\.(mjs|js)$/.test(arg)), argv: args.map(arg => arg.length > 256 ? "<long-argument>" : arg), status: child.status, signal: child.signal, error: child.error?.message });
+          trace({ method, pid: child.pid, elapsedMs: performance.now() - started, entry: args.findLast(arg => /\\.(mjs|js)$/.test(arg)), argv: args.map(arg => arg.length > 256 ? "<long-argument>" : arg), status: child.status, signal: child.signal, error: child.error?.message, errorCode: child.error?.code });
           if (method === "spawn") {
             child.once("exit", (code, signal) => trace({ code, signal }));
             child.once("error", error => trace({ error: error.message }));
@@ -196,9 +207,9 @@ async function fixture(equalsPort = false) {
     }
     mock.module("node:child_process", () => ({ ...observed, default: observed }));
   `);
-  const bootstrap = (encoded = plan) => {
+  const bootstrap = (encoded = plan, bootstrapEntry = path.resolve("bin/launcher-relaunch.mjs")) => {
     const preload = ["--preload", diagnosticsPreload, ...(process.platform === "win32" ? [] : ["--preload", path.resolve("bin/__fixtures__/windows-state-paths.preload.ts")])];
-    const child = spawn(process.execPath, ["--bun", ...preload, path.resolve("bin/launcher-relaunch.mjs"), "--terminal", encoded, path.join(candidate, "bin", "cli.mjs"), ...args],
+    const child = spawn(process.execPath, ["--bun", ...preload, bootstrapEntry, "--terminal", encoded, path.join(candidate, "bin", "cli.mjs"), ...args],
       { cwd: base, env: { ...env, LLV_TEST_WINDOWS_STATE_ROOT: root, ...(equalsPort ? { LLV_TEST_PROBE_PORT: String(port) } : {}) }, stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
     let error = "", stdout = "";
     child.stderr!.on("data", data => { error = (error + data).slice(-4096); });
@@ -248,8 +259,122 @@ async function fixture(equalsPort = false) {
       print("page-health", { status: page.status, body: (await page.text()).slice(0, 2048) });
     } catch (error) { print("page-health", String(error)); }
   };
-  return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, bootstrap, plan, port, env, diagnose, diagnosticsDir };
+  return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, recordFile, bootstrap, plan, port, env, diagnose, diagnosticsDir };
 }
+
+test("terminal load preflight refuses a candidate that ignores TERM within its child timeout", async () => {
+  const f = await fixture();
+  const bootstrapEntry = path.join(f.candidate, "bin/launcher-relaunch.mjs");
+  const entered = path.join(f.diagnosticsDir, "load-entered");
+  writeFileSync(bootstrapEntry, readFileSync(bootstrapEntry, "utf8").replace("timeout: 30000", "timeout: 100"));
+  writeFileSync(path.join(f.candidate, "bin/cli.mjs"), `
+    process.on("SIGTERM", () => {});
+    (await import("node:fs")).writeFileSync(${JSON.stringify(entered)}, String(process.pid));
+    while (true) await Bun.sleep(1000);
+  `);
+  await stop(f.old); await stopRecorded(f.before);
+  const run = f.bootstrap(f.plan, bootstrapEntry);
+  await until(() => existsSync(entered));
+  const preflightPid = Number(readFileSync(entered, "utf8")), identity = readStartIdentity(preflightPid);
+  if (identity) owners.set(preflightPid, identity);
+  // Bound the load check itself. The bootstrap then starts and health-checks
+  // the prior release, which has the same budget as every other rollback.
+  const preflight = await until(() => {
+    for (const name of readdirSync(f.diagnosticsDir).filter(name => name.endsWith(".jsonl"))) {
+      for (const line of readFileSync(path.join(f.diagnosticsDir, name), "utf8").trim().split("\n")) {
+        try {
+          const event = JSON.parse(line);
+          if (event.method === "spawnSync" && event.argv?.includes("--version")) return event;
+        } catch { /* A trace line may still be being written. */ }
+      }
+    }
+    return null;
+  }, 5000);
+  expect(preflight.errorCode).toBe("ETIMEDOUT");
+  expect(preflight.elapsedMs).toBeLessThan(5000);
+  expect(isAlive(preflightPid)).toBe(false);
+  const rollbackStarted = performance.now();
+  await terminalExited(run.child)
+    .catch(async error => { await f.diagnose("rollback health after bounded load preflight", run); throw error; });
+  console.error("[terminal-timing] " + JSON.stringify({ preflightMs: preflight.elapsedMs, rollbackMs: performance.now() - rollbackStarted }));
+  expect(run.child.exitCode).toBe(1);
+  const record = f.readRecord()!;
+  expect(record.web.state).toBe("healthy"); expect(record.runtimeHost.state).toBe("healthy");
+  expect(record.web.revision).toBe("a".repeat(7));
+  expect(readFileSync(f.pointer, "utf8")).toBe(f.rollbackPointer);
+}, 240000);
+
+test("terminal teardown collects replacement owners after an interrupted health wait", async () => {
+  const f = await fixture();
+  await stop(f.old); await stopRecorded(f.before);
+  // The prior Viewer is alive with an inherited cwd, but cannot report health
+  // yet. This reproduces the early wait failure without runner-speed timing.
+  const server = path.join(f.prior, "dist", "standalone", "server.js");
+  const entered = path.join(f.diagnosticsDir, "rollback-entered");
+  writeFileSync(server, `
+    (await import("node:fs")).writeFileSync(${JSON.stringify(entered)}, String(process.pid));
+    while (true) await Bun.sleep(1000);
+  `);
+  writeFileSync(path.join(f.candidate, "bin", "cli.mjs"), 'throw new Error("candidate load refused");\n');
+  const run = f.bootstrap();
+  await until(() => existsSync(entered));
+  const webPid = Number(readFileSync(entered, "utf8"));
+  // The process can enter before its launcher finishes publishing custody.
+  // Observe that publication without registering owners in the test harness.
+  const replacement = await until(() => {
+    try {
+      const record = JSON.parse(readFileSync(f.recordFile, "utf8")) as LauncherRecord;
+      return record.launcher.pid !== f.before.launcher.pid && record.web.pid === webPid
+        && [record.launcher, record.web, record.runtimeHost].every(entry => entry.pid && entry.startIdentity) ? record : null;
+    } catch { return null; }
+  });
+  expect(isAlive(webPid)).toBe(true);
+  await expect(terminalExited(run.child, 1)).rejects.toThrow("Terminal process did not exit after its health budget");
+  // Deliberately do not call readRecord: teardown must discover the new owner.
+  await cleanup();
+  for (const entry of [replacement.launcher, replacement.web, replacement.runtimeHost]) {
+    expect(ownerExited(entry.pid!, entry.startIdentity!)).toBe(true);
+  }
+  expect(run.child.exitCode !== null || run.child.signalCode !== null).toBe(true);
+  expect(existsSync(path.dirname(f.prior))).toBe(false);
+}, 240000);
+
+test("terminal rollback deadline refuses and reaps its own hung legacy launcher", async () => {
+  const f = await fixture();
+  await stop(f.old); await stopRecorded(f.before);
+  const candidateEntry = path.join(f.candidate, "bin", "cli.mjs");
+  const priorEntry = path.join(f.prior, "bin", "cli.mjs");
+  writeFileSync(candidateEntry, 'throw new Error("candidate load refused");\n');
+  const priorEntered = path.join(path.dirname(f.prior), "prior-entered");
+  writeFileSync(priorEntry, `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(priorEntered)}, String(process.pid));\nwhile (true) await Bun.sleep(1000);\n`);
+  const deadlineModule = path.join(f.candidate, "bin", "launcher-deadline.mjs");
+  writeFileSync(deadlineModule, readFileSync(deadlineModule, "utf8").replace("ROLLBACK_TIMEOUT_MS = 10 * 60_000", "ROLLBACK_TIMEOUT_MS = 600"));
+  const controlDirectory = path.dirname(f.before.requestFile);
+  const applyFile = path.join(controlDirectory, "apply.json");
+  const activeApply = JSON.parse(readFileSync(applyFile, "utf8"));
+  activeApply.deploymentId = "terminal-rollback-deployment";
+  writeFileSync(applyFile, JSON.stringify(activeApply));
+  writeFileSync(path.join(controlDirectory, "deployments.json"), JSON.stringify([{
+    deploymentId: activeApply.deploymentId, idempotencyKey: activeApply.requestId,
+    phase: "host-handoff", terminal: false, error: null, revisionNumber: 1,
+  }]));
+  const bootstrapModule = path.join(f.candidate, "bin", "launcher-relaunch.mjs");
+  const run = f.bootstrap(f.plan, bootstrapModule);
+  await terminalExited(run.child, 5000);
+  expect(run.child.exitCode).toBe(1);
+  expect(run.error()).toContain("rollback exceeded its 10 minute deadline");
+  const trialFile = path.join(path.dirname(f.before.requestFile), path.basename(f.before.requestFile).replace(/^request/, "trial"));
+  expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ state: "rolled-back", refused: true });
+  const apply = JSON.parse(readFileSync(path.join(controlDirectory, "apply.json"), "utf8"));
+  expect(apply).toMatchObject({ state: "failed", rolledBack: false });
+  expect(apply.detail).toContain("rollback exceeded");
+  expect(JSON.parse(readFileSync(path.join(controlDirectory, "deployments.json"), "utf8"))[0]).toMatchObject({
+    phase: "failed", terminal: true, error: expect.stringContaining("rollback exceeded"),
+  });
+  expect(existsSync(path.join(controlDirectory, "auto-drain.json"))).toBe(false);
+  const priorPid = Number(readFileSync(priorEntered, "utf8"));
+  await until(() => !isAlive(priorPid) ? true : null, 3000);
+}, 15_000);
 
 for (const rollback of [false, true]) test(`Windows request-context terminal entrypoint settles rollback=${rollback}`, async () => {
   const f = await fixture();
@@ -370,6 +495,63 @@ test("launcher record survives transient Windows rename conflicts without losing
     else expect(result.attempts).toBe(platform === "win32" && code === "EPERM" ? 101 : 1);
     expect(result.temporary).toBe(false);
   }
+}, 30000);
+
+test("rollback receipt retries transient Windows rename conflicts and preserves prior custody", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "dlg-terminal-receipt-")); roots.push(root);
+  const entry = path.join(root, "receipt.mjs");
+  const script = [
+    'import fs from "node:fs";',
+    'import { mock } from "bun:test";',
+    'Atomics.wait = () => "timed-out";',
+    'mock.module("node:fs", () => ({ ...fs, renameSync(from, to) {',
+    '  const scenario = globalThis.renameScenario;',
+    '  if (to === scenario.receipt) {',
+    '    scenario.attempts++;',
+    '    if (JSON.parse(fs.readFileSync(to, "utf8")).launcherPid !== 111) throw new Error("Prior receipt changed before commit");',
+    '    if (scenario.attempts <= scenario.failures) throw Object.assign(new Error("Synthetic sharing conflict"), { code: scenario.code });',
+    '  }',
+    '  return fs.renameSync(from, to);',
+    '} }));',
+    'const supervisor = await import(__SUPERVISOR__);',
+    'mock.module(__SUPERVISOR__, () => ({ ...supervisor, readStartIdentity: () => "new-owner-identity" }));',
+    'const { createRelaunch } = await import(__RELAUNCH__);',
+    'Object.defineProperty(process, "platform", { value: "win32" });',
+    'const results = [];',
+    'for (const [name, code, failures, expectedAttempts, succeeds] of [["transient", "EPERM", 2, 3, true], ["exhausted", "EBUSY", Infinity, 101, false], ["refused", "EACCES", Infinity, 1, false]]) {',
+    '  const directory = __ROOT__ + "/" + name;',
+    '  fs.mkdirSync(directory);',
+    '  const request = directory + "/request.json", receipt = request + ".result.json";',
+    '  const trial = { requestId: "request-id", target: "' + "b".repeat(40) + '", rollbackPointer: null, previousEntry: "previous-entry", state: "rolled-back", detail: "expected rollback", rollbackDeadlineAt: Date.now() + 60000 };',
+    '  fs.writeFileSync(directory + "/trial.json", JSON.stringify(trial));',
+    '  fs.writeFileSync(directory + "/apply.json", JSON.stringify({ requestId: trial.requestId, target: trial.target, launcherPid: 111, launcherIdentity: "old-owner-identity", state: "switching" }));',
+    '  fs.writeFileSync(receipt, JSON.stringify({ requestId: trial.requestId, state: "rolled-back", launcherPid: 111, launcherIdentity: "old-owner-identity" }));',
+    '  const scenario = { receipt, code, failures, attempts: 0 }; globalThis.renameScenario = scenario;',
+    '  const relaunch = createRelaunch({ paths: { trial: directory + "/trial.json", request, releasePointer: directory + "/release.json", record: directory + "/launcher.json" }, installRoot: directory, entry: "previous-entry", release: { sha: "' + "a".repeat(40) + '" }, stop: async () => {}, record: { set() {} } });',
+    '  let rejected = false; try { await relaunch.succeeded(); } catch { rejected = true; }',
+    '  const written = JSON.parse(fs.readFileSync(receipt, "utf8"));',
+    '  results.push({ name, attempts: scenario.attempts, rejected, launcherPid: written.launcherPid, launcherIdentity: written.launcherIdentity, temporary: fs.existsSync(receipt + "." + process.pid + ".tmp") });',
+    '  if (!succeeds && (written.launcherPid !== 111 || written.launcherIdentity !== "old-owner-identity")) throw new Error("Failed settlement replaced the prior receipt");',
+    '  if (succeeds && (written.launcherPid !== process.pid || written.launcherIdentity !== "new-owner-identity")) throw new Error("Retry did not settle the receipt owner");',
+    '  if (scenario.attempts !== expectedAttempts || rejected === succeeds || fs.existsSync(receipt + "." + process.pid + ".tmp")) throw new Error("Unexpected atomic receipt outcome");',
+    '}',
+    'console.log(JSON.stringify(results));',
+  ].join("\n")
+    .replaceAll("__SUPERVISOR__", JSON.stringify(new URL("./self-update-supervisor.mjs", import.meta.url).href))
+    .replaceAll("__RELAUNCH__", JSON.stringify(new URL("./launcher-relaunch.mjs", import.meta.url).href))
+    .replaceAll("__ROOT__", JSON.stringify(root));
+  writeFileSync(entry, script);
+  const child = spawn(process.execPath, ["--bun", entry], { stdio: ["ignore", "pipe", "pipe"] }); children.add(child);
+  let output = "", error = "";
+  child.stdout!.on("data", data => output += data);
+  child.stderr!.on("data", data => error += data);
+  await terminalClosed(child);
+  expect({ code: child.exitCode, error }).toEqual({ code: 0, error: "" });
+  expect(JSON.parse(output)).toEqual([
+    { name: "transient", attempts: 3, rejected: false, launcherPid: expect.any(Number), launcherIdentity: "new-owner-identity", temporary: false },
+    { name: "exhausted", attempts: 101, rejected: true, launcherPid: 111, launcherIdentity: "old-owner-identity", temporary: false },
+    { name: "refused", attempts: 1, rejected: true, launcherPid: 111, launcherIdentity: "old-owner-identity", temporary: false },
+  ]);
 }, 30000);
 
 test("terminal completion waits for process exit while a recorded descendant holds its pipe", async () => {

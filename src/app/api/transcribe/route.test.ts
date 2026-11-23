@@ -5,6 +5,8 @@ import { NextRequest } from "next/server";
 
 import * as codexAuth from "@/lib/codexAuth";
 import * as chatgpt from "@/lib/transcribe/chatgpt";
+import { configFilePath } from "@/lib/configDir";
+import * as policy from "@/lib/openaiServices/policy";
 import * as backend from "@/lib/transcribeBackend";
 
 import { POST } from "./route";
@@ -14,6 +16,7 @@ const restores: Array<() => void> = [];
 
 afterEach(() => {
   for (const restore of restores.splice(0).reverse()) restore();
+  fs.rmSync(configFilePath("transcribe-backend"), { force: true });
 });
 
 async function upload(filename: string, type: string, language = "uk") {
@@ -43,8 +46,8 @@ describe("transcription multipart media guard", () => {
     ["dictation.mp3", "audio/mpeg", "audio/mpeg", "audio/mpeg"],
     ["dictation", "audio/webm", "", "audio/webm"],
   ])("transcribes %s through the ChatGPT branch", async (filename, type, parsedType, upstreamType) => {
-    const select = spyOn(backend, "resolveTranscribeBackend").mockReturnValue("chatgpt");
-    restores.push(() => select.mockRestore());
+    backend.writeTranscribeBackend("chatgpt");
+
     const auth = spyOn(codexAuth, "readCodexAuth").mockReturnValue({ accessToken: "fixture", accountId: "fixture" });
     restores.push(() => auth.mockRestore());
     let audioPath = "";
@@ -71,7 +74,7 @@ describe("transcription multipart media guard", () => {
     ["archive.zip", "application/zip"],
     ["movie.avi", "video/x-msvideo"],
   ])("rejects %s before selecting a backend", async (filename, type) => {
-    const select = spyOn(backend, "resolveTranscribeBackend");
+    const select = spyOn(policy, "resolveService");
     restores.push(() => select.mockRestore());
     const { response } = await upload(filename, type);
     expect(response.status).toBe(415);
@@ -82,13 +85,13 @@ describe("transcription multipart media guard", () => {
 
 
 test.each([["", "uk"], ["be", "uk"], ["ru-RU", "ru"], ["en-US", "en"]])("the route restricts %j and tags a provider language outside the set", async (language, expected) => {
-  const select = spyOn(backend, "resolveTranscribeBackend").mockReturnValue("chatgpt");
+  backend.writeTranscribeBackend("chatgpt");
   const auth = spyOn(codexAuth, "readCodexAuth").mockReturnValue({ accessToken: "fixture", accountId: "fixture" });
   const transcribe = spyOn(chatgpt, "callTranscribe").mockImplementation(async (_auth, _file, _mime, hint) => {
     expect(hint).toBe(expected);
     return { status: 200, body: JSON.stringify({ text: "speech", language: "be" }) };
   });
-  restores.push(() => select.mockRestore(), () => auth.mockRestore(), () => transcribe.mockRestore());
+  restores.push(() => auth.mockRestore(), () => transcribe.mockRestore());
   const { response } = await upload("dictation.webm", "audio/webm", language);
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ text: "speech", language: expected });
@@ -96,10 +99,10 @@ test.each([["", "uk"], ["be", "uk"], ["ru-RU", "ru"], ["en-US", "en"]])("the rou
 
 
 test.each([{ language_code: "bel" }, { languages: [{ code: "en" }, { code: "be" }] }])("the route normalizes provider language metadata %j", async metadata => {
-  const select = spyOn(backend, "resolveTranscribeBackend").mockReturnValue("chatgpt");
+  backend.writeTranscribeBackend("chatgpt");
   const auth = spyOn(codexAuth, "readCodexAuth").mockReturnValue({ accessToken: "fixture", accountId: "fixture" });
   const transcribe = spyOn(chatgpt, "callTranscribe").mockResolvedValue({ status: 200, body: JSON.stringify({ text: "speech", ...metadata }) });
-  restores.push(() => select.mockRestore(), () => auth.mockRestore(), () => transcribe.mockRestore());
+  restores.push(() => auth.mockRestore(), () => transcribe.mockRestore());
   const { response } = await upload("dictation.webm", "audio/webm", "ru");
   expect(await response.json()).toEqual({ text: "speech", language: "ru" });
 });

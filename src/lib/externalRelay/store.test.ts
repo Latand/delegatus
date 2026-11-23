@@ -6,6 +6,8 @@ import path from "node:path";
 import {
   dropRun,
   mergeRelayTargets,
+  newTargetSettings,
+  publicRelay,
   reserveRun,
   reserveRunAsync,
   claimRelayRequestAsync,
@@ -270,4 +272,39 @@ test("an asynchronous file-lock action retains ownership until its work finishes
     await expect(pending).resolves.toBe("committed");
     expect(fs.existsSync(`${file}.lock`)).toBe(false);
   } finally { release(); await pending.catch(() => {}); }
+});
+
+test("an old claim whose owner process is gone leaves the ledger with the next claim", async () => {
+  const file = path.join(root, "external-relay/requests.json");
+  const prior = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  const dead = { leaseId: "lease", ownerPid: 999999999, ownerIdentity: "dead" };
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ v: 1, claims: [
+      { ...dead, requestId: "abandoned-old", claimedAt: Date.now() - 3 * 24 * 60 * 60_000 },
+      { ...dead, requestId: "abandoned-recent", claimedAt: Date.now() - 60_000 },
+    ] }));
+    expect(await claimRelayRequestAsync("claim-after-abandoned", "lease", Date.now() + 5000)).toEqual({ kind: "claimed" });
+    const kept = (JSON.parse(fs.readFileSync(file, "utf8")) as { claims: { requestId: string }[] }).claims.map(claim => claim.requestId);
+    expect(kept.sort()).toEqual(["abandoned-recent", "claim-after-abandoned"]);
+  } finally { if (prior) fs.writeFileSync(file, prior); else fs.rmSync(file, { force: true }); }
+});
+
+test("pairing and refresh retain ownership through the persisted and public store, clearing stale elsewhere flags", () => {
+  const remote = { target_id: "elsewhere", name: "Elsewhere clone", answered_by: "service" as const, fallback: "service" as const, answered_elsewhere: true };
+  const settings = newTargetSettings(remote);
+  expect(settings.answered_elsewhere).toBe(true);
+  updateRelayStore(store => ({ ...store, relays: [{ id: "ownership", origin: "https://relay.example", api_base: "https://relay.example/v1", name: "Relay", description: "",
+    credential: "fixture", owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    pairedAt: "2026-11-17T12:00:00Z", paused: true, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: [settings] }] }));
+  const stored = readRelayStore().relays[0]!;
+  expect(publicRelay(stored).targets[0]!.answered_elsewhere).toBe(true);
+  const merged = mergeRelayTargets(stored.targets, [{ ...remote, target_id: "added" }, remote]);
+  expect(merged.map(t => t.answered_elsewhere)).toEqual([true, true]);
+  for (const flag of [false, undefined]) {
+    const refreshed = mergeRelayTargets(merged, [{ ...remote, answered_by: "install", answered_elsewhere: flag }]);
+    expect(refreshed[0]!.answered_elsewhere).toBe(flag);
+    updateRelayStore(store => ({ ...store, relays: [{ ...stored, targets: refreshed }] }));
+    expect(readRelayStore().relays[0]!.targets[0]!.answered_elsewhere).toBe(flag);
+  }
 });

@@ -101,13 +101,16 @@ export const PIPELINE_FAIL_EDGE_EXHAUSTIONS: readonly PipelineFailEdgeExhaustion
     many rounds of it the source reviews, and what happens once those are spent.
     Cycles live exclusively on fail edges; the pass graph stays acyclic so
     every pass path terminates. */
+/** Where a run stage executes. A cloud runtime names its provider's hosted session. */
+export type PipelineStageRuntime = "local" | "codex-cloud" | "claude-cloud";
+
 export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: PipelineFailEdgeExhaustion };
 
 export type PipelineStageInput = {
   id: string;
   kind: PipelineStageKind;
   /** Omitted stages inherit the project default when the definition is created. */
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   role?: PipelineRoleRef;
   engine?: FlowEngine;
   model?: string | null;
@@ -260,7 +263,7 @@ export type PipelineBoundedWait = {
 export type PipelineAttemptDefinition = {
   agentMemoryMaxBytes?: number | null;
   boundAt: string;
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   /** `stageDigest` of the stage as it was bound. */
   stageDigest: string;
   "prompt": string;
@@ -290,6 +293,8 @@ export type PipelineGraphEdit = {
   /** The first attempt of `stageId` that runs under this edit; null for an
       edge or an order change, which apply at the next routing decision. */
   appliesFromAttempt: number | null;
+  /** An account value explicitly set or cleared by this override. */
+  accountOverride?: string | null;
   summary: string;
   runtimeSwitch?: { attempt: number; id: string };
 };
@@ -331,6 +336,8 @@ export type PipelineStageReport = {
   summary: string | null;
   result?: string;
   taskSummary?: TaskSummaryContent;
+  /** Unusable recorded checks excluded from this intent, never passing evidence. */
+  excludedRecordedChecks?: import("@/lib/recordedChecks/reportGate").RecordedCheckExclusion[];
   provenance: PipelineStageProvenance;
   /** Exact admitted lane authority for the deferred observation. */
   provenanceFence?: string;
@@ -395,6 +402,9 @@ export type PipelineRuntimeSwitch = {
   to: PipelineRuntimeSeat & { accountPinned: boolean };
   phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
   cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
+  /** handoff only: written before the switch asks the runtime to stop its
+      source, so a source found gone afterwards reads as the switch's own stop. */
+  stopDispatchedAt?: string;
   rollback?: boolean;
   reconfigureNoop?: boolean;
   /** Withdraws this attempt's execution authority before any teardown. */
@@ -411,6 +421,17 @@ export type PipelineRuntimeSwitch = {
 export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
 
 export type PipelineStageAttempt = {
+  /** An explicit operator waiver admitted while this stage was a visual critic. */
+  operatorCriticSkip?: true;
+  accounting?: import("./accounting").AttemptAccounting;
+  /** Setup evidence stays with this attempt across failures and explicit retries. */
+  setup?: {
+    /** Resolved execution cwd; the approved recipe keeps its relative cwd. */
+    command: string[]; cwd: string; hash: string;
+    state: "running" | "passed" | "failed";
+    startedAt: string; completedAt: string | null; code: number | null;
+    stdout: string; stderr: string;
+  };
   memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   n: number;
   cloud?: import("./cloudStage").CloudStageAttempt;
@@ -488,6 +509,8 @@ export type PipelineStageAttempt = {
     startedAt: string;
     resumeAt: string;
     resetsAt: number | null;
+    /** The native provider refusal was the turn's only output. */
+    limitOnly?: boolean;
     actionAt?: string;
     /** Persisted before sending; a lost acknowledgment still owes cancellation on control. */
     continuationRequestedAt?: string;
@@ -518,6 +541,11 @@ export type PipelineStageAttempt = {
       Each failed operation is counted once; `exhausted` waits for an explicit
       push, while publicationRecovery keeps the per-head automatic bound. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
+  /** Advisory script hints survive settlement and reach the seat lifecycle journal. */
+  publicationLanguageHints?: { at: string; hints: import("@/lib/forge/publicationLanguage").PublicationLanguageHint[] };
+  /** Gate infrastructure retries are independent of producer summary repairs.
+      The accepted head and due time survive controller restarts. */
+  pullRequestInspection?: { sha: string; failures: number; retryAt: string; detail: string; exhausted?: boolean };
   /** Bounded PR summary corrections preserve the accepted verdict and SHA.
       Persisted before delivery so a restart reuses the same request. */
   publicationTextRepair?: {
@@ -708,7 +736,10 @@ export type PipelineStageAttempt = {
     /** Keyed delivery evidence; safeToReplace requires affirmative no-dispatch evidence. */
     delivery?: PipelineRepairDelivery;
     /** Missing on older settled repairs, which already permitted a commit. */
-    outcome?: { status: "accepted" } | { status: "rejected"; reason: string };
+    outcome?: { status: "accepted" } | { status: "rejected"; reason: string;
+      /** Only a lost publication repair delivery permits dead-producer adoption.
+          Missing on legacy refusals, which must restore before any recommit. */
+      source?: "abandonment" };
     settledAt?: string;
     /** Consumes the one recommit before Git runs. Recovery must advance from
         this head; a refused recommit checkpoints a rejected outcome. */
@@ -724,6 +755,15 @@ export type PipelineStageAttempt = {
     operationId: string;
     stageId: string;
     attempt: number;
+    /** Clean checkpoint proved before the repair continuation was delivered. */
+    cleanHead?: { sha: string; branch: string;
+      /** Existing ignored files or collapsed directories, captured before delivery. */
+      ignoredPaths?: string[] };
+    /** Original trees retain refused output; phase makes cleanup replayable. */
+    rollback?: { index: string; tree: string; afterTree: string; tracked: string[]; untracked: string[];
+      /** Producer-created head proved before restoring the pre-repair ref. */
+      head?: string;
+      phase: "restore" | "clean" | "done" };
     commitStartedHead?: string;
     /** Dead-producer custody pins the branch and staged tree before committing.
         An unchanged intent can retry; a moved head needs the controller receipt. */
@@ -739,6 +779,9 @@ export type PipelineStageAttempt = {
       Also covers legacy/replacement attempts with no repair request record.
       Retained for audit; current affirmative activity still fences recovery. */
   publicationRepairAbandonment?: { at: string; reason: string };
+  /** Fresh producer repair identity and durable lane-wide round. The original
+      passed attempt remains history; controller restarts retain this budget. */
+  publicationRepairFrom?: { stageId: string; attempt: number; round: number };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
@@ -754,9 +797,15 @@ export type PipelineStageAttempt = {
       for at most ten minutes. Ownership changes and controller restarts keep
       this deadline; successful retirement clears it before replacement. */
   startupOwnerWait?: { launchId: string; deadline: string };
-  /** After a privacy revision conflict, require two stable revision
+  /** A privacy conflict retains the original launch until its receipt proves
+      delivery or safe retirement. The wall deadline survives controller restarts. */
+  roleMemoryDispatchWait?: { launchId: string; deadline: string; reason?: string; detail?: string };
+  /** Confirmed original delivery overrides only its matching privacy refusal.
+      The receipt and generation must still agree on every later tick. */
+  roleMemoryDelivery?: { launchId: string; conversationId: string; transcript: string; retryClaimId: string | null };
+  /** After a privacy revision conflict or preparation exhaustion, require two stable revision
       observations across persisted ticks before composing again. */
-  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
+  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean; detail?: string };
   roleMemoryFailures?: number;
   /** Launches this attempt reserved and then retired because their receipt
       settled `failed` before any host ran them (#1678): the runtime host was
@@ -786,6 +835,9 @@ export type PipelineStageAttempt = {
       until its turn completes and settlement reads it. Absent on an attempt
       that never called, which settles from its fenced JSON verdict. */
   report?: PipelineStageReport | null;
+  /** Exclusions revalidated at final settlement, including fenced fallback
+      verdicts that have no explicit stage report. */
+  excludedRecordedChecks?: import("@/lib/recordedChecks/reportGate").RecordedCheckExclusion[];
   /** Persisted before switching away from a stage-created branch, so a
       controller restart must finish adopting this head before acceptance. */
   branchAdoption?: { branch: string; head: string; target: string; adoptedHead?: string };
@@ -810,10 +862,12 @@ export type PipelineStageAttempt = {
       close may terminalize this attempt, however dead the registry row looks;
       the record is cleared once every one is proven gone. */
   unresolvedTermination?: PipelineUnresolvedTermination;
-  /** Automatic stops this attempt, still waiting to launch, sent to a settled
-      earlier stage agent whose recorded processes still run in the worktree.
-      Bounded: the lane parks once the tries are spent. */
+  /** Legacy single-agent budget, migrated into priorWriterStops on read by the
+      launch gate. Kept readable across upgrades. */
   priorWriterStop?: PipelinePriorWriterStop;
+  /** Independent bounded budgets for earlier agents, visited in one sweep.
+      Entries are removed once their recorded processes are proven gone. */
+  priorWriterStops?: PipelinePriorWriterStop[];
   /** Tool permission requests this attempt's agent raised and nobody could
       answer, each denied so the turn went on (#2215). Bounded, oldest first. */
   permissionDenials?: PipelinePermissionDenial[];
@@ -846,6 +900,7 @@ export type PipelineUnresolvedTermination = {
   survivors: Array<{ pid: number; startIdentity: string | null; bootEpoch?: string | null }>;
   error: string;
   recordedAt: string;
+  sourceRevision?: string;
 };
 
 export type PipelineStageRun = {
@@ -991,6 +1046,10 @@ export type PipelineDeliveryTarget = {
   remote: string;
   branch: string;
   pr?: number;
+  /** `<owner>/<repo>` holding `pr` when that is not the repository `remote`
+      pushes to: a PR from a fork, whose number names a PR of the checkout's
+      origin. Absent: `pr` is a PR of the delivery remote's repository. */
+  prRepository?: string;
   rejectedHead?: string;
 };
 
@@ -1004,12 +1063,14 @@ export type PipelinePublicationRecovery = {
   sha: string;
   /** Recoverable failures across attempts, manual retries and ownership epochs. */
   failures: number;
+  /** Failed publication attempts; superseded admissions are excluded. */
   totalAttempts: number;
   /** First verified App git 403 for this accepted head, retained on takeover. */
   app403Since?: string;
-  /** Newest 64 failed operations; totalAttempts includes omitted older records. */
+  /** Newest 64 refusal and supersession records. totalAttempts also counts
+      failed attempts omitted from this bounded history. */
   history: Array<{ operationId: string; epoch: number; at: string;
-    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403";
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403" | "environment" | "remote-refusal" | "superseded";
     detail: string; retryAt: string | null }>;
 };
 
@@ -1033,6 +1094,9 @@ export type PipelinePublicationFailure = {
   retryableDeadline?: boolean;
   /** The proven deadline expired during CPU admission before checks started. */
   admissionDeadline?: true;
+  /** The scanner reported only a configuration fault, and this head changes
+      none of its script inputs. Computed on complete output before redaction. */
+  privacyConfigurationFault?: true;
   /** Git refused HTTP access after its App credential helper verified a fresh mint. */
   retryableApp403?: boolean;
   /** Observation clock captured with the refusal, before recovery can restart. */
@@ -1043,7 +1107,7 @@ export type PipelinePublicationResult = (
   | { ok: true; sha: string; remote: "published" | "unavailable"; detail?: string; uncertain?: boolean }
   | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
   | { ok: false; error: string }
-) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" };
+) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded" };
 
 export type PipelineDelivery = {
   target: PipelineDeliveryTarget;
@@ -1055,6 +1119,12 @@ export type PipelineDelivery = {
   releasedAt?: string;
   /** Failure already released or explicitly acknowledged by takeover. */
   settledFailure?: string;
+  /** A forge identity/ancestry refusal remains authoritative across retries
+      and process restarts until the same PR is read back at the accepted head. */
+  pullRequestRefusal?: { epoch: number; sha: string; number: number | null; head: string | null; reason: string };
+  /** A final-fix body refresh deferred while Git proved publication. The body
+      is reconstructed from this summary and the PR's later verified body. */
+  pendingPullRequestRefresh?: { epoch: number; sha: string; number: number; summary: string; nextAttemptAt?: string };
   operation?: {
     id: string;
     /** Pending reservation consumed by this execution. Keeps logical recovery
@@ -1072,6 +1142,11 @@ export type PipelineDelivery = {
     app403Deadline?: string;
     state: "pending" | "running" | "settled";
     executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean;
+      /** Current child's execution limit; its private ledger credits admission
+          waits even when the Viewer generation has exited. */
+      command?: { deadline: string; waitRoot: string };
+      /** Run-specific inherited fence; a later shared-lock owner cannot supply it. */
+      runLock?: { path: string; identity: string };
       result?: PipelinePublicationResult };
     result?: PipelinePublicationResult;
   };
@@ -1164,6 +1239,8 @@ export type PipelineRemoteAction = {
   settledAt?: string;
   error?: string;
   actor: import("@/lib/pauseResumeActor").PauseResumeActor | null;
+  /** Older intents can misattribute agent skips to the operator; actor alone is no waiver. */
+  operatorCriticSkip?: true;
   retryReceipt?: { launchId: string; state: import("./engine").PipelineSpawnReceipt["state"]; claimId?: string };
   takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
 };
@@ -1176,6 +1253,8 @@ export type PipelineConversationSource = {
 };
 
 export type Pipeline = {
+  /** Server-attributed member scope, retained across stage retries and restart. */
+  workspace?: import("@/lib/accounts/migration/contracts").LaunchProfile["workspace"];
   /** Receipt-owned invention provenance, retained across attachment edits. */
   proactiveTaskIds?: string[];
   /** Historical context only; never grants creator or spawn authority. */
@@ -1196,10 +1275,14 @@ export type Pipeline = {
   creationRequest?: { key: string; digest: string };
   id: string;
   task: string;
+  /** Public PR title, independent of the board title. Defaults to derived English prose. */
+  prTitle?: string;
   /** Durable board-task membership. The legacy `task` field remains the title. */
   taskIds: string[];
   /** Launch-correlated creation evidence reserved before task-spawn actuation. */
   creationIntent?: PipelineCreationIntent;
+  /** Declaration frozen at lane creation; null fields are unknown. */
+  taskClass?: import("./accounting").LaneClass;
   /** Pinned specification and acceptance criteria, matching Flow.spec from #85. */
   spec?: string;
   /** Caller-produced source handoff and tracked skill references, shared by stage runtimes. */
@@ -1221,13 +1304,16 @@ export type Pipeline = {
       not a stage's; recording what landed lets a steady state skip the remote
       probe entirely. Null while nothing is published. */
   publishedCommit?: string | null;
+  /** Fresh publication producer attempts spent by this lane. Kept separately
+      from attempt history so controller recovery reads the budget in constant work. */
+  publicationProducerRepairs?: number;
   stages: PipelineStage[];
   runs: PipelineStageRun[];
   /** The cursor carries the durable relay record (#353): the forwarded input and
       the activating edge are persisted in the same atomic write as the verdict
       that advanced here, so a crash between advance and spawn replays the
       identical prompt. */
-  cursor: { stageId: string; state: PipelineCursorState; input: string | null; activatedBy: PipelineEdgeActivation | null; launchedBy?: PipelineHandLaunch } | null;
+  cursor: { repeatReason?: import("./accounting").RepeatReason; admittedAt?: string; stageId: string; state: PipelineCursorState; input: string | null; activatedBy: PipelineEdgeActivation | null; launchedBy?: PipelineHandLaunch } | null;
   state: PipelineState;
   pausedState: Exclude<PipelineState, "paused" | "draft"> | null;
   /** When the pipeline was last paused, and when it was last resumed. Durable
@@ -1273,9 +1359,14 @@ export type Pipeline = {
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
       at read time and never stored here. */
   workLinks?: import("@/lib/forge/workLinks").StoredWorkLink[];
+  /** Durable settlement of issues delivered by this lane. */
+  issueDelivery?: import("@/lib/forge/issueDelivery").IssueDelivery[];
   /** Hosts the last close could not confirm terminated. Present only while one
       is outstanding; a close that confirms every kill clears it. */
   unconfirmedHosts?: PipelineUnconfirmedHost[];
+  /** Bounded physical-process proofs for outstanding hosts. A changed source
+      identity invalidates its cursor; completed hosts retain no proof state. */
+  hostTerminationProofs?: Record<string, import("./hostTerminationProof").HostTerminationProgress>;
   /** Receipt of the finished-host sweep completion triggers (#574). Absent
       until the pipeline first settles terminally with launched hosts to check. */
   terminalReap?: PipelineTerminalReap;
@@ -1362,6 +1453,9 @@ export type PipelineRefresh = {
 };
 
 export type PipelineMerge = {
+  /** No PR was created; landing is a guarded Git fast-forward of the exact
+      reviewed publication and is confirmed from the remote base ref. */
+  gitOnly?: true;
   /** A proactive write began without a terminal forge receipt. Only receipt
       reconciliation, never a repeated write, may advance it automatically. */
   effectUncertain?: boolean;
@@ -1393,6 +1487,8 @@ export type PipelineMerge = {
   updates: Array<{ requestedAt: string; head: string | null; commit?: string; base?: string }>;
   /** Every check name seen on any head of this PR, a union. */
   seenChecks: string[];
+  /** Optional red checks on the last observed open head; retained after landing. */
+  optionalFailedChecks?: string[];
   /** The head the check clock runs for, when it was first seen, and the check
       names of the previous read of that head. */
   head: string | null;
@@ -1418,8 +1514,12 @@ export type PipelineMerge = {
 };
 
 export type CreatePipelineRequest = {
-  delivery?: { branch: string; remote?: string; pr?: number; rejectedHead?: string; comparison?: boolean };
+  taskClass?: import("./accounting").DeclaredClass;
+  /** `prRepository`: see {@link PipelineDeliveryTarget}; it must be the checkout's origin. */
+  delivery?: { branch: string; remote?: string; pr?: number; prRepository?: string; rejectedHead?: string; comparison?: boolean };
   task: string;
+  /** Public PR title, independent of the board title. Defaults to derived English prose. */
+  prTitle?: string;
   taskIds?: string[];
   /** #2187 §5.1: `true` marks every linked task as one this pipeline
       finishes, a list marks those ids; an id outside `taskIds` is dropped
@@ -1481,6 +1581,7 @@ export const PIPELINE_ACTIONS = [
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number];
 
 export type PatchPipelineRequest = {
+  repeatReason?: import("./accounting").RepeatReason;
   /** Required for resolve-decision, continue-review and accept-head, preserved as its durable receipt key. */
   clientRequestId?: string;
   /** Opaque revision returned by get_pipeline or the pipeline detail route. */
@@ -1520,6 +1621,8 @@ export type PatchPipelineRequest = {
   link?: string | number | Array<string | number>;
   /** for attach-link: overrides whether the number is a PR or an issue. */
   kind?: import("@/lib/forge/workLinks").WorkLinkKind;
+  /** attach-link only: true marks partial delivery, false clears it. */
+  part?: boolean;
   /** Creator transcript used by set-src. */
   srcPath?: string;
   /** Explicit authorization to replace existing creator lineage. */
@@ -1557,7 +1660,7 @@ export type PatchPipelineRequest = {
       running the attempt. An attempt another conversation runs by then answers
       409 `STAGE_CHANGED` before any runtime or definition is changed. */
   expectedConversationId?: string;
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;

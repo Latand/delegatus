@@ -16,8 +16,8 @@ SQLite insert, update and delete triggers coalesce changed identities in
 `history_pending`. The triggers cover pipeline saves, bounded patches, controller
 writes, archive moves, flow saves, imports and older/raw SQL writers. Projection
 refresh reads one changed record per transaction and yields between records after
-four milliseconds of accumulated work. Its final transaction checks the relevant
-collections' queue before reading their projections. Failed work rolls back with
+four milliseconds of accumulated work. General readers capture a finite pending
+batch, then read after preparing those identities. Failed work rolls back with
 its pending identity intact. Release authority is checked before and inside each
 write transaction, including before commit.
 
@@ -66,11 +66,40 @@ answer deadline to refresh. An already prepared artifact can answer without a
 refresh budget. Each reader prepares its needed collections. An unrelated
 archive failure therefore leaves active liveness readable.
 
+Liveness pipeline lineage prepares at most 200 pending identities for the
+selected conversation IDs and paths. Write-time `pipeline_owner_refs` finds new
+owners; `history_attempts` also finds old owners after moves and deletions.
+Archive preparation is needed when an active conversation reference cannot
+settle the lookup. Without a write-time archive ownership index, this fallback
+conservatively includes pending archive rows within the same cap.
+Conversation identity still precedes path fallback across
+both collections. These reads share the existing answer deadline.
+
+The final snapshot checks each target's pending dependencies again. A concurrent
+write, an exhausted deadline or a busy writer can leave a reference unknown.
+That row remains visible with `pipeline: null`, `verified: false` and
+`evidenceSource: "projection"`; the MCP answer retains `evidence: "pending"`.
+When the deadline remains available but projection is pending, the full selection
+report names `budget: "projection_pending"`. A later read can finish preparation.
+Cancellation, release fencing and database replacement remain failures.
+`scripts/deploy-checkout.py` still rejects incomplete captures and failed reads.
+
+The scoped-read regression uses the SDK client, the real HTTP MCP route on an
+ephemeral loopback port, native peer proof, operator scope and SQLite receipts.
+It checks both `limit: 1` health reads and `limit: 200` protected capture while
+an unrelated pipeline is repeatedly written and its next write lease is held.
+Separate subprocess cases spend the answer deadline before preparation and
+require a partial answer that the unchanged deploy guard rejects. This change
+claims bounded work and availability; it makes no measured latency claim.
+
 Loop attribution uses `history.prepare`, `history.project-row`, `history.read`
 and `memory.curation-admission`. The synchronous source adapters remain available
 to full-record consumers; liveness uses their specialized `forLiveness` readers.
 
 ## Measurements
+
+The measurements below describe the earlier projection implementation. They
+are not measurements of the scoped liveness follow-up above.
 
 Final repeated measurements and source digests are recorded in
 [`evidence/history-projection.json`](../../evidence/history-projection.json).

@@ -65,6 +65,21 @@ function typesFor(pipelineId: string): string[] {
   return queryLifecycleEvents({ pipelineId, limit: 200 }).events.map((event) => event.type);
 }
 
+test("publication language hints reach the seat journal once across replay without blocking a stage", () => {
+  const p = pipelineFixture("language-hints");
+  p.runs[0]!.attempts.push({ n: 1, state: "passed", startedAt: T0, completedAt: T0,
+    effectiveRole: BUILDER_ROLE, conversationId: null,
+    publicationLanguageHints: { at: T0, hints: [{ part: "body", line: 2 }] },
+  } as unknown as Pipeline["runs"][number]["attempts"][number]);
+  refreshLifecycleJournal({ pipelines: [p] }, { force: true });
+  refreshLifecycleJournal({ pipelines: JSON.parse(JSON.stringify([p])) }, { force: true });
+  const events = queryLifecycleEvents({ pipelineId: p.id, type: "publication_language_hint" }).events;
+  expect(events).toHaveLength(1);
+  expect(events[0]!.summary).toContain("body line 2");
+  expect(events[0]!.summary).toContain("Advisory only");
+  expect(p.runs[0]!.attempts[0]!.state).toBe("passed");
+});
+
 test("the merge journal retains lane, PR and merged head after the lane leaves the hot store", () => {
   const id = "pipeline_merge_record";
   const head = "a".repeat(40);

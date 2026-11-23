@@ -1,3 +1,4 @@
+import { ROLE_MEMORY_BOUND } from "./roleTypes";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -161,13 +162,15 @@ test("an engine start preserves aliased scopes for available curation without ch
   const template = fixtureRows().snapshot().find((row): row is Rule => row.kind === "rule" && row.state === "active" && !row.versionOf)!;
   const currentScope = "role:alias-budget-current:builder";
   const oldScope = "role:alias-budget-old:builder";
-  const rules = [currentScope, oldScope].flatMap((scope, group) => Array.from({ length: 8 }, (_, n): Rule => ({
+  const sample = { ...template, rule: `Check durable ownership category 0 variation 0 before every replay. ${"Check each receipt. ".repeat(34)}` };
+  const perScope = Math.ceil(ROLE_MEMORY_BOUND / (2 * (scopeChars([sample]) + 1)));
+  const rules = [currentScope, oldScope].flatMap((scope, group) => Array.from({ length: perScope }, (_, n): Rule => ({
     ...template, id: `r_alias_budget_${group}_${n}`, scope,
     rule: `Check durable ownership category ${group} variation ${n} before every replay. ${"Check each receipt. ".repeat(34)}`,
     versions: [], revisedBy: undefined, curatedAt: group ? "2026-10-11T00:00:00.000Z" : undefined,
     keptByOperatorAt: undefined, state: "active",
   })));
-  fixtureRows().boundedPatch(40, tx => {
+  fixtureRows().boundedPatch(rules.length + 2, tx => {
     for (const row of rules) tx.put(row);
     for (const scope of [currentScope, oldScope]) tx.put({ kind: "scope", scope, revision: 1, history: [], active: rules.filter(row => row.scope === scope).map(row => row.id) });
   });
@@ -176,7 +179,7 @@ test("an engine start preserves aliased scopes for available curation without ch
   const before = fixtureRows().snapshot();
   const block = store.learnedRulesBlock("alias-budget-current", "builder");
   const selected = rules.filter(row => block.includes(`[${row.id}]`));
-  expect(scopeChars(selected)).toBeGreaterThan(10_000);
+  expect(scopeChars(selected)).toBeGreaterThan(ROLE_MEMORY_BOUND);
   expect(selected).toHaveLength(rules.length);
   for (const row of rules.filter(row => !row.curatedAt)) expect(block).toContain(row.rule);
   expect(fixtureRows().snapshot()).toEqual(before);

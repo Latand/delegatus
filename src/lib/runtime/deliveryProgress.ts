@@ -1,4 +1,5 @@
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
+import { withoutOperationLease } from "@/lib/operationLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
@@ -6,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { Database as BunDatabase } from "bun:sqlite";
+import type { DeliveryTimingMark } from "./engineHost";
 
 import { statePath } from "@/lib/configDir";
 
@@ -53,7 +55,18 @@ export interface DeliveryPhase {
   at: string;
 }
 
+export interface DeliveryRefusalEvidence {
+  component: "claude-native-broker" | "claude-native-ledger";
+  stage: "admission" | "intent";
+  reason: string;
+  firstAt: string;
+  lastAt: string;
+  count: number;
+}
+
 export interface DeliveryProgressRecord {
+  /** Latest allowlisted refusal survives phase-history truncation and settlement. */
+  refusal?: DeliveryRefusalEvidence;
   operationId: string;
   conversationId: string;
   /** The idempotency key the message was admitted under, when known. */
@@ -62,8 +75,8 @@ export interface DeliveryProgressRecord {
   waitReason: DeliveryWaitReason;
   /** A short machine detail; message content stays out of it. */
   detail: string | null;
-  /** Dispatch attempts this delivery has made: each `delivering` write and each
-      reconciliation counts one. */
+  /** Attempts this delivery has made: host recovery, each `delivering` write
+      and each reconciliation count one. Recovery flushes before its effect. */
   attempt: number;
   admittedAt: string | null;
   /** When the current wait reason began. */
@@ -72,7 +85,7 @@ export interface DeliveryProgressRecord {
   lastProgressAt: string;
   /** When the background settlement will end it if nothing else does. */
   deadlineAt: string | null;
-  deadlinePolicy: "settlement-window" | "in-turn-ceiling" | null;
+  deadlinePolicy: "settlement-window" | "in-turn-ceiling" | "turn-boundary" | null;
   /** When the queue looks at it next; the watchdog runs a pass once this is overdue. */
   nextWakeAt: string | null;
   /** Set when an active phase ran past the stall bound. */
@@ -92,6 +105,9 @@ export interface DeliveryProgressRecord {
   ingressAt?: string | null;
   /** First live engine user echo; replayed history supplies no arrival time. */
   engineEchoAt?: string | null;
+  /** Diagnostic observations, persisted by the next ordinary progress write. */
+  timingMarks?: Array<{ mark: DeliveryTimingMark; at: string; attempt: number }>;
+  timingMarksDropped?: number;
 }
 
 export interface DeliveryProgressNote {
@@ -114,6 +130,9 @@ export interface DeliveryProgressNote {
 
 /** The queue's view of the store; tests pass their own. */
 export interface DeliveryProgressSink {
+  flush?(): boolean;
+  releaseRecoveryAttempt?(operationId: string, attempt: number, executorId: string | null): boolean;
+  mark?(operationId: string, mark: DeliveryTimingMark, at?: string): void;
   timing?(operationId: string, times: { ingressAt?: string; engineEchoAt?: string }): void;
   note(operationId: string, conversationId: string, note: DeliveryProgressNote): void;
   stalled(operationId: string): void;
@@ -126,6 +145,7 @@ export interface DeliveryProgressSink {
 export const DELIVERY_PROGRESS_TERMINAL_RETENTION_MS = 14 * 24 * 60 * 60_000;
 export const DELIVERY_PROGRESS_MIN_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const DELIVERY_PHASE_HISTORY_LIMIT = 128;
+export const DELIVERY_TIMING_MARK_LIMIT = 32;
 const TERMINAL_ROW_LIMIT = 5_000;
 const OPEN_ROW_LIMIT = 5_000;
 const FLUSH_DELAY_MS = 20;
@@ -149,6 +169,16 @@ function boundedDetail(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed.slice(0, DETAIL_LIMIT) : null;
+}
+
+function refusalEvidence(value: string | null | undefined, current: DeliveryRefusalEvidence | undefined, at: string): DeliveryRefusalEvidence | undefined {
+  const match = value?.match(/claude-native-(broker\/admission|ledger\/intent): (capacity-exhausted|native-evidence-uncertain|attention-pending|persistence-pending|compaction-pending|background-turn|input-window-full|turn-fence-mismatch|dispatch-fence-changed|persistence-uncertain|protocol-window-contained|foreign-turn|replay-window-full|writer-unavailable)\b/);
+  if (!match) return current;
+  const component = match[1] === "broker/admission" ? "claude-native-broker" : "claude-native-ledger";
+  const stage = component === "claude-native-broker" ? "admission" : "intent";
+  const same = current?.component === component && current.stage === stage && current.reason === match[2];
+  return { component, stage, reason: match[2]!, firstAt: same ? current.firstAt : at, lastAt: at,
+    count: same ? Math.min(1_000_000, current.count + 1) : 1 };
 }
 
 function withPhase(current: Pick<DeliveryProgressRecord, "phaseHistory" | "phaseHistoryDropped"> | null, phase: DeliveryPhase): Pick<DeliveryProgressRecord, "phaseHistory" | "phaseHistoryDropped"> {
@@ -198,6 +228,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private lastPruneAt = 0;
   private loaded = false;
+  private closed = false;
   /** When a read that failed may be tried again. */
   private loadRetryAt = 0;
   /** Every ending whose owner row settled before this has a record in the
@@ -218,6 +249,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const current = this.record(operationId);
     if (current === undefined) return;
     const at = new Date(this.now()).toISOString();
+    const refusal = refusalEvidence(note.detail, current?.refusal, at);
     const since = note.sinceMs !== undefined ? new Date(Math.min(note.sinceMs, this.now())).toISOString() : at;
     /* A detail belongs to the reason it was written with. */
     const detail = note.detail !== undefined ? boundedDetail(note.detail)
@@ -228,6 +260,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     if (!current) {
       this.put({
         ...withPhase(null, { phase: note.waitReason, reason: detail, at: since }),
+        ...(refusal ? { refusal } : {}),
         operationId,
         conversationId,
         originalKey: note.originalKey ?? null,
@@ -251,7 +284,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     }
     if (current.terminal) return;
     const reasonChanged = current.waitReason !== note.waitReason;
-    const changed = reasonChanged
+    const changed = refusal !== current.refusal || reasonChanged
       || note.attempted === true
       || note.progressed === true
       || detail !== current.detail
@@ -264,6 +297,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     this.put({
       ...current,
       ...(advanced || detail !== current.detail ? withPhase(current, { phase: note.waitReason, reason: detail, at: since }) : {}),
+      ...(refusal ? { refusal } : {}),
       conversationId,
       originalKey: note.originalKey ?? current.originalKey,
       kind: note.kind ?? current.kind,
@@ -279,6 +313,16 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       executorId: note.executorId ?? current.executorId,
       updatedAt: at,
     });
+  }
+
+  /** A typed admission wait proved that recovery made no successor. Only
+      its unchanged, current executor record may return the reserved attempt. */
+  releaseRecoveryAttempt(operationId: string, attempt: number, executorId: string | null): boolean {
+    const current = this.record(operationId);
+    if (!current || current.terminal || current.attempt !== attempt || attempt < 1
+      || current.executorId !== executorId) return false;
+    this.put({ ...current, attempt: attempt - 1, updatedAt: new Date(this.now()).toISOString() });
+    return this.flush();
   }
 
   /**
@@ -326,6 +370,10 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   deadline(operationId: string, deadlineAt: string | null, policy: DeliveryProgressRecord["deadlinePolicy"]): void {
     const current = this.record(operationId);
     if (!current || current.terminal || (current.deadlineAt === deadlineAt && current.deadlinePolicy === policy)) return;
+    // A delayed admission/checkpoint cannot erase a later live-turn observation.
+    // Explicit workflow cutoffs are enforced independently by settlement.
+    if (current.deadlinePolicy === "turn-boundary" && current.deadlineAt && deadlineAt
+      && Date.parse(current.deadlineAt) > Date.parse(deadlineAt)) return;
     this.put({ ...current, deadlineAt, deadlinePolicy: policy, updatedAt: new Date(this.now()).toISOString() });
   }
 
@@ -341,6 +389,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       nextWakeAt: null,
       stalledSince: null,
       lastProgressAt: at,
+      ...(refusalEvidence(reason, current.refusal, at) ? { refusal: refusalEvidence(reason, current.refusal, at) } : {}),
       terminal: { state, at, reason: boundedDetail(reason) },
       ...withPhase(current, { phase: state, reason: boundedDetail(reason), at }),
       updatedAt: at,
@@ -362,13 +411,44 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     }
   }
 
+  /** No hydration, dirtying, timer or I/O: an ordinary progress write carries
+      these bounded observations. A crash before that write can lose marks. */
+  mark(operationId: string, mark: DeliveryTimingMark, at = new Date(this.now()).toISOString()): void {
+    const current = this.records.get(operationId);
+    if (!current || !Number.isFinite(Date.parse(at))) return;
+    const marks = current.timingMarks ??= [];
+    marks.push({ mark, at, attempt: current.attempt });
+    if (marks.length > DELIVERY_TIMING_MARK_LIMIT) {
+      marks.shift();
+      current.timingMarksDropped = (current.timingMarksDropped ?? 0) + 1;
+    }
+  }
+
   get(operationId: string): DeliveryProgressRecord | null {
     return this.record(operationId) ?? null;
+  }
+
+  /** Read one explanation without hydrating the store's global open history. */
+  getKeyed(operationId: string): DeliveryProgressRecord | null {
+    const cached = this.records.get(operationId);
+    if (cached) return cached;
+    if (this.filename === null) return null;
+    try {
+      if (!progressFileExists(this.filename)) return null;
+      const db = this.connection();
+      const row = db.query<{ record_json: string }, [string]>(
+        "SELECT record_json FROM delivery_progress WHERE operation_id = ?",
+      ).get(operationId);
+      return row ? parseRecord(row.record_json, db) : null;
+    } catch {
+      return null;
+    }
   }
 
   /** A cold record still owns its fields and history. Null proves absence;
       undefined means unreadable, so an update must leave the saved row alone. */
   private record(operationId: string): DeliveryProgressRecord | null | undefined {
+    if (this.closed) return this.records.get(operationId);
     this.load();
     const current = this.records.get(operationId);
     if (current) return current;
@@ -465,6 +545,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   /** Takes a checkpoint after a sweep restored every ending up to it; it is
       persisted with the next flush. */
   checkpoint(throughMs: number): void {
+    if (this.closed) return;
     this.load();
     if (!Number.isFinite(throughMs)) return;
     this.pendingCheckpoint = Math.max(throughMs, this.pendingCheckpoint ?? throughMs);
@@ -517,6 +598,13 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
 
   /** Writes every changed record now. Answers whether nothing is left owed. */
   flush(): boolean {
+    // Accepted records belong to this store, including their retries and prune.
+    // A caller's expired controller pass cannot revoke persistence custody.
+    return withoutOperationLease(() => this.flushOwned());
+  }
+
+  private flushOwned(): boolean {
+    if (this.closed) return this.dirty.size === 0 && this.pendingCheckpoint === null;
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = null;
     const checkpoint = this.pendingCheckpoint;
@@ -527,6 +615,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       return true;
     }
     const pending = [...this.dirty];
+    const pruneDue = this.now() - this.lastPruneAt >= PRUNE_INTERVAL_MS;
     try {
       const db = this.connection();
       db.exec("BEGIN IMMEDIATE");
@@ -550,13 +639,14 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
           db.query("INSERT INTO delivery_progress_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
             .run(CHECKED_THROUGH, String(checkpoint));
         }
-        if (this.now() - this.lastPruneAt >= PRUNE_INTERVAL_MS) this.prune(db);
+        if (pruneDue) this.prune(db);
         db.exec("COMMIT");
       } catch (error) {
         try { db.exec("ROLLBACK"); } catch { /* never opened */ }
         throw error;
       }
       for (const operationId of pending) this.dirty.delete(operationId);
+      if (pruneDue) this.lastPruneAt = this.now();
       if (checkpoint !== null) {
         this.checkedThrough = Math.max(checkpoint, this.checkedThrough ?? checkpoint);
         if (this.pendingCheckpoint === checkpoint) this.pendingCheckpoint = null;
@@ -574,12 +664,17 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   }
 
   close(): void {
+    if (this.closed) return;
     this.flush();
+    this.closed = true;
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = null;
     this.db?.close();
     this.db = null;
   }
 
   private put(record: DeliveryProgressRecord): void {
+    if (this.closed) return;
     this.records.set(record.operationId, record);
     this.dirty.add(record.operationId);
     this.trimMemory();
@@ -599,16 +694,17 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   }
 
   private scheduleFlush(delayMs: number): void {
-    if (this.flushTimer || this.filename === null) return;
-    const timer = this.schedule(() => {
+    if (this.closed || this.flushTimer || this.filename === null) return;
+    const timer = withoutOperationLease(() => this.schedule(() => {
       this.flushTimer = null;
-      this.flush();
-    }, delayMs);
+      if (!this.closed) this.flush();
+    }, delayMs));
     (timer as { unref?: () => void }).unref?.();
     this.flushTimer = timer;
   }
 
   private connection(): Database {
+    if (this.closed) throw new Error("delivery progress owner is closed");
     if (this.db) return this.db;
     fs.mkdirSync(path.dirname(this.filename!), { recursive: true, mode: 0o700 });
     const Database = sqliteDatabase();
@@ -631,7 +727,6 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
 
   private prune(db: Database): void {
     return withViewerOperation("delivery-progress.prune", () => {
-    this.lastPruneAt = this.now();
     const cutoff = this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS;
     db.query("DELETE FROM delivery_progress WHERE terminal = 1 AND updated_at < ?").run(cutoff);
     db.query(`
@@ -715,6 +810,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   }
 
   private load(): void {
+    if (this.closed) return;
     if (this.loaded) return;
     /* A read that failed is tried again, at most once per retry interval:
        the store counts as loaded only once a read succeeded. */
@@ -787,7 +883,7 @@ export function readDeliveryProgress(
   const owned = processStore.__llvDeliveryProgressStore;
   if (owned && (file === undefined || path.resolve(file) === path.resolve(processStore.__llvDeliveryProgressPath ?? ""))) {
     for (const operationId of operationIds) {
-      const record = owned.get(operationId);
+      const record = owned.getKeyed(operationId);
       if (record) found.set(operationId, record);
     }
     return found;

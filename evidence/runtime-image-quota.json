@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "checkedAt": "2026-11-12T08:40:28.122608+00:00",
+  "base": "f9571ba01c01a06065f177658bfed628a7f4bbd1",
+  "runtime": "Bun 1.4.0 on Linux",
+  "minimumSqlite": "3.39.4, built from the fixture checksum-verified official amalgamation",
+  "sourceSha256": {
+    "src/lib/runtime/runtimeImageStore.ts": "474be9a782f710733cbeaa1bf06423f41087141d00061665a7fd8544a59b3d09",
+    "src/lib/runtime/runtimeImageStore.test.ts": "eba15f77159b74b61c8ee03afdf46282be41bd6dd37bf80534ef121d17b54c80",
+    "src/lib/runtime/fixtures/runtimeImageStoreWriter.ts": "38c754dcb61b922bc85997c1e41f27a0d3b0de5f0b716303498d6c90a9974891",
+    ".github/workflows/platform-tests.yml": "f43e1e6ec40302f9d916e72831e67c39da9ed77a79572e5344e4ebb24c3522f9"
+  },
+  "procedure": [
+    "Use a scratch export; run each file in a fresh HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR, with LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1 and LLV_GATE_RUNNER=off.",
+    "Build the minimum SQLite library once with minimumSqliteLibrary(); pass its absolute path through LLV_MINIMUM_SQLITE_LIBRARY.",
+    "All test campaigns ran sequentially through the pipeline-supplied gate-slot.sh from revision 34b741354731, using --record and wait_for_check. Each raw command receipt and every file log is retained in pipeline evidence.",
+    "To reproduce the original race, export the base, overlay the current test and writer fixture, then select the two publication cases. For the timeout diagnostic, release the publisher before asserting its result.",
+    "The cleanup failure control uses the atomic-ticket implementation with the original cleanup stat call; the controlled ordering then produces ENOENT."
+  ],
+  "cause": {
+    "ciObservation": "The reported CI case had one successful writer and two quota refusals instead of three, lasting 5459.45 ms. Its child stderr was not collected.",
+    "controlledObservation": "A queue scanner can unlink an empty or partial owner ticket after file creation and before writeFileSync finishes. The live writer resumes without a ticket and times out after its existing five-second lock budget.",
+    "attribution": "The controlled original-source failure reproduces the CI exit-count and duration signature. The failing path uses filesystem locks; the minimum-SQLite preload does not propagate into writer children.",
+    "fix": "Write complete owner JSON to a private partial and atomically rename it into the queue. Startup cleanup tolerates a partial disappearing during publication; aged crash debris remains reclaimable.",
+    "unchangedAssertions": "Four distinct 4 MiB writers still require exactly one success and three quota refusals, and total stored bytes must stay within the original cap. No quota or lock deadline was increased."
+  },
+  "writePath": {
+    "producers": [
+      "RuntimeImageStore constructor maintenance",
+      "RuntimeImageStore.putMany"
+    ],
+    "ticketWriter": "RuntimeImageStore.withWriterAcquisitionGate",
+    "reader": "readOwnerFile plus the sorted live-ticket scan",
+    "cleanup": [
+      "writer finally removes its staging file and ticket",
+      "removeAgedPartials retires aged crash debris"
+    ],
+    "defaults": "Production callers retain the existing five-second wait; deputyCommand retains its explicit zero wait."
+  },
+  "checks": [
+    {
+      "name": "Exploratory original test repetitions",
+      "command": "bun test --timeout 60000 --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/runtime/runtimeImageStore.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "files": 30,
+        "passed": 960,
+        "failed": 0,
+        "assertions": 2460
+      },
+      "logs": [
+        "base-1.log",
+        "base-2.log",
+        "base-3.log",
+        "base-4.log",
+        "base-5.log",
+        "base-6.log",
+        "base-7.log",
+        "base-8.log",
+        "base-9.log",
+        "base-10.log",
+        "base-11.log",
+        "base-12.log",
+        "base-13.log",
+        "base-14.log",
+        "base-15.log",
+        "base-16.log",
+        "base-17.log",
+        "base-18.log",
+        "base-19.log",
+        "base-20.log",
+        "base-21.log",
+        "base-22.log",
+        "base-23.log",
+        "base-24.log",
+        "base-25.log",
+        "base-26.log",
+        "base-27.log",
+        "base-28.log",
+        "base-29.log",
+        "base-30.log"
+      ],
+      "adopted": false,
+      "note": "Diagnostic export; no immutable input manifest was captured for this batch."
+    },
+    {
+      "name": "Superseded publication probe",
+      "command": "bun test --timeout 60000 --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/runtime/runtimeImageStore.test.ts --test-name-pattern \"peer cannot discard\"",
+      "exitStatus": 1,
+      "counts": {
+        "files": 1,
+        "passed": 0,
+        "failed": 2,
+        "assertions": 6
+      },
+      "logs": [
+        "base-probe.log"
+      ],
+      "adopted": false,
+      "note": "Observer used a child-local descriptor path; disappearance assertions were inconclusive."
+    },
+    {
+      "name": "Superseded publication regression control",
+      "command": "bun test --timeout 60000 --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/runtime/runtimeImageStore.test.ts --test-name-pattern \"preserve a .* ticket until publication\"",
+      "exitStatus": 1,
+      "counts": {
+        "files": 1,
+        "passed": 0,
+        "failed": 2,
+        "assertions": 8
+      },
+      "logs": [
+        "red.log"
+      ],
+      "adopted": false,
+      "note": "Observer path corrected before adopting the later base control."
+    },
+    {
+      "name": "Superseded head publication probe",
+      "command": "bun test --timeout 60000 --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/runtime/runtimeImageStore.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "files": 1,
+        "passed": 32,
+        "failed": 3,
+        "assertions": 93
+      },
+      "logs": [
+        "initial-head/minimum-1.log"
+      ],
+      "adopted": false,
+      "note": "The observer path was process-local; corrected to the real filesystem path."
+    },
+    {
+      "name": "Corrected original-source publication control",
+      "command": "bun test --timeout 60000 --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/runtime/runtimeImageStore.test.ts --test-name-pattern \"preserve a .* ticket until publication\"",
+      "exitStatus": 1,
+      "counts": {
+        "files": 1,
+        "passed": 0,
+        "failed": 2,
+        "assertions": 8
+      },
+      "logs": [
+        "red-v2.log"
+      ],
+      "adopted": true,
+      "note": "Both held incomplete tickets were read successfully and then deleted by the peer before release."
+    },
+    {
+      "name": "Atomic-only implementation, minimum SQLite",
+      "command": "bun test --timeout 60000 --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/runtime/runtimeImageStore.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "files": 10,
+        "passed": 350,
+        "failed": 0,
+        "assertions": 1050
+      },
+      "logs": [
+        "head-v2/minimum-1.log",
+        "head-v2/minimum-2.log",
+        "head-v2/minimum-3.log",
+        "head-v2/minimum-4.log",
+        "head-v2/minimum-5.log",
+        "head-v2/minimum-6.log",
+        "head-v2/minimum-7.log",
+        "head-v2/minimum-8.log",
+        "head-v2/minimum-9.log",
+        "head-v2/minimum-10.log"
+      ],
+      "adopted": false,
+      "note": "Superseded by final code after the bundled-SQLite repetition exposed the cleanup interaction."
+    },
+    {
+      "name": "Atomic-only implementation, bundled SQLite",
+      "command": "bun test --timeout 60000 src/lib/runtime/runtimeImageStore.test.ts",
+      "exitStatus": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "counts": {
+        "files": 8,
+        "passed": 279,
+        "failed": 1,
+        "assertions": 838
+      },
+      "logs": [
+        "head-v2/native-1.log",
+        "head-v2/native-2.log",
+        "head-v2/native-3.log",
+        "head-v2/native-4.log",
+        "head-v2/native-5.log",
+        "head-v2/native-6.log",
+        "head-v2/native-7.log",
+        "head-v2/native-8.log"
+      ],
+      "adopted": false,
+      "note": "Eighth run exposed ENOENT when cleanup statted a partial after publication renamed it."
+    },
+    {
+      "name": "Original-source timeout control",
+      "command": "bun test --timeout 60000 --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/runtime/runtimeImageStore.test.ts --test-name-pattern \"preserve a .* ticket until publication\"",
+      "exitStatus": 1,
+      "counts": {
+        "files": 1,
+        "passed": 0,
+        "failed": 2,
+        "assertions": 8
+      },
+      "logs": [
+        "timeout-control.log"
+      ],
+      "adopted": true,
+      "note": "Diagnostic variant releases the publisher after deletion; both writers return exit 1 with runtime image writer lock timed out instead of quota exit 2."
+    },
+    {
+      "name": "Atomic-only cleanup failure control",
+      "command": "bun test --timeout 60000 --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/runtime/runtimeImageStore.test.ts --test-name-pattern \"tolerate publication during partial cleanup\"",
+      "exitStatus": 1,
+      "counts": {
+        "files": 1,
+        "passed": 0,
+        "failed": 1,
+        "assertions": 4
+      },
+      "logs": [
+        "cleanup-control.log"
+      ],
+      "adopted": true,
+      "note": "Forced scan-before-rename-before-stat ordering returns ENOENT without the cleanup fix."
+    },
+    {
+      "name": "Final minimum SQLite repetitions",
+      "command": "bun test --timeout 60000 --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/runtime/runtimeImageStore.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "files": 10,
+        "passed": 360,
+        "failed": 0,
+        "assertions": 1120
+      },
+      "logs": [
+        "head-v3/minimum-1.log",
+        "head-v3/minimum-2.log",
+        "head-v3/minimum-3.log",
+        "head-v3/minimum-4.log",
+        "head-v3/minimum-5.log",
+        "head-v3/minimum-6.log",
+        "head-v3/minimum-7.log",
+        "head-v3/minimum-8.log",
+        "head-v3/minimum-9.log",
+        "head-v3/minimum-10.log"
+      ],
+      "adopted": true
+    },
+    {
+      "name": "Final bundled SQLite repetitions",
+      "command": "bun test --timeout 60000 src/lib/runtime/runtimeImageStore.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "files": 10,
+        "passed": 360,
+        "failed": 0,
+        "assertions": 1120
+      },
+      "logs": [
+        "head-v3/native-1.log",
+        "head-v3/native-2.log",
+        "head-v3/native-3.log",
+        "head-v3/native-4.log",
+        "head-v3/native-5.log",
+        "head-v3/native-6.log",
+        "head-v3/native-7.log",
+        "head-v3/native-8.log",
+        "head-v3/native-9.log",
+        "head-v3/native-10.log"
+      ],
+      "adopted": true
+    },
+    {
+      "name": "Final exact CI repetition",
+      "command": "bun test --timeout 60000 --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/runtime/runtimeImageStore.test.ts --test-name-pattern '^concurrent runtime image writers' --rerun-each 10",
+      "exitStatus": 0,
+      "counts": {
+        "files": 1,
+        "passed": 40,
+        "failed": 0,
+        "assertions": 290
+      },
+      "logs": [
+        "head-v3/ci-repeat.log"
+      ],
+      "adopted": true,
+      "note": "The CI helper cardinality guard also passes: grep -q \"across 1 file\"."
+    },
+    {
+      "name": "Changed-file ESLint",
+      "command": "bun node_modules/eslint/bin/eslint.js src/lib/runtime/runtimeImageStore.ts src/lib/runtime/runtimeImageStore.test.ts src/lib/runtime/fixtures/runtimeImageStoreWriter.ts",
+      "exitStatus": 0,
+      "runs": 2,
+      "filesPerRun": 3,
+      "note": "One preliminary invocation and one final invocation; the final invocation checked the recorded source hashes.",
+      "logs": [
+        "eslint.log",
+        "head-v3/eslint-final.log"
+      ]
+    },
+    {
+      "name": "Workflow YAML parse",
+      "command": "bun -e 'const fs=await import(\"node:fs\"); const w=Bun.YAML.parse(fs.readFileSync(\".github/workflows/platform-tests.yml\", \"utf8\")); const step=w.jobs[\"minimum-sqlite\"].steps.find(s=>s.name===\"Run the state stores on it\"); if (!step) throw new Error(\"minimum SQLite step missing\"); fs.writeFileSync(process.argv[1],step.run)' \"$RUN/workflow-step.sh\"",
+      "exitStatus": 0,
+      "workflows": 1
+    },
+    {
+      "name": "Workflow shell syntax",
+      "command": "bash -n \"$RUN/workflow-step.sh\"",
+      "exitStatus": 0,
+      "steps": 1
+    },
+    {
+      "name": "Whitespace",
+      "command": "git diff --check",
+      "exitStatus": 0,
+      "changedFiles": 5
+    },
+    {
+      "name": "Publication privacy",
+      "command": "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json bun scripts/privacy-publication-gate.ts --require-known-values --paths .github/workflows/platform-tests.yml src/lib/runtime/runtimeImageStore.ts src/lib/runtime/runtimeImageStore.test.ts src/lib/runtime/fixtures/runtimeImageStoreWriter.ts evidence/runtime-image-quota.json",
+      "exitStatus": 0,
+      "files": 5,
+      "findings": 0,
+      "log": "privacy-files.log",
+      "runs": 2
+    },
+    {
+      "name": "Repository pre-commit checks",
+      "command": "git commit -m \"Publish runtime image writer tickets atomically\" -m \"Co-Authored-By: Delegatus <noreply@delegatus.invalid>\"",
+      "exitStatus": 0,
+      "stagedFiles": 5,
+      "lintedFiles": 3,
+      "note": "Plain commit invokes the installed repository hooks, including staged whitespace and ESLint."
+    },
+    {
+      "name": "Commit publication privacy",
+      "command": "bun run privacy:check",
+      "exitStatus": 0,
+      "findings": 0,
+      "log": "privacy-commits.log"
+    },
+    {
+      "name": "Integration preview",
+      "command": "git merge-tree --write-tree HEAD origin/main",
+      "exitStatus": 0,
+      "conflicts": 0,
+      "note": "The refreshed base adds an unrelated merge-queue change; none of the four tested source/workflow files moved."
+    }
+  ],
+  "finalAcceptedTests": {
+    "passed": 760,
+    "failed": 0,
+    "assertions": 2530,
+    "fullFileRuns": 20,
+    "focusedCiIterations": 10
+  },
+  "hostedAcceptance": {
+    "job": "Minimum macOS SQLite",
+    "runner": "Linux with the minimum macOS SQLite library",
+    "requiredAfterPublication": "The pipeline must open the PR and require the complete job, including its ten new contention repetitions, to pass on the published commit. Hosted results are not available during the builder stage."
+  }
+}

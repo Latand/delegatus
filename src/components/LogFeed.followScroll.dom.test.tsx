@@ -12,7 +12,7 @@ import { emptyStore } from "@/components/runtime/runtimeModel";
  * The conversation feed's follow scroll, and the pills it no longer has.
  *
  * The orchestrator dock and the board's conversation pane are the same shell:
- * both compose `LogFeed` over `TmuxComposer`. Reply-draft pills used to sit
+ * both compose `LogFeed` over `ConversationComposer`. Reply-draft pills used to sit
  * under the latest turn and pin above the composer (#1202); every ask now goes
  * through a decision form, so neither place renders a pill and nothing reads
  * drafts. The rest asserts how follow holds and releases.

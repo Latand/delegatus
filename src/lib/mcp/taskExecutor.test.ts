@@ -455,22 +455,62 @@ test("HTTP byte streaming keeps the complete wire bound across backpressure and 
 test("HTTP frame metadata has its own small decoding bound", async () => {
   for (const extra of [0, 1]) {
     const source = new PassThrough();
-    const completed: number[] = [], errors: Error[] = [];
+    const completed: number[] = [], errors: Error[] = [], sources: string[] = [];
     let body: ReadableStream<Uint8Array> | undefined;
     const wire = new TaskExecutorReplies(source, value => {
       if (value.http) body = value.http.body;
-    }, id => completed.push(id), error => errors.push(error));
+    }, id => completed.push(id), (error, source) => { errors.push(error); sources.push(source); });
     try {
       const header = (padding: number) => JSON.stringify({ id: 1, http: { status: 200, headers: [["x-fixture", "x".repeat(padding)]] } });
       source.write(header(16_384 - Buffer.byteLength(header(0)) + extra) + "\t\n");
       if (extra) {
         expect(body).toBeUndefined(); expect(completed).toEqual([]);
         expect(errors).toHaveLength(1); expect(errors[0]!.message).toContain("header exceeds its bound");
+        expect(sources).toEqual(["reply"]);
       } else {
         expect(await new Response(body).text()).toBe(""); expect(completed).toEqual([1]); expect(errors).toEqual([]);
       }
     } finally { wire.close(); source.destroy(); }
   }
+});
+
+for (const mode of ["parse", "continuation", "eof", "stream-error"] as const) test(`reply failure reports its ${mode} source`, async () => {
+  const source = new PassThrough();
+  let finish!: (value: { error: Error; source: string }) => void;
+  const failed = new Promise<{ error: Error; source: string }>(resolve => { finish = resolve; });
+  const wire = new TaskExecutorReplies(source, value => { if (value.http) void value.http.body.cancel(); }, () => {},
+    (error, source) => finish({ error, source }));
+  try {
+    if (mode === "parse") source.write("malformed-frame\n");
+    if (mode === "continuation") source.write('{"id":1,"http":{"status":200,"headers":[]}}\t\nmalformed-tail\n');
+    if (mode === "eof") source.end();
+    if (mode === "stream-error") source.destroy(Object.assign(new Error("private-stream-reason"), { code: "EPIPE" }));
+    const failure = await failed;
+    expect(failure.source).toBe(mode === "eof" ? "output-ended" : mode === "stream-error" ? "output-error" : "reply");
+    expect(failure.error).toBeInstanceOf(mode === "parse" || mode === "continuation" ? SyntaxError : Error);
+  } finally { wire.close(); source.destroy(); }
+});
+
+test("EOF invokes a throwing failure callback once in a real process", async () => {
+  const child = ownFixtureChild(Bun.spawn([process.execPath, "--eval", `
+    import { PassThrough } from "node:stream";
+    const { TaskExecutorReplies } = await import(${JSON.stringify(path.join(import.meta.dir, "taskExecutor.ts"))});
+    let calls = 0;
+    const sources = [];
+    process.once("uncaughtException", () => {
+      console.log(JSON.stringify({ calls, sources }));
+      process.exit(calls === 1 ? 0 : 1);
+    });
+    const source = new PassThrough();
+    new TaskExecutorReplies(source, () => {}, () => {}, (_error, failureSource) => {
+      calls++; sources.push(failureSource); throw new Error("fixture callback failed");
+    });
+    source.end();
+  `], { env: process.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" }));
+  const output = new Response(child.stdout).text(), errors = new Response(child.stderr).text();
+  expect(await child.exited).toBe(0);
+  expect(JSON.parse((await output).trim())).toEqual({ calls: 1, sources: ["output-ended"] });
+  expect(await errors).toBe("");
 });
 
 test("the real executor exposes HTTP headers while its worker holds the body tail", async () => {

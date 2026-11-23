@@ -1,3 +1,5 @@
+import { validAgentStateDisplay, agentStateActivity } from "@/lib/agentState/model";
+import { validAgentStateMetrics } from "@/lib/agentState/store";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { procBackend } from "@/lib/proc";
 import type { ProcBackend } from "@/lib/proc";
@@ -30,8 +32,6 @@ import {
 import { resourceWorkerRequestProblem } from "@/lib/resourceWorkerRequest";
 import { readViewerTree } from "@/lib/resourceViewerTree";
 import { overlayResourceSessionTitles } from "@/lib/session/titleProjection";
-import { readTranscriptHosts, type TranscriptHost, type TranscriptHostSnapshot } from "@/lib/agent/transcriptHost";
-import { captureTmuxAttachReferences, type TmuxAttachReference } from "@/lib/tmux";
 import { statePath } from "@/lib/configDir";
 import { recordHelperGroup } from "@/lib/helperLease";
 import { fsyncPath } from "@/lib/state/durableJson";
@@ -40,10 +40,10 @@ import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry, type ResourceSession, t
 
 /**
  * System memory pressure + per-agent-session memory attribution, the data
- * behind the rail resources block and its cleanup list. Each tmux pane whose
- * process tree contains a claude/codex CLI is one session; the tree sum is
- * what actually frees up on kill-pane — the MCP children (`npm exec`, node
- * servers) hanging off the CLI usually outweigh the CLI itself.
+ * behind the rail resources block and its cleanup list. Each structured host
+ * is one session; the tree sum is what actually frees up when it is killed —
+ * the MCP children (`npm exec`, node servers) hanging off the CLI usually
+ * outweigh the CLI itself.
  */
 
 /** Per-session process attribution is expensive on large transcript inventories.
@@ -190,11 +190,20 @@ function captureSystemMemory(proc: Pick<ProcBackend, "systemMemory"> = procBacke
   return system ? { ...system, capturedAt: new Date().toISOString() } : null;
 }
 
-/** What the kill path needs to take a snapshot row down safely, on whichever
-    transport owns it: for a pane, the stable `%N` pane id to address and the
-    pane pid to verify it against; for a structured host, the pid, start
-    identity, and boot epoch observed with it. */
-export type KillTargetRef = TmuxAttachReference | StructuredHostKillRef;
+/** The reference an observation persisted before pane hosts were retired
+    carries for a pane row. Nothing acts on it; it is kept so such an
+    observation still parses. */
+export interface StoredPaneKillRef {
+  tmuxServerPid: number;
+  tmuxServerStartIdentity: string | null;
+  paneId: string;
+  panePid: number;
+  paneStartIdentity: string | null;
+}
+
+/** What the kill path needs to take a snapshot row down safely: the pid, start
+    identity, and boot epoch observed with a structured host. */
+export type KillTargetRef = StoredPaneKillRef | StructuredHostKillRef;
 
 /**
  * One structured host as the registry knows it, assembled by the viewer and
@@ -203,6 +212,7 @@ export type KillTargetRef = TmuxAttachReference | StructuredHostKillRef;
  * a host's identity, role and ownership travels in this record.
  */
 export interface StructuredHostRecord {
+  agentState?: import("./agentState/model").AgentStateDisplay;
   /** Session key id (`<engine>:<sessionId>`), the row's stable target suffix. */
   id: string;
   engine: "claude" | "codex" | "copilot";
@@ -318,17 +328,8 @@ export function lastResourceTargetRefs(): Array<{ target: string; ref: KillTarge
   return globalStore.__llvLastResourceTargets?.map(({ target, ref }) => ({ target, ref: { ...ref } })) ?? [];
 }
 
-/** Snapshot pane ref recorded for `target`, or null when it was never listed
-    — or when the row it names is a structured host, which the tmux kill and
-    attach paths have nothing to do with. */
-export function allowedKillTarget(target: string): TmuxAttachReference | null {
-  if (target === "") return null;
-  const ref = globalStore.__llvResourceTargets?.get(target) ?? null;
-  return ref === null || isStructuredHostKillRef(ref) ? null : ref;
-}
-
-/** Drops `target` from the allowlist after a kill: the coordinates are free
-    for tmux to reuse, so a repeated POST must not pass the gate again. */
+/** Drops `target` from the allowlist after a kill, so a repeated POST does
+    not pass the gate again. */
 export function consumeKillTarget(target: string): void {
   if (globalStore.__llvResourceTargets?.delete(target)) {
     globalStore.__llvResourceTargetEpoch = (globalStore.__llvResourceTargetEpoch ?? 0) + 1;
@@ -345,38 +346,14 @@ export function allowedStructuredHostTarget(target: string): StructuredHostKillR
   return ref !== null && isStructuredHostKillRef(ref) ? ref : null;
 }
 
-/** The resources rail may list duplicate panes for cleanup. Only the host
-    elected by the shared resolver receives the transcript path and its UI
-    metadata, keeping observation aligned with path-addressed delivery. */
-export function canonicalResourceEntry(
-  snapshot: TranscriptHostSnapshot,
-  paneHosts: TranscriptHost[],
-  entriesByPath: Map<string, ResourceFileObservation>,
-): ResourceFileObservation | null {
-  for (const candidate of paneHosts) {
-    if (!candidate.primaryPath) continue;
-    const canonical = snapshot.canonicalFor(candidate.primaryPath);
-    if (canonical?.paneId === candidate.paneId && canonical.agentPid === candidate.agentPid) {
-      return entriesByPath.get(candidate.primaryPath) ?? null;
-    }
-  }
-  return null;
-}
-
-export function conflictingResourceHost(snapshot: TranscriptHostSnapshot, host: TranscriptHost): boolean {
-  return snapshot.conflicts?.some((conflict) => conflict.paneIds.includes(host.paneId)) ?? false;
-}
-
 function isoFromUnix(seconds: number): string {
   return new Date(seconds * 1000).toISOString();
 }
 
 export interface ResourceSnapshotDependencies {
   readFiles(fresh: boolean): Promise<ResourceFileObservation[]>;
-  readHosts(fresh: boolean, entries: ResourceFileObservation[], ppids: Map<number, number>): Promise<TranscriptHostSnapshot>;
-  proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory">;
+  proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory" | "resourceSystemMemory" | "resourcePpidMap" | "resourceProcessMemory">;
   bootEpoch?(): string | null;
-  captureAttachReferences(refs: ReadonlyArray<Pick<TmuxAttachReference, "tmuxServerPid" | "paneId" | "panePid">>): Map<string, TmuxAttachReference>;
   /** Structured-host records the registry holds. The viewer reads them and
       hands them to the collector; nothing here ever opens the registry. */
   readStructuredHosts?(fresh: boolean): Promise<StructuredHostRecord[]>;
@@ -401,9 +378,7 @@ async function readStructuredHostRecordsForCollection(): Promise<StructuredHostR
 
 const resourceSnapshotDependencies: ResourceSnapshotDependencies = {
   readFiles: readResourceFileSnapshot,
-  readHosts: (fresh, entries, ppids) => readTranscriptHosts(fresh, entries as FileEntry[], ppids),
   proc: procBackend,
-  captureAttachReferences: captureTmuxAttachReferences,
   readStructuredHosts: readStructuredHostRecordsForCollection,
   listAgentProcesses: agentProcesses,
   directoryExists: (directory) => existsSync(directory),
@@ -567,31 +542,21 @@ export async function buildResourceSnapshot(
   const startedAt = performance.now();
   const phases = emptyResourceBuildPhases();
   try {
-    const system = measureResourcePhase(phases, "systemMemory", () => captureSystemMemory(dependencies.proc));
+    const system = await measureResourcePhaseAsync(phases, "systemMemory", async () => {
+      const captured = dependencies.proc.resourceSystemMemory
+        ? await dependencies.proc.resourceSystemMemory()
+        : dependencies.proc.systemMemory();
+      return captured ? { ...captured, capturedAt: new Date().toISOString() } : null;
+    });
     const files = await measureResourcePhaseAsync(phases, "readFiles", () => dependencies.readFiles(fresh));
-    const ppids = measureResourcePhase(phases, "ppidMap", () => dependencies.proc.ppidMap());
-    const hosts = await measureResourcePhaseAsync(phases, "readHosts", () => dependencies.readHosts(fresh, files, ppids));
+    const ppids = await measureResourcePhaseAsync(phases, "ppidMap", () => dependencies.proc.resourcePpidMap?.() ?? Promise.resolve(dependencies.proc.ppidMap()));
     const structured = await measureResourcePhaseAsync(phases, "readHosts", () => structuredHostTrees(fresh, ppids, dependencies));
     const sessions: ResourceSession[] = [];
     const byPath = new Map(files.map((entry) => [entry.path, entry]));
-    const byPane = new Map<string, TranscriptHost[]>();
-    for (const host of hosts.hosts) {
-      const paneHosts = byPane.get(host.paneId);
-      if (paneHosts) paneHosts.push(host);
-      else byPane.set(host.paneId, [host]);
-    }
 
     /* Trees first, memory second: one processMemory() batch over the union
-       keeps the portable backend at a single `ps` spawn for every pane and
-       every structured host together. */
-    const paneTrees: Array<{ host: TranscriptHost; tree: number[]; paneHosts: TranscriptHost[] }> = [];
+       keeps the portable backend at a single `ps` spawn for every host. */
     const treePids = new Set<number>();
-    for (const paneHosts of byPane.values()) {
-      const host = paneHosts[0]!;
-      const tree = descendantPids(host.panePid, ppids);
-      paneTrees.push({ host, tree, paneHosts });
-      for (const pid of tree) treePids.add(pid);
-    }
     /* A host already counted inside another row's tree is that row's memory;
        listing it twice would double the total the footer shows. Registry
        records come first, so a recorded host always outranks a process the
@@ -602,7 +567,7 @@ export async function buildResourceSnapshot(
       structuredTrees.push(item);
       for (const pid of item.tree) treePids.add(pid);
     }
-    const memory = measureResourcePhase(phases, "processMemory", () => dependencies.proc.processMemory(treePids));
+    const memory = await measureResourcePhaseAsync(phases, "processMemory", () => dependencies.proc.resourceProcessMemory?.(treePids) ?? Promise.resolve(dependencies.proc.processMemory(treePids)));
     const treeMemory = (tree: number[]) => {
       let rssBytes = 0;
       let swapBytes = 0;
@@ -616,41 +581,13 @@ export async function buildResourceSnapshot(
     };
 
     const killRefs: Array<{ target: string; ref: KillTargetRef }> = [];
-    measureResourcePhase(phases, "attach", () => {
-      const attachRefs = dependencies.captureAttachReferences(paneTrees.map(({ host }) => ({
-        tmuxServerPid: host.tmuxServerPid,
-        panePid: host.panePid,
-        paneId: host.paneId,
-      })));
-      for (const { host, tree, paneHosts } of paneTrees) {
-        /* The resolver elects one canonical host for every transcript. A
-           duplicate pane stays visible for cleanup, though it carries no path
-           and cannot disagree with path-addressed delivery. */
-        const entry = canonicalResourceEntry(hosts, paneHosts, byPath);
-        sessions.push({
-          target: host.display,
-          panePid: host.panePid,
-          path: entry?.path ?? null,
-          engine: host.engine,
-          hostConflict: conflictingResourceHost(hosts, host),
-          title: entry?.title ?? null,
-          project: entry?.project || null,
-          activity: entry?.activity ?? null,
-          lastActiveAt: entry ? isoFromUnix(entry.mtime) : null,
-          cwd: host.cwd,
-          ...treeMemory(tree),
-          procCount: tree.length,
-        });
-        const ref = attachRefs.get(host.paneId);
-        if (ref) killRefs.push({ target: host.display, ref });
-      }
-    });
-
     for (const { record, tree } of structuredTrees) {
       const entry = record.path ? byPath.get(record.path) ?? null : null;
       const lastActiveAt = entry ? isoFromUnix(entry.mtime) : null;
       const target = STRUCTURED_TARGET_PREFIX + record.id;
+      const centralState = record.agentState;
       sessions.push({
+        ...(centralState ? { agentState: centralState } : {}),
         target,
         panePid: record.pid,
         kind: "structured",
@@ -658,7 +595,7 @@ export async function buildResourceSnapshot(
         engine: record.engine,
         title: record.title ?? entry?.title ?? null,
         project: entry?.project || null,
-        activity: entry?.activity ?? null,
+        activity: centralState ? agentStateActivity(centralState, record.turnBusy) : entry?.activity ?? null,
         lastActiveAt,
         cwd: record.cwd || null,
         ...treeMemory(tree),
@@ -768,11 +705,13 @@ process.on("SIGINT", () => { terminationRequested = true; });
 `;
 /** The worker runs as PID 1 in a private namespace. Its brief TERM grace lets
     child handlers finish while the kernel retains authority over every fork. */
-const RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT = `
+export const RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT = `
 token="$1"
 shift
 read host_pid _ < /proc/self/stat
 printf '%s %s %s\n' "$token" "$host_pid" "$(readlink /proc/self/ns/pid)"
+IFS= read -r acknowledgment || exit 125
+[ "$acknowledgment" = "$token" ] || exit 125
 exec "$@"
 `;
 const RESOURCE_OBSERVATION_MAX_SESSIONS = 10_000;
@@ -1138,7 +1077,8 @@ function validResourceSystem(value: unknown): boolean {
 function validResourceSession(value: unknown): boolean {
   if (!record(value) || !exactKeys(value, [
     "target", "panePid", "path", "engine", "title", "project", "activity", "lastActiveAt", "cwd", "rssBytes", "swapBytes", "procCount",
-  ], ["hostConflict", "kind", "model", "role", "conversationId", "stage", "ownership", "seat", "turnBusy"])) return false;
+  ], ["hostConflict", "kind", "model", "role", "conversationId", "stage", "ownership", "seat", "turnBusy", "agentState"])) return false;
+  if (value.agentState !== undefined && !validAgentStateDisplay(value.agentState)) return false;
   if (value.kind !== undefined && value.kind !== "tmux" && value.kind !== "structured") return false;
   if (value.ownership !== undefined
     && value.ownership !== "owned" && value.ownership !== "released" && value.ownership !== "orphaned") return false;
@@ -1165,7 +1105,8 @@ function validResourceSession(value: unknown): boolean {
 }
 
 function validResourcesPayload(value: unknown): value is ResourcesPayload {
-  if (!record(value) || !exactKeys(value, ["system", "sessions"]) || !validResourceSystem(value.system) || !Array.isArray(value.sessions)) return false;
+  if (!record(value) || !exactKeys(value, ["system", "sessions"], ["agentState"]) || !validResourceSystem(value.system) || !Array.isArray(value.sessions)) return false;
+  if (value.agentState !== undefined && !validAgentStateMetrics(value.agentState)) return false;
   return value.sessions.length <= RESOURCE_OBSERVATION_MAX_SESSIONS && value.sessions.every(validResourceSession);
 }
 
@@ -1496,6 +1437,16 @@ async function collectResourcesInWorker(
      before the deadline below would have ended it. */
   recordHelperGroup("resource-collector", worker);
   return new Promise<CollectedResources>((resolve, reject) => {
+    let requestSent = false;
+    const sendWorkerRequest = () => {
+      if (requestSent) return;
+      requestSent = true;
+      try {
+        worker.stdin.end(containmentRequested ? `${containmentToken}\n${request}` : request);
+      } catch (error) {
+        onStdinError(error instanceof Error ? error : new Error(String(error)));
+      }
+    };
     const pid = worker.pid;
     const expectedIdentity = typeof pid === "number" ? processRuntime.processIdentity(pid) : null;
     const groupEstablished = typeof pid === "number"
@@ -2027,6 +1978,9 @@ async function collectResourcesInWorker(
       containmentMembershipEmpty = false;
       namespaceScanComplete = true;
       retainLiveContainmentMembers();
+      // Keep the namespace root alive until its kernel identity is proven.
+      // Only then can a fast worker consume its request and finish.
+      sendWorkerRequest();
       return true;
     };
     if (!containmentRequested && !containmentProven) {
@@ -2325,10 +2279,10 @@ async function collectResourcesInWorker(
         error,
       });
     };
+    worker.stdin.once("error", onStdinError);
     worker.stdout.on("data", onStdout);
     worker.stderr.on("data", onStderr);
-    worker.stdin.once("error", onStdinError);
-    worker.stdin.end(request);
+    if (!containmentRequested) sendWorkerRequest();
   });
 }
 
@@ -2487,7 +2441,8 @@ export function createResourcesReader(
     workerProcessRuntime?: ResourceWorkerProcessRuntime;
   } = {},
 ): ResourcesReader {
-  const inProcess = options.inProcess ?? process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS === "1";
+  // The worker requires Linux kernel containment. Other platforms collect in the Viewer.
+  const inProcess = options.inProcess ?? (process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS === "1" || process.platform !== "linux");
   const collectorId = options.collectorId ?? (inProcess
     ? `in-process:${process.pid}:${crypto.randomUUID()}`
     : `worker:${process.pid}:${crypto.randomUUID()}`);
@@ -2669,6 +2624,10 @@ export async function readResourcesWithDiagnostic(fresh = false, options: Resour
   }
   const read = withViewerSection(await resourcesReader().read(fresh, options));
   /* Loaded here, never by the collector worker that imports this module. */
-  const [{ readDiskPressure }, { worktreeSweepStatus }, { tempSweepStatus }, { releaseRetentionStatus }] = await Promise.all([import("@/lib/state/diskPressure"), import("@/lib/pipelines/worktreeSweep"), import("@/lib/tempSweep"), import("@/lib/selfUpdate/retention")]);
-  return { ...read, payload: { ...read.payload, diskPressure: await readDiskPressure(), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus(), releaseRetention: releaseRetentionStatus() } };
+  const [{ readDiskPressure }, { worktreeSweepStatus }, { tempSweepStatus }, { releaseRetentionStatus }, { filesResponseSweepStatus }] = await Promise.all([import("@/lib/state/diskPressure"), import("@/lib/pipelines/worktreeSweep"), import("@/lib/tempSweep"), import("@/lib/selfUpdate/retention"), import("@/lib/scanner/filesResponseResults")]);
+  const { readAgentStateMetrics } = await import("@/lib/agentState/store");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  const { servingAgentStateService } = await import("@/lib/agentState/service");
+  servingAgentStateService()?.observeResourceSample(read.payload.sessions, Date.parse(read.payload.sessionsCapturedAt ?? ""));
+  return { ...read, payload: { ...read.payload, agentState: readAgentStateMetrics(agentRegistry()), diskPressure: await readDiskPressure(), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus(), releaseRetention: releaseRetentionStatus(), filesResponseSweep: filesResponseSweepStatus() } };
 }

@@ -37,7 +37,7 @@ export function attachmentsAreOrphaned(outcome: AttachmentDeliveryOutcome): bool
 
 /**
  * The delivery fate of a structured send, as its own result reports it. The
- * uncertainty test is the one `flows/engine.ts` applies before it dares call a
+ * uncertainty test is the one a relay applies before it dares call a
  * relayed send failed: a transport failure proves nothing about what the host
  * did with the command, and an `uncertain` receipt is the host saying so
  * itself.

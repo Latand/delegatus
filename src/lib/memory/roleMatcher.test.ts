@@ -88,44 +88,43 @@ test("a signature holding only an oversized lesson caches its empty matcher", ()
   }
 }, 30_000);
 
-test("compilation of 2000 long lessons is bounded and happens once per signature", () => {
-  store(Array.from({ length: 2000 }, (_, index) => longLesson(index)));
+test("building the matcher compiles no pattern, and a prompt compiles only the lessons it quotes, once per signature", () => {
+  const lessons = Array.from({ length: 2000 }, (_, index) => longLesson(index));
+  store(lessons);
   const NativeRegExp = globalThis.RegExp;
-  const compilations: { sourceChars: number; ms: number }[] = [];
+  const compilations: { sourceChars: number }[] = [];
   class MeasuredRegExp extends NativeRegExp {
     constructor(pattern: string | RegExp, flags?: string) {
-      const started = performance.now();
       super(pattern, flags);
-      compilations.push({ sourceChars: this.source.length, ms: performance.now() - started });
+      compilations.push({ sourceChars: this.source.length });
     }
   }
   globalThis.RegExp = MeasuredRegExp as typeof RegExp;
   try {
-    const started = performance.now();
-    // Build the signature's matcher without executing it against prompt text.
+    // The signature's matcher is an index of words: nothing is compiled for it.
     expect(withoutStoredLessonsIn(null)).toBeNull();
-    const matcherBuildMs = performance.now() - started;
-    const compileCount = compilations.length;
-    expect(compileCount).toBeGreaterThan(0);
-    expect(compilations.every(compile => compile.sourceChars <= 32_000)).toBe(true);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       expect(withoutStoredLessons("ordinary launch instructions")).toBe("ordinary launch instructions");
       expect(withoutStoredLessonsIn(null)).toBeNull();
     }
-    expect(compilations).toHaveLength(compileCount);
-    console.info(JSON.stringify({ lessonMatcherCompilation: { lessons: 2000, compileCount,
-      maxSourceChars: Math.max(...compilations.map(compile => compile.sourceChars)),
-      regexCompileMs: Number(compilations.reduce((sum, compile) => sum + compile.ms, 0).toFixed(2)),
-      matcherBuildMs: Number(matcherBuildMs.toFixed(2)) } }));
+    expect(compilations).toHaveLength(0);
+    const prompt = `first ${lessons[3]}\nthen ${lessons[1500].toUpperCase()}; and ${lessons[77]}`;
+    const withheld = `first ${WITHHELD_LESSON}\nthen ${WITHHELD_LESSON}; and ${WITHHELD_LESSON}`;
+    for (let attempt = 0; attempt < 5; attempt += 1) expect(withoutStoredLessons(prompt)).toBe(withheld);
+    expect(compilations).toHaveLength(3);
+    expect(compilations.every(compile => compile.sourceChars <= 32_000)).toBe(true);
+    // Words of many lessons, never one lesson's words in order: nothing more is compiled.
+    expect(withoutStoredLessons(lessons.slice(0, 50).map(lesson => lesson.split(" ").reverse().join(" ")).join("\n"))).not.toContain(WITHHELD_LESSON);
+    expect(compilations).toHaveLength(3);
     store(["The signature changed after another operation completed"]);
-    withoutStoredLessonsIn(null);
-    expect(compilations.length).toBeGreaterThan(compileCount);
+    expect(withoutStoredLessons("x the SIGNATURE changed after another operation completed y")).toBe(`x ${WITHHELD_LESSON} y`);
+    expect(compilations).toHaveLength(4);
   } finally {
     globalThis.RegExp = NativeRegExp;
   }
 }, 30_000);
 
-test("an engine-refused source is split out, skipped and cached without repeated compile attempts", () => {
+test("an engine-refused lesson is skipped and counted once, without repeated compile attempts, and a complete check refuses", () => {
   const rejected = "EngineRejected verification required";
   const ordinary = "Preserve the receipt until its owning operation has completed";
   store([rejected, ordinary]);
@@ -142,15 +141,37 @@ test("an engine-refused source is split out, skipped and cached without repeated
   globalThis.RegExp = RefusingRegExp as typeof RegExp;
   try {
     expect(withoutStoredLessons(ordinary)).toBe(WITHHELD_LESSON);
-    const firstAttempts = attempts;
-    expect(firstAttempts).toBeGreaterThan(2);
+    expect(attempts).toBe(1);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       expect(withoutStoredLessons(rejected)).toBe(rejected);
       expect(withoutStoredLessonsIn({ ordinary })).toEqual({ ordinary: WITHHELD_LESSON });
     }
-    expect(attempts).toBe(firstAttempts);
+    expect(attempts).toBe(2);
     expect(warning).toHaveBeenCalledTimes(1);
     expect(warning.mock.calls[0]).toEqual([expect.stringContaining("skipped 1")]);
+    // A caller that must cover every lesson is refused once one could not be compiled.
+    expect(() => withoutStoredLessonsIn({ ordinary }, { requireComplete: true })).toThrow(expect.objectContaining({ code: "LESSON_PRIVACY_UNAVAILABLE" }));
+  } finally {
+    globalThis.RegExp = NativeRegExp;
+    warning.mockRestore();
+  }
+});
+
+test("a complete check refuses in the same call that first meets a lesson the engine cannot compile", () => {
+  const rejected = "EngineRejected verification required";
+  store([rejected]);
+  const NativeRegExp = globalThis.RegExp;
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  class RefusingRegExp extends NativeRegExp {
+    constructor(pattern: string | RegExp, flags?: string) {
+      if (String(pattern).includes("EngineRejected")) throw new SyntaxError("fixture engine size limit");
+      super(pattern, flags);
+    }
+  }
+  globalThis.RegExp = RefusingRegExp as typeof RegExp;
+  try {
+    expect(withoutStoredLessonsIn({ text: "nothing of the kind" }, { requireComplete: true })).toEqual({ text: "nothing of the kind" });
+    expect(() => withoutStoredLessonsIn({ text: `quoted: ${rejected}` }, { requireComplete: true })).toThrow(expect.objectContaining({ code: "LESSON_PRIVACY_UNAVAILABLE" }));
   } finally {
     globalThis.RegExp = NativeRegExp;
     warning.mockRestore();

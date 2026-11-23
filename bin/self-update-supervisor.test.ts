@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   createLauncherRecord,
@@ -88,6 +89,34 @@ describe("installedRelease", () => {
   test("an unreadable pointer falls back to the package root", () => {
     writeFileSync(pointer, "{not json");
     expect(installedRelease(pointer, checkout).dir).toBe(checkout);
+  });
+
+  test.skipIf(process.platform === "win32")("a stalled Git revision probe is killed under an independent parent watchdog", async () => {
+    const shim = join(root, "slow-git"); mkdirSync(shim, { recursive: true });
+    const executable = join(shim, "git");
+    const childPidFile = join(shim, "child.pid");
+    writeFileSync(executable, `#!/bin/sh\nprintf '%s' "$$" > ${JSON.stringify(childPidFile)}\nexec /bin/sleep 30\n`); chmodSync(executable, 0o700);
+    const moduleUrl = pathToFileURL(join(process.cwd(), "bin", "self-update-supervisor.mjs")).href;
+    const script = `
+      const { headRevision } = await import(${JSON.stringify(moduleUrl)});
+      if (headRevision(${JSON.stringify(checkout)}, 100) !== null) process.exit(11);
+      const pid = Number(await Bun.file(${JSON.stringify(childPidFile)}).text());
+      try { process.kill(pid, 0); process.exit(12); } catch { process.exit(0); }
+    `;
+    const child = spawn(process.execPath, ["--bun", "-e", script], {
+      detached: true, env: { ...process.env, PATH: `${shim}:${process.env.PATH ?? ""}` }, stdio: "ignore",
+    });
+    let timedOut = false;
+    const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
+      const watchdog = setTimeout(() => {
+        timedOut = true;
+        if (child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already exited */ } }
+      }, 2000);
+      child.once("error", () => { clearTimeout(watchdog); resolve({ code: 127, signal: null }); });
+      child.once("close", (code, signal) => { clearTimeout(watchdog); resolve({ code, signal }); });
+    });
+    expect(timedOut).toBe(false);
+    expect(result).toEqual({ code: 0, signal: null });
   });
 
   test("a package manifest supplies the revision when the package root has no checkout", () => {

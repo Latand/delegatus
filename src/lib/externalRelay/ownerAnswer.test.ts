@@ -20,11 +20,21 @@ test("relay_answer binds a live owner conversation, replaces parts and closes af
   const file=path.join(handoff,"report.md");fs.writeFileSync(file,"# Report");
   const entry=openOwnerAnswer(relay.id,request,root,["private-credential"],()=>true);
   try {
+    expect(entry.parts().format).toBe("rich_markdown");
     expect(await relayAnswerOp("conversation_other",{format:"rich_markdown"})).toBeNull();
     expect(await relayAnswerOp("conversation_owner_parts",{format:"rich_markdown",buttons:[[{text:"Open",url:"https://example.com/"}]]})).toMatchObject({format:"rich_markdown",buttons:[[{text:"Open"}]]});
     expect(entry.parts().format).toBe("rich_markdown");
     await relayAnswerOp("conversation_owner_parts",{format:"plain"});
     expect(entry.parts().buttons).toEqual([]);
+    expect(entry.parts().format).toBe("plain");
+    expect(await relayAnswerOp("conversation_owner_parts",{text:"Chat reply"})).toMatchObject({text_chars:10,format:"rich_markdown"});
+    expect(entry.parts().text).toBe("Chat reply");
+    await expect(relayAnswerOp("conversation_owner_parts",{text:""})).rejects.toMatchObject({code:"invalid_answer_parts"});
+    expect(entry.parts().text).toBe("Chat reply");
+    // A parts-only replacement uses the same default as a fresh answer.
+    await relayAnswerOp("conversation_owner_parts",{buttons:[[{text:"Open",url:"https://example.com/"}]]});
+    expect(entry.parts().format).toBe("rich_markdown");
+    expect(entry.parts().text).toBeUndefined();
     await expect(relayAnswerOp("conversation_owner_parts",{buttons:[[{text:"No",url:"https://localhost"}]]})).rejects.toMatchObject({code:"button_invalid"});
     expect(relayAnswerSchema.safeParse({attachments:Array(5).fill({path:"/file",kind:"document"})}).success).toBe(false);
     await relayAnswerOp("conversation_owner_parts",{attachments:[{path:file,kind:"document"}]});
@@ -64,6 +74,8 @@ test("owner mentions keep leading source whitespace and refuse redaction that wo
       await expect(relayAnswerOp("conversation_owner_mentions", { format: "rich_markdown", mentions: invalid })).rejects.toMatchObject({ code: "malformed", status: 400 });
     }
     await expect(relayAnswerOp("conversation_owner_mentions", { format: "plain", mentions })).rejects.toMatchObject({ code: "malformed", status: 400 });
+    await relayAnswerOp("conversation_owner_mentions", { mentions });
+    expect(entry.parts()).toMatchObject({ format: "rich_markdown", mentions });
     await relayAnswerOp("conversation_owner_mentions", { format: "rich_markdown", mentions });
     expect(ownerAnswer("  😀 Person", request, owner)).toMatchObject({ text: "  😀 Person", mentions });
     for (const text of ["[ignore]", "[handoff]"])

@@ -1,14 +1,86 @@
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { ApplyController } from "./apply";
 import { activeDrain } from "./drain";
 import type { LauncherRecord } from "./launcher";
-const root = mkdtempSync("/var/tmp/install-apply-");
+import { writeLauncherRefusal } from "../../../bin/launcher-deadline.mjs";
+const root = mkdtempSync(join(tmpdir(), "install-apply-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const record = (dir: string) => ({ launcher: { pid: 5, startIdentity: "7", relaunch: 1, state: "healthy" },
   releasePointer: join(dir, "pointer.json"), requestFile: join(dir, "request-install.json"),
   web: { state: "healthy", revision: "aaaaaaa" }, runtimeHost: { state: "healthy", revision: "aaaaaaa" } }) as LauncherRecord;
+
+test.each(["new", "legacy"])("a late healthy target keeps the %s switch overrun after a cold Viewer start", kind => {
+  const dir = mkdtempSync(join(root, "overrun-")), r = record(dir), c = new ApplyController(dir);
+  const switchedAt = "2026-11-05T05:25:40.047Z";
+  const deadline = Date.parse(switchedAt) + 600_000;
+  writeFileSync(join(dir, "deployments.json"), JSON.stringify([{ deploymentId: "bounded-deploy", idempotencyKey: "bounded-request", phase: "building", terminal: false, error: null, revisionNumber: 1 }]));
+  c.begin(r, "a".repeat(40), "seat", "bounded-deploy");
+  c.patch({ state: "switching", switchedAt, ...(kind === "new" ? { switchDeadlineAt: deadline } : {}) });
+  if (kind === "legacy") {
+    const intent = JSON.parse(readFileSync(join(dir, "apply.json"), "utf8"));
+    delete intent.switchDeadlineAt;
+    writeFileSync(join(dir, "apply.json"), JSON.stringify(intent));
+  }
+  const cold = new ApplyController(dir);
+  const healthy = { ...r, launcher: { ...r.launcher, requestId: c.current!.requestId } };
+  expect(cold.observe(healthy, true, deadline + 1)).toBe("failed");
+  const ledger = JSON.parse(readFileSync(join(dir, "deployments.json"), "utf8"))[0];
+  expect(ledger).toMatchObject({ phase: "failed", terminal: true, error: "The launcher switch exceeded its 10 minute deadline" });
+  expect(new ApplyController(dir).current).toMatchObject({ state: "failed", switchOverrun: ledger.error });
+  expect(cold.observe(healthy, true, deadline + 100)).toBeNull();
+});
+
+test("a switch expiry is preserved by another dispatch and health before expiry succeeds", () => {
+  const dir = mkdtempSync(join(root, "deadline-")), r = record(dir), c = new ApplyController(dir);
+  const switchedAt = "2026-11-05T05:25:40.047Z";
+  c.begin(r, "a".repeat(40), "operator");
+  c.patch({ state: "switching", switchedAt });
+  const deadline = c.current!.switchDeadlineAt;
+  expect(deadline).toBe(Date.parse(switchedAt) + 600_000);
+  c.patch({ state: "switching", switchedAt: "2026-11-05T07:49:55.125Z" });
+  expect(c.current!.switchDeadlineAt).toBe(deadline);
+  expect(c.current!.switchedAt).toBe(switchedAt);
+  expect(c.observe({ ...r, launcher: { ...r.launcher, requestId: c.current!.requestId } }, true, deadline! - 1)).toBe("done");
+});
+
+test("a timely launcher receipt remains successful when the Viewer reconciles after the switch deadline", () => {
+  const dir = mkdtempSync(join(root, "late-observer-")), r = record(dir), c = new ApplyController(dir);
+  const switchedAt = "2026-11-05T05:25:40.047Z", deadline = Date.parse(switchedAt) + 600_000;
+  c.begin(r, "a".repeat(40), "operator"); c.patch({ state: "switching", switchedAt });
+  writeFileSync(`${r.requestFile}.result.json`, JSON.stringify({ requestId: c.current!.requestId, target: c.current!.target,
+    state: "done", completedAt: new Date(deadline - 1).toISOString() }));
+  const cold = new ApplyController(dir);
+  expect(cold.observe({ ...r, launcher: { ...r.launcher, requestId: c.current!.requestId } }, true, deadline + 600_000)).toBe("done");
+  expect(cold.current?.switchOverrun).toBeUndefined();
+});
+
+test("a cold refused recovery releases its interrupted hold after the timely target serves", () => {
+  const dir = mkdtempSync(join(root, "refused-recovery-")), r = record(dir), c = new ApplyController(dir);
+  r.web.revision = r.runtimeHost.revision = "bbbbbbb";
+  writeFileSync(r.releasePointer, JSON.stringify({ sha: "b".repeat(40) }));
+  c.begin(r, "a".repeat(40), "operator"); c.patch({ requestId: "timely-recovery" }); c.send(r);
+  c.patch({ switchCompletedAt: new Date(Date.parse(c.current!.switchedAt!) + 1).toISOString() });
+  const drain = join(dir, "auto-drain.json"), held = readFileSync(drain, "utf8");
+  writeLauncherRefusal({ request: r.requestFile, trial: r.requestFile.replace("request-", "trial-") }, {
+    requestId: c.current!.requestId, target: c.current!.target, rollbackPointer: c.current!.rollbackPointer,
+    previousEntry: join(dir, "bin/cli.mjs"), state: "starting",
+  }, "The launcher startup exceeded its 10 minute deadline");
+  // The apply write precedes admission release. Restore that exact owned hold
+  // to exercise a cold reader at the interrupted cleanup checkpoint.
+  writeFileSync(drain, held);
+  const cold = new ApplyController(dir), bytes = readFileSync(join(dir, "apply.json"), "utf8");
+  const serving = { ...r, web: { ...r.web, revision: "aaaaaaa" }, runtimeHost: { ...r.runtimeHost, revision: "aaaaaaa" } };
+  cold.observe(serving, true);
+  expect(activeDrain(drain)).toBeNull();
+  expect(readFileSync(join(dir, "apply.json"), "utf8")).toBe(bytes);
+  expect(cold.current).toMatchObject({ state: "failed", detail: "The launcher startup exceeded its 10 minute deadline" });
+  writeFileSync(drain, JSON.stringify({ ...JSON.parse(held), id: "new-owner" }));
+  cold.observe(serving, true);
+  expect(activeDrain(drain)?.id).toBe("new-owner");
+});
 test("one apply survives the Viewer and settles both processes", () => {
   const dir = mkdtempSync(join(root, "success-")); const r = record(dir);
   const raw = "{\"previous\":true}\n"; writeFileSync(r.releasePointer, raw);

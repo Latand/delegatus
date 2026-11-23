@@ -720,6 +720,246 @@
       "intervalHours": 12,
       "fits": true,
       "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "lang": "en",
+      "theme": "light",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "lang": "en",
+      "theme": "dark",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "lang": "uk",
+      "theme": "light",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "read-error",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "lang": "en",
+      "theme": "light",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "lang": "en",
+      "theme": "dark",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "lang": "uk",
+      "theme": "light",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 1000,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
+    },
+    {
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "state": "read-error-known",
+      "reachable": true,
+      "intervalHours": 12,
+      "fits": true,
+      "pageErrors": []
     }
   ]
 }

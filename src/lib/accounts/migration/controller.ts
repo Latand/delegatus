@@ -2,17 +2,16 @@ import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { activeClaudeAccountId, setActiveClaudeAccount } from "@/lib/accounts/claude";
-import { activeCodexAccountId, codexAccountsMutationLocked, codexLoginPaneStatus, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
+import { activeCodexAccountId, codexAccountsMutationLocked, listCodexAccounts, setActiveCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { agentRegistry, RegistryWriterBusyError, type AgentRegistry } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
-import { readTranscriptHosts } from "@/lib/agent/transcriptHost";
 import { yieldToRuntime } from "@/lib/cooperative";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { loadFlows, reconcileFlowConversationOwnershipCooperatively } from "@/lib/flows/store";
+import { loadFlows } from "@/lib/flows/store";
 import { reconcileHandoffConversationOwnershipCooperatively } from "@/lib/handoffLineage";
 import { listFilesWithProjectCatalog, reconcileFileControllers } from "@/lib/scanner";
 import { persistedFileScanSnapshot } from "@/lib/scanner/scanCache";
@@ -24,42 +23,108 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { loadTasksForList, mutateTasks } from "@/lib/tasks/store";
 import { waitForStateLock } from "@/lib/state/lockWait";
-import { reconcileWorkflowConversationOwnershipCooperatively } from "@/lib/workflows/store";
-import { paneInfo } from "@/lib/tmux";
 import { spawnViewerResidentWorker } from "@/lib/viewerWorkerLifecycle";
 
 import { reconcileMigrationInventory, reconcileMigrations, type HeldDeliveryPort } from "./coordinator";
 import { createMigrationDeliveryPort } from "./deliveryPort";
 export { createMigrationDeliveryPort } from "./deliveryPort";
-import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, registerAccountMigrationTick } from "./controllerSignal";
+import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, HELD_DRAIN_PASS_BUDGET_MS, registerAccountMigrationTick } from "./controllerSignal";
 import type { SuccessorProviderPort } from "./contracts";
 import { RegisteredSuccessorProvider } from "./provider";
 import { QuotaController } from "./quotaController";
-import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
+import { safeProviderDiagnostic } from "./safeHistoryCopy";
+import { requestStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
+import { withoutOperationLease } from "@/lib/operationLease";
 
 const INITIAL_INVENTORY_DELAY_MS = 1_000;
 const INVENTORY_WORKER_RESTART_MS = 1_000;
 
 const deliveryPort = createMigrationDeliveryPort();
 
+type QuotaPort = Pick<QuotaController, "tick">;
+type QuotaOutcome = PromiseSettledResult<void>;
+interface QuotaTickOwner {
+  outcomes: (QuotaOutcome | null)[];
+  settled: boolean;
+  listeners: Set<() => void>;
+}
+const quotaHost = process as typeof process & {
+  __llvMigrationQuotaOwners?: WeakMap<AgentRegistry, WeakMap<QuotaPort, QuotaTickOwner>>;
+};
+const quotaOwners = quotaHost.__llvMigrationQuotaOwners ??= new WeakMap();
+
+/** One retained owner per registry/port. Cycle observers detach at their
+ * deadline; a stalled probe retains no expired cycle continuations. */
+function ownedQuotaTick(registry: AgentRegistry, quota: QuotaPort): QuotaTickOwner {
+  let owners = quotaOwners.get(registry);
+  if (!owners) quotaOwners.set(registry, owners = new WeakMap());
+  const running = owners.get(quota);
+  if (running) return running;
+  const owner: QuotaTickOwner = { outcomes: [null, null, null], settled: false, listeners: new Set() };
+  owners.set(quota, owner);
+  void withoutOperationLease(() => Promise.allSettled(
+    (["claude", "codex", "copilot"] as const).map((engine, index) =>
+      Promise.resolve().then(() => withViewerOperation("controller.account-quota", () => quota.tick(engine)))
+        .then(value => { owner.outcomes[index] = { status: "fulfilled", value }; return value; }, error => {
+          owner.outcomes[index] = { status: "rejected", reason: error };
+          console.error("[account migration controller] quota tick failed", { engine, error: safeProviderDiagnostic(error) });
+          throw error;
+        })),
+  )).then(outcomes => {
+    owner.outcomes = outcomes;
+    owner.settled = true;
+    for (const notify of owner.listeners) notify();
+    owner.listeners.clear();
+    if (owners!.get(quota) === owner) owners!.delete(quota);
+  });
+  return owner;
+}
+
 export async function reconcileAccountMigrationCycle(
   registry: AgentRegistry,
   quota: Pick<QuotaController, "tick">,
   provider: SuccessorProviderPort = new RegisteredSuccessorProvider(),
   delivery: HeldDeliveryPort = deliveryPort,
+  passBudgetMs = HELD_DRAIN_PASS_BUDGET_MS,
 ): Promise<void> {
+  const startedAt = performance.now();
+  const remaining = () => Math.max(0, passBudgetMs - (performance.now() - startedAt));
+  if (!remaining()) return;
   try {
     // Reservation writes and startup already compact their own evidence.
     // An idle controller must not open a whole-registry mutation for hygiene.
-    /* Quota ticks run alongside migration reconciliation so a slow migration
-       cannot delay fresh readings. Observe every rejection immediately and
-       settle all peers before releasing the controller's running fence. */
-    const outcomes = await Promise.allSettled([
-      quota.tick("claude"), quota.tick("codex"), quota.tick("copilot"),
-      reconcileMigrations(provider, delivery, registry),
-    ]);
-    const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
-    await kickStructuredDeliveryQueue();
+    const quotaOwner = ownedQuotaTick(registry, quota);
+    let quotaDone!: () => void;
+    const quotaAcknowledgement = new Promise<void>(resolve => {
+      quotaDone = resolve;
+      if (quotaOwner.settled) resolve();
+      else quotaOwner.listeners.add(resolve);
+    });
+    let acknowledged = false;
+    let migrationOutcomes: QuotaOutcome[] = [];
+    const migration = Promise.allSettled([
+      reconcileMigrations(provider, delivery, registry, { passBudgetMs: remaining() }),
+    ]).then(outcomes => {
+      migrationOutcomes = outcomes;
+      if (acknowledged) for (const outcome of outcomes) if (outcome.status === "rejected") {
+        console.error("[account migration controller] late reconciliation failed", safeProviderDiagnostic(outcome.reason));
+      }
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([Promise.all([quotaAcknowledgement, migration]), new Promise<void>(resolve => {
+        timer = setTimeout(resolve, remaining());
+      })]);
+    } finally {
+      acknowledged = true;
+      quotaOwner.listeners.delete(quotaDone);
+      if (timer) clearTimeout(timer);
+    }
+    const failures = [...quotaOwner.outcomes, ...migrationOutcomes]
+      .filter((outcome): outcome is PromiseRejectedResult => outcome?.status === "rejected");
+    // Delivery owns its wake and deadline. A migration pass cannot join the
+    // lifetime of the general queue while more admissions keep it busy.
+    await withoutOperationLease(() => requestStructuredDeliveryQueue(remaining()));
     // A busy peer must not hide another peer's failure.
     const failure = failures.find(outcome => !reconciliationWriterBusy(outcome.reason)) ?? failures[0];
     if (failure) throw failure.reason;
@@ -104,17 +169,11 @@ export async function reconcileAccountLogins(): Promise<void> {
   const mutationLocked = codexAccountsMutationLocked();
   const runtime = managedCodexRuntime();
   await Promise.all(listCodexAccounts().map(async (account) => {
-    if (account.kind === "managed") {
-      if (account.loginPane && !mutationLocked) setCodexAccountLoginPane(account.id, null);
-      if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
-      return;
-    }
-    /* Main's own device login (#2166) settles the way a managed one does. */
+    /* A login pane recorded by an older release names a terminal window that
+       no release opens any more; the record is dropped. Main's own device
+       login (#2166) settles the way a managed one does. */
+    if (account.loginPane && !mutationLocked) setCodexAccountLoginPane(account.id, null);
     if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
-    if (!account.loginPane) return;
-    const pane = await paneInfo(account.loginPane.paneId);
-    const status = codexLoginPaneStatus(account.authPresent, account.loginPane, pane);
-    if (status.clear && !mutationLocked) setCodexAccountLoginPane(account.id, null);
   }));
 }
 
@@ -140,8 +199,6 @@ export function accountControllerScan(
 export interface AccountMigrationControllerCyclePorts {
   scan: () => ReturnType<typeof listFilesWithProjectCatalog>;
   reconcileInventory: (registry: AgentRegistry, files: ControllerScan["files"], onTranscriptRead?: (pathname: string, complete: boolean) => void) => Promise<InventorySnapshot>;
-  reconcileFlowOwnership: (lookup: ConversationLookup) => Promise<void>;
-  reconcileWorkflowOwnership: (lookup: ConversationLookup) => Promise<void>;
   reconcileHandoffOwnership: (lookup: ConversationLookup) => Promise<void>;
   reconcileFiles: typeof reconcileFileControllers;
   reconcileRuntime: (registry: AgentRegistry, files: ControllerScan["files"]) => Promise<void>;
@@ -152,14 +209,13 @@ export interface AccountMigrationControllerCyclePorts {
 
 async function reconcileControllerRuntime(registry: AgentRegistry, files: ControllerScan["files"]): Promise<void> {
   await reconcileAccountLogins();
-  const transcriptHosts = await readTranscriptHosts(true, files);
   try {
-    await runReaperCycle({ registry, hosts: transcriptHosts.hosts, files });
+    await runReaperCycle({ registry, files });
   } catch (error) {
     console.error("[agent reaper] lifecycle reconciliation failed", error);
   }
   try {
-    const report = await runHeadlessProcessReaper({ hosts: transcriptHosts.hosts, flows: loadFlows() });
+    const report = await runHeadlessProcessReaper({ flows: loadFlows() });
     if (report.signaled > 0) console.warn(`[headless process reaper] terminated ${report.signaled} stale process group(s)`);
   } catch (error) {
     console.error("[headless process reaper] reconciliation failed", error);
@@ -198,8 +254,6 @@ const DEFAULT_CONTROLLER_CYCLE_PORTS: AccountMigrationControllerCyclePorts = {
   reconcileInventory: (registry, files, onTranscriptRead) => reconcileMigrationInventory(registry, files, {
     readOnlySnapshot: true, incrementalInventory: true, onTranscriptRead,
   }),
-  reconcileFlowOwnership: reconcileFlowConversationOwnershipCooperatively,
-  reconcileWorkflowOwnership: reconcileWorkflowConversationOwnershipCooperatively,
   reconcileHandoffOwnership: reconcileHandoffConversationOwnershipCooperatively,
   reconcileFiles: reconcileFileControllers,
   reconcileRuntime: reconcileControllerRuntime,
@@ -342,8 +396,6 @@ export class AccountMigrationController {
     // Ownership stores can change independently of the scanner. Their lookups
     // remain keyed and do not need an assembled registry snapshot.
     const inventoryLookup: ConversationLookup = this.registry;
-    await this.ports.reconcileFlowOwnership(inventoryLookup);
-    await this.ports.reconcileWorkflowOwnership(inventoryLookup);
     await this.ports.reconcileHandoffOwnership(inventoryLookup);
     await yieldToRuntime();
     // Flow/pipeline deadlines and question routing also advance with no file

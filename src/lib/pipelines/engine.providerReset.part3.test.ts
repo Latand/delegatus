@@ -1,8 +1,13 @@
+import { setDefaultTimeout } from "bun:test";
 import { expect, test, path, selectProjectAccount, tickPipelines, loadPipelines, savePipelines, loadTasks, saveTasks, patchPipeline, LIMITED_ACCOUNT, SPARE_ACCOUNT, recoveryReport, providerRecoveryHarness } from "./engine.fixture";
 import type { DurableQuotaObservation } from "./engine.fixture";
 
+// Durable reset chains share CPU with seven other files during publication.
+// Keep case deadlines above that contention; the comparator still caps the file.
+setDefaultTimeout(30_000);
+
 for (const engine of ["claude", "codex"] as const) {
-  test.each(["auth", "auth-window", "capacity"] as const)(`${engine} successor %s cut retains the source reset retry`, async cause => {
+  test.each(["auth", "auth-window", "capacity"] as const)(`${engine} successor %s cut respects capacity bounds and source reset recovery`, async cause => {
     const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded",
       "You've hit your session limit", 60 * 60_000);
     const unavailable: string[][] = [];
@@ -43,6 +48,16 @@ for (const engine of ["claude", "codex"] as const) {
     await tickPipelines([], f.h.ports);
     const parked = loadPipelines()[0]!;
     expect(parked.state).toBe("needs_decision");
+    if (engine === "codex" && cause === "capacity") {
+      expect(parked.runs[0]!.attempts.at(-1)!.providerWait?.stageRetry).toBeUndefined();
+      expect(parked.stateDetail).toContain("model at capacity after 3 tries");
+      f.advance(f.resetsAt! * 1_000 + 60_000 - f.now());
+      await tickPipelines([], f.h.ports);
+      expect(f.h.spawnInputs).toHaveLength(2);
+      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(SPARE_ACCOUNT);
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      return;
+    }
     expect(parked.runs[0]!.attempts.at(-1)!.providerWait).toMatchObject({
       resumeAt: new Date(f.resetsAt! * 1_000 + 60_000).toISOString(), stageRetry: { fallback: false },
     });
@@ -57,7 +72,7 @@ for (const engine of ["claude", "codex"] as const) {
     expect(f.h.spawnInputs[2]!.unavailableAccountIds).toContain(SPARE_ACCOUNT);
     expect(unavailable.at(-1)).toContain(SPARE_ACCOUNT);
     expect(f.now()).toBeLessThanOrEqual(f.resetsAt! * 1_000 + 2 * 60_000);
-  }, 15_000);
+  }, 60_000);
 }
 
 

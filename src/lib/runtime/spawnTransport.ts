@@ -9,33 +9,27 @@ import {
 } from "./flags";
 import { CODEX_STRUCTURED_IMAGE_REASON } from "./structuredContent";
 
-export type SpawnTransport = "tmux" | "structured";
+export type SpawnTransport = "structured";
 
-/** A deployment that carries a runtime host is structured-capable: no tmux
-    server sits between the viewer and the agent. Every rollback switch that can
-    block a structured spawn is read here, so the implicit default and
-    {@link structuredSpawnGap} agree on the same env record — a switch that
-    fails the gap but not this predicate would decide `structured` and then
-    reject every spawn with the gap, taking tmux down with it. */
-function structuredTransportAvailable(env: Readonly<Record<string, string | undefined>>): boolean {
-  return structuredHostsEnabled(env)
-    && runtimeEventsEnabled(env)
-    && runtimeUiEnabled(env);
-}
-
-/** Structured is the default wherever it can actually run: pane-less spawns are
-    the faster path, so a deployment with a runtime host takes it without being
-    told to. Environments without a host still spawn through tmux instead of
-    failing, and an explicit `LLV_SPAWN_TRANSPORT` always wins — asking for
-    structured without a host keeps returning the gap that names what is
-    missing, rather than silently downgrading a deliberate choice. */
+/** Every agent is hosted by a structured host. `LLV_SPAWN_TRANSPORT` is still
+    read so an installation that names the retired terminal transport, or
+    anything else, is told so at the first spawn. A deployment with no runtime
+    host gets the gap {@link structuredSpawnGap} names. */
 export function spawnTransport(env: Readonly<Record<string, string | undefined>> = process.env): SpawnTransport {
   const requested = env.LLV_SPAWN_TRANSPORT?.trim();
-  if (!requested) return structuredTransportAvailable(env) ? "structured" : "tmux";
-  if (requested !== "tmux" && requested !== "structured") {
-    throw new Error("LLV_SPAWN_TRANSPORT must be tmux or structured");
+  if (requested && requested !== "structured") {
+    throw new Error("LLV_SPAWN_TRANSPORT must be structured; the terminal transport was removed");
   }
-  return requested;
+  return "structured";
+}
+
+/** Whether a dead conversation can be given a new structured host here. A
+    deployment with a rollback switch thrown, or with no runtime events plane,
+    has nothing to host it; an explicit `LLV_SPAWN_TRANSPORT=structured`
+    states that the deployment hosts agents and is taken at its word. */
+export function structuredTransportAvailable(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  if (env.LLV_SPAWN_TRANSPORT?.trim() === "structured") return true;
+  return structuredHostsEnabled(env) && runtimeEventsEnabled(env) && runtimeUiEnabled(env);
 }
 
 export function structuredSpawnGap(

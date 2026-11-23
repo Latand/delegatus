@@ -6,6 +6,7 @@ import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve,
 import { isDeepStrictEqual } from "node:util";
 import { domainToASCII } from "node:url";
 import { inflateSync } from "node:zlib";
+import { readSafeRegularFile } from "./privacy-safe-path";
 
 import { preparedPrivacyText } from "./privacy-text-preparation";
 import { privacyMarkupSpans, stripPrivacyHtml } from "./privacy-markup";
@@ -81,7 +82,6 @@ const textExtensions = new Set([
 ]);
 const textBasenames = new Set(["CODEOWNERS", "Dockerfile", "LICENSE", "Makefile", "README"]);
 const maxPublicationBytes = 32 * 1024 * 1024;
-const maxVideoStreams = 16;
 const supportedGeneratorRuntime = "bun-1.3.3";
 // Reviewed public forms, stored without publication-sensitive literals.
 // Identity normalization preserves case, punctuation and every raw code point.
@@ -1025,12 +1025,6 @@ function safePath(path: string): SafePathResult {
   return { metadata, status: "safe" };
 }
 
-function readSafeRegularFile(path: string): Buffer {
-  const result = safePath(path);
-  if (result.status !== "safe" || !result.metadata?.isFile()) throw new Error("unsafe file path");
-  return readFileSync(resolve(path));
-}
-
 type PreparedKnownValue = Readonly<KnownValue & {
   primary: string;
   fingerprintNeedle: string;
@@ -1061,7 +1055,11 @@ function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprin
     preparedValues.push({ ...value, primary, fingerprint,
       fingerprintNeedle: value.exactOnly ? primary : compactSensitiveText(value.value) });
   }
-  const fingerprintFile = process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE;
+  // Only the command supplies a default. Importers keep their existing
+  // environment-driven policy, and an explicit empty value disables it.
+  const fingerprintFile = process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE
+    ?? (import.meta.main && process.argv.includes("--require-known-values")
+      ? join(import.meta.dir, "privacy-known-value-fingerprints.json") : undefined);
   if (fingerprintFile) {
     try {
       const catalog = JSON.parse(readSafeRegularFile(fingerprintFile).toString("utf8")) as {
@@ -1103,11 +1101,6 @@ const knownValues = loadKnownValues();
 // per-line notices. The prepared text is shared across those views; cache the
 // config-specific match so fingerprint windows are not hashed twice.
 const knownValueMatches = new WeakMap<object, boolean>();
-
-function configuredOcrLanguages(): string | undefined {
-  const languages = (process.env.LLV_PRIVACY_OCR_LANGUAGES ?? "eng").trim();
-  return /^[a-z0-9_]+(?:\+[a-z0-9_]+)*$/i.test(languages) ? languages : undefined;
-}
 
 function extensionMediaKind(path: string): MediaKind | undefined {
   const extension = extname(path).toLowerCase();
@@ -1251,6 +1244,119 @@ function changedPaths(arguments_: string[], repository: string, resolvedBase?: s
     for (const path of result.paths) paths.add(resolve(repository, path));
   }
   return { error: false, paths: [...paths] };
+}
+
+function commitInputGit(repository: string, args: string[], env: Record<string, string | undefined> = withoutUnsupportedApiCredentials(process.env), stdin?: Buffer): Buffer {
+  const result = Bun.spawnSync({
+    cmd: ["git", "--no-replace-objects", "--literal-pathspecs", "-C", repository, ...args],
+    env, stdin, stdout: "pipe", stderr: "pipe",
+  });
+  if (result.exitCode !== 0) throw new Error("commit input unreadable");
+  return result.stdout;
+}
+
+/** New-side text from changed hunks, including three context lines, without removed text or diff syntax. */
+function addedHunks(patch: string): Array<{ line: number; text: string }> {
+  const hunks: Array<{ line: number; text: string }> = [];
+  let current: { line: number; lines: string[]; changed: boolean } | undefined;
+  let oldRemaining = 0, newRemaining = 0;
+  const finish = () => {
+    if (oldRemaining !== 0 || newRemaining !== 0) throw new Error("incomplete commit hunk");
+    if (current?.changed) hunks.push({ line: current.line, text: current.lines.join("\n") });
+    current = undefined;
+  };
+  for (const line of patch.split("\n")) {
+    const header = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (header) {
+      finish();
+      oldRemaining = Number(header[1] ?? 1); newRemaining = Number(header[3] ?? 1);
+      current = { line: Number(header[2]), lines: [], changed: false };
+    } else if (current && (oldRemaining > 0 || newRemaining > 0)) {
+      if (line.startsWith("\\ No newline at end of file")) continue;
+      if (line[0] === " " || line[0] === "+") {
+        current.lines.push(line.slice(1)); newRemaining -= 1;
+        if (line[0] === "+") current.changed = true;
+      }
+      if (line[0] === " " || line[0] === "-") oldRemaining -= 1;
+      if (line[0] === "-") current.changed = true;
+      if (![" ", "+", "-"].includes(line[0]) || oldRemaining < 0 || newRemaining < 0) {
+        throw new Error("invalid commit hunk");
+      }
+    }
+  }
+  finish();
+  return hunks;
+}
+
+type CommitInput = { commit: string; path: string; blob: string } & (
+  | { kind: "text"; hunks: Array<{ line: number; text: string }> }
+  | { kind: "blob" | "unsafe" }
+);
+
+/** Read immutable commit objects. Checkout, index and untracked bytes cannot enter this selection. */
+export function* commitInputs(repository: string, base: string): Generator<CommitInput> {
+  const commits = commitInputGit(repository, ["rev-list", "--parents", `${base}..HEAD`]).toString().trim();
+  const binaryBlobs = new Set<string>();
+  for (const row of commits ? commits.split("\n") : []) {
+    const [commit, ...parents] = row.split(" ");
+    if (![commit, ...parents].every(hash => COMMIT_HASH.test(hash))) throw new Error("invalid commit input");
+    const endpoints = parents.length ? [parents[0], commit] : [commit];
+    const options = ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--no-abbrev", "--no-ext-diff", "--no-textconv", "-r", "-z"];
+    // Git's combined diff selects paths whose result differs from every
+    // parent, including octopus merges. A path inherited unchanged from a
+    // parent is already covered: that parent is either in base or is scanned
+    // separately in this complete base..HEAD traversal. Keep first-parent
+    // hunks for the selected paths so new merge resolutions retain context.
+    let mergePaths: Set<string> | undefined;
+    if (parents.length > 1) {
+      const paths = new TextDecoder("utf-8", { fatal: true }).decode(commitInputGit(repository,
+        [...options, "--name-only", "-c", commit])).split("\0");
+      if (paths.pop() !== "") throw new Error("unframed merge paths");
+      mergePaths = new Set(paths);
+      if (mergePaths.size === 0) continue;
+    }
+    const raw = new TextDecoder("utf-8", { fatal: true }).decode(commitInputGit(repository, [...options, "--raw", ...endpoints])).split("\0");
+    if (raw.pop() !== "") throw new Error("unframed commit paths");
+    const attributeOutput = commitInputGit(repository, ["check-attr", "--source", commit, "-z", "diff", "--stdin"], undefined,
+      Buffer.from(raw.filter((path, index) => index % 2 === 1 && (!mergePaths || mergePaths.has(path)))
+        .map(path => `${path}\0`).join(""))).toString().split("\0");
+    if (attributeOutput.pop() !== "" || attributeOutput.length % 3 !== 0) throw new Error("invalid commit attributes");
+    const diffAttributes = new Map<string, string>();
+    for (let index = 0; index < attributeOutput.length; index += 3) {
+      if (attributeOutput[index + 1] !== "diff") throw new Error("invalid commit attribute name");
+      diffAttributes.set(attributeOutput[index], attributeOutput[index + 2]);
+    }
+    for (let index = 0; index < raw.length; index += 2) {
+      const metadata = /^:(\d{6}) (\d{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) [AMDT]$/.exec(raw[index]);
+      const path = raw[index + 1];
+      if (!metadata || !path) throw new Error("invalid commit path");
+      if (mergePaths && !mergePaths.has(path)) continue;
+      const [, oldMode, mode, oldBlob, blob] = metadata;
+      if (mode === "000000") continue;
+      const input = { commit, path, blob };
+      if (mode !== "100644" && mode !== "100755") { yield { ...input, kind: "unsafe" }; continue; }
+      const oldWasRegular = oldMode === "100644" || oldMode === "100755";
+      const changedFromNonRegular = oldMode !== "000000" && !oldWasRegular;
+      if (oldBlob === blob && oldWasRegular) continue;
+      const size = Number(commitInputGit(repository, ["cat-file", "-s", blob]).toString().trim());
+      if (!Number.isSafeInteger(size) || size < 0 || size > maxPublicationBytes) throw new Error("commit blob too large");
+      // A symlink blob stores its target as bytes. Materializing those same
+      // bytes as a regular file publishes content the old-side diff omits.
+      if (changedFromNonRegular) { yield { ...input, kind: "blob" }; continue; }
+      let binary = binaryBlobs.has(blob) || diffAttributes.get(path) === "unset" || extensionMediaKind(path) !== undefined;
+      if (!binary) {
+        const bytes = commitInputGit(repository, ["cat-file", "blob", blob]);
+        binary = signatureMediaKind(bytes) !== undefined || bytes.some(byte => byte < 32 && ![9, 10, 13].includes(byte));
+        if (!binary) {
+          try { new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { binary = true; }
+        }
+      }
+      if (binary) { binaryBlobs.add(blob); yield { ...input, kind: "blob" }; continue; }
+      const patch = commitInputGit(repository, ["diff-tree", "--root", "--no-commit-id", "--no-renames", "-r",
+        "--no-ext-diff", "--no-textconv", "--no-color", "--text", "--unified=3", "-p", ...endpoints, "--", path]);
+      yield { ...input, kind: "text", hunks: addedHunks(new TextDecoder("utf-8", { fatal: true }).decode(patch)) };
+    }
+  }
 }
 
 function addFinding(findings: Map<FindingClass, number>, finding: FindingClass): void {
@@ -1613,8 +1719,8 @@ function pngMetadata(bytes: Buffer): { animated?: boolean; error: boolean; liveS
   return { animated, error: false, liveSource, text: values.join("\n") };
 }
 
-function inspectRasterMetadata(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "png" && kind !== "raster") return new Set();
+function inspectMediaMetadata(path: string, kind: MediaKind | undefined): Set<FindingClass> {
+  if (kind !== "png" && kind !== "raster" && kind !== "animated") return new Set();
   try {
     const bytes = readFileSync(path);
     if (kind === "png") {
@@ -1626,6 +1732,24 @@ function inspectRasterMetadata(path: string, kind: MediaKind | undefined): Set<F
       return findings;
     }
     if (bytes.length > 32 * 1024 * 1024) return new Set(["inspection_error"]);
+    if (kind === "animated") {
+      // Container tags can be UTF-8 even when adjacent frame bytes are binary.
+      const strings: string[] = bytes.toString("utf8").match(/[^\x00-\x1f\x7f-\x9f\ufffd]{4,}/gu) ?? [];
+      // ISO-BMFF metadata data boxes declare their encoding and byte extent.
+      // Type 2 stores UTF-16. Scan both alignments and byte orders just as
+      // for PNG metadata, without decoding any frame or launching a tool.
+      if (bytes.toString("ascii", 4, 8) === "ftyp") {
+        for (let pos = bytes.indexOf("data", 4); pos !== -1; pos = bytes.indexOf("data", pos + 4)) {
+          if (pos + 12 > bytes.length || bytes.readUInt32BE(pos + 4) !== 2) continue;
+          const size = bytes.readUInt32BE(pos - 4);
+          if (size < 16 || size > bytes.length - pos + 4) continue;
+          const end = pos - 4 + size;
+          for (const text of metadataStrings(bytes.subarray(pos + 12, end))) strings.push(text);
+          pos = end - 4;
+        }
+      }
+      return sensitiveClasses(strings.join("\n"));
+    }
     const printableMetadata = bytes.toString("latin1").match(/[\x20-\x7e]{4,}/g)?.join("\n") ?? "";
     return sensitiveClasses(printableMetadata);
   } catch {
@@ -1859,6 +1983,10 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
   return findings;
 }
 
+function isTextLikePath(path: string): boolean {
+  return textExtensions.has(extname(path).toLowerCase()) || textBasenames.has(basename(path));
+}
+
 function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClass> {
   if (kind) return new Set();
   try {
@@ -1912,8 +2040,7 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
     if (views.slice(1).some(view => matchesStandaloneIdentity(normalizedSensitiveText(view).exactSearchable))) {
       findings.add("known_value");
     }
-    const extension = extname(path).toLowerCase();
-    const textLike = textExtensions.has(extension) || textBasenames.has(basename(path));
+    const textLike = isTextLikePath(path);
     const controlBytes = contents.reduce((count, byte) => {
       const allowedWhitespace = byte === 0x09 || byte === 0x0a || byte === 0x0d;
       return count + (byte < 0x20 && !allowedWhitespace ? 1 : 0);
@@ -1929,135 +2056,6 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
   } catch {
     return new Set(["inspection_error"]);
   }
-}
-
-function inspectRaster(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "png" && kind !== "raster") return new Set();
-  if (!Bun.which("tesseract")) return new Set(["tool_unavailable"]);
-  const languages = configuredOcrLanguages();
-  if (!languages) return new Set(["configuration_error"]);
-  const result = Bun.spawnSync({
-    cmd: ["tesseract", path, "stdout", "-l", languages],
-    env: withoutUnsupportedApiCredentials(process.env),
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  if (result.exitCode !== 0) return new Set(["inspection_error"]);
-  return sensitiveClasses(result.stdout.toString());
-}
-
-function inspectAnimated(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "animated") return new Set();
-  if (!Bun.which("ffprobe") || !Bun.which("ffmpeg") || !Bun.which("tesseract")) {
-    return new Set(["tool_unavailable"]);
-  }
-  const languages = configuredOcrLanguages();
-  if (!languages) return new Set(["configuration_error"]);
-  const probe = Bun.spawnSync({
-    cmd: [
-      "ffprobe",
-      "-v",
-      "error",
-      "-count_frames",
-      "-select_streams",
-      "v",
-      "-show_entries",
-      "format=duration:format_tags:stream=duration,nb_frames,nb_read_frames:stream_tags",
-      "-of",
-      "json",
-      path,
-    ],
-    env: withoutUnsupportedApiCredentials(process.env),
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  if (probe.exitCode !== 0) return new Set(["inspection_error"]);
-  const findings = sensitiveClasses(probe.stdout.toString());
-  let formatDuration = 0;
-  let streams: Array<{ duration?: unknown; nb_frames?: unknown; nb_read_frames?: unknown }>;
-  try {
-    const metadata = JSON.parse(probe.stdout.toString()) as {
-      format?: { duration?: unknown };
-      streams?: unknown;
-    };
-    formatDuration = Number(metadata.format?.duration);
-    if (!Number.isFinite(formatDuration) || formatDuration < 0) formatDuration = 0;
-    if (!Array.isArray(metadata.streams) || metadata.streams.length === 0 || metadata.streams.length > maxVideoStreams
-      || metadata.streams.some((stream) => typeof stream !== "object" || stream === null || Array.isArray(stream))) {
-      findings.add("inspection_error");
-      return findings;
-    }
-    streams = metadata.streams as Array<{ duration?: unknown; nb_frames?: unknown; nb_read_frames?: unknown }>;
-  } catch {
-    return new Set([...findings, "inspection_error"]);
-  }
-  const fractions = [0, 0.25, 0.5, 0.75, 0.95];
-  for (const [streamOrdinal, stream] of streams.entries()) {
-    let duration = Number(stream.duration);
-    if (!Number.isFinite(duration) || duration < 0) duration = formatDuration;
-    let frameCount = 0;
-    for (const candidate of [stream.nb_read_frames, stream.nb_frames]) {
-      const count = Number(candidate);
-      if (!Number.isSafeInteger(count) || count < 1) continue;
-      frameCount = count;
-      break;
-    }
-    if (duration === 0 && frameCount === 0) {
-      findings.add("inspection_error");
-      continue;
-    }
-    const samples = duration > 0
-      ? fractions.map((fraction) => ({ kind: "time" as const, value: (duration * fraction).toFixed(3) }))
-      : fractions.map((fraction) => ({
-        kind: "frame" as const,
-        value: Math.floor((frameCount - 1) * fraction).toString(),
-      }));
-    const uniqueSamples = new Map(samples.map((sample) => [`${sample.kind}:${sample.value}`, sample]));
-    for (const sample of uniqueSamples.values()) {
-      const inputArguments = sample.kind === "time"
-        ? ["-ss", sample.value, "-i", path]
-        : ["-i", path];
-      const filterArguments = sample.kind === "frame" ? ["-vf", `select=eq(n\\,${sample.value})`] : [];
-      const frame = Bun.spawnSync({
-        cmd: [
-          "ffmpeg",
-          "-v",
-          "error",
-          ...inputArguments,
-          "-map",
-          `0:v:${streamOrdinal}`,
-          ...filterArguments,
-          "-frames:v",
-          "1",
-          "-f",
-          "image2pipe",
-          "-vcodec",
-          "png",
-          "pipe:1",
-        ],
-        env: withoutUnsupportedApiCredentials(process.env),
-        stderr: "pipe",
-        stdout: "pipe",
-      });
-      if (frame.exitCode !== 0 || frame.stdout.length === 0) {
-        findings.add("inspection_error");
-        continue;
-      }
-      const ocr = Bun.spawnSync({
-        cmd: ["tesseract", "stdin", "stdout", "-l", languages],
-        env: withoutUnsupportedApiCredentials(process.env),
-        stdin: frame.stdout,
-        stderr: "pipe",
-        stdout: "pipe",
-      });
-      if (ocr.exitCode !== 0) {
-        findings.add("inspection_error");
-        continue;
-      }
-      for (const finding of sensitiveClasses(ocr.stdout.toString())) findings.add(finding);
-    }
-  }
-  return findings;
 }
 
 type ProvenanceResult = {
@@ -2367,6 +2365,12 @@ function trustedVendorExemptions(path: string, inspectionRoot: string | undefine
     : new Set();
 }
 
+function inspectFileContents(path: string, kind: MediaKind | undefined): Set<FindingClass> {
+  return new Set([
+    ...inspectMediaMetadata(path, kind), ...inspectText(path, kind),
+  ]);
+}
+
 export function inspectPaths(
   paths: string[],
   configurationError = false,
@@ -2374,6 +2378,7 @@ export function inspectPaths(
   inspectionRoot = repositoryRoot,
   trustedBase?: string,
   attributionNotices: string[] = [],
+  inspectContents = inspectFileContents,
 ): Map<FindingClass, number> {
   const findings = new Map<FindingClass, number>();
   if (knownValues.error || configurationError || (requireKnownValues && knownValues.fingerprints.length === 0)) {
@@ -2393,12 +2398,8 @@ export function inspectPaths(
       addFinding(findings, "inspection_error");
       continue;
     }
-    const pathFindings = new Set<FindingClass>();
     const kind = mediaKind(path);
-    for (const finding of inspectRasterMetadata(path, kind)) pathFindings.add(finding);
-    for (const finding of inspectRaster(path, kind)) pathFindings.add(finding);
-    for (const finding of inspectAnimated(path, kind)) pathFindings.add(finding);
-    for (const finding of inspectText(path, kind)) pathFindings.add(finding);
+    const pathFindings = new Set(inspectContents(path, kind));
     if (kind && kind !== "audio") {
       const provenance = provenanceFor(path, inspectionRoot, trustedBase);
       if (provenance.status === "missing") pathFindings.add("provenance_missing");
@@ -2434,6 +2435,75 @@ export function inspectPaths(
         attributionNotices.push(`file-sha256:${pathDigest} ${finding}`);
       }
     }
+  }
+  return findings;
+}
+
+function inspectCommitAdditions(repository: string, base: string, requireKnownValues: boolean, notices: string[]): Map<FindingClass, number> {
+  const findings = inspectPaths([], false, requireKnownValues, repository, base, notices);
+  let scratch: string | undefined, snapshot: string | undefined, snapshotCommit: string | undefined;
+  // Cache detector results, never provenance: a copied blob still needs the
+  // manifest and generator at its own path and commit. Kinds can depend on the
+  // extension, so an opaque blob renamed to an image cannot inherit a text pass.
+  const content = new Map<string, Set<FindingClass>>();
+  const snapshotEnv = Object.fromEntries(Object.entries(withoutUnsupportedApiCredentials(process.env)).filter(([name]) => !name.startsWith("GIT_")));
+  Object.assign(snapshotEnv, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+  const snapshotAt = (commit: string): string => {
+    if (!scratch) {
+      scratch = mkdtempSync(join(tmpdir(), "llv-privacy-commits-"));
+      snapshot = join(scratch, "tree");
+      const result = Bun.spawnSync({ cmd: ["git", "clone", "--quiet", "--shared", "--no-checkout", "--template=", "--", repository, snapshot],
+        env: snapshotEnv, stdout: "pipe", stderr: "pipe" });
+      if (result.exitCode !== 0) throw new Error("commit snapshot unavailable");
+      const attributes = join(snapshot, ".git", "info", "attributes");
+      mkdirSync(dirname(attributes), { recursive: true });
+      // Preserve blob bytes while retaining a commit tree for provenance reads.
+      // info/attributes outranks committed .gitattributes files.
+      writeFileSync(attributes, "* -filter -ident -working-tree-encoding -text\n");
+    }
+    if (snapshotCommit !== commit) {
+      commitInputGit(snapshot!, ["-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false", "checkout", "--quiet", "--force", "--detach", "--no-recurse-submodules", commit], snapshotEnv);
+      snapshotCommit = commit;
+    }
+    return snapshot!;
+  };
+  try {
+    for (const input of commitInputs(repository, base)) {
+      const pathDigest = createHash("sha256").update(input.path).digest("hex");
+      const location = `commit_content: ${input.commit.slice(0, 12)} file-sha256:${pathDigest}`;
+      if (input.kind === "unsafe") {
+        addFinding(findings, "unsafe_path"); notices.push(`${location} unsafe_path`); continue;
+      }
+      if (input.kind === "text") {
+        for (const hunk of input.hunks) {
+          const detected = sensitiveClasses(hunk.text);
+          if (detected.size && input.path.startsWith(`${trustedTelegramVendor.relativeRoot}/`)) {
+            const root = snapshotAt(input.commit);
+            for (const finding of trustedVendorExemptions(join(root, input.path), root)) detected.delete(finding);
+          }
+          for (const finding of detected) {
+            addFinding(findings, finding); notices.push(`${location}:${hunk.line} ${finding}`);
+          }
+        }
+        continue;
+      }
+      const root = snapshotAt(input.commit);
+      const detected = inspectPaths([join(root, input.path)], false, false, root, base, [], (path, kind) => {
+        // inspectText's refusal depends on whether this particular filename
+        // is classified as text, even when the blob bytes and media kind match.
+        const key = `${input.blob}:${kind ?? "text"}:${isTextLikePath(path) ? "text-like" : "other"}`;
+        let result = content.get(key);
+        if (!result) { result = inspectFileContents(path, kind); content.set(key, result); }
+        return result;
+      });
+      for (const [finding, count] of detected) {
+        findings.set(finding, (findings.get(finding) ?? 0) + count); notices.push(`${location} ${finding}`);
+      }
+    }
+  } catch {
+    addFinding(findings, "inspection_error"); notices.push("commit_content: input unreadable");
+  } finally {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
   }
   return findings;
 }
@@ -2785,8 +2855,9 @@ function isForgeComposerIdentityAddress(address: string, identity: CommitIdentit
     && isForgeComposerMailbox(address);
 }
 
-function isForgeComposerAddress(address: string, identity: CommitIdentity): boolean {
-  return identity.parentCount > 1 && isForgeComposerIdentityAddress(address, identity);
+function isForgeComposerAddress(address: string, identity: CommitIdentity, signedLandedTip?: string): boolean {
+  const composed = identity.parentCount > 1 || (identity.commit === signedLandedTip && identity.name === "GitHub");
+  return composed && isForgeComposerIdentityAddress(address, identity);
 }
 
 /** Each distinct identity git recorded on the commits the merge will squash. */
@@ -2850,7 +2921,7 @@ function composedAttributionMessage(identity: CommitIdentity): string {
  * its body, keeps the narrow reading the trailer rule gives it — this is the
  * merge-boundary identity path, and it widens nothing else.
  */
-export function mergeBoundaryReview(repository: string, base: string): MergeBoundaryReview {
+export function mergeBoundaryReview(repository: string, base: string, signedLandedTip?: string): MergeBoundaryReview {
   const findings = new Map<FindingClass, number>();
   const notices: string[] = [];
   const identities = branchIdentities(repository, base);
@@ -2874,12 +2945,12 @@ export function mergeBoundaryReview(repository: string, base: string): MergeBoun
     const { attributable } = commitMessageAddressReview(attribution);
     /* The composed trailer rules classify any exact `noreply` local part as
        machine attribution. For the forge's web-flow mailbox, the commit graph
-       is the additional proof: a zero- or one-parent commit did not come from
-       the forge's merge composer and remains attributable. */
+       identifies a merge. A protected push can also verify GitHub's signature
+       on the exact single-parent tip it just published. */
     const unverifiedForgeComposer = isForgeComposerIdentityAddress(identity.address, identity)
-      && !isForgeComposerAddress(identity.address, identity);
+      && !isForgeComposerAddress(identity.address, identity, signedLandedTip);
     const publishes = unverifiedForgeComposer || attributable.some((address) => {
-      return !isForgeAccountAddress(address) && !isForgeComposerAddress(address, identity);
+      return !isForgeAccountAddress(address) && !isForgeComposerAddress(address, identity, signedLandedTip);
     });
     if (!publishes) continue;
     addFinding(findings, "email_address");
@@ -2901,26 +2972,32 @@ export function reportPrivacyFindings(findings: Map<FindingClass, number>, notic
   process.exitCode = 1;
 }
 
-if (import.meta.main) {
-  const arguments_ = process.argv.slice(2);
+export function runPublicationGate(arguments_: string[], signedLandedTip?: string): void {
+  if (arguments_.includes("--require-known-values") && knownValues.fingerprints.length === 0
+    && (!knownValues.error || process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE === undefined)) {
+    console.error("Known-value catalog unavailable. Set LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE to the committed scripts/privacy-known-value-fingerprints.json, or pass LLV_PRIVACY_KNOWN_VALUES_FILE or LLV_PRIVACY_KNOWN_VALUES.");
+  }
   const repositoryArgument = argumentValue(arguments_, "--repository");
   const inspectionRoot = repositoryArgument ? resolve(repositoryArgument) : (repositoryRoot ?? resolve("."));
   const requestedBase = argumentValue(arguments_, "--base") ?? "origin/main";
   const repositoryPath = safePath(inspectionRoot);
   const repositoryError = repositoryPath.status !== "safe" || !repositoryPath.metadata?.isDirectory();
   const explicitPaths = requestedPaths(arguments_);
+  const addedLines = arguments_.includes("--added-lines");
   const range = !repositoryError && (explicitPaths === undefined || arguments_.includes("--check-commits"))
     ? publicationRange(inspectionRoot, requestedBase)
     : { base: requestedBase, error: false, notices: [] };
   const trustedBase = range.base;
-  const selection = explicitPaths === undefined
+  const selection = addedLines ? { error: explicitPaths !== undefined, paths: [] } : explicitPaths === undefined
     ? changedPaths(arguments_, inspectionRoot, trustedBase)
     : {
       error: explicitPaths.length === 0,
       paths: explicitPaths.map((path) => isAbsolute(path) ? path : resolve(inspectionRoot, path)),
     };
   const notices: string[] = [...range.notices];
-  const pathFindings = inspectPaths(
+  const pathFindings = addedLines && !range.error && !repositoryError
+    ? inspectCommitAdditions(inspectionRoot, trustedBase, arguments_.includes("--require-known-values"), notices)
+    : inspectPaths(
     selection.paths,
     false,
     arguments_.includes("--require-known-values"),
@@ -2938,7 +3015,7 @@ if (import.meta.main) {
     /* The branch commits publish their messages when they are pushed; the merge
        publishes a commit composed from their identities. Both are the commit
        surface, so one flag reads both. */
-    const boundary = mergeBoundaryReview(inspectionRoot, trustedBase);
+    const boundary = mergeBoundaryReview(inspectionRoot, trustedBase, signedLandedTip);
     for (const [finding, count] of boundary.findings) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);
     }
@@ -2946,3 +3023,5 @@ if (import.meta.main) {
   }
   reportPrivacyFindings(pathFindings, notices);
 }
+
+if (import.meta.main) runPublicationGate(process.argv.slice(2));

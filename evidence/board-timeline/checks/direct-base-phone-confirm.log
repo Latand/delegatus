@@ -1,0 +1,86 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/components/mobile/MobileKanban.dom.test.tsx:
+(pass) phone remote agents stay on their own project while another board loads or fails [72.23ms]
+(pass) column tabs retain their counts and marks beside Timeline, opening on Assigned [31.53ms]
+(pass) a tab tap moves the column, writes no history entry, and presence follows the column on screen [29.92ms]
+(pass) Timeline is the only selected tab, survives remount and keyboard navigation returns to a column [72.21ms]
+(pass) Timeline uses shown board membership and excludes hidden, completed and foreign tasks [18.73ms]
+323 |   lane.cursor = state === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null };
+324 |   lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
+325 |     agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
+326 |   const { host } = mount({ files: [file], tasks: [owner], pipelines: [lane] });
+327 |   click(q(host, '[data-phone-kanban-tab="timeline"]'));
+328 |   expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
+                                                                                         ^
+error: expect(received).toBe(expected)
+
+Expected: "1"
+Received: undefined
+
+      at <anonymous> (src/components/mobile/MobileKanban.dom.test.tsx:328:84)
+(fail) Timeline expands resumed work from a completed stage and keeps its completed bar [24.12ms]
+323 |   lane.cursor = state === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null };
+324 |   lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
+325 |     agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
+326 |   const { host } = mount({ files: [file], tasks: [owner], pipelines: [lane] });
+327 |   click(q(host, '[data-phone-kanban-tab="timeline"]'));
+328 |   expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
+                                                                                         ^
+error: expect(received).toBe(expected)
+
+Expected: "1"
+Received: "0"
+
+      at <anonymous> (src/components/mobile/MobileKanban.dom.test.tsx:328:84)
+(fail) Timeline expands resumed work from a needs_decision stage and keeps its completed bar [19.87ms]
+(pass) a card opens its task, and a row no task owns opens its conversation [12.78ms]
+(pass) a long-press opens the card's sheet; Move to moves the card at once with Undo, and a refused write puts it back and says why [1180.60ms]
+(pass) a card sheet that comes back without its card (a reload, #2105) closes, and its entry goes with it [24.06ms]
+(pass) an empty column says so in the desktop's words and points to the nearest column with work [18.79ms]
+(pass) an empty Inbox offers New task bordered with one plus, while Tell the orchestrator stays filled [11.64ms]
+(pass) Done opens twenty cards at a time and counts them all [53.31ms]
+(pass) a card whose pipeline waits on the operator says the lane's state and draws the chain [7.60ms]
+(pass) a tap on a stage pill of the card's lane opens that stage's agent, within 11 px of it; any other tap opens the task (2026-10-16) [11.97ms]
+(pass) coming back to the board lands on the column and the offset the operator left (§3.7) [56.77ms]
+(pass) ⋯ › Hidden tasks lists what the columns do not draw, and Show brings a group back [31.22ms]
+(pass) a task card leads its title with the task's icon in the task's colour, the neutral tone without one, and nothing when it has no icon (#2190) [26.53ms]
+(pass) the Inbox tab lists high first and low last, marks those two in the card and in its label, and draws nothing for normal [12.43ms]
+(pass) a hold of 0.35 s lifts the card and shows the four columns; nothing opens until the finger lets go [417.94ms]
+(pass) released in place, a lifted card opens today's menu, and its click opens nothing [420.38ms]
+(pass) released over a column, a lifted card moves there with the usual receipt; the dock and the ghost go [467.03ms]
+(pass) the ghost keeps clear of the dock: a finger on a tile never has the card over its label [447.83ms]
+(pass) released over the column it is in, or over nothing, a lifted card goes back and nothing opens or moves [864.09ms]
+(pass) a finger that moves before the lift is a scroll: no lift, no menu, no move [512.82ms]
+(pass) a tap shorter than the hold still opens the task [442.07ms]
+(pass) the page may scroll under a finger until the card is lifted, and not after [410.90ms]
+(pass) the browser's own long-press menu event does not open the sheet under a lifted card [404.83ms]
+(pass) the lifted card follows the finger by transform alone, one write a frame [433.89ms]
+(pass) a conversation row no task owns keeps today's hold: its sheet, with no dock [526.49ms]
+(pass) phone cards show a passive status note below the title [8.60ms]
+(pass) a task card with a prototype review carries the review button beside its face; one tap opens the review where the operator is [15.34ms]
+915 |     createdAt: "2026-09-14T10:00:00.000Z",
+916 |   } as unknown as Pipeline;
+917 |   const { host } = mount({ files, tasks: [task("t1", "assigned", [files[0]!.path], "Mobile data: stop repeated full-board downloads")], pipelines: [finished] });
+918 |   const card = q(host, '[data-phone-card="task:t1"]')!;
+919 |   expect(q(card, '[data-density="card"]')).not.toBeNull();
+920 |   expect(q(card, "[data-card-state-text]")!.textContent).toMatch(/^Stopped, no reason given/);
+                                                               ^
+error: expect(received).toMatch(expected)
+
+Expected substring or pattern: /^Stopped, no reason given/
+Received: "Done · 5m ago"
+
+      at <anonymous> (src/components/mobile/MobileKanban.dom.test.tsx:920:58)
+(fail) a phone card with a shown lane and stopped work with no reason keeps its state line text [8.30ms]
+
+3 tests failed:
+(fail) Timeline expands resumed work from a completed stage and keeps its completed bar [24.12ms]
+(fail) Timeline expands resumed work from a needs_decision stage and keeps its completed bar [19.87ms]
+(fail) a phone card with a shown lane and stopped work with no reason keeps its state line text [8.30ms]
+
+ 30 pass
+ 3 fail
+ 204 expect() calls
+Ran 33 tests across 1 file. [7.98s]
+exit: 1

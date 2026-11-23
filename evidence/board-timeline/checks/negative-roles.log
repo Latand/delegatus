@@ -1,0 +1,33 @@
+gate-slot: Waiting for the CPU queue · 2nd · waited 0 min · high priority
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+gate-slot: Waiting for a heavy command slot · all 6 busy · waited 0 min
+$ bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+233 |           expect(strip.every(part => part.height === 4)).toBe(true);
+234 |           expect(new Set(strip.map(part => part.color)).size).toBe(2);
+235 |           expect(strip[0]!.color).toBe(strip[1]!.color);
+236 |           expect(strip[1]!.color).not.toBe(strip[3]!.color);
+237 |           const runtimeLabels = await chart.locator(".bt-runtime").allTextContents();
+238 |           expect(runtimeLabels.every(label => !/\b(builder|reviewer)\b/.test(label))).toBe(true);
+                                                                                            ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (src/components/kanban/kanbanBoard.browser.test.tsx:238:87)
+(fail) board timeline hybrid > real board and phone timeline, folds, zoom, history and empty states in every locale and theme [3267.68ms]
+
+ 0 pass
+ 278 filtered out
+ 1 fail
+ 20 expect() calls
+Ran 1 test across 1 file. [5.00s]
+error: script "test" exited with code 1
+
+exit: 1

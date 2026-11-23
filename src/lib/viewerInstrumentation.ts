@@ -5,6 +5,7 @@ import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpoint
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { installServingNextRenderMonitor } from "@/lib/nextRenderMonitor";
+import { installServingControlIngress } from "@/lib/mcp/controlIngress";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -27,7 +28,7 @@ import {
 } from "@/lib/state/hotStateAuthority";
 import { initializeStateCollectionsAsync as initializeStateCollections, markStateSqliteCutoverReady } from "@/lib/state/sqliteStateStore";
 import { openStateMutationActivation } from "@/lib/state/stateMutationBarrier";
-import { markStructuredHostStartupFailed, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
+import { markStructuredHostStartupFailed, markStructuredHostStartupReady, markStructuredHostStartupRetryStarted } from "@/lib/runtime/startupStatus";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
 import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 import { readAuto } from "@/lib/selfUpdate/auto";
@@ -85,6 +86,7 @@ export interface HotStateCutoverBoundary {
 }
 
 interface CurrentReleaseControllerLoaders {
+  loadMemberRevocations?: () => Promise<{ startMemberRevocationWorker: () => void }>;
   loadFlowPipelineController: () => Promise<{ startFlowPipelineController: () => void }>;
   /** Optional for the same reason as the loaders below. The stale role
       mapping pass (docs/design/model-sizing-tiers.md §5). */
@@ -99,6 +101,7 @@ interface CurrentReleaseControllerLoaders {
   /** Optional for the same reason. */
   loadTelegramConnectorBoot?: () => Promise<{ provisionTelegramConnectorAtStartup: () => Promise<unknown> }>;
   /** Optional for the same reason. */
+  loadAgentStateService?: () => Promise<{ startAgentStateService: () => Promise<void> }>;
   loadStructuredHostRetirement?: () => Promise<{ startStructuredHostRetirement: () => void }>;
   /** Optional for the same reason. */
   loadSeatTick?: () => Promise<{ startSeatTick: () => boolean }>;
@@ -106,6 +109,7 @@ interface CurrentReleaseControllerLoaders {
   loadDeputySweep?: () => Promise<{ startDeputySweep: () => void }>;
   /** Optional for the same reason. */
   loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
+  loadDiskPressureWatch?: () => Promise<{ startDiskPressureWatch: () => void }>;
   /** Optional for the same reason. */
   loadTurboSweep?: () => Promise<{ startTurboSweep: () => void }>;
   /** Optional for the same reason. */
@@ -119,6 +123,8 @@ interface CurrentReleaseControllerLoaders {
   loadDoneSweep?: () => Promise<{ startDoneSweep: () => void }>;
   loadSeatChannel?: () => Promise<{ startSeatChannel: () => void }>;
   loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
+  loadAppConnect?: () => Promise<{ startAppConnectPoller: () => void }>;
+  loadVoiceTimers?: () => Promise<{ startVoiceTimers: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
   loadCloudEnvironmentController?: () => Promise<{ startCloudEnvironmentController: () => void }>;
 }
@@ -394,9 +400,11 @@ export async function startCurrentReleaseControllers(
     loadTelegramBotPoller: () => import("@/lib/telegram/bot/service"),
     loadExternalRelayPollers: () => import("@/lib/externalRelay/poller"),
     loadTelegramConnectorBoot: () => import("@/lib/telegram/connectorBoot"),
+    loadAgentStateService: () => import("@/lib/agentState/service"),
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
+    loadDiskPressureWatch: () => import("@/lib/state/diskPressureWatch"),
     loadTurboSweep: () => import("@/lib/monitor/turboRuntime"),
     loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
     loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
@@ -407,6 +415,9 @@ export async function startCurrentReleaseControllers(
     loadDoneSweep: () => import("@/lib/done/sweep"),
     loadSeatChannel: () => import("@/lib/orchestrator/seatChannel"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
+    loadMemberRevocations: () => import("@/lib/team/memberRevocation"),
+    loadAppConnect: () => import("@/lib/forge/appConnect"),
+    loadVoiceTimers: () => import("@/lib/voiceCompanion/voiceTimersServer"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
     loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
   },
@@ -477,6 +488,12 @@ export async function startCurrentReleaseControllers(
   } catch (error) {
     console.error("[external relay] poller start failed", error instanceof Error ? error.name : "unknown");
   }
+  try {
+    const agentState = await loaders.loadAgentStateService?.();
+    await agentState?.startAgentStateService();
+  } catch (error) {
+    console.error("[agent state] service start failed", error instanceof Error ? error.name : "unknown");
+  }
   /* Automatic structured host retirement (#747). It belongs to the release
      that owns traffic for a stronger reason than the others: ownership of a
      host and its live transports are process-scoped state of the process that
@@ -521,7 +538,17 @@ export async function startCurrentReleaseControllers(
      sweeping the same roots would only find nothing left to remove.
      `LLV_TEMP_SWEEP_MAX_AGE_HOURS=0` turns it off. */
   try {
+    const pressure = await loaders.loadDiskPressureWatch?.();
+    pressure?.startDiskPressureWatch();
+  } catch (error) {
+    console.error("[disk pressure] watch start failed", error instanceof Error ? error.name : "unknown");
+  }
+  try {
     const tempSweep = await loaders.loadTempSweep?.();
+    if (tempSweep) {
+      const { AttemptTempStore } = await import("./runtime/attemptTempRetention");
+      new AttemptTempStore().close();
+    }
     tempSweep?.startTempSweep();
   } catch (error) {
     console.error("[temp sweep] start failed", error instanceof Error ? error.name : "unknown");
@@ -594,6 +621,17 @@ export async function startCurrentReleaseControllers(
     prototypeDelivery?.startPrototypeDeliveryWorker();
   } catch (error) {
     console.error("[prototype delivery] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  try { (await loaders.loadMemberRevocations?.())?.startMemberRevocationWorker(); }
+  catch { console.error("[team revocation] recovery worker unavailable"); }
+  try { (await loaders.loadAppConnect?.())?.startAppConnectPoller(); }
+  catch (error) { console.error("[forge app connect] start failed", error instanceof Error ? error.name : "unknown"); }
+  /* Voice timers fire whether or not a page is open, and one that came due during a restart fires now. */
+  try {
+    const voiceTimers = await loaders.loadVoiceTimers?.();
+    voiceTimers?.startVoiceTimers();
+  } catch (error) {
+    console.error("[voice timers] start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();
@@ -684,7 +722,7 @@ const TRANSIENT_IO_CODES = new Set([
   "ENOENT",
 ]);
 
-function startupErrorField(error: unknown, field: "code" | "name" | "message" | "hostKey"): string {
+function startupErrorField(error: unknown, field: "code" | "name" | "message" | "hostKey" | "deadline"): string {
   if (typeof error !== "object" || error === null || !(field in error)) return "";
   const value = error[field as keyof typeof error];
   return typeof value === "string" ? value : "";
@@ -730,7 +768,7 @@ export function classifyStructuredHostStartupError(
       action: "Retry after the process controller publication becomes visible.",
     };
   }
-  if (code === "ETIMEDOUT" || /\btimed out\b/i.test(message)) {
+  if (code === "ETIMEDOUT" || /\b(?:timed out|deadline exceeded)\b/i.test(message)) {
     return {
       disposition: "recoverable",
       category: "timeout",
@@ -790,6 +828,7 @@ export async function runStructuredHostStartup(
     if (running || finished) return;
     running = true;
     attempts += 1;
+    markStructuredHostStartupRetryStarted();
     try {
       options.signal?.throwIfAborted();
       await adopt();
@@ -807,12 +846,14 @@ export async function runStructuredHostStartup(
         throw error;
       }
       const classification = classifyStructuredHostStartupError(error);
-      markStructuredHostStartupFailed(classification.category);
       const diagnostic = {
         message: redactBounded(startupErrorField(error, "message") || String(error), 1_000),
-        hostKey: startupErrorField(error, "hostKey") || null,
+        hostKey: redactBounded(startupErrorField(error, "hostKey"), 160) || null,
       };
+      const deadline = redactBounded(startupErrorField(error, "deadline"), 160)
+        || (classification.category === "timeout" ? diagnostic.message : null);
       if (classification.disposition === "terminal") {
+        markStructuredHostStartupFailed(classification.category, { deadline, hostKey: diagnostic.hostKey, nextRetryAt: null });
         finished = true;
         options.signal?.removeEventListener("abort", aborted);
         log("[structured hosts] startup adoption failed", {
@@ -829,6 +870,9 @@ export async function runStructuredHostStartup(
       const delayMs = Math.min(maxRetryMs, Math.max(0, Math.round(retryMs * jitter)));
       retryMs = Math.min(retryMs * 2, maxRetryMs);
       retryPending = true;
+      markStructuredHostStartupFailed(classification.category, {
+        deadline, hostKey: diagnostic.hostKey, nextRetryAt: new Date(Date.now() + delayMs).toISOString(),
+      });
       log("[structured hosts] startup adoption failed; retry scheduled", {
         ...diagnostic,
         category: classification.category, attempt: attempts, retryInMs: delayMs,
@@ -966,6 +1010,7 @@ export async function registerViewerRuntime(): Promise<void> {
   // Background diagnostics never hold readiness or reach the runtime host.
   void import("./loopProfilerServing").then(({ startServingLoopProfiler }) => startServingLoopProfiler(viewerLoopMonitor)).catch(() => {});
   await installServingNextRenderMonitor();
+  await installServingControlIngress();
   discardUnsupportedApiCredentials();
 
   await installSpawnCapabilityResolverAtStartup();
@@ -1036,7 +1081,11 @@ export async function registerViewerRuntime(): Promise<void> {
     try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
     const { startRoleSelectionRetention } = await import("@/lib/memory/roleSelectionRetention");
     startRoleSelectionRetention();
+    const { startRoleHistoryDrain } = await import("@/lib/memory/roleHistoryDrain");
+    startRoleHistoryDrain();
     const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
+    const { startServingHeapSeries } = await import("./heapSeries");
+    startServingHeapSeries(viewerReleaseOwnsTraffic);
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
     await startupBarrier.run(() => settleInterruptedTransfers());
@@ -1044,6 +1093,7 @@ export async function registerViewerRuntime(): Promise<void> {
     await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", async () => {
       const registry = await prepareAgentRegistry(startupAbort.signal);
       await registry.prepareReadOnlySnapshot(startupAbort.signal);
+      await registry.prepareNativeCallerArtifacts();
     }));
     assertStartupActive();
     const { cleanupFinishedWorkAtStartup } = await import("@/lib/attention/finishedWorkCleanup");

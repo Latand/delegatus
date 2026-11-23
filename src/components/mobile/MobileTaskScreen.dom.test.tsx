@@ -53,6 +53,7 @@ const { MobileTaskScreen } = await import("./MobileTaskScreen");
 const { ConversationDrafts } = await import("@/components/pipelines/conversationDraftClient");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
 const { fakeHistory } = await import("./mobileNavTestHistory");
+const { takeRequestedStage } = await import("./pipelineStageRequest");
 setLocale("en");
 afterAll(async () => {
   await new Promise((r) => setTimeout(r, 0));
@@ -182,7 +183,7 @@ function taskPorts(patches: Array<{ id: string; body: PatchBody }>, refuse = () 
       patches.push({ id, body });
       await sleep(5);
       if (refuse()) return { ok: false, status: 500, error: "the store is read-only" };
-      stored = { ...stored, ...("status" in body ? { status: body.status } : {}), ...("text" in body ? { text: body.text } : {}), ...("priority" in body ? { priority: body.priority === "normal" ? undefined : body.priority } : {}), revision: `${(stored as BoardTask & { revision: string }).revision}+` } as BoardTask;
+      stored = { ...stored, ...("status" in body ? { status: body.status } : {}), ...("text" in body ? { text: body.text } : {}), ...("priority" in body ? { priority: body.priority === "normal" ? undefined : body.priority } : {}), ...("hold" in body ? { hold: body.hold } : {}), revision: `${(stored as BoardTask & { revision: string }).revision}+` } as BoardTask;
       return { ok: true, task: stored };
     },
     async read() { return stored; },
@@ -233,12 +234,21 @@ test("the status is a sheet: a choice moves the task with a guarded write and a 
   const sheet = q(dom.document.body as unknown as HTMLElement, "[data-phone-task-status-sheet]")!;
   expect(qa(sheet, "[data-phone-task-status]").map((row) => row.getAttribute("data-phone-task-status"))).toEqual(["inbox", "assigned", "blocked", "done"]);
   click(q(sheet, '[data-phone-task-status="blocked"]'));
+  expect(nav.getState().sheet).toBe("status");
+  const form = q(dom.document.body as unknown as HTMLElement, "[data-hold-editor]")!;
+  expect(form).toBeTruthy();
+  expect(q(host, "[data-phone-task-status-pill]")!.getAttribute("data-phone-task-status-pill")).toBe("assigned");
+  const field = form.querySelector("input") as unknown as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+  flushSync(() => { setter.call(field, "Choose the release"); field.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+  click(form.querySelector('[type="submit"]') as unknown as HTMLElement);
   expect(nav.getState().sheet).toBeNull();
   expect(q(host, "[data-phone-task-status-pill]")!.getAttribute("data-phone-task-status-pill")).toBe("blocked");
-  expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: en("kanban.status.blocked") }));
+  expect(q(host, "[data-test-receipt]")).toBeNull();
   await sleep(20);
+  expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: en("kanban.status.blocked") }));
   expect(patches).toHaveLength(1);
-  expect(patches[0]!.body).toMatchObject({ status: "blocked", expectedRevision: "r-t-many-1" });
+  expect(patches[0]!.body).toMatchObject({ status: "blocked", hold: { kind: "operator", note: "Choose the release" }, expectedRevision: "r-t-many-1" });
   click(q(host, "[data-test-undo]"));
   expect(q(host, "[data-phone-task-status-pill]")!.getAttribute("data-phone-task-status-pill")).toBe("assigned");
   await sleep(20);
@@ -475,6 +485,12 @@ test("a live lane is its numbered stage list: who runs each stage once, the curr
   expect(current.querySelector("[data-stage-now]")?.textContent).toContain("running");
   click(q(current, '[data-open-conversation="implement"]'));
   expect(opened).toEqual([stageFile.path]);
+  /* A stage that has not started opens the pipeline screen on its own ⚙ sheet
+     (docs/design/task-card-no-inline-conversations.md §6). */
+  click(q(live, '[data-stage-open="review"]'));
+  expect(screens).toEqual(["running-a"]);
+  expect(takeRequestedStage("running-a")).toBe("review");
+  screens.length = 0;
   /* The Stages line is the way into the pipeline screen, with the lane's ⋯. */
   const stages = q(live, '.pb-section-row [data-open-stages="running-a"]')!;
   expect(stages.textContent).toContain(en("mobile2.pipeline.stages"));
@@ -710,5 +726,34 @@ test("«Pipeline from conversation…» on the phone: a create with no answer ke
     expect(posts.map((post) => [post.clientRequestId, post.sourceRevision])).toEqual([["key-1", "rev-fix/csv-export-retry"], ["key-1", "rev-fix/csv-export-retry"]]);
   } finally {
     globalThis.fetch = realFetch;
+  }
+});
+
+test("an accepted creation joins its task without replacing the existing lanes or task navigation", async () => {
+  const { setTeamViewForTests } = await import("@/components/team/teamClient");
+  const { resetFilesClientCacheForTests, reservePipelineCreation } = await import("@/hooks/useFiles");
+  const { memoryFilesSnapshotStore } = await import("@/lib/client/filesSnapshotStore");
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async () => Response.json({ error: "temporarily unavailable" }, { status: 503 }), { preconnect: () => {} });
+  setTeamViewForTests({ mode: "solo", me: null, members: [], methods: {
+    approval: false, telegram: { available: false, botUsername: null }, passkey: { available: false },
+  } });
+  resetFilesClientCacheForTests(memoryFilesSnapshotStore());
+  try {
+    const accepted = buildPipeline({ id: "accepted-task", project: "fixture", task: "Accepted follow-up", taskIds: [theTask.id],
+      repoDir: "/repo", srcPath: null, srcConversationId: null, stages: [], now: iso(0) });
+    const reservation = reservePipelineCreation()!;
+    expect(await reservation.accept(accepted, iso(0))).toBe(true);
+    reservation.release();
+    const { host, nav } = mount(taskPorts([]), noPipelinePorts);
+    expect(q(host, '[data-creation="accepted-task"]')).not.toBeNull();
+    expect(qa(host, "[data-phone-task-lane]").length).toBeGreaterThan(1);
+    expect(q(host, "[data-phone-task-title]")?.textContent).toContain(theTask.text.split("\n")[0]);
+    expect(nav.getState().stack.at(-1)?.kind).toBe("task");
+  } finally {
+    for (const root of roots) flushSync(() => root.unmount());
+    roots = [];
+    resetFilesClientCacheForTests(); setTeamViewForTests(null); globalThis.fetch = realFetch;
   }
 });

@@ -21,14 +21,15 @@ export interface ReseatTarget {
 export function chooseReseatTarget(
   currentAccountId: string,
   observations: readonly DurableQuotaObservation[],
-  accounts: readonly { id: string; label: string }[],
+  accounts: readonly { id: string; label: string; spendCredits?: boolean }[],
   now = Date.now(),
   model?: string | null,
 ): ReseatTarget | null {
-  const labels = new Map(accounts.map((account) => [account.id, account.label] as const));
+  const byId = new Map(accounts.map(account => [account.id, account] as const));
   const candidates = observations.flatMap((observation) => {
     if (observation.accountId === currentAccountId) return [];
-    const label = labels.get(observation.accountId);
+    const account = byId.get(observation.accountId);
+    const label = account?.label;
     if (label === undefined) return [];
     const remaining = effectiveRemaining({
       engine: observation.engine,
@@ -39,7 +40,9 @@ export function chooseReseatTarget(
       observedAt: Date.parse(observation.observedAt),
       authCheckedAt: Date.parse(observation.authCheckedAt),
     }, now, { model });
-    if (!remaining || remaining.percent <= AUTO_BALANCE_THRESHOLD) return [];
+    const spending = observation.engine === "codex" && observation.limits?.credits?.hasCredits === true
+      && account?.spendCredits === true;
+    if (!remaining || !spending && remaining.percent <= AUTO_BALANCE_THRESHOLD) return [];
     return [{ accountId: observation.accountId, label, remainingPercent: remaining.percent, window: remaining.window }];
   });
   return candidates.sort((left, right) =>
@@ -68,7 +71,7 @@ export type ProjectReseatSelection =
 export function chooseProjectReseatTarget(
   currentAccountId: string,
   observations: readonly DurableQuotaObservation[],
-  accounts: readonly { id: string; label: string }[],
+  accounts: readonly { id: string; label: string; spendCredits?: boolean }[],
   allowedAccountIds: readonly string[] | null,
   now = Date.now(),
   model?: string | null,

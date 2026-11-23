@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { statePath } from "@/lib/configDir";
 
@@ -73,32 +73,6 @@ function recordStructuredOwner(registry: AgentRegistry, conversation: ReturnType
   });
 }
 
-function recordLegacyOwner(registry: AgentRegistry, conversation: ReturnType<typeof registryWithConversation>["conversation"]): void {
-  const generation = conversation.generations.at(-1)!;
-  registry.upsert({
-    key: { engine: conversation.engine, sessionId: generation.id },
-    artifactPath: generation.path,
-    cwd: generation.launchProfile.cwd,
-    accountId: generation.accountId,
-    launchProfile: generation.launchProfile,
-    status: "idle",
-    host: {
-      kind: "tmux",
-      endpoint: "/run/user/1000/tmux/default",
-      server: { pid: 201, startIdentity: "tmux-server" },
-      paneId: "%21",
-      panePid: { pid: 202, startIdentity: "tmux-pane" },
-      windowName: "legacy-root",
-      agent: { pid: 203, startIdentity: "legacy-agent" },
-      argv: ["codex", "resume", generation.id],
-    },
-    structuredHost: null,
-    claimEpoch: 2,
-    claimOwner: null,
-    pendingAction: null,
-  });
-}
-
 function snapshot(ownedConversationId = conversationId, engine: "codex" | "claude" = "codex", imageSupported = false): RuntimeSnapshot {
   return {
     schemaVersion: 1,
@@ -140,7 +114,7 @@ function snapshot(ownedConversationId = conversationId, engine: "codex" | "claud
   };
 }
 
-test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "deadline-json-settlement-held", "revoked", "role-memory"] as const)("dispatch authorization preserves the %s outcome", async scenario => {
+test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "deadline-json-settlement-held", "revoked", "role-memory", "role-memory-journaled", "role-memory-unknown"] as const)("dispatch authorization preserves the %s outcome", async scenario => {
   const { registry, conversation } = registryWithConversation("default", "codex", scenario.startsWith("deadline-json") ? "off" : undefined);
   const journal = new RuntimeJournal(path.join(sandbox, `authorization-${scenario}.sqlite`), { structuredHosts: true });
   let commands = 0;
@@ -150,6 +124,10 @@ test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "
       ? { acquired: false as const } : writeNow(correlation, commit, options));
   const client = {
     readSession: sessionReader(async () => snapshot(conversation.id)),
+    operationStatus: async id => {
+      if (scenario === "role-memory-unknown") throw new Error("journal unavailable");
+      return journal.operationResult(id);
+    },
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
       commands += 1;
       return journal.executeOperation(command);
@@ -163,7 +141,15 @@ test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "
       authorizeDispatch: async () => {
         if (scenario.startsWith("deadline")) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
         if (scenario === "revoked") throw new Error("authority revoked");
-        if (scenario === "role-memory") throw new RoleMemoryChanged();
+        if (scenario.startsWith("role-memory")) {
+          if (scenario === "role-memory-journaled") {
+            const delivery = Object.values(registry.snapshot().heldDeliveries)[0]!;
+            journal.executeOperation({ ...delivery.command, kind: "send", conversationId: conversation.id,
+              idempotencyKey: delivery.command.operationId, text: "Stage work",
+              contentDigest: structuredContentDigest({ text: "Stage work", images: [] }) });
+          }
+          throw new RoleMemoryChanged();
+        }
       },
     });
     if (scenario === "allowed") {
@@ -172,7 +158,8 @@ test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "
       return;
     }
     expect(commands).toBe(0);
-    expect(journal.operationResult(`authorization-${scenario}`)).toBeNull();
+    if (scenario === "role-memory-journaled") expect(journal.operationResult(`authorization-${scenario}`)).not.toBeNull();
+    else expect(journal.operationResult(`authorization-${scenario}`)).toBeNull();
     expect(result).toMatchObject({ ok: false, status: scenario.startsWith("deadline") ? 503 : scenario === "revoked" ? 403 : 409 });
     expect(result).not.toHaveProperty("transportUncertain");
     const reopened = new AgentRegistry(registry.filename);
@@ -192,15 +179,22 @@ test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "
       } else {
         expect(result).toMatchObject({ error: scenario === "revoked"
           ? "autonomous first prompt authorization revoked" : "Role-memory privacy changed; retrying before dispatch" });
+        if (scenario.startsWith("role-memory")) {
+          expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition))
+            .toEqual([scenario === "role-memory" ? "lost" : "unverified"]);
+          expect(failed.error).toBe(new RoleMemoryChanged().message + (scenario === "role-memory" ? ""
+            : "; a prior delivery attempt may have been delivered because its journal outcome is unknown"));
+        }
       }
     } finally { reopened.close(); }
   } finally { immediateWriter.mockRestore(); journal.close(); registry.close(); }
 });
 
-test("an admission deadline on a same-key resend keeps the earlier attempt's unknown fate", async () => {
+test.each(["deadline", "role-memory"] as const)("an admission %s on a same-key resend keeps the earlier attempt's unknown fate", async mode => {
   const { registry, conversation } = registryWithConversation();
-  const journal = new RuntimeJournal(path.join(sandbox, "authorization-deadline-resend.sqlite"), { structuredHosts: true });
+  const journal = new RuntimeJournal(path.join(sandbox, `authorization-${mode}-resend.sqlite`), { structuredHosts: true });
   let commands = 0;
+  const admissions: string[] = [];
   let authorizations = 0;
   const session = snapshot(conversation.id).sessions[0]!;
   session.sessionKey.sessionId = conversation.generations.at(-1)!.id;
@@ -212,6 +206,7 @@ test("an admission deadline on a same-key resend keeps the earlier attempt's unk
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
       commands += 1;
       const admitted = journal.executeOperation(command);
+      admissions.push(admitted.receipt.status);
       expect(admitted.receipt.status).toBe("queued");
       expect(journal.transitionOperation(admitted.operationId, "delivering").receipt.status).toBe("delivering");
       expect(journal.transitionOperation(admitted.operationId, "delivered").receipt.status).toBe("delivered");
@@ -219,12 +214,13 @@ test("an admission deadline on a same-key resend keeps the earlier attempt's unk
     },
   } as unknown as RuntimeHostClient;
   const request = { path: artifactPath, conversationId: conversation.id,
-    clientMessageId: "authorization-deadline-resend", operationId: "authorization-deadline-resend", text: "Stage work" };
+    clientMessageId: `authorization-${mode}-resend`, operationId: `authorization-${mode}-resend`, text: "Stage work" };
   const dependencies = () => ({
     enabled: () => true, registry: () => registry, client: () => client, kick: () => {}, progress: new DeliveryProgressStore(null),
     authorizeDispatch: async () => {
       authorizations += 1;
-      if (authorizations > 1) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+      if (authorizations > 1) throw mode === "role-memory" ? new RoleMemoryChanged()
+        : new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
     },
   });
   try {
@@ -233,9 +229,14 @@ test("an admission deadline on a same-key resend keeps the earlier attempt's unk
     const resent = await enqueueStructuredMessage(request, dependencies());
     expect(authorizations).toBe(2);
     expect(commands).toBe(1);
+    expect(admissions).toEqual(["queued"]);
     expect(journal.operationResult(request.operationId)?.receipt.status).toBe("delivered");
-    expect(resent).toMatchObject({ ok: false, status: 503, operationId: request.operationId });
-    expect(resent && !resent.ok && resent.error).toContain("a prior delivery attempt may have been delivered");
+    expect(resent).toMatchObject({ ok: false, status: mode === "deadline" ? 503 : 409 });
+    if (mode === "deadline") {
+      expect(resent).toMatchObject({ operationId: request.operationId });
+      expect(resent && !resent.ok && resent.error).toContain("a prior delivery attempt may have been delivered");
+    }
+    expect(Object.values(registry.snapshot().heldDeliveries)[0]!.error).toContain("a prior delivery attempt may have been delivered");
     const reopened = new AgentRegistry(registry.filename);
     try {
       expect(sendReceiptFor(reopened.snapshot(), request.operationId)).toMatchObject({ duplicateRisk: true, resend: "verify-first" });
@@ -1165,7 +1166,7 @@ test("a persisted structured current generation holds the exact send while the r
   }]);
 });
 
-test("a reopened synchronization hold replays the exact steer command", async () => {
+test.each(["steer", "context"] as const)("a reopened synchronization hold replays the exact %s command", async mode => {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);
   const request = {
@@ -1173,9 +1174,9 @@ test("a reopened synchronization hold replays the exact steer command", async ()
     conversationId: conversation.id,
     clientMessageId: "deployment-window-steer",
     operationId: "operation-deployment-window-steer",
-    kind: "steer" as const,
-    policy: "steer-if-active" as const,
-    turnId: "turn-before-runtime-restart",
+    kind: mode === "steer" ? "steer" as const : "send" as const,
+    policy: mode === "steer" ? "steer-if-active" as const : "context-or-queue" as const,
+    ...(mode === "steer" ? { turnId: "turn-before-runtime-restart" } : {}),
     text: "amend the active turn after runtime recovery",
     hasImages: false,
   };
@@ -1194,7 +1195,7 @@ test("a reopened synchronization hold replays the exact steer command", async ()
       operationId: request.operationId,
       kind: request.kind,
       policy: request.policy,
-      turnId: request.turnId,
+      ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
     },
     requestDigest: expect.any(String),
   });
@@ -1206,7 +1207,7 @@ test("a reopened synchronization hold replays the exact steer command", async ()
     conversationId: conversation.id,
     kind: request.kind,
     status: "delivered" as const,
-    turnId: request.turnId,
+    ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
     at: "2026-07-13T00:00:00.000Z",
     revision: 2,
   };
@@ -1238,7 +1239,7 @@ test("a reopened synchronization hold replays the exact steer command", async ()
     idempotencyKey: request.clientMessageId,
     kind: request.kind,
     policy: request.policy,
-    turnId: request.turnId,
+    ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
     text: request.text,
     contentDigest: expect.any(String),
   });
@@ -1392,165 +1393,6 @@ test("a delivered tombstone rejects changed client-id reuse and preserves the ca
   expect(registry.snapshot().heldDeliveries[tombstone.id]).toEqual(tombstone);
 });
 
-test("a persisted tmux current generation falls through during runtime client absence", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  let migrationTicks = 0;
-
-  const result = await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "legacy-deployment-window-message",
-    text: "continue through the legacy pane",
-    hasImages: false,
-  }, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-    requestMigrationTick: () => { migrationTicks += 1; },
-    startupFailed: () => false,
-  });
-
-  expect(result).toBeNull();
-  expect(migrationTicks).toBe(0);
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
-test("legacy synchronization rejects structured command semantics before fallback", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const request = {
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "legacy-structured-command",
-    operationId: "operation-legacy-structured-command",
-    kind: "steer" as const,
-    policy: "steer-if-active" as const,
-    turnId: "stale-legacy-turn",
-    text: "preserve structured command semantics",
-    hasImages: false,
-  };
-  const result = await enqueueStructuredMessage(request, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-  });
-  const legacySnapshot = snapshot(conversation.id);
-  legacySnapshot.sessions[0] = { ...legacySnapshot.sessions[0]!, hostKind: "tmux-legacy" };
-  const snapshotResult = await enqueueStructuredMessage(request, {
-    enabled: () => true,
-    client: () => ({ readSession: sessionReader(async () => legacySnapshot) }) as unknown as RuntimeHostClient,
-    registry: () => registry,
-  });
-
-  expect(result).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 409 });
-  expect(snapshotResult).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 409 });
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
-test("the structured transport refuses a queue send once the owner turns out to be a legacy pane host", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const result = await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "seat-tick:legacy:1",
-    text: "wake text",
-    hasImages: false,
-    policy: "queue",
-  }, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-  });
-
-  expect(result).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 409,
-    error: "legacy delivery cannot preserve structured command semantics" });
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
-test("a durable legacy host wins over retained structured adapter metadata during runtime client absence", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const generation = conversation.generations.at(-1)!;
-  registry.setStructuredHost({ engine: conversation.engine, sessionId: generation.id }, {
-    kind: "codex-app-server",
-    endpoint: "stdio:conflicting-owner",
-    process: null,
-    eventCursor: 9,
-    protocolVersion: "v2",
-    writerClaimEpoch: 2,
-    activeTurnRef: null,
-    pendingAttention: [],
-    activeFlags: [],
-  });
-
-  const result = await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "ambiguous-deployment-window-message",
-    text: "keep conflicting ownership fenced",
-    hasImages: false,
-  }, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-  });
-
-  expect(result).toBeNull();
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
-test("a live legacy record outranks a stale structured projection for the send immediately after resume", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const generation = conversation.generations.at(-1)!;
-  registry.setStructuredHost({ engine: conversation.engine, sessionId: generation.id }, {
-    kind: "codex-app-server",
-    endpoint: "stdio:stale-after-resume",
-    process: null,
-    eventCursor: 9,
-    protocolVersion: "v2",
-    writerClaimEpoch: 2,
-    activeTurnRef: null,
-    pendingAttention: [],
-    activeFlags: [],
-  });
-  const staleRuntime = snapshot(conversation.id);
-  staleRuntime.sessions[0] = { ...staleRuntime.sessions[0]!, host: "unhosted" };
-  let recoveryCalls = 0;
-
-  expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), {
-    conversationId: conversation.id,
-  })).toMatchObject({
-    deliverable: true,
-    condition: "deliverable",
-    transport: "legacy",
-    hostStatus: "idle",
-  });
-
-  const result = await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "send-immediately-after-legacy-resume",
-    text: "deliver through the host the resume just settled",
-    hasImages: false,
-  }, {
-    enabled: () => true,
-    client: () => ({ readSession: sessionReader(async () => staleRuntime) }) as unknown as RuntimeHostClient,
-    registry: () => registry,
-    republish: async () => false,
-    recover: async () => {
-      recoveryCalls += 1;
-      return null;
-    },
-  });
-
-  expect(result).toBeNull();
-  expect(recoveryCalls).toBe(0);
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
 test("structured runtime synchronization keeps images and oversized text request-local", async () => {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);
@@ -1577,32 +1419,6 @@ test("structured runtime synchronization keeps images and oversized text request
 
   expect(image).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 409 });
   expect(oversized).toMatchObject({ ok: false, structured: true, outcome: "failed", status: 413 });
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
-test("legacy runtime synchronization leaves request-local payloads for the legacy ladder", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const dependencies = {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-  };
-
-  expect(await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "legacy-runtime-window-image",
-    text: "image caption",
-    hasImages: true,
-  }, dependencies)).toBeNull();
-  expect(await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "legacy-runtime-window-oversized",
-    text: "x".repeat(32_001),
-    hasImages: false,
-  }, dependencies)).toBeNull();
   expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
 });
 
@@ -1706,30 +1522,6 @@ test("a persisted structured current generation holds the send after a runtime s
   });
 });
 
-test("a persisted tmux current generation falls through after a runtime snapshot failure", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const client = {
-    readSession: sessionReader(async () => { throw new Error("runtime host is unavailable"); }),
-  } as unknown as RuntimeHostClient;
-
-  const result = await enqueueStructuredMessage({
-    path: artifactPath,
-    conversationId: conversation.id,
-    clientMessageId: "legacy-snapshot-window-message",
-    text: "deliver through the legacy pane",
-    hasImages: false,
-  }, {
-    enabled: () => true,
-    client: () => client,
-    registry: () => registry,
-    startupFailed: () => false,
-  });
-
-  expect(result).toBeNull();
-  expect(registry.pendingDeliveries(conversation.id)).toEqual([]);
-});
-
 test("structured ownership recovery revokes startup-failure fallback authorization", async () => {
   let startupFailed = true;
   let snapshots = 0;
@@ -1756,22 +1548,6 @@ test("structured ownership recovery revokes startup-failure fallback authorizati
     { path: artifactPath, text: "remain fenced", hasImages: false },
     dependencies,
   )).toMatchObject({ ok: false, structured: true, status: 503 });
-});
-
-test("structured message routing only falls through for an explicit legacy owner", async () => {
-  const legacySnapshot = snapshot();
-  legacySnapshot.sessions[0] = { ...legacySnapshot.sessions[0]!, hostKind: "tmux-legacy" };
-  const client = {
-    readSession: sessionReader(async () => legacySnapshot),
-    command: async () => { throw new Error("legacy delivery reached the structured host"); },
-  } as unknown as RuntimeHostClient;
-
-  const result = await enqueueStructuredMessage(
-    { path: artifactPath, text: "hello", hasImages: false },
-    { enabled: () => true, client: () => client },
-  );
-
-  expect(result).toBeNull();
 });
 
 test("dead structured composer send is durable before recovery and delivers after claim", async () => {
@@ -2090,12 +1866,14 @@ test("the migration orphan sweep still terminalizes upgrade-era residue without 
     recoveryIntent: null,
   });
 
+  /* Residue of an upgrade was admitted before the serving process started; a
+     reservation admitted since gets the reason settledStageSend.test.ts names. */
   await reconcileMigrations({} as never, {
     async deliver() {
       deliveryCalls += 1;
       return "delivered";
     },
-  }, registry);
+  }, registry, { servingStartedAt: Date.parse(orphan.createdAt) + 60_000 });
 
   expect(deliveryCalls).toBe(0);
   expect(registry.snapshot().heldDeliveries[orphan.id]).toMatchObject({
@@ -2585,7 +2363,7 @@ test.each([false, true])("a completed pipeline-stage send replaces dead host own
       return recoverDeadStructuredConversation(request, {
         registry,
         client,
-        transport: () => "structured",
+        transportAvailable: () => true,
         resolveAccount: () => ({
           engine: "codex",
           accountId: "pipeline-account",
@@ -3139,7 +2917,7 @@ test("a terminal resume failure fences its reservation before a competing resend
   } as unknown as RuntimeHostClient;
   const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
     ...dependencies,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "managed", home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } }),
     spawn: async (input) => ({
       ok: true, target: null, path: null, launchId: input.receipt.launchId, conversationId: input.receipt.conversationId,
@@ -3296,7 +3074,7 @@ test("the first send to a reclaimed conversation waits for the resume it raised 
   } as unknown as RuntimeHostClient;
   const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => recoverDeadStructuredConversation(request, {
     ...dependencies,
-    transport: () => "structured",
+    transportAvailable: () => true,
     resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "managed", home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } }),
     spawn: async (input) => ({
       ok: true, target: null, path: null, launchId: input.receipt.launchId, conversationId: input.receipt.conversationId,
@@ -3490,54 +3268,6 @@ test("an injection a switch overtook between preflight and its reservation is re
   expect(ended.duringEnding).toMatchObject({ operationId: ended.operationId, waitReason: "switching-accounts", terminal: null });
   expect(ended.after).toMatchObject({ terminal: { state: "failed" } });
   expect(ended.commands).toBe(0);
-});
-
-test("held delivery authorizes legacy fallback from persisted tmux ownership", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-
-  expect(await deliverHeldStructuredMessage({
-    conversationId: conversation.id,
-    path: artifactPath,
-    deliveryId: "held-legacy-startup-failure",
-    clientMessageId: "held-legacy-startup-failure-message",
-    text: "continue through the legacy ladder",
-  }, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-    startupFailed: () => true,
-  })).toBeNull();
-});
-
-test("held delivery rejects structured command semantics before legacy fallback", async () => {
-  const { registry, conversation } = registryWithConversation();
-  recordLegacyOwner(registry, conversation);
-  const request = {
-    conversationId: conversation.id,
-    path: artifactPath,
-    deliveryId: "held-legacy-structured-command",
-    clientMessageId: "held-legacy-structured-command-message",
-    text: "retain the stale turn fence",
-    command: {
-      operationId: "operation-held-legacy-structured-command",
-      kind: "steer" as const,
-      policy: "steer-if-active" as const,
-      turnId: "stale-legacy-turn",
-    },
-  };
-  expect(await deliverHeldStructuredMessage(request, {
-    enabled: () => true,
-    client: () => null,
-    registry: () => registry,
-  })).toBe("failed");
-  const legacySnapshot = snapshot(conversation.id);
-  legacySnapshot.sessions[0] = { ...legacySnapshot.sessions[0]!, hostKind: "tmux-legacy" };
-  expect(await deliverHeldStructuredMessage(request, {
-    enabled: () => true,
-    client: () => ({ readSession: sessionReader(async () => legacySnapshot) }) as unknown as RuntimeHostClient,
-    registry: () => registry,
-  })).toBe("failed");
 });
 
 test("held delivery stays uncertain during a transient structured snapshot failure", async () => {
@@ -4290,7 +4020,7 @@ test("a message to a seat's deputy is refused before anything is reserved or res
     expect(await send(deputyMessageKey(askId))).toMatchObject({ ok: false, code: "deputy_conversation_closed" });
     endDeputy(askId, { outcome: "done" });
     expect(await send("mcp_send_worker")).toMatchObject({ ok: false, code: "deputy_conversation_closed" });
-    /* Addressed by transcript alone, as `/api/tmux` may be. */
+    /* Addressed by transcript alone, as `/api/conversation-host` may be. */
     expect(await send("mcp_send_worker", { path: artifactPath })).toMatchObject({ ok: false, code: "deputy_conversation_closed" });
     expect(touched).toBe(0);
   } finally {
@@ -4859,7 +4589,7 @@ test.each(["unchanged", "active", "reply-during-read", "reply-before-command"] a
 });
 
 
-function idleContinuationFixture(options: { republication?: boolean; republicationCount?: number; loseAcknowledgmentAt?: number; queued?: boolean; failAtExecution?: boolean } = {}) {
+function idleContinuationFixture(options: { republication?: boolean; republicationCount?: number; loseAcknowledgmentAt?: number; queued?: boolean; failAtExecution?: boolean; terminalRejection?: string } = {}) {
   const { registry, conversation } = registryWithConversation();
   recordStructuredOwner(registry, conversation);
   const journal = new RuntimeJournal(path.join(sandbox, `continuation-${registryNumber}.sqlite`), { structuredHosts: true });
@@ -4882,7 +4612,8 @@ function idleContinuationFixture(options: { republication?: boolean; republicati
           state.deliveries += 1;
           if (options.failAtExecution) {
             publish();
-            result = journal.transitionOperation(result.operationId, "failed", { reason: "idle-continuation-cancelled" });
+            result = journal.transitionOperation(result.operationId, options.terminalRejection ? "rejected" : "failed",
+              { reason: options.terminalRejection ?? "idle-continuation-cancelled" });
           } else result = journal.transitionOperation(result.operationId, "delivered");
         }
       }
@@ -4903,6 +4634,26 @@ function idleContinuationFixture(options: { republication?: boolean; republicati
   });
   return { registry, conversation, journal, session, publish, send, state, client };
 }
+
+test("synchronous journal rejection keeps its long primary cause and safe retry proof after registry reopen", async () => {
+  const primary = "synchronous journal rejection: " + "original cause ".repeat(80);
+  const { registry, journal, send, state } = idleContinuationFixture({ failAtExecution: true, terminalRejection: primary });
+  try {
+    const result = await send();
+    expect(result).toMatchObject({ ok: false, receipt: { status: "rejected", reason: primary } });
+    expect(state.commands).toBe(1);
+    expect(state.deliveries).toBe(1);
+    expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+    const reopened = new AgentRegistry(registry.filename);
+    try {
+      expect(sendReceiptFor(reopened.deliverySnapshotForOperation(result!.operationId!), result!.operationId!)).toMatchObject({
+        state: "failed", reason: expect.stringContaining("accepted for delivery but never executed"),
+        primaryFailure: { status: "rejected", reason: primary.slice(0, 2048) }, duplicateRisk: false, resend: "safe",
+      });
+      expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["lost"]);
+    } finally { reopened.close(); }
+  } finally { journal.close(); }
+});
 
 test("an idle republication rejection retries the stable continuation key exactly once", async () => {
   const fixture = idleContinuationFixture({ republication: true });
@@ -5163,7 +4914,7 @@ test.each([
   const recover: typeof recoverDeadStructuredConversation = (request, dependencies) => {
     recoveries++;
     return recoverDeadStructuredConversation(request, {
-      ...dependencies, transport: () => "structured", park: () => null,
+      ...dependencies, transportAvailable: () => true, park: () => null,
       spawn: async () => { spawns++; throw new Error("a live owner must not spawn a successor"); },
     });
   };
@@ -5298,6 +5049,26 @@ test.each(["id", "path", "runtime-read", "reservation-wait"])("D4 rotated seat r
     expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: conversation.id }))
       .toMatchObject({ deliverable: false, condition: "superseded" });
   } finally { blocked.mockRestore(); }
+});
+
+
+test("a send whose reservation write found the delivery record busy is refused before anything is reserved (#3782)", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  let commands = 0;
+  const busy = spyOn(registry, "holdDeliveryOffLoop").mockImplementation(async () => null);
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      text: "words that met a busy writer", images: [], clientMessageId: "busy-writer-message",
+    }, { enabled: () => true, registry: () => registry, progress: null,
+      client: () => ({ readSession: async () => snapshot(conversation.id).sessions[0],
+        command: async () => { commands += 1; throw new Error("a refused send reached the host"); } }) as unknown as RuntimeHostClient,
+    });
+    expect(busy).toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, status: 503, admission: "refused" });
+    expect(registry.readOnlySnapshot().heldDeliveries).toEqual({});
+    expect(commands).toBe(0);
+  } finally { busy.mockRestore(); }
 });
 
 
@@ -5465,4 +5236,195 @@ test.each([false, true])("only a newly committed journal receipt grants an immed
       kick: fresh => { wakes.push(fresh); } })).toMatchObject({ ok: true, outcome: "queued" });
     expect(wakes).toEqual(replayed ? [undefined] : [true]);
   } finally { journal.close(); }
+});
+
+
+test("a proven dead stage fails its held follow-up once without rearming later drains", async () => {
+  const { isolatedStageRegistry, stageFollowup } = await import("./deadStageDelivery.fixture");
+  setSystemTime(new Date("2026-11-01T00:00:00Z"));
+  const directory = fs.mkdtempSync(path.join(sandbox, "dead-stage-"));
+  const { registry, conversation } = isolatedStageRegistry(directory);
+  const f = stageFollowup(registry, conversation.id);
+  try {
+    await f.drain();
+    const failed = registry.snapshot().heldDeliveries[f.held.id]!;
+    expect(failed.state).toBe("failed");
+    expect(failed.error).toContain("stage host is gone");
+    expect(failed.error).toContain("retry the stage");
+    expect(failed).toMatchObject({ text: f.held.text, command: f.held.command, clientMessageId: f.held.clientMessageId });
+    expect(sendReceiptFor(registry.snapshot(), f.held.command.operationId)).toMatchObject({ state: "failed", duplicateRisk: false, resend: "safe" });
+    expect(registry.snapshot().deliveryOperationOwners[f.held.command.operationId]).toMatchObject({ terminalState: "failed", terminalDisposition: "lost" });
+    for (const minutes of [1, 5, 11]) {
+      setSystemTime(new Date(Date.parse(f.held.createdAt) + minutes * 60_000));
+      await f.drain();
+      expect(registry.snapshot().heldDeliveries[f.held.id]).toEqual(failed);
+    }
+    expect(f.commands()).toBe(0);
+    expect(f.recoveries()).toBe(0);
+  } finally { registry.close(); setSystemTime(); }
+});
+
+
+test.each(["live", "unknown", "unreadable", "publishing", "first-prompt", "journaled", "journal-unreadable", "reconciling", "replaced-attempt", "replaced-generation", "republished-after-read", "replaced-after-read"] as const)(
+  "dead-stage refusal retains the existing deferral for %s evidence", async mode => {
+    const { isolatedStageRegistry, stageFollowup } = await import("./deadStageDelivery.fixture");
+    const { loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+    const { procBackend } = await import("@/lib/proc");
+    setSystemTime(new Date("2026-11-01T00:00:00Z"));
+    const directory = fs.mkdtempSync(path.join(sandbox, `stage-evidence-${mode}-`));
+    const { registry, conversation } = isolatedStageRegistry(directory);
+    const generation = conversation.generations.at(-1)!;
+    const key = { engine: conversation.engine, sessionId: generation.id };
+    const entry = registry.hostEntry(key)!;
+    const f = stageFollowup(registry, conversation.id);
+    let identityRead: ReturnType<typeof spyOn> | undefined;
+    try {
+      if (mode === "live" || mode === "unknown" || mode === "unreadable") {
+        registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: {
+          ...captureProcessIdentity(process.pid), ...(mode === "unknown" ? { startIdentity: null } : {}) } } });
+        if (mode === "unreadable") identityRead = spyOn(procBackend, "processIdentity").mockReturnValue(null);
+      }
+      if (mode === "publishing") registry.upsert({ ...entry, status: "starting", pendingAction: "spawn",
+        structuredHost: { ...entry.structuredHost!, process: null } });
+      if (mode === "first-prompt") {
+        registry.recordDeliveryOutcome(f.held.id, "failed", "replaced fixture operation", "lost");
+        f.held = registry.holdDelivery(conversation.id, "Stage initial work", "stage-initial-key", "text", [], null,
+          { operationId: "spawn_message_stage-fixture-launch", kind: "send", policy: "queue", turnId: null });
+      }
+      if (mode === "journaled") f.client.operationStatus = async () => ({ operationId: f.held.command.operationId,
+        receipt: { status: "delivering" } } as never);
+      if (mode === "journal-unreadable") f.client.operationStatus = async () => { throw new Error("journal unavailable"); };
+      if (mode === "republished-after-read" || mode === "replaced-after-read") f.client.operationStatus = async () => {
+        if (mode === "republished-after-read") registry.upsert({ ...entry, structuredHost: {
+          ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+        else {
+          const pipelines = loadPipelines();
+          pipelines.find(row => row.id === "dead-stage-fixture")!.runs[0]!.attempts[0]!.conversationId = "conversation_replaced";
+          savePipelines(pipelines);
+        }
+        return null;
+      };
+      if (mode === "replaced-attempt" || mode === "replaced-generation") {
+        const pipelines = loadPipelines();
+        const attempt = pipelines.find(row => row.id === "dead-stage-fixture")!.runs[0]!.attempts[0]!;
+        if (mode === "replaced-attempt") attempt.conversationId = "conversation_other-stage";
+        else attempt.sessionId = "replacement-generation";
+        savePipelines(pipelines);
+      }
+      const result = await deliverHeldStructuredMessage({ conversationId: conversation.id, path: generation.path,
+        deliveryId: f.held.id, clientMessageId: f.held.clientMessageId!, text: f.held.text, command: f.held.command,
+        reconcileUncertain: mode === "reconciling" }, f.dependencies);
+      expect(typeof result === "object" && result?.outcome === "rejected").toBe(false);
+      if (["journaled", "journal-unreadable"].includes(mode)) expect(result).toBe("delivery-uncertain");
+      expect(f.commands()).toBe(0);
+      expect(registry.snapshot().heldDeliveries[f.held.id]!.state).toBe("assigned");
+    } finally { identityRead?.mockRestore(); registry.close(); setSystemTime(); }
+  });
+
+
+test.each(["waiting-turn", "requested", "preparing"] as const)("a Codex send held behind a running turn explains the boundary in its immediate answer (%s)", async phase => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const generation = conversation.generations.at(-1)!;
+  const entry = registry.readOnlySnapshot().entries[`codex:${generation.id}`]!;
+  registry.upsert({ ...entry, status: "live", structuredHost: { ...entry.structuredHost!, activeTurnRef: "working-turn" } });
+  registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual", requestId: "busy-switch",
+    expectedRevision: registry.engineRouting("codex").revision });
+  registry.setConversationMigration(conversation.id, { ...registry.conversation(conversation.id)!.migration!, phase });
+  const state = snapshot(conversation.id);
+  state.sessions[0]!.turn = "running";
+  state.sessions[0]!.activeTurnId = "working-turn";
+  const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    text: "new requirement", hasImages: false, clientMessageId: "busy-switch-message" }, {
+    enabled: () => true, registry: () => registry,
+    client: () => ({ readSession: sessionReader(async () => state) } as RuntimeHostClient),
+    kick: () => {}, requestMigrationTick: () => {},
+  });
+  expect(result).toMatchObject({ ok: true, outcome: "held", waitReason: phase === "waiting-turn" ? "switch-after-turn" : "switching-accounts",
+    detail: expect.stringContaining("current turn ends"), deadlineAt: expect.any(String) });
+});
+
+/* A busy Claude agent outlived the Viewer that owned its stdio
+   across a release. Its row still named that gone Viewer as claim owner and a
+   running engine as its process, so recovery handed it back as live, and the
+   send was accepted and then failed in a tenth of a second as `dead-host`.
+   The send now stops the orphan through the fenced ladder and resumes it. The
+   only processes here are children this test started. */
+test("a send to a host whose owner process is gone resumes it instead of failing as dead-host", async () => {
+  const { spawn } = await import("node:child_process");
+  const { ownFixtureTree, stopFixtureTree } = await import("@/lib/testing/fixtureProcess");
+  const { processIdentityStatus } = await import("@/lib/processIdentity");
+  const child = () => ownFixtureTree(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }));
+  const engine = child();
+  const ended = child();
+  const owner = captureProcessIdentity(ended.pid!);
+  await stopFixtureTree(ended);
+  const engineIdentity = captureProcessIdentity(engine.pid!);
+  const cwd = fs.mkdtempSync(path.join(sandbox, "orphan-send-"));
+  const sessionId = "22222222-2222-\x34222-8222-222222222222";
+  const orphanPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.writeFileSync(orphanPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("claude", orphanPath, "default");
+  registry.upsert({
+    key: { engine: "claude", sessionId }, artifactPath: orphanPath, cwd, accountId: "default",
+    launchProfile: emptyLaunchProfile({ cwd }), status: "idle", host: null, claimEpoch: 1,
+    claimOwner: `structured-host:${JSON.stringify(owner)}`, pendingAction: null,
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:orphaned", process: engineIdentity, eventCursor: 3,
+      protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+  });
+  let resumed = false;
+  const commands: string[] = [];
+  const session = () => {
+    const state = snapshot(conversation.id, "claude");
+    state.sessions[0] = { ...state.sessions[0]!, sessionKey: { engine: "claude", sessionId }, artifactPath: orphanPath,
+      host: resumed ? "hosted" : "dead" };
+    return state;
+  };
+  const receipt = (operationId: string, idempotencyKey: string) => ({
+    operationId, replayed: false,
+    receipt: { operationId, idempotencyKey, conversationId: conversation.id, kind: "send" as const,
+      status: resumed ? "queued" as const : "rejected" as const, reason: resumed ? null : "dead-host",
+      queuePosition: resumed ? 1 : null, at: "2026-07-13T00:00:01.000Z", revision: 1 },
+  });
+  const results = new Map<string, ReturnType<typeof receipt>>();
+  const client = {
+    readSession: sessionReader(async () => session()),
+    command: async (command: { operationId: string; idempotencyKey: string }) => {
+      commands.push(command.operationId);
+      const result = receipt(command.operationId, command.idempotencyKey);
+      results.set(command.operationId, result);
+      return result;
+    },
+    operationStatus: async (id: string) => results.get(id) ?? null,
+  } as unknown as RuntimeHostClient;
+  try {
+    expect(await conversationDeliverabilityFromRecord(registry.snapshot(), { conversationId: conversation.id }))
+      .toMatchObject({ deliverable: false, condition: "orphaned" });
+    const result = await enqueueStructuredMessage({
+      path: orphanPath, conversationId: conversation.id, clientMessageId: "orphan-send-one",
+      text: "the merge gate finished", hasImages: false,
+    }, {
+      enabled: () => true,
+      client: () => client,
+      registry: () => registry,
+      kick: () => {},
+      recover: (request: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(request, {
+        registry, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
+        orphanStop: { graceMs: 200, deadlineMs: 3_000 },
+        resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+        spawn: async input => {
+          resumed = true;
+          return { ok: true, target: null, path: orphanPath, launchId: input.receipt.launchId, conversationId: conversation.id,
+            launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+        },
+      }),
+    } as never);
+    expect(result).toMatchObject({ ok: true, structured: true, spawned: true, outcome: "queued" });
+    expect(commands).toHaveLength(1);
+    expect(processIdentityStatus(engineIdentity)).toBe("dead");
+  } finally {
+    registry.close();
+    await stopFixtureTree(engine);
+  }
 });

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { creditGuardBlock, creditGuardUsedPercent, retainCreditGuardEvidence } from "./creditGuard";
+import { creditGuardUsedPercent, retainCreditGuardEvidence } from "./creditGuard";
+import { accountCreditGuardBlock } from "./creditPolicy";
 
 import type { ClaudeAccount } from "@/lib/accounts/claude";
 import type { CodexAccount } from "@/lib/accounts/codex";
@@ -141,7 +142,7 @@ export function exhaustionNeedsLiveRead(
   model?: string | null,
 ): boolean {
   if (!observation?.authenticated || !observation.limits) return false;
-  const threshold = creditGuardBlock(observation.engine, observation.limits) ? creditGuardUsedPercent() : 100;
+  const threshold = accountCreditGuardBlock(observation.engine, observation.accountId, observation.limits) ? creditGuardUsedPercent() : 100;
   const exhausted = gatingWindows(observation.engine, observation.limits, model)
     .flatMap((entry) => entry.value && entry.value.usedPercent >= threshold ? [entry.value] : []);
   if (!exhausted.length) return false;

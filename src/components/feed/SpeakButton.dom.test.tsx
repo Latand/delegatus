@@ -5,11 +5,14 @@ import { flushSync } from "react-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Profiler } from "react";
 
+import { ttsBackendInfo, type TtsBackendInfo, type TtsBackendOption } from "@/lib/ttsBackend";
+import { clearPcmCache, pcmChunksCached, pcmVoice, PCM_RATE } from "./ttsPcmSession";
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
+import { translate } from "@/lib/i18n";
 import { chunkSpeech, MAX_CHUNK_CHARS } from "@/lib/ttsChunks";
 
 import { SpeakButton } from "./SpeakButton";
-import { chunksCached, clearTtsCache, evictTtsAudio, voiceKey } from "./ttsSession";
+import { clearTtsCache, voiceKey } from "./ttsSession";
 
 test("a scoped speech header server-renders before its client snapshot exists", () => {
   const html = renderToStaticMarkup(<SpeakButton scope="ssr-speech-header" header />);
@@ -44,61 +47,77 @@ const originalFetch = globalThis.fetch;
 const originalAudio = globalThis.Audio;
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
-const backendInfo = {
-  backend: "openai",
-  lockedByEnv: false,
-  options: [
-    { id: "openai", available: true, keyPath: "/keys/openai", model: "gpt-4o-mini-tts", voice: "alloy", cap: 4000 },
-    { id: "elevenlabs", available: false, keyPath: "/keys/elevenlabs", model: "eleven_v4_turbo", voice: "Rachel", cap: 4000 },
-  ],
-};
+// Build the server view through its production resolver in the isolated test root.
+const backendInfo: TtsBackendInfo = ttsBackendInfo(Date.UTC(2026, 9, 29));
+backendInfo.options = backendInfo.options.filter((option) => option.id === "openai" || option.id === "elevenlabs").map((option) => ({
+  ...option, available: option.id === "openai", keyPath: `/keys/${option.id}`,
+  ...(option.id === "elevenlabs" ? { voice: "Rachel" } : {}),
+}));
 
-/**
- * Audio that refuses to play until a muted silent clip has carried the user
- * gesture into it — the autoplay policy the Speak control works around, now
- * across a whole sequence of chunks instead of one clip.
- */
-class FakeAudio {
-  static instances: FakeAudio[] = [];
-  muted = false;
-  src = "";
+function infoFixture(overrides: Omit<Partial<TtsBackendInfo>, "options"> & { options: (Partial<TtsBackendOption> & Pick<TtsBackendOption, "id">)[] }): TtsBackendInfo {
+  const info = ttsBackendInfo(Date.UTC(2026, 9, 29));
+  return { ...info, ...overrides, options: overrides.options.map((option) => ({ ...info.options.find((base) => base.id === option.id)!, ...option })) };
+}
+
+const originalContext = globalThis.AudioContext;
+const originalFrame = globalThis.requestAnimationFrame;
+const originalCancelFrame = globalThis.cancelAnimationFrame;
+const frames = new Map<number, FrameRequestCallback>();
+let frameId = 0;
+let requestClock = 0;
+let clockSpy: ReturnType<typeof spyOn>;
+
+/** Drive Web Audio's sample clock and animation frames without wall-time playback. */
+class FakeContext {
+  static instances: FakeContext[] = [];
+  state = "suspended";
   currentTime = 0;
-  duration = 10;
-  paused = true;
-  private unlocked = false;
-  onloadedmetadata: (() => void) | null = null;
-  ontimeupdate: (() => void) | null = null;
-  onended: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  constructor(src = "") {
-    this.src = src;
-    FakeAudio.instances.push(this);
+  destination = {};
+  nodes: { end: number; stopped: boolean }[] = [];
+  constructor() { FakeContext.instances.push(this); }
+  async resume() { this.state = "running"; }
+  async close() { this.state = "closed"; }
+  createBuffer(_channels: number, length: number, sampleRate: number) {
+    return { length, duration: length / sampleRate, copyToChannel() {} };
   }
-  load() {}
-  pause() { this.paused = true; }
-  async play() {
-    if (this.muted && this.src.startsWith("data:audio/wav")) this.unlocked = true;
-    if (!this.unlocked) throw new DOMException("blocked", "NotAllowedError");
-    this.paused = false;
-    this.onloadedmetadata?.();
+  createBufferSource() {
+    const entry = { end: 0, stopped: false };
+    this.nodes.push(entry);
+    return {
+      buffer: null as { duration: number } | null,
+      connect() {}, disconnect() {},
+      start(at: number) { entry.end = at + this.buffer!.duration; },
+      stop() { entry.stopped = true; },
+    };
   }
-  tick(time: number) { this.currentTime = time; this.ontimeupdate?.(); }
-  finish() { this.currentTime = this.duration; this.paused = true; this.onended?.(); }
+  get paused() { return this.state !== "running" || this.nodes.every((node) => node.stopped || node.end <= this.currentTime); }
+  tick(time: number) { this.currentTime = time; runFrames(); }
+  finish() { this.tick(Math.max(this.currentTime, ...this.nodes.map((node) => node.end))); }
 }
-
-function useFakeAudio(): void {
-  FakeAudio.instances = [];
-  globalThis.Audio = FakeAudio as unknown as typeof Audio;
+function runFrames(): void {
+  requestClock += 1000;
+  const pending = [...frames.values()]; frames.clear();
+  for (const callback of pending) callback(requestClock);
 }
-
-/** The element a chunk is playing on, if any. */
-function playing(): FakeAudio | undefined {
-  return FakeAudio.instances.find((element) => !element.paused && element.src.startsWith("blob:"));
+function useFakeContext(): void {
+  FakeContext.instances = [];
+  globalThis.AudioContext = FakeContext as unknown as typeof AudioContext;
+}
+function playing(): FakeContext | undefined {
+  return FakeContext.instances.find((context) => !context.paused);
+}
+function pcmResponse(backend = "openai", model = backendInfo.options[0]!.model, voice = "alloy"): Response {
+  return new Response(new Uint8Array(PCM_RATE * 2 * 10), { headers: {
+    "content-type": "audio/pcm", "x-tts-backend": backend, "x-tts-model": model,
+    "x-tts-voice": voice, "x-tts-encoding": "pcm_s16le", "x-tts-sample-rate": String(PCM_RATE), "x-tts-channels": "1",
+  } });
 }
 
 async function drainUpdates(): Promise<void> {
   for (let index = 0; index < 6; index += 1) {
     await Promise.resolve();
+    runFrames();
+    for (const context of FakeContext.instances) { if (context.currentTime === 0 && context.nodes.length) context.currentTime = 0.03; }
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
 }
@@ -202,10 +221,20 @@ const LONG = Array.from({ length: 40 }, (_, index) => `Sentence number ${index} 
 
 beforeEach(() => {
   clearTtsCache();
+  clearPcmCache();
   highlights.clear();
+  frames.clear(); requestClock = 0;
+  clockSpy = spyOn(performance, "now").mockImplementation(() => requestClock);
+  globalThis.requestAnimationFrame = (callback) => { frames.set(++frameId, callback); return frameId; };
+  globalThis.cancelAnimationFrame = (id) => { frames.delete(id); };
+  useFakeContext();
 });
 
 afterEach(() => {
+  clockSpy.mockRestore();
+  globalThis.AudioContext = originalContext;
+  globalThis.requestAnimationFrame = originalFrame;
+  globalThis.cancelAnimationFrame = originalCancelFrame;
   globalThis.fetch = originalFetch;
   globalThis.Audio = originalAudio;
   URL.createObjectURL = originalCreateObjectURL;
@@ -221,10 +250,11 @@ test("a left click starts synthesis at once, with no dialog in between", async (
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method) { configRequests += 1; return Response.json(backendInfo); }
     sent.push(String(input));
-    return new Response(new Blob(["audio"]));
+    expect(JSON.parse(String(init.body))).toEqual({ text: "Read me at once", mode: "pcm" });
+    return pcmResponse();
   }) as unknown as typeof fetch;
   URL.createObjectURL = () => "blob:tts";
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount("Read me at once");
   const other = await mount("Another answer");
@@ -260,7 +290,7 @@ test("a second click cancels pending synthesis and ignores its stale response", 
   }) as unknown as typeof fetch;
   const createObjectURL = mock(() => "blob:tts");
   URL.createObjectURL = createObjectURL;
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount("Read me");
   const other = await mount("Another answer");
@@ -270,44 +300,52 @@ test("a second click cancels pending synthesis and ignores its stale response", 
   await drainUpdates();
   expect(postSignal?.aborted).toBe(true);
 
-  resolvePost(new Response(new Blob(["late"])));
+  resolvePost(pcmResponse());
   await drainUpdates();
   expect(createObjectURL).not.toHaveBeenCalled();
+  expect(FakeContext.instances.flatMap((context) => context.nodes)).toHaveLength(0);
   flushSync(() => { view.root.unmount(); });
   flushSync(() => { other.root.unmount(); });
   view.host.remove();
   other.host.remove();
 });
 
-test("a long answer is chunked, synthesized in parallel and played from the first chunk", async () => {
+test("a long answer starts with one PCM chunk, then prefetches while it plays", async () => {
   const sent: string[] = [];
   const pending = new Map<string, (response: Response) => void>();
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method) return Response.json(backendInfo);
     const text = (JSON.parse(String(init.body)) as { text: string }).text;
     sent.push(text);
-    return new Promise<Response>((resolve) => pending.set(text, resolve));
+    return new Promise<Response>((resolve, reject) => {
+      pending.set(text, resolve);
+      init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    });
   }) as unknown as typeof fetch;
   URL.createObjectURL = mock((blob: Blob) => `blob:${(blob as Blob & { id?: string }).id ?? "chunk"}`);
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount(LONG);
   await speak(view);
 
-  /* Two chunks are in flight at once, and neither covers the whole message. */
-  expect(sent.length).toBe(2);
+  /* PCM starts with one request, preserving the first-audio admission. */
+  expect(sent.length).toBe(1);
   for (const text of sent) expect(text.length).toBeLessThanOrEqual(MAX_CHUNK_CHARS);
   expect(playing()).toBeUndefined();
 
   /* The first chunk alone starts the voice; the rest are still synthesizing. */
-  pending.get(sent[0]!)!(new Response(new Blob(["audio-0"])));
+  pending.get(sent[0]!)!(pcmResponse());
   await drainUpdates();
   expect(playing()).toBeDefined();
   expect(view.button.getAttribute("aria-label")).toContain("Stop");
   expect(pending.has(sent[1]!)).toBe(true);
 
-  for (const [text, resolve] of [...pending]) {
-    resolve(new Response(new Blob([`audio-${text.length}`])));
+  for (let index = 0; index < chunkSpeech(LONG, { backend: backendInfo.backend }).length; index++) {
+    const text = sent[index]!;
+    expect(text).toBeDefined();
+    pending.get(text)!(pcmResponse());
+    await drainUpdates();
+    playing()?.finish();
     await drainUpdates();
   }
 
@@ -324,11 +362,11 @@ test("a message read to the end replays free, and an evicted one says it costs a
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method) return Response.json(backendInfo);
     posts += 1;
-    return new Response(new Blob(["audio"]));
+    return pcmResponse();
   }) as unknown as typeof fetch;
   URL.createObjectURL = () => "blob:tts";
   URL.revokeObjectURL = mock(() => {});
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount(LONG);
   await speak(view);
@@ -354,7 +392,7 @@ test("a message read to the end replays free, and an evicted one says it costs a
   /* Evicted between the render that promised a free replay and the click that
      took it: the audio still starts, and the control says out loud that this
      one is paid instead of letting the stale label pass for free. */
-  evictTtsAudio();
+  clearPcmCache();
   await speak(view);
   expect(posts).toBeGreaterThan(synthesized);
   expect(alertNode()!.textContent).toBe("Cached audio expired — this replay is a paid synthesis.");
@@ -372,15 +410,18 @@ test("a message stopped after the first chunk never advertises a free replay", a
     if (!init?.method) return Response.json(backendInfo);
     posts += 1;
     const text = (JSON.parse(String(init.body)) as { text: string }).text;
-    return new Promise<Response>((resolve) => pending.set(text, resolve));
+    return new Promise<Response>((resolve, reject) => {
+      pending.set(text, resolve);
+      init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    });
   }) as unknown as typeof fetch;
   URL.createObjectURL = () => "blob:tts";
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount(LONG);
   await speak(view);
   const [first] = [...pending.keys()];
-  pending.get(first!)!(new Response(new Blob(["audio"])));
+  pending.get(first!)!(pcmResponse());
   await drainUpdates();
   expect(playing()).toBeDefined();
 
@@ -391,7 +432,9 @@ test("a message stopped after the first chunk never advertises a free replay", a
   expect(view.button.getAttribute("aria-label")).toBe("Read answer aloud");
   const menu = await openMenu(view);
   expect(menu.textContent).toContain("Next click: paid synthesis of this answer");
-  expect(menu.textContent).toContain("Billed to your OpenAI account per character");
+  /* OpenAI read aloud runs on Realtime, billed by tokens (docs/design/openai-key-services.md, C2). */
+  expect(menu.textContent).toContain(translate("en", "tts.billingTokens"));
+  expect(menu.textContent).not.toContain("per character");
   expect(menu.textContent).toContain("AI-generated voice");
   expect(menu.textContent).not.toContain("free replay");
 
@@ -408,11 +451,11 @@ test("a message stopped after the first chunk never advertises a free replay", a
 test("the menu's cost line follows playback and cache eviction while it is open", async () => {
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method) return Response.json(backendInfo);
-    return new Response(new Blob(["audio"]));
+    return pcmResponse();
   }) as unknown as typeof fetch;
   URL.createObjectURL = () => "blob:tts";
   URL.revokeObjectURL = mock(() => {});
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount(LONG);
   await speak(view);
@@ -423,7 +466,7 @@ test("the menu's cost line follows playback and cache eviction while it is open"
 
   /* Evicted from under an OPEN menu — nothing re-renders the control, so the
      menu has to hear it from the cache itself. */
-  flushSync(() => { evictTtsAudio(); });
+  flushSync(() => { clearPcmCache(); });
   await drainUpdates();
   expect(cached.textContent).toContain("Next click: paid synthesis of this answer");
   expect(cached.textContent).not.toContain("free replay");
@@ -451,9 +494,9 @@ test("a message past the ceiling refuses out loud instead of being cut short", a
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method) return Response.json(backendInfo);
     posts += 1;
-    return new Response(new Blob(["audio"]));
+    return pcmResponse();
   }) as unknown as typeof fetch;
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount("word ".repeat(MAX_TTS_MESSAGE_LENGTH / 4));
   await speak(view);
@@ -484,9 +527,9 @@ test("a refusal is dismissed by Escape or a click away, with nothing bought", as
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method) return Response.json(backendInfo);
     posts += 1;
-    return new Response(new Blob(["audio"]));
+    return pcmResponse();
   }) as unknown as typeof fetch;
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount("word ".repeat(MAX_TTS_MESSAGE_LENGTH / 4));
   await speak(view);
@@ -542,7 +585,7 @@ test("the refusal alert tracks its trigger on scroll and leaves the screen with 
     if (!init?.method) return Response.json(backendInfo);
     throw new Error("unexpected synthesis");
   }) as unknown as typeof fetch;
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount("word ".repeat(MAX_TTS_MESSAGE_LENGTH / 4));
   placeTrigger(view.button, 300);
@@ -573,11 +616,11 @@ test("a chunk failure mid-sequence surfaces the provider error and stops cleanly
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method) return Response.json(backendInfo);
     posts += 1;
-    if (posts === 1) return new Response(new Blob(["audio"]));
+    if (posts === 1) return pcmResponse();
     return Response.json({ error: "openai TTS failed (HTTP 401)" }, { status: 502 });
   }) as unknown as typeof fetch;
   URL.createObjectURL = () => "blob:tts";
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount(LONG);
   await speak(view);
@@ -585,7 +628,7 @@ test("a chunk failure mid-sequence surfaces the provider error and stops cleanly
   const alert = alertNode()!;
   expect(alert.textContent).toBe("openai TTS failed (HTTP 401)");
   expect(view.button.getAttribute("aria-label")).not.toContain("Stop");
-  expect(FakeAudio.instances.every((element) => element.paused)).toBe(true);
+  expect(FakeContext.instances.every((element) => element.paused)).toBe(true);
   flushSync(() => { view.root.unmount(); });
   view.host.remove();
 });
@@ -593,17 +636,12 @@ test("a chunk failure mid-sequence surfaces the provider error and stops cleanly
 test("audio the browser refuses to play reports that, not a provider failure", async () => {
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method) return Response.json(backendInfo);
-    return new Response(new Blob(["audio"]));
+    return pcmResponse();
   }) as unknown as typeof fetch;
   URL.createObjectURL = () => "blob:tts";
-  FakeAudio.instances = [];
-  globalThis.Audio = class extends FakeAudio {
-    override async play() {
-      await super.play();
-      /* Unlocked on the silent clip, blocked on the real one. */
-      if (this.src.startsWith("blob:")) throw new DOMException("blocked", "NotAllowedError");
-    }
-  } as unknown as typeof Audio;
+  globalThis.AudioContext = class extends FakeContext {
+    override async resume() { throw new DOMException("blocked", "NotAllowedError"); }
+  } as unknown as typeof AudioContext;
 
   const view = await mount("A short answer to read.");
   await speak(view);
@@ -621,11 +659,14 @@ test("the spoken word is highlighted in the rendered answer and a click in it se
     if (!init?.method) return Response.json(backendInfo);
     const text = (JSON.parse(String(init.body)) as { text: string }).text;
     sent.push(text);
-    if (sent.length === 1) return new Response(new Blob(["audio"]));
-    return new Promise<Response>((resolve) => pending.set(text, resolve));
+    if (sent.length === 1) return pcmResponse();
+    return new Promise<Response>((resolve, reject) => {
+      pending.set(text, resolve);
+      init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    });
   }) as unknown as typeof fetch;
   URL.createObjectURL = () => "blob:tts";
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mountInFeed(LONG);
   await speak(view);
@@ -668,9 +709,9 @@ test("the right-click menu opens outside the message, and Escape closes it back 
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method) return Response.json(backendInfo);
     posts += 1;
-    return new Response(new Blob(["audio"]));
+    return pcmResponse();
   }) as unknown as typeof fetch;
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount("Menu answer");
   const menu = await openMenu(view);
@@ -705,7 +746,7 @@ test("an outside pointerdown closes the menu, and a second right-click toggles i
     if (!init?.method) return Response.json(backendInfo);
     throw new Error("unexpected synthesis");
   }) as unknown as typeof fetch;
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount("Dismissal answer");
   await openMenu(view);
@@ -731,7 +772,7 @@ test("an outside pointerdown closes the menu, and a second right-click toggles i
 });
 
 test("the menu switches provider, and every answer control follows", async () => {
-  const elevenInfo = {
+  const elevenInfo: TtsBackendInfo = {
     ...backendInfo,
     backend: "elevenlabs",
     options: backendInfo.options.map((option) => option.id === "elevenlabs" ? { ...option, available: true } : option),
@@ -794,15 +835,55 @@ test("a provider pick is checked at once while the save is held, sends once, and
   view.host.remove();
 });
 
+test("a read-aloud OpenAI choice held for a removed key is let go by pressing the provider serving it now", async () => {
+  const held: TtsBackendInfo = {
+    ...backendInfo,
+    backend: "elevenlabs",
+    requested: "openai",
+    held: true,
+    options: backendInfo.options.map((option) => option.id === "elevenlabs" ? { ...option, available: true } : option),
+  };
+  const posts: unknown[] = [];
+  let current = held;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/tts/backend" && init?.method === "POST") {
+      posts.push(JSON.parse(String(init.body)));
+      current = { ...held, requested: "elevenlabs", held: false };
+      return Response.json(current);
+    }
+    if (url === "/api/tts/backend") return Response.json(current);
+    throw new Error("unexpected synthesis");
+  }) as unknown as typeof fetch;
+  const view = await mount("Provider held for a key");
+  const provider = (menu: HTMLElement, name: string) => [...menu.querySelectorAll<HTMLButtonElement>("button[data-tts-provider]")].find((button) => button.textContent?.startsWith(name))!;
+  try {
+    const menu = await openMenu(view);
+    expect(provider(menu, "ElevenLabs").getAttribute("aria-checked")).toBe("true");
+    flushSync(() => { provider(menu, "ElevenLabs").click(); });
+    await drainUpdates();
+    expect(posts).toEqual([{ backend: "elevenlabs" }]);
+    expect(menuOpen()).toBe(false);
+    /* Once kept, pressing it again is no new choice. */
+    const again = await openMenu(view);
+    flushSync(() => { provider(again, "ElevenLabs").click(); });
+    await drainUpdates();
+    expect(posts).toEqual([{ backend: "elevenlabs" }]);
+  } finally {
+    flushSync(() => { view.root.unmount(); });
+    view.host.remove();
+  }
+});
+
 test("a provider with no key refuses out loud and names the file to drop it into", async () => {
   const noKey = { ...backendInfo, backend: "elevenlabs" };
   let posts = 0;
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     if (!init?.method) return Response.json(noKey);
     posts += 1;
-    return new Response(new Blob(["audio"]));
+    return pcmResponse();
   }) as unknown as typeof fetch;
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount("Nothing can read this");
   /* Opening the menu is what re-reads the configuration, so the control learns
@@ -834,7 +915,7 @@ test("a provider with no key refuses out loud and names the file to drop it into
    surface (#1024). */
 test("a provider switched under a stale tab is keyed and named by what the route billed", async () => {
   const TEXT = "Billed somewhere else entirely.";
-  const elevenActive = {
+  const elevenActive: TtsBackendInfo = {
     ...backendInfo,
     backend: "elevenlabs",
     options: backendInfo.options.map((option) => (option.id === "elevenlabs" ? { ...option, available: true } : option)),
@@ -845,17 +926,15 @@ test("a provider switched under a stale tab is keyed and named by what the route
     if (String(input) === "/api/tts/backend") return Response.json(served);
     posts += 1;
     /* The server is on ElevenLabs now, whatever this tab believes. */
-    return new Response(new Blob(["audio"]), {
-      headers: { "x-tts-backend": "elevenlabs", "x-tts-model": "eleven_v4_turbo", "x-tts-voice": "Rachel" },
-    });
+    return pcmResponse("elevenlabs", "eleven_v4_turbo", "Rachel");
   }) as unknown as typeof fetch;
   URL.createObjectURL = () => "blob:tts";
-  useFakeAudio();
+  useFakeContext();
 
   const view = await mount(TEXT);
   /* This tab last read the configuration while openai was active. */
   const before = await openMenu(view);
-  expect(before.textContent).toContain("OpenAI · gpt-4o-mini-tts · alloy");
+  expect(before.textContent).toContain("OpenAI · gpt-realtime-2.1-mini · alloy");
   flushSync(() => {
     document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event);
   });
@@ -867,10 +946,10 @@ test("a provider switched under a stale tab is keyed and named by what the route
   expect(posts).toBeGreaterThan(0);
 
   /* Nothing was filed under the voice this tab named on its way out... */
-  const texts = chunkSpeech(TEXT).map((chunk) => chunk.text);
-  expect(chunksCached(texts.map((text) => voiceKey({ id: "openai", model: "gpt-4o-mini-tts", voice: "alloy" }, text)))).toBe(false);
+  const texts = chunkSpeech(TEXT, { backend: backendInfo.backend }).map((chunk) => chunk.text);
+  expect(pcmChunksCached(texts.map((text) => voiceKey(pcmVoice(backendInfo.options[0]!), text)))).toBe(false);
   /* ...and everything under the one that answered. */
-  expect(chunksCached(texts.map((text) => voiceKey({ id: "elevenlabs", model: "eleven_v4_turbo", voice: "Rachel" }, text)))).toBe(true);
+  expect(pcmChunksCached(texts.map((text) => voiceKey(pcmVoice(elevenActive.options[1]!), text)))).toBe(true);
 
   /* And the surface names the provider that was charged, without the click
      having waited on /api/tts/backend to find out. */
@@ -878,8 +957,8 @@ test("a provider switched under a stale tab is keyed and named by what the route
   const after = await openMenu(view);
   expect(after.textContent).toContain("ElevenLabs · eleven_v4_turbo · Rachel");
   expect(after.textContent).toContain("Billed to your ElevenLabs account per character");
-  // A legacy MP3 response cannot be replayed by the new ElevenLabs PCM player.
-  expect(after.textContent).toContain("Next click: paid synthesis of this answer");
+  // The returned PCM identity is also the identity used for free replay.
+  expect(after.textContent).toContain("Next click: free replay from the cache");
 
   flushSync(() => { view.root.unmount(); });
   view.host.remove();
@@ -898,7 +977,7 @@ test("Soniox header freezes its target, shares Stop with the row, and cancels wh
     resume() { return new Promise<void>((resolve) => resumes.push(resolve)); }
     async close() { closed++; }
   } as unknown as typeof AudioContext;
-  const info = { backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] };
+  const info = infoFixture({ backend: "soniox", lockedByEnv: false, options: [{ id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "en", cap: 4000 }] });
   const requests: string[] = [];
   globalThis.fetch = mock(async (_input, init) => {
     if (!init?.method) return Response.json(info);
@@ -998,8 +1077,8 @@ beforeEach(() => { clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-1
 afterEach(() => clock.mockRestore());
 
 test("menu chooses a persisted model and states free and paid billing", async () => {
-  const fish = { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeUntil: "2026-11-30", freeEnded: false, modelLockedByEnv: false };
-  let info = { backend: "fishaudio", lockedByEnv: false, options: [...backendInfo.options, fish] };
+  const fish: TtsBackendOption = { ...ttsBackendInfo(Date.UTC(2026, 9, 29)).options.find((option) => option.id === "fishaudio")!, id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeUntil: "2026-11-30", freeEnded: false, modelLockedByEnv: false };
+  let info = infoFixture({ backend: "fishaudio", lockedByEnv: false, options: [...backendInfo.options, fish] });
   const posts: unknown[] = [];
   globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
     if (init?.method === "POST") {
@@ -1034,7 +1113,7 @@ test("menu chooses a persisted model and states free and paid billing", async ()
 });
 
 test.each(["model", "provider"])("%s lock disables both model rows", async (lock) => {
-  const info = { backend: lock === "provider" ? "openai" : "fishaudio", lockedByEnv: lock === "provider", options: [...backendInfo.options, { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, modelLockedByEnv: lock === "model" }] };
+  const info = infoFixture({ backend: lock === "provider" ? "openai" : "fishaudio", lockedByEnv: lock === "provider", options: [...backendInfo.options, { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, modelLockedByEnv: lock === "model" }] });
   globalThis.fetch = mock(async () => Response.json(info)) as unknown as typeof fetch;
   const view = await mount("Fish Audio lock");
   try {
@@ -1047,7 +1126,7 @@ test.each(["model", "provider"])("%s lock disables both model rows", async (lock
 test("expired free model refuses in Ukrainian without synthesis", async () => {
   const { setLocale } = await import("@/lib/i18n");
   setLocale("uk");
-  const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: true }] };
+  const info = infoFixture({ backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: true }] });
   let posts = 0;
   globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => { if (init?.method === "POST") posts++; return Response.json(info); }) as unknown as typeof fetch;
   const view = await mount("Привіт світе");
@@ -1076,7 +1155,7 @@ test("provider refusal explains the paid choice without retrying", async () => {
     async resume() {} async close() { this.state = "closed"; }
   }
   Object.assign(globalThis, { AudioContext: Context, requestAnimationFrame: () => 1, cancelAnimationFrame: () => undefined });
-  const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: false }] };
+  const info = infoFixture({ backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: false }] });
   let calls = 0;
   globalThis.fetch = mock(async (input: unknown) => {
     if (String(input) === "/api/tts/backend") return Response.json(info);
@@ -1097,7 +1176,7 @@ test("provider refusal explains the paid choice without retrying", async () => {
   }
 });
 test("the ended free model never promises a charge-free read and names the provider one way", async () => {
-  const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: false, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: true }] };
+  const info = infoFixture({ backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: false, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: true }] });
   globalThis.fetch = mock(async () => Response.json(info)) as unknown as typeof fetch;
   const view = await mount("Ended copy");
   try {
@@ -1117,7 +1196,7 @@ test("the ended free model never promises a charge-free read and names the provi
 test("a phone refusal says press and hold instead of right-click", async () => {
   const original = (dom as unknown as { matchMedia: unknown }).matchMedia;
   (dom as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({ matches: true, media: String(query), addEventListener() {}, removeEventListener() {} });
-  const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: true }] };
+  const info = infoFixture({ backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: true }] });
   globalThis.fetch = mock(async () => Response.json(info)) as unknown as typeof fetch;
   const view = await mount("Phone refusal");
   try {
@@ -1131,7 +1210,7 @@ test.each(["header", "row"])("a refusal raised from the %s shows one alert, not 
   const { conversationSpeech } = await import("./conversationSpeech");
   const prior = { context: globalThis.AudioContext, frame: globalThis.requestAnimationFrame, cancel: globalThis.cancelAnimationFrame };
   Object.assign(globalThis, { AudioContext: class { state = "running"; async resume() {} async close() {} }, requestAnimationFrame: () => 1, cancelAnimationFrame: () => undefined });
-  const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: false }] };
+  const info = infoFixture({ backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: false }] });
   globalThis.fetch = mock(async (input: unknown) => String(input) === "/api/tts/backend"
     ? Response.json(info)
     : Response.json({ error: "provider refused", code: "fishaudio-free-refused" }, { status: 403 })) as unknown as typeof fetch;
@@ -1156,7 +1235,7 @@ test.each(["header", "row"])("a refusal raised from the %s shows one alert, not 
 
 
 describe("per-provider voice menu", () => {
-  let current: typeof backendInfo & { options: Array<typeof backendInfo.options[number] & { voiceLockedByEnv?: boolean; voiceList?: boolean }> };
+  let current: TtsBackendInfo;
   let saves: unknown[];
   let lists: number;
   let state: "loaded" | "failed" | "loading" | "unknown";
@@ -1230,7 +1309,7 @@ test.each([['en', false], ['uk', false], ['en', true], ['uk', true]] as const)("
   Object.assign(globalThis, { AudioContext: Context, requestAnimationFrame: () => 1, cancelAnimationFrame: () => undefined });
   dom.matchMedia = ((query: string) => ({ matches: mobile, media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof dom.matchMedia;
   setLocale(locale);
-  const info = { backend: "elevenlabs", lockedByEnv: false, options: [{ id: "elevenlabs", available: true, keyPath: "$CONFIG/elevenlabs-api-key", model: "eleven_v4_turbo", voice: "unknown-voice", cap: 4000 }] };
+  const info = infoFixture({ backend: "elevenlabs", lockedByEnv: false, options: [{ id: "elevenlabs", available: true, keyPath: "$CONFIG/elevenlabs-api-key", model: "eleven_v4_turbo", voice: "unknown-voice", cap: 4000 }] });
   let calls = 0;
   globalThis.fetch = mock(async (url: unknown, init?: RequestInit) => {
     if (String(url) === "/api/tts/backend") return Response.json(info);

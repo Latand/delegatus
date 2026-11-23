@@ -33,6 +33,86 @@ const PROJECT = "due-fixture";
 beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Maintain the board", clientRequestId: "due-seat", mode: "existing", conversationId: "conversation_fixture" });
 completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "due-seat", conversationId: "conversation_fixture", path: null });
 
+for (const kind of ["external", "resource", "limit", "postponed", "banana"] as const) {
+  for (const supplied of [true, false]) {
+    test(`MCP and HTTP report ignored hold dates for ${kind}, until supplied: ${supplied}`, async () => {
+      const now = "2026-10-23T12:00:00.000Z";
+      const until = "2026-10-24T12:00:00.000Z";
+      const dueAt = "2026-10-25T12:00:00.000Z";
+      const key = `hold-date-${kind}-${supplied}`;
+      const supported = kind === "limit" || kind === "postponed";
+      const normalized = kind === "banana" ? "unstated" : kind;
+      const hold = { kind, note: "Wait for dependency", ...(supplied ? { until } : {}) };
+      const notes = [
+        ...(kind === "banana" ? ['Unknown hold kind "banana" normalized to unstated.'] : []),
+        ...(supplied && !supported ? [`hold.until ignored for hold kind "${normalized}"; only limit and postponed store until. Use dueAt for the task deadline.`] : []),
+      ];
+      const receipts = new SqliteMcpReceiptStore(path.join(sandbox, `${key}.sqlite`));
+      const server = createViewerMcpServer(createMcpToolService(viewerMcpBindings(), receipts));
+      const client = new Client({ name: "task-hold-date-test", version: "1" });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      type Answer = { ok: boolean; replayed?: boolean; task: BoardTask; notes?: string[] };
+      const call = async (name: string, args: Record<string, unknown>) =>
+        (await client.callTool({ name, arguments: args })).structuredContent as Answer;
+      let db: Database | undefined;
+      let listener: ReturnType<typeof Bun.serve> | undefined;
+      try {
+        setSystemTime(new Date(now));
+        saveTasks([]);
+        await Promise.all([client.connect(a), server.connect(b)]);
+        const createArgs = { clientRequestId: `${key}-create`, project: PROJECT, text: "Wait for dependency", dueAt, dueTz: "UTC", hold, full: true };
+        const created = await call("create_task", createArgs);
+        expect(created.ok).toBe(true);
+        const createdHold = created.task.hold;
+        if (!createdHold) throw new Error("create_task omitted the requested hold");
+        expect(createdHold.kind).toBe(normalized);
+        expect(createdHold.until).toBe(supplied && supported ? until : undefined);
+        expect(created.task.dueAt).toBe(dueAt);
+        db = new Database(taskSelectionSource()!.filename, { readonly: true });
+        const storedRows = () => db!.query("SELECT * FROM state_rows WHERE collection='tasks' ORDER BY row_key").all();
+        const createdRows = storedRows();
+        expect(await call("create_task", createArgs)).toMatchObject({ ok: true, replayed: true, task: created.task });
+        expect(storedRows()).toEqual(createdRows);
+        expect(loadTasks()).toHaveLength(1);
+
+        setSystemTime(new Date("2026-10-23T13:00:00.000Z"));
+        const updateArgs = { clientRequestId: `${key}-update`, taskId: created.task.id, hold: { ...hold, note: "Still waiting" }, full: true };
+        const updated = await call("update_task", updateArgs);
+        expect(updated).toMatchObject({ ok: true, replayed: false });
+        expect(updated.notes).toEqual(notes.length ? notes : undefined);
+        expect(created.notes).toEqual(notes.length ? notes : undefined);
+        expect(updated.task.hold).toEqual({ ...createdHold, note: "Still waiting" });
+        expect(updated.task.dueAt).toBe(dueAt);
+        expect(updated.task.dueHistory).toEqual(created.task.dueHistory);
+        const updatedRows = storedRows();
+        expect(updatedRows).not.toEqual(createdRows);
+        setSystemTime(new Date("2026-10-23T14:00:00.000Z"));
+        expect(await call("update_task", updateArgs)).toMatchObject({ ok: true, replayed: true, task: updated.task, ...(notes.length ? { notes } : {}) });
+        expect(storedRows()).toEqual(updatedRows);
+        expect((await call("get_task", { taskId: created.task.id })).task.hold).toEqual(updated.task.hold);
+        expect(loadTasks()[0]?.hold).toEqual(updated.task.hold);
+
+        listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request =>
+          PATCH(new NextRequest(request), { params: Promise.resolve({ id: created.task.id }) }) });
+        const response = await fetch(new URL(`/api/tasks/${created.task.id}`, listener.url), {
+          method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ hold }),
+        });
+        expect(response.status).toBe(200);
+        const body = await response.json() as Answer;
+        expect(body.notes).toEqual(notes.length ? notes : undefined);
+        expect(body.task.hold).toEqual({ ...createdHold, by: "operator", conversationId: undefined });
+        expect(body.task.dueAt).toBe(dueAt);
+        expect(body.task.dueHistory).toEqual(created.task.dueHistory);
+      } finally {
+        await listener?.stop(true);
+        db?.close();
+        await client.close(); await server.close(); receipts.close();
+        setSystemTime();
+      }
+    });
+  }
+}
+
 test("MCP schema and raw binding enforce rescheduling; get_task returns history; operator HTTP can clear", async () => {
   const now = "2026-10-23T12:00:00.000Z";
   const past = "2026-10-22T12:00:00.000Z";

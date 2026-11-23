@@ -78,7 +78,8 @@ export type ChatRow = {
   type: TelegramChatType;
   title: string;
   username: string | null;
-  isForum: boolean;
+  /** Null means discovery has not established whether this chat uses topics. */
+  isForum: boolean | null;
   botStatus: TelegramBotMemberStatus | null;
   alias: string | null;
   postAllowed: boolean;
@@ -104,13 +105,16 @@ export type SendRow = {
 
 /** Private durable inbound obligation. Completed rows remain as dedup tombstones. */
 export interface ReportReplyRow {
+  /** Source retained so a queued directive rechecks workspace chat policy. */
+  chatId?: string;
   key: string;
   botId: string;
   senderId: string;
   project: string;
   seq: number;
   text: string;
-  state: "pending" | "delivered";
+  state: "pending" | "delivered" | "refused";
+  refusalReason?: string;
   attempt: number;
   recipient: string | null;
   operationId: string | null;
@@ -181,7 +185,7 @@ function decodeCursor(cursor: string | undefined): [number, number] | null {
 }
 
 type SqlChat = {
-  chat_id: string; type: string; title: string; username: string | null; is_forum: number; bot_status: string | null;
+  chat_id: string; type: string; title: string; username: string | null; is_forum: number; forum_known: number; bot_status: string | null;
   alias: string | null; post_allowed: number; first_seen_at: string; last_message_at: string | null;
   last_post_at: string | null; last_post_conversation_id: string | null; last_post_unidentified: number; stored: number;
 };
@@ -199,7 +203,7 @@ function chatFromSql(row: SqlChat): ChatRow {
     type: (CHAT_TYPES.has(row.type) ? row.type : "group") as TelegramChatType,
     title: row.title,
     username: row.username,
-    isForum: row.is_forum === 1,
+    isForum: row.is_forum === 1 ? true : row.forum_known === 1 ? false : null,
     botStatus: row.bot_status && MEMBER_STATUSES.has(row.bot_status) ? row.bot_status as TelegramBotMemberStatus : null,
     alias: row.alias,
     postAllowed: row.post_allowed === 1,
@@ -311,8 +315,10 @@ export class TelegramBotStore {
       db.exec("CREATE TABLE IF NOT EXISTS sending_bots (bot_id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT, connected_at TEXT NOT NULL, token_state TEXT NOT NULL DEFAULT 'ok')");
       db.exec("CREATE TABLE IF NOT EXISTS chat_bots (chat_id TEXT NOT NULL, bot_id TEXT NOT NULL, value_json TEXT NOT NULL, PRIMARY KEY (chat_id, bot_id))");
       for (const [table, column, definition] of [
+        ["chats", "forum_known", "INTEGER NOT NULL DEFAULT 0"],
         ["chats", "assigned_bot", "TEXT"], ["chats", "last_delivery", "TEXT"],
         ["sends", "bot_id", "TEXT"], ["sends", "bot_identity", "TEXT"], ["sends", "attempts", "TEXT NOT NULL DEFAULT '[]'"],
+        ["sends", "clone_keys", "TEXT NOT NULL DEFAULT '{}'"],
       ]) {
         const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
         if (!columns.some(c => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -488,15 +494,16 @@ export class TelegramBotStore {
     const chatId = String(chat.id);
     const type = CHAT_TYPES.has(chat.type) ? chat.type : "group";
     this.db.query(`
-      INSERT INTO chats (chat_id, type, title, username, is_forum, first_seen_at, last_message_at)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+      INSERT INTO chats (chat_id, type, title, username, is_forum, first_seen_at, last_message_at, forum_known)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
       ON CONFLICT(chat_id) DO UPDATE SET type = excluded.type, title = excluded.title, username = excluded.username,
-        is_forum = excluded.is_forum,
+        is_forum = CASE WHEN excluded.forum_known = 1 THEN excluded.is_forum ELSE chats.is_forum END,
+        forum_known = CASE WHEN excluded.forum_known = 1 THEN 1 ELSE chats.forum_known END,
         last_message_at = CASE
           WHEN excluded.last_message_at IS NULL THEN chats.last_message_at
           WHEN chats.last_message_at IS NULL OR excluded.last_message_at > chats.last_message_at THEN excluded.last_message_at
           ELSE chats.last_message_at END
-    `).run(chatId, type, chatTitle(chat), chat.username ?? null, chat.is_forum ? 1 : 0, now.toISOString(), messageAt);
+    `).run(chatId, type, chatTitle(chat), chat.username ?? null, chat.is_forum ? 1 : 0, now.toISOString(), messageAt, typeof chat.is_forum === "boolean" ? 1 : 0);
   }
 
   /**
@@ -680,7 +687,7 @@ export class TelegramBotStore {
       if (existing && (existing.state !== "failed" || existing.messageIds.length > 0)) return { claimed: false as const, row: existing };
       this.db.query(`
         INSERT INTO sends (caller_key, client_request_id, state, chat_id, created_at) VALUES (?1, ?2, 'pending', ?3, ?4)
-        ON CONFLICT(caller_key, client_request_id) DO UPDATE SET state = 'pending', chat_id = ?3, error_code = NULL, message_ids = '[]', parts = 0, bot_id = NULL, bot_identity = NULL, attempts = '[]'
+        ON CONFLICT(caller_key, client_request_id) DO UPDATE SET state = 'pending', chat_id = ?3, error_code = NULL, message_ids = '[]', parts = 0, bot_id = NULL, bot_identity = NULL, attempts = '[]', clone_keys = '{}'
       `).run(callerKey, clientRequestId, chatId, now.toISOString());
       return { claimed: true as const };
     });

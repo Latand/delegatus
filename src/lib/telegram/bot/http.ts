@@ -20,6 +20,7 @@ const STATUS: Record<TelegramBotErrorCode, number> = {
   chat_reference_invalid: 400,
   chat_not_allowed: 403,
   bot_not_in_chat: 409,
+  clone_files_unsupported: 409,
   alias_invalid: 400,
   alias_taken: 409,
   text_empty: 400,

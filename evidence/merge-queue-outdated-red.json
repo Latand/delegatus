@@ -1,0 +1,114 @@
+{
+  "pinnedBase": "7da984802f9f0143a32a7f5f709d5f40289cd8de",
+  "runtime": "Bun 1.4.0 (34cbb9a40)",
+  "probe": {
+    "path": "src/lib/forge/autoRefresh.test.ts",
+    "testNamePattern": "outdated red probe",
+    "sha256": "6bf6a0827a2530857cc641295abb1217be818fb786431d4acb14bd67e6d0fba9",
+    "unchanged": true
+  },
+  "isolation": {
+    "scratchFilesystem": "ext4",
+    "privateRoots": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_CACHE_HOME",
+      "XDG_DATA_HOME",
+      "LLV_STATE_DIR",
+      "TMPDIR",
+      "CODEX_HOME",
+      "CLAUDE_CONFIG_DIR"
+    ],
+    "controlUrl": "http://127.0.0.1:1",
+    "gate": "declared gate-slot.sh",
+    "execution": "local service, cleanup confirmed"
+  },
+  "red": {
+    "command": "gate-slot.sh bun run test src/lib/forge/autoRefresh.test.ts -t 'outdated red probe'",
+    "exit": 1,
+    "passed": 0,
+    "failed": 5,
+    "trace": "$ bun test --timeout=60000 src/lib/forge/autoRefresh.test.ts -t \"outdated red probe\"\nbun test v1.4.0 (34cbb9a40)\n\nsrc/lib/forge/autoRefresh.test.ts:\nbun test v1.4.0 (34cbb9a40)\n\nsrc/lib/forge/autoRefresh.test.ts:\noutdated-red-probe BEHIND ci {\"plans\":0,\"pushes\":0,\"refreshes\":1,\"merges\":0}\n1269 |       pr: { mergeStateStatus: status, checks: check === \"ci\" ? [red(check)] : [green(\"ci\"), red(check)] } });\n1270 |     git.landed = pr => { pr.checks = []; };\n1271 |     await h.sweep();\n1272 |     const counts = { plans: plans.length, pushes: pushes.length, refreshes: h.creates.length, merges: h.merges().length };\n1273 |     console.log(\"outdated-red-probe\", status, check, JSON.stringify(counts));\n1274 |     expect(counts).toEqual({ plans: 1, pushes: 1, refreshes: 0, merges: 0 });\n                          ^\nerror: expect(received).toEqual(expected)\n\n  {\n    \"merges\": 0,\n-   \"plans\": 1,\n-   \"pushes\": 1,\n-   \"refreshes\": 0,\n+   \"plans\": 0,\n+   \"pushes\": 0,\n+   \"refreshes\": 1,\n  }\n\n- Expected  - 3\n+ Received  + 3\n\n      at <anonymous> (<scratch>/base/src/lib/forge/autoRefresh.test.ts:1274:20)\n(fail) outdated red probe: BEHIND with ci uses one mechanical update and fresh exact-head checks [96.86ms]\noutdated-red-probe BEHIND optional-audit {\"plans\":0,\"pushes\":0,\"refreshes\":1,\"merges\":0}\n1269 |       pr: { mergeStateStatus: status, checks: check === \"ci\" ? [red(check)] : [green(\"ci\"), red(check)] } });\n1270 |     git.landed = pr => { pr.checks = []; };\n1271 |     await h.sweep();\n1272 |     const counts = { plans: plans.length, pushes: pushes.length, refreshes: h.creates.length, merges: h.merges().length };\n1273 |     console.log(\"outdated-red-probe\", status, check, JSON.stringify(counts));\n1274 |     expect(counts).toEqual({ plans: 1, pushes: 1, refreshes: 0, merges: 0 });\n                          ^\nerror: expect(received).toEqual(expected)\n\n  {\n    \"merges\": 0,\n-   \"plans\": 1,\n-   \"pushes\": 1,\n-   \"refreshes\": 0,\n+   \"plans\": 0,\n+   \"pushes\": 0,\n+   \"refreshes\": 1,\n  }\n\n- Expected  - 3\n+ Received  + 3\n\n      at <anonymous> (<scratch>/base/src/lib/forge/autoRefresh.test.ts:1274:20)\n(fail) outdated red probe: BEHIND with optional-audit uses one mechanical update and fresh exact-head checks [9.00ms]\noutdated-red-probe UNSTABLE ci {\"plans\":0,\"pushes\":0,\"refreshes\":1,\"merges\":0}\n1269 |       pr: { mergeStateStatus: status, checks: check === \"ci\" ? [red(check)] : [green(\"ci\"), red(check)] } });\n1270 |     git.landed = pr => { pr.checks = []; };\n1271 |     await h.sweep();\n1272 |     const counts = { plans: plans.length, pushes: pushes.length, refreshes: h.creates.length, merges: h.merges().length };\n1273 |     console.log(\"outdated-red-probe\", status, check, JSON.stringify(counts));\n1274 |     expect(counts).toEqual({ plans: 1, pushes: 1, refreshes: 0, merges: 0 });\n                          ^\nerror: expect(received).toEqual(expected)\n\n  {\n    \"merges\": 0,\n-   \"plans\": 1,\n-   \"pushes\": 1,\n-   \"refreshes\": 0,\n+   \"plans\": 0,\n+   \"pushes\": 0,\n+   \"refreshes\": 1,\n  }\n\n- Expected  - 3\n+ Received  + 3\n\n      at <anonymous> (<scratch>/base/src/lib/forge/autoRefresh.test.ts:1274:20)\n(fail) outdated red probe: UNSTABLE with ci uses one mechanical update and fresh exact-head checks [1.79ms]\noutdated-red-probe UNSTABLE optional-audit {\"plans\":0,\"pushes\":0,\"refreshes\":1,\"merges\":0}\n1269 |       pr: { mergeStateStatus: status, checks: check === \"ci\" ? [red(check)] : [green(\"ci\"), red(check)] } });\n1270 |     git.landed = pr => { pr.checks = []; };\n1271 |     await h.sweep();\n1272 |     const counts = { plans: plans.length, pushes: pushes.length, refreshes: h.creates.length, merges: h.merges().length };\n1273 |     console.log(\"outdated-red-probe\", status, check, JSON.stringify(counts));\n1274 |     expect(counts).toEqual({ plans: 1, pushes: 1, refreshes: 0, merges: 0 });\n                          ^\nerror: expect(received).toEqual(expected)\n\n  {\n    \"merges\": 0,\n-   \"plans\": 1,\n-   \"pushes\": 1,\n-   \"refreshes\": 0,\n+   \"plans\": 0,\n+   \"pushes\": 0,\n+   \"refreshes\": 1,\n  }\n\n- Expected  - 3\n+ Received  + 3\n\n      at <anonymous> (<scratch>/base/src/lib/forge/autoRefresh.test.ts:1274:20)\n(fail) outdated red probe: UNSTABLE with optional-audit uses one mechanical update and fresh exact-head checks [1.60ms]\noutdated-red-three-pr-probe {\"plans\":0,\"pushes\":0,\"refreshes\":3,\"merges\":0}\n1299 |     for (const lane of h.ports.loadPipelines()) if (lane.refreshOf) h.pipeline(lane.id).state = \"closed\";\n1300 |     h.advance(MERGE_POLL_MS);\n1301 |   }\n1302 |   const counts = { plans: plans.length, pushes: pushes.length, refreshes: h.creates.length, merges: h.merges().length };\n1303 |   console.log(\"outdated-red-three-pr-probe\", JSON.stringify(counts));\n1304 |   expect(counts).toEqual({ plans: 3, pushes: 3, refreshes: 0, merges: 3 });\n                        ^\nerror: expect(received).toEqual(expected)\n\n  {\n-   \"merges\": 3,\n-   \"plans\": 3,\n-   \"pushes\": 3,\n-   \"refreshes\": 0,\n+   \"merges\": 0,\n+   \"plans\": 0,\n+   \"pushes\": 0,\n+   \"refreshes\": 3,\n  }\n\n- Expected  - 4\n+ Received  + 4\n\n      at <anonymous> (<scratch>/base/src/lib/forge/autoRefresh.test.ts:1304:18)\n(fail) outdated red probe: three reviewed PRs need no agent refresh lanes [78.03ms]\n\n 0 pass\n 203 filtered out\n 5 fail\n 5 expect() calls\nRan 5 tests across 1 file. [617.00ms]\nerror: script \"test\" exited with code 1\n",
+    "startedAt": "2026-11-03T19:41:57.221000+00:00",
+    "completedAt": "2026-11-03T19:41:58.581000+00:00"
+  },
+  "green": {
+    "command": "gate-slot.sh bun run test src/lib/forge/autoRefresh.test.ts src/lib/forge/autoMerge.test.ts src/lib/forge/baseUpdate.test.ts",
+    "exit": 0,
+    "passed": 410,
+    "failed": 0,
+    "assertions": 3867,
+    "probeTrace": [
+      "outdated-red-probe BEHIND ci {\"plans\":1,\"pushes\":1,\"refreshes\":0,\"merges\":0}",
+      "(pass) outdated red probe: BEHIND with ci uses one mechanical update and fresh exact-head checks [5.35ms]",
+      "outdated-red-probe BEHIND optional-audit {\"plans\":1,\"pushes\":1,\"refreshes\":0,\"merges\":0}",
+      "(pass) outdated red probe: BEHIND with optional-audit uses one mechanical update and fresh exact-head checks [2.76ms]",
+      "outdated-red-probe UNSTABLE ci {\"plans\":1,\"pushes\":1,\"refreshes\":0,\"merges\":0}",
+      "(pass) outdated red probe: UNSTABLE with ci uses one mechanical update and fresh exact-head checks [2.70ms]",
+      "outdated-red-probe UNSTABLE optional-audit {\"plans\":1,\"pushes\":1,\"refreshes\":0,\"merges\":0}",
+      "(pass) outdated red probe: UNSTABLE with optional-audit uses one mechanical update and fresh exact-head checks [2.66ms]",
+      "outdated-red-three-pr-probe {\"plans\":3,\"pushes\":3,\"refreshes\":0,\"merges\":3}",
+      "(pass) outdated red probe: three reviewed PRs need no agent refresh lanes [19.70ms]"
+    ],
+    "summary": [
+      "",
+      " 410 pass",
+      " 0 fail",
+      " 3867 expect() calls",
+      "Ran 410 tests across 3 files. [70.01s]"
+    ],
+    "startedAt": "2026-11-03T19:47:42.990000+00:00",
+    "completedAt": "2026-11-03T19:48:53.763000+00:00"
+  },
+  "sourceSha256": {
+    "src/lib/forge/autoMerge.ts": "2475b31d6ae9fbe8b9389fb95f7e6894d7fc9de805937629aa95cf4467311ecb",
+    "src/lib/forge/autoRefresh.test.ts": "4dce0cb24805526fd9a358b46f310082b8964285ca08b9ac2f87375a703a2375",
+    "src/lib/forge/baseUpdate.ts": "c19cee3424b29355515d3e31a9dd7bb66188d4447e2d1e0b22651261f29c5a88"
+  },
+  "limits": [
+    "Synthetic forge and Git planning ports for queue counts; baseUpdate.test.ts separately exercises real local Git.",
+    "The old-runner three-PR fixture closes refused synthetic refresh children to release capacity; agent execution is not simulated.",
+    "No production rate, latency, or cost claim. No live PR mutation, merge, or deployment.",
+    "Independent exact-head review belongs to the next declared pipeline stage."
+  ],
+  "redFinalTestFile": {
+    "command": "gate-slot.sh bun run test src/lib/forge/autoRefresh.test.ts -t 'outdated red probe'",
+    "exit": 1,
+    "passed": 0,
+    "failed": 5,
+    "testFileSha256": "4dce0cb24805526fd9a358b46f310082b8964285ca08b9ac2f87375a703a2375",
+    "probeTrace": [
+      "outdated-red-probe BEHIND ci {\"plans\":0,\"pushes\":0,\"refreshes\":1,\"merges\":0}",
+      "1278 |     console.log(\"outdated-red-probe\", status, check, JSON.stringify(counts));",
+      "outdated-red-probe BEHIND optional-audit {\"plans\":0,\"pushes\":0,\"refreshes\":1,\"merges\":0}",
+      "1278 |     console.log(\"outdated-red-probe\", status, check, JSON.stringify(counts));",
+      "outdated-red-probe UNSTABLE ci {\"plans\":0,\"pushes\":0,\"refreshes\":1,\"merges\":0}",
+      "1278 |     console.log(\"outdated-red-probe\", status, check, JSON.stringify(counts));",
+      "outdated-red-probe UNSTABLE optional-audit {\"plans\":0,\"pushes\":0,\"refreshes\":1,\"merges\":0}",
+      "1278 |     console.log(\"outdated-red-probe\", status, check, JSON.stringify(counts));",
+      "outdated-red-three-pr-probe {\"plans\":0,\"pushes\":0,\"refreshes\":3,\"merges\":0}",
+      "1308 |   console.log(\"outdated-red-three-pr-probe\", JSON.stringify(counts));"
+    ],
+    "summary": [
+      " 0 pass",
+      " 245 filtered out",
+      " 5 fail",
+      " 5 expect() calls",
+      "Ran 5 tests across 1 file. [845.00ms]",
+      "error: script \"test\" exited with code 1"
+    ]
+  },
+  "checks": {
+    "types": {
+      "command": "gate-slot.sh bun x tsc --noEmit",
+      "exit": 0,
+      "output": "",
+      "completedAt": "2026-11-03T19:51:59.577000+00:00"
+    },
+    "lint": {
+      "command": "gate-slot.sh bun node_modules/eslint/bin/eslint.js src/lib/forge/autoMerge.ts src/lib/forge/autoRefresh.test.ts",
+      "exit": 0,
+      "output": ""
+    }
+  }
+}

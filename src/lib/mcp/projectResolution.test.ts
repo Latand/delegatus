@@ -46,7 +46,7 @@ function harness(owner = false, overrides: Partial<ViewerMcpDomainDependencies> 
   const registry = agentRegistry();
   const caller = registry.ensureConversation("codex", "/sessions/source.jsonl", null);
   if (owner) {
-    writeRelayFile(externalRelayFile("relays"), { v: 1, relays: [{ id: "relay", paused: false, targets: [{ id: "target", enabled: true, ownerTier: true }] }] });
+    writeRelayFile(externalRelayFile("relays"), { v: 1, relays: [{ id: "relay", paused: false, owner: { namespace: "telegram", id: "101" }, targets: [{ id: "target", enabled: true, ownerTier: true, project: null }] }] });
     writeRelayFile(externalRelayFile("runs"), { v: 1, runs: [{
       requestId: "owner-request", relayId: "relay", targetId: "target", conversationId: caller.id,
       ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid),
@@ -92,7 +92,7 @@ function harness(owner = false, overrides: Partial<ViewerMcpDomainDependencies> 
     posts.push({ pathname, body });
     if (pathname === "/api/spawn") return {
       ok: true, launchId: "launch-fixture", conversationId: "conversation_launched",
-      state: "starting", initialMessage: "pending",
+      state: "settled", initialMessage: "delivered", launched: true,
     };
     return { ok: true, outcome: "delivered", operationId: "fixture-operation" };
   } };

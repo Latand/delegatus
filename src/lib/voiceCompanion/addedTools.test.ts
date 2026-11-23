@@ -52,7 +52,7 @@ function fakeServer(answer: (call: Call) => unknown = call => ({ content: [{ typ
     if (rpc.id === undefined) return new Response(null, { status: 202 });
     const result = rpc.method === "initialize" ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } }
       : rpc.method === "tools/list" ? { tools }
-      : (calls.push(rpc.params as Call), answer(rpc.params as Call));
+      : (calls.push(rpc.params as Call), await answer(rpc.params as Call));
     return Response.json({ jsonrpc: "2.0", id: rpc.id, result });
   } });
   listeners.push(listener);
@@ -87,15 +87,16 @@ class RecordingProvider extends FakeLiveProvider {
     return super.create(key, locale, sdp, projectName, project, memory);
   }
 }
-async function fixture(voiceTools?: InstanceType<typeof VoiceToolSessions>, ownerHistory?: OwnerHistoryRead) {
-  const storage = new CompanionStorage();
-  storage.updateSettings({ enabled: true });
+async function fixture(voiceTools?: InstanceType<typeof VoiceToolSessions>, ownerHistory?: OwnerHistoryRead, backend: "api" | "codex" = "api", now = Date.now) {
+  const storage = new CompanionStorage(now);
+  storage.updateSettings({ enabled: true, backend });
   const sent: string[] = [];
   const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
-    send: async binding => { sent.push(binding.text); return { status: "queued", operationId: "operation_fixture" }; }, reports: () => [] });
+    send: async binding => { sent.push(binding.text); return { status: "queued", operationId: "operation_fixture" }; }, reports: () => [] }, now);
   const reads = fixtureBoardReads({ tasks: () => [{ id: "task_fixture", project: "fixture", text: "Review the plan", status: "inbox" }], pipelines: () => [], activity: async () => [], messages: async () => [] });
   const provider = new RecordingProvider();
-  const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => "synthetic-credential", closeTimeoutMs: 20, timers: false, ...(voiceTools ? { voiceTools } : {}), ...(ownerHistory ? { ownerHistory } : {}) });
+  if (backend === "codex") Object.defineProperty(provider, "backend", { value: "codex" });
+  const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => "synthetic-credential", closeTimeoutMs: 20, timers: false, now, ...(voiceTools ? { voiceTools } : {}), ...(ownerHistory ? { ownerHistory } : {}) });
   const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: { operator: true } });
   return { storage, admission, provider, service, s, sent };
 }
@@ -1461,4 +1462,49 @@ for (const backend of ["api", "codex"] as const) test(`${backend}: a private ser
     expect(opening).toContain("A private part of this call is not repeated here.");
     expect(opening).not.toContain("sentinel");
   } finally { await h.service.close(second.sessionId); }
+}, 30_000);
+
+for (const backend of ["api", "codex"] as const) for (const privateTool of [false, true]) test(`slice 3: ${backend} announces an interrupted ${privateTool ? "private" : "public"} acting tool once and never replays it`, async () => {
+  let entered!: () => void, release!: () => void;
+  const reached = new Promise<void>(done => { entered = done; });
+  const held = new Promise<void>(done => { release = done; });
+  const server = fakeServer(async () => { entered(); await held; return { content: [{ type: "text", text: "Acted" }] }; });
+  const { sessions } = await hub([{ url: server.url, askBeforeActing: true, private: privateTool }]);
+  const f = await fixture(sessions, undefined, backend, () => Date.UTC(2026, 10, 11, 12));
+  try {
+    // The original call enters through its production tool handler and normal confirmation gate.
+    if (backend === "api") {
+      queue(f, [functionCall("ask-action", "music__play", { song: "Fixture" })]);
+      await turn(f, "Play Fixture.", "ask", 0);
+    } else {
+      f.provider.replay(f.s.providerId, said("Play Fixture.", 0), delegationCreated("ask", 600)); await f.service.drain(f.s.sessionId);
+      await f.provider.callTool(f.s.providerId, "music__play", { song: "Fixture" }, "ask-action", "ask");
+    }
+    f.provider.replay(f.s.providerId, voiceSaid("Should Music play Fixture?", 1500)); await f.service.drain(f.s.sessionId);
+    let acting: Promise<unknown>;
+    if (backend === "api") {
+      queue(f, [functionCall("act-now", "music__play", { song: "Fixture" })]);
+      acting = turn(f, "Yes, play it.", "act", 3000);
+    } else {
+      f.provider.replay(f.s.providerId, said("Yes, play it.", 3000), delegationCreated("act", 3600)); await f.service.drain(f.s.sessionId);
+      acting = f.provider.callTool(f.s.providerId, "music__play", { song: "Fixture" }, "act-now", "act");
+    }
+    await reached;
+    const actionRecord = f.admission.transcriptRecord(f.s.sessionId).entries.find(row => row.kind === "tool" && row.data.acting === true)!;
+    expect(actionRecord.data).toMatchObject({ acting: true, status: "running" });
+    await f.service.close(f.s.sessionId, "transport"); release(); await acting;
+    const n = await f.service.start({ project: "fixture", locale: "en", sdp: "v=1", startedBy: { operator: true }, resume: f.s.sessionId, cursor: {} });
+    await f.service.events(n.sessionId, 0);
+    f.provider.replay(n.providerId, voiceSaid("Ready to continue.", 4000)); await f.service.drain(n.sessionId);
+    await f.service.events(n.sessionId, 0);
+    const notices = () => f.admission.transcriptRecord(n.sessionId).entries.filter(row => row.kind === "handoff" && (row.data.resumeOf as { item?: string })?.item === actionRecord.id);
+    expect(notices()).toHaveLength(1); expect(server.calls).toHaveLength(1);
+    if (privateTool) expect(String(notices()[0].data.text)).not.toContain("music__play");
+    f.provider.replay(n.providerId, voiceSaid("The action outcome is unknown.", 5000)); await f.service.drain(n.sessionId);
+    await f.service.close(n.sessionId, "transport");
+    const n2 = await f.service.start({ project: "fixture", locale: "en", sdp: "v=2", startedBy: { operator: true }, resume: n.sessionId, cursor: {} });
+    await f.service.events(n2.sessionId, 0);
+    expect(f.admission.reportSpeech(n2.sessionId).filter(row => row.resumeOf?.item === actionRecord.id)).toEqual([]);
+    expect(server.calls).toHaveLength(1); await f.service.close(n2.sessionId);
+  } finally { release(); await f.service.close(f.s.sessionId); }
 }, 30_000);

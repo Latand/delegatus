@@ -1,0 +1,36 @@
+gate-slot: Waiting for the CPU queue · 2nd · waited 0 min · high priority
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+gate-slot: Waiting for a heavy command slot · all 6 busy · waited 0 min
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+gate-slot: Waiting for a heavy command slot · all 6 busy · waited 0 min
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/KanbanBoard.dom.test.tsx:
+(pass) Timeline expands resumed work from a completed stage and keeps its completed bar [666.14ms]
+(pass) Timeline expands resumed work from a needs_decision stage and keeps its completed bar [408.30ms]
+(pass) the layout mode follows the board's own width, tabbed from 640 px up to 767 px [0.34ms]
+(pass) remote agents stay on their own project while a different board loads or fails [251.28ms]
+(pass) a seat docked at the side never costs the columns: what it leaves scrolls instead of folding into tabs (#1841) [0.31ms]
+(pass) four columns hold every task; an empty task taken off the board is counted, never dropped [157.95ms]
+(pass) choosing a status moves the card at once, writes it with the guard, and offers Undo [284.44ms]
+(pass) a column names its cards' status, so a card draws no status pill; S opens the status menu from the card's ⋯ (#2148) [521.26ms]
+(pass) a refused write returns the card to its column with an error receipt and Retry [171.44ms]
+(pass) a status changed elsewhere puts the card where the server has it and offers Move anyway [155.10ms]
+(pass) find narrows each column and says how many of how many it shows [85.19ms]
+(pass) / inside the board finds a task and never reaches the Viewer's global search; outside the board it is left alone [48.24ms]
+(pass) U undoes the last edit after its receipt has closed (#1856) [159.54ms]
+(pass) a shelf takes the wide share, one at a time, and gives it back when work resumes in Assigned unless pinned [288.53ms]
+(pass) the mouse resting in a narrow column widens it after the dwell, with the cue on the way; a menu or a pin holds it [227.92ms]
+(pass) the Overview keeps its fixed shares: no width control and no read of a project's pin [137.38ms]
+(pass) on a large screen a project board balances its columns; narrow, scroll, tabs and the Overview keep theirs [419.61ms]
+(pass) the column template function holds the reading width and the wide share in every grid mode [0.30ms]
+(pass) an open agent keeps its minimum width and an empty column folds to a strip in every grid mode [0.13ms]
+(pass) an empty column draws as a strip and a filled one does not [13.57ms]
+(pass) in tabs every column is already full width, so no column draws the control [58.05ms]
+(pass) O folds and unfolds the orchestrator seat while no field holds the keys [32.28ms]
+
+ 22 pass
+ 0 fail
+ 169 expect() calls
+Ran 22 tests across 1 file. [5.49s]
+exit: 0

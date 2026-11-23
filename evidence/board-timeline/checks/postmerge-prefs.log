@@ -1,0 +1,26 @@
+source: a381c16e5ae34de6d26274f97e62d63240fb6679
+command: ["bun","run","test","src/components/kanban/boardTimelineStore.test.ts"]
+startedAt: 2026-11-01T05:38:43.812Z
+gate-slot: Waiting for the CPU queue · 2nd · waited 0 min · high priority
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+gate-slot: Waiting for a heavy command slot · all 6 busy · waited 0 min
+$ bun test --timeout=60000 src/components/kanban/boardTimelineStore.test.ts
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/boardTimelineStore.test.ts:
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/boardTimelineStore.test.ts:
+(pass) live work starts expanded; explicit collapse survives a new store and later clocks [0.65ms]
+(pass) every zoom, view and fold writer output reloads without losing sibling choices [0.41ms]
+(pass) malformed and unsupported storage values retain valid independent fields [0.32ms]
+(pass) storage refusal preserves usable choices in the mounted store [0.23ms]
+(pass) a storage update from another surface is read before the next local write [0.10ms]
+
+ 5 pass
+ 0 fail
+ 27 expect() calls
+Ran 5 tests across 1 file. [406.00ms]
+
+exit: 0
+finishedAt: 2026-11-01T05:38:53.362Z

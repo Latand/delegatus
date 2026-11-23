@@ -6,7 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseReplacedError } from "./currentDatabase";
-import { historyInputSql, installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyPipelineRef, historyHeadlessFlows, historyHeadlessFlowsForTarget, historyHeadlessDeadRounds, historyFleetLimitWaits } from "./historyProjection";
+import { historyInputSql, installHistoryProjection, readHistoryProjection, readHistoryPipelineRefs, historyAttemptCounts, historyPipelineRef, historyHeadlessFlows, historyHeadlessFlowsForTarget, historyHeadlessDeadRounds, historyFleetLimitWaits } from "./historyProjection";
+import { initializeStateCollections } from "./sqliteStateStore";
 import { fleetLimitWaits } from "@/lib/mcp/agentFleet";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { buildPipeline } from "@/lib/pipelines/store";
@@ -62,6 +63,154 @@ function oldCounts(rows: ReturnType<typeof pipeline>[], now = NOW) {
   }
   return counts;
 }
+
+function targetedFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(),"history-targets-")); owned.push(root);
+  const filename = path.join(root,"state.sqlite");
+  initializeStateCollections(filename, ["pipelines", "pipelines_archive"].map(collection => ({
+    collection, schemaVersion: 1, migrationId: "targeted-history", key: (row: Pipeline) => row.id, loadRecords: () => [],
+  })));
+  const db = new Database(filename); db.exec("PRAGMA busy_timeout=0");
+  const put = (row: Pipeline, collection = "pipelines", order = 0) => db.query(`INSERT INTO state_rows
+    (collection,row_key,value_json,row_order,row_revision,controller_active) VALUES (?,?,?,?,0,0)
+    ON CONFLICT(collection,row_key) DO UPDATE SET value_json=excluded.value_json,row_order=excluded.row_order`).run(collection,row.id,JSON.stringify(row),order);
+  const read = (targets = [{ conversationId: "conversation_fixture", path: "fixture-transcript" }],
+    options: Parameters<typeof readHistoryPipelineRefs>[1] = {}) => readHistoryPipelineRefs(targets,{filename,...options});
+  return { db, filename, put, read };
+}
+
+test("targeted reads without an ownership index keep pending evidence unknown", async () => {
+  const f = fixture();
+  const targets = [{ conversationId: "conversation_fixture", path: "fixture-transcript" }];
+  try {
+    f.put(pipeline("selected"));
+    expect(f.db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_owner_refs'").get()).toBeNull();
+    expect(await readHistoryPipelineRefs(targets,{filename:f.filename,deadlineMs:0})).toEqual([undefined]);
+    expect(await readHistoryPipelineRefs(targets,{filename:f.filename})).toMatchObject([{pipelineId:"selected"}]);
+    f.db.query("DELETE FROM state_rows WHERE collection='pipelines' AND row_key=?").run("selected");
+    expect(await readHistoryPipelineRefs(targets,{filename:f.filename,deadlineMs:0})).toEqual([undefined]);
+    expect(await readHistoryPipelineRefs(targets,{filename:f.filename})).toEqual([null]);
+  } finally { f.db.close(); }
+});
+
+test("targeted pipeline freshness ignores unrelated active and archived writes through indexed lookups", async () => {
+  const f = targetedFixture();
+  try {
+    f.put(pipeline("selected"));
+    expect(await f.read()).toMatchObject([{ pipelineId: "selected", reportedState: "running" }]);
+    for (let n = 0; n < 64; n++) {
+      const other = pipeline(`other-${n}`);
+      Object.assign(other.runs[0]!.attempts[0]!,{conversationId:`conversation_other_${n}`,agentPath:`other-${n}`});
+      f.put(other,n % 2 ? "pipelines" : "pipelines_archive",n+1);
+    }
+    const pending = f.db.query("SELECT * FROM history_pending ORDER BY collection,row_key").all();
+    const queries = spyOn(Database.prototype,"query");
+    let selections: string[] = [];
+    try {
+      expect(await f.read(undefined,{deadlineMs:0})).toMatchObject([{pipelineId:"selected"}]);
+      selections = queries.mock.calls.map(([sql]) => sql).filter(sql => sql.includes("FROM history_pending p"));
+    } finally { queries.mockRestore(); }
+    expect(f.db.query("SELECT * FROM history_pending ORDER BY collection,row_key").all()).toEqual(pending);
+    expect(pending).toHaveLength(64);
+    expect(selections.length).toBeGreaterThan(0);
+    for (const sql of selections) {
+      const field = sql.includes("AND conversationId=?") ? "conversationId" : "agentPath";
+      const identity = field === "conversationId" ? "conversation_fixture" : "fixture-transcript";
+      const plan = f.db.query<{detail:string},SQLQueryBindings[]>(`EXPLAIN QUERY PLAN ${sql}`).all(field,identity,identity,200).map(row=>row.detail).join("\n");
+      expect(plan).toContain("pipeline_owner_lookup");
+      expect(plan).toContain(field === "conversationId" ? "history_conversation" : "history_path");
+      expect(plan).not.toContain("SCAN p");
+      expect(plan).not.toContain("SCAN pipeline_owner_refs");
+    }
+  } finally { f.db.close(); }
+});
+
+test("targeted pipeline reads keep requeued evidence unknown until a fresh snapshot", async () => {
+  const f = targetedFixture();
+  try {
+    const row = pipeline("selected"); f.put(row);
+    let writes = 0;
+    const first = await f.read(undefined,{onYield: async () => {
+      writes++;
+      row.runs[0]!.attempts[0]!.state = "passed";
+      f.put(row);
+    }});
+    expect(writes).toBe(1);
+    expect(first).toEqual([undefined]);
+    expect(f.db.query("SELECT row_key FROM history_pending").all()).toEqual([{row_key:"selected"}]);
+    expect(await f.read()).toMatchObject([{reportedState:"passed"}]);
+    row.runs[0]!.attempts[0]!.state = "failed"; f.put(row);
+    expect(await f.read(undefined,{deadlineMs:0})).toEqual([undefined]);
+    const cancel = new AbortController(); cancel.abort(new Error("target cancelled"));
+    await expect(f.read(undefined,{signal:cancel.signal})).rejects.toThrow("target cancelled");
+    const lock = new Database(f.filename); lock.exec("BEGIN IMMEDIATE");
+    try { expect(await f.read()).toEqual([undefined]); }
+    finally { lock.exec("ROLLBACK"); lock.close(); }
+    expect(await f.read()).toMatchObject([{reportedState:"failed"}]);
+  } finally { f.db.close(); }
+});
+
+test("targeted pipeline reads discover new owners and retain conversation precedence through moves and deletion", async () => {
+  const f = targetedFixture();
+  try {
+    const row = pipeline("original"); f.put(row);
+    expect(await f.read()).toMatchObject([{pipelineId:"original"}]);
+    row.runs[0]!.attempts[0]!.conversationId = "conversation_other";
+    row.runs[0]!.attempts[0]!.agentPath = "other-path";
+    f.put(row);
+    const newcomer = pipeline("newcomer"); f.put(newcomer,"pipelines",1);
+    expect(await f.read(undefined,{deadlineMs:0})).toEqual([undefined]);
+    expect(await f.read()).toMatchObject([{pipelineId:"newcomer"}]);
+    f.db.query("DELETE FROM state_rows WHERE collection='pipelines' AND row_key=?").run(newcomer.id);
+    f.put(newcomer,"pipelines_archive");
+    expect(await f.read()).toEqual([undefined]); // Archive dependency appeared after deleting the active projection.
+    expect(await f.read()).toMatchObject([{pipelineId:"newcomer"}]);
+    const pathOnly = pipeline("path-only"); pathOnly.runs[0]!.attempts[0]!.conversationId = "conversation_path"; f.put(pathOnly);
+    expect(await f.read()).toMatchObject([{pipelineId:"newcomer"}]);
+    f.db.query("DELETE FROM state_rows WHERE collection='pipelines_archive' AND row_key=?").run(newcomer.id);
+    expect(await f.read()).toMatchObject([{pipelineId:"path-only"}]);
+    f.db.query("DELETE FROM state_rows WHERE collection='pipelines' AND row_key=?").run(pathOnly.id);
+    expect(await f.read()).toEqual([null]);
+    expect(await f.read([],{deadlineMs:0})).toEqual([]);
+  } finally { f.db.close(); }
+});
+
+test("targeted preparation caps its batch and a fresh process finishes the retained remainder", async () => {
+  const f = targetedFixture();
+  try {
+    for (let n = 0; n < 205; n++) f.put(pipeline(`selected-${String(n).padStart(3,"0")}`),"pipelines",n);
+    expect(await f.read()).toEqual([undefined]);
+    expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM history_pending").get()!.n).toBe(5);
+    const script = `import { readHistoryPipelineRefs } from ${JSON.stringify(path.join(import.meta.dir,"historyProjection.ts"))};
+      console.log(JSON.stringify(await readHistoryPipelineRefs([{conversationId:"conversation_fixture",path:"fixture-transcript"}],{filename:process.argv[1]})));`;
+    const child = Bun.spawn([process.execPath,"--eval",script,f.filename],{stdin:"ignore",stdout:"pipe",stderr:"pipe"});
+    try {
+      const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();
+      expect(await child.exited,await stderr).toBe(0);
+      expect(JSON.parse(await stdout)).toMatchObject([{pipelineId:"selected-204"}]);
+      expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM history_pending").get()!.n).toBe(0);
+    } finally { if(child.exitCode === null) child.kill(); await child.exited; }
+  } finally { f.db.close(); }
+});
+
+test("targeted partial answers preserve release fencing and cancellation after a yield", async () => {
+  const f = targetedFixture();
+  const target = path.join(path.dirname(f.filename),"viewer-release.json");
+  try {
+    f.put(pipeline("selected"));
+    const revision = "c".repeat(40);
+    await expect(f.read(undefined,{onYield:async () => {
+      fs.writeFileSync(target,JSON.stringify({endpoint:"http://127.0.0.1:1",revision,hotStateBackend:HOT_STATE_BACKEND}));
+      publishHotStateAuthority(path.dirname(f.filename),"fencing",revision);
+    }})).rejects.toThrow(/fenced/);
+    fs.unlinkSync(target);
+    const row = pipeline("selected"); row.runs[0]!.attempts[0]!.state = "passed"; f.put(row);
+    const cancel = new AbortController();
+    await expect(f.read(undefined,{signal:cancel.signal,onYield:async () => { cancel.abort(new Error("target cancelled after yield")); }}))
+      .rejects.toThrow("target cancelled after yield");
+    expect(await f.read()).toMatchObject([{reportedState:"passed"}]);
+  } finally { f.db.close(); }
+});
 
 test("empty history answers without payload reads",async () => {
   const f = fixture();
@@ -969,7 +1118,7 @@ test("fleet wait precedence follows row order, row key and then run order",async
   } finally {f.db.close();}
 });
 
-test("the jsonb and the text input queries store the same text JSON",() => {
+test("the supported input query stores the same text JSON as the text fallback",() => {
   const f=fixture();
   try {
     const wait={accountId:null,resetsAt:NOW+1000,resumeAt:new Date(NOW+2000).toISOString(),startedAt:new Date(NOW).toISOString(),text:"wait",turnTs:1,tries:0,condition:{kind:"usage_limit",scope:null,resetLabel:null,label:"usage limit"}};
@@ -980,11 +1129,30 @@ test("the jsonb and the text input queries store the same text JSON",() => {
     f.put(flow({id:"flow_empty"}),"flows");
     expect(historyInputSql(f.db,"pipelines","text")).not.toContain("jsonb");
     expect(historyInputSql(f.db,"flows","text")).not.toContain("jsonb");
+    const form = historyInputSql(f.db,"pipelines") === historyInputSql(f.db,"pipelines","text") ? "text" : "jsonb";
     for (const [collection,key] of [["pipelines","plain"],["pipelines","closed"],["pipelines","empty_runs"],["flows","flow_rounds"],["flows","flow_empty"]] as const) {
       const input=(form:"jsonb"|"text")=>f.db.query<{input:string},[string,string]>(historyInputSql(f.db,collection,form)).get(collection,key)!.input;
-      expect(typeof input("jsonb")).toBe("string");
-      expect(input("text")).toBe(input("jsonb"));
+      expect(typeof input(form)).toBe("string");
+      expect(input("text")).toBe(input(form));
     }
-    expect(historyInputSql(f.db,"pipelines")).toBe(historyInputSql(f.db,"pipelines","jsonb"));
+    expect(historyInputSql(f.db,"pipelines")).toBe(historyInputSql(f.db,"pipelines",form));
+  } finally { f.db.close(); }
+});
+
+
+test("the JS correction keeps adjacent fractional milliseconds exact before history readers run", async () => {
+  const f = fixture();
+  const start = Date.parse("2026-10-11T04:58:01.001Z");
+  const row = pipeline("exact_history_times");
+  const original = row.runs[0]!.attempts[0]!;
+  original.startedAt = new Date(start).toISOString();
+  row.runs[0]!.attempts.push({ ...original, n: 2, startedAt: new Date(start - 1).toISOString() });
+  try {
+    f.put(row);
+    expect(await f.read(db => historyAttemptCounts(db, "fixture", start + WINDOW))).toEqual({ builder: 1, reviewer: 0 });
+    expect(f.db.query("SELECT startedMs FROM history_attempts ORDER BY attempt").all()).toEqual([{ startedMs: start }, { startedMs: start - 1 }]);
+    // A later incremental refresh keeps the same inclusive window boundary.
+    original.startedAt = new Date(start + 1).toISOString(); f.put(row);
+    expect(await f.read(db => historyAttemptCounts(db, "fixture", start + WINDOW + 1))).toEqual({ builder: 1, reviewer: 0 });
   } finally { f.db.close(); }
 });

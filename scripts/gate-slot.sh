@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Heavy commands wait for low CPU pressure and a free shared machine slot in
-# the same pass, then run in their own scope in the CPU work slice
+# Heavy commands wait for CPU queue readiness and a free shared machine slot,
+# then run in their own scope in the CPU work slice
 # (docs/design/cpu-placement.md). The slot lock files are the ones the installed
 # /var/tmp/llv-gate uses, so both gates count against one set of slots.
 set -euo pipefail
@@ -21,6 +21,8 @@ poll=${LLV_GATE_POLL_SECONDS:-2}
 # setting is read as DELEGATUS_X, then as the LLV_X an entry point folds it into.
 # owned-runner always applies CPUWeight=10 and IOWeight=10 to the check service,
 # including the no-placement and namespace handoff paths.
+# That launcher also enforces the measured TasksMax from gate-tasks.ts and
+# reports each gate unit's task peak before its cgroup is collected.
 slice=${LLV_GATE_SLICE:-delegatus-agents-work.slice}
 # The machine's online CPUs whatever this process's affinity, like onlineCpuCount.
 cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
@@ -47,13 +49,21 @@ own_cgroup() {
 }
 # The user manager accepts CPU properties even where an ancestor keeps the cpu
 # controller off (DisableControllers=cpu, an undelegated slice), and the scope
-# then runs with no controls; only the kernel files prove the quotas hold. This
-# process's scope and the work slice above it must both carry a quota.
+# then runs with no controls; only the kernel files prove the quotas hold.
+# A worker leaf inherits its service's ceiling. Require a finite gate ancestor
+# below the work slice and a finite work-slice ceiling.
 cpu_quota_effective() {
-  local root=${LLV_GATE_CGROUP_ROOT:-/sys/fs/cgroup} group own="" above=""
+  local root=${LLV_GATE_CGROUP_ROOT:-/sys/fs/cgroup} group own="" above="" control_group work_group candidate_quota
   group=$(own_cgroup) && [[ $group == */"$slice"/* ]] || { echo "the gate's cgroup ${group:-(unreadable)} is outside $slice"; return 1; }
-  { read -r own _ < "$root$group/cpu.max"; } 2>/dev/null
-  { read -r above _ < "$root${group%%/"$slice"/*}/$slice/cpu.max"; } 2>/dev/null
+  work_group=${group%%/"$slice"/*}/$slice
+  control_group=$group
+  while [[ -n $control_group && $control_group != "$work_group" ]]; do
+    candidate_quota=""
+    { read -r candidate_quota _ < "$root$control_group/cpu.max"; } 2>/dev/null || true
+    if [[ $candidate_quota =~ ^[0-9]+$ ]]; then own=$candidate_quota; break; fi
+    control_group=${control_group%/*}
+  done
+  { read -r above _ < "$root$work_group/cpu.max"; } 2>/dev/null
   [[ $own =~ ^[0-9]+$ && $above =~ ^[0-9]+$ ]] && return 0
   echo "the kernel applied no CPU quota to $group (cpu.max ${own:-absent}, $slice cpu.max ${above:-absent}); the cpu controller is off on an ancestor"
   return 1
@@ -95,6 +105,11 @@ pre_push_parent() {
 # without a user manager does it run in a leaf of the agent's own scope, whose
 # memory cap then applies; that fallback is announced, never silent.
 run() {
+  # A caller that names no deadline sends a heavy command of its own: a build
+  # or a whole suite of any project. The runner's own default of fifteen
+  # minutes stopped healthy ones and their work was run again, so such a
+  # command gets an hour. Hooks and comparators pass their own deadlines.
+  export LLV_OWNED_RUN_TIMEOUT_MS="${LLV_OWNED_RUN_TIMEOUT_MS:-3600000}"
   if [[ -n ${LLV_GATE_WAIT_STARTED:-} ]]; then
     printf 'running\n' > "$LLV_GATE_WAIT_STARTED"
     unset LLV_GATE_WAIT_STARTED
@@ -188,24 +203,66 @@ fi
 # Propagate helper failures; only a lost slot race retries.
 claim() {
   local code=0
-  "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid" || code=$?
+  "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid" "$@" || code=$?
   if [[ $code != 0 && $code != 75 ]]; then exit "$code"; fi
   return "$code"
 }
-queue_key="command:$$:$RANDOM:$RANDOM"
-queued_at=$(date +%s)
+try_lock() {
+  local code=0
+  if command -v flock >/dev/null; then flock -n "$1" || code=$?
+  else "${LLV_GATE_BUN:-bun}" "$admission" --lock-fd "$1" || code=$?; fi
+  if [[ $code != 0 && $code != 1 ]]; then exit "$code"; fi
+  return "$code"
+}
+# Keep the claim across the owned runner's execution and cleanup, even where
+# exec cannot preserve the shell's native PID. The runner inherits the Unix
+# lock descriptors for its own lifetime and for nested-slot proof.
+run_claimed() {
+  local runner="" signal="" result
+  trap 'signal=TERM; if [[ -n $runner ]]; then kill -TERM "$runner" 2>/dev/null || true; fi' TERM
+  trap 'signal=INT; if [[ -n $runner ]]; then kill -INT "$runner" 2>/dev/null || true; fi' INT
+  end_cpu_wait
+  run "$@" <&0 &
+  runner=$!
+  if [[ -n $signal ]]; then kill -s "$signal" "$runner" 2>/dev/null || true; fi
+  while :; do
+    result=0; wait "$runner" || result=$?
+    kill -0 "$runner" 2>/dev/null || break
+  done
+  runner=""
+  "${LLV_GATE_BUN:-bun}" "$admission" --release-slot "$queue_key" "$owner_pid" || {
+    echo "gate-slot: could not release the completed command's slot" >&2
+    if [[ $result == 0 ]]; then result=1; fi
+  }
+  exit "$result"
+}
+queue_key="command:bounded:drained:$$:$RANDOM:$RANDOM"
 while :; do
-  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid" "$queued_at"
-  if ! command -v flock >/dev/null; then
-    if claim; then end_cpu_wait; run "$@"; fi
+  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
+  if [[ $OSTYPE == msys || $OSTYPE == cygwin ]]; then
+    # Native Windows uses the shared queue's atomic claim and the native
+    # wrapper PID as its slot proof.
+    if claim portable; then run_claimed "$@"; fi
   else
-    for ((i=1; i<=slots; i++)); do
-      exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
-      if flock -n 9; then
-        if claim; then end_cpu_wait; run "$@"; fi
-      fi
-      exec 9>&-
-    done
+    # Serialize current final claims. The cap lock identifies this particular
+    # slot's protocol and stays held alongside fd 9 for the runner's lifetime.
+    exec 8>"$lock_dir/llv-heavy-gate.claim.lock"
+    if try_lock 8; then
+      for ((i=1; i<=slots; i++)); do
+        exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
+        if try_lock 9; then
+          exec 7>"$lock_dir/llv-heavy-gate.slot$i.cap$slots.lock"
+          if try_lock 7 && claim "$i"; then
+            exec 8>&-
+            run_claimed "$@"
+          fi
+          exec 9>&- 7>&-
+          break
+        fi
+        exec 9>&-
+      done
+    fi
+    exec 8>&-
   fi
   sleep "$poll"
 done

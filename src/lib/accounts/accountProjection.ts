@@ -32,6 +32,7 @@ export function liveFreshObservation(observation: DurableQuotaObservation | unde
 export type AccountAuthState = "authenticated" | "signed_out" | "unknown" | "error";
 
 export interface AccountObservationProjection {
+  paidCredits?: { balance: string | null; checkedAt: string | null };
   auth: { state: AccountAuthState; method: null; email: null; plan: string | null; checkedAt: string | null };
   limits: {
     state: "fresh" | "stale" | "unavailable";
@@ -66,7 +67,13 @@ export function accountProjection(observation: DurableQuotaObservation | undefin
     observedAt: Date.parse(observation.observedAt),
     authCheckedAt: Date.parse(observation.authCheckedAt),
   }, now) : null;
+  const creditTime = observation?.limits?.credits?.observedAt;
   return {
+    ...(observation?.engine === "codex" ? { paidCredits: {
+      balance: observation.limits?.credits?.balance ?? null,
+      checkedAt: typeof creditTime === "number" && Number.isFinite(creditTime) && creditTime >= 0 && creditTime < 8.64e12
+        ? new Date(creditTime * 1000).toISOString() : null,
+    } } : {}),
     auth: {
       state: authState,
       method: null,

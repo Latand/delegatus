@@ -187,9 +187,9 @@ export async function transcriptFileIdentity(transcriptPath: string): Promise<st
 }
 
 /** The scanner root a transcript belongs to, by path prefix alone — no walk. */
-function rootForPath(transcriptPath: string): [RootKey, string] | null {
+function rootForPath(transcriptPath: string, roots = scanRootEntries()): [RootKey, string] | null {
   let best: [RootKey, string] | null = null;
-  for (const [rootName, root] of scanRootEntries()) {
+  for (const [rootName, root] of roots) {
     if (transcriptPath !== root && !transcriptPath.startsWith(root.endsWith(path.sep) ? root : root + path.sep)) continue;
     /* Account homes can nest; the longest matching root is the owning one. */
     if (!best || root.length > best[1].length) best = [rootName, root];
@@ -204,8 +204,15 @@ function rootForPath(transcriptPath: string): [RootKey, string] | null {
  * root or one that is not a readable file. `strict` throws a stat failure
  * other than a missing file, as the strict tail read does.
  */
-export async function describeTranscriptPath(transcriptPath: string, options: { strict?: boolean } = {}): Promise<LivenessTranscript | null> {
-  const rootEntry = rootForPath(transcriptPath);
+export async function describeTranscriptPath(transcriptPath: string, options: {
+  strict?: boolean;
+  readOnly?: boolean;
+  /** A read-only caller supplies its already verified roots; root discovery
+      also performs account recovery and must never run in that caller. */
+  roots?: [RootKey, string][];
+} = {}): Promise<LivenessTranscript | null> {
+  if (options.readOnly && !options.roots) throw new Error("Read-only description requires explicit roots");
+  const rootEntry = rootForPath(transcriptPath, options.roots);
   if (!rootEntry) return null;
   let stat: fs.Stats;
   try {
@@ -216,7 +223,7 @@ export async function describeTranscriptPath(transcriptPath: string, options: { 
     return null;
   }
   if (!stat.isFile()) return null;
-  const description = describe(rootEntry[0], rootEntry[1], transcriptPath, stat);
+  const description = describe(rootEntry[0], rootEntry[1], transcriptPath, stat, undefined, undefined, { readOnly: options.readOnly });
   return {
     path: transcriptPath,
     project: description.project,

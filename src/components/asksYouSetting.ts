@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
+import { onServiceSettled } from "@/components/keys/openKeys";
 import type { AsksYouSettingView } from "@/lib/asks/types";
 
 /*
@@ -22,24 +23,36 @@ const EMPTY: AsksYouSettingState = { view: null, saving: false, failed: false };
 let state: AsksYouSettingState = EMPTY;
 const listeners = new Set<() => void>();
 let read: Promise<void> | null = null;
+/* A read asked for while one is on its way that may have begun before what changed: it runs once that one ends. */
+let again = false;
+/* Bumped when a write begins and when it settles: a read that began in another epoch answers from before what the write did. */
+let epoch = 0;
+/* A read that answered while a write was on its way, which may carry a provider chosen since: it runs again once the write settles. */
+let missed = false;
+/* The read after a refused write keeps the refusal on the row. */
+let keepFailed = false;
 
 function publish(next: AsksYouSettingState): void {
   state = next;
   for (const listener of listeners) listener();
 }
 
-function readView(): Promise<void> {
-  if (read) return read;
+function readView(fresh = false): Promise<void> {
+  if (read) { again ||= fresh; return read; }
+  const begun = epoch;
   read = (async () => {
     try {
       const response = await fetch("/api/asks-you", { cache: "no-store" });
       if (!response.ok) return;
       const body = await response.json() as AsksYouSettingView;
-      if (!state.saving) publish({ view: body, saving: false, failed: false });
+      if (state.saving) missed = true;
+      else if (begun !== epoch) again = true;
+      else { publish({ view: body, saving: false, failed: keepFailed && state.failed }); keepFailed = false; }
     } catch {
       /* The row stays disabled until a later read answers. */
     } finally {
       read = null;
+      if (again) { again = false; void readView(); }
     }
   })();
   return read;
@@ -70,18 +83,24 @@ export function useAsksYouSetting(initial?: AsksYouSettingView): AsksYouSettingS
   useEffect(() => {
     if (initial) return;
     void readView();
-    const refresh = () => void readView();
+    /* A key saved or a provider chosen in «Keys» changes what the hint names. */
+    const refresh = () => void readView(true);
     window.addEventListener("delegatus:provider-key-changed", refresh);
-    return () => window.removeEventListener("delegatus:provider-key-changed", refresh);
+    const offService = onServiceSettled("asks", refresh);
+    return () => { offService(); window.removeEventListener("delegatus:provider-key-changed", refresh); };
   }, [initial]);
 
   const toggle = useCallback(() => {
     const view = state.view;
     if (!view || state.saving) return;
     const next = !view.enabled;
+    epoch++;
     publish({ view: { ...view, enabled: next }, saving: true, failed: false });
     void writeEnabled(next).then((answer) => {
+      epoch++;
+      /* The answer, or the view before the switch, may name a provider chosen under «Keys» while this was saving: a read that answered meanwhile runs again. */
       publish(answer ? { view: answer, saving: false, failed: false } : { view, saving: false, failed: true });
+      if (missed) { missed = false; keepFailed = !answer; void readView(true); }
     });
   }, []);
 
@@ -91,4 +110,8 @@ export function useAsksYouSetting(initial?: AsksYouSettingView): AsksYouSettingS
 export function resetAsksYouSettingForTests(): void {
   state = EMPTY;
   read = null;
+  again = false;
+  epoch = 0;
+  missed = false;
+  keepFailed = false;
 }

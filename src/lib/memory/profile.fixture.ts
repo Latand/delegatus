@@ -1,4 +1,4 @@
-import type { RoleMemoryProjectView, RuleView, ScopeView } from "./roleTypes";
+import { ROLE_MEMORY_BOUND, type RoleMemoryProjectView, type RuleView, type ScopeView } from "./roleTypes";
 import type { ProfileAnswer } from "./profileTypes";
 
 export function sampleRule(id: string, rule = "Check the sample color before saving."): RuleView {
@@ -6,7 +6,7 @@ export function sampleRule(id: string, rule = "Check the sample color before sav
 }
 export function sampleScope(scope: string, active: RuleView[]): ScopeView {
   const kind = scope === "machine" ? "machine" : scope.startsWith("role:") ? "role" : "project";
-  return { scope, kind, roleId: kind === "role" ? scope.split(":").at(-1)! : null, revision: 1, chars: 100, bound: 10_000, addedToday: 0, active, left: [] };
+  return { scope, kind, roleId: kind === "role" ? scope.split(":").at(-1)! : null, revision: 1, chars: 100, bound: ROLE_MEMORY_BOUND, addedToday: 0, active, left: [] };
 }
 export function sampleMemory(): RoleMemoryProjectView {
   return { project: "garden", enabled: true, scopes: [sampleScope("role:garden:builder", [sampleRule("one"), sampleRule("two")]), sampleScope("role:*:builder", [sampleRule("three")]), sampleScope("project:garden", [sampleRule("four")]), sampleScope("machine", [sampleRule("five")]), sampleScope("role:garden:architect", [])] };

@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 
 import { POST as rotateRoute } from "@/app/api/orchestrator/rotate/route";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { reconcileSeatTick } from "@/lib/monitor/seatTickController";
 import { DEFAULT_SEAT_TICK_POLICY } from "@/lib/monitor/seatTick";
 import { defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
@@ -22,8 +23,10 @@ import {
   beginOrchestratorSeatIntent,
   completeOrchestratorSeatIntent,
   orchestratorSeatFor,
+  readOrchestratorSeatFile,
   revokedOrchestratorSeatConversationsOrUnknown,
 } from "./seats";
+import { writeStoredSeatRecord } from "./seatStoreFixture";
 
 /**
  * THE MORNING NOBODY COULD RAISE AN ORCHESTRATOR (#1757).
@@ -76,6 +79,8 @@ interface Answer {
 let sandbox = "";
 let previousStateDir: string | undefined;
 let previousOrchestratorCwd: string | undefined;
+let previousRegistry: AgentRegistry;
+let registry: AgentRegistry;
 let listener: ReturnType<typeof Bun.serve> | null = null;
 let origin = "";
 
@@ -116,10 +121,13 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  previousRegistry = agentRegistry();
   previousStateDir = process.env.LLV_STATE_DIR;
   previousOrchestratorCwd = process.env.LLV_ORCHESTRATOR_CWD;
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rotation-settlement-"));
   process.env.LLV_STATE_DIR = sandbox;
+  registry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(registry);
   spawns = [];
   settlement = { kind: "unknown" };
   turnsByConversation = new Map();
@@ -136,6 +144,8 @@ beforeEach(() => {
 
 afterEach(() => {
   setSeatCommandDependenciesForTests(null);
+  setAgentRegistryForTests(previousRegistry);
+  registry.close();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   if (previousOrchestratorCwd === undefined) delete process.env.LLV_ORCHESTRATOR_CWD;
@@ -606,11 +616,10 @@ test("REGRESSION (#1757): a seat that was ALREADY provisional rolls back to the 
   /* The shape a seat standing on a stillborn conversation when this recovery
      ships has: an active provisional seat, a revocation naming the predecessor
      it superseded, and no `rollbacks` entry — because nothing wrote one. */
-  const file = path.join(sandbox, "orchestrator-seats.json");
-  const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { rollbacks: Record<string, unknown> };
+  const parsed = readOrchestratorSeatFile();
   expect(Object.keys(parsed.rollbacks)).toContain(PROJECT);
   parsed.rollbacks = {};
-  fs.writeFileSync(file, JSON.stringify(parsed), "utf8");
+  writeStoredSeatRecord(parsed);
 
   settlement = { kind: "failed", error: "structured spawn transport failed: runtime host timed out" };
 

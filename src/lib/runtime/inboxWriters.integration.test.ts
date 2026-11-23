@@ -139,7 +139,7 @@ test("the legacy conversation-host send under the key can neither replace nor de
   });
   try {
     const entry = await queued("shared-legacy");
-    const hostSend = (data: Buffer) => conversationHostPOST(new NextRequest("http://127.0.0.1/api/tmux", {
+    const hostSend = (data: Buffer) => conversationHostPOST(new NextRequest("http://127.0.0.1/api/conversation-host", {
       method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
       body: JSON.stringify({ conversationId: runtime.conversationId, clientMessageId: "shared-legacy", text: "legacy route", files: attachment(data) }),
     }));
@@ -174,7 +174,7 @@ test("the legacy writer waits for the shared batch turn before staging asynchron
       return { ok: false, structured: true, outcome: "failed", error: "structured host ownership is unavailable", status: 409 } as never;
     },
   });
-  const pending = conversationHostPOST(new NextRequest("http://127.0.0.1/api/tmux", {
+  const pending = conversationHostPOST(new NextRequest("http://127.0.0.1/api/conversation-host", {
     method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
     body: JSON.stringify({ conversationId: runtime.conversationId, clientMessageId: key, text: "legacy route", files: attachment(accepted) }),
   })).then(response => { settled = true; return response; });

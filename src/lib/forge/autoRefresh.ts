@@ -68,11 +68,12 @@ export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipel
   const merger = { roleId: "merger" as const, params: { prs: `${merge.prNumber}@${refresh.head}` } };
   return {
     task: `#${merge.prNumber} ${lane.task.split("\n")[0]!.slice(0, 60)}: merge current ${base}, review the merge resolution only`,
+    ...(lane.prTitle ? { prTitle: lane.prTitle } : {}),
     taskIds: lane.taskIds,
     finishesTask: lane.finishesTaskIds ?? false,
     repoDir: lane.repoDir,
     baseBranch: base,
-    delivery: { branch: target.branch, remote: target.remote, pr: merge.prNumber! },
+    delivery: { branch: target.branch, remote: target.remote, pr: merge.prNumber!, ...(target.prRepository ? { prRepository: target.prRepository } : {}) },
     publication: "remote-branch",
     autoStart: true,
     spec: `Automatic refresh is authorized for a PR behind or in conflict with its base branch.

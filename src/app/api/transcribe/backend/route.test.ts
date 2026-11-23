@@ -80,6 +80,6 @@ describe("/api/transcribe/backend accepts soniox (#1020)", () => {
     delete process.env.LLV_TRANSCRIBE_BACKEND;
     const bad = await POST(request({ backend: "sonix" }));
     expect(bad.status).toBe(400);
-    expect(await bad.json()).toEqual({ error: "backend must be one of local, chatgpt, elevenlabs, soniox" });
+    expect(await bad.json()).toEqual({ error: "backend must be one of local, chatgpt, elevenlabs, soniox, openai" });
   });
 });

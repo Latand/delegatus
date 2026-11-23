@@ -1,0 +1,14 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/boardTimelineStore.test.ts:
+(pass) live work starts expanded; explicit collapse survives a new store and later clocks [0.29ms]
+(pass) every zoom, view and fold writer output reloads without losing sibling choices [0.15ms]
+(pass) malformed and unsupported storage values retain valid independent fields [0.07ms]
+(pass) storage refusal preserves usable choices in the mounted store [0.10ms]
+(pass) a storage update from another surface is read before the next local write [0.04ms]
+
+ 5 pass
+ 0 fail
+ 27 expect() calls
+Ran 5 tests across 1 file. [255.00ms]
+exit: 0

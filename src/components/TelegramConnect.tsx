@@ -13,7 +13,7 @@ import type { TelegramErrorCode, TelegramPhase, TelegramStatusPayload } from "@/
 
 import { Loader2, Trash2, X } from "./icons";
 import { LINE_EDGE, type RailFooterDensity } from "./railFooterDensity";
-import { TelegramBotSection } from "./TelegramBot";
+import { TelegramBotRow } from "./settings/TelegramSection";
 import { ActionButton, ConfirmingAction } from "./TelegramControls";
 import { TelegramReportsSection } from "./TelegramReports";
 import { Z } from "@/components/layers";
@@ -403,7 +403,7 @@ export function TelegramPanel({ state, reports, bot, onClose }: { state: Telegra
             </div>
           ) : null}
 
-          {bot ? <TelegramBotSection state={bot} /> : null}
+          {bot ? <TelegramBotRow state={bot} onOpen={onClose} /> : null}
         </div>
       </div>
     </>
@@ -421,9 +421,27 @@ export function TelegramFooterRow({ density = "full" }: { density?: RailFooterDe
   /* The bot is its own account: its section polls whenever the panel is
      open, whatever the personal account's phase. */
   const bot = useTelegramBot(open);
+  /* A connected bot is the connection too, whatever the personal account reads. The row reads it once when it
+     mounts and again after the panel closes, with no interval of its own; while the panel is open its own poll
+     is the fresher reading. */
+  const [rowBotConnected, setRowBotConnected] = useState(false);
+  useEffect(() => {
+    if (open) return;
+    let cancelled = false;
+    void fetch("/api/telegram/bot")
+      .then(async (response) => response.ok ? await response.json() as { bot?: { connected?: boolean } } : null)
+      .catch(() => null)
+      .then((body) => { if (!cancelled && body) setRowBotConnected(body.bot?.connected === true); });
+    return () => { cancelled = true; };
+  }, [open]);
+  const botConnected = open ? bot.status?.connected === true : rowBotConnected;
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const phase = state.status?.phase ?? "disconnected";
+  const personalPhase = state.status?.phase ?? "disconnected";
+  /* The personal account's own words win while it is anything but disconnected; with a bot and no account the row says so. */
+  const botOnly = personalPhase === "disconnected" && botConnected;
+  const phase: TelegramPhase = botOnly ? "connected" : personalPhase;
+  const statusText = botOnly ? t("telegram.status.botConnected") : t(statusKey(personalPhase));
   /* The desktop sidebar draws one line, the same in both of its densities; `full` is the phone's row. */
   const line = density !== "full";
 
@@ -445,7 +463,7 @@ export function TelegramFooterRow({ density = "full" }: { density?: RailFooterDe
 
   // Opening the panel refreshes the health reading it displays.
   useEffect(() => {
-    if (open) void state.refresh(phase === "connected" || phase === "expired" || phase === "error");
+    if (open) void state.refresh(personalPhase === "connected" || personalPhase === "expired" || personalPhase === "error");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -458,7 +476,7 @@ export function TelegramFooterRow({ density = "full" }: { density?: RailFooterDe
         aria-haspopup="dialog"
         aria-label={t("telegram.rowAria")}
         onClick={() => setOpen((value) => !value)}
-        title={line ? `${t("telegram.title")} · ${t(statusKey(phase))}` : undefined}
+        title={line ? `${t("telegram.title")} · ${statusText}` : undefined}
         className={line
           ? `flex h-[26px] w-full items-center gap-1.5 ${LINE_EDGE} text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`
           : "flex min-h-[44px] w-full items-center gap-2 px-3.5 py-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[36px]"}
@@ -469,7 +487,7 @@ export function TelegramFooterRow({ density = "full" }: { density?: RailFooterDe
         {line ? <Send className="h-3 w-3 shrink-0 text-muted" aria-hidden /> : null}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {state.status?.login ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none text-accent" aria-hidden /> : null}
-          <span className={line ? "text-[11px] text-muted" : "text-[10px] font-semibold text-muted"}>{t(statusKey(phase))}</span>
+          <span className={line ? "text-[11px] text-muted" : "text-[10px] font-semibold text-muted"}>{statusText}</span>
           <span
             aria-hidden
             className="h-2 w-2 rounded-full"

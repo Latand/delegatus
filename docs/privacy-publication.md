@@ -1,21 +1,15 @@
 # Privacy-safe publication
 
-Every pull request runs `privacy-publication` from the default branch through
-`pull_request_target`. The job checks out trusted scanner, test, workflow, and
-fingerprint files separately, then handles the pull-request checkout as opaque
-inspection input for the trusted scan. Default-branch privacy self-tests run
-under GitHub's three-minute step timeout and report failures or timeouts as
-warnings, so a repair candidate can reach inspection when main's suite is
-broken. Trusted inspection must pass. After the trusted verdict and cache
-writes, the candidate's privacy tests must pass without credentials under their own
-130-second timeout; a failure or timeout refuses publication. Candidate code
-never supplies the scanner or fingerprint catalog for the trusted verdict.
-
-The trusted test command stays unchanged so main's candidate-ordering detector
-continues to pass during repair admission. Only that baseline step uses
-`continue-on-error`; its original failure outcome drives the warning. GitHub's
-step timeout bounds a stalled baseline, while the candidate keeps its separate
-130-second shell timeout and remains the last step.
+Every pull request runs the required `privacy-publication` job. It checks out
+the protected scanner and fingerprint catalog separately from the candidate.
+The trusted scanner inspects every PR. Changes to the privacy tools, their
+runtime or test dependencies, the fingerprint catalog, or either privacy
+workflow also run the self-tests. A trusted baseline failure produces a warning
+so a repair PR can proceed. The candidate suite runs last, with a 130-second
+deadline, and its failure blocks publication. The complete protected suite
+runs nightly on the default branch at 02:31 UTC and reports failures. On a
+push to main, the publication scan checks the range from the previous tip to
+the new one. That push also reports the tracker check used by release verification.
 
 Privacy fixtures are released by the final serial test, after every concurrent
 CLI check has returned. Cleanup has its own 30-second timeout inside the unchanged
@@ -42,22 +36,20 @@ zero hook timeouts and the same 131,163 assertions. Cleanup took
 Each run used an explicit test path through the gate slot and a fresh isolated
 home, configuration, state and temporary directory.
 
-The scan covers committed, staged, unstaged, and untracked changes
-relative to the exact base SHA.
-Diagnostics expose finding classes and counts. Matched values, OCR text,
-metadata values, and file paths remain suppressed.
+The hosted scan reads whole changed files relative to the exact base SHA.
+Local pre-push inspection and `privacy:check` use `--added-lines`: each commit
+in the publication range contributes its added lines with three context lines,
+and each new binary blob contributes its complete bytes. Content removed by a
+later commit remains covered. Commit messages, identities, the fingerprint
+catalog and supplied learned-rule texts remain covered. Local privacy ignores
+working-tree, index and untracked changes; commit the intended changes before
+running `privacy:check`. Pre-commit runs whitespace and lint checks.
 
-Run the same check locally:
+Metadata and provenance findings refuse publication. Diagnostics report
+finding classes and counts. See the [commit selection](design/privacy-commit-selection.md)
+for input boundaries and measurements.
 
-```sh
-bun run privacy:check
-```
-
-The gate requires Tesseract plus FFmpeg and FFprobe. CI installs English and
-Ukrainian OCR data and configures `eng+ukr`; operators can set
-`LLV_PRIVACY_OCR_LANGUAGES` to another Tesseract language expression. Missing
-tools, missing language data, failed inspection, and malformed configuration
-fail closed.
+Run the local scanner with `bun run privacy:check`.
 
 Text inspection applies bounded fixed-point decoding to nested percent encoding
 and the complete GFM HTML5 named-entity table. It normalizes CommonMark escapes,
@@ -89,16 +81,12 @@ they are not systemd names and can contain a real address.
 
 Media dispatch recognizes PNG, JPEG, GIF, BMP, TIFF, WebP, ISO-BMFF, AVI, and
 Matroska signatures before applying the declared-extension fallback. Renamed
-media therefore receives the same OCR, container, and provenance checks.
-Raster inspection covers pixels and metadata. PNG inspection validates chunk
-CRCs and scans `tEXt`, compressed `zTXt` and `iTXt`, `eXIf`, UTF-oriented
-metadata strings, and bytes after `IEND`. Live-capture classification runs over
-every decoded PNG metadata channel. APNG animation controls produce
-`inspection_error` until multi-frame PNG sampling is supported. GIF and video
-inspection scans container metadata plus five representative frames from every
-video stream. Frame-count sampling keeps that coverage when duration metadata
-is unavailable. Missing duration and frame count, malformed stream inventories,
-and excessive stream counts produce `inspection_error`.
+media receives the same metadata and provenance checks. PNG inspection
+validates chunk CRCs, scans `tEXt`, compressed `zTXt` and `iTXt`, `eXIf`,
+UTF-oriented metadata strings, and bytes following `IEND`. Live-capture
+classification covers each decoded PNG metadata channel. APNG animation
+controls produce `inspection_error`. Other recognized raster, GIF and video
+containers are scanned for embedded printable strings.
 
 ## Commit surface and merge boundary
 
@@ -144,7 +132,7 @@ A per-value `exactOnly: true` entry hashes the NFKC, case-folded value with
 separators preserved. It matches same-length contiguous windows of decoded
 source text after the gate's existing percent/entity decoding and Unicode
 normalization. It applies across every inspected context, including resource
-strings, HTML attributes, commit messages, composed merge identity names, metadata and OCR output. Spaces,
+strings, HTML attributes, commit messages, composed merge identity names, and metadata. Spaces,
 hyphens and other separators interrupt the match; the flag never exempts a
 context containing the contiguous value. Markdown projection cannot join split
 spellings for this policy. Generic credential, address and resource checks
@@ -184,7 +172,7 @@ content and retains its digest for identity fields
 mentions and values following a textual account marker. Serialized account
 responses expose bare id and label keys, which receive the same protection.
 These checks run after the same decoding as other known values,
-across file contents, metadata, OCR and commit text. Keep the global entry out
+across file contents, metadata and commit text. Keep the global entry out
 of regenerated catalogs. Other private-label fingerprints and the scanner's compact and `exactOnly` policies
 remain in force. Review every generated catalog diff before committing;
 retain each private entry and its policy unless its change was explicitly
@@ -241,7 +229,7 @@ neighbours are rejected before normalization. JSON escapes still receive an
 additional inspection view, and other privacy rules still read the original.
 
 The same masking runs for all inspected text, including code, tests, JSON,
-commit messages, composed merge identity names, metadata and OCR. Both the committed fingerprint catalog and
+commit messages, composed merge identity names, and metadata. Both the committed fingerprint catalog and
 private lists supplied through `LLV_PRIVACY_KNOWN_VALUES*` use that masked
 known-value input. The catalog stays intact: the bare base domain, private
 email addresses and other subdomains still match. Other privacy rules inspect

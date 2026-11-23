@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { ViewerDeploymentCoordinator } from "../../runtime-host/deployment";
 import { FakeDeploymentAdapter } from "../../runtime-host/fixtures/fakeDeploymentAdapter";
 import { RuntimeJournal } from "../../runtime-host/journal";
-import { viewerMcpBindings } from "./bindings";
+import { viewerMcpBindings, viewerMcpToolPolicy } from "./bindings";
 import { createMcpToolService, SqliteMcpReceiptStore } from "./server";
 import { beginSeatDeployment, recordSeatDeployment, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
@@ -50,6 +50,7 @@ test("a lost busy-join reply replays its durable admission before and after sett
     },
   };
   const bindings = viewerMcpBindings(undefined, { post: async (_url, body) => {
+    if (body.reconcileOnly === true) return coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string; reconcileOnly: boolean });
     posts++;
     await coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string });
     throw new Error("same-SHA join response was lost after runtime admission");
@@ -73,7 +74,7 @@ test("a lost busy-join reply replays its durable admission before and after sett
   `;
   try {
     const lost = await service.callTool("deploy_exact_sha", args);
-    expect(lost).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
+    expect(lost).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: false });
     attributionWritable = true;
     const replay = await service.callTool("deploy_exact_sha", args);
     expect(replay).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: true });
@@ -107,6 +108,77 @@ test("a lost busy-join reply replays its durable admission before and after sett
   }
 }, 2 * REPLAY_CHILD_TIMEOUT_MS + 15_000);
 
+test("an accepted replay keeps its deployment receipt when wake attribution is unavailable", async () => {
+  let attributionReady = false;
+  let admissions = 0;
+  let wakeWrites = 0;
+  const deploymentId = "checkout-accepted-wake-replay";
+  const key = "accepted-wake-replay";
+  const bindings = viewerMcpBindings(undefined, { post: async () => {
+    admissions++;
+    throw new Error("accepted receipt replay must not send admission");
+  } }, {
+    ...domain,
+    beginSeatDeployment: async () => { if (!attributionReady) throw new Error("seat attribution store unavailable"); },
+    recordSeatDeployment: async () => { if (!attributionReady) throw new Error("seat wake store unavailable"); wakeWrites++; },
+  } as never);
+  const call = () => bindings.deploy_exact_sha({ revision: SHA, clientRequestId: key }, {
+    priorAttemptUncertain: true, priorAcceptedDeployment: { deploymentId, revision: SHA },
+  });
+
+  expect(await call()).toMatchObject({ state: "accepted", deploymentId, revision: SHA, wakeOnSettle: false });
+  attributionReady = true;
+  expect(await call()).toMatchObject({ state: "accepted", deploymentId, revision: SHA, wakeOnSettle: true });
+  expect({ admissions, wakeWrites }).toEqual({ admissions: 0, wakeWrites: 1 });
+});
+
+test("accepted receipt survives temporary authority loss during wake recovery", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "accepted-wake-authority-"));
+  const receiptFile = path.join(root, "receipt.sqlite");
+  let store = new SqliteMcpReceiptStore(receiptFile);
+  const deploymentId = "checkout-authority-race";
+  let designated = true, admissions = 0, begins = 0, wakes = 0;
+  const dependencies = {
+    ...domain,
+    authorizedSeats: () => designated ? domain.authorizedSeats() : [],
+    beginSeatDeployment: async (_pending: unknown, assertCaller?: () => void) => {
+      begins++;
+      if (begins === 2) {
+        designated = false;
+        assertCaller?.();
+      }
+    },
+    recordSeatDeployment: async () => {
+      if (++wakes === 1) throw new Error("wake write temporarily unavailable");
+    },
+  };
+  const bindings = viewerMcpBindings(undefined, { post: async () => {
+    admissions++;
+    return { state: "accepted", deploymentId, revision: SHA };
+  } }, dependencies as never);
+  const createService = () => createMcpToolService(bindings, store, viewerMcpToolPolicy(dependencies as never));
+  let service = createService();
+  const args = { revision: SHA, clientRequestId: "accepted-authority-recovery" };
+  try {
+    const initial = await service.callTool("deploy_exact_sha", args);
+    expect(initial).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: false });
+    const denied = await service.callTool("deploy_exact_sha", args);
+    expect(denied).toMatchObject({ ok: false, details: { code: "deploy_caller_not_designated" } });
+    designated = true;
+    store.close();
+    store = new SqliteMcpReceiptStore(receiptFile);
+    service = createService();
+    const restored = await service.callTool("deploy_exact_sha", args);
+    expect(restored).toMatchObject({ ok: true, state: "accepted", deploymentId, revision: SHA.slice(0, 8), wakeOnSettle: true });
+    expect({ admissions, begins, wakes }).toEqual({ admissions: 1, begins: 3, wakes: 2 });
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ...restored, replayed: true });
+    expect({ admissions, begins, wakes }).toEqual({ admissions: 1, begins: 3, wakes: 2 });
+  } finally {
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("an attribution failure during uncertain replay stays pending until admission and wake reconcile", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "uncertain-attribution-replay-"));
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 4_000 });
@@ -129,6 +201,10 @@ test("an attribution failure during uncertain replay stays pending until admissi
     },
   };
   const bindings = viewerMcpBindings(undefined, { post: async (_url, body) => {
+    if (body.reconcileOnly === true) {
+      if (!lookupReady) throw new Error("admission reconciliation temporarily unavailable");
+      return coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string; reconcileOnly: boolean });
+    }
     posts++;
     await coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string });
     throw new Error("response lost after durable admission");
@@ -157,4 +233,70 @@ test("an attribution failure during uncertain replay stays pending until admissi
     journal.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("an uncertain deploy replay recovers a durable admission through the bounded read-only lookup", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "uncertain-deploy-read-recovery-"));
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 5_000 });
+  const adapter = new FakeDeploymentAdapter();
+  const build = Promise.withResolvers<void>();
+  adapter.buildGate = build.promise;
+  const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 32, startIdentity: "32:1" });
+  const key = "older-receiver-admitted-key";
+  const args = { revision: SHA, clientRequestId: key };
+  let admissions = 0, reconciliations = 0, lookups = 0;
+  const dependencies = {
+    ...domain,
+    findDeploymentByIdempotencyKey: async (requestKey: string) => {
+      lookups++;
+      return coordinator.findViewerDeploymentByIdempotencyKey(requestKey);
+    },
+  };
+  const bindings = viewerMcpBindings(undefined, { post: async (url, body) => {
+    if (body.reconcileOnly === true) {
+      reconciliations++;
+      throw new Error("older receiver has no reconciliation route");
+    }
+    admissions++;
+    await coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string });
+    throw new Error("admission response was lost");
+  } }, dependencies as never);
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  const service = createMcpToolService(bindings, store);
+  try {
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: false, code: "outcome_unknown" });
+    const startedAt = performance.now();
+    const recovered = await service.callTool("deploy_exact_sha", args);
+    const elapsedMs = performance.now() - startedAt;
+    const admitted = journal.viewerDeploymentByIdempotencyKey(key);
+    expect(recovered).toMatchObject({ ok: true, state: "accepted", deploymentId: admitted?.deploymentId });
+    expect(elapsedMs).toBeLessThan(1_500);
+    expect({ admissions, reconciliations, lookups }).toEqual({ admissions: 1, reconciliations: 1, lookups: 1 });
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    build.resolve();
+    const active = journal.activeViewerDeployment();
+    if (active) await coordinator.waitForDeployment(active.deploymentId);
+    store.close();
+    journal.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a fresh deploy refuses an older receiver before sending admission", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unsupported-deploy-receiver-"));
+  let admissions = 0;
+  const bindings = viewerMcpBindings(undefined, {
+    get: async () => ({ capability: "viewer-deployments", version: 1 }),
+    post: async () => { admissions++; return { state: "accepted", deploymentId: "unexpected", revision: SHA }; },
+  }, domain as never);
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  try {
+    const answer = await createMcpToolService(bindings, store).callTool("deploy_exact_sha", {
+      revision: SHA, clientRequestId: "unsupported-receiver-key",
+    });
+    expect(answer).toMatchObject({ ok: false, code: "deploy_admission_fence_unsupported",
+      details: { outcome: "not-executed", evidence: "not-admitted" } });
+    expect(admissions).toBe(0);
+  } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

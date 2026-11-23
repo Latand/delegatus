@@ -9,6 +9,7 @@ import { prototypeWorld } from "./world";
 import { postPrototypeReviewToTelegram } from "./telegramPost";
 import { reconcileReviewPolls, reviewPollsNeedRecovery } from "@/lib/telegram/bot/reviewPolls";
 import { telegramBotService } from "@/lib/telegram/bot/service";
+import { prototypeDeliverySettled } from "./deliveryPolicy";
 
 /*
  * The background delivery of saved prototype decisions.
@@ -67,7 +68,7 @@ const productionPorts = (): PrototypeDeliveryPorts => ({ delivery: prototypeDeli
 
 /** How long after an attempt the next one is due, from what the attempt left. */
 export function prototypeDeliveryDelay(delivery: PrototypeDecision["delivery"]): number {
-  if (delivery.state === "sent") return Number.POSITIVE_INFINITY;
+  if (prototypeDeliverySettled(delivery)) return Number.POSITIVE_INFINITY;
   if (delivery.exhaustedAt) return EXHAUSTED_RECEIPT_RECHECK_MS;
   if (!delivery.conversationId) return PROTOTYPE_DELIVERY_SEAT_POLL_MS;
   const failures = delivery.failures ?? 0;
@@ -96,7 +97,7 @@ function run(taskId: string | null, reviewId: string, ports: PrototypeDeliveryPo
           state.due.set(reviewId, ports.now() + PROTOTYPE_DELIVERY_BACKOFF_MS[0]);
           continue;
         }
-        if (!decision || decision.delivery.state === "sent") {
+        if (!decision || prototypeDeliverySettled(decision.delivery)) {
           state.owed.delete(reviewId); state.due.delete(reviewId);
         } else state.due.set(reviewId, ports.now() + prototypeDeliveryDelay(decision.delivery));
       } while (entry.again);
@@ -121,7 +122,7 @@ async function scan(state: WorkerState, now: number, bounded: boolean): Promise<
   const inspect = (task: ReturnType<typeof loadTasksForList>[number]) => {
     const elsewhere = runsElsewhere(task);
     for (const round of task.prototypeReviews ?? []) {
-      if (!elsewhere && round.decision && round.decision.delivery.state !== "sent") state.owed.set(round.id, task.id);
+      if (!elsewhere && round.decision && !prototypeDeliverySettled(round.decision.delivery)) state.owed.set(round.id, task.id);
       else { state.owed.delete(round.id); state.due.delete(round.id); }
     }
   };
@@ -139,7 +140,7 @@ async function scan(state: WorkerState, now: number, bounded: boolean): Promise<
   for (;;) {
     const page = withViewerOperation("prototype.state", () => seatRoundPageWithCursor(state.seatScanAfter));
     for (const round of page.rounds) {
-      if (round.decision && round.decision.delivery.state !== "sent") state.owed.set(round.id, null);
+      if (round.decision && !prototypeDeliverySettled(round.decision.delivery)) state.owed.set(round.id, null);
       else { state.owed.delete(round.id); state.due.delete(round.id); }
     }
     if (page.scanned < 16) { state.seatScanAfter = undefined; break; }

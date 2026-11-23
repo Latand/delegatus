@@ -3,6 +3,9 @@ import { agentHistoryGuardEnv, type AgentEnvironment } from "./agentHistoryGuard
 import { agentForgeWriteEnv } from "./agentForgeCredentials";
 import { agentLessonPublicationEnv } from "@/lib/memory/roleStore";
 import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, type RepositoryCommitIdentity } from "./repositoryCommitIdentity";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../runtime/gateCheckRecord";
+import type { GateCheckRoot } from "../runtime/gateCheckTool";
+import { installedGateAdmissionEnv } from "../runtime/agentSignalSandbox";
 
 /** Publication settings belong to the launching process, before child-env
     filtering. Git identity variables from that process never choose an agent's
@@ -19,10 +22,10 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
       throw new Error("Invalid repository Git identity (values withheld)");
     }
     const forge = agentForgeWriteEnv(source);
+    const guard = agentHistoryGuardEnv({ ...source, ...forge }, name, email, repository.coauthor);
     return { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
       [REPOSITORY_IDENTITY]: source[REPOSITORY_IDENTITY],
-      ...agentLessonPublicationEnv(), ...forge,
-      ...agentHistoryGuardEnv({ ...source, ...forge }, name, email, repository.coauthor) };
+      ...agentLessonPublicationEnv(), ...forge, ...guard, ...installedGateAdmissionEnv({ ...source, ...forge, ...guard }) };
   }
   const defaults = controllerCommitIdentityEnv();
   const configuredName = source.DELEGATUS_PUBLICATION_NAME ?? source.LLV_PUBLICATION_NAME ?? defaults.GIT_AUTHOR_NAME!;
@@ -38,6 +41,7 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
      come first: the history guard appends its own after them and has to stay
      the last one. */
   const forge = agentForgeWriteEnv(source);
+  const guard = agentHistoryGuardEnv({ ...source, ...forge }, name, email);
   return {
     GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email,
     GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
@@ -45,15 +49,22 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
        role-memory lesson (src/lib/memory/roleStore.ts). */
     ...agentLessonPublicationEnv(),
     ...forge,
-    ...agentHistoryGuardEnv({ ...source, ...forge }, name, email),
+    ...guard,
+    ...installedGateAdmissionEnv({ ...source, ...forge, ...guard }),
   };
 }
 
-export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment): Record<string, unknown> {
+export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment, gateRoot?: GateCheckRoot | null): Record<string, unknown> {
   const identity = agentPublicationIdentityEnv(source);
   const shellBindings = source.LLV_GATE_CPU_PRIORITY_SOURCE === undefined
     ? {} : { LLV_GATE_CPU_PRIORITY_SOURCE: source.LLV_GATE_CPU_PRIORITY_SOURCE };
-  const set = { ...identity, ...shellBindings };
+  const storage = Object.fromEntries(["TMPDIR", "LLV_EVIDENCE_DIR"].flatMap(key => source[key] === undefined ? [] : [[key, source[key]]]));
+  const gateBindings = gateRoot ? {
+    [GATE_CHECK_LAUNCH_ROOT_ENV]: gateRoot.root,
+    [GATE_CHECK_ROOT_ENV]: gateRoot.physicalRoot,
+    [GATE_CHECK_ROOT_IDENTITY_ENV]: gateRoot.rootDirectoryIdentity,
+  } : {};
+  const set = { ...identity, ...shellBindings, ...storage, ...gateBindings };
   const configured = policy && typeof policy === "object" && !Array.isArray(policy)
     ? policy as Record<string, unknown> : {};
   const override: Record<string, unknown> = { set };
@@ -66,7 +77,7 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
     if (typeof filters !== "object" || Array.isArray(filters)
       || Object.values(filters).some((value) => value !== "include" && value !== "exclude")
       || included != null || configured.exclude != null) throw new Error("Codex shell policy could not be read safely");
-    // Includes filter after `set`; add only the Git fields to an existing
+    // Includes filter after `set`; add the protected fields to an existing
     // inclusion bound. Exclusions run before `set` and remain untouched.
     if (Object.values(filters).includes("include")) {
       override.filters = Object.fromEntries(Object.keys(set).map((key) => [key, "include"]));

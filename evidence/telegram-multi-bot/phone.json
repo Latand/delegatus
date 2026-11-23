@@ -4,11 +4,11 @@
       "key": "phone-390-en-light-multi-one",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": "Bot token from @BotFather",
+          "label": "Close",
           "disabled": false
         },
         {
@@ -16,60 +16,40 @@
           "disabled": false
         },
         {
-          "label": "Agents may post: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Alias agents use: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Chat id or @username",
+          "label": "Atlas Reports: A webhook elsewhere gets its updates: it can post but not read.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Nothing posted yet.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Where the reports of atlas go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of ledger go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of mesh go",
           "disabled": false
-        },
-        {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -86,21 +66,24 @@
       "frames": [
         "phone-390-en-light-multi-one.png",
         "phone-390-en-light-multi-one-add.png"
-      ]
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-en-light-multi-kicked",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Bot token from @BotFather",
+          "label": "Close",
           "disabled": false
         },
         {
@@ -108,60 +91,48 @@
           "disabled": false
         },
         {
-          "label": "Agents may post: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Alias agents use: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Chat id or @username",
+          "label": "Atlas Reports: A webhook elsewhere gets its updates: it can post but not read.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Sends posts to the groups it is in.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Nothing posted yet.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Where the reports of atlas go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of ledger go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of mesh go",
           "disabled": false
-        },
-        {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -174,22 +145,26 @@
       ],
       "actions": [],
       "frames": [
-        "phone-390-en-light-multi-kicked.png"
-      ]
+        "phone-390-en-light-multi-kicked.png",
+        "phone-390-en-light-multi-kicked-chat.png"
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-en-light-multi-refused",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Bot token from @BotFather",
+          "label": "Close",
           "disabled": false
         },
         {
@@ -197,60 +172,48 @@
           "disabled": false
         },
         {
-          "label": "Agents may post: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Alias agents use: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Chat id or @username",
+          "label": "Atlas Reports: A webhook elsewhere gets its updates: it can post but not read.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Sends posts to the groups it is in.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Atlas Reports: removed from the chat",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Where the reports of atlas go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of ledger go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of mesh go",
           "disabled": false
-        },
-        {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -263,22 +226,26 @@
       ],
       "actions": [],
       "frames": [
-        "phone-390-en-light-multi-refused.png"
-      ]
+        "phone-390-en-light-multi-refused.png",
+        "phone-390-en-light-multi-refused-chat.png"
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-en-light-multi-ready",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Bot token from @BotFather",
+          "label": "Close",
           "disabled": false
         },
         {
@@ -286,64 +253,48 @@
           "disabled": false
         },
         {
-          "label": "Agents may post: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Alias agents use: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Posts as: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Chat id or @username",
+          "label": "Atlas Reports: A webhook elsewhere gets its updates: it can post but not read.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Sends posts to the groups it is in.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Nothing posted yet.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Where the reports of atlas go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of ledger go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of mesh go",
           "disabled": false
-        },
-        {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -360,18 +311,26 @@
       ],
       "frames": [
         "phone-390-en-light-multi-ready.png",
+        "phone-390-en-light-multi-ready-chat.png",
         "phone-390-en-light-multi-ready-remove.png"
-      ]
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-en-dark-multi-one",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": "Bot token from @BotFather",
+          "label": "Close",
           "disabled": false
         },
         {
@@ -379,60 +338,40 @@
           "disabled": false
         },
         {
-          "label": "Agents may post: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Alias agents use: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Chat id or @username",
+          "label": "Atlas Reports: A webhook elsewhere gets its updates: it can post but not read.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Nothing posted yet.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Where the reports of atlas go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of ledger go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of mesh go",
           "disabled": false
-        },
-        {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -449,21 +388,24 @@
       "frames": [
         "phone-390-en-dark-multi-one.png",
         "phone-390-en-dark-multi-one-add.png"
-      ]
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-en-dark-multi-kicked",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Bot token from @BotFather",
+          "label": "Close",
           "disabled": false
         },
         {
@@ -471,60 +413,48 @@
           "disabled": false
         },
         {
-          "label": "Agents may post: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Alias agents use: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Chat id or @username",
+          "label": "Atlas Reports: A webhook elsewhere gets its updates: it can post but not read.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Sends posts to the groups it is in.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Nothing posted yet.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Where the reports of atlas go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of ledger go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of mesh go",
           "disabled": false
-        },
-        {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -537,22 +467,26 @@
       ],
       "actions": [],
       "frames": [
-        "phone-390-en-dark-multi-kicked.png"
-      ]
+        "phone-390-en-dark-multi-kicked.png",
+        "phone-390-en-dark-multi-kicked-chat.png"
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-en-dark-multi-refused",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Bot token from @BotFather",
+          "label": "Close",
           "disabled": false
         },
         {
@@ -560,60 +494,48 @@
           "disabled": false
         },
         {
-          "label": "Agents may post: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Alias agents use: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Chat id or @username",
+          "label": "Atlas Reports: A webhook elsewhere gets its updates: it can post but not read.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Sends posts to the groups it is in.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Atlas Reports: removed from the chat",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Where the reports of atlas go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of ledger go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of mesh go",
           "disabled": false
-        },
-        {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -626,22 +548,26 @@
       ],
       "actions": [],
       "frames": [
-        "phone-390-en-dark-multi-refused.png"
-      ]
+        "phone-390-en-dark-multi-refused.png",
+        "phone-390-en-dark-multi-refused-chat.png"
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-en-dark-multi-ready",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Bot token from @BotFather",
+          "label": "Close",
           "disabled": false
         },
         {
@@ -649,64 +575,48 @@
           "disabled": false
         },
         {
-          "label": "Agents may post: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Alias agents use: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Posts as: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Chat id or @username",
+          "label": "Atlas Reports: A webhook elsewhere gets its updates: it can post but not read.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Sends posts to the groups it is in.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Nothing posted yet.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Where the reports of atlas go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of ledger go",
           "disabled": false
         },
         {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Where the reports of mesh go",
           "disabled": false
-        },
-        {
-          "label": "Chat or topic link, @username or ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -723,18 +633,26 @@
       ],
       "frames": [
         "phone-390-en-dark-multi-ready.png",
+        "phone-390-en-dark-multi-ready-chat.png",
         "phone-390-en-dark-multi-ready-remove.png"
-      ]
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-uk-light-multi-one",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": "Токен бота від @BotFather",
+          "label": "Закрити",
           "disabled": false
         },
         {
@@ -742,60 +660,40 @@
           "disabled": false
         },
         {
-          "label": "Агентам можна писати: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Псевдонім для агентів: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Id чату або @username",
+          "label": "Atlas Reports: Оновлення йдуть на вебхук деінде: бот пише, але не читає.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Ще нічого не опубліковано.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Куди йдуть звіти проєкту atlas",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту ledger",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту mesh",
           "disabled": false
-        },
-        {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -812,21 +710,24 @@
       "frames": [
         "phone-390-uk-light-multi-one.png",
         "phone-390-uk-light-multi-one-add.png"
-      ]
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-uk-light-multi-kicked",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Токен бота від @BotFather",
+          "label": "Закрити",
           "disabled": false
         },
         {
@@ -834,60 +735,48 @@
           "disabled": false
         },
         {
-          "label": "Агентам можна писати: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Псевдонім для агентів: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Id чату або @username",
+          "label": "Atlas Reports: Оновлення йдуть на вебхук деінде: бот пише, але не читає.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Надсилає дописи в групи, де він є.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Ще нічого не опубліковано.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Куди йдуть звіти проєкту atlas",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту ledger",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту mesh",
           "disabled": false
-        },
-        {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -900,22 +789,26 @@
       ],
       "actions": [],
       "frames": [
-        "phone-390-uk-light-multi-kicked.png"
-      ]
+        "phone-390-uk-light-multi-kicked.png",
+        "phone-390-uk-light-multi-kicked-chat.png"
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-uk-light-multi-refused",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Токен бота від @BotFather",
+          "label": "Закрити",
           "disabled": false
         },
         {
@@ -923,60 +816,48 @@
           "disabled": false
         },
         {
-          "label": "Агентам можна писати: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Псевдонім для агентів: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Id чату або @username",
+          "label": "Atlas Reports: Оновлення йдуть на вебхук деінде: бот пише, але не читає.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Надсилає дописи в групи, де він є.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Atlas Reports: видалено з чату",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Куди йдуть звіти проєкту atlas",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту ledger",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту mesh",
           "disabled": false
-        },
-        {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -989,22 +870,26 @@
       ],
       "actions": [],
       "frames": [
-        "phone-390-uk-light-multi-refused.png"
-      ]
+        "phone-390-uk-light-multi-refused.png",
+        "phone-390-uk-light-multi-refused-chat.png"
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-uk-light-multi-ready",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Токен бота від @BotFather",
+          "label": "Закрити",
           "disabled": false
         },
         {
@@ -1012,64 +897,48 @@
           "disabled": false
         },
         {
-          "label": "Агентам можна писати: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Псевдонім для агентів: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Публікує від: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Id чату або @username",
+          "label": "Atlas Reports: Оновлення йдуть на вебхук деінде: бот пише, але не читає.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Надсилає дописи в групи, де він є.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Ще нічого не опубліковано.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Куди йдуть звіти проєкту atlas",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту ledger",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту mesh",
           "disabled": false
-        },
-        {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -1086,18 +955,26 @@
       ],
       "frames": [
         "phone-390-uk-light-multi-ready.png",
+        "phone-390-uk-light-multi-ready-chat.png",
         "phone-390-uk-light-multi-ready-remove.png"
-      ]
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-uk-dark-multi-one",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": "Токен бота від @BotFather",
+          "label": "Закрити",
           "disabled": false
         },
         {
@@ -1105,60 +982,40 @@
           "disabled": false
         },
         {
-          "label": "Агентам можна писати: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Псевдонім для агентів: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Id чату або @username",
+          "label": "Atlas Reports: Оновлення йдуть на вебхук деінде: бот пише, але не читає.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Ще нічого не опубліковано.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Куди йдуть звіти проєкту atlas",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту ledger",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту mesh",
           "disabled": false
-        },
-        {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -1175,21 +1032,24 @@
       "frames": [
         "phone-390-uk-dark-multi-one.png",
         "phone-390-uk-dark-multi-one-add.png"
-      ]
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-uk-dark-multi-kicked",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Токен бота від @BotFather",
+          "label": "Закрити",
           "disabled": false
         },
         {
@@ -1197,60 +1057,48 @@
           "disabled": false
         },
         {
-          "label": "Агентам можна писати: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Псевдонім для агентів: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Id чату або @username",
+          "label": "Atlas Reports: Оновлення йдуть на вебхук деінде: бот пише, але не читає.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Надсилає дописи в групи, де він є.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Ще нічого не опубліковано.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Куди йдуть звіти проєкту atlas",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту ledger",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту mesh",
           "disabled": false
-        },
-        {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -1263,22 +1111,26 @@
       ],
       "actions": [],
       "frames": [
-        "phone-390-uk-dark-multi-kicked.png"
-      ]
+        "phone-390-uk-dark-multi-kicked.png",
+        "phone-390-uk-dark-multi-kicked-chat.png"
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-uk-dark-multi-refused",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Токен бота від @BotFather",
+          "label": "Закрити",
           "disabled": false
         },
         {
@@ -1286,60 +1138,48 @@
           "disabled": false
         },
         {
-          "label": "Агентам можна писати: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Псевдонім для агентів: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Id чату або @username",
+          "label": "Atlas Reports: Оновлення йдуть на вебхук деінде: бот пише, але не читає.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Надсилає дописи в групи, де він є.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Atlas Reports: видалено з чату",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Куди йдуть звіти проєкту atlas",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту ledger",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту mesh",
           "disabled": false
-        },
-        {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -1352,22 +1192,26 @@
       ],
       "actions": [],
       "frames": [
-        "phone-390-uk-dark-multi-refused.png"
-      ]
+        "phone-390-uk-dark-multi-refused.png",
+        "phone-390-uk-dark-multi-refused-chat.png"
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     },
     {
       "key": "phone-390-uk-dark-multi-ready",
       "width": 390,
       "height": 844,
-      "panelWidth": 366,
+      "panelWidth": 390,
       "overflow": 0,
       "controls": [
         {
-          "label": null,
-          "disabled": false
-        },
-        {
-          "label": "Токен бота від @BotFather",
+          "label": "Закрити",
           "disabled": false
         },
         {
@@ -1375,64 +1219,48 @@
           "disabled": false
         },
         {
-          "label": "Агентам можна писати: Team Reports",
+          "label": null,
           "disabled": false
         },
         {
-          "label": "Псевдонім для агентів: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Публікує від: Team Reports",
-          "disabled": false
-        },
-        {
-          "label": "Id чату або @username",
+          "label": "Atlas Reports: Оновлення йдуть на вебхук деінде: бот пише, але не читає.",
           "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": "Release Helper: Надсилає дописи в групи, де він є.",
+          "disabled": false
         },
         {
           "label": null,
-          "disabled": true
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Team Reports: Ще нічого не опубліковано.",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
         },
         {
           "label": "Куди йдуть звіти проєкту atlas",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту ledger",
           "disabled": false
         },
         {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
-        },
-        {
           "label": "Куди йдуть звіти проєкту mesh",
           "disabled": false
-        },
-        {
-          "label": "Посилання на чат або топік, @username чи ID",
-          "disabled": false
-        },
-        {
-          "label": null,
-          "disabled": true
         },
         {
           "label": null,
@@ -1449,8 +1277,16 @@
       ],
       "frames": [
         "phone-390-uk-dark-multi-ready.png",
+        "phone-390-uk-dark-multi-ready-chat.png",
         "phone-390-uk-dark-multi-ready-remove.png"
-      ]
+      ],
+      "railDot": {
+        "dot": [
+          44,
+          44
+        ],
+        "opens": true
+      }
     }
   ]
 }

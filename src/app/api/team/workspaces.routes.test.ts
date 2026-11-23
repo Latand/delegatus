@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,11 +6,19 @@ import path from "node:path";
 import { NextRequest, type NextResponse } from "next/server";
 
 import { persistProjectAliases } from "@/lib/projects/aliases";
-import { createManualProject } from "@/lib/projects/curation";
+import * as createByName from "@/lib/projects/createByName";
+import { createManualProject, projectCurationSnapshot } from "@/lib/projects/curation";
 import { replaceConversationCatalog, type ConversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import type { Workspace, WorkspacesView } from "@/lib/team/contract";
-import { MEMBER_COOKIE } from "@/lib/team/sessions";
-import { resetTeamStoreForTests } from "@/lib/team/store";
+import { MEMBER_COOKIE, verifySessionValue } from "@/lib/team/sessions";
+import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
+import { workspaceScope } from "@/lib/team/workspaceAccess";
+import { placeCreatedProject, placeProject, workspaceDirectory } from "@/lib/team/workspaces";
+import { resetProjectDirectoryCacheForTests } from "@/lib/scanner/projectDirectories";
+import { directoryProjectId } from "@/lib/projects/identity";
+import { TeamError } from "@/lib/team/members";
+
+import { POST as createProject } from "../projects/create/route";
 
 import { POST as claim } from "./claim/route";
 import { POST as createInvite } from "./invites/route";
@@ -226,5 +234,248 @@ describe("the catalog read", () => {
     ]);
     /* Without the query, no catalog. */
     expect((await view(owner)).catalog).toBeUndefined();
+  });
+});
+
+/* Red on main: the gate decision was "owner" and the route had no workspace
+   checks, so a member could not create at all and an owner's project could not be
+   placed by the create request. */
+describe("creating a project by name in a team", () => {
+  const previousHome = process.env.HOME;
+  let parent = "";
+  let ownerCookie = "";
+  let memberCookie = "";
+  let ownerId = "";
+  let memberId = "";
+
+  beforeEach(async () => {
+    const home = path.join(fs.realpathSync(stateDir), "home");
+    fs.mkdirSync(home);
+    process.env.HOME = home;
+    parent = path.join(home, "Projects");
+    resetProjectDirectoryCacheForTests();
+    const people = await team();
+    ownerCookie = people.owner;
+    memberCookie = people.member;
+    ownerId = verifySessionValue(teamStore(), ownerCookie)!.member.id;
+    memberId = verifySessionValue(teamStore(), memberCookie)!.member.id;
+    expect((await create(ownerCookie, { id: W1, name: "Clients" })).status).toBe(201);
+    expect((await create(ownerCookie, { id: W2, name: "Research" })).status).toBe(201);
+  });
+
+  afterEach(() => {
+    process.env.HOME = previousHome;
+    resetProjectDirectoryCacheForTests();
+  });
+
+  const join = (role: "manager" | "member" = "member", workspaceId = W1) => teamStore().putWorkspaceMember(workspaceId, memberId, role, ownerId, new Date().toISOString());
+  const post = (cookie: string | undefined, body: unknown, headers?: Record<string, string>) => createProject(call("/api/projects/create", { body, cookie, headers }));
+  const placedIn = (project: unknown) => workspaceDirectory(teamStore()).workspaceOf(project as string);
+  const nothingCreated = () => {
+    expect(fs.existsSync(parent)).toBe(false);
+    expect(projectCurationSnapshot().manualProjects).toEqual([]);
+  };
+
+  test.each(["member", "manager"] as const)("a %s creates by name and the project lands in their workspace", async (role) => {
+    join(role);
+    const response = await post(memberCookie, { name: "PR GRAM", workspaceId: W1 });
+    expect(response.status).toBe(200);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ ok: true, displayName: "PR GRAM", root: path.join(parent, "pr-gram"), workspaceId: W1 });
+    expect(placedIn(body.project)).toBe(W1);
+    expect(workspaceScope(teamStore(), memberId).canAct(body.project as string)).toBe(true);
+    expect(fs.statSync(path.join(parent, "pr-gram")).isDirectory()).toBe(true);
+  });
+
+  test.each([
+    ["an existing folder", (root: string) => ({ name: "Bound", root, workspaceId: W1 })],
+    ["a missing folder to create", (root: string) => ({ name: "Bound", root: path.join(root, "new"), createRoot: true, workspaceId: W1 })],
+    ["an empty root", () => ({ name: "Bound", root: "", workspaceId: W1 })],
+    ["a root that is not a string", () => ({ name: "Bound", root: 5, workspaceId: W1 })],
+  ])("a member naming %s is refused and nothing is created", async (_label, body) => {
+    join();
+    const existing = path.join(process.env.HOME!, ".config");
+    fs.mkdirSync(existing);
+    const response = await post(memberCookie, body(existing));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "workspace_forbidden" });
+    nothingCreated();
+    expect(fs.readdirSync(existing)).toEqual([]);
+  });
+
+  test.each([
+    ["no workspace", { name: "Lost" }],
+    ["a null workspace", { name: "Lost", workspaceId: null }],
+    ["a workspace they do not belong to", { name: "Lost", workspaceId: W2 }],
+    ["a workspace that does not exist", { name: "Lost", workspaceId: `w_${"c".repeat(32)}` }],
+    ["a malformed workspace", { name: "Lost", workspaceId: "../W1" }],
+    ["a workspace that is not a string", { name: "Lost", workspaceId: [W1] }],
+  ])("a member with %s is refused and nothing is created", async (_label, body) => {
+    join();
+    const response = await post(memberCookie, body);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "workspace_forbidden" });
+    nothingCreated();
+  });
+
+  test("a member of no workspace passes the gate and is refused here", async () => {
+    expect((await post(memberCookie, { name: "Lost", workspaceId: W1 })).status).toBe(403);
+    expect((await post(memberCookie, { name: "Lost" })).status).toBe(403);
+    nothingCreated();
+  });
+
+  test("the owner with a workspace gets the project placed there, without one it is Unassigned", async () => {
+    const placed = await (await post(ownerCookie, { name: "Placed", workspaceId: W2 })).json() as Record<string, unknown>;
+    expect(placed.workspaceId).toBe(W2);
+    expect(placedIn(placed.project)).toBe(W2);
+    const loose = await (await post(ownerCookie, { name: "Loose" })).json() as Record<string, unknown>;
+    expect(loose.workspaceId).toBeNull();
+    expect(placedIn(loose.project)).toBeNull();
+  });
+
+  test("the owner keeps the existing-folder flow, placed in the workspace they name", async () => {
+    const folder = path.join(process.env.HOME!, "existing");
+    fs.mkdirSync(folder);
+    const answer = await post(ownerCookie, { name: "Existing", root: folder, workspaceId: W1 });
+    expect(answer.status).toBe(200);
+    const body = await answer.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ root: folder, workspaceId: W1 });
+    expect(placedIn(body.project)).toBe(W1);
+  });
+
+  test("the owner naming a workspace that does not exist creates nothing", async () => {
+    expect((await post(ownerCookie, { name: "Nowhere", workspaceId: `w_${"c".repeat(32)}` })).status).toBe(403);
+    nothingCreated();
+  });
+
+  test("a project in the member's workspace with the same name answers 409 with its key", async () => {
+    join();
+    const first = await (await post(memberCookie, { name: "Shared", workspaceId: W1 })).json() as Record<string, unknown>;
+    const second = await post(memberCookie, { name: "shared", workspaceId: W1 });
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({ error: "DUPLICATE_NAME", project: first.project, root: path.join(parent, "shared") });
+  });
+
+  test("a name outside the member's scope says nothing about that project", async () => {
+    join();
+    const foreign = await (await post(ownerCookie, { name: "Secret", workspaceId: W2 })).json() as Record<string, unknown>;
+    const response = await post(memberCookie, { name: "Secret", workspaceId: W1 });
+    expect(response.status).toBe(200);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body.project).not.toBe(foreign.project);
+    expect(body.root).toBe(path.join(parent, "secret-2"));
+    expect(placedIn(foreign.project)).toBe(W2);
+    expect(placedIn(body.project)).toBe(W1);
+  });
+
+  test("the key of a deleted folder still placed elsewhere costs a suffix and is not moved", async () => {
+    join();
+    const stale = directoryProjectId(path.join(parent, "reused"));
+    expect((await put(ownerCookie, { project: stale, workspaceId: W2 })).status).toBe(200);
+    const response = await post(memberCookie, { name: "Reused", workspaceId: W1 });
+    expect(response.status).toBe(200);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body.root).toBe(path.join(parent, "reused-2"));
+    expect(placedIn(stale)).toBe(W2);
+    expect(placedIn(body.project)).toBe(W1);
+  });
+
+  test("a role lost between creation and placement answers 403 and the project stays Unassigned", async () => {
+    join();
+    const real = createByName.createProjectByName;
+    const racing = spyOn(createByName, "createProjectByName").mockImplementation((name, options) => {
+      const result = real(name, options);
+      teamStore().removeWorkspaceMember(W1, memberId);
+      return result;
+    });
+    try {
+      const response = await post(memberCookie, { name: "Raced", workspaceId: W1 });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: "workspace_forbidden" });
+    } finally {
+      racing.mockRestore();
+    }
+    const [row] = projectCurationSnapshot().manualProjects;
+    expect(row).toMatchObject({ displayName: "Raced", root: path.join(parent, "raced") });
+    expect(placedIn(row!.project)).toBeNull();
+    expect(workspaceScope(teamStore(), ownerId).canAct(row!.project)).toBe(true);
+  });
+
+  test("a session revoked while the body is read admits nothing", async () => {
+    join();
+    const request = call("/api/projects/create", { body: { name: "Revoked", workspaceId: W1 }, cookie: memberCookie });
+    const readBody = request.json.bind(request);
+    request.json = async () => {
+      const body = await readBody();
+      teamStore().removeWorkspaceMember(W1, memberId);
+      return body;
+    };
+    expect((await createProject(request)).status).toBe(403);
+    nothingCreated();
+  });
+
+  test("the access key alone names no member, so it is asked to sign in", async () => {
+    const previous = process.env.LLV_TOKEN;
+    process.env.LLV_TOKEN = "fixture-access-key";
+    try {
+      const response = await post(undefined, { name: "Keyed" }, { cookie: "llv_auth=fixture-access-key" });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toMatchObject({ code: "member_required" });
+      nothingCreated();
+    } finally {
+      if (previous === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previous;
+    }
+  });
+
+  test("a signed-out or cross-origin request creates nothing", async () => {
+    expect((await post(undefined, { name: "Nobody" })).status).toBe(403);
+    expect((await post(memberCookie, { name: "Foreign", workspaceId: W1 }, { origin: "https://elsewhere.invalid" })).status).toBe(403);
+    nothingCreated();
+  });
+
+  describe("placeCreatedProject", () => {
+    const member = () => verifySessionValue(teamStore(), memberCookie)!.member;
+    const code = (run: () => unknown): string | null => {
+      try { run(); return null; }
+      catch (error) { return error instanceof TeamError ? error.code : "not a TeamError"; }
+    };
+
+    test("places a project with no placement, for a member and a manager of the workspace", () => {
+      join("member");
+      expect(placeCreatedProject(teamStore(), member(), "dir-fresh", W1)).toEqual({ project: "dir-fresh", workspaceId: W1 });
+      expect(placedIn("dir-fresh")).toBe(W1);
+      join("manager");
+      expect(placeCreatedProject(teamStore(), member(), "dir-fresher", W1).workspaceId).toBe(W1);
+    });
+
+    test("refuses a project that already has a placement, so it can never move one", () => {
+      join("manager");
+      join("manager", W2);
+      placeProject(teamStore(), teamStore().member(ownerId)!, "repo-placed", W2);
+      expect(code(() => placeCreatedProject(teamStore(), member(), "repo-placed", W1))).toBe("workspace_forbidden");
+      expect(placedIn("repo-placed")).toBe(W2);
+      /* The owner too: this call is for new projects, and Move to… is another. */
+      expect(code(() => placeCreatedProject(teamStore(), teamStore().member(ownerId)!, "repo-placed", W1))).toBe("workspace_forbidden");
+    });
+
+    test("refuses a placement held under an alias of the key", () => {
+      join();
+      placeProject(teamStore(), teamStore().member(ownerId)!, "repo-old", W2);
+      expect(persistProjectAliases([{ source: "repo-old", target: "repo-new", displayName: "New" }])).toBe(true);
+      expect(code(() => placeCreatedProject(teamStore(), member(), "repo-new", W1))).toBe("workspace_forbidden");
+    });
+
+    test("refuses a caller outside the workspace, a revoked caller and a deleted workspace", () => {
+      expect(code(() => placeCreatedProject(teamStore(), member(), "dir-a", W1))).toBe("workspace_forbidden");
+      join();
+      expect(code(() => placeCreatedProject(teamStore(), member(), "dir-a", W2))).toBe("workspace_forbidden");
+      const owner = teamStore().member(ownerId)!;
+      expect(code(() => placeCreatedProject(teamStore(), owner, "dir-a", `w_${"c".repeat(32)}`))).toBe("workspace_gone");
+      expect(code(() => placeCreatedProject(teamStore(), owner, "dir-a", "not-an-id"))).toBe("invalid_id");
+      const held = member();
+      teamStore().updateMember({ ...held, status: "revoked", revokedAt: new Date().toISOString() });
+      expect(code(() => placeCreatedProject(teamStore(), held, "dir-a", W1))).toBe("workspace_forbidden");
+      expect(placedIn("dir-a")).toBeNull();
+    });
   });
 });

@@ -22,7 +22,8 @@ import type { PinnedTranscript } from "@/lib/mcp/bindings";
 import type { ConversationDraftPreview, ConversationDraftRequest } from "./conversationDraftContract";
 import { createPipelineFromRequest, defaultPipelinePorts, type PipelinePorts, type PipelineMutationResult } from "./engine";
 import { MAX_STAGE_PROMPT_LENGTH, MAX_TASK_LENGTH } from "./limits";
-import { preflightPipelineRepo } from "./preflight";
+import { preflightPipelineRepo, pipelineRepoPreflightError } from "./preflight";
+import { preparePipelineRepository } from "./initializeRepository";
 import { pipelineBaseBranchError } from "./git";
 import { pipelineDeliveryLookup } from "./store";
 import type { Pipeline } from "./types";
@@ -147,11 +148,15 @@ async function sourceCapture(req: NextRequest, input: Pick<ConversationDraftRequ
       return result;
     };
     const inside = await exec("git", ["rev-parse", "--is-inside-work-tree"], realCwd);
-    if (inside.code !== 0 || inside.stdout.trim() !== "true") refuse("SOURCE_WORKING_COPY_UNAVAILABLE", "conversation requires an existing Git working copy");
-    const preflight = await preflightPipelineRepo(realCwd, { homeDir: os.homedir, stat: fs.statSync, access: fs.accessSync, exec });
+    const needsInitialization = inside.code !== 0 && /not a (?:git )?repository/i.test(inside.stderr);
+    if (!needsInitialization && (inside.code !== 0 || inside.stdout.trim() !== "true")) refuse("SOURCE_WORKING_COPY_UNAVAILABLE", "conversation requires a Git working copy or an admissible project folder");
+    const preflight = needsInitialization ? await preparePipelineRepository(realCwd, false)
+      : await preflightPipelineRepo(realCwd, { homeDir: os.homedir, stat: fs.statSync, access: fs.accessSync, exec });
+    boundSource(req, input, ports);
+    budget.check();
     if (!preflight.ok) {
       if (preflight.code === "probe_failed") throw new ConversationDraftRefusal("SOURCE_READ_TIMEOUT", "source repository probe failed", 503, true);
-      refuse("SOURCE_WORKING_COPY_UNAVAILABLE", "conversation requires an existing Git working copy");
+      refuse("SOURCE_WORKING_COPY_UNAVAILABLE", pipelineRepoPreflightError(preflight));
     }
     const repoDir = fs.realpathSync(preflight.repoDir);
     const project = projectForCwd(repoDir);
@@ -159,25 +164,30 @@ async function sourceCapture(req: NextRequest, input: Pick<ConversationDraftRequ
     if (!project || canonicalProject(project) !== canonicalProject(bound.task.project)) refuse("SOURCE_PROJECT_MISMATCH", "working copy and task belong to different projects");
     const git = async (...args: string[]) => exec("git", args, repoDir);
     const facts = async () => {
+      if (needsInitialization) {
+        if (fs.existsSync(path.join(repoDir, ".git"))) refuse("SOURCE_CHANGED", "source changed; refresh the preview");
+        return { branch: "main", head: "", dirty: false };
+      }
       const symbolicRef = await git("symbolic-ref", "--quiet", "HEAD");
       const fullRef = symbolicRef.stdout.trim();
       const branch = fullRef.startsWith("refs/heads/") ? fullRef.slice("refs/heads/".length) : "";
       const head = await git("rev-parse", "--verify", "HEAD^{commit}");
+      if (head.code !== 0 && symbolicRef.code === 0 && branch) refuse("SOURCE_BRANCH_UNAVAILABLE", "The repository has no commit yet. Create the first commit with git add . and git commit, then retry.");
       if (symbolicRef.code !== 0 || !branch || pipelineBaseBranchError(branch) || head.code !== 0) refuse("SOURCE_BRANCH_UNAVAILABLE", "conversation requires a named branch with a commit");
       const status = await git("status", "--porcelain", "--untracked-files=normal");
       if (status.code !== 0) refuse("SOURCE_WORKING_COPY_UNAVAILABLE", "source status is unavailable");
       return { branch, head: head.stdout.trim(), dirty: !!status.stdout.trim() };
     };
     const initial = await facts();
-    const gitDirectory = await git("rev-parse", "--absolute-git-dir");
+    const gitDirectory = needsInitialization ? { code: 0, stdout: repoDir } : await git("rev-parse", "--absolute-git-dir");
     if (gitDirectory.code !== 0) refuse("SOURCE_WORKING_COPY_UNAVAILABLE", "source Git directory is unavailable");
     const originalCwd = bound.generation.launchProfile.cwd;
     const canonicalPath = fs.realpathSync(bound.generation.path);
-    const common = fs.realpathSync(preflight.gitCommonDir);
+    const common = fs.realpathSync(needsInitialization ? repoDir : preflight.gitCommonDir);
     // Cheap file identities recheck refs/index at synchronous storage admission.
     // Working-copy status is prepared again after any admission contention.
     // Never run synchronous Git, or hold the state write lease over a Git probe.
-    const refFiles = [path.join(gitDirectory.stdout.trim(), "HEAD"), path.join(common, "refs", "heads", initial.branch),
+    const refFiles = needsInitialization ? [] : [path.join(gitDirectory.stdout.trim(), "HEAD"), path.join(common, "refs", "heads", initial.branch),
       path.join(common, "packed-refs"), path.join(gitDirectory.stdout.trim(), "index")];
     const refStamp = () => refFiles.map(file => {
       try { const stat = fs.statSync(file); return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs]; }
@@ -188,7 +198,7 @@ async function sourceCapture(req: NextRequest, input: Pick<ConversationDraftRequ
     const repoIdentity = [identity(repoDir), identity(common)];
     const transcriptIdentity = [pinned.stat.dev, pinned.stat.ino, pinned.stat.size, pinned.stat.mtimeMs];
     const sourceRevision = hash([bound.conversation.id, bound.generation.id, bound.generation.path, canonicalPath, transcriptIdentity, repoDir, common, repoIdentity, initial.branch, initial.head]);
-    const assertCurrent = () => {
+    const assertCurrent = (allowInitialized = false) => {
       budget.check();
       const current = boundSource(req, input, ports);
       const stat = fs.fstatSync(pinned.descriptor);
@@ -197,7 +207,8 @@ async function sourceCapture(req: NextRequest, input: Pick<ConversationDraftRequ
           || current.generation.path !== bound.generation.path || current.generation.launchProfile.cwd !== originalCwd
           || !pinned.sameIdentity() || fs.realpathSync(bound.generation.path) !== canonicalPath
           || hash([stat.dev, stat.ino, stat.size, stat.mtimeMs]) !== hash(transcriptIdentity)
-          || fs.realpathSync(cwd) !== realCwd || fs.realpathSync(preflight.gitCommonDir) !== common
+          || fs.realpathSync(cwd) !== realCwd || fs.realpathSync(needsInitialization ? repoDir : preflight.gitCommonDir) !== common
+          || needsInitialization && !allowInitialized && fs.existsSync(path.join(repoDir, ".git"))
           || hash(refStamp()) !== originalRefs
           || hash([identity(repoDir), identity(common)]) !== hash(repoIdentity)) refuse("SOURCE_CHANGED", "source changed; refresh the preview");
       } catch (error) {
@@ -214,7 +225,7 @@ async function sourceCapture(req: NextRequest, input: Pick<ConversationDraftRequ
       return current;
     };
     assertCurrent();
-    return { ...bound, ...initial, pinned, repoDir, project, sourceRevision, assertCurrent, recheck,
+    return { ...bound, ...initial, pinned, repoDir, project, sourceRevision, assertCurrent, recheck, needsInitialization,
       title: visible(title || bound.conversation.id, 240) };
   } catch (error) { fs.closeSync(pinned.descriptor); throw error; }
 }
@@ -262,6 +273,7 @@ export async function previewConversationDraft(req: NextRequest, input: Pick<Con
       return { ok: true, source: {
         conversationId: source.conversation.id, title: source.title, branch: source.branch, head: source.head,
         sourceRevision: source.sourceRevision, canCreate: !current.dirty,
+        ...(source.needsInitialization ? { repositoryInitialization: "Creating the draft will create a local Git repository." } : {}),
         ...(current.dirty ? { refusal: { code: "SOURCE_HAS_CHANGES", error: "Commit the conversation's changes before creating a pipeline." } } : {}),
       } };
     } finally { fs.closeSync(source.pinned.descriptor); }
@@ -288,9 +300,23 @@ export async function createConversationDraft(req: NextRequest, input: Conversat
   if (existing) return existing;
   let descriptor: number | undefined;
   try {
-    const source = await withViewerOperation("pipelines.from-conversation.capture", () => sourceCapture(req, input, ports, budget));
+    let source = await withViewerOperation("pipelines.from-conversation.capture", () => sourceCapture(req, input, ports, budget));
     descriptor = source.pinned.descriptor;
     if (source.sourceRevision !== input.sourceRevision) refuse("SOURCE_CHANGED", "source changed; refresh the preview");
+    if (source.needsInitialization) {
+      await source.recheck();
+      source.assertCurrent();
+      const initialized = await ports.pipeline.preflightRepo(source.repoDir);
+      source.assertCurrent(true);
+      if (!initialized.ok) refuse("SOURCE_WORKING_COPY_UNAVAILABLE", pipelineRepoPreflightError(initialized));
+      const baseline = initialized.repositoryInitialization;
+      if (!baseline || initialized.repoDir !== source.repoDir) refuse("SOURCE_CHANGED", "source changed; refresh the preview");
+      fs.closeSync(descriptor);
+      descriptor = undefined;
+      source = await sourceCapture(req, input, ports, budget);
+      descriptor = source.pinned.descriptor;
+      if (source.needsInitialization || source.branch !== "main" || source.head !== baseline.commit) refuse("SOURCE_CHANGED", "source changed; refresh the preview");
+    }
     if (source.dirty) refuse("SOURCE_HAS_CHANGES", "Commit the conversation's changes before creating a pipeline.");
     const excerpt = withViewerOperation("pipelines.from-conversation.capture", () => conversationExcerpt(source.pinned, source.conversation.engine));
     const capturedAt = ports.now();

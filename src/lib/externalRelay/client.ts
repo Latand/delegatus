@@ -1,3 +1,4 @@
+import { noteRelayHttpRefusal, relayHttpRefusal, type RelayHttpRefusal } from "./httpDiagnostics";
 import dns from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
@@ -56,12 +57,12 @@ async function target(input: string, options: { query?: boolean; detailedErrors?
 }
 /** A publication deadline covers name resolution as well as the socket. Late
  * DNS completion cannot prepare a body or start an HTTP request. */
-async function targetWithSignal(input: string, signal?: AbortSignal, detailedErrors = false) {
-  if (!signal) return target(input, { detailedErrors });
+async function targetWithSignal(input: string, signal?: AbortSignal, detailedErrors = false, query = false) {
+  if (!signal) return target(input, { detailedErrors, query });
   signal.throwIfAborted();
   let onAbort: (() => void) | undefined;
   try {
-    return await Promise.race([target(input, { detailedErrors }), new Promise<never>((_resolve, reject) => {
+    return await Promise.race([target(input, { detailedErrors, query }), new Promise<never>((_resolve, reject) => {
       onAbort = () => reject(signal.reason);
       signal.addEventListener("abort", onAbort, { once: true });
     })]);
@@ -82,9 +83,13 @@ export async function relayCall<T = unknown>(
     /** Preserve DNS failures for readers that report transport causes. */
     detailedErrors?: boolean;
     onResponseStatus?: (status: number) => void;
+    /** Lease helper forwards safe refusal records to the Viewer journal. */
+    onHttpRefusal?: (record: RelayHttpRefusal) => void;
+    headers?: Record<string, string>;
     /** Trusted caller rechecks its body after DNS, immediately before emission. */
     prepareBody?: () => unknown;
     binary?: { bytes: Buffer; headers: Record<string, string> };
+    upload?: { byteLength: number; contentType: string; body: () => AsyncIterable<Uint8Array> };
     /** Trusted request authority is rechecked after DNS, before every send. */
     beforeSend?: () => void | Promise<void>;
   } = {},
@@ -112,6 +117,7 @@ export async function relayCall<T = unknown>(
         agent: false,
         signal: options.signal,
         headers: {
+          ...options.headers,
           host: url.host,
           "Delegatus-Relay-Version": "1",
           ...(encoded
@@ -121,17 +127,29 @@ export async function relayCall<T = unknown>(
               }
             : {}),
           ...options.binary?.headers,
+          ...(options.upload ? { "Content-Type": options.upload.contentType, "Content-Length": String(options.upload.byteLength) } : {}),
           ...(credential ? { Authorization: `Bearer ${credential}` } : {}),
         },
       },
       (response) => {
+        let refusalReported = false;
+        const reportRefusal = (payload?: unknown) => {
+          if (refusalReported) return;
+          const record = relayHttpRefusal(route, response.statusCode ?? 0, payload);
+          if (!record) return;
+          refusalReported = true;
+          if (options.onHttpRefusal) options.onHttpRefusal(record);
+          // Claim counters and reasons have their own poll-loop journal.
+          else if (record.path !== "/requests/claim") noteRelayHttpRefusal(record);
+        };
         options.onResponseStatus?.(response.statusCode ?? 0);
-        response.on("error", reject);
+        response.on("error", error => { reportRefusal(); reject(error); });
         const chunks: Buffer[] = [];
         let size = 0;
         response.on("data", (chunk: Buffer) => {
           size += chunk.length;
           if (size > (options.maxBytes ?? 1_048_576)) {
+            reportRefusal();
             response.destroy(new ExternalRelayError("too_large", options.detailedErrors ? response.statusCode : 0));
             return;
           }
@@ -140,25 +158,29 @@ export async function relayCall<T = unknown>(
         response.on("end", async () => {
           // A binary refusal can arrive before the body has drained. Close
           // that owned upload before a retry starts another transfer.
-          if (options.binary) request.destroy();
+          if (options.binary || options.upload) request.destroy();
           if (!response.complete) {
+            reportRefusal();
             reject(new ExternalRelayError("unreachable"));
             return;
           }
           const status = response.statusCode ?? 0;
-          if (status >= 300 && status < 400) {
-            reject(new ExternalRelayError("unreachable", status));
-            return;
-          }
           let parsed: unknown = null;
           try {
             if (size)
               parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
           } catch {
+            reportRefusal();
             reject(new ExternalRelayError("malformed", status));
             return;
           }
+          if (status >= 300 && status < 400) {
+            reportRefusal(parsed);
+            reject(new ExternalRelayError("unreachable", status, null, parsed));
+            return;
+          }
           if (status >= 400) {
+            reportRefusal(parsed);
             const error = parsed as {
               error?: { code?: string; retry_after_s?: number } | { code?: string; retry_after?: number }[];
             } | null;
@@ -181,7 +203,7 @@ export async function relayCall<T = unknown>(
             );
             return;
           }
-          try { if (!options.binary) await waitForStateLock("relay.publication-reference", () => recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed), { waitMs: 5000 }); }
+          try { if (!options.binary && !options.upload) await waitForStateLock("relay.publication-reference", () => recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed), { waitMs: 5000 }); }
           catch { reject(new ExternalRelayError("publication_context_unavailable")); return; }
           resolve({ status, body: parsed as T });
         });
@@ -189,9 +211,14 @@ export async function relayCall<T = unknown>(
     );
     request.on("error", reject);
     request.setTimeout(options.timeoutMs ?? 5_000, () =>
-      request.destroy(new ExternalRelayError("unreachable")),
+      request.destroy(new ExternalRelayError(options.detailedErrors ? "timeout" : "unreachable")),
     );
-    if (options.binary && encoded) {
+    if (options.upload) {
+      const source = Readable.from(options.upload.body());
+      request.once("close", () => source.destroy());
+      source.on("error", error => request.destroy(error));
+      source.pipe(request);
+    } else if (options.binary && encoded) {
       const bytes = encoded;
       const source = Readable.from((function* () { for (let offset = 0; offset < bytes.length; offset += 65536) yield bytes.subarray(offset, offset + 65536); })());
       request.once("close", () => source.destroy());
@@ -247,13 +274,77 @@ export async function relayDownloadMedia<T>(apiBase: string, requestId: string, 
     request.end();
   });
 }
+
+/** H4: pairing-authenticated stream, with the same pinned destination as relayCall.
+ * Only the fixed caller constructs route; no redirect or provider URL is followed. */
+export async function relayStreamGet<T>(apiBase: string, route: string, credential: string,
+  consume: (response: http.IncomingMessage, signal: AbortSignal) => Promise<T>,
+  options: { signal: AbortSignal; beforeSend: () => void; headerMs?: number; idleMs?: number },
+): Promise<{ status: 200; value: T } | { status: 202; body: unknown }> {
+  const controller = new AbortController();
+  const signal = AbortSignal.any([options.signal, controller.signal]);
+  const headerTimer = setTimeout(() => controller.abort(new ExternalRelayError("deadline_exceeded")), options.headerMs ?? 30_000);
+  try {
+    const { url, address } = await targetWithSignal(apiBase, signal, true);
+    signal.throwIfAborted(); options.beforeSend();
+    if (!url.pathname.endsWith("/v1") || !/^\/targets\/[^/?#]+\/owner\/groups\/-[1-9][0-9]*\/messages\/[1-9][0-9]*\/media$/.test(route))
+      throw new ExternalRelayError("invalid_address");
+    const transport = url.protocol === "https:" ? https : http;
+    return await new Promise((resolve, reject) => {
+      let activeResponse: http.IncomingMessage | undefined;
+      const request = transport.request({ hostname: address, port: url.port || (url.protocol === "https:" ? 443 : 80),
+        servername: net.isIP(bare(url.hostname)) ? undefined : bare(url.hostname), path: url.pathname + route,
+        method: "GET", agent: false, signal, headers: { host: url.host, Authorization: `Bearer ${credential}`, "Delegatus-Relay-Version": "1" } }, response => {
+        clearTimeout(headerTimer);
+        activeResponse = response;
+        response.on("error", error => { controller.abort(error); });
+        void (async () => {
+          signal.throwIfAborted(); options.beforeSend();
+          const status = response.statusCode ?? 0;
+          if (status >= 300 && status < 400) throw new ExternalRelayError("http_error", status);
+          if (status === 200) {
+            const value = await consume(response, signal);
+            signal.throwIfAborted(); options.beforeSend();
+            if (!response.complete) throw new ExternalRelayError("incomplete", status);
+            return { status: 200 as const, value };
+          }
+          const chunks: Buffer[] = []; let size = 0;
+          for await (const chunk of response) {
+            size += chunk.length;
+            if (size > 65_536) throw new ExternalRelayError("malformed_response", status);
+            chunks.push(Buffer.from(chunk));
+          }
+          if (!response.complete) throw new ExternalRelayError("incomplete", status);
+          let body: unknown;
+          try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+          catch { throw new ExternalRelayError("malformed_response", status); }
+          signal.throwIfAborted(); options.beforeSend();
+          if (status === 202) return { status: 202 as const, body };
+          const error = body as { error?: { code?: unknown; retry_after_s?: unknown } };
+          const code = error?.error?.code, retry = error?.error?.retry_after_s ?? Number(response.headers["retry-after"]);
+          throw new ExternalRelayError(typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? code : "http_error", status,
+            typeof retry === "number" && Number.isFinite(retry) ? retry : null, body);
+        })().then(resolve, error => { response.destroy(); reject(error); });
+      });
+      request.on("error", error => {
+        // A consumer may still own a part. Let it finish its cleanup before
+        // returning a transport verdict or releasing a registry slot.
+        if (activeResponse) { controller.abort(error); activeResponse.destroy(error); }
+        else reject(signal.aborted ? signal.reason : error);
+      });
+      request.setTimeout(options.idleMs ?? 60_000, () => request.destroy(new ExternalRelayError("deadline_exceeded")));
+      request.end();
+    });
+  } finally { clearTimeout(headerTimer); }
+}
 /**
  * Bounded GET with DNS pinning and redirect refusal, without credentials.
  * `query` admits and sends a query string, for an image the relay hands out
  * as a signed or parameterized URL; the relay's own documents are read without.
  */
-export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576, options: { query?: boolean } = {}): Promise<Buffer> {
-  const { url, address } = await target(urlInput, options);
+export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576, options: { query?: boolean; signal?: AbortSignal } = {}): Promise<Buffer> {
+  const { url, address } = await targetWithSignal(urlInput, options.signal, false, options.query);
+  options.signal?.throwIfAborted();
   const transport = url.protocol === "https:" ? https : http;
   return await new Promise<Buffer>((resolve, reject) => {
     const request = transport.request(
@@ -266,6 +357,7 @@ export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576, 
         path: url.pathname + (options.query ? url.search : ""),
         method: "GET",
         agent: false,
+        signal: options.signal,
         headers: { host: url.host, "Delegatus-Relay-Version": "1" },
       },
       (response) => {
@@ -294,8 +386,8 @@ export async function readRelayBytesUrl(urlInput: string, maxBytes = 1_048_576, 
   });
 }
 /** Bounded JSON transport with DNS pinning and redirect refusal, without credentials. */
-export async function readRelayJsonUrl(urlInput: string): Promise<unknown> {
-  const bytes = await readRelayBytesUrl(urlInput);
+export async function readRelayJsonUrl(urlInput: string, options: { signal?: AbortSignal } = {}): Promise<unknown> {
+  const bytes = await readRelayBytesUrl(urlInput, 1_048_576, options);
   try {
     return JSON.parse(bytes.toString("utf8"));
   } catch {

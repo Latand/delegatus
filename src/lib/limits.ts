@@ -841,7 +841,7 @@ export function mapAppServerRateLimits(rateLimits: AppServerRateLimits, captured
     session: routed.session,
     weekly: routed.weekly,
     plan: rateLimits.planType,
-    ...(rateLimits.credits ? { credits: rateLimits.credits } : {}),
+    ...(rateLimits.credits ? { credits: { ...rateLimits.credits, observedAt: rateLimits.credits.observedAt ?? capturedAt } } : {}),
     capturedAt,
   };
 }
@@ -1132,7 +1132,7 @@ function lastRateLimits(file: string, owns: (at: number) => boolean): { data: En
       }
       const rl = row.payload?.rate_limits;
       if (!rl) continue;
-      credits ??= paidCredits(rl.credits);
+      credits ??= paidCredits(rl.credits, capturedAt);
       const routed = routeWindowsByHorizon(codexWindow(rl.primary, capturedAt), codexWindow(rl.secondary, capturedAt), capturedAt);
       // Codex also emits `rate_limits` events carrying no windows at all (other
       // limit families, e.g. credit balances). They say nothing about the

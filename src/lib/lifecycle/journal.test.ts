@@ -15,7 +15,10 @@ import {
 } from "./journal";
 import { projectLifecycleEvents } from "./projector";
 import { operatorSafeSummary } from "./vocabulary";
+import { Database } from "bun:sqlite";
+
 import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
 
 const sandboxes: string[] = [];
 const originalStateDir = process.env.LLV_STATE_DIR;
@@ -151,64 +154,69 @@ test("events are queryable by project, pipeline, conversation and cursor", () =>
 
 test("a truncated journal surfaces the problem instead of silently resetting to empty", () => {
   sandbox();
-  appendLifecycleEvents(reviewerStage);
   const journalPath = lifecycleJournalPath();
-  const intact = fs.readFileSync(journalPath, "utf8");
-  expect(readLifecycleJournal().lastSeq).toBe(2);
+  const intact = `${JSON.stringify({ version: 1, lastSeq: 2, events: [
+    { id: lifecycleEventId(reviewerStage[0]!.key), seq: 1, at: reviewerStage[0]!.at, type: "stage_started", state: "running",
+      project: "viewer", pipelineId: "pipeline_a", stageId: "review", attempt: 1, conversationId: "conversation_reviewer", role: "reviewer", summary: "review started" },
+    { id: lifecycleEventId(reviewerStage[1]!.key), seq: 2, at: reviewerStage[1]!.at, type: "stage_completed", state: "completed",
+      project: "viewer", pipelineId: "pipeline_a", stageId: "review", attempt: 1, conversationId: "conversation_reviewer", role: "reviewer", summary: "APPROVE" },
+  ], retired: [] }, null, 2)}\n`;
+  fs.mkdirSync(path.dirname(journalPath), { recursive: true });
 
-  /* The half-written file a crash between write and flush leaves behind. */
+  /* The half-written file a crash between write and flush leaves behind, met
+     by the release that would import it. */
   fs.writeFileSync(journalPath, intact.slice(0, Math.floor(intact.length / 2)), "utf8");
 
-  /* Resetting to `lastSeq 0` here is silent data loss with a second victim:
-     every durable subscriber sits above the reset cursor and never matches
-     another event again. */
+  /* Importing it as an empty journal would restart it at `lastSeq 0`: silent
+     data loss with a second victim, since every durable subscriber sits above
+     the reset cursor and never matches another event again. The import is
+     refused instead, and every surface keeps saying why. */
   expect(() => readLifecycleJournal()).toThrow(LifecycleJournalCorruptError);
   expect(() => readLifecycleJournal()).toThrow(journalPath);
   expect(() => appendLifecycleEvents(reviewerStage)).toThrow(LifecycleJournalCorruptError);
   expect(() => queryLifecycleEvents({})).toThrow(LifecycleJournalCorruptError);
-  /* Nothing overwrote the damaged file, so the operator can still recover it. */
-  expect(fs.readFileSync(journalPath, "utf8")).not.toContain('"lastSeq": 0');
+  /* Nothing overwrote or moved the damaged file, so the operator can still recover it. */
+  expect(fs.readFileSync(journalPath, "utf8")).toBe(intact.slice(0, Math.floor(intact.length / 2)));
 
   /* A structurally intact file with one malformed row is damage too. */
   const damaged = JSON.parse(intact) as { events: unknown[] };
   damaged.events[1] = { id: "evt_partial", at: "2026-07-26T09:20:00.000Z" };
   fs.writeFileSync(journalPath, JSON.stringify(damaged), "utf8");
   expect(() => readLifecycleJournal()).toThrow(/recorded event 2 of 2 is malformed/);
+  expect(() => appendLifecycleEvents(reviewerStage)).toThrow(/recorded event 2 of 2 is malformed/);
 
-  /* Restoring the file restores the surface: nothing was lost by failing. */
+  /* Restoring the file restores the surface: nothing was lost by failing, and
+     the next append imports it and continues its sequence. */
   fs.writeFileSync(journalPath, intact, "utf8");
   expect(readLifecycleJournal().lastSeq).toBe(2);
+  expect(appendLifecycleEvents([{ ...reviewerStage[1]!, key: "pipeline:pipeline_a:stage:review:attempt:2:passed" }]).appended.map(event => event.seq)).toEqual([3]);
+  expect(fs.statSync(journalPath).isDirectory()).toBe(true);
+  expect(readLifecycleJournal().events.map(event => event.seq)).toEqual([1, 2, 3]);
 });
 
-test("the journal is written durably: flushed before the rename publishes it", () => {
-  const dir = sandbox();
-  const journalPath = path.join(dir, "state", "lifecycle-journal.json");
-  const realFsync = fs.fsyncSync;
-  const realRename = fs.renameSync;
-  const steps: string[] = [];
-  (fs as { fsyncSync: typeof fs.fsyncSync }).fsyncSync = ((descriptor: number) => {
-    steps.push("fsync");
-    return realFsync(descriptor);
-  }) as typeof fs.fsyncSync;
-  (fs as { renameSync: typeof fs.renameSync }).renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
-    steps.push(String(to) === journalPath ? "publish-journal" : "rename");
-    return realRename(from, to);
-  }) as typeof fs.renameSync;
-  try {
-    appendLifecycleEvents(reviewerStage);
-  } finally {
-    (fs as { fsyncSync: typeof fs.fsyncSync }).fsyncSync = realFsync;
-    (fs as { renameSync: typeof fs.renameSync }).renameSync = realRename;
-  }
+test("an append writes the rows it adds and the trim it owes, never the journal", () => {
+  sandbox();
+  appendLifecycleEvents(reviewerStage);
+  const database = path.join(path.dirname(lifecycleJournalPath()), "state.sqlite");
+  const changedAt = (revision: number) => {
+    const db = new Database(database, { readonly: true });
+    try {
+      return db.query<{ row_key: string; operation: string }, [number]>(
+        "SELECT row_key, operation FROM state_changes WHERE collection = 'lifecycle' AND revision = ? ORDER BY row_key",
+      ).all(revision).map(row => `${row.operation} ${row.row_key.split(":")[0]}`);
+    } finally { db.close(); }
+  };
+  const revision = () => readStateCollectionRevision(database, "lifecycle")!;
+  appendLifecycleEvents([{ ...reviewerStage[0]!, key: "single" }]);
+  expect(changedAt(revision())).toEqual(["upsert e", "upsert meta"]);
 
-  /* Content flushed, then published, then the directory entry flushed. A rename
-     that publishes unflushed bytes leaves a valid name over a truncated file —
-     exactly the corruption the test above has to fail loudly on. */
-  const publish = steps.indexOf("publish-journal");
-  expect(publish).toBeGreaterThanOrEqual(0);
-  expect(steps.slice(0, publish)).toContain("fsync");
-  expect(steps.slice(publish + 1)).toContain("fsync");
-  expect(fs.existsSync(journalPath)).toBe(true);
+  appendLifecycleEvents(Array.from({ length: 1_997 }, (_, index) => ({ key: `fill:${index}`, type: "delivery_expired" as const, at: "2026-10-14T17:00:00.000Z" })));
+  expect(readLifecycleJournal().events).toHaveLength(2_000);
+  /* At capacity, one event in turns the oldest out into a retired id. */
+  appendLifecycleEvents([{ ...reviewerStage[0]!, key: "past capacity" }]);
+  expect(changedAt(revision()).sort()).toEqual(["delete e", "upsert e", "upsert meta", "upsert x"]);
+  expect(readLifecycleJournal().events).toHaveLength(2_000);
+  expect(readLifecycleJournal().retired).toEqual([lifecycleEventId(reviewerStage[0]!.key)]);
 });
 
 /* The synthetic secret shapes are assembled at runtime: a literal token in this

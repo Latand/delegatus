@@ -4,13 +4,13 @@ import { readBounded, voiceRefusal, providerErrorMessage } from "@/lib/ttsVoices
 import { redactSecrets } from "@/lib/review";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { MAX_TTS_TEXT_LENGTH, isPcmTtsBackend } from "@/lib/tts";
-import { activeTtsOption, readFishAudioApiKey, readOpenAiApiKey, resolveTtsBackend, ttsBackendInfo, type TtsBackend, type TtsBackendOption } from "@/lib/ttsBackend";
-import { readElevenLabsApiKey, readSonioxApiKey } from "@/lib/transcribeBackend";
+import { ttsBackendInfo, type TtsBackend, type TtsBackendOption } from "@/lib/ttsBackend";
+import { resolveService } from "@/lib/openaiServices/policy";
+import { openAiRealtimeSpeech } from "@/lib/ttsOpenAiRealtime";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const OPENAI_SPEECH_URL = "https://api.openai.com/v1/audio/speech";
 const SONIOX_SPEECH_URL = "https://tts-rt.soniox.com/tts";
 const MAX_AUDIO_BYTES = 32 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 60_000;
@@ -84,13 +84,6 @@ function synthesisRequest(
   text: string,
   fast = false,
 ): { url: string; headers: Record<string, string>; body: string } {
-  if (backend === "openai") {
-    return {
-      url: OPENAI_SPEECH_URL,
-      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: option.model, voice: option.voice, input: text, response_format: "mp3" }),
-    };
-  }
   if (backend === "fishaudio") {
     return {
       url: "https://api.fish.audio/v1/tts",
@@ -150,18 +143,6 @@ export async function POST(req: NextRequest): Promise<Response> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  const backend = resolveTtsBackend();
-  const option = activeTtsOption();
-  const apiKey =
-    backend === "openai" ? readOpenAiApiKey() : backend === "soniox" ? readSonioxApiKey() : backend === "fishaudio" ? readFishAudioApiKey() : readElevenLabsApiKey();
-  if (!apiKey) {
-    return NextResponse.json({ error: "text-to-speech is unavailable", keyPath: option.keyPath }, { status: 503 });
-  }
-
-  if (backend === "fishaudio" && option.model === "s2.1-pro-free" && option.freeEnded) {
-    return NextResponse.json({ error: "Fish Audio's free model ended on 2026-11-30; choose S2.1 Pro (paid)", code: "fishaudio-free-ended" }, { status: 410 });
-  }
-
   let parsed: unknown;
   try {
     parsed = await req.json();
@@ -171,10 +152,19 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return NextResponse.json({ error: "expected a JSON object" }, { status: 400 });
   }
+  const resolution = resolveService("read");
+  const backend = resolution.effective;
+  const option = ttsBackendInfo(Date.now(), true).options.find(row => row.id === backend)!;
+  const credential = resolution.apiKey;
+  if (!credential) return NextResponse.json({ error: "text-to-speech is unavailable", keyPath: option.keyPath }, { status: 503 });
+  if (backend === "fishaudio" && option.model === "s2.1-pro-free" && option.freeEnded) {
+    return NextResponse.json({ error: "Fish Audio's free model ended on 2026-11-30; choose S2.1 Pro (paid)", code: "fishaudio-free-ended" }, { status: 410 });
+  }
+
   const body = parsed as { text?: unknown; mode?: unknown };
   if (body.mode !== undefined && body.mode !== "soniox-pcm" && body.mode !== "pcm") return NextResponse.json({ error: "invalid speech mode" }, { status: 400 });
   const fast = body.mode === "soniox-pcm" || body.mode === "pcm";
-  if ((fast && !isPcmTtsBackend(backend)) || ((backend === "fishaudio" || backend === "elevenlabs") && body.mode !== "pcm")) return NextResponse.json({ error: "speech backend changed; refresh configuration" }, { status: 409 });
+  if ((fast && !isPcmTtsBackend(backend)) || ((backend === "openai" || backend === "fishaudio" || backend === "elevenlabs") && body.mode !== "pcm")) return NextResponse.json({ error: "speech backend changed; refresh configuration" }, { status: 409 });
   if (typeof body.text !== "string" || !body.text.trim()) {
     return NextResponse.json({ error: "text must be a non-empty string" }, { status: 400 });
   }
@@ -190,10 +180,21 @@ export async function POST(req: NextRequest): Promise<Response> {
   const release = admitSynthesis();
   if (!release) return NextResponse.json({ error: "another read-aloud is in progress" }, { status: 429 });
 
-  const request = synthesisRequest(backend, option, apiKey, text, fast);
+  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)]);
+  if (backend === "openai") {
+    try {
+      const audio = await openAiRealtimeSpeech({ apiKey: credential, model: option.model, voice: option.voice, text, signal });
+      return new Response(boundedAudioStream(audio, release, signal, req.signal), {
+        headers: { "content-type": "audio/pcm", "cache-control": "no-store", ...billedBy(backend, option, true) },
+      });
+    } catch {
+      release();
+      return req.signal.aborted ? new Response(null, { status: 499 }) : NextResponse.json({ error: "OpenAI TTS request failed" }, { status: 502 });
+    }
+  }
+  const request = synthesisRequest(backend, option, credential, text, fast);
   if (backend === "soniox") sonioxStarts.push(Date.now());
   let upstream: Response;
-  const signal = AbortSignal.any([req.signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)]);
   try {
     upstream = await fetch(request.url, {
       method: "POST",
@@ -216,7 +217,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     release();
     const refusal = voiceRefusal(backend, upstream.status, payload);
     if (refusal) return NextResponse.json({ error: `${backend} does not know voice «${option.voice}»`, code: "voice-not-found", voice: option.voice }, { status: 422 });
-    const message = backend === "elevenlabs" ? providerErrorMessage(payload, apiKey) : null;
+    const message = backend === "elevenlabs" ? providerErrorMessage(payload, credential) : null;
     const status = ((backend === "soniox" && [400, 401, 402, 403, 429].includes(upstream.status)) || (["fishaudio", "elevenlabs"].includes(backend) && [400, 401, 402, 403, 404, 429].includes(upstream.status))) ? upstream.status : 502;
     return NextResponse.json({ error: message ?? `${backend} TTS failed (HTTP ${upstream.status})`, ...(backend === "fishaudio" && option.model === "s2.1-pro-free" && [402, 403, 404].includes(upstream.status) ? { code: "fishaudio-free-refused" } : {}) }, {
       status, headers: status === 429 ? { "retry-after": safeRetryAfter(upstream.headers.get("retry-after")) } : {},

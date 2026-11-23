@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -77,4 +77,80 @@ test("parallel C: retry's cancellation yields to a peer writer and rechecks the 
     expect(advanced).toBe(true);
     expect(registry.pendingDeliveries(conversation.id)[0]).toMatchObject({ state: "assigned", attempts: 0 });
   } finally { clearTimeout(timer); if (locked) peer.exec("ROLLBACK"); peer.close(); registry.close(); }
+});
+
+for (const change of ["unchanged", "member-revoked", "owner-revoked", "project-rebound"] as const) test(`parallel queue rechecks saved human authority after the runtime read: ${change}`, async () => {
+  const { agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { createWorkspace, placeProject } = await import("@/lib/team/workspaces");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } = await import("./seats");
+  const { beginDeputy, recordDeputyFork } = await import("./deputies");
+  const clientModule = await import("@/lib/runtime/client");
+  const previousRegistry = agentRegistry(), previousState = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "parallel-member-queue-")); roots.push(root);
+  process.env.LLV_STATE_DIR = root; resetTeamStoreForTests();
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const journal = new RuntimeJournal(path.join(root, "journal.sqlite"));
+  const at = "2026-10-20T09:00:00.000Z", project = "project-alpha", w1 = `w_${"a".repeat(32)}`, w2 = `w_${"b".repeat(32)}`;
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse(at));
+  const read = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  let clientSpy: ReturnType<typeof spyOn> | undefined, delivery: Promise<unknown> | undefined;
+  let commands = 0;
+  try {
+    const store = teamStore();
+    const owner = { id: "m_owner", name: "Owner", role: "owner" as const, status: "active" as const, color: "teal" as const,
+      telegram: null, createdAt: at, createdBy: "claim", revokedAt: null };
+    const member = { ...owner, id: "m_member", name: "Member", role: "member" as const };
+    store.insertMember(owner); store.insertMember(member);
+    createWorkspace(store, owner, { id: w1, name: "Alpha", projects: [project] });
+    createWorkspace(store, owner, { id: w2, name: "Beta", projects: [] });
+    store.putWorkspaceMember(w1, member.id, "member", owner.id, at);
+    const actor = change === "owner-revoked" ? owner : member;
+    const workspace = actor.role === "owner" ? undefined : { memberId: actor.id, workspaceId: w1 };
+    const seat = registry.ensureForkedConversation("claude", path.join(root, "seat.jsonl"), null, emptyLaunchProfile({ cwd: root, project }));
+    beginOrchestratorSeatIntent({ project, mandate: "Run work", mode: "existing", conversationId: seat.id, clientRequestId: "queue-seat", now: at });
+    completeOrchestratorSeatIntent({ project, conversationId: seat.id, path: seat.generations.at(-1)!.path, clientRequestId: "queue-seat", now: at });
+    const fork = registry.ensureForkedConversation("claude", path.join(root, "fork.jsonl"), null,
+      emptyLaunchProfile({ cwd: root, project, parentConversationId: seat.id, ...(workspace ? { workspace } : {}) }));
+    const begun = beginDeputy({ project, seatConversationId: seat.id, seatEpoch: orchestratorSeatFor(project).active!.seatEpoch,
+      seatPath: seat.generations.at(-1)!.path, clientRequestId: "queue-member", askId: "deputy-member-queue", workspace,
+      ask: { text: "Workspace question", images: 0, sender: null, origin: { kind: "operator" }, memberId: actor.id }, now: new Date(at) });
+    recordDeputyFork(begun.deputy.askId, { deputyConversationId: fork.id, artifactPath: fork.generations.at(-1)!.path, forkRecordCount: 1 });
+    store.admitConversationMember(fork.id, actor.id);
+    journal.append({ scope: { type: "session", id: fork.id }, kind: "session-status", payload: {
+      conversationId: fork.id, sessionKey: { engine: "claude", sessionId: fork.generations.at(-1)!.id },
+      hostKind: "claude-broker", host: "hosted", turn: "idle", provenance: "structured", artifactPath: fork.generations.at(-1)!.path,
+      capabilities: { steer: false, structuredAttention: true },
+    } });
+    const client = { readSession: async () => { read.resolve(); await release.promise; return journal.readSession({ conversationId: fork.id }); },
+      command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => { commands++; return journal.executeOperation(command); },
+    } as unknown as RuntimeHostClient;
+    clientSpy = spyOn(clientModule, "runtimeHostClient").mockReturnValue(client);
+    const pending = productionDeputyCommandPorts({ registry }).deliver({ conversationId: fork.id, path: fork.generations.at(-1)!.path,
+      clientMessageId: deputyMessageKey(begun.deputy.askId), text: "Workspace question", images: [], origin: { kind: "operator" } });
+    delivery = pending;
+    await Promise.race([read.promise, pending.then(result => { throw new Error(`queue ended before its runtime read: ${JSON.stringify(result)}`); })]);
+    if (change === "member-revoked") store.removeWorkspaceMember(w1, member.id);
+    if (change === "owner-revoked") store.updateMember({ ...owner, status: "revoked", revokedAt: at });
+    if (change === "project-rebound") {
+      placeProject(store, owner, project, w2);
+      store.putWorkspaceMember(w2, member.id, "member", owner.id, at);
+    }
+    release.resolve();
+    const result = await pending.then(value => ({ value }), error => ({ error }));
+    expect(commands).toBe(change === "unchanged" ? 1 : 0);
+    if (change === "unchanged") expect(result).toMatchObject({ value: { ok: true } });
+    else {
+      expect("error" in result ? String(result.error) : JSON.stringify(result.value))
+        .toContain(change === "owner-revoked" ? "member authority is unavailable" : "workspace access denied");
+      expect(registry.pendingDeliveries(fork.id)).toEqual([]);
+    }
+  } finally {
+    release.resolve(); await Promise.allSettled(delivery ? [delivery] : []);
+    clientSpy?.mockRestore(); clock.mockRestore(); journal.close(); registry.close();
+    setAgentRegistryForTests(previousRegistry); resetTeamStoreForTests();
+    process.env.LLV_STATE_DIR = previousState;
+  }
 });

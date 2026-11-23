@@ -1,8 +1,20 @@
 import { expect, test } from "bun:test";
-import { publicationApp403, publicationDeadlineOnly, pipelinePublishesRemoteBranch } from "./publication";
+import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFailure, publicationTransportLine, pipelinePublishesRemoteBranch } from "./publication";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
+
+test.each(["remote: fatal error in commit_refs_rules", "! [remote rejected] HEAD -> lane (pre-receive hook declined)"])(
+  "a remote ref refusal retains its diagnostic: %s", async line => {
+    const outputTail = `pre-push: privacy\nPRIVACY GATE: PASS\npre-push: verified completed checks for this publication; transport admitted\n${line}\nerror: failed to push some refs`;
+    const { publicationFailureCause } = await import("./git");
+    expect(publicationTransportLine(outputTail)).toBe(line);
+    expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1, outputTail }))
+      .toBe(`git push was refused (exit 1): ${line}`);
+    expect(publicationApp403(outputTail)).toBe(false);
+    expect(publicationDeadlineOnly(outputTail)).toBe(false);
+    expect(publicationFrozenInstallFailure(outputTail)).toBe(false);
+  });
 
 async function admissionFailureOutput(): Promise<string> {
   let now = 0;
@@ -56,6 +68,56 @@ test("a failed transport retains its error when git finishes with Everything up-
     .toBe("git push was refused (exit 1): error: RPC failed; HTTP 403 curl 22");
 });
 
+test.each(["EEXIST: cannot create link", "pre-push: frozen install: failed (1)\nENOSPC"])("a frozen install refusal retains its environment cause: %s", refusal => {
+  expect(publicationFrozenInstallFailure(`pre-push: frozen install\n${refusal}`)).toBe(true);
+});
+
+test.each([
+  "(pass) a case: PRIVACY GATE: FAIL",
+  "PRE-EXISTING src/work.test.ts: a case: PRIVACY GATE: FAIL",
+  'expected: "PRIVACY GATE: FAIL"',
+  "> PRIVACY GATE: FAIL",
+  "(pass) a case: pre-push: privacy: failed (1)",
+  '"pre-push: privacy: failed (1)"',
+])("quoted privacy text preserves installer and deadline recovery: %s", line => {
+  expect(publicationFrozenInstallFailure(`${line}\npre-push: frozen install\nEEXIST`)).toBe(true);
+  expect(publicationDeadlineOnly(`${line}\nowned runner: deadline expired`)).toBe(true);
+  expect(publicationApp403(`${FORGE_PUSH_MINT_MARKER}\n${line}\nfatal: HTTP 403`)).toBe(true);
+});
+
+test.each(["PRIVACY GATE: FAIL", "pre-push: privacy: failed (1)", "pre-push: privacy: refused"])("a privacy diagnostic remains decisive across recovery classifiers: %s", line => {
+  expect(publicationFrozenInstallFailure(`${line}\npre-push: frozen install\nEEXIST`)).toBe(false);
+  expect(publicationDeadlineOnly(`${line}\nowned runner: deadline expired`)).toBe(false);
+  expect(publicationApp403(`${FORGE_PUSH_MINT_MARKER}\n${line}\nfatal: HTTP 403`)).toBe(false);
+});
+
+test.each([
+  "(fail) named assertion [2.00ms]",
+  "NEW src/work.test.ts: named assertion",
+  "src/work.ts: error TS2353: invalid property",
+  "pre-push: types: failed (1)",
+  "owned runner: budget cleanup failed: child tree could not be stopped",
+  "PRIVACY GATE: FAIL",
+  "fatal: HTTP 403",
+  "error: RPC failed; HTTP 403 curl 22",
+  "remote: Permission denied",
+])("a frozen install marker preserves a later decisive refusal: %s", refusal => {
+  expect(publicationFrozenInstallFailure(`pre-push: frozen install\n${refusal}`)).toBe(false);
+});
+
+test("a frozen install marker preserves a verified App denial", () => {
+  const output = `pre-push: frozen install\n${FORGE_PUSH_MINT_MARKER}\nfatal: HTTP 403`;
+  expect(publicationApp403(output)).toBe(true);
+  expect(publicationFrozenInstallFailure(output)).toBe(false);
+});
+
+test("a stale frozen install marker retains the Git transport cause", async () => {
+  const { publicationFailureCause } = await import("./git");
+  expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1700,
+    outputTail: "pre-push: frozen install\nfatal: HTTP 403" }))
+    .toBe("git push was refused (exit 1): fatal: HTTP 403");
+});
+
 for (const [publication, disposition, remote, publishes] of [
   ["remote-branch", "owner", "", true],
   [undefined, "owner", "https://example.invalid/repo.git", true],
@@ -75,6 +137,12 @@ test.each([
   "NEW src/work.test.ts: <runner error> runner did not finish (124)",
   "command timed out after 900000ms",
   "pre-push: Viewer runtime: failed (124)\nowned runner: deadline expired",
+  "pre-push: touched tests\ntouched-tests: no verdict: head: test run exceeded its 15 minute budget; 58 of 70 files completed; nothing was judged\npre-push: touched tests: failed (75)",
+  "touched-tests: head: test run exceeded its 15 minute budget; gate error (blocking)",
+  "touched-tests: baseline: test run exceeded its 15 minute budget; gate error (blocking)",
+  "touched-tests: head rerun: test run exceeded its flaky rerun budget; gate error (blocking)",
+  "touched-tests: base rerun: test run exceeded its flaky rerun budget; gate error (blocking)",
+  "touched-tests: baseline: flaky rerun budget exhausted during setup; gate error (blocking)",
 ])("a deadline without a refusal is retryable: %s", output => {
   expect(publicationDeadlineOnly(output)).toBe(true);
 });
@@ -98,6 +166,25 @@ test.each([
 
 test("an ordinary touched-test exit has no capacity evidence", () => {
   expect(publicationDeadlineOnly("pre-push: touched tests: failed (1)")).toBe(false);
+});
+
+test.each([
+  "NEW src/work.test.ts: named assertion", "PRIVACY GATE: FAIL", "pre-push: types: failed (1)",
+  "owned runner: budget cleanup failed: child tree could not be stopped",
+])("a comparator budget cannot erase a decisive refusal: %s", refusal => {
+  for (const budget of ["touched-tests: no verdict: head: test run exceeded its 15 minute budget; nothing was judged",
+    "touched-tests: head: test run exceeded its 15 minute budget; gate error (blocking)"]) {
+    expect(publicationDeadlineOnly(`${budget}\n${refusal}`)).toBe(false);
+    expect(publicationDeadlineOnly(`${refusal}\n${budget}`)).toBe(false);
+  }
+});
+
+test.each([
+  "touched-tests: baseline: dependency setup failed; gate error (blocking)",
+  "touched-tests: head: test run exceeded its unknown budget; gate error (blocking)",
+  "(pass) touched-tests: no verdict: quoted diagnostic",
+])("a comparator fault keeps its refusal: %s", output => {
+  expect(publicationDeadlineOnly(output)).toBe(false);
 });
 
 // The remote gate runner lost a started run (scripts/gate-runner/client.ts).

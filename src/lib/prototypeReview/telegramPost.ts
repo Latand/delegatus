@@ -102,6 +102,7 @@ export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: rea
     const heading = `<b>${attribute(`Питання ${i + 1}/${round.questions!.length} · ${question.text.replace(/\s+/g, " ")}${question.multiple ? " (можна кілька)" : ""}`)}</b>`;
     const options = question.options.map((option, j) => `${String.fromCharCode(97 + j)}) ${attribute(shortenHashesInText(option.label).replace(/\s+/g, " "))}${option.recommended ? " ✅" : ""}`);
     lines.push(`<p>${[heading, ...options, ...(question.other ? ["+ Інше — у коментарі"] : [])].join("<br>")}</p>`, "");
+    for (const link of question.links ?? []) lines.push(`[${inline(link.label)}](<${link.href}>)`, "");
   }
   lines.push("---", `Як відповісти: дайте текстовий reply на цей пост або його опитування: 1b, 2a; 1: b; рекомендовані; або відповідь своїми словами. Рішення записує лише текстовий reply власника. Голоси показують думки учасників. Можна також надіслати клону ${prototypeReference(round)} і відповідь, або скористатися кнопкою. Застереження до рекомендованих відповідей теж збережуться. Повне рев’ю — у Delegatus.`, "");
   const button = (label: string, text: string, recommended = false) => `<tg-button type="copy_text"${recommended ? ' style="success"' : ""} text="${attribute(text)}">${label}</tg-button>`;
@@ -117,6 +118,7 @@ export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: rea
     plain.push(`Питання ${i + 1}/${round.questions!.length} · ${question.text}${question.multiple ? " (можна кілька)" : ""}`,
       ...question.options.map((o, j) => `${String.fromCharCode(97 + j)}) ${shortenHashesInText(o.label)}${o.recommended ? " ✅" : ""}`),
       ...(question.other ? ["+ Інше — у коментарі"] : []), "");
+    for (const link of question.links ?? []) plain.push(`${link.label}: ${link.href}`, "");
   }
   plain.push(`Дайте текстовий reply на цей пост або його опитування: 1b, 2a; 1: b; рекомендовані; або відповідь своїми словами. Рішення записує лише текстовий reply власника. Голоси показують думки учасників. Можна також надіслати клону ${prototypeReference(round)} і відповідь, або скопійований рядок. Застереження теж збережуться. Повне рев’ю — у Delegatus.`);
   if (round.questions?.length) plain.push(`Скопіювати рекомендовані: ${prototypeCopyLine(round)}`);

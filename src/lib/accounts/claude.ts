@@ -318,8 +318,25 @@ function credentialPresence(home: string): Pick<ClaudeAccount, "authPresent" | "
   const read = readClaudeCredentials(home);
   return { authPresent: read.state === "present", credentialState: read.state };
 }
-function account(stored: StoredAccount): ClaudeAccount { const home = managedHome(stored.id); return { ...stored, home, projectsDir: projectsDirFor(home), ...(stored.provider ? { authPresent: readClaudeProviderToken(home) !== null } : credentialPresence(home)) }; }
-function main(): ClaudeAccount { const home = legacyClaudeHome(); return { id: DEFAULT_ID, label: "Main", kind: "legacy", home, projectsDir: projectsDirFor(home), ...credentialPresence(home), createdAt: 0 }; }
+type ClaudeAccountLocation = Omit<ClaudeAccount, "authPresent" | "credentialState">;
+
+function accountLocation(stored?: StoredAccount): ClaudeAccountLocation {
+  if (stored) {
+    const home = managedHome(stored.id);
+    return { ...stored, home, projectsDir: projectsDirFor(home) };
+  }
+  const home = legacyClaudeHome();
+  return { id: DEFAULT_ID, label: "Main", kind: "legacy", home, projectsDir: projectsDirFor(home), createdAt: 0 };
+}
+
+function withCredentialState(item: ClaudeAccountLocation): ClaudeAccount {
+  return { ...item, ...(item.provider
+    ? { authPresent: readClaudeProviderToken(item.home) !== null } : credentialPresence(item.home)) };
+}
+
+function account(stored: StoredAccount): ClaudeAccount {
+  return withCredentialState(accountLocation(stored));
+}
 /** Complete stored names for publication checks, including retained history.
     This read neither recovers removals nor discovers credentials. */
 export function claudeAccountsForPrivacy(): readonly { id: string; label: string }[] {
@@ -329,10 +346,20 @@ export function claudeAccountsForPrivacy(): readonly { id: string; label: string
     ...loaded.registry.removals.map((item) => ({ id: item.id, label: "" }))];
 }
 
-export function listClaudeAccounts(): ClaudeAccount[] {
+/** Scanner and transcript ownership reads need the registered locations in
+    routing order. A credential rotation cannot change that ordering. */
+function listedClaudeLocations(only?: ReadonlySet<string>): ClaudeAccountLocation[] {
   recoverRemovalsAtStartup();
-  const loaded = readRegistry();
-  return [...(loaded.registry.legacyHidden ? [] : [main()]), ...loaded.registry.accounts.map(account)];
+  const { registry } = readRegistry();
+  return [
+    ...(registry.legacyHidden || (only && !only.has(DEFAULT_ID)) ? [] : [accountLocation()]),
+    ...registry.accounts.filter(stored => !only || only.has(stored.id)).map(stored => accountLocation(stored)),
+  ];
+}
+
+/** Apply the caller's account filter before reading any credential state. */
+export function listClaudeAccounts(only?: ReadonlySet<string>): ClaudeAccount[] {
+  return listedClaudeLocations(only).map(withCredentialState);
 }
 /** True once the operator removed Main from Delegatus. */
 export function claudeLegacyAccountHidden(): boolean { return readRegistry().registry.legacyHidden === true; }
@@ -381,7 +408,7 @@ export function retiredClaudeProjectRoots(): string[] {
 /** Every Claude transcript root the scanner reads: live accounts first,
  * then the shared store and retained archives. The shared store survives the
  * last account's projects link being removed during archive cleanup. */
-export function claudeProjectRoots(): string[] { return [...new Set([...listClaudeAccounts().map((item) => item.projectsDir), sharedClaudeProjectsRoot(), ...retiredClaudeProjectRoots()])]; }
+export function claudeProjectRoots(): string[] { return [...new Set([...listedClaudeLocations().map((item) => item.projectsDir), sharedClaudeProjectsRoot(), ...retiredClaudeProjectRoots()])]; }
 
 /** Why a transcript names no owning Claude account, or which one it names. */
 export type ClaudeTranscriptOwnership =
@@ -413,7 +440,7 @@ export type ClaudeTranscriptOwnership =
  */
 export function claudeTranscriptOwnership(pathname: string, recordedAccountId?: string | null): ClaudeTranscriptOwnership {
   let real: string; try { real = fs.realpathSync(pathname); } catch { return { kind: "unreadable" }; }
-  const accounts = listClaudeAccounts();
+  const accounts = listedClaudeLocations();
   let shared: string | null = null;
   try { shared = fs.realpathSync(sharedClaudeProjectsRoot()); } catch { /* store not provisioned */ }
   for (const item of accounts) {

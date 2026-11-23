@@ -79,7 +79,8 @@ if (collection === "flows") {
     name: "contention",
     stages: [
       { kind: "implement", agent: { engine: "codex", model: null, effort: "medium" }, scope: "store" },
-      { kind: "review-loop", reviewer: { engine: "codex", model: null, effort: "xhigh" } },
+      // Resolve a live role explicitly: the default fixer needs no registry read.
+      { kind: "review-loop", role: "reviewer", roleParams: { diffSource: "fixture" } },
     ],
   }));
   if (!template) throw new Error("contention workflow template is invalid");

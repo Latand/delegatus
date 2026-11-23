@@ -2,6 +2,7 @@
 
 import { startTransition, useEffect, useRef, useState } from "react";
 
+import { modelDisplayName } from "@/lib/agent/models";
 import { createFreshAwareCoalescer } from "@/lib/asyncCoalescer";
 import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { DiskPressure } from "@/lib/state/diskPressure";
@@ -9,7 +10,6 @@ import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/t
 
 import { X } from "./icons";
 import { LINE_EDGE, MeterLine, type RailFooterDensity } from "./railFooterDensity";
-import { AttachControls } from "./resources/AttachControls";
 import { fmtBytes } from "./resources/fmtBytes";
 import { WorktreeDrilldown } from "./resources/WorktreeDrilldown";
 import { bulkKillTargets, idleKillTargets, isStructuredHost, resourceCounts } from "./resources/hostSelection";
@@ -326,14 +326,10 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
   );
 }
 
-/** Kills one row, on whichever transport owns it, for one named gesture.
-    A structured host goes to /api/runtime/hosts, which ends it through the
-    runtime when it still holds it and by process group otherwise, then retires
-    the registry row. A tmux pane keeps the kill-target action: the server
-    resolves the stable pane id recorded in the snapshot and verifies the pane
-    pid before killing, so the kill survives window renumbering mid-bulk.
-    Both sides refuse a target the last snapshot did not list.
-    Returns one explicit outcome for the row. */
+/** Kills one row for one named gesture through /api/runtime/hosts, which ends
+    the host through the runtime when it still holds it and by process group
+    otherwise, then retires the registry row. The server refuses a target the
+    last snapshot did not list. Returns one explicit outcome for the row. */
 type KillSessionOutcome =
   | { outcome: "killed" }
   | { outcome: "already-gone" }
@@ -351,26 +347,20 @@ async function killSession(
   gesture: { intent: "row" | "idle" | "all"; includeSeat: boolean; idleHours?: number },
 ): Promise<KillSessionOutcome> {
   try {
-    const res = isStructuredHost(session)
-      ? await fetch("/api/runtime/hosts", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "kill",
-          target: session.target,
-          /* The gesture travels with the request: the server re-reads the
-             promises it makes (settled turn, quiet transcript, untouched
-             orchestrator seat) instead of trusting the polled snapshot. */
-          intent: gesture.intent,
-          includeSeat: gesture.includeSeat,
-          ...(gesture.intent === "idle" ? { idleHours: gesture.idleHours } : {}),
-        }),
-        })
-      : await fetch("/api/tmux", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "kill-target", target: session.target }),
-        });
+    const res = await fetch("/api/runtime/hosts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "kill",
+        target: session.target,
+        /* The gesture travels with the request: the server re-reads the
+           promises it makes (settled turn, quiet transcript, untouched
+           orchestrator seat) instead of trusting the polled snapshot. */
+        intent: gesture.intent,
+        includeSeat: gesture.includeSeat,
+        ...(gesture.intent === "idle" ? { idleHours: gesture.idleHours } : {}),
+      }),
+    });
     const json = (await res.json().catch(() => ({}))) as { error?: string; via?: string };
     if (res.ok) return json.via === "already-exited" ? { outcome: "already-gone" } : { outcome: "killed" };
     return { outcome: "refused", reason: json.error ?? String(res.status) };
@@ -389,7 +379,11 @@ export function DiskPressureNotice({ pressure, density = "full" }: { pressure: D
   const low = pressure.volumes.filter((volume) => volume.level === "warning" || volume.level === "critical");
   if (!pressure.episode || low.length === 0) return null;
   const role = (name: string) => t(`resources.diskRole.${name}` as MessageKey);
-  const consumers = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes).map((consumer) => `${role(consumer.kind)} ${fmtBytes(consumer.bytes)}`).join(", ");
+  const rows = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes).map(consumer => {
+    const label = consumer.kind === "temp" ? t("resources.tempWithScratch") : role(consumer.kind);
+    return `${label} ${fmtBytes(consumer.bytes)}`;
+  });
+  const consumers = rows.join(", ");
   const waiting = low.some((volume) => volume.level === "critical" && (volume.provisioning || volume.roles.includes("state")));
   const volumeText = (volume: DiskPressure["volumes"][number]) => `${volume.roles.map(role).join(" / ")}: ${t("resources.free", { amount: fmtBytes(volume.freeBytes ?? 0) })}`;
   if (density !== "full") {
@@ -418,6 +412,11 @@ export function DiskPressureNotice({ pressure, density = "full" }: { pressure: D
             </span>
           );
         })}
+        {density === "detail" && rows.length ? (
+          <div className={NOTE} title={t("resources.diskConsumersHint")}>
+            {rows.map(row => <div key={row}>{row}</div>)}
+          </div>
+        ) : null}
         {!notes ? null : consumers
           ? <span data-meter-note="" className={`-mt-0.5 ${NOTE}`} title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</span>
           : <span data-meter-note="" className={`-mt-0.5 ${NOTE}`}>{t("resources.diskMeasuring")}</span>}
@@ -432,7 +431,9 @@ export function DiskPressureNotice({ pressure, density = "full" }: { pressure: D
         <div key={`${index}:${volume.roles.join("/")}`}>{volumeText(volume)}</div>
       ))}
       {consumers
-        ? <div title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</div>
+        ? <div title={t("resources.diskConsumersHint")}>{t("resources.diskConsumers")}
+          {rows.map(row => <div key={row}>{row}</div>)}
+        </div>
         : <div>{t("resources.diskMeasuring")}</div>}
       {waiting ? <div>{t("resources.diskWaiting")}</div> : null}
     </div>
@@ -625,7 +626,6 @@ export function CleanupPanel({
               onToggleSeat={() => toggleSeat(session.target)}
               onArm={() => setArmed(session.target)}
               onKill={() => void killOne(session)}
-              onRefresh={onRefresh}
             />
           ))
         )}
@@ -769,7 +769,6 @@ function SessionRow({
   onToggleSeat,
   onArm,
   onKill,
-  onRefresh,
 }: {
   session: ResourceSession;
   /** The row comes from an earlier capture a failed refresh fell back on. */
@@ -780,8 +779,6 @@ function SessionRow({
   onToggleSeat: () => void;
   onArm: () => void;
   onKill: () => void;
-  /** Re-poll the snapshot — the attach control's stale-pane recovery. */
-  onRefresh: () => Promise<void>;
 }) {
   const { t } = useLocale();
   const tint = engineTintOf(session.engine ?? "");
@@ -795,7 +792,7 @@ function SessionRow({
   const detail = [
     session.role,
     session.stage,
-    session.model,
+    session.model ? modelDisplayName(session.engine ?? "", session.model) : null,
     session.project,
   ].filter((value): value is string => Boolean(value));
   /* Live rows keep the kill button locked; the first click only arms it and a
@@ -911,8 +908,6 @@ function SessionRow({
           {armed ? t("resources.confirm") : t("resources.kill")}
         </button>
       </div>
-      {/* Attaching means attaching to a tmux pane; a structured host has none. */}
-      {structured ? null : <AttachControls target={session.target} onRefresh={() => void onRefresh()} />}
     </div>
   );
 }

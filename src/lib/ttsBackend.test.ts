@@ -53,7 +53,7 @@ describe("TTS backend configuration", () => {
     fs.writeFileSync(path.join(dir, "tts-voice-openai"), "nova\n");
     setEnv("OPENAI_API_KEY", undefined);
     expect(readOpenAiApiKey()).toBe("file-key");
-    expect(ttsBackendInfo().options[0]).toMatchObject({ available: true, model: "tts-1-hd", voice: "nova" });
+    expect(ttsBackendInfo().options[0]).toMatchObject({ available: true, model: "gpt-realtime-2.1-mini", voice: "alloy" });
   });
 });
 
@@ -165,11 +165,11 @@ describe("voice persistence", () => {
   test("per-provider values survive a fresh module import and selection changes", async () => {
     configHome(); names.forEach((name) => setEnv(name, undefined)); delete process.env.LLV_TTS_BACKEND;
     expect(ttsBackendInfo().options.find((o) => o.id === "elevenlabs")).toMatchObject({ model: "eleven_v4_turbo", voice: "JBFqnCBsd6RMkjVDRZzb" });
-    for (const backend of TTS_BACKENDS) { writeTtsVoice(backend, `${backend} voice`); writeTtsBackend(backend); }
+    for (const backend of TTS_BACKENDS) { writeTtsVoice(backend, backend === "openai" ? "echo" : `${backend} voice`); writeTtsBackend(backend); }
     const restartPath = "./ttsBackend.ts?restart=voices";
     const fresh: typeof import("./ttsBackend") = await import(restartPath);
     expect(fresh.resolveTtsBackend()).toBe("fishaudio");
-    for (const option of fresh.ttsBackendInfo().options) expect(option).toMatchObject({ voice: `${option.id} voice`, voiceList: option.id !== "openai", voiceLockedByEnv: false });
+    for (const option of fresh.ttsBackendInfo().options) expect(option).toMatchObject({ voice: option.id === "openai" ? "echo" : `${option.id} voice`, voiceList: option.id !== "openai", voiceLockedByEnv: false });
     process.env.LLV_TTS_ELEVENLABS_VOICE = "env voice";
     expect(fresh.ttsBackendInfo().options[1]).toMatchObject({ voice: "env voice", voiceLockedByEnv: true });
   });

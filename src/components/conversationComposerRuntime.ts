@@ -1,0 +1,54 @@
+"use client";
+
+import {
+  injectRuntimeContext,
+  lookupRuntimeAdmission,
+  refreshRuntime,
+  sendRuntimeMessage,
+  useRuntimeReceiptsForArtifact,
+} from "@/hooks/useRuntime";
+
+import { productionNativeQueueDependencies, type NativeQueueDependencies } from "@/hooks/useNativeQueue";
+
+import { useAgentCapabilities } from "./useAgentCapabilities";
+
+export interface ConversationComposerRuntimeDependencies {
+  refreshRuntime: typeof refreshRuntime;
+  sendRuntimeMessage: typeof sendRuntimeMessage;
+  /** #1560: native history injection, behind the same seam as the send so a
+      test can drive the composer's injection action without a socket. */
+  injectRuntimeContext: typeof injectRuntimeContext;
+  /** The read half of the send key. An attempt whose response was lost is
+      resolved THROUGH this and never by posting the send again. */
+  lookupRuntimeAdmission: typeof lookupRuntimeAdmission;
+  useRuntimeReceiptsForArtifact: typeof useRuntimeReceiptsForArtifact;
+  useAgentCapabilities: typeof useAgentCapabilities;
+  /** #1629: the native queue transport, so a test can drive the whole control
+      loop without a socket. */
+  nativeQueue: NativeQueueDependencies;
+}
+
+const productionDependencies: ConversationComposerRuntimeDependencies = {
+  refreshRuntime,
+  sendRuntimeMessage,
+  injectRuntimeContext,
+  lookupRuntimeAdmission,
+  useRuntimeReceiptsForArtifact,
+  useAgentCapabilities,
+  nativeQueue: productionNativeQueueDependencies,
+};
+
+let testDependencies: Partial<ConversationComposerRuntimeDependencies> | null = null;
+
+export function conversationComposerRuntimeDependencies(): ConversationComposerRuntimeDependencies {
+  return testDependencies === null
+    ? productionDependencies
+    : { ...productionDependencies, ...testDependencies };
+}
+
+/** Lifecycle-scoped test seam. Tests install it in setup and clear it in cleanup. */
+export function setConversationComposerRuntimeDependenciesForTests(
+  dependencies: Partial<ConversationComposerRuntimeDependencies> | null,
+): void {
+  testDependencies = dependencies;
+}

@@ -348,3 +348,21 @@ test("the collapsed output keeps its own control, and it too copies the full out
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(copied).toEqual([output]);
 });
+
+test("a preview taken from the end shows the last lines, and show all reveals the rest", () => {
+  const output = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+  const host = mount(<OutputPreview output={output} truncated={false} previewLines={8} from="end" />);
+  expect(host.querySelector("pre")!.textContent).toBe(Array.from({ length: 8 }, (_, i) => `line ${i + 33}`).join("\n"));
+  const showAll = Array.from(host.querySelectorAll("button")).find((button) => (button.textContent ?? "").includes(en("tools.showOutput")));
+  click(showAll!);
+  expect(host.querySelector("pre")!.textContent).toBe(output);
+});
+
+test("a tail over its character budget starts on a whole line", () => {
+  const output = ["first line", "x".repeat(30), "last line"].join("\n");
+  expect(mount(<OutputPreview output={output} truncated={false} previewLines={8} previewChars={25} from="end" />).querySelector("pre")!.textContent).toBe("last line");
+});
+
+test("a single line over the tail's character budget is marked as cut", () => {
+  expect(mount(<OutputPreview output={"y".repeat(40)} truncated={false} previewLines={8} previewChars={10} from="end" />).querySelector("pre")!.textContent).toBe("…" + "y".repeat(10));
+});

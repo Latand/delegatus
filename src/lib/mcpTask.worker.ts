@@ -15,7 +15,7 @@ if (!process.env.LLV_STATE_DIR) throw new Error("task executor needs an explicit
 // App Router modules capture this global when they load. A standalone executor
 // has no Next server bootstrap to install it before the compiled binding graph.
 (globalThis as typeof globalThis & { AsyncLocalStorage?: typeof AsyncLocalStorage }).AsyncLocalStorage ??= AsyncLocalStorage;
-const { identifyCallerWhenReady, logCallerIdentificationError } = await import("./mcp/callerIdentification");
+const { identifyCallerWhenReady, logCallerIdentificationError, callerIdentificationFailureClass } = await import("./mcp/callerIdentification");
 const { runAsMcpHttpCaller } = await import("./mcp/callerContext");
 const { TASK_EXECUTOR_FRAME_BYTES, TASK_EXECUTOR_HTTP_FRAME_BYTES, TASK_EXECUTOR_TOOLS } = await import("./mcp/taskExecutor");
 const { createProductionViewerMcpService, createViewerMcpServer, mcpTextResultClient, MCP_HTTP_CLIENT_ID, McpReceiptsNotReadyError, taskExecutorFailure } = await import("./mcp/server");
@@ -25,6 +25,7 @@ const { capabilityConversationResolver } = await import("./mcp/bindings");
 const { mcpHttpRefusal } = await import("./mcp/httpResponse");
 const { startTaskChannel } = await import("./mcp/taskChannelServer");
 const { TASK_CHANNEL_CALLS, TASK_CHANNEL_INPUT_BYTES, encodeTaskChannel } = await import("./mcp/taskChannel");
+const { residentWorkerOverLimit } = await import("./residentWorkerMemory");
 // initialize and tools/list need only caller identity. Opening task receipts
 // here used to kill this worker before it could identify anyone on an older
 // installation whose serving Viewer had not prepared those receipts yet.
@@ -46,20 +47,28 @@ const configuredIdle = Number(process.env.LLV_MCP_TASK_IDLE_MS);
 const idleMs = Number.isFinite(configuredIdle) && configuredIdle >= 1 ? Math.min(60_000, configuredIdle) : 60_000;
 let privateChannel: Awaited<ReturnType<typeof startTaskChannel>> = null;
 const awake = () => { clearTimeout(idle); idle = undefined; };
+/* Measured on a loaded installation this worker settles between 0.7 and
+   1.1 GiB; twice that leaves room for a burst and still bounds a leak. */
+const MEMORY_LIMIT_BYTES = 2 * 1024 ** 3;
+let served = 0;
+const retire = (reason: "idle-retirement" | "memory-retirement") => {
+  logMcpLifecycle(reason);
+  retiring = true; privateChannel?.close();
+  write(() => `{"id":0,"control":{"retiring":true${reason === "memory-retirement" ? ',"memory":true' : ""}}}\n`, 4096, false);
+  // The parent closes its guardian before admitting a successor. Remain
+  // present until that signal arrives, with a bounded fallback on lost IPC.
+  void writing.finally(() => { setTimeout(() => process.exit(0), 1_000); });
+};
 const maybeIdle = () => {
   if (shuttingDown) {
     if (!calls.size && !outputs) void writing.then(() => process.exit(0));
     return;
   }
-  if (retiring || calls.size || outputs || idle) return;
-  idle = setTimeout(() => {
-    logMcpLifecycle("idle-retirement");
-    retiring = true; privateChannel?.close();
-    write(() => '{"id":0,"control":{"retiring":true}}\n', 4096, false);
-    // The parent closes its guardian before admitting a successor. Remain
-    // present until that signal arrives, with a bounded fallback on lost IPC.
-    void writing.finally(() => { setTimeout(() => process.exit(0), 1_000); });
-  }, idleMs);
+  if (retiring || calls.size || outputs || preparation) return;
+  // Between requests: every admitted call has closed and every reply is written.
+  if (residentWorkerOverLimit("mcp-task-worker", { defaultLimitBytes: MEMORY_LIMIT_BYTES, served })) { awake(); retire("memory-retirement"); return; }
+  if (idle) return;
+  idle = setTimeout(() => retire("idle-retirement"), idleMs);
 };
 function admit(id: number, bytes: number, deadlineAt: number): TaskChannelAdmission | null {
   if (retiring || calls.has(id) || calls.size >= TASK_CHANNEL_CALLS || pendingBytes + bytes > TASK_CHANNEL_INPUT_BYTES
@@ -70,7 +79,7 @@ function admit(id: number, bytes: number, deadlineAt: number): TaskChannelAdmiss
   let closed = false;
   return { signal: controller.signal, cancel: () => controller.abort(), close: () => {
     if (closed) return;
-    closed = true; clearTimeout(timer); calls.delete(id); pendingBytes -= bytes; maybeIdle();
+    closed = true; clearTimeout(timer); calls.delete(id); pendingBytes -= bytes; served++; maybeIdle();
   } };
 }
 let writing = Promise.resolve();
@@ -84,6 +93,29 @@ const write = (frame: () => string, limit: number, activity = true) => {
   void writing.catch(() => { logMcpLifecycle("output-failure"); process.exit(1); });
 };
 const send = (message: unknown) => write(() => JSON.stringify(message) + "\n", TASK_EXECUTOR_FRAME_BYTES);
+
+// This process owns task calls, while startup mutations belong to its Viewer.
+// One bounded request is shared by concurrent calls, including private-channel
+// calls that never travel through the Viewer's HTTP dispatcher.
+let nextPreparation = 0;
+let preparation: { id: number; promise: Promise<void>; resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | undefined;
+const { setTaskPreparationRequester } = await import("./tasks/store");
+setTaskPreparationRequester(() => {
+  if (retiring || shuttingDown) return Promise.reject(new Error("task preparation owner connection closed"));
+  if (preparation) return preparation.promise;
+  const id = ++nextPreparation;
+  let resolve!: () => void, reject!: (error: Error) => void;
+  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  const timer = setTimeout(() => {
+    if (preparation?.id !== id) return;
+    preparation = undefined; reject(new Error("serving Viewer task preparation timed out")); maybeIdle();
+  }, 35_000);
+  preparation = { id, promise, resolve, reject, timer };
+  const deadlineAt = Date.now() + 30_000;
+  write(() => preparation?.id === id ? JSON.stringify({ id: 0, control: { prepareTasks: { id, deadlineAt } } }) + "\n"
+    : '{"id":0,"control":{"heartbeat":true}}\n', 4096);
+  return promise;
+});
 
 const identifyCapability = (capability: string | undefined) => capabilityConversationResolver(capability,
   digest => agentRegistry().conversationIdForSpawnCapabilityDigest(digest))();
@@ -169,19 +201,33 @@ const shutdown = (reason: string) => {
   if (shuttingDown) return;
   logMcpLifecycle(reason, { pendingCalls: calls.size });
   shuttingDown = true; retiring = true; awake(); privateChannel?.close();
+  if (preparation) {
+    clearTimeout(preparation.timer);
+    preparation.reject(new Error("task preparation owner connection closed")); preparation = undefined;
+  }
   maybeIdle();
 };
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on("line", (line: string) => {
   if (Buffer.byteLength(line) > TASK_EXECUTOR_FRAME_BYTES) { logMcpLifecycle("input-frame-refused"); process.exit(1); }
-  const request = JSON.parse(line) as TaskExecutorRequest & { cancel?: number };
+  const request = JSON.parse(line) as TaskExecutorRequest & { cancel?: number; preparedTasks?: { id: number; error?: string; retryable?: boolean } };
+  if (request.preparedTasks) {
+    const result = request.preparedTasks;
+    if (!Number.isSafeInteger(result.id) || result.id < 1 || result.id > nextPreparation || (result.retryable !== undefined && typeof result.retryable !== "boolean") || (result.error !== undefined && (typeof result.error !== "string" || result.error.length > 1024))) throw new Error("invalid task preparation reply");
+    if (preparation?.id === result.id) {
+      const pending = preparation; preparation = undefined; clearTimeout(pending.timer);
+      if (result.error && !result.retryable) pending.reject(new Error(result.error)); else pending.resolve();
+      maybeIdle();
+    }
+    return;
+  }
   if (request.cancel !== undefined) { calls.get(request.cancel)?.abort(); return; }
   const admission = admit(request.id, Buffer.byteLength(line) + 1, request.deadlineAt);
   if (!admission) { send({ id: request.id, error: "task executor admission is full or its request expired; retry the original key" }); return; }
   if (request.name === "identifyCapability") {
     void identifyCallerWhenReady(() => identifyCapability(request.caller.capability), request.caller.capability, request.deadlineAt, admission.signal)
       .then(conversationId => send({ id: request.id, result: { conversationId } }))
-      .catch(() => send({ id: request.id, error: "task executor could not identify the caller" }))
+      .catch(error => send({ id: request.id, error: `task executor could not identify the caller (${callerIdentificationFailureClass(error, request.deadlineAt, admission.signal)})` }))
       .finally(() => admission.close());
     return;
   }

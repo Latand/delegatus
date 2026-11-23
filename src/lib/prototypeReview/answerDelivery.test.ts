@@ -16,13 +16,16 @@ import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import { mintSession, MEMBER_COOKIE } from "@/lib/team/sessions";
 import { LEGACY_FIXTURE_TITLE, planGhostSettlement, applyGhostSettlement } from "@/lib/tasks/ghostSettlement";
 import { operatorDecisions, seatDecisionNotices, withPrototypeReviewSummaries } from "./read";
-import { prototypeReviewNotices } from "./model";
+import { prototypeReviewNotices, prototypeReviewReplica } from "./model";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
 import { clearSeatRoundsForTests, insertSeatRound, findSeatRound, loadSeatRounds, mutateSeatRound, SEAT_ROUNDS_LIMIT } from "./seatRounds";
 import { telegramPostSignals } from "./telegramPostSignals";
 import { prototypeWorld } from "./world";
 import type { PrototypeDecision, PrototypeReviewRound } from "./types";
+import { isPrototypeReplica } from "./replica";
+import { criticLane } from "./criticGate.fixture";
+import { archiveSettledPipelines, buildPipeline, savePipelines } from "@/lib/pipelines/store";
 
 const NOW = Date.parse("2026-10-16T08:00:00Z");
 const ID = "pr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -60,6 +63,105 @@ afterEach(async () => {
   resetProjectAliasesForTests();
   setSystemTime();
   process.env.LLV_STATE_DIR = previousState; fs.rmSync(root, { recursive: true, force: true });
+});
+
+test.each(["seat", "task"])("a legacy answered %s round settles its closed pipeline signal durably on the boot sweep", async kind => {
+  const saved = decision();
+  saved.delivery.failures = 12;
+  saved.delivery.exhaustedAt = new Date(NOW).toISOString();
+  const published = { ...round(kind === "seat" ? null : "task-a"),
+    source: { conversationId: "conversation_publisher", pipelineId: "prototype-lane", stageId: "publish", attempt: 1 }, decision: saved };
+  if (kind === "seat") insertSeatRound(published); else saveTasks([task([published])]);
+  expect(telegramPostSignals("project-a", kind === "task" ? loadTasks() : [], kind === "seat" ? loadSeatRounds() : [])).toHaveLength(1);
+  const p = ports();
+  p.world = { ...world, pipeline: () => ({ ...criticLane(), project: "project-a", state: "closed" }) };
+  let calls = 0;
+  p.delivery.recover = p.delivery.send = p.delivery.retry = async () => { calls++; return { state: "failed" }; };
+  await sweepPrototypeDeliveries(p, { force: true });
+  const held = kind === "seat" ? findSeatRound(ID)! : loadTasks()[0]!.prototypeReviews![0]!;
+  expect(held.decision!.delivery).toMatchObject({ state: "failed", operationId: "operation-old",
+    settlement: { reason: "target-pipeline-closed", at: new Date(NOW).toISOString() } });
+  expect(calls).toBe(0);
+  expect(telegramPostSignals("project-a", kind === "task" ? loadTasks() : [], kind === "seat" ? loadSeatRounds() : [])).toHaveLength(0);
+  const { prototypeRoundMetadata } = await import("./model");
+  expect(prototypeRoundMetadata(held).decision!.delivery.retryable).toBe(false);
+  expect(decidePrototype(request(), published.taskId, { reviewId: ID, retry: true }, p.world)).toBe(false);
+  if (kind === "task") expect(patchTask(loadTasks(), "task-a", { status: "done" }, new Date(NOW).toISOString()).ok).toBe(true);
+  // A fresh process reads the production writer's bytes and runs the boot sweep.
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { sweepPrototypeDeliveries, resetPrototypeDeliveryWorkerForTests } from ${JSON.stringify(new URL("./deliveryWorker.ts", import.meta.url).pathname)};
+    import { loadTasks } from ${JSON.stringify(new URL("../tasks/store.ts", import.meta.url).pathname)};
+    import { loadSeatRounds } from ${JSON.stringify(new URL("./seatRounds.ts", import.meta.url).pathname)};
+    import { telegramPostSignals } from ${JSON.stringify(new URL("./telegramPostSignals.ts", import.meta.url).pathname)};
+    let calls = 0;
+    const delivery = { recover: async () => { calls++; return { state: "failed" }; }, send: async () => { calls++; return { state: "failed" }; }, retry: async () => { calls++; return { state: "failed" }; } };
+    await sweepPrototypeDeliveries({ delivery, world: { pipeline: () => { throw new Error("settled rounds need no lookup"); }, orchestrator: () => "conversation_old" }, now: () => ${NOW} }, { force: true });
+    console.log(JSON.stringify({ calls, signals: telegramPostSignals("project-a", loadTasks(), loadSeatRounds()) }));
+    await resetPrototypeDeliveryWorkerForTests();
+  `], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit).toBe(0);
+  // Slow filesystem diagnostics are observations, and also appear on the base.
+  expect(stderr.split("\n").filter(line => line && !line.startsWith("[blocking-wait] "))).toEqual([]);
+  expect(JSON.parse(stdout)).toEqual({ calls: 0, signals: [] });
+});
+
+test("the boot sweep settles a closed source pipeline already moved into the archive", async () => {
+  const pipeline = buildPipeline({ id: "closed-source", task: "Publish a form", project: "project-a", repoDir: "/repo", stages: [],
+    srcPath: null, srcConversationId: null, now: "2026-10-01T00:00:00.000Z", state: "draft" });
+  pipeline.state = "closed"; pipeline.cursor = null;
+  pipeline.closedAt = "2026-10-01T00:00:00.000Z"; pipeline.hiddenAt = pipeline.closedAt;
+  savePipelines([pipeline]);
+  expect(await archiveSettledPipelines(NOW)).toBe(1);
+  insertSeatRound({ ...round(), source: { conversationId: "conversation_publisher", pipelineId: pipeline.id, stageId: "publish" }, decision: decision() });
+  const p = ports(); let calls = 0;
+  p.delivery.recover = p.delivery.send = p.delivery.retry = async () => { calls++; return { state: "failed" }; };
+  await sweepPrototypeDeliveries(p, { force: true });
+  expect(findSeatRound(ID)!.decision!.delivery.settlement?.reason).toBe("target-pipeline-closed");
+  expect(telegramPostSignals("project-a", [], loadSeatRounds())).toHaveLength(0);
+  expect(calls).toBe(0);
+});
+
+test.each(["running", "paused", "completed", "missing", "foreign"])("a failed answer to a %s pipeline remains actionable and retries", async kind => {
+  const saved = decision();
+  insertSeatRound({ ...round(), source: { conversationId: "conversation_publisher", pipelineId: "prototype-lane", stageId: "publish" }, decision: saved });
+  const p = ports();
+  p.world = { ...world, pipeline: () => kind === "missing" ? null : { ...criticLane(), project: kind === "foreign" ? "project-b" : "project-a", state: kind === "paused" ? "paused" : kind === "completed" ? "completed" : kind === "foreign" ? "closed" : "running" } };
+  let retries = 0;
+  p.delivery.recover = async () => ({ state: "failed", operationId: "operation-old" });
+  p.delivery.retry = async () => { retries++; return { state: "failed", operationId: "operation-old" }; };
+  await attemptPrototypeDelivery(null, ID, p);
+  expect(retries).toBe(1);
+  expect(telegramPostSignals("project-a", [], loadSeatRounds())).toHaveLength(1);
+});
+
+test.each(["passed", "skipped", "different-attempt"])("source stage %s settles only a closed exact attempt", async kind => {
+  insertSeatRound({ ...round(), source: { conversationId: "conversation_publisher", pipelineId: "prototype-lane", stageId: "publish", attempt: 1 }, decision: decision() });
+  const pipeline = { ...criticLane(), project: "project-a", state: "running" as const };
+  pipeline.runs.push({ stageId: "publish", attempts: [{ ...pipeline.runs[0]!.attempts[0]!, n: kind === "different-attempt" ? 2 : 1, state: kind === "passed" ? "passed" : "skipped", conversationId: "conversation_publisher" }] });
+  const p = ports(); p.world = { ...world, pipeline: () => pipeline };
+  await attemptPrototypeDelivery(null, ID, p);
+  expect(findSeatRound(ID)!.decision!.delivery.settlement?.reason).toBe(kind === "skipped" ? "target-stage-closed" : undefined);
+  expect(telegramPostSignals("project-a", [], loadSeatRounds())).toHaveLength(kind === "skipped" ? 0 : 1);
+});
+
+test("a pipeline closed while receipt recovery waits settles before retry dispatch", async () => {
+  insertSeatRound({ ...round(), source: { conversationId: "conversation_publisher", pipelineId: "prototype-lane", stageId: "publish" }, decision: decision() });
+  const pipeline = { ...criticLane(), project: "project-a", state: "running" as "running" | "closed" };
+  const p = ports(); p.world = { ...world, pipeline: () => pipeline };
+  let ready!: () => void, release!: () => void;
+  const recovering = new Promise<void>(resolve => { ready = resolve; });
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  p.delivery.recover = async () => { ready(); await hold; return { state: "failed", operationId: "operation-old" }; };
+  let retries = 0; p.delivery.retry = async () => { retries++; return { state: "failed" }; };
+  const pending = attemptPrototypeDelivery(null, ID, p);
+  await recovering;
+  pipeline.state = "closed";
+  release();
+  await pending;
+  expect(retries).toBe(0);
+  expect(findSeatRound(ID)!.decision!.delivery.settlement?.reason).toBe("target-pipeline-closed");
+  expect(telegramPostSignals("project-a", [], loadSeatRounds())).toHaveLength(0);
 });
 
 test.each(["recommended", "explicit"])("B: verified Telegram member is persisted for %s replies", async kind => {
@@ -142,13 +244,15 @@ test("B: automatic attempts and pending age are durably bounded, and the next se
   expect(sends).toBeLessThanOrEqual(10);
 });
 
-test("B: queued replies reach attention after their durable age limit", async () => {
+test("B: queued replies retire with a visible reason after their durable age limit", async () => {
   const saved = decision(); saved.delivery.state = "pending";
   insertSeatRound({ ...round(), decision: saved });
   const p = ports(); p.now = () => NOW + 31 * 60_000;
   p.delivery.recover = async () => ({ state: "pending", operationId: "operation-old" });
   await sweepPrototypeDeliveries(p, { force: true });
-  expect(telegramPostSignals("project-a", [], [findSeatRound(ID)!]).some(s => s.label.includes(saved.delivery.text))).toBe(true);
+  expect(telegramPostSignals("project-a", [], [findSeatRound(ID)!])).toEqual([]);
+  expect(findSeatRound(ID)!.decision!.delivery.settlement?.reason).toBe("delivery-expired");
+  expect(operatorDecisions("project-a", []).decisions).toEqual([]);
 });
 
 test("B: the receipt still settles after the final admitted attempt", async () => {
@@ -325,7 +429,7 @@ test.each(["seat", "task"])("B: %s delivery storage waits off the loop for a pee
 }, 10000);
 
 
-test("B: retention keeps every undelivered answer and retires only confirmed delivery", () => {
+test.each(["delivered", "closed-target"])("B: retention keeps active undelivered answers and can retire a %s answer", async kind => {
   for (let i = 0; i < SEAT_ROUNDS_LIMIT; i++) {
     const id = `pr_${i.toString(16).padStart(32, "0")}`;
     insertSeatRound({ ...round(), id, createdAt: new Date(NOW + i * 1000).toISOString(), decision: decision() });
@@ -333,7 +437,12 @@ test("B: retention keeps every undelivered answer and retires only confirmed del
   expect(() => insertSeatRound(round())).toThrow();
   expect(loadSeatRounds()).toHaveLength(SEAT_ROUNDS_LIMIT);
   const first = `pr_${"0".repeat(32)}`;
-  mutateSeatRound(first, round => { round.decision!.delivery.state = "sent"; });
+  if (kind === "delivered") mutateSeatRound(first, round => { round.decision!.delivery.state = "sent"; });
+  else {
+    mutateSeatRound(first, round => { round.source.pipelineId = "prototype-lane"; });
+    const p = ports(); p.world = { ...world, pipeline: () => ({ ...criticLane(), project: "project-a", state: "closed" }) };
+    await attemptPrototypeDelivery(null, first, p);
+  }
   expect(insertSeatRound(round())).toEqual([first]);
   expect(findSeatRound(ID)).toBeDefined();
 }, 15000);
@@ -550,4 +659,73 @@ test("a saved failed operation waits when the project has no current seat", asyn
   await attemptPrototypeDelivery(null, ID, p);
   expect(sends).toBe(0);
   expect(findSeatRound(ID)!.decision!.delivery).toMatchObject({ state: "no-orchestrator", operationId: "operation-old", conversationId: "conversation_old" });
+});
+
+
+test.each(["task", "seat", "no-seat"])("the absolute delivery cutoff survives a real process restart: %s", async kind => {
+  const saved = decision();
+  saved.delivery.startedAt = new Date(NOW - 30 * 60_000).toISOString();
+  if (kind === "no-seat") { saved.delivery.conversationId = null; saved.delivery.state = "no-orchestrator"; }
+  const published = { ...round(kind === "task" ? "task-a" : null), decision: saved };
+  if (kind === "task") saveTasks([task([published])]); else insertSeatRound(published);
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { attemptPrototypeDelivery } from ${JSON.stringify(new URL("./decision.ts", import.meta.url).pathname)};
+    import { loadTasks } from ${JSON.stringify(new URL("../tasks/store.ts", import.meta.url).pathname)};
+    loadTasks();
+    let sends = 0;
+    const d = await attemptPrototypeDelivery(${JSON.stringify(published.taskId)}, ${JSON.stringify(ID)}, {
+      now: () => ${NOW}, world: { pipeline: () => null, orchestrator: () => ${kind === "no-seat" ? "null" : '"conversation_old"'} },
+      delivery: { recover: async () => ({state:"uncertain"}), send: async () => { sends++; return {state:"sent"}; }, retry: async () => { sends++; return {state:"sent"}; } }
+    });
+    console.log(JSON.stringify({sends, delivery:d.delivery}));
+  `], { env: { ...process.env, LLV_STATE_DIR: kind === "task" ? path.dirname(TASKS_FILE) : process.env.LLV_STATE_DIR, NODE_ENV: "test" }, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit).toBe(0);
+  expect(stderr).not.toContain("error:");
+  expect(JSON.parse(stdout)).toMatchObject({ sends: 0, delivery: { settlement: { reason: "delivery-expired" } } });
+  const held = kind === "task" ? loadTasks()[0]!.prototypeReviews![0]! : findSeatRound(ID)!;
+  expect(held.decision!.comment).toBe(saved.comment);
+  expect(held.decision!.delivery.operationId).toBe(saved.delivery.operationId);
+  expect(held.decision!.delivery.settlement?.reason).toBe("delivery-expired");
+});
+
+
+test.each(["sent", "pending", "failed"] as const)("receipt recovery crossing the cutoff preserves %s evidence without a resend", async state => {
+  insertSeatRound({ ...round(), decision: decision() });
+  let clock = NOW + 30 * 60_000 - 1;
+  let sends = 0;
+  const p = ports(); p.now = () => clock;
+  p.delivery.recover = async () => { clock++; return { state, operationId: "operation-old" }; };
+  p.delivery.send = p.delivery.retry = async () => { sends++; throw new Error("cutoff must prevent a resend"); };
+  await attemptPrototypeDelivery(null, ID, p);
+  expect(sends).toBe(0);
+  const saved = findSeatRound(ID)!.decision!;
+  expect(saved.delivery.state).toBe(state === "sent" ? "sent" : "failed");
+  expect(saved.delivery.settlement?.reason).toBe(state === "sent" ? undefined : "delivery-expired");
+});
+
+test("a cutoff reached while checking the current seat prevents dispatch", async () => {
+  insertSeatRound({ ...round(), decision: decision() });
+  let clock = NOW + 30 * 60_000 - 1;
+  let arm = false;
+  let sends = 0;
+  const p = ports(); p.now = () => clock;
+  p.delivery.recover = async () => { arm = true; return { state: "failed", operationId: "operation-old" }; };
+  p.world = { ...world, orchestrator: () => { if (arm) queueMicrotask(() => { clock = NOW + 30 * 60_000; }); return "conversation_old"; } };
+  p.delivery.send = p.delivery.retry = async () => { sends++; throw new Error("cutoff must prevent dispatch"); };
+  await attemptPrototypeDelivery(null, ID, p);
+  expect(sends).toBe(0);
+  expect(findSeatRound(ID)!.decision!.delivery.settlement?.reason).toBe("delivery-expired");
+});
+
+
+test.each(["delivery-expired", "target-pipeline-closed", "target-stage-closed"] as const)("a retired answer still round-trips through the strict replica reader: %s", async reason => {
+  const saved = decision();
+  saved.answers = [{ questionId: "where", options: [0] }];
+  saved.delivery.settlement = { reason, at: new Date(NOW).toISOString() };
+  const held = task([{ ...round("task-a"), decision: saved }]);
+  const wire = prototypeReviewReplica(held)!;
+  expect(isPrototypeReplica(JSON.parse(JSON.stringify(wire)), held.id, held.project)).toBe(true);
+  const { readPrototypeReviews } = await import("./read");
+  expect(readPrototypeReviews(held).rounds[0]!.decision!.delivery.settlement?.reason).toBe(reason);
 });

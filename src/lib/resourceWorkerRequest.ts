@@ -1,3 +1,4 @@
+import { validAgentStateDisplay } from "./agentState/model";
 import type { ResourceWorkerFileObservation, StructuredHostRecord } from "./resources";
 import { RESOURCE_STRUCTURED_HOST_LIMIT } from "./types";
 
@@ -68,7 +69,7 @@ function fileProblem(value: unknown): string | null {
 
 function hostProblem(value: unknown): string | null {
   if (!record(value)) return "not an object";
-  const keys = keyProblem(value, HOST_KEYS);
+  const keys = keyProblem(value, [...HOST_KEYS, ...(Object.hasOwn(value, "agentState") ? ["agentState"] : [])]);
   if (keys) return keys;
   if (typeof value.id !== "string" || value.id.length === 0) return "id";
   if (!HOST_ENGINES.has(value.engine as string)) return `engine ${String(value.engine)}`;
@@ -79,6 +80,7 @@ function hostProblem(value: unknown): string | null {
   }
   if (typeof value.cwd !== "string") return "cwd";
   if (!nullableBoolean(value.seat)) return "seat";
+  if (value.agentState !== undefined && !validAgentStateDisplay(value.agentState)) return "agentState";
   if (!nullableBoolean(value.turnBusy)) return "turnBusy";
   if (typeof value.owned !== "boolean") return "owned";
   return null;

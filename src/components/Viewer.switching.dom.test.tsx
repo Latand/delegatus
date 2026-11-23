@@ -219,7 +219,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (url.startsWith("/api/files")) {
     const pin = new URL(url, "http://localhost").searchParams.get("path") ?? "";
     const files = pin === GAMMA.conversationId || pin === GAMMA.path ? [...allFiles(), fileEntryFor(GAMMA)] : allFiles();
-    return delayed(Response.json({ files, projectCatalog, flows: [], pipelines, workflows: [], tasks: [], systemHealth: { tmux: { status: "healthy" } } }));
+    return delayed(Response.json({ files, projectCatalog, flows: [], pipelines, workflows: [], tasks: [], systemHealth: {} }));
   }
   if (url.startsWith("/api/board")) {
     if (method === "GET") {

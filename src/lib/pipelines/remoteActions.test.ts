@@ -11,7 +11,7 @@ const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 closeAgentRegistryForTests();
 const { pipelineCorpus } = await import("./fixtures/corpus");
 const { savePipelines, findPipelineRecord, takeoverPipelineDelivery, withPipelineMutation } = await import("./store");
-const { defaultPipelinePorts, patchPipeline, preparePipelineReviewRepair, settlePendingRemoteActions, settlePendingStageGit, tickPipelines } = await import("./engine");
+const { defaultPipelinePorts, patchPipeline, settlePendingRemoteActions, settlePendingStageGit, tickPipelines } = await import("./engine");
 const { realExec } = await import("@/lib/workflows/provision");
 const { publishPipelineBranch } = await import("./git");
 const { registerPipelineTick } = await import("./controllerSignal");
@@ -162,7 +162,7 @@ test("compact MCP polling exposes a deferred publication failure while preservin
   expect(findPipelineRecord(h.lane.id)!.stateDetail).toBe("paused by operator");
 });
 
-test.each(["launch", "repair-before-write", "repair-after-write"] as const)("%s artifact work yields the pipeline lease to a newer pause", async (boundary) => {
+test("launch artifact work yields the pipeline lease to a newer pause", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-lease-"));
   const repo = path.join(root, "source"); fs.mkdirSync(repo);
   const git = (...args: string[]) => {
@@ -175,14 +175,8 @@ test.each(["launch", "repair-before-write", "repair-after-write"] as const)("%s 
   lane.repoDir = repo; lane.worktreeDir = `${repo}-pipeline-${lane.id}`;
   git("worktree", "add", "-q", "-b", lane.branch, lane.worktreeDir, base);
   lane.publication = "internal"; lane.lastPassedCommit = base; lane.baseRef = base;
-  lane.cursor = { stageId: boundary === "launch" ? "build" : "review", state: boundary === "launch" ? "pending" : "reviewing", input: null, activatedBy: null };
-  if (boundary === "launch") lane.runs[0]!.attempts[0]!.state = "pending";
-  else {
-    lane.stages[0]!.effectiveRole.access = "read-only"; lane.stages[0]!.outputs = ["report.md"];
-    lane.runs[0]!.attempts[0]!.agentPath = path.join(root, "producer.jsonl");
-    lane.runs[1]!.attempts[0]!.flowId = "repair-flow";
-    fs.writeFileSync(path.join(lane.worktreeDir, "report.md"), "repaired output\n");
-  }
+  lane.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
+  lane.runs[0]!.attempts[0]!.state = "pending";
   savePipelines([lane]);
   let entered!: () => void, release!: () => void;
   const checking = new Promise<void>((resolve) => { entered = resolve; });
@@ -194,13 +188,10 @@ test.each(["launch", "repair-before-write", "repair-after-write"] as const)("%s 
     structuredDeliveryPublication: () => "ready" as const, engineReadiness: () => "connected" as const,
     spawnAgent: async () => { spawned++; throw new Error("superseded launch must not spawn"); } };
   const ports = { ...basePorts, exec: async (...args: Parameters<typeof realExec>) => {
-    const intercept = boundary === "launch" ? args[1].includes("--show-toplevel") : args[1][0] === "commit";
-    if (intercept && boundary !== "repair-after-write") { entered(); await held; }
-    const result = await realExec(...args);
-    if (intercept && boundary === "repair-after-write") { entered(); await held; }
-    return result;
+    if (args[1].includes("--show-toplevel")) { entered(); await held; }
+    return await realExec(...args);
   } };
-  const work = boundary === "launch" ? tickPipelines([], ports) : preparePipelineReviewRepair("repair-flow", ports);
+  const work = tickPipelines([], ports);
   let pause: ReturnType<typeof patchPipeline> | undefined;
   try {
     expect(await Promise.race([checking.then(() => true), work.then(() => false), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500))])).toBe(true);
@@ -209,13 +200,6 @@ test.each(["launch", "repair-before-write", "repair-after-write"] as const)("%s 
     release(); await work;
     expect(findPipelineRecord(lane.id)!.state).toBe("paused");
     expect(findPipelineRecord(lane.id)!.lastPassedCommit).toBe(base); expect(spawned).toBe(0);
-    if (boundary === "repair-after-write") {
-      const head = (await realExec("git", ["rev-parse", "HEAD"], lane.worktreeDir)).stdout.trim();
-      expect(head).not.toBe(base);
-      await patchPipeline(lane.id, { action: "resume" }, basePorts);
-      expect(await preparePipelineReviewRepair("repair-flow", basePorts)).toEqual({ ok: true });
-      expect(findPipelineRecord(lane.id)!.lastPassedCommit).toBe(head);
-    }
   } finally { release(); await work; await pause; fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -307,7 +291,7 @@ test.each(["unsupported", "unopenable"] as const)("an accepted publication settl
   }
 });
 
-test.each(["action", "stage", "repair"] as const)("a blocked artifact parent produces a visible %s refusal", async (kind) => {
+test.each(["action", "stage"] as const)("a blocked artifact parent produces a visible %s refusal", async (kind) => {
   const h = setupRetry(), blocked = pipelineCorpus(8, 1)[7]!;
   blocked.closedAt = null; blocked.lastPassedCommit = HEAD; blocked.publication = "internal";
   blocked.state = kind === "action" ? "needs_decision" : "running";
@@ -315,11 +299,6 @@ test.each(["action", "stage", "repair"] as const)("a blocked artifact parent pro
   blocked.runs[kind === "stage" ? 0 : 1]!.attempts[0]!.state = kind === "stage" ? "committing" : "needs_decision";
   blocked.delivery = { target: { repository: "parent-refusal-repo", remote: "origin", branch: `refs/heads/${blocked.branch}` },
     disposition: "owner", publish: "enabled", ownerId: blocked.id, epoch: 1, active: true, journal: [] };
-  if (kind === "repair") {
-    blocked.stages[0]!.effectiveRole.access = "read-only"; blocked.stages[0]!.outputs = ["report.md"];
-    blocked.runs[0]!.attempts[0]!.agentPath = "/sandbox/producer.jsonl";
-    blocked.runs[1]!.attempts[0]!.flowId = "blocked-parent-repair";
-  }
   savePipelines([blocked, h.lane]);
   const { pipelineArtifactsDir } = await import("./store");
   const parent = pipelineArtifactsDir(blocked.id);
@@ -332,10 +311,10 @@ test.each(["action", "stage", "repair"] as const)("a blocked artifact parent pro
       expect(findPipelineRecord(blocked.id)).toMatchObject({ remoteAction: { state: "settled", error: expect.stringContaining("EEXIST") } });
       expect(findPipelineRecord(blocked.id)!.delivery!.journal.at(-1)!.reason).toContain("EEXIST");
       expect(findPipelineRecord(h.lane.id)).toMatchObject({ remoteAction: { state: "settled" }, state: "running" });
-    } else if (kind === "stage") {
+    } else {
       expect(await settlePendingStageGit(h.ports)).toBe(true);
       expect(findPipelineRecord(blocked.id)).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("EEXIST") });
-    } else expect(await preparePipelineReviewRepair("blocked-parent-repair", h.ports)).toMatchObject({ ok: false, retryable: false, detail: expect.stringContaining("EEXIST") });
+    }
     expect(fs.readFileSync(parent, "utf8")).toBe("preserved file\n");
   } finally { fs.unlinkSync(parent); }
 });

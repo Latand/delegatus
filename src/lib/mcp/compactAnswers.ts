@@ -17,7 +17,7 @@ import type { AccountProjectBinding } from "@/lib/accounts/projectBindings";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import type { AgentLivenessRecord, AgentLivenessSnapshot } from "@/lib/lifecycle/liveness";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
-import { clampChars, clampLine } from "@/lib/pipelines/listProjection";
+import { boundedStageExecution, clampChars, clampLine, cloudAttemptRead } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { attemptAccountPin, currentRuntimeSeat } from "@/lib/pipelines/runtimeSwitch";
 import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineStageReport } from "@/lib/pipelines/types";
@@ -207,7 +207,9 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
     && !!runtimeSwitch.launch?.launchId && runtimeSwitch.launch.launchId === selected?.launchId;
   const hasRuntimeEvidence = selected && (selected.launchId || selected.conversationId || selected.agentPath
     // Legacy launched records can predate both binding and launch identities.
-    || (!selected.definition && selected.startedAt && selected.state !== "pending" && selected.state !== "spawning"));
+    || (!selected.definition && (!selected.cloud || selected.executionRuntime === "cloud-then-local" || selected.cloud.fallback)
+      && selected.startedAt && selected.state !== "pending" && selected.state !== "spawning"));
+  const cloud = selected ? cloudAttemptRead(stage, selected, SUMMARY_CHARS) : null;
   const result = selected?.report && "result" in selected.report && typeof selected.report.result === "string"
     ? selected.report.result : null;
   return {
@@ -237,14 +239,15 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       stageDigest: stageDigests([stage])[stage.id] ?? null,
     },
     attempt: selected ? {
+      execution: boundedStageExecution(stage, selected, ERROR_CHARS),
       runtimeSwitch: runtimeSwitch ?? null,
       /* Role copying, definition binding and start booking precede dispatch.
          A launch or conversation identity witnesses the persisted runtime,
          including switches; a requested switch target does not. */
-      runtime: selected.effectiveRole && hasRuntimeEvidence && !reservedHandoff ? {
+      runtime: cloud?.runtime ?? (selected.effectiveRole && hasRuntimeEvidence && !reservedHandoff ? {
         ...currentRuntimeSeat(selected),
         serviceTierSource: selected.effectiveRole.serviceTierSource ?? null,
-      } : null,
+      } : null),
       accountPin: attemptAccountPin(stage, selected),
       roleParams: selected.definition?.role?.params ?? null,
       access: selected.effectiveRole?.access ?? null,
@@ -253,8 +256,8 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       state: selected.state,
       verdict: verdict?.status ?? null,
       findings: verdict?.findings ?? [],
-      summary: clampChars(selected.report?.summary ?? null, SUMMARY_CHARS),
-      result: result !== null && result.length > 160 ? clampChars(result, 159) : result,
+      summary: cloud ? cloud.summary : clampChars(selected.report?.summary ?? null, SUMMARY_CHARS),
+      result: cloud ? cloud.result : result !== null && result.length > 160 ? clampChars(result, 159) : result,
       decisionRequested: selected.decisionRequested === true,
       /* Findings handed to the fix stage after the budget was spent and never
          re-reviewed (#1868). */
@@ -344,7 +347,7 @@ export type AccountLimitEngine = "claude" | "codex" | "copilot";
 export type AccountLimitsInput = {
   engine?: AccountLimitEngine;
   accountId?: string;
-  accounts: Record<AccountLimitEngine, ReadonlyArray<{ accountId: string; authPresent?: boolean }>>;
+  accounts: Record<AccountLimitEngine, ReadonlyArray<{ accountId: string; authPresent?: boolean; spendCredits?: boolean }>>;
   active: Record<AccountLimitEngine, string | null>;
   observations: Record<AccountLimitEngine, Readonly<Record<string, DurableQuotaObservation>>>;
   /** Server-resolved project and bindings used by the actual automatic selector. */
@@ -395,6 +398,7 @@ export function accountLimitRows(input: AccountLimitsInput) {
           /* No label: it is free text the operator typed and may name a person;
              the account id is the one identity this answer carries. */
           accountId: account.accountId,
+          ...(engine === "codex" ? { spendCredits: account.spendCredits === true, credits: limits?.credits ?? null } : {}),
           active: input.active[engine] === account.accountId,
           ...(nextChosenId ? { nextChosen: nextChosenId === account.accountId } : {}),
           /* Whether the observation is recent enough for the automatic switch to

@@ -281,3 +281,17 @@ test("registry preparation refusal preserves its reason without a synchronous fa
   expect(f.projected()).toBe(0);
   expect(f.journaled()).toBe(0);
 });
+
+for (const args of [{}, { compact: true }, { full: true }]) {
+  test(`activity distinguishes verified lifecycle from failed delivery (${JSON.stringify(args)})`, async () => {
+    const f = fixture();
+    f.sources.transcriptEvidence = async () => ({ turn: "idle", lastRecordTs: FLEET_NOW });
+    const conversation = Object.values(f.registry.readOnlySnapshot().conversations)[0]!;
+    const delivery = f.registry.holdDelivery(conversation.id, "repair", "failed-repair", "text", [], null,
+      { operationId: "failed-repair-operation", kind: "send", policy: "queue" });
+    f.registry.terminalizeHeldDelivery(delivery.id, "structured host recovery failed: stage Git rehost cannot prove its original attempt");
+    const answer = await f.bindings.agent_activity(args);
+    expect(answer).toMatchObject({ deliveryEvidence: "not_checked", conversations: [{ lifecycle: "waiting", verified: true }] });
+    expect(f.registry.deliveryAdmissionForKey(conversation.id, "failed-repair")).toMatchObject({ outcome: "admitted", state: "failed" });
+  });
+}

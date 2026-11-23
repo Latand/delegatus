@@ -118,6 +118,7 @@ export interface KanbanCard {
   /** Agent drafts the card holds, in the band's order: its own «+ Agent», a handoff, a retried launch. */
   drafts: string[];
   pipelines: KanbanPipeline[];
+  creations?: readonly import("@/hooks/useFiles").CreationCard[];
   holdTarget?: { title: string; done: boolean };
   motion: TaskMotion;
   stepSummary: TaskStepsSummary | null;
@@ -427,7 +428,7 @@ export function compareCards(a: KanbanCard, b: KanbanCard): number {
  * untouched queue: something in flight, or agent work within the span the board
  * already treats as recent for «Done».
  */
-function workedRecently(card: KanbanCard, nowMs: number): boolean {
+export function workedRecently(card: KanbanCard, nowMs: number): boolean {
   return card.workingSinceMs !== null || card.lastAgentWorkAtMs >= nowMs - DONE_TASK_BOARD_RETENTION_MS;
 }
 
@@ -439,6 +440,22 @@ function workedRecently(card: KanbanCard, nowMs: number): boolean {
  */
 export function parkedCard(card: KanbanCard, nowMs: number): boolean {
   return card.motion.key === "stopped" && !workedRecently(card, nowMs);
+}
+
+export type TimelineGroup = "working" | "needs-you" | "still" | "still-long";
+
+/**
+ * The chart's one grouping (docs/design/board-timeline-manager-view.md §4), first
+ * match wins. «Working» is the kanban's own count (`card.working`, by
+ * `isWorkingAgent`), so the chart's top and the green numbers agree. A task that
+ * needs the operator stays in his own group however long it is quiet. The rest
+ * stand; those quiet for longer than the board's «recent» span (the one that
+ * keeps a card above the Without-motion divider) are the tail of «Stopped».
+ */
+export function timelineGroup(card: KanbanCard, nowMs: number): TimelineGroup {
+  if (card.working > 0) return "working";
+  if (card.motion.key === "needs-you") return "needs-you";
+  return workedRecently(card, nowMs) ? "still" : "still-long";
 }
 
 /**
@@ -972,6 +989,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
          it; a band without one takes it from the container or the first
          conversation it carries, which is where the board got the band. */
       project: task?.project
+        || band.creations?.[0]?.receipt?.project
         || band.pipeline?.project
         || band.flow?.project
         || members[0]?.file.project
@@ -993,6 +1011,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
       otherSurfaces,
       drafts,
       pipelines: summaries,
+      ...(band.creations ? { creations: band.creations } : {}),
       stepSummary: stepProjection.summary,
       ...(holdTarget ? { holdTarget: { title: holdTarget.text.split("\n")[0]!, done: holdTarget.status === "done" } } : {}),
       /* A card holding only unsent drafts has started nothing, so nothing stopped: it reads as not started in any column. */

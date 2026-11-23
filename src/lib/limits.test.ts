@@ -79,14 +79,14 @@ test("paid-credit metadata survives transcript/live reconciliation and windowles
       credits: { has_credits: true, balance: "10", unlimited: false } } } },
     { timestamp: new Date(now).toISOString(), payload: { rate_limits: { credits: { has_credits: true, balance: "12", unlimited: false } } } },
   ].map(row => JSON.stringify(row)).join("\n") + "\n");
-  expect(readCodexTranscriptLimits(account.sessionsDir, account.id).data?.credits).toEqual({ hasCredits: true, balance: "12", unlimited: false });
+  expect(readCodexTranscriptLimits(account.sessionsDir, account.id).data?.credits).toEqual({ hasCredits: true, balance: "12", unlimited: false, observedAt: now / 1000 });
   const live = await readCodexLimits({ account, now: () => now, liveReader: async () => ({
     primary: { usedPercent: 99, windowDurationMins: 10080, resetsAt: now / 1000 + 86400 }, secondary: null, planType: "pro",
     credits: { hasCredits: true, balance: "11", unlimited: false },
   }) });
-  expect(live.data?.credits).toEqual({ hasCredits: true, balance: "11", unlimited: false });
+  expect(live.data?.credits).toEqual({ hasCredits: true, balance: "11", unlimited: false, observedAt: now / 1000 });
   const fallback = await readCodexLimits({ account, now: () => now, liveReader: async () => { throw Error("offline"); } });
-  expect(fallback.data?.credits).toEqual({ hasCredits: true, balance: "12", unlimited: false });
+  expect(fallback.data?.credits).toEqual({ hasCredits: true, balance: "12", unlimited: false, observedAt: now / 1000 });
 });
 
 test("account throttle provenance round-trips from disk and expires after retry grace", () => {

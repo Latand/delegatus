@@ -22,6 +22,8 @@ export type StoredWorkLink = {
   kind: WorkLinkKind | null;
   addedAt: string;
   addedBy: "operator" | "agent";
+  /** Lane-only: this PR delivers a part of the issue. */
+  part?: true;
 };
 
 /** Manual links a single record can carry. */
@@ -148,6 +150,13 @@ export function githubRepositoryOfRemote(remote: string | null | undefined): str
   if (!value) return null;
   const match = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]+@)?(?:www\.)?github\.com[:/]+([^/\s]+)\/([^/\s?#]+?)\/?$/i.exec(value);
   return match ? repositoryName(match[1]!, match[2]!) : null;
+}
+
+/** The repository a delivery's `pr` number names: the upstream a fork's PR
+    was opened in, else the repository the delivery remote pushes to. */
+export function deliveryPullRequestRepository(target: { remote: string; prRepository?: string } | null | undefined): string | null {
+  if (!target) return null;
+  return (boundedRepository(target.prRepository) ? target.prRepository.toLowerCase() : null) ?? githubRepositoryOfRemote(target.remote);
 }
 
 const HOW_TO_ATTACH = "attach a pull request or issue as #123, 123, owner/repo#123 or a github.com pull or issue URL";
@@ -296,7 +305,9 @@ const stripHeads = (ref: string) => ref.replace(/^refs\/heads\//, "");
  * is the lane or the delivery branch — created while the lane was alive, so a
  * reused head name can neither hand a new lane an old PR nor hand a settled
  * lane the PRs later lanes open on it, unless `delivery.pr` or provenance
- * names the PR — and then the issues those PRs close.
+ * names the PR — and then the issues those PRs close. A fork delivery
+ * (`prRepository`) takes no head match at all: its head names a branch of the
+ * fork, and the upstream's PRs on that name may come from any fork.
  */
 export function resolvePipelineLinks(pipeline: PipelineLinkRecord, repository: string | null, cache: ForgeCacheView): ResolvedWorkLinks {
   const drafts: LinkDraft[] = manualDrafts(pipeline.workLinks);
@@ -313,7 +324,11 @@ export function resolvePipelineLinks(pipeline: PipelineLinkRecord, repository: s
       seen.add(number);
       drafts.push({ repository, number, kind: "pr", source: "auto", via: ["provenance"] });
     }
-    if (view) {
+    /* A fork delivery's PR lives in the upstream, where a head name such as
+       `main` is shared by every fork's PRs and the cache cannot tell their
+       head repositories apart, so only the PRs the lane names are its own. */
+    const forkDelivery = Boolean(pipeline.delivery?.target.prRepository);
+    if (view && !forkDelivery) {
       /* A settled lane's window closes when it settles: every completed and
          closed lane carries `closedAt`, and a PR opened on its head after that
          belongs to whichever lane reused the head. */
@@ -377,7 +392,7 @@ export type WorkLinkEdit =
  */
 export function editStoredWorkLinks(
   current: readonly StoredWorkLink[] | undefined,
-  attach: readonly NormalizedWorkLink[],
+  attach: readonly (NormalizedWorkLink & { part?: boolean })[],
   detach: readonly NormalizedWorkLink[],
   meta: { now: string; addedBy: StoredWorkLink["addedBy"]; canonical?: (repository: string) => string },
   autoVia?: (link: NormalizedWorkLink) => WorkLinkVia[] | null,
@@ -408,8 +423,11 @@ export function editStoredWorkLinks(
     const existing = links.findIndex((link) => same(link, target));
     if (existing >= 0) {
       const prior = links[existing]!;
-      if (target.kind && prior.kind !== target.kind) {
-        links[existing] = { ...prior, kind: target.kind };
+      if ((target.kind && prior.kind !== target.kind) || (target.part !== undefined && !!prior.part !== target.part)) {
+        const updated = { ...prior, kind: target.kind ?? prior.kind };
+        if (target.part === true) updated.part = true;
+        if (target.part === false) delete updated.part;
+        links[existing] = updated;
         changed = true;
       }
       continue;
@@ -422,7 +440,7 @@ export function editStoredWorkLinks(
         error: `a record carries at most ${MAX_WORK_LINKS} attached links; detach one first. Attached: ${links.map((link) => `${link.repository}#${link.number}`).join(", ")}`,
       };
     }
-    links.push({ repository: target.repository, number: target.number, kind: target.kind, addedAt: meta.now, addedBy: meta.addedBy });
+    links.push({ repository: target.repository, number: target.number, kind: target.kind, addedAt: meta.now, addedBy: meta.addedBy, ...(target.part ? { part: true as const } : {}) });
     changed = true;
   }
   return { ok: true, links, changed };

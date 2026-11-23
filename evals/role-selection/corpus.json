@@ -1,0 +1,1619 @@
+[
+  {
+    "id": "010db2b88ca07de2",
+    "cohort": "replay",
+    "role": "builder",
+    "brief": "Add an optional cloud runtime for reviewer and verifier stages. Submit the stage context through the authenticated provider, poll asynchronously within a deadline, parse the normal verdict and record the result. Preserve local execution and keep the feature off when no environment is configured.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_224699d3e2bdbd3b",
+            "scope": "role:eval:builder",
+            "rule": "Before finishing, inspect repository status and restore any tracked changes made under ignored output folders. Keep generated scratch files outside the checkout.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_3c62671e714254a8",
+            "scope": "role:eval:builder",
+            "rule": "For flaky or filtered checks, compare matching cases on the merge base and current tree with fresh isolated runs. Diagnose specific assertions and use order-leak claims only when isolation and file-order controls support them.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_527c35b728690fcd",
+            "scope": "role:eval:builder",
+            "rule": "Before reviewing a floating panel or toast, check its text and controls against fixed bars at every viewport and open state. Reposition it when content is covered, and render localized reason text as users see it.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "project:eval",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_61156b5f0a74ce4e",
+            "scope": "project:eval",
+            "rule": "Run heavy checks one at a time with the supported local gate, or the approved cloud runtime for that lane. Do not rely on a retired remote-gate command.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_a9c9c0f324e271f9",
+            "scope": "project:eval",
+            "rule": "When running a sequence of test files, own each child process, close its input, and require a completed summary and exit for every file plus the final file count.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_61156b5f0a74ce4e",
+      "r_3c62671e714254a8",
+      "r_a9c9c0f324e271f9",
+      "r_224699d3e2bdbd3b"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_527c35b728690fcd",
+      "r_224699d3e2bdbd3b",
+      "r_3c62671e714254a8",
+      "r_61156b5f0a74ce4e",
+      "r_a9c9c0f324e271f9"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 10.14345000000003,
+    "wholeLatencyMs": 7.009455999999972
+  },
+  {
+    "id": "4266b6422925ee5b",
+    "cohort": "replay",
+    "role": "builder",
+    "brief": "Consolidate two contractor-work cost items into one, rename the related materials items, and broaden the user-facing cost-kind label. Migrate existing and fresh installations while preserving estimate amounts, calculations, and access behavior.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_66d005d6096d3849",
+            "scope": "role:eval:builder",
+            "rule": "For ERP tests, use the pinned runner and an owned disposable database with isolated config and browser state. Verify the runner's completion marker and reproduce report failures on the base before changing them.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_6d2b6e01ec5a4992",
+            "scope": "role:eval:builder",
+            "rule": "Check required ancestry before final validation, integrate without rewriting history, and refresh dependency pins when the shared base has changed. Rerun affected checks on the final tree.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_b3fcd5cfbbb5b355",
+            "scope": "role:eval:builder",
+            "rule": "Keep test databases within the approved disposable-name scheme and preserve the live-name fence. When a browser test needs a database copy, move its matching file store with it.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "project:eval",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_70422f1af28b1343",
+            "scope": "project:eval",
+            "rule": "Do not change shared repository Git configuration. Use explicit repository and index arguments or a separate clone for base and head comparisons, then verify local configuration is clean.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_66d005d6096d3849",
+      "r_6d2b6e01ec5a4992",
+      "r_70422f1af28b1343"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_66d005d6096d3849",
+      "r_b3fcd5cfbbb5b355",
+      "r_6d2b6e01ec5a4992",
+      "r_70422f1af28b1343"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 8.850219999999979,
+    "wholeLatencyMs": 13.58993700000002
+  },
+  {
+    "id": "229461dac5a6a471",
+    "cohort": "replay",
+    "role": "builder",
+    "brief": "Update current guidance to teach the pipeline review lifecycle instead of the retired flow system. Preserve dated design and acceptance history as historical material and leave runtime behavior untouched.",
+    "scopes": [
+      {
+        "scope": "machine",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_b74f71ed2dc41547",
+            "scope": "machine",
+            "rule": "For prose-only edits, avoid tests that assert prompt wording. Before changing or removing tests, inspect nested assertions and retain structural, filesystem, and idempotency coverage.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_fb4c391905a90d8a",
+            "scope": "machine",
+            "rule": "A pipeline reports its final command's status, which may hide an earlier failure. Save each check's own exit code beside its log and read that record instead of trusting a pipe.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_9188d78d17840831",
+            "scope": "machine",
+            "rule": "Before a Git-based comparison, confirm the checkout and pin the base, tree, refs, and merge base. Use a full repository clone when a check needs Git metadata, and report unavailable forge evidence explicitly.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_b74f71ed2dc41547",
+      "r_fb4c391905a90d8a"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_9188d78d17840831",
+      "r_b74f71ed2dc41547",
+      "r_fb4c391905a90d8a"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 3.7940209999999865,
+    "wholeLatencyMs": 8.354516999999987
+  },
+  {
+    "id": "266af39df7818671",
+    "cohort": "replay",
+    "role": "builder",
+    "brief": "When a queued first-message launch carries an outdated memory revision, prove the old effect never ran and safely prepare a newly authorized launch. Preserve privacy checks, delivery identity, retry limits, and crash recovery; prevent duplicate turns.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_ed94ad1b80f02be5",
+            "scope": "role:eval:builder",
+            "rule": "Exercise each production guard before and after reservations with real stores and adapters. Pair zero-effect refusal cases with successful controls, and prove child cleanup and deadline behavior.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_b08a61ad7e08fe79",
+            "scope": "role:eval:builder",
+            "rule": "Carry caller, owner, task, and permission identities across awaits. Recheck authority at dispatch and effect time; stale or missing proof must refuse, including for cached and pending actions.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "project:eval",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_61156b5f0a74ce4e",
+            "scope": "project:eval",
+            "rule": "Run heavy checks one at a time with the supported local gate, or the approved cloud runtime for that lane. Do not rely on a retired remote-gate command.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_065363ad9329e93c",
+            "scope": "project:eval",
+            "rule": "For a red proof, preserve existing edits and user state. Test the pre-fix source in an isolated export against the focused head test instead of changing the shared checkout beneath it.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_ed94ad1b80f02be5",
+      "r_065363ad9329e93c",
+      "r_61156b5f0a74ce4e"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_ed94ad1b80f02be5",
+      "r_b08a61ad7e08fe79",
+      "r_065363ad9329e93c"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 7.9038229999999885,
+    "wholeLatencyMs": 13.950208999999973
+  },
+  {
+    "id": "c85be7f0f19b48a0",
+    "cohort": "replay",
+    "role": "builder",
+    "brief": "Persist a short sanitized provider error category and reason when a request using a user-supplied AI key fails. Keep the existing user-facing response, billing, and retry behavior unchanged; cover sanitization and durable recording.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_4376a75b87620125",
+            "scope": "role:eval:builder",
+            "rule": "For a contract change, inspect all producers, consumers, constructors, fixtures, docs, and caller tests. Cover success, refusal, early exits, shared notices, and every changed request shape.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_47c6f84a22810144",
+            "scope": "role:eval:builder",
+            "rule": "Freeze test clocks and use barriers to prove expiry, restart, and held-write behavior. Bound lock waits monotonically and separate watchdog deadlines from application time.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "role:*:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_0525efea32826d36",
+            "scope": "role:*:builder",
+            "rule": "For broad test runs, reconcile collected cases with completed results by full file and case identity. Derive deadlines from runner limits and report any missing file as incomplete.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "machine",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_20ba0b3b99d96eb3",
+            "scope": "machine",
+            "rule": "Keep exports, logs, and build artifacts in durable task storage outside the checkout. Verify the exact runtime and dependency source used by helpers before relying on them.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_0525efea32826d36",
+      "r_20ba0b3b99d96eb3",
+      "r_4376a75b87620125"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_4376a75b87620125",
+      "r_47c6f84a22810144"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 4.071731999999997,
+    "wholeLatencyMs": 1.5546050000000378
+  },
+  {
+    "id": "246883564da9d18a",
+    "cohort": "replay",
+    "role": "builder",
+    "brief": "Make service-tier refusals report the model and the accounts actually checked, with the tiers each model supports. Cover pinned and pooled account choices while preserving which requests are refused.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_9188d78d17840831",
+            "scope": "role:eval:builder",
+            "rule": "Before a Git-based comparison, confirm the checkout and pin the base, tree, refs, and merge base. Use a full repository clone when a check needs Git metadata, and report unavailable forge evidence explicitly.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_66ddf22cbce5b267",
+            "scope": "role:eval:builder",
+            "rule": "Install the locked dependencies in a fresh worktree before committing if they are absent. Do not bypass hooks or rely on a temporary dependency link that publication cannot resolve.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_0924fc67abc64afd",
+            "scope": "role:eval:builder",
+            "rule": "Before review, exercise every visible control and filled action in each relevant state, viewport, language, and theme. Inspect rendered frames for clipped text, missing actions, and mismatched destinations.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "machine",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_a9c9c0f324e271f9",
+            "scope": "machine",
+            "rule": "When running a sequence of test files, own each child process, close its input, and require a completed summary and exit for every file plus the final file count.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "project:eval",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_c8e1c4ae99d34f81",
+            "scope": "project:eval",
+            "rule": "By-hand checks should use the project's isolated test environment, a closed control port, and OS scratch roots. Keep native Git ahead of forge shims and retain launch bindings for commits.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_61156b5f0a74ce4e",
+            "scope": "project:eval",
+            "rule": "Run heavy checks one at a time with the supported local gate, or the approved cloud runtime for that lane. Do not rely on a retired remote-gate command.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_66ddf22cbce5b267",
+      "r_c8e1c4ae99d34f81",
+      "r_9188d78d17840831",
+      "r_61156b5f0a74ce4e",
+      "r_a9c9c0f324e271f9"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_9188d78d17840831",
+      "r_0924fc67abc64afd",
+      "r_66ddf22cbce5b267",
+      "r_c8e1c4ae99d34f81",
+      "r_61156b5f0a74ce4e"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 2.63722800000005,
+    "wholeLatencyMs": 1.572355000000016
+  },
+  {
+    "id": "80d4215de27c45be",
+    "cohort": "replay",
+    "role": "builder",
+    "brief": "Apply three reviewed fixes on the current integration base, keeping only changes that address their stated defects. Add tests that fail when each fix is removed, run the relevant checks, and leave workflow configuration alone.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_224699d3e2bdbd3b",
+            "scope": "role:eval:builder",
+            "rule": "Before finishing, inspect repository status and restore any tracked changes made under ignored output folders. Keep generated scratch files outside the checkout.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_527c35b728690fcd",
+            "scope": "role:eval:builder",
+            "rule": "Before reviewing a floating panel or toast, check its text and controls against fixed bars at every viewport and open state. Reposition it when content is covered, and render localized reason text as users see it.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "project:eval",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_61156b5f0a74ce4e",
+            "scope": "project:eval",
+            "rule": "Run heavy checks one at a time with the supported local gate, or the approved cloud runtime for that lane. Do not rely on a retired remote-gate command.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_61156b5f0a74ce4e",
+      "r_224699d3e2bdbd3b"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_527c35b728690fcd",
+      "r_61156b5f0a74ce4e"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 3.7646089999999504,
+    "wholeLatencyMs": 1.3331759999999804
+  },
+  {
+    "id": "a9ab06cc1ce6a255",
+    "cohort": "replay",
+    "role": "builder",
+    "brief": "Add a bounded, paginated read-only view of retained worktree records with task, relative checkout, size, retention reason, and observation time. Reuse existing access controls and provide no deletion action.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_903cdc8c252260d5",
+            "scope": "role:eval:builder",
+            "rule": "For each panel state, inspect initial focus and scroll, then measure all visible text and controls against scroll and clipping boundaries at each supported viewport.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_ced923743d210533",
+            "scope": "role:eval:builder",
+            "rule": "For changed authorization or refusal states, extend the real rendered driver across supported locales, themes, and viewports. Verify full text and reveal updated status after user actions.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_527c35b728690fcd",
+            "scope": "role:eval:builder",
+            "rule": "Before reviewing a floating panel or toast, check its text and controls against fixed bars at every viewport and open state. Reposition it when content is covered, and render localized reason text as users see it.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "project:eval",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_61156b5f0a74ce4e",
+            "scope": "project:eval",
+            "rule": "Run heavy checks one at a time with the supported local gate, or the approved cloud runtime for that lane. Do not rely on a retired remote-gate command.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_61156b5f0a74ce4e",
+      "r_ced923743d210533",
+      "r_903cdc8c252260d5"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_527c35b728690fcd",
+      "r_ced923743d210533",
+      "r_61156b5f0a74ce4e"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 3.565714000000071,
+    "wholeLatencyMs": 1.0219359999999824
+  },
+  {
+    "id": "4e01e525ce270a25",
+    "cohort": "replay",
+    "role": "builder",
+    "brief": "Reconcile estimate positions against supplied engineering workbooks for three service groups. Match renamed or moved rows by meaning, update quantities and prices, add missing positions, and report discrepancies without duplicating entries.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_0d8a2fb41f924647",
+            "scope": "role:eval:builder",
+            "rule": "On a shared test installation, follow its named locks and receipts, validate under the lock, and resume only the first unverified step. Recheck at handoff and never repeat a proven apply.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_09096574469dd579",
+            "scope": "role:eval:builder",
+            "rule": "Before a database apply, flush the intended actor and compare rows inside one consistent snapshot. Preserve values outside the approved scope and prove a repeated run makes no extra changes.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_89d805cf8524912e",
+            "scope": "role:eval:builder",
+            "rule": "Judge an accepted restore at its verified transaction boundary using receipts and hashes. Preserve later edits and require separate authority before repairing the current state.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "project:eval",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_70422f1af28b1343",
+            "scope": "project:eval",
+            "rule": "Do not change shared repository Git configuration. Use explicit repository and index arguments or a separate clone for base and head comparisons, then verify local configuration is clean.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_9301bc92d595ff6b",
+            "scope": "project:eval",
+            "rule": "Attribute estimate entries from their recorded source field, since one user account may act in multiple roles. Name services with no matching entries in the report.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "machine",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_7c8b458c4adc8511",
+            "scope": "machine",
+            "rule": "Keep test captures and scripts outside the worktree in durable task storage. For file-only exports, use an explicit file list and verify the archive's entry count and imported dependencies.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_0d8a2fb41f924647",
+      "r_09096574469dd579",
+      "r_9301bc92d595ff6b",
+      "r_70422f1af28b1343",
+      "r_7c8b458c4adc8511"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_89d805cf8524912e",
+      "r_0d8a2fb41f924647",
+      "r_70422f1af28b1343",
+      "r_9301bc92d595ff6b",
+      "r_7c8b458c4adc8511"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 3.216047000000117,
+    "wholeLatencyMs": 3.1174100000000635
+  },
+  {
+    "id": "3918f9e42dd1e021",
+    "cohort": "replay",
+    "role": "builder",
+    "brief": "Add one coherent illustration to the existing daily conversation summary. Select the best drawable moment from the current summary response without an extra model call, and include a short caption in the conversation language.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_4376a75b87620125",
+            "scope": "role:eval:builder",
+            "rule": "For a contract change, inspect all producers, consumers, constructors, fixtures, docs, and caller tests. Cover success, refusal, early exits, shared notices, and every changed request shape.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_47c6f84a22810144",
+            "scope": "role:eval:builder",
+            "rule": "Freeze test clocks and use barriers to prove expiry, restart, and held-write behavior. Bound lock waits monotonically and separate watchdog deadlines from application time.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "machine",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_b74f71ed2dc41547",
+            "scope": "machine",
+            "rule": "For prose-only edits, avoid tests that assert prompt wording. Before changing or removing tests, inspect nested assertions and retain structural, filesystem, and idempotency coverage.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_19a2af1a36f87812",
+            "scope": "machine",
+            "rule": "Keep credentials and state isolated during checks. Capture each gate's own output and exit code to a log; avoid pipelines that obscure errors or interrupt the producer.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_9e96c5de2b5a783b",
+            "scope": "machine",
+            "rule": "Set every supervising deadline above the suite's limit; an outer timeout does not extend an inner one. Treat deadline exit as incomplete until cleanup is proven and the check is rerun.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_4376a75b87620125",
+      "r_19a2af1a36f87812",
+      "r_9e96c5de2b5a783b",
+      "r_b74f71ed2dc41547"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_4376a75b87620125",
+      "r_47c6f84a22810144",
+      "r_b74f71ed2dc41547",
+      "r_9e96c5de2b5a783b"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 2.775728000000072,
+    "wholeLatencyMs": 1.1110529999998562
+  },
+  {
+    "id": "d2de88e57f04d812",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Change the lowest anti-spam classification tier to use Decisions. Keep the existing thresholds, provider failure behavior, and higher-tier handling, and verify the real request path with focused cases.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_b953c33a62fba44d",
+            "scope": "role:eval:builder",
+            "rule": "For an authorized public issue update, try the configured client first and verify the saved result with a fresh read.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_43f5fcc691b94b6f",
+            "scope": "role:eval:builder",
+            "rule": "Before review, reconcile documentation and reported totals with code, policy, and final logs. Correct stale counts and describe each cohort's changes, costs, and delays from measured inputs.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_b91bb44c5b3e86ce",
+            "scope": "role:eval:builder",
+            "rule": "Before saying historical inputs are unavailable, trace their producers and search retained records by the operation names they actually emit.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_b953c33a62fba44d"
+    ],
+    "misled": [
+      "r_43f5fcc691b94b6f"
+    ],
+    "baselineIds": [
+      "r_b91bb44c5b3e86ce",
+      "r_43f5fcc691b94b6f"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 5.925338000000011,
+    "wholeLatencyMs": 3.5981960000001436
+  },
+  {
+    "id": "1ee5acb4f971e3e4",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Integrate a payroll vacation-rate adjustment into the current branch while retaining earlier merged work. Verify the calculation on the development installation and ensure a repeated run does not apply the adjustment twice.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_063efe98143e538c",
+            "scope": "role:eval:builder",
+            "rule": "When table content or width changes, render the longest values at affected widths and compare headers, row heights, wrapping, and clipping with the prior view.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_240af7d9762bf095",
+            "scope": "role:eval:builder",
+            "rule": "Apply a reviewed module change to a shared development installation only after explicit continuation. Keep production and staging deployment fences intact.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [],
+    "misled": [
+      "r_063efe98143e538c"
+    ],
+    "baselineIds": [
+      "r_240af7d9762bf095",
+      "r_063efe98143e538c"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 3.7985579999999572,
+    "wholeLatencyMs": 6.838745000000017
+  },
+  {
+    "id": "3a588f7b1f467eac",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Integrate the vacation-rate change with the latest shared base and validate the existing payroll rows on the development installation. Preserve prior edits and avoid repeating any already verified apply step.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_b758f2de96e2ce4d",
+            "scope": "role:eval:builder",
+            "rule": "For access changes, trace grants and writes across related records. Test base and changed behavior for mixed roles, defaults, hidden data, and both authorized and foreign records.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_240af7d9762bf095",
+            "scope": "role:eval:builder",
+            "rule": "Apply a reviewed module change to a shared development installation only after explicit continuation. Keep production and staging deployment fences intact.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [],
+    "misled": [
+      "r_b758f2de96e2ce4d"
+    ],
+    "baselineIds": [
+      "r_240af7d9762bf095"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 4.9698000000000775,
+    "wholeLatencyMs": 3.0881309999999758
+  },
+  {
+    "id": "162240d57ea1a020",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Keep a recorded test run alive through its first test even if the caller exits or a file descriptor closes. Exercise the real runner and verify completion, timeout cleanup, and the durable result.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_f127714f224b59b2",
+            "scope": "role:eval:builder",
+            "rule": "Test refusals through real child, parser, and service paths. Validate identity and authorization after awaits and restarts; missing proof must produce no effect, while restored proof can proceed.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_724553df8125ee3d",
+            "scope": "role:eval:builder",
+            "rule": "For durable work ownership, test missing, unreadable, in-flight, dead, and terminal receipts across restart. Preserve unknown work until ownership is proven and release held capacity only after settlement.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [],
+    "misled": [
+      "r_f127714f224b59b2"
+    ],
+    "baselineIds": [
+      "r_724553df8125ee3d"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 5.815788000000111,
+    "wholeLatencyMs": 11.710156000000097
+  },
+  {
+    "id": "75886a654cceb277",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Let a requester copy their own saved request to another date. Preserve the source record, open an editable draft with the appropriate fields, and make the copied draft available from the existing request surfaces.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_1d6ddd5ba47ac8d5",
+            "scope": "role:eval:builder",
+            "rule": "For copied editors, preserve source identity and field order while testing reloads, clashes, exceptions, insertions, removals, missing IDs, and overlapping claims.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_67d1550f2847824c",
+            "scope": "role:eval:builder",
+            "rule": "Bind asynchronous replies to the identity and version visible when the request started. Recheck after awaits; stale or late errors must not update a newer page or draft.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "machine",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_e9e319bf8af36c82",
+            "scope": "machine",
+            "rule": "If a base run proves test timeouts come from host load, limit workers consistently and record the chosen setting with the results.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_065363ad9329e93c",
+            "scope": "machine",
+            "rule": "For a red proof, preserve existing edits and user state. Test the pre-fix source in an isolated export against the focused head test instead of changing the shared checkout beneath it.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_f6cbd58228737166",
+            "scope": "machine",
+            "rule": "Before browser tests, verify the supported runtime and full browser installation. Use an owned short temporary path and an explicit verified runtime when wrappers select an older one.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_b0c53fc839bc6da6",
+            "scope": "machine",
+            "rule": "Use test mode for unit and React tests, development mode for dev servers and browser e2e, and production mode for builds and built-browser checks.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_e9e319bf8af36c82",
+      "r_065363ad9329e93c",
+      "r_f6cbd58228737166",
+      "r_b0c53fc839bc6da6"
+    ],
+    "misled": [
+      "r_1d6ddd5ba47ac8d5"
+    ],
+    "baselineIds": [
+      "r_67d1550f2847824c",
+      "r_1d6ddd5ba47ac8d5",
+      "r_e9e319bf8af36c82",
+      "r_065363ad9329e93c",
+      "r_f6cbd58228737166",
+      "r_b0c53fc839bc6da6"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 16.62838600000009,
+    "wholeLatencyMs": 4.7376520000000255
+  },
+  {
+    "id": "731acd64d34555bb",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Give directors read-only access to every section of estimates for their own objects. Do not widen edit, create, delete, or submission rights, and check every related action path for indirect writes.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_66d005d6096d3849",
+            "scope": "role:eval:builder",
+            "rule": "For ERP tests, use the pinned runner and an owned disposable database with isolated config and browser state. Verify the runner's completion marker and reproduce report failures on the base before changing them.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_b3fcd5cfbbb5b355",
+            "scope": "role:eval:builder",
+            "rule": "Keep test databases within the approved disposable-name scheme and preserve the live-name fence. When a browser test needs a database copy, move its matching file store with it.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_09096574469dd579",
+            "scope": "role:eval:builder",
+            "rule": "Before a database apply, flush the intended actor and compare rows inside one consistent snapshot. Preserve values outside the approved scope and prove a repeated run makes no extra changes.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "project:eval",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_70422f1af28b1343",
+            "scope": "project:eval",
+            "rule": "Do not change shared repository Git configuration. Use explicit repository and index arguments or a separate clone for base and head comparisons, then verify local configuration is clean.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "role:*:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_0e9ff25ff6f6ec4c",
+            "scope": "role:*:builder",
+            "rule": "Before integrating an older branch, inspect the base and both merge parents for behavior and tests. Preserve main-only capabilities and justify any test changes.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_66d005d6096d3849",
+      "r_b3fcd5cfbbb5b355",
+      "r_70422f1af28b1343"
+    ],
+    "misled": [
+      "r_0e9ff25ff6f6ec4c"
+    ],
+    "baselineIds": [
+      "r_b3fcd5cfbbb5b355",
+      "r_09096574469dd579",
+      "r_70422f1af28b1343",
+      "r_0e9ff25ff6f6ec4c"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 4.321451000000025,
+    "wholeLatencyMs": 8.727214000000004
+  },
+  {
+    "id": "a3b42118a51018f4",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Provide directors a read-only view of all estimate sections and inputs for objects they already may access. Preserve current write permissions and avoid exposing other organizations' data.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_5c37508bf05d21a3",
+            "scope": "role:eval:builder",
+            "rule": "After table layout changes, measure text ranges against cell boxes across widths, long values, grouping, and scroll edges. Keep every label complete and prove the old layout fails.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_66d005d6096d3849",
+            "scope": "role:eval:builder",
+            "rule": "For ERP tests, use the pinned runner and an owned disposable database with isolated config and browser state. Verify the runner's completion marker and reproduce report failures on the base before changing them.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [],
+    "misled": [
+      "r_5c37508bf05d21a3"
+    ],
+    "baselineIds": [
+      "r_66d005d6096d3849"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 4.396396000000095,
+    "wholeLatencyMs": 7.436682999999903
+  },
+  {
+    "id": "e78d83ee969d475a",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Require users given a temporary password to change it at first sign-in, and provide a later self-service change after confirming the current password. Persist the requirement and leave seeded accounts unaffected.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_12a5d60ed472573a",
+            "scope": "role:eval:builder",
+            "rule": "Test offline and refused requests on each form surface. Show a localized error and retry beside the active form, mark invalid fields accessibly, and clear errors when corrected values are sent.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_e298d0380bceb81d",
+            "scope": "role:eval:builder",
+            "rule": "After resizing or relabeling a rendered view, verify measured boxes settle consistently and compare paired base and head views. Report unsampled areas as unmeasured.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_a7eac33c4aa6a3b4",
+            "scope": "role:eval:builder",
+            "rule": "For a legacy finance database, try each documented read-only connection route from the executing role. Ask for help only after recording the exact failures; never assume an operator password step.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "machine",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_651b87d30a3cfe79",
+            "scope": "machine",
+            "rule": "Isolate browser tests, use an explicit browser path and short socket-safe temporary directory, and verify the actual runtime and full browser before diagnosing an automation failure.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_e7be20ac7fcea8b4",
+            "scope": "machine",
+            "rule": "Before importing TypeScript browser specs, verify the runtime version and select a checksum-verified supported runtime if the system version is incompatible.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_e7be20ac7fcea8b4",
+      "r_651b87d30a3cfe79",
+      "r_e298d0380bceb81d"
+    ],
+    "misled": [
+      "r_12a5d60ed472573a"
+    ],
+    "baselineIds": [
+      "r_a7eac33c4aa6a3b4",
+      "r_12a5d60ed472573a"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 3.097295000000031,
+    "wholeLatencyMs": 0.5397960000000239
+  },
+  {
+    "id": "c038b165737f7442",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Select launch-time role guidance with Decisions using a prompt that evaluates the upcoming role, brief, and each candidate rule. Preserve always-on principles and the byte cap, compare prompt versions with recorded labels, and deliver selection immediately without shadow mode.",
+    "scopes": [
+      {
+        "scope": "machine",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_c45f5c4322905598",
+            "scope": "machine",
+            "rule": "Use subscription-backed agents for personal automations. Before other paid evaluation runs, inspect the shared limit and reserve enough headroom for existing usage.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_e1c1503ef2237cdc",
+            "scope": "machine",
+            "rule": "Before reporting missing access, inspect provider transcripts, secret-file names, and configured environment variable names without reading secret values; verify effective permissions.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_e01bb71ae6329fc1",
+            "scope": "machine",
+            "rule": "Never print secret files or whole process environments. Read only the required non-secret fields in-process and report availability without exposing values.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_ed94ad1b80f02be5",
+            "scope": "role:eval:builder",
+            "rule": "Exercise each production guard before and after reservations with real stores and adapters. Pair zero-effect refusal cases with successful controls, and prove child cleanup and deadline behavior.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_e1c1503ef2237cdc",
+      "r_e01bb71ae6329fc1",
+      "r_c45f5c4322905598"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_ed94ad1b80f02be5",
+      "r_c45f5c4322905598",
+      "r_e1c1503ef2237cdc"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 8.44235700000013,
+    "wholeLatencyMs": 14.571222000000034
+  },
+  {
+    "id": "ad9089ce36be77e4",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "When the support planner fails, run the same authorized document retrieval used by a successful search plan. Limit the fallback to support mode, keep retrieval failures non-blocking, and preserve moderation and other modes.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_fa71a716d04b11de",
+            "scope": "role:eval:builder",
+            "rule": "Test metering across successful calls, validation and transport errors, retries, fallbacks, cancellation, and malformed successful replies. Preserve payer attribution and avoid logging payloads or identifiers.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_b91bb44c5b3e86ce",
+            "scope": "role:eval:builder",
+            "rule": "Before saying historical inputs are unavailable, trace their producers and search retained records by the operation names they actually emit.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_fa71a716d04b11de"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_b91bb44c5b3e86ce",
+      "r_fa71a716d04b11de"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 3.1598089999997683,
+    "wholeLatencyMs": 6.89099299999998
+  },
+  {
+    "id": "0d591717f82b2d00",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Add two administrator expense items to current estimate drafts and remove an irrelevant department service from the company-level form. Use the established source and tax conventions, recalculate the draft, and preserve other entries.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_0d8a2fb41f924647",
+            "scope": "role:eval:builder",
+            "rule": "On a shared test installation, follow its named locks and receipts, validate under the lock, and resume only the first unverified step. Recheck at handoff and never repeat a proven apply.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_199f399299c4e126",
+            "scope": "role:eval:builder",
+            "rule": "Immediately after an apply, verify affected rows and revisions in one consistent snapshot. Preserve later edits, verify durable receipts, and reconcile an error before replaying the change.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_6a5d85836f67ca1c",
+            "scope": "role:eval:builder",
+            "rule": "For an upgrade, verify dependency and socket shutdown, confirm the old process exits, then start a fresh process and check version, logs, and health before reading state.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_a113f2b9cd85da41",
+            "scope": "role:eval:builder",
+            "rule": "For scoped recalculation, protect user-entered values separately from approved computed outputs and refresh the allowlist before repeating an apply.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "project:eval",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_2deeb33d732f58b8",
+            "scope": "project:eval",
+            "rule": "Compare preservation at the first read-only snapshot after an upgrade. Use audit timing and authorization to attribute later differences.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "machine",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_00321b97d69c3937",
+            "scope": "machine",
+            "rule": "To diagnose a file lock, match its device and inode in the kernel lock table and live descriptors. Verify the owner remains alive and releases the inherited lock after protected work ends.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_0d8a2fb41f924647",
+      "r_2deeb33d732f58b8",
+      "r_6a5d85836f67ca1c",
+      "r_199f399299c4e126",
+      "r_00321b97d69c3937"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_0d8a2fb41f924647",
+      "r_a113f2b9cd85da41",
+      "r_199f399299c4e126",
+      "r_2deeb33d732f58b8",
+      "r_00321b97d69c3937"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 4.926574999999957,
+    "wholeLatencyMs": 9.328182000000197
+  },
+  {
+    "id": "4ab56201a9356da9",
+    "cohort": "recent",
+    "role": "architect",
+    "brief": "Prepare a design for shared read-only estimate access by directors and engineers. Document current role and record scope, new information exposure, implementation options, a recommendation, required tests, and rollout checks.",
+    "scopes": [
+      {
+        "scope": "role:eval:architect",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_14167c8dcd8fd8e5",
+            "scope": "role:eval:architect",
+            "rule": "When asked to imitate an existing feature, inspect its real implementation first and explain which parts fit the new design and which need different treatment.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_29daf73903e95363",
+            "scope": "role:eval:architect",
+            "rule": "When field-level access limits a relational field, validate the referenced record's permission in the create path too; read surfaces may reveal its display name under elevated access.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_9f9122ec8edb438e",
+            "scope": "role:eval:architect",
+            "rule": "Before diagnosing an access denial, reproduce the user's exact screen and run non-writing permission, search, and form checks under that user's role.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_8882c71609be05de",
+            "scope": "role:eval:architect",
+            "rule": "Trace the requested screen through its action to the rendered view before assuming a shared widget or renderer affects it. Expand the design scope when the screen uses another path.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_17e7e32dd3ebee4a",
+            "scope": "role:eval:architect",
+            "rule": "Before widening read access, inspect every write guard that relies on read permissions, including related records and stored actions that reapply a domain when opened.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_f77bc29c733ec010",
+            "scope": "role:eval:architect",
+            "rule": "For a numeric display change, list neighboring fields on forms and lists, including editable inputs, and specify the shared locale-aware formatter for each view.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_14167c8dcd8fd8e5",
+      "r_8882c71609be05de",
+      "r_9f9122ec8edb438e",
+      "r_17e7e32dd3ebee4a",
+      "r_29daf73903e95363"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_14167c8dcd8fd8e5",
+      "r_f77bc29c733ec010",
+      "r_29daf73903e95363",
+      "r_9f9122ec8edb438e",
+      "r_8882c71609be05de",
+      "r_17e7e32dd3ebee4a"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 6.878313000000162,
+    "wholeLatencyMs": 1.444025000000238
+  },
+  {
+    "id": "70cf92377345ebd1",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Fix the runtime-gate check so it reports failure unless both required runtime verdicts succeeded. Trace the producing jobs and aggregate condition, preserve the successful path, and add focused failure controls.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_aae3690c142990f5",
+            "scope": "role:eval:builder",
+            "rule": "For asynchronous UI behavior, hold requests behind barriers, inspect pending and open states, and await the real receipt or terminal result. Test races and verify guarded failures have no effect.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_f9fffb97e6db098d",
+            "scope": "role:eval:builder",
+            "rule": "Before build or capture, refresh the target revision and flags. For dependency patch changes, inspect pinned and patched distributions and verify source maps before claiming a fix.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_3c5a345078bbcab0",
+            "scope": "role:eval:builder",
+            "rule": "For nested gate tests, allow only known queue-wait diagnostics, keep session input open where needed, and compare repeated real runs against the same base and head cases.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      },
+      {
+        "scope": "project:eval",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_69c71813201f0c81",
+            "scope": "project:eval",
+            "rule": "In shared-module test runners, avoid persistent module mocks. Spy on imported functions and restore them; route tests should use isolated roots and real resolver unit tests.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_aae3690c142990f5",
+      "r_69c71813201f0c81",
+      "r_f9fffb97e6db098d"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_3c5a345078bbcab0"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 6.232265000000098,
+    "wholeLatencyMs": 18.994260000000395
+  },
+  {
+    "id": "9431f23ebdc7d5d2",
+    "cohort": "recent",
+    "role": "builder",
+    "brief": "Route support and casual conversation planning through Decisions when the configured key and feature choice allow it. Preserve explicit provider choices, compare prompt quality, and keep request failures on the established safe fallback.",
+    "scopes": [
+      {
+        "scope": "role:eval:builder",
+        "rules": [
+          {
+            "kind": "rule",
+            "id": "r_b953c33a62fba44d",
+            "scope": "role:eval:builder",
+            "rule": "For an authorized public issue update, try the configured client first and verify the saved result with a fresh read.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_fd83d1163cd60162",
+            "scope": "role:eval:builder",
+            "rule": "Date a saved status read by the time it was observed. For a delayed report, fetch the current record again instead of presenting an older snapshot as current.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          },
+          {
+            "kind": "rule",
+            "id": "r_b91bb44c5b3e86ce",
+            "scope": "role:eval:builder",
+            "rule": "Before saying historical inputs are unavailable, trace their producers and search retained records by the operation names they actually emit.",
+            "why": "",
+            "state": "active",
+            "hints": []
+          }
+        ]
+      }
+    ],
+    "applied": [
+      "r_b953c33a62fba44d",
+      "r_fd83d1163cd60162"
+    ],
+    "misled": [],
+    "baselineIds": [
+      "r_b91bb44c5b3e86ce"
+    ],
+    "baselineReason": "jev-no-key,bm25",
+    "baselineLatencyMs": 4.919933000000128,
+    "wholeLatencyMs": 5.999416999999994
+  }
+]

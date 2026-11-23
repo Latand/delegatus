@@ -34,6 +34,24 @@ test("a designated seat leaves a role rule without a stage request", async () =>
   expect(projectView(project).scopes.find(scope => scope.roleId === "orchestrator")?.active[0]?.stageId).toBe("seat");
 });
 
+test("an over-limit reason is a deterministic refusal and a corrected new key records one complete lesson", async () => {
+  const api = service();
+  const exact = "я".repeat(16) + "🧭".repeat(144);
+  const args = { clientRequestId: "seat-reason-over", lesson: { scope: "role", rule, why: exact + "я" } };
+  const refused = await api.callTool("leave_lesson", args);
+  expect(refused).toMatchObject({ ok: false, code: "LESSON_INVALID", retryable: false });
+  if (refused.ok) throw Error("accepted an overage");
+  for (const part of ["why", "160 normalized Unicode code points", "actual length is 161"]) expect(refused.error).toContain(part);
+  expect(projectView(project).scopes.flatMap(scope => scope.active)).toEqual([]);
+  expect(await api.callTool("leave_lesson", args)).toMatchObject({ ok: false, replayed: true, retryable: false });
+  const corrected = { ...args, lesson: { ...args.lesson, why: exact } };
+  expect(await api.callTool("leave_lesson", corrected)).toMatchObject({ ok: false, code: "idempotency_conflict" });
+  expect(await api.callTool("leave_lesson", { ...corrected, clientRequestId: "seat-reason-corrected" })).toMatchObject({ ok: true });
+  const rows = roleMemoryCollection()?.snapshot() ?? [];
+  expect(rows.filter(row => row.kind === "rule" && !row.versionOf)).toHaveLength(1);
+  expect(rows.find(row => row.kind === "rule")).toMatchObject({ rule, why: exact });
+});
+
 let request = 0;
 const lesson = (rule: string, scope = "role", role?: string) => ({ scope, rule, why, ...(role ? { role } : {}) });
 const call = (args: Record<string, unknown>, api = service()) => api.callTool("leave_lesson", { clientRequestId: `seat-check-${++request}`, ...args });

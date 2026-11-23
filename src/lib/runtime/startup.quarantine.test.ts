@@ -15,10 +15,14 @@ import { procBackend } from "@/lib/proc";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
 import { type RuntimeHostClient } from "./client";
-import { adoptStructuredHostsAtStartup, structuredStartupDeferral, type StructuredStartupDependencies } from "./startup";
+import type { StructuredStartupDependencies } from "./startup";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { restartCutEvidenceHolds, restartCutEvidenceUnresolved } from "./restartCutHold";
+
+const { adoptStructuredHostsAtStartup, structuredStartupDeferral } = await import(
+  process.env.STARTUP_ADOPTION_MINIFIED_MODULE ?? "./startup"
+) as typeof import("./startup");
 
 /* #2761: a successor's startup pass can reach a live worker's row while the
    incumbent still owns it, skip it, and find it released by the incumbent's
@@ -102,6 +106,46 @@ test("one blocked row completes boot and sixty subsequent admissions reuse it", 
     expect(refreshes).toBe(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null }); journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a scheduled row retry releases the completed startup pass snapshot", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-retry-retention-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const id = "25300000-0000-0000-0000-000000000074";
+  passedOverRow(registry, directory, id, "unhosted", "handoff");
+  const callbacks: Array<() => void> = [];
+  let firstSnapshot: WeakRef<ReturnType<AgentRegistry["readOnlySnapshot"]>> | undefined;
+  const prepare = registry.prepareReadOnlySnapshot.bind(registry);
+  registry.prepareReadOnlySnapshot = async (...args) => {
+    const value = await prepare(...args);
+    firstSnapshot ??= new WeakRef(value);
+    return value;
+  };
+  const dependencies: StructuredStartupDependencies = {
+    registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [],
+    refreshTranscriptState: async () => {}, resolveCodexOwner: () => null,
+    resolveClaudeOwner: () => null, adoptClaude: async () => [],
+    schedule: callback => { callbacks.push(callback); return { unref() {} }; },
+    pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+  };
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(callbacks.length).toBeGreaterThan(0);
+    expect(firstSnapshot).toBeDefined();
+    const entry = registry.readOnlySnapshot().entries[`codex:${id}`]!;
+    registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, eventCursor: entry.structuredHost!.eventCursor + 1 } });
+    registry.readOnlySnapshot();
+    for (let i = 0; i < 4; i++) { await Bun.sleep(1); Bun.gc(true); }
+    await Bun.sleep(1);
+    expect(firstSnapshot!.deref()).toBeUndefined();
+  } finally {
+    callbacks.length = 0;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });

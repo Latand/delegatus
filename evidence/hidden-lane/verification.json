@@ -1,0 +1,446 @@
+{
+  "requirement": "A hidden lane is hidden the same way in the UI and through MCP",
+  "checkedAt": "2026-11-12T08:38:15.604379+00:00",
+  "main": "aae7208f2d0d67e0b4fc176188bf055e0fbd7bc2",
+  "sourceSha256": {
+    "src/components/attention/needsYouPanel.fixture.tsx": "3cbc990462382f4fa04506fee96f19f00f0c470bae6831f53ebb24819c9a4395",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "328ae7aba90b45c6b40dbebb0b1cb01148a806e7b834ff0a3e2e9e8e2dbbc442",
+    "src/components/mobile/mobileBoardModel.ts": "44c06e44b9a8b081021f5c1212b1f6e423dc337c55c244fdaeffe92fc8f096da",
+    "src/lib/mcp/pipelineVisibility.integration.test.ts": "f05b84c5822387810a0aecae8bb97c95ce4c4ef9aded4c3ce3088be6d54be4e1",
+    "src/lib/pipelines/engine.ts": "9f548803c02c5a2b1b1a331a4d21beb718fc78907170b561d01db505b3fee98c",
+    "src/lib/pipelines/laneMovement.ts": "e929dd8484607a532faabe217cd5de56a8ca847246fba23c244fd71dc9823a3d",
+    "src/lib/pipelines/listProjection.test.ts": "704d8a5395c7648174e7590330eb94c4954bcc4136bdae12526a8984343bed2d",
+    "src/lib/pipelines/listProjection.ts": "29fe9f5049b512b05c2136857e1bcf57b37dce3d28b65a518dc2f690ff497606"
+  },
+  "execution": {
+    "commands": "Paths in commands use STAGE_GATE for the supplied gate-slot.sh and CHECK_ROOT for a fresh isolated root. Run commands from the named scratch export. Heavy checks ran sequentially; every command has its own terminal result.",
+    "environment": {
+      "HOME": "$CHECK_ROOT/home",
+      "XDG_CONFIG_HOME": "$CHECK_ROOT/config",
+      "XDG_CACHE_HOME": "$CHECK_ROOT/cache",
+      "LLV_STATE_DIR": "$CHECK_ROOT/state",
+      "TMPDIR": "$CHECK_ROOT/tmp",
+      "LLV_VIEWER_CONTROL_URL": "http://127.0.0.1:1",
+      "LLV_GATE_RUNNER": "off"
+    },
+    "browserEnvironment": {
+      "CHROME_BIN": "$INSTALLED_CHROMIUM",
+      "LLV_KANBAN_BROWSER_TEST": "1",
+      "LLV_EVIDENCE_DIR": "$RETAINED_EVIDENCE"
+    },
+    "browserSocketDirectory": "Owned scratch directory, reached through the existing Linux proc alias helper.",
+    "inputs": "Scratch source exports with matching dependencies shared read-only. No live lane was hidden, shown or re-parked."
+  },
+  "acceptance": [
+    {
+      "requirement": "MCP lists identify a hidden current decision",
+      "evidence": "src/lib/mcp/pipelineVisibility.integration.test.ts: compact, board-card, status-only and full-record list reads through the SDK, exported HTTP route, real service, schemas, policy and receipts on loopback port 0. Compact and board-card rows expose dismissedAt and hiddenFromBoard; full records retain dismissedAt."
+    },
+    {
+      "requirement": "Retry after a provisioning park restores attention without a new round",
+      "evidence": "src/lib/mcp/pipelineVisibility.integration.test.ts: both base and worktree failure; pipeline_action Hide/Undo and dismiss_attention Hide; a second failure has no attempts, clears the stamp and attribution/note, returns to phone rows/badge and desktop laneNeed, then can be hidden again."
+    },
+    {
+      "requirement": "The desktop honours Hide and can restore it",
+      "evidence": "src/components/kanban/kanbanBoard.browser.test.tsx: hidden lane visibility; real Viewer, a roundless fixture, card timeline and Undo menu, restored Needs-you row. Four locale/theme combinations at 1440x900, eight frames, fixed clock."
+    },
+    {
+      "requirement": "Existing phone restore and engine guards remain valid",
+      "evidence": "The phone restore DOM case and engine dismissal case both pass; the latter checks cursor/runs/hosts and draft/closed refusals. MCP treats draft/closed lanes as already clear and leaves their record unchanged."
+    }
+  ],
+  "finalChecks": [
+    "final-mcp",
+    "final-projection",
+    "final-mobile-model",
+    "final-phone-restore",
+    "final-engine-dismiss",
+    "final-desktop-render",
+    "final-lint"
+  ],
+  "finalTestTotals": {
+    "pass": 54,
+    "fail": 0,
+    "assertions": 475
+  },
+  "runs": [
+    {
+      "name": "base-mcp",
+      "source": "main f9571ba01c",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 3,
+        "assertions": 12
+      },
+      "log": "base-mcp.log"
+    },
+    {
+      "name": "head-mcp-1",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 2,
+        "fail": 1,
+        "assertions": 118
+      },
+      "log": "head-mcp-1.log"
+    },
+    {
+      "name": "base-mcp-final",
+      "source": "main f9571ba01c",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 5,
+        "assertions": 47
+      },
+      "log": "base-mcp-final.log"
+    },
+    {
+      "name": "base-projection",
+      "source": "main f9571ba01c",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/pipelines/listProjection.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 26,
+        "fail": 2,
+        "assertions": 76
+      },
+      "log": "base-projection.log"
+    },
+    {
+      "name": "head-mcp-final",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 4,
+        "fail": 1,
+        "assertions": 207
+      },
+      "log": "head-mcp-final.log"
+    },
+    {
+      "name": "head-projection",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/pipelines/listProjection.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 28,
+        "fail": 0,
+        "assertions": 90
+      },
+      "log": "head-projection.log"
+    },
+    {
+      "name": "mobile-model",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/components/mobile/mobileBoardModel.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "assertions": 114
+      },
+      "log": "mobile-model.log"
+    },
+    {
+      "name": "phone-restore",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx -t 'hidden from the board'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "filtered_out": 8,
+        "assertions": 6
+      },
+      "log": "phone-restore.log"
+    },
+    {
+      "name": "engine-dismiss",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/pipelines/engine.creation.test.ts -t 'dismiss and undismiss'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "filtered_out": 112,
+        "assertions": 26
+      },
+      "log": "engine-dismiss.log"
+    },
+    {
+      "name": "browser-probe",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun -e 'const {chromium}=await import(\"playwright-core\"); const b=await chromium.launch({headless:true,executablePath:process.env.CHROME_BIN,args:[\"--no-sandbox\"]}); const p=await b.newPage(); await p.setContent(\"<p>browser ready</p>\"); if(await p.locator(\"p\").textContent()!==\"browser ready\") throw Error(\"probe failed\"); await b.close(); console.log(\"1 browser probe passed\");'",
+      "exitStatus": 1,
+      "counts": {
+        "probes": 1,
+        "passed": 0,
+        "failed": 1
+      },
+      "log": "browser-probe.log"
+    },
+    {
+      "name": "desktop-render",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=240000 src/components/kanban/kanbanBoard.browser.test.tsx -t 'hidden lane visibility'",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 1,
+        "filtered_out": 306
+      },
+      "log": "desktop-render.log"
+    },
+    {
+      "name": "lint",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun node_modules/eslint/bin/eslint.js src/components/attention/needsYouPanel.fixture.tsx src/components/kanban/kanbanBoard.browser.test.tsx src/components/mobile/mobileBoardModel.ts src/lib/pipelines/engine.ts src/lib/pipelines/laneMovement.ts src/lib/pipelines/listProjection.ts src/lib/pipelines/listProjection.test.ts src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "files": 8,
+        "errors": 0,
+        "warnings": 4
+      },
+      "log": "lint.log"
+    },
+    {
+      "name": "base-mcp-corrected",
+      "source": "main f9571ba01c",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 1,
+        "fail": 4,
+        "assertions": 63
+      },
+      "log": "base-mcp-corrected.log"
+    },
+    {
+      "name": "head-mcp-corrected",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "assertions": 223
+      },
+      "log": "head-mcp-corrected.log"
+    },
+    {
+      "name": "browser-probe-short",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun -e 'const fs=await import(\"node:fs\");const path=await import(\"node:path\");const directory=fs.mkdtempSync(path.join(process.cwd(),\".browser-probe-\"));const env={...process.env,TMPDIR:`/proc/${process.pid}/cwd/${path.basename(directory)}`};const {chromium}=await import(\"playwright-core\");let browser;try {browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_BIN,env,args:[\"--no-sandbox\"]});const p=await browser.newPage();await p.setContent(\"<p>browser ready</p>\");if(await p.locator(\"p\").textContent()!==\"browser ready\")throw Error(\"probe failed\");console.log(\"1 browser probe passed\");}finally {await browser?.close();fs.rmSync(directory,{recursive:true,force:true});}'",
+      "exitStatus": 0,
+      "counts": {
+        "probes": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "log": "browser-probe-short.log"
+    },
+    {
+      "name": "desktop-render-short",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=240000 src/components/kanban/kanbanBoard.browser.test.tsx -t 'hidden lane visibility'",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 1,
+        "filtered_out": 306,
+        "assertions": 1
+      },
+      "log": "desktop-render-short.log"
+    },
+    {
+      "name": "desktop-render-selector",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=240000 src/components/kanban/kanbanBoard.browser.test.tsx -t 'hidden lane visibility'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "filtered_out": 306,
+        "assertions": 12
+      },
+      "log": "desktop-render-selector.log"
+    },
+    {
+      "name": "current-base-mcp",
+      "source": "main aae7208f2d",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 1,
+        "fail": 4,
+        "assertions": 65
+      },
+      "log": "current-base-mcp.log"
+    },
+    {
+      "name": "current-base-projection",
+      "source": "main aae7208f2d",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/pipelines/listProjection.test.ts",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 26,
+        "fail": 2,
+        "assertions": 76
+      },
+      "log": "current-base-projection.log"
+    },
+    {
+      "name": "final-mcp",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "assertions": 227
+      },
+      "log": "final-mcp.log"
+    },
+    {
+      "name": "final-projection",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/pipelines/listProjection.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 28,
+        "fail": 0,
+        "assertions": 90
+      },
+      "log": "final-projection.log"
+    },
+    {
+      "name": "final-mobile-model",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/components/mobile/mobileBoardModel.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "assertions": 114
+      },
+      "log": "final-mobile-model.log"
+    },
+    {
+      "name": "final-phone-restore",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx -t 'hidden from the board'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "filtered_out": 8,
+        "assertions": 6
+      },
+      "log": "final-phone-restore.log"
+    },
+    {
+      "name": "final-engine-dismiss",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=60000 src/lib/pipelines/engine.creation.test.ts -t 'dismiss and undismiss'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "filtered_out": 112,
+        "assertions": 26
+      },
+      "log": "final-engine-dismiss.log"
+    },
+    {
+      "name": "final-desktop-render",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun test --timeout=240000 src/components/kanban/kanbanBoard.browser.test.tsx -t 'hidden lane visibility'",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "filtered_out": 306,
+        "assertions": 12
+      },
+      "log": "final-desktop-render.log"
+    },
+    {
+      "name": "final-lint",
+      "source": "candidate",
+      "command": "bash \"$STAGE_GATE\" bun node_modules/eslint/bin/eslint.js src/components/attention/needsYouPanel.fixture.tsx src/components/kanban/kanbanBoard.browser.test.tsx src/components/mobile/mobileBoardModel.ts src/lib/pipelines/engine.ts src/lib/pipelines/laneMovement.ts src/lib/pipelines/listProjection.ts src/lib/pipelines/listProjection.test.ts src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "exitStatus": 0,
+      "counts": {
+        "files": 8,
+        "errors": 0,
+        "warnings": 4
+      },
+      "log": "final-lint.log"
+    },
+    {
+      "name": "whitespace",
+      "source": "candidate",
+      "command": "git diff --check",
+      "exitStatus": 0,
+      "counts": {
+        "errors": 0
+      }
+    }
+  ],
+  "rendered": {
+    "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+    "filter": "hidden lane visibility",
+    "readings": [
+      {
+        "lang": "en",
+        "scheme": "light",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      },
+      {
+        "lang": "en",
+        "scheme": "dark",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      },
+      {
+        "lang": "uk",
+        "scheme": "light",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      },
+      {
+        "lang": "uk",
+        "scheme": "dark",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      }
+    ],
+    "frames": [
+      "hidden-lane/en-dark-hidden.png",
+      "hidden-lane/en-dark-restored.png",
+      "hidden-lane/en-light-hidden.png",
+      "hidden-lane/en-light-restored.png",
+      "hidden-lane/uk-dark-hidden.png",
+      "hidden-lane/uk-dark-restored.png",
+      "hidden-lane/uk-light-hidden.png",
+      "hidden-lane/uk-light-restored.png"
+    ]
+  },
+  "notes": [
+    "Current-main regressions fail independently for missing list fields and retained dismissal after roundless re-park. These expected baseline failures are preserved.",
+    "Earlier draft/closed test attempts used an invalid fixture, then expected an error where MCP returns alreadyClear. Corrected tests use the real engine create/close output and assert no mutation.",
+    "The first Chromium probe and render failed before rendering because the socket path was too long. The existing ownedBrowserSocketEnvironment helper fixed the environment; one following render attempt corrected the pipeline timeline selector from need-cleared to lane-cleared.",
+    "ESLint reports zero errors and four warnings in existing code. No speed or memory improvement is claimed. Publication performs its own complete gate."
+  ]
+}

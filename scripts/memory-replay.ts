@@ -10,6 +10,7 @@ import { renderLearnedRules } from "../src/lib/memory/roleRender";
 import { renderStagePrompt } from "../src/lib/pipelines/prompts";
 import type { Pipeline } from "../src/lib/pipelines/types";
 import type { RoleMemoryRow, RoleMemoryRule } from "../src/lib/memory/roleTypes";
+import { ROLE_HISTORY_COLLECTION, rowsWithCollectedHistory } from "../src/lib/memory/roleHistoryRows";
 
 const hash = (text: string | Buffer) => createHash("sha256").update(text).digest("hex");
 const time = (text: string | null | undefined) => text ? Date.parse(text) : NaN;
@@ -54,7 +55,7 @@ export function assembleReplay(stateDir: string, output: string) {
     let pipelines: Pipeline[], memory: RoleMemoryRow[];
     try {
       pipelines = [...new Map([...rows<Pipeline>("pipelines_archive"), ...rows<Pipeline>("pipelines")].map(p => [p.id, p])).values()];
-      memory = rows<RoleMemoryRow>("role_memory");
+      memory = rowsWithCollectedHistory(rows<RoleMemoryRow>("role_memory"), () => rows<unknown>(ROLE_HISTORY_COLLECTION));
     } finally { db.close(); }
     const rules = memory.filter(r => r.kind === "rule");
     const scopes = memory.filter(r => r.kind === "scope");

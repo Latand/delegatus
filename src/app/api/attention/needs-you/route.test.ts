@@ -5,6 +5,24 @@ import type { AttentionCallerAuthority } from "@/lib/attention/callerAuthority";
 import type { NeedsYouAnswer } from "@/lib/attention/needsYouRead";
 const seats = [{ conversationId: "seat-a", project: "project-a" }, { conversationId: "seat-b", project: "project-b" }];
 const request = (project = "project-a", origin?: string) => new NextRequest("http://localhost/api/attention/needs-you", { method: "POST", headers: { Host: "localhost", "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) }, body: JSON.stringify({ project }) });
+test("the route pins the earlier read cutoff and forwards caller cancellation", async () => {
+  const controller = new AbortController();
+  const input = new NextRequest(request(), { signal: controller.signal });
+  const cutoff = Date.now() + 1000;
+  input.headers.set("x-llv-read-deadline", String(cutoff));
+  let signal: AbortSignal | undefined;
+  const handler = needsYouHandler({
+    caller: () => ({ authority: { kind: "root", conversationId: null }, seats: [], maintainer: null }),
+    read: async (project, options) => {
+      expect(options.deadlineAt).toBe(cutoff);
+      signal = options.signal;
+      return { project, rows: [] } as unknown as NeedsYouAnswer;
+    },
+  });
+  expect((await handler(input)).status).toBe(200);
+  controller.abort();
+  expect(signal?.aborted).toBe(true);
+});
 test("the read admits the project's seat and maintenance run, and refuses other callers before reading", async () => {
   for (const [authority, maintainer, allowed] of [
     [{ kind: "root", conversationId: "root" }, null, true],

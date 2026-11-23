@@ -123,12 +123,26 @@ test("structured hosts get a row each, with role, stage, model and ownership", (
   expect(lane).toContain("Structured lane");
   expect(lane).toContain("builder");
   expect(lane).toContain("implement");
-  expect(lane).toContain("opus");
+  expect(lane).toContain("Opus 5.5");
   expect(lane).toContain("owned");
   expect(rows[1]!.textContent).toContain("released");
   expect(rows[2]!.textContent).toContain("orphaned");
   /* The empty state used to name tmux; the list is transport-neutral now. */
   expect(view.textContent).not.toContain("tmux");
+});
+
+test("a host row names its model as the catalogue does, Fable 5.2 and Fable 5.1 apart", () => {
+  const view = mount([
+    host({ target: "structured:claude:new", model: "claude-fable-5-2" }),
+    host({ target: "structured:claude:old", model: "claude-fable-5-1" }),
+    host({ target: "structured:codex:other", engine: "codex", model: "gpt-6.1-sol" }),
+  ]);
+  const rows = [...view.querySelectorAll('[data-testid="resource-host-row"]')].map((row) => row.textContent ?? "");
+  expect(rows[0]).toContain("Fable 5.2");
+  expect(rows[0]).not.toContain("claude-fable-5-2");
+  expect(rows[1]).toContain("Fable 5.1");
+  expect(rows[1]).not.toContain("Fable 5.2");
+  expect(rows[2]).toContain("gpt-6.1-sol");
 });
 
 test("the header counts hosts, idle hosts and the memory they hold", () => {
@@ -360,6 +374,9 @@ test("the System panel names the low volume, the largest consumers first, and th
     consumers: [
       { kind: "state" as const, bytes: 2 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
       { kind: "worktrees" as const, bytes: 90 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
+      { kind: "temp" as const, bytes: GiB, measuredAt: "2026-10-06T10:04:00Z" },
+      { kind: "dockerImages" as const, bytes: 3 * GiB, measuredAt: "2026-10-06T10:04:00Z" },
+      { kind: "dockerCache" as const, bytes: 4 * GiB, measuredAt: "2026-10-06T10:04:00Z" },
     ],
   };
   flushSync(() => { root.render(<DiskPressureNotice pressure={pressure} />); });
@@ -368,7 +385,8 @@ test("the System panel names the low volume, the largest consumers first, and th
   expect(notice.textContent).toContain("Disk space low");
   expect(notice.textContent).toContain("State / Worktrees: 1.5 GiB free");
   expect(notice.textContent).not.toContain("Temp:");
-  expect(notice.textContent).toContain("Most space: Worktrees 90 GiB, State 2.0 GiB");
+  expect([...notice.querySelectorAll("div[title] > div")].map(row => row.textContent))
+    .toEqual(["Worktrees 90 GiB", "Docker build cache 4.0 GiB", "Docker images 3.0 GiB", "State 2.0 GiB", "Temporary files (including scratch) 1.0 GiB"]);
   expect(notice.textContent).not.toContain("lower bound");
   expect(notice.textContent).toContain("New checkouts wait for space");
   flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ roles: ["temp"], freeBytes: 0.5 * GiB, level: "critical" }] }} />); });
@@ -429,6 +447,10 @@ for (const density of ["line", "detail"] as const) {
     const notes = [...notice.querySelectorAll<HTMLElement>("[data-meter-note]")];
     expect(notes.map((note) => note.textContent)).toEqual(density === "line" ? ["Most space: Worktrees 90 GiB, State 2.0 GiB", "New checkouts wait for space"] : []);
     expect(notes.map((note) => note.title)).toEqual(density === "line" ? ["Delegatus files, at least: Worktrees 90 GiB, State 2.0 GiB", "New checkouts wait for space and retry automatically."] : []);
+    if (density === "detail") {
+      expect([...notice.querySelectorAll("div[title] > div")].map(row => row.textContent))
+        .toEqual(["Worktrees 90 GiB", "State 2.0 GiB"]);
+    }
     /* Two volumes with the same roles are two keyed lines. */
     expect(errors.filter((args) => String(args[0]).includes("same key"))).toEqual([]);
     /* A warning admits new checkouts, so nothing waits; unmeasured consumers say so in the same line. */

@@ -62,8 +62,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 363,
-              "height": 147,
+              "width": 451,
+              "height": 128,
               "text": "CSV export fails on large projects (over 50k rows): the worker runs out of memory. Decided in the conversation: the file format stays byte for byte, customers parse it. Done: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass). Left: a test for the retry after 503, then a review of the three changed files."
             },
             {
@@ -97,9 +97,9 @@
         },
         "editLayout": {
           "editBelowText": false,
-          "firstLineRight": 702,
-          "textRight": 811,
-          "editRight": 828
+          "firstLineRight": 775,
+          "textRight": 869,
+          "editRight": 884
         },
         "firstMessageStatus": "First message · not sent yet",
         "editing": {
@@ -147,7 +147,7 @@
               "selector": "[data-draft-changed] .msg-text",
               "missing": false,
               "cut": false,
-              "width": 502,
+              "width": 526,
               "height": 16,
               "text": "Changed elsewhere since you began: «Keep the header row exactly as customers parse it today.»"
             }
@@ -544,8 +544,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 363,
-              "height": 147,
+              "width": 451,
+              "height": 128,
               "text": "CSV export fails on large projects (over 50k rows): the worker runs out of memory. Decided in the conversation: the file format stays byte for byte, customers parse it. Done: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass). Left: a test for the retry after 503, then a review of the three changed files."
             },
             {
@@ -579,9 +579,9 @@
         },
         "editLayout": {
           "editBelowText": false,
-          "firstLineRight": 702,
-          "textRight": 811,
-          "editRight": 828
+          "firstLineRight": 775,
+          "textRight": 869,
+          "editRight": 884
         },
         "firstMessageStatus": "First message · not sent yet",
         "editing": {
@@ -629,7 +629,7 @@
               "selector": "[data-draft-changed] .msg-text",
               "missing": false,
               "cut": false,
-              "width": 502,
+              "width": 526,
               "height": 16,
               "text": "Changed elsewhere since you began: «Keep the header row exactly as customers parse it today.»"
             }
@@ -1026,8 +1026,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 363,
-              "height": 166,
+              "width": 440,
+              "height": 128,
               "text": "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркеру бракує пам’яті. У розмові вирішили: формат файлу лишається байт у байт, клієнти його розбирають. Зроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 пройшли). Лишилося: тест на повтор після 503, потім рев’ю трьох змінених файлів."
             },
             {
@@ -1061,9 +1061,9 @@
         },
         "editLayout": {
           "editBelowText": false,
-          "firstLineRight": 696,
-          "textRight": 811,
-          "editRight": 828
+          "firstLineRight": 755,
+          "textRight": 857,
+          "editRight": 884
         },
         "firstMessageStatus": "Перше повідомлення · ще не надіслано",
         "editing": {
@@ -1111,7 +1111,7 @@
               "selector": "[data-draft-changed] .msg-text",
               "missing": false,
               "cut": false,
-              "width": 502,
+              "width": 526,
               "height": 32,
               "text": "Змінено деінде, відколи ви почали: «Лишити рядок заголовків таким, як його розбирають клієнти сьогодні.»"
             }
@@ -1508,8 +1508,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 363,
-              "height": 166,
+              "width": 440,
+              "height": 128,
               "text": "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркеру бракує пам’яті. У розмові вирішили: формат файлу лишається байт у байт, клієнти його розбирають. Зроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 пройшли). Лишилося: тест на повтор після 503, потім рев’ю трьох змінених файлів."
             },
             {
@@ -1543,9 +1543,9 @@
         },
         "editLayout": {
           "editBelowText": false,
-          "firstLineRight": 696,
-          "textRight": 811,
-          "editRight": 828
+          "firstLineRight": 755,
+          "textRight": 857,
+          "editRight": 884
         },
         "firstMessageStatus": "Перше повідомлення · ще не надіслано",
         "editing": {
@@ -1593,7 +1593,7 @@
               "selector": "[data-draft-changed] .msg-text",
               "missing": false,
               "cut": false,
-              "width": 502,
+              "width": 526,
               "height": 32,
               "text": "Змінено деінде, відколи ви почали: «Лишити рядок заголовків таким, як його розбирають клієнти сьогодні.»"
             }

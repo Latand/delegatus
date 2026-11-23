@@ -8,7 +8,7 @@ export type RulePrivacyHint = StaticFindingClass | "email_address";
    own state and nowhere else. */
 
 /** Scope target in code points; unseen lessons can overflow until curation. */
-export const ROLE_MEMORY_BOUND = 10_000;
+export const ROLE_MEMORY_BOUND = 15_000;
 export const CURATION_NEW_LESSONS = 10;
 export const CURATION_INTERVAL_MS = 6 * 60 * 60_000;
 export const RULE_MAX_CHARS = 300;
@@ -196,7 +196,17 @@ export interface RoleMemoryScopeRow {
   /** Never-curated ids first, then curated low to high. Only curated ids can
       leave for budget; the first segment awaits curation. */
   active: string[];
+  /** The newest entries, still held in the scope row. A scope written before
+      history rows existed holds its whole history here. */
   history: ScopeHistoryEntry[];
+  /** The entries before `history`, one stored row each in the history
+      collection under this token, in sequence order. `count` rows are stored
+      below sequence `next`; `ordinary` of them carry no curator pass. */
+  historyRows?: { token: string; next: number; count: number; ordinary: number };
+  /** Tokens whose rows this scope took back into `history`, and when. The
+      record commits with the scope row that holds those entries again, and
+      the drain removes rows only for a token recorded here. */
+  historyDropped?: { token: string; at: string }[];
   curatedAt?: string;
   /** Raised only by a completed project import with a seat room trigger. */
   fourScopeTarget?: 24000;

@@ -1,7 +1,5 @@
-// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
-// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { startAutoAndSettle } from "./engineEnvironment.fixture";
-import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, pipelineRevision, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
+import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, pipelineRevision, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
 import type { ServiceDeps, Snapshot } from "./engine.fixture";
 import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -535,111 +533,6 @@ test("fallback verdict preserves the pre-output PR head through real settlement 
   }
 });
 
-
-test.skip("a skipped legacy architect publishes its declared output to the review flow", async () => {
-  const fixture = await realWorktreeLane("legacy-architect-skip-review", [
-    { id: "architect", kind: "run", role: { roleId: "architect" }, access: "read-only", outputs: ["fix.txt"], prompt: "Write fix", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review fix", next: null },
-  ], "remote-branch", true);
-  try {
-    const { git, h, id, origin, worktree } = fixture;
-    expect(loadPipelines().find((item) => item.id === id)!.stages[1]!.kind).toBe("review-loop");
-    fs.writeFileSync(path.join(worktree, "fix.txt"), "accepted fix\n");
-    fs.writeFileSync(path.join(worktree, "sentinel.tmp"), "untouched\n");
-    h.setConversationActive(false);
-    await tickPipelines([h.finish("/codex/stage-1.jsonl", "needs_decision")], h.ports);
-    expect((await patchPipeline(id, { action: "skip-stage" }, h.ports)).error).toBeUndefined();
-    await tickPipelines([], h.ports);
-    const skipped = loadPipelines().find((item) => item.id === id)!;
-    const accepted = (await git(worktree, "rev-parse", "HEAD"));
-    expect(accepted).not.toBe(fixture.base);
-    expect(skipped).toMatchObject({ lastPassedCommit: accepted, cursor: { stageId: "review" } });
-    expect(skipped.runs[0]!.attempts[0]!.state).toBe("skipped");
-    expect((await git(worktree, "show", "--name-only", "--format=", "HEAD"))).toBe("fix.txt");
-    expect((await git(origin, "rev-parse", `refs/heads/${skipped.branch}`))).toBe(accepted);
-    await tickPipelines([], h.ports);
-    const review = loadPipelines().find((item) => item.id === id)!;
-    expect(review.state).toBe("running");
-    expect(review.runs[1]!.attempts[0]).toMatchObject({ expectedReviewHeadSha: accepted, flowId: "flow-1" });
-    expect(h.flowRequests).toHaveLength(1);
-    expect(h.flowRequests[0]).toMatchObject({ implementerPath: "/codex/stage-1.jsonl", targetSha: accepted, headRef: skipped.branch, requireRemoteHead: true });
-    expect(fs.readFileSync(path.join(worktree, "sentinel.tmp"), "utf8")).toBe("untouched\n");
-  } finally {
-    savePipelines([]);
-    fs.rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-
-
-for (const publication of ["internal", "remote-branch"] as const) {
-test.skip(`a legacy architect repair commits its declared output before ${publication} review`, async () => {
-  const fixture = await realWorktreeLane(`architect-review-repair-${publication}`, [
-    { id: "architect", kind: "run", role: { roleId: "architect" }, access: "read-only", outputs: ["report.md"], prompt: "Write report", next: "review" },
-    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review report", next: null },
-  ], publication === "remote-branch" ? publication : undefined);
-  const offline = `${fixture.origin}.offline`;
-  try {
-    fs.writeFileSync(path.join(fixture.worktree, "report.md"), "first report\n");
-    fixture.h.setConversationActive(false);
-    await tickPipelines([fixture.h.finish("/codex/stage-1.jsonl", "pass")], fixture.h.ports);
-    await tickPipelines([], fixture.h.ports);
-    const first = (await fixture.git(fixture.worktree, "rev-parse", "HEAD"));
-    const flow = fixture.h.flows.get("flow-1")!;
-    expect(flow).toBeDefined();
-    const transcript = path.join(fixture.root, "architect-repair.jsonl");
-    const sessionId = ["059f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-");
-    fs.writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { id: sessionId, cwd: fixture.worktree } })}\n${JSON.stringify({
-      timestamp: new Date(Date.now() + 1_000).toISOString(), type: "event_msg",
-      payload: { type: "task_complete", last_agent_message: "REVIEW_READY: repaired report" },
-    })}\n`);
-    const roles = { implementer: { engine: "codex" as const, model: null, effort: "high" }, reviewer: { engine: "codex" as const, model: null, effort: "high" } };
-    const firstRound = { ...newRound({ ...flow, roles, rounds: [] }, "marker", null), n: 1, startedAt: "2026-07-22T00:00:00Z", relayedAt: "2026-07-22T00:01:00Z" };
-    Object.assign(flow, {
-      template: "implement-review-loop",
-      project: loadPipelines().find((item) => item.id === fixture.id)!.project,
-      baseMode: "head",
-      pausedState: null, stateDetail: null,
-      cwd: fixture.worktree,
-      implementerPath: transcript,
-      requireRemoteHead: publication === "remote-branch",
-      roles,
-      mode: "auto", reviewerMode: "headless", state: "fixing", roundLimit: 5,
-      createdAt: "2026-07-21T00:00:00Z",
-      rounds: [firstRound],
-    });
-    saveFlows([flow]);
-    fs.writeFileSync(path.join(fixture.worktree, "report.md"), "repaired report\n");
-    fs.writeFileSync(path.join(fixture.worktree, "sentinel.tmp"), "keep me\n");
-    const record = entry(transcript);
-    record.size = fs.statSync(transcript).size;
-    record.mtime = Date.now() / 1_000;
-    if (publication === "remote-branch") fs.renameSync(fixture.origin, offline);
-    expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
-    const repaired = (await fixture.git(fixture.worktree, "rev-parse", "HEAD"));
-    expect(repaired).not.toBe(first);
-    if (publication === "remote-branch") {
-      expect(flow.state).toBe("fixing");
-      expect(flow.rounds).toHaveLength(1);
-      fs.renameSync(offline, fixture.origin);
-      saveFlows([flow]);
-      expect(await tickFlow(flow, [record], new Map([[transcript, record]]), () => {})).toBe(true);
-      expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${loadPipelines().find((item) => item.id === fixture.id)!.branch}`))).toBe(repaired);
-    }
-    expect(flow.state).toBe("spawning");
-    expect(flow.rounds[1]!.reviewHeadSha).toBe(repaired);
-    expect(loadPipelines().find((item) => item.id === fixture.id)!.lastPassedCommit).toBe(repaired);
-    expect((await fixture.git(fixture.worktree, "show", "--name-only", "--format=", "HEAD"))).toBe("report.md");
-    expect(fs.readFileSync(path.join(fixture.worktree, "sentinel.tmp"), "utf8")).toBe("keep me\n");
-  } finally {
-    saveFlows([]);
-    savePipelines([]);
-    if (fs.existsSync(offline)) fs.renameSync(offline, fixture.origin);
-    fs.rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-}
-
-
 test("a new owner reviews the commit published after the producer turn ends", async () => {
   savePipelines([]);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-one-published-head-"));
@@ -871,7 +764,7 @@ test("held pending cursors let the real controller idle and release one successo
   await create(h.ports);
   const controller = new FlowPipelineController({
     tickPipelines: (entries) => tickPipelines(entries, h.ports),
-    tickFlows: async () => ({ changed: false }), scan: async () => ({ files: [], complete: true }),
+    scan: async () => ({ files: [], complete: true }),
     publishHeartbeat: (heartbeat) => {
       heartbeats.push(heartbeat);
       // Bound the old defect without leaving its microtask loop alive.
@@ -968,30 +861,6 @@ test("a failed CPU pressure sample admits the stage start", async () => {
   expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
   expect(loadPipelines()[0]!.stateDetail ?? "").not.toContain("CPU pressure");
 });
-
-
-test.skip("automatic drain holds a new embedded legacy review stage and releases once", async () => {
-  const h = harness();
-  let held = false;
-  h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;
-  await create(h.ports, [
-    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
-    { id: "review", kind: "review-loop", reviewer: { engine: "codex", model: "gpt-5.6-sol", effort: "high" }, prompt: "Review", next: null },
-  ] as never);
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  h.setConversationActive(false);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  held = true;
-  for (let i = 0; i < 3; i++) await tickPipelines([], h.ports);
-  expect(h.flowRequests).toHaveLength(0);
-  expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "review", state: "pending" });
-  held = false;
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  expect(h.flowRequests).toHaveLength(1);
-});
-
 
 test.each([false, true])("automatic drain holds reserved custody with dead owner=%s and resumes its identity", async (deadOwner) => {
   const oldDrain = process.env.LLV_PIPELINE_ACTIVATION_DRAIN;
@@ -1344,7 +1213,6 @@ for (const shape of ["foreign", "wrong-attempt", "missing-start", "malformed", "
     } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
   });
 }
-
 
 
 test("attempt Git custody replays its durable proof in a new controller process", async () => {

@@ -7,6 +7,108 @@ in **As built** below, with its reason; a passage that section overrides is
 marked there by its section number, and the rest of this document stands as
 written.
 
+## Public HTTPS reverse proxy setup
+
+To use passkeys at a public address, first deploy a release supporting
+`DELEGATUS_PUBLIC_ORIGIN`, then set it to `https://<PUBLIC_HOST>` in the
+Viewer's existing launch environment. Keep its existing access key enabled.
+`LLV_PUBLIC_ORIGIN` is the legacy spelling; the normal entry-point alias
+folding accepts the `DELEGATUS_` spelling. Use the installation's approved
+restart/deploy procedure to apply the environment. This is an explicit origin
+(scheme, DNS name and optional port), with no credentials, path, query or
+fragment. An absent, malformed or HTTP value admits no additional address;
+without an access key the setting admits none either. The existing phone and
+linked-install address settings keep their established behavior.
+
+The application can be deployed and configured while Caddy still rewrites
+Host and Origin to loopback. Approval sign-in, existing member sessions and
+link construction keep working in that configuration; passkeys remain
+unavailable there because the public WebAuthn origin is lost. After the server
+is configured, change only the public site's block as follows, replacing
+`<PUBLIC_HOST>` with the actual public authority (include its port if used):
+
+```diff
+ <PUBLIC_HOST> {
+-    @ownOrigin header Origin https://<PUBLIC_HOST>
+-    request_header @ownOrigin Origin http://127.0.0.1:8898
+     reverse_proxy 127.0.0.1:8898 {
+-        header_up Host 127.0.0.1:8898
++        header_up Host <PUBLIC_HOST>
+     }
+ }
+```
+
+Keep all other directives, including streaming, TLS and response headers,
+and the separate loopback-only site's bearer handling. Preserve Origin
+unchanged. Caddy supplies `X-Forwarded-For` and `X-Forwarded-Proto` itself;
+retain its [default treatment of untrusted incoming forwarded headers](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults). Keep
+the upstream listener on loopback. The application selects the public RP and
+HTTPS scheme from the configured origin and exact Host authority, independently
+of forwarded headers. Host is an address selector and grants no authentication
+or local-entry authority. `rejectForeignHost` checks the server allowlist on
+every route; `rejectCrossOrigin` pins a public browser's complete Origin,
+including scheme and port. WebAuthn verification separately checks the origin
+inside the signed ceremony data. A public Origin through a loopback Host is
+refused. Non-browser callers may omit Origin and still need their usual
+credentials.
+
+The operator backs up, edits, validates and reloads Caddy. These commands are
+operator steps; preparing a release does not execute them:
+
+```sh
+pkexec cp -p /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-passkeys
+# Apply the diff above to /etc/caddy/Caddyfile with your privileged editor.
+pkexec caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+# Continue only if validation succeeded.
+pkexec systemctl reload caddy
+curl --fail --silent --show-error 'https://<PUBLIC_HOST>/api/team/public'
+```
+
+On a team installation the response must show the public `hostName` and
+`methods.passkey.available: true`. In a signed-in browser at that address,
+register a passkey in Members, sign out and sign in with it. An existing
+passkey for another origin remains specific to that origin. Approval sign-in
+remains available. This configuration neither enables nor configures Telegram.
+
+To undo the proxy change, restore the backup, validate, then reload:
+
+```sh
+pkexec cp -p /etc/caddy/Caddyfile.before-passkeys /etc/caddy/Caddyfile
+pkexec caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+# Continue only if validation succeeded.
+pkexec systemctl reload caddy
+```
+
+The configured server remains compatible with the restored loopback rewrite.
+To roll back the application too, restore the proxy first, then remove the new
+environment setting through the installation's approved restart procedure.
+
+### Host and Origin consumers
+
+The old rewrite adapted a public address to the local Host allowlist and CSRF
+checks. Both headers had to change together: changing Host alone leaves the
+browser's public Origin outside that allowlist. The public configuration above
+gives those checks an explicit public address instead.
+
+| Consumer | Header use and effect |
+| --- | --- |
+| `src/proxy.ts`, `src/lib/sameOrigin.ts` | Host allowlist before perimeter exceptions, reads, streams and identity; Origin and Sec-Fetch-Site on route mutations. The configured public authority and browser origin are exact matches. |
+| `src/lib/team/http.ts`, `src/lib/team/passkeys.ts` | Host selects RP, displayed host name, invite/handoff link origin and Telegram request display context. Registration and sign-in verify signed client data against the RP origin. Forwarded Host never selects an RP. |
+| `src/lib/team/sessions.ts` | Configured public Host makes member cookies Secure. Existing HTTPS / X-Forwarded-Proto handling remains for other entries, including sign-out. |
+| `src/proxy.ts`, `src/lib/team/gate.ts`, `src/app/api/access/phone/route.ts`, `src/app/api/links/route.ts` | X-Forwarded-Proto sets Secure on the perimeter and solo-operator cookies; Caddy overwrites it at the TLS edge. It grants no identity. |
+| `src/app/api/spawn/admission.ts` | Compares Origin's authority to Host plus Sec-Fetch-Site when distinguishing browser submissions. Preserving the public pair keeps them equal. |
+| `src/runtime-host/deploymentProxy.ts` | The trusted local entry injects a bearer only for loopback Host with no Forwarded, X-Forwarded-For or X-Real-IP. The same rule applies to HTTP and WebSocket upgrades; upgrades forward the original headers. A fixed public Host never qualifies. |
+| `src/lib/mcp/httpAccess.ts` | Requires the declared loopback bind, loopback URL/Host/Origin, local forwarding constraints and its own derived credential. Public Host cannot claim MCP loopback access. |
+| `src/app/api/peer/v1/self-check/route.ts`, `src/lib/links/self.ts` | Nonce-bound self-check records Host and forwarding headers for diagnostics; the Host observation determines whether a proxy rewrote the address. Headers do not configure the public origin. |
+| `src/app/api/artifact/frame/[...rest]/route.ts` | Reflects only the opaque `null` Origin for signed, sandboxed frames, behind the Host perimeter. |
+| `src/lib/mcp/bindings.ts`, `src/lib/links/client.ts`, `src/lib/links/self.ts`, `src/lib/externalRelay/client.ts` | First-party clients produce Host/Origin for their selected target; self-check alone can override Host under its nonce. Voice tool contracts forbid overriding Host / `:authority`. |
+
+Runtime Codex WebSockets use their separate local transport; this setup changes
+no WebSocket authentication. The public-origin setup is covered by
+`src/app/api/team/passkeyProxy.routes.test.ts` over ephemeral HTTP routes and
+real WebAuthn verification, and `src/lib/publicOrigin.test.ts` covers malformed
+configuration, hostile headers and complete-origin matching.
+
 ## 0. Originating requirement
 
 The pinned specification of this pipeline task, 2026-09-26. The record is the

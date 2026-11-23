@@ -97,6 +97,8 @@ export interface ChatStateOptions {
   /** The runtime lost the host: screen-level, outranks every entry signal. */
   offline?: boolean;
   nowMs?: number;
+  /** A decision form of this project is open and the seat's own turn is over: what would read «done» reads «waiting». Working, limit and the rest keep their words. */
+  decisionWaiting?: boolean;
 }
 
 /** How many deliveries the account-switch fence is holding for this card. */
@@ -127,7 +129,7 @@ export function heldMessages(file: FileEntry, nowMs: number = Date.now()): numbe
 }
 
 /** The one state of a conversation. */
-export function chatState(file: FileEntry, { offline = false, nowMs = Date.now() }: ChatStateOptions = {}): ChatStateKey {
+export function chatState(file: FileEntry, { offline = false, nowMs = Date.now(), decisionWaiting = false }: ChatStateOptions = {}): ChatStateKey {
   if (offline) return "offline";
   if (file.proc === "killed" && turnLeftOpen(file)) return "killed";
   /* Stalled keeps the queue's own TTL judgement: a permission prompt from two
@@ -142,8 +144,8 @@ export function chatState(file: FileEntry, { offline = false, nowMs = Date.now()
   /* A conversation that finished its turn and is waiting on the operator is
      the queue's business; the attention id is what says so. */
   if (attentionId(file, nowMs / 1000) !== null) return "waiting";
-  if (file.parent !== null && file.activity === "recent" && file.proc !== "running") return "returned";
-  return "done";
+  if (file.parent !== null && file.activity === "recent" && file.proc !== "running") return decisionWaiting ? "waiting" : "returned";
+  return decisionWaiting ? "waiting" : "done";
 }
 
 export interface ChatStateBits {

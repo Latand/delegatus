@@ -49,7 +49,10 @@ test("updates clone the stored data, invalidate the view and preserve prior snap
   expect(second.data).toEqual(written);
   expect(second.view).not.toBe(first.view);
   expect(second.view.repository("acme/renamed")).toBe(second.view.repository("acme/widgets"));
-  expect(fs.readFileSync(file, "utf8")).toBe(`${JSON.stringify(written)}\n`);
+  // The write imported the file into state.sqlite; a fresh reader sees the write.
+  expect(fs.statSync(file).isDirectory()).toBe(true);
+  resetForgeCacheForTests();
+  expect(readForgeCache(file).data).toEqual(written);
 });
 
 test("a same-size same-mtime replacement rebuilds the indexed view", () => {

@@ -2,16 +2,23 @@ import type { NextRequest } from "next/server";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { pipelineSelectionSource, loadPipelinesForList } from "@/lib/pipelines/store";
+import { findPipelineRecord, loadPipelinesForList } from "@/lib/pipelines/store";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { currentSeat } from "@/lib/orchestrator/seatChannel";
+import { authorizedManagerSeats } from "@/lib/orchestrator/authority";
+import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { loadPrototypeTask } from "@/lib/tasks/store";
 import { runsElsewhere } from "@/lib/links/linked";
 import type { PrototypeReviewRound } from "./types";
 import { PrototypeError } from "./input";
 
 export interface PrototypeCaller { conversationId: string | null; project: string | null }
+export const PROTOTYPE_RECEIPT_SCOPE_HEADER = "x-llv-prototype-receipt-scope";
+/** The same identity at receipt admission, HTTP dispatch and settled replay. */
+export function prototypeProjectReceiptScope(conversationId: string, taskId: string | null, project: string): string {
+  return JSON.stringify(["prototype-project-v1", conversationId, canonicalProject(project), taskId]);
+}
+
 export interface PrototypeWorld {
   pipeline(id: string): import("@/lib/pipelines/types").Pipeline | null;
   caller(request: NextRequest): PrototypeCaller;
@@ -19,7 +26,7 @@ export interface PrototypeWorld {
   orchestrator(project: string): string | null;
 }
 export const prototypeWorld: PrototypeWorld = {
-  pipeline: id => pipelineSelectionSource().read(id),
+  pipeline: id => findPipelineRecord(id),
   caller(request) {
     const id = callerConversationId(request);
     if (!id) {
@@ -32,15 +39,11 @@ export const prototypeWorld: PrototypeWorld = {
     return { conversationId: id, project: project ? canonicalProject(project) : null };
   },
   stage(conversationId) {
-    const found = loadPipelinesForList().flatMap(pipeline => pipeline.runs.flatMap(run => run.attempts
-      .filter(attempt => attempt.conversationId === conversationId && !attempt.historical)
-      .map(attempt => ({ taskIds: pipeline.taskIds, project: pipeline.project,
-        source: { conversationId, pipelineId: pipeline.id, stageId: run.stageId, attempt: attempt.n } }))));
-    if (found.length > 1) throw new PrototypeError("caller holds multiple pipeline stages; publication cannot choose a task",409);
-    return found[0] ?? null;
+    return prototypeStageForConversation(conversationId);
   },
   orchestrator(project) {
-    return currentSeat(project)?.conversationId ?? null;
+    return authorizedManagerSeats(productionManagerAuthoritySources()).find(seat =>
+      seat.project && canonicalProject(seat.project) === canonicalProject(project))?.conversationId ?? null;
   },
 };
 export function taskForPrototype(taskId: string, caller: PrototypeCaller, write = false) {
@@ -49,4 +52,15 @@ export function taskForPrototype(taskId: string, caller: PrototypeCaller, write 
   if (caller.conversationId && (!caller.project || canonicalProject(task.project) !== canonicalProject(caller.project))) throw new PrototypeError("prototype access is limited to the caller's project",403);
   if (write && runsElsewhere(task)) throw new PrototypeError("this task's prototypes are owned by another installation",409);
   return task;
+}
+
+/** Shared task inference for HTTP admission and caller-bound receipt recovery. */
+export function prototypeStageForConversation(conversationId: string,
+  pipelines: readonly import("@/lib/pipelines/types").Pipeline[] = loadPipelinesForList()): ReturnType<PrototypeWorld["stage"]> {
+  const found = pipelines.flatMap(pipeline => pipeline.runs.flatMap(run => run.attempts
+    .filter(attempt => attempt.conversationId === conversationId && !attempt.historical)
+    .map(attempt => ({ taskIds: pipeline.taskIds, project: pipeline.project,
+      source: { conversationId, pipelineId: pipeline.id, stageId: run.stageId, attempt: attempt.n } }))));
+  if (found.length > 1) throw new PrototypeError("caller holds multiple pipeline stages; publication cannot choose a task",409);
+  return found[0] ?? null;
 }

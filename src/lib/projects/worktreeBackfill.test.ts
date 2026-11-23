@@ -7,6 +7,7 @@ import { canonicalProject, persistProjectAliases, resetProjectAliasesForTests } 
 import { directoryProjectId, projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 import { projectInfoFromCwd, recordRecoveredWorktrees } from "@/lib/scanner/describe";
 import { projectCatalogSnapshotFromRaw } from "@/lib/scanner/projectCatalog";
+import { projectCatalogDocumentForTests, seedProjectCatalogForTests } from "@/lib/scanner/projectCatalogStore";
 import { readWorktreeRecoveries } from "./worktreeRecoveryStore";
 import { backfillWorktreeProjects, planWorktreeBackfill } from "./worktreeBackfill";
 
@@ -33,7 +34,9 @@ function fixture() {
     return filename;
   };
   transcript(repo, {}, identity.project);
-  const write = () => fs.writeFileSync(path.join(state, "project-catalog.json"), JSON.stringify({ version: 2, files }));
+  /* The catalog as a scan would have stored it: through the store, so a
+     later read imports nothing and writes no state of its own. */
+  const write = () => seedProjectCatalogForTests({ version: 2, files }, path.join(state, "project-catalog.json"));
   return { state, repo, identity, files, transcript, write, disk };
 }
 
@@ -45,15 +48,18 @@ test("dry-run plans supported removed siblings, uses native hints and changes no
   f.transcript(path.join(f.disk, "elsewhere", "widgets-lane-9"));
   fs.mkdirSync(f.repo + "-lane-10"); f.transcript(f.repo + "-lane-10");
   f.write();
-  const before = fs.readFileSync(path.join(f.state, "project-catalog.json"));
+  const before = projectCatalogDocumentForTests(path.join(f.state, "project-catalog.json"));
+  const listing = fs.readdirSync(f.state).sort();
+  const database = fs.readFileSync(path.join(f.state, "state.sqlite"));
   let rescans = 0;
   const plan = await backfillWorktreeProjects({}, async () => { rescans++; });
   expect(plan.folded).toHaveLength(4);
   expect(plan.folded.every(item => item.reason === "sibling-name-and-branch-hint")).toBe(true);
   expect(plan.leftAlone.map(item => item.reason).sort()).toEqual(["checkout-present-or-unreadable", "conflicting-repository-hint", "no-known-sibling-repository", "no-known-sibling-repository"].sort());
   expect(rescans).toBe(0);
-  expect(fs.readdirSync(f.state)).toEqual(["project-catalog.json"]);
-  expect(fs.readFileSync(path.join(f.state, "project-catalog.json"))).toEqual(before);
+  expect(fs.readdirSync(f.state).sort()).toEqual(listing);
+  expect(fs.readFileSync(path.join(f.state, "state.sqlite"))).toEqual(database);
+  expect(projectCatalogDocumentForTests(path.join(f.state, "project-catalog.json"))).toEqual(before);
 });
 
 test("apply records checkout roots, folds directory keys, rescans and can be repeated", async () => {
@@ -193,11 +199,11 @@ test("large native metadata retains conflicting hints through preview, apply and
   }));
   const first = await projectCatalogSnapshotFromRaw(raw, { recoverWorktrees: false });
   expect(first.projectByPath.get(foreignFile)).toBe(directoryProjectId(foreignCwd));
-  const before = fs.readFileSync(path.join(f.state, "project-catalog.json"));
+  const before = projectCatalogDocumentForTests(path.join(f.state, "project-catalog.json"));
   const preview = await backfillWorktreeProjects();
   expect(preview.folded).toEqual([]);
   expect(preview.leftAlone.map(item => item.reason)).toEqual(["conflicting-repository-hint", "conflicting-repository-hint"]);
-  expect(fs.readFileSync(path.join(f.state, "project-catalog.json"))).toEqual(before);
+  expect(projectCatalogDocumentForTests(path.join(f.state, "project-catalog.json"))).toEqual(before);
   let rescanned: typeof first | undefined;
   const applied = await backfillWorktreeProjects({ dryRun: false }, async () => {
     rescanned = await projectCatalogSnapshotFromRaw(raw, { recoverWorktrees: false });

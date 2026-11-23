@@ -1,12 +1,18 @@
+import { issueDeliveryHoldsArchive } from "@/lib/forge/issueDelivery";
+import { loadTasksByIds } from "@/lib/tasks/store";
+import { withdrawPipelineMerge } from "./mergeSuccessor";
+import { hostTerminationCheckpointCurrent, hostTerminationKey } from "./hostTerminationProof";
+import { settleAttemptAccounting } from "./attemptAccounting";
+import { declaredClassSchema } from "./accounting";
+import { settleClosedPipelineAttempts } from "./closeAttempts";
+import { assertPipelineNotRetiring, admitAttemptRetirement } from "./retirementClaim";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { agentRegistry } from "@/lib/agent/registry";
 import { defaultStageFailEdge } from "./failEdgeBudget";
-import { isTaskSummaryContent } from "@/lib/tasks/summary";
-import { isStagePromptContext } from "./prompts";
-import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
 import { projectStoreSignature } from "@/lib/projects/persistence";
-import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { pipelinePauseInputSchema } from "./pauseMetadata";
-import { forEachCooperatively } from "@/lib/cooperative";
+import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
 import { StateLockDeferredError, outsideStateLockWait, stateLockAttempt, stateLockProcessKind, waitForStateLock } from "@/lib/state/lockWait";
 import { withWaitCorrelation } from "@/lib/blockingWaits";
@@ -16,35 +22,27 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
-
-import { isDismissedBy } from "@/lib/attention/dismissalTypes";
 import { pipelineHasPullRequest } from "@/lib/forge/resolve";
-import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { deliveryPullRequestRepository } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
 import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
-import { effortScale } from "@/lib/agent/efforts";
-import { validAgentMemoryMax, normalizeAgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
-import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
-import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readPipelineRowsForTasks, readRecipientPipelineEvidence, type PipelineRecipientSelection, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, StateSnapshotChangedError, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
+import { pipelineActivitySettled } from "./types";
+import type { Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelinePublication, PipelineStage } from "./types";
+import { PIPELINES_SCHEMA_VERSION, PIPELINE_ROLE_IDS, isPipeline, needsIntegrationReader, slugify } from "./storedRecord";
+export { PIPELINES_SCHEMA_VERSION, isEffectiveRole, pipelineGraphError, isStoredPipeline, isPipelineConversationSource } from "./storedRecord";
 
-import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_RESULT_CHARS } from "./limits";
-import { isLegacyReviewLoopStage, legacyReviewLoopReachable, legacyReviewLoopShapeValid, MAX_LEGACY_REVIEW_CONVERSIONS } from "./legacyReviewDefinition";
-import { normalizeStageOutputPath } from "./stageAccess";
-import { MAX_DECISION_ANSWER_CHARS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, pipelineActivitySettled } from "./types";
-import type { EffectivePipelineRole, Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelineEdgeActivation, PipelinePublication, PipelineStage, PipelineTerminalReap, PipelineUnconfirmedHost } from "./types";
-import { stageVerdictFrom } from "./verdict";
+
 
 /** Same opaque content revision used by MCP record acknowledgements. */
 export function pipelineRevision(pipeline: Pipeline): string {
   return crypto.createHash("sha256").update(JSON.stringify(pipeline)).digest("hex");
 }
 
-export const PIPELINES_SCHEMA_VERSION = 5;
 /** Older registries are migrated in memory on load; the file is rewritten in
     the current shape by the next successful mutation, never by a read. */
 const MIGRATABLE_SCHEMA_VERSIONS = new Set([2, 3, 4, PIPELINES_SCHEMA_VERSION]);
@@ -54,7 +52,6 @@ const stateDatabaseFile = () => statePath("state.sqlite");
 const artifactsRoot = () => statePath("pipelines");
 
 type PipelineFile = { schemaVersion: number; pipelines: Pipeline[] };
-const PIPELINE_ROLE_IDS = ["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer", "merger", "visual-critic"] as const;
 
 export class PipelineStoreError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -79,1063 +76,11 @@ function readJson(filePath: string): { raw: unknown; source: string } | undefine
   }
 }
 
-export function isEffectiveRole(value: unknown): value is EffectivePipelineRole {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const role = value as Partial<EffectivePipelineRole>;
-  if (role.engine !== "claude" && role.engine !== "codex") return false;
-  if (role.serviceTier !== undefined && (role.engine !== "codex" || typeof role.serviceTier !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(role.serviceTier))) return false;
-  if (role.preferredServiceTier !== undefined && (role.engine !== "codex" || typeof role.preferredServiceTier !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(role.preferredServiceTier))) return false;
-  if (role.serviceTierSource !== undefined && role.serviceTierSource !== "explicit" && role.serviceTierSource !== "role-default") return false;
-  if (role.model !== null && typeof role.model !== "string") return false;
-  if (role.model && role.engine === "claude" && !normalizeClaudeLaunchModel(role.model)) return false;
-  if (role.model && role.engine === "codex" && (role.model.length > 128 || !role.model.startsWith("gpt-") || /[\u0000-\u001f\u007f]/.test(role.model))) return false;
-  if (role.effort !== null && (typeof role.effort !== "string" || !effortScale(role.engine, role.model)!.includes(role.effort))) return false;
-  return (
-    (role.roleId === null || PIPELINE_ROLE_IDS.includes(role.roleId as typeof PIPELINE_ROLE_IDS[number])) &&
-    (role.access === "read-only" || role.access === "read-write") &&
-    (role.promptScaffold === null || (typeof role.promptScaffold === "string" && role.promptScaffold.length <= MAX_SCAFFOLD_LENGTH))
-  );
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
-}
-
-function isVerdict(value: unknown): boolean {
-  // Older persisted attempts may contain a bare severity such as "P1".
-  // New completion input still requires finding text; only stored history uses this path.
-  return value === null || stageVerdictFrom(value, { allowLegacySeverityOnly: true }) !== null;
-}
-
-function isReviewFlowSync(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const sync = value as Record<string, unknown>;
-  const hostClaim = sync.hostClaim as Record<string, unknown> | null | undefined;
-  const hostClaimValid = hostClaim === undefined || hostClaim === null || (
-    typeof hostClaim === "object"
-    && !Array.isArray(hostClaim)
-    && /^(?:claude|codex):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(hostClaim.sessionKey))
-    && /^(?:default|unknown|managed:[0-9a-f]{12})$/.test(String(hostClaim.accountRef))
-  );
-  const flowStates = ["waiting_ready", "spawn_pending", "spawning", "reviewing", "relay_pending", "relaying", "fixing", "approved", "done_comment", "needs_decision", "paused", "closed"];
-  return typeof sync.generation === "string"
-    && (sync.sourceRevision === undefined || (Number.isInteger(sync.sourceRevision) && (sync.sourceRevision as number) >= 0))
-    && Number.isInteger(sync.roundCount) && (sync.roundCount as number) >= 0
-    && isNullableString(sync.implementerHeadSha)
-    && isNullableString(sync.reviewerHeadSha)
-    && (sync.verdict === null || ["APPROVE", "REQUEST_CHANGES", "COMMENT"].includes(String(sync.verdict)))
-    && flowStates.includes(String(sync.relayState))
-    && (sync.terminalState === null || flowStates.includes(String(sync.terminalState)))
-    && hostClaimValid
-    && typeof sync.synchronizedAt === "string"
-    && isNullableString(sync.sourceUpdatedAt)
-    && (sync.lagMs === null || (typeof sync.lagMs === "number" && Number.isFinite(sync.lagMs) && sync.lagMs >= 0));
-}
-
-function isActivation(value: unknown): value is PipelineEdgeActivation | null {
-  if (value === null || value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const activation = value as Partial<PipelineEdgeActivation>;
-  return (
-    typeof activation.stageId === "string" &&
-    Number.isInteger(activation.attempt) &&
-    (activation.attempt as number) >= 1 &&
-    (activation.edge === "pass" || activation.edge === "fail") &&
-    (activation.budgetSpent === undefined || (activation.budgetSpent === true && activation.edge === "fail"))
-  );
-}
-
-function isVerdictRecovery(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const recovery = value as Record<string, unknown>;
-  return (
-    ["pending", "recovered", "exhausted"].includes(String(recovery.state))
-    && Number.isInteger(recovery.checks)
-    && (recovery.checks as number) >= 0
-    && Number.isInteger(recovery.maxChecks)
-    && (recovery.maxChecks as number) >= 1
-    && (recovery.checks as number) <= (recovery.maxChecks as number)
-    && typeof recovery.startedAt === "string"
-    && typeof recovery.lastCheckedAt === "string"
-    && isNullableString(recovery.nextCheckAt)
-    && typeof recovery.reason === "string"
-    && recovery.reason.length > 0
-    && recovery.reason.length <= 1_000
-    && (recovery.messageTs === null
-      || (typeof recovery.messageTs === "number" && Number.isFinite(recovery.messageTs) && recovery.messageTs >= 0))
-  );
-}
-
-function isProviderCondition(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const condition = value as Record<string, unknown>;
-  return ["usage_limit", "transient", "auth_required", "other", "host_death", "turn_cut"].includes(String(condition.kind))
-    && isNullableString(condition.scope) && (condition.scope === null || String(condition.scope).length <= 64)
-    && isNullableString(condition.resetLabel) && (condition.resetLabel === null || String(condition.resetLabel).length <= 160)
-    && typeof condition.label === "string" && condition.label.length > 0 && condition.label.length <= 100;
-}
-
-/** Transcript evidence may use the filesystem's fractional millisecond mtime. */
-function isEvidenceTimestamp(value: unknown): boolean {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
-}
-
-function isProviderWait(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const wait = value as Record<string, unknown>;
-  const dated = (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time));
-  return isProviderCondition(wait.condition) && typeof wait.text === "string" && wait.text.length <= 300
-    && isNullableString(wait.accountId) && isEvidenceTimestamp(wait.turnTs)
-    && Number.isSafeInteger(wait.tries) && Number(wait.tries) >= 0
-    && dated(wait.startedAt) && dated(wait.resumeAt)
-    && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
-    && (wait.actionAt === undefined || dated(wait.actionAt))
-    && (wait.continuationRequestedAt === undefined || dated(wait.continuationRequestedAt))
-    && (wait.capacityProbes === undefined || Number.isSafeInteger(wait.capacityProbes) && Number(wait.capacityProbes) >= 0)
-    && (wait.retryCancelled === undefined || typeof wait.retryCancelled === "boolean")
-    && (wait.stageRetry === undefined || (
-      wait.stageRetry !== null && typeof wait.stageRetry === "object" && !Array.isArray(wait.stageRetry)
-      && isNullableString((wait.stageRetry as Record<string, unknown>).controlGeneration)
-      && typeof (wait.stageRetry as Record<string, unknown>).detail === "string"
-      && ((wait.stageRetry as Record<string, unknown>).fallback === undefined || typeof (wait.stageRetry as Record<string, unknown>).fallback === "boolean")
-    ))
-    && (wait.switchedAccountId === undefined || typeof wait.switchedAccountId === "string")
-    && (wait.failedAccounts === undefined || isStringList(wait.failedAccounts) && wait.failedAccounts.length <= 32);
-}
-
-function isProviderRecoveries(value: unknown): boolean {
-  if (value === undefined) return true;
-  return Array.isArray(value) && value.length <= 8 && value.every((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-    return typeof entry.at === "string" && Number.isFinite(Date.parse(entry.at))
-      && ["wait", "continue", "switch", "relaunch", "park"].includes(String(entry.action))
-      && isProviderCondition(entry.condition) && typeof entry.summary === "string" && entry.summary.length <= 2000;
-  });
-}
-
-function isRuntimeSwitches(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!Array.isArray(value) || value.length > 8) return false;
-  const textOrNull = (item: unknown) => item === null || typeof item === "string";
-  const seat = (item: Record<string, unknown> | undefined) => !!item && ["claude", "codex"].includes(String(item.engine))
-    && textOrNull(item.model) && textOrNull(item.effort) && textOrNull(item.serviceTier) && textOrNull(item.accountId);
-  let open = 0;
-  return value.every((item, index) => item && typeof item.id === "string" && item.id.length > 0 && Number.isSafeInteger(item.seq) && item.seq > 0
-    && (!index || item.seq > value[index - 1].seq)
-    && typeof item.requestedAt === "string" && Number.isFinite(Date.parse(item.requestedAt)) && isActor(item.actor)
-    && ["fork", "handoff"].includes(item.mode)
-    && (item.inPlace === undefined || item.inPlace === true && item.mode === "fork")
-    && (item.cut === undefined || ["boundary", "none"].includes(item.cut))
-    && (item.tierCut === undefined || ["cut", "armed", "none", "turn-ended", "cancelled", "host-gone", "unknown"].includes(item.tierCut))
-    && (item.appliedServiceTier === undefined || item.appliedServiceTier === null || typeof item.appliedServiceTier === "string")
-    && (item.cutTurnId === undefined || typeof item.cutTurnId === "string")
-    && (item.turbo === undefined || typeof item.turbo === "string" && item.turbo.length <= 80)
-    && ["requested", "cutting", "switching", "continuing", "committed", "rolled-back", "failed", "superseded"].includes(item.phase)
-    && (!["requested", "cutting", "switching", "continuing"].includes(item.phase) || ++open <= 1)
-    && seat(item.from) && seat(item.to)
-    && typeof item.from.conversationId === "string" && textOrNull(item.from.launchId) && textOrNull(item.from.sessionId) && textOrNull(item.from.agentPath)
-    && typeof item.to.accountId === "string" && typeof item.to.accountPinned === "boolean"
-    && ["cutAt", "continuedAt", "settledAt"].every(key => item[key] === undefined || typeof item[key] === "string" && Number.isFinite(Date.parse(item[key])))
-    && (item.reconfigureNoop === undefined || typeof item.reconfigureNoop === "boolean")
-    && (item.retry === undefined || item.retry && typeof item.retry.reason === "string" && item.retry.reason.length <= 2000
-      && typeof item.retry.requestedAt === "string" && Number.isFinite(Date.parse(item.retry.requestedAt))
-      && (item.retry.completedAt === undefined || typeof item.retry.completedAt === "string" && Number.isFinite(Date.parse(item.retry.completedAt)))
-      && (item.retry.operatorStoppedAt === undefined || typeof item.retry.operatorStoppedAt === "string" && Number.isFinite(Date.parse(item.retry.operatorStoppedAt)))
-      && (item.retry.pendingReason === undefined || typeof item.retry.pendingReason === "string" && item.retry.pendingReason.length <= 2000))
-    && (item.rollback === undefined || typeof item.rollback === "boolean")
-    && (item.continuationKey === undefined || typeof item.continuationKey === "string")
-    && (item.continuationDispatch === undefined || typeof item.continuationDispatch.key === "string"
-      && typeof item.continuationDispatch.at === "string" && Number.isFinite(Date.parse(item.continuationDispatch.at)))
-    && (item.outcome === undefined || typeof item.outcome === "string")
-    && (item.launch === undefined || typeof item.launch.clientAttemptId === "string" && textOrNull(item.launch.launchId) && textOrNull(item.launch.conversationId))
-    && (item.handoff === undefined || typeof item.handoff.prompt === "string" && /^[a-f0-9]{64}$/.test(item.handoff.digest)
-      && item.handoff.bytes === Buffer.byteLength(item.handoff.prompt) && item.handoff.bytes <= 32000));
-}
-
-function isStageSuspension(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const suspension = value as Record<string, unknown>;
-  const dated = (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time));
-  return (suspension.reason === "pause" || suspension.reason === "account") && typeof suspension.detail === "string"
-    && dated(suspension.requestedAt)
-    && (suspension.stoppedAt === undefined || dated(suspension.stoppedAt))
-    && (suspension.stopRevision === undefined || Number.isSafeInteger(suspension.stopRevision) && (suspension.stopRevision as number) >= 0)
-    && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt))
-    && (suspension.retryRequestedAt === undefined || dated(suspension.retryRequestedAt))
-    && (suspension.hold === undefined || isSuspensionHold(suspension.hold));
-}
-
-function isSuspensionHold(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const hold = value as Record<string, unknown>;
-  return typeof hold.accountId === "string" && hold.accountId.length > 0
-    && (hold.resetsAt === null || Number.isSafeInteger(hold.resetsAt) && (hold.resetsAt as number) >= 0)
-    && (hold.observedAt === null || typeof hold.observedAt === "string" && Number.isFinite(Date.parse(hold.observedAt)));
-}
-
-function isPublicationTextRepair(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const repair = value as Record<string, unknown>;
-  return typeof repair.sha === "string" && /^[0-9a-f]{40}$/i.test(repair.sha)
-    && (repair.pullRequestHead === undefined || typeof repair.pullRequestHead === "string" && /^[0-9a-f]{40}$/i.test(repair.pullRequestHead))
-    && typeof repair.stageId === "string" && typeof repair.detail === "string"
-    && Number.isSafeInteger(repair.attempt) && (repair.attempt as number) >= 1
-    && Number.isSafeInteger(repair.rounds) && (repair.rounds as number) >= 0
-    && Number.isSafeInteger(repair.maxRounds) && (repair.maxRounds as number) >= (repair.rounds as number)
-    && ["title", "body", "title/body"].includes(String(repair.part))
-    && ["pending", "answered", "exhausted"].includes(String(repair.state))
-    && (repair.reportSeq === null || Number.isSafeInteger(repair.reportSeq))
-    && typeof repair.requestedAt === "string" && Number.isFinite(Date.parse(repair.requestedAt))
-    && (repair.delivered === undefined || typeof repair.delivered === "boolean")
-    && (repair.answeredAt === undefined || typeof repair.answeredAt === "string" && Number.isFinite(Date.parse(repair.answeredAt)));
-}
-
-function isTerminalOutputPublication(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const publication = value as Record<string, unknown>;
-  return ["localSha", "pullRequestHead"].every(key => typeof publication[key] === "string"
-    && /^[0-9a-f]{40}$/i.test(publication[key] as string));
-}
-
-function isAttempt(value: unknown, index: number): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const attempt = value as Record<string, unknown>;
-  return (
-    attempt.n === index + 1 &&
-    (attempt.cloud === undefined || isCloudStageAttempt(attempt.cloud)) &&
-    (attempt.executionRuntime === undefined || ["local", "cloud", "cloud-then-local"].includes(String(attempt.executionRuntime))) &&
-    (attempt.decisionAnswerId === undefined || (typeof attempt.decisionAnswerId === "string" && attempt.decisionAnswerId.length > 0 && attempt.decisionAnswerId.length <= 200)) &&
-    (attempt.historical === undefined || typeof attempt.historical === "boolean") &&
-    (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
-    (attempt.acceptedForReview === undefined || attempt.acceptedForReview === true) &&
-    ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"].includes(String(attempt.state)) &&
-    isEffectiveRole(attempt.effectiveRole) &&
-    isNullableString(attempt.launchId) &&
-    isNullableString(attempt.conversationId) &&
-    isNullableString(attempt.sessionId) &&
-    isNullableString(attempt.agentPath) &&
-    isNullableString(attempt.paneId) &&
-    (attempt.accountId === undefined || isNullableString(attempt.accountId)) &&
-    (attempt.usageLimitedAccounts === undefined || (
-      Array.isArray(attempt.usageLimitedAccounts)
-      && attempt.usageLimitedAccounts.every((limited) => (
-        limited !== null
-        && typeof limited === "object"
-        && !Array.isArray(limited)
-        && typeof limited.accountId === "string"
-        && limited.accountId.length > 0
-        && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
-        && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
-        && (limited.limitedAt === undefined || limited.limitedAt === null || isEvidenceTimestamp(limited.limitedAt))
-        && (limited.turnId === undefined || (typeof limited.turnId === "string" && limited.turnId.length > 0 && limited.turnId.length <= 100))
-      ))
-      && new Set(attempt.usageLimitedAccounts.map((limited) => `${limited.engine ?? ""}:${limited.accountId}`)).size === attempt.usageLimitedAccounts.length
-    )) &&
-    (attempt.providerFallbackRetries === undefined || Number.isSafeInteger(attempt.providerFallbackRetries) && Number(attempt.providerFallbackRetries) >= 0)
-    && (attempt.providerRecoveryBudget === undefined || (
-      attempt.providerRecoveryBudget !== null && typeof attempt.providerRecoveryBudget === "object"
-      && !Array.isArray(attempt.providerRecoveryBudget)
-      && Number.isSafeInteger((attempt.providerRecoveryBudget as Record<string, unknown>).tries)
-      && Number((attempt.providerRecoveryBudget as Record<string, unknown>).tries) >= 0
-      && ((attempt.providerRecoveryBudget as Record<string, unknown>).engine === undefined
-        || ["claude", "codex", "copilot"].includes(String((attempt.providerRecoveryBudget as Record<string, unknown>).engine)))
-      && ((attempt.providerRecoveryBudget as Record<string, unknown>).triedAccounts === undefined
-        || isStringList((attempt.providerRecoveryBudget as Record<string, unknown>).triedAccounts))
-      && ((attempt.providerRecoveryBudget as Record<string, unknown>).failedAccounts === undefined
-        || isStringList((attempt.providerRecoveryBudget as Record<string, unknown>).failedAccounts))
-      && typeof (attempt.providerRecoveryBudget as Record<string, unknown>).startedAt === "string"
-      && Number.isFinite(Date.parse((attempt.providerRecoveryBudget as Record<string, unknown>).startedAt as string))
-    )) &&
-    isProviderWait(attempt.providerWait) &&
-    isRestoreContinuation(attempt.restoreContinuation) &&
-    isProviderRecoveries(attempt.providerRecoveries) &&
-    isNullableString(attempt.flowId) &&
-    (attempt.expectedReviewHeadSha === undefined || isNullableString(attempt.expectedReviewHeadSha)) &&
-    (attempt.reviewHeadSha === undefined || isNullableString(attempt.reviewHeadSha)) &&
-    (attempt.publicationIntegration === undefined || (
-      attempt.publicationIntegration !== null && typeof attempt.publicationIntegration === "object"
-      && !Array.isArray(attempt.publicationIntegration)
-      && ["passedSha", "acceptedSha", "mainSha"].every((key) => typeof (attempt.publicationIntegration as Record<string, unknown>)[key] === "string"
-        && /^[0-9a-f]{40}$/i.test((attempt.publicationIntegration as Record<string, string>)[key]))
-    )) &&
-    isPublicationTextRepair(attempt.publicationTextRepair) &&
-    isTerminalOutputPublication(attempt.terminalOutputPublication) &&
-    (attempt.publicationRetry === undefined || (
-      attempt.publicationRetry !== null && typeof attempt.publicationRetry === "object"
-      && !Array.isArray(attempt.publicationRetry)
-      && ["sha", "operationId", "retryAt"].every((key) => typeof (attempt.publicationRetry as Record<string, unknown>)[key] === "string")
-      && Number.isSafeInteger((attempt.publicationRetry as Record<string, unknown>).failures)
-    )) &&
-    isReviewFlowSync(attempt.reviewFlowSync) &&
-    isNullableString(attempt.startedAt) &&
-    isNullableString(attempt.completedAt) &&
-    (attempt.outputBaseHead === undefined || (typeof attempt.outputBaseHead === "string" && /^[0-9a-f]{40}$/i.test(attempt.outputBaseHead))) &&
-    (attempt.input === undefined || isNullableString(attempt.input)) &&
-    isActivation(attempt.activatedBy) &&
-    isNullableString(attempt.output) &&
-    isVerdict(attempt.verdict) &&
-    isNullableString(attempt.error) &&
-    (attempt.decisionRequested === undefined || typeof attempt.decisionRequested === "boolean") &&
-    (attempt.budgetSpent === undefined || typeof attempt.budgetSpent === "boolean") &&
-    (attempt.reviewedHead === undefined || isNullableString(attempt.reviewedHead)) &&
-    isVerdictRecovery(attempt.verdictRecovery) &&
-    isRuntimeSwitches(attempt.runtimeSwitches) &&
-    isStageSuspension(attempt.suspension) &&
-    (attempt.accountHolds === undefined || Array.isArray(attempt.accountHolds) && attempt.accountHolds.every(isSuspensionHold)) &&
-    (attempt.runtimeEvidenceSince === undefined || typeof attempt.runtimeEvidenceSince === "string" && Number.isFinite(Date.parse(attempt.runtimeEvidenceSince))) &&
-    (attempt.runtimeAccountPin === undefined || isNullableString(attempt.runtimeAccountPin)) &&
-    (attempt.memoryCap === undefined || normalizeAgentMemoryCap(attempt.memoryCap) !== null) &&
-    isAttemptDefinition(attempt.definition) &&
-    isSpawnActivation(attempt.activation) &&
-    isSpawnAdmissionBudget(attempt.spawnAdmissionBudget) &&
-    isStageReport(attempt.report) &&
-    isRetiredLaunches(attempt.retiredLaunches) &&
-    isStartupOwnerWait(attempt.startupOwnerWait) &&
-    (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
-      && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
-    isUnresolvedTermination(attempt.unresolvedTermination) &&
-    isPriorWriterStop(attempt.priorWriterStop) &&
-    isPermissionDenials(attempt.permissionDenials)
-  );
-}
-
-function isRestoreContinuation(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  const timestamp = (value: unknown) => typeof value === "string" && Number.isFinite(Date.parse(value));
-  return ["cutAt", "requestedAt", "deadline"].every(key => timestamp(record[key]))
-    && ["conversationId", "transcriptPath"].every(key => typeof record[key] === "string" && record[key].length > 0)
-    && (record.acceptedAt === undefined || timestamp(record.acceptedAt))
-    && (record.promptBoundary === null || Number.isSafeInteger(record.promptBoundary) && Number(record.promptBoundary) >= 0)
-    && Number.isSafeInteger(record.count) && Number(record.count) >= 1 && Number(record.count) <= 3
-    && typeof record.clientMessageId === "string" && record.clientMessageId.length > 0 && record.clientMessageId.length <= 300;
-}
-
-function isStartupOwnerWait(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const wait = value as Record<string, unknown>;
-  return typeof wait.launchId === "string" && wait.launchId.length > 0
-    && typeof wait.deadline === "string" && Number.isFinite(Date.parse(wait.deadline));
-}
-
-function isPriorWriterStop(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const stop = value as Record<string, unknown>;
-  return typeof stop.conversationId === "string" && stop.conversationId.length > 0
-    && Number.isSafeInteger(stop.tries) && (stop.tries as number) >= 0
-    && typeof stop.lastAt === "string" && Number.isFinite(Date.parse(stop.lastAt))
-    && isNullableString(stop.error);
-}
-
-/** The automatic permission denials an attempt recorded (#2215). */
-function isPermissionDenials(value: unknown): boolean {
-  if (value === undefined) return true;
-  return Array.isArray(value) && value.every((denial) => {
-    if (!denial || typeof denial !== "object" || Array.isArray(denial)) return false;
-    const entry = denial as Record<string, unknown>;
-    return typeof entry.requestId === "string" && entry.requestId.length > 0
-      && isNullableString(entry.tool) && isNullableString(entry.command)
-      && isNullableString(entry.reason) && isNullableString(entry.reasonType)
-      && (entry.mode === "unattended" || entry.mode === "timeout")
-      && typeof entry.deniedAt === "string";
-  });
-}
-
-function isSpawnAdmissionBudget(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const budget = value as Record<string, unknown>;
-  const spent = budget.spent as Record<string, unknown> | undefined;
-  return !!spent && ["host", "writer", "controller"].every(kind => typeof spent[kind] === "number"
-    && Number.isFinite(spent[kind]) && Number(spent[kind]) >= 0 && Number(spent[kind]) <= 600_000)
-    && ["host", "writer", "controller"].includes(String(budget.kind))
-    && (budget.legacyLimitMs === undefined || typeof budget.legacyLimitMs === "number"
-      && Number.isFinite(budget.legacyLimitMs) && budget.legacyLimitMs >= 0 && budget.legacyLimitMs <= 600_000)
-    && (budget.inFlightKind === undefined || budget.inFlightKind === "host" || budget.inFlightKind === "writer")
-    && ["waitingSince", "inFlightSince"].every(key => budget[key] === undefined
-      || typeof budget[key] === "string" && Number.isFinite(Date.parse(budget[key] as string)))
-    && ["lastFailure", "lastWriterFailure"].every(key => budget[key] === undefined
-      || typeof budget[key] === "string" && (budget[key] as string).length <= 2_000);
-}
-
-function isSpawnActivation(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const activation = value as Record<string, unknown>;
-  const input = activation.input as Record<string, unknown> | undefined;
-  const owner = activation.owner as Record<string, unknown> | undefined;
-  return typeof activation.id === "string" && activation.id.length > 0
-    && ["reserved", "reserving", "dispatching", "settled"].includes(String(activation.phase))
-    && typeof activation.clientAttemptId === "string" && activation.clientAttemptId.length > 0
-    && typeof activation.startedAt === "string" && typeof activation.fence === "string"
-    && (activation.admissionStartedAt === undefined || typeof activation.admissionStartedAt === "string" && Number.isFinite(Date.parse(activation.admissionStartedAt)))
-    && (activation.replay === undefined || typeof activation.replay === "boolean")
-    && (activation.prepareInput === undefined || typeof activation.prepareInput === "boolean")
-    && (activation.cancelRequested === undefined || typeof activation.cancelRequested === "boolean")
-    && (activation.closeRequested === undefined || typeof activation.closeRequested === "boolean")
-    && (!owner || (Number.isSafeInteger(owner.pid) && Number(owner.pid) > 0
-      && isNullableString(owner.startIdentity) && isNullableString(owner.bootEpoch)))
-    && !!input && isEffectiveRole(input.role) && typeof input.prompt === "string"
-    && typeof input.cwd === "string" && typeof input.project === "string"
-    && typeof input.clientAttemptId === "string" && typeof input.title === "string"
-    && !!input.runtimeProfile && !!input.membership;
-}
-
-function isAttemptDefinition(value: unknown): boolean {
-  if (value === undefined || value === null) return true;
-  if (typeof value !== "object" || Array.isArray(value)) return false;
-  const definition = value as Record<string, unknown>;
-  const role = definition.role;
-  return (definition.runtime === undefined || definition.runtime === "local" || definition.runtime === "codex-cloud")
-    && validAgentMemoryMax(definition.agentMemoryMaxBytes)
-    && typeof definition.boundAt === "string"
-    && typeof definition.stageDigest === "string"
-    && typeof definition.prompt === "string"
-    && isNullableString(definition.account)
-    && (role === null || Boolean(role && typeof role === "object" && !Array.isArray(role) && (PIPELINE_ROLE_IDS as readonly unknown[]).includes((role as { roleId?: unknown }).roleId)))
-    && (definition.sandbox === null || definition.sandbox === "full" || definition.sandbox === "restricted")
-    && (definition.outputs === null || (Array.isArray(definition.outputs) && definition.outputs.every((output) => typeof output === "string")));
-}
-
-const GRAPH_EDIT_ACTION_NAMES: readonly string[] = ["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"];
-
-function isActor(value: unknown): boolean {
-  const actor = value as Record<string, unknown> | null;
-  return Boolean(actor && typeof actor === "object" && !Array.isArray(actor) && (actor.kind === "operator"
-    || (actor.kind === "agent" && isNullableString(actor.role) && isNullableString(actor.conversationId))));
-}
-
-function isStageProvenance(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const provenance = value as Record<string, unknown>;
-  const pullRequest = provenance.pullRequest as Record<string, unknown> | null;
-  return (provenance.state === undefined || ["pending", "complete", "unknown"].includes(String(provenance.state)))
-    && (provenance.pullRequestState === undefined || ["pending", "observed", "absent", "unknown"].includes(String(provenance.pullRequestState)))
-    && isNullableString(provenance.head)
-    && typeof provenance.branch === "string"
-    && (provenance.uncommitted === null
-      || (Array.isArray(provenance.uncommitted) && provenance.uncommitted.every((path) => typeof path === "string")))
-    && (pullRequest === null || Boolean(pullRequest && typeof pullRequest === "object" && !Array.isArray(pullRequest)
-      && typeof pullRequest.url === "string" && Number.isSafeInteger(pullRequest.number) && typeof pullRequest.state === "string"))
-    && Array.isArray(provenance.outputs)
-    && provenance.outputs.every((output) => Boolean(output && typeof output === "object" && !Array.isArray(output)
-      && typeof (output as { path: unknown }).path === "string"
-      && ((output as { present: unknown }).present === null || typeof (output as { present: unknown }).present === "boolean")));
-}
-
-/** A stage attempt's own completion report (graph slice 2). */
-function isStageReport(value: unknown): boolean {
-  if (value === undefined || value === null) return true;
-  if (typeof value !== "object" || Array.isArray(value)) return false;
-  const report = value as Record<string, unknown>;
-  return Number.isSafeInteger(report.seq) && (report.seq as number) >= 1
-    && typeof report.at === "string"
-    && isActor(report.actor)
-    && stageVerdictFrom(report.verdict, { allowLegacySeverityOnly: true }) !== null
-    && isNullableString(report.summary)
-    && (report.result === undefined || (typeof report.result === "string" && report.result.trim().length > 0 && report.result.length <= MAX_STAGE_RESULT_CHARS && !/[\r\n]/.test(report.result)))
-    && (report.taskSummary === undefined || isTaskSummaryContent(report.taskSummary))
-    && isStageProvenance(report.provenance)
-    && (report.provenanceFence === undefined || (typeof report.provenanceFence === "string" && /^[0-9a-f]{64}$/.test(report.provenanceFence)))
-    && Number.isSafeInteger(report.calls) && (report.calls as number) >= 1;
-}
-
-function isStageReportEntry(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const entry = value as Record<string, unknown>;
-  return Number.isSafeInteger(entry.seq) && (entry.seq as number) >= 1
-    && typeof entry.at === "string"
-    && isActor(entry.actor)
-    && typeof entry.stageId === "string"
-    && Number.isSafeInteger(entry.attempt) && (entry.attempt as number) >= 1
-    && ["pass", "fail", "needs_decision"].includes(String(entry.status))
-    && Number.isSafeInteger(entry.findings) && (entry.findings as number) >= 0
-    && (entry.replaces === null || (Number.isSafeInteger(entry.replaces) && (entry.replaces as number) >= 1))
-    && (entry.provenanceState === undefined || ["pending", "complete", "unknown"].includes(String(entry.provenanceState)))
-    && (entry.provenanceAt === undefined || typeof entry.provenanceAt === "string")
-    && isNullableString(entry.summary);
-}
-
-function isGraphEdit(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const edit = value as Record<string, unknown>;
-  return Number.isSafeInteger(edit.seq) && (edit.seq as number) >= 1
-    && typeof edit.at === "string"
-    && isActor(edit.actor)
-    && GRAPH_EDIT_ACTION_NAMES.includes(String(edit.action))
-    && isNullableString(edit.stageId)
-    && typeof edit.pipelineState === "string"
-    && (edit.effect === "applied" || edit.effect === "pending-next-attempt")
-    && (edit.appliesFromAttempt === null || (Number.isSafeInteger(edit.appliesFromAttempt) && (edit.appliesFromAttempt as number) >= 1))
-    && typeof edit.summary === "string";
-}
-
-function isRetiredLaunches(value: unknown): boolean {
-  if (value === undefined) return true;
-  return Array.isArray(value)
-    && value.length <= 50
-    && value.every((retired) => retired !== null
-      && typeof retired === "object"
-      && !Array.isArray(retired)
-      && typeof (retired as { launchId: unknown }).launchId === "string"
-      && (retired as { launchId: string }).launchId.length > 0
-      && isNullableString((retired as { conversationId: unknown }).conversationId)
-      && typeof (retired as { error: unknown }).error === "string"
-      && typeof (retired as { retiredAt: unknown }).retiredAt === "string");
-}
-
-function isUnresolvedTermination(value: unknown): boolean {
-  if (value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return typeof record.error === "string"
-    && typeof record.recordedAt === "string"
-    && Array.isArray(record.survivors)
-    && record.survivors.every((survivor) => survivor !== null
-      && typeof survivor === "object"
-      && Number.isSafeInteger((survivor as { pid: unknown }).pid)
-      && isNullableString((survivor as { startIdentity: unknown }).startIdentity)
-      && ((survivor as { bootEpoch: unknown }).bootEpoch === undefined
-        || isNullableString((survivor as { bootEpoch: unknown }).bootEpoch)));
-}
-
-function isRun(value: unknown): value is Pipeline["runs"][number] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const run = value as { stageId?: unknown; attempts?: unknown };
-  return typeof run.stageId === "string" && Array.isArray(run.attempts) && run.attempts.every(isAttempt);
-}
-
-function isFailEdge(value: unknown): boolean {
-  if (value === null || value === undefined) return true;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const edge = value as { to?: unknown; maxRounds?: unknown; onExhausted?: unknown };
-  return (
-    typeof edge.to === "string" &&
-    Number.isInteger(edge.maxRounds) &&
-    (edge.maxRounds as number) >= 1 &&
-    (edge.maxRounds as number) <= MAX_FAIL_EDGE_ROUNDS &&
-    (edge.onExhausted === undefined || (PIPELINE_FAIL_EDGE_EXHAUSTIONS as readonly unknown[]).includes(edge.onExhausted))
-  );
-}
-
-function isCreationIntent(value: unknown): value is PipelineCreationIntent {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const intent = value as Partial<PipelineCreationIntent>;
-  return intent.kind === "task-spawn"
-    && typeof intent.taskId === "string" && Boolean(intent.taskId.trim())
-    && typeof intent.launchId === "string" && Boolean(intent.launchId.trim());
-}
-
-function isUnconfirmedHost(value: unknown): value is PipelineUnconfirmedHost {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const host = value as Partial<PipelineUnconfirmedHost>;
-  return typeof host.stageId === "string"
-    && Number.isInteger(host.attempt)
-    && isNullableString(host.conversationId)
-    && isNullableString(host.agentPath)
-    && (host.paneId === undefined || isNullableString(host.paneId))
-    && isNullableString(host.operationId)
-    && typeof host.detail === "string"
-    && typeof host.at === "string";
-}
-
-function isCloseCustody(pipeline: Partial<Pipeline>): boolean {
-  const plan = pipeline.closeTeardown;
-  const report = pipeline.closeReport;
-  if (plan === undefined && report === undefined) return true;
-  if (!plan || !report || typeof plan !== "object" || typeof report !== "object") return false;
-  const host = (item: unknown): boolean => {
-    if (!item || typeof item !== "object") return false;
-    const ref = item as Record<string, unknown>;
-    return typeof ref.stageId === "string" && Number.isInteger(ref.attempt) && Number(ref.attempt) > 0
-      && isNullableString(ref.conversationId) && isNullableString(ref.agentPath) && isNullableString(ref.paneId)
-      && (ref.launchId === undefined || isNullableString(ref.launchId));
-  };
-  const owner = plan.owner;
-  return typeof plan.id === "string" && !!plan.id && ["pending", "running", "settled"].includes(plan.phase)
-    && (plan.hosts === undefined || (Array.isArray(plan.hosts) && plan.hosts.every((item) => item && host(item.target)
-      && item.evidence && isEffectiveRole(item.evidence.effectiveRole) && typeof item.evidence.startedAt === "string"
-      && typeof item.evidence.state === "string" && isNullableString(item.evidence.error)
-      && isNullableString(item.evidence.completedAt) && isVerdict(item.evidence.verdict)
-      && isUnresolvedTermination(item.evidence.unresolvedTermination))))
-    && typeof plan.waitingForActivation === "boolean" && typeof plan.acknowledgeHosts === "boolean"
-    && (owner === undefined || (owner && typeof owner === "object" && Number.isInteger(owner.pid) && owner.pid > 0 && isNullableString(owner.startIdentity) && isNullableString(owner.bootEpoch)))
-    && (plan.flow === null || (typeof plan.flow === "object" && typeof plan.flow.id === "string"
-      && typeof plan.flow.stageId === "string" && Number.isInteger(plan.flow.attempt)))
-    && ["pending", "settled"].includes(report.status)
-    && (plan.phase === "settled") === (report.status === "settled")
-    && [report.pending, report.stopped, report.alreadyStopped, report.unconfirmed, report.acknowledged, report.stillRunning, report.notes]
-      .every((items) => Array.isArray(items) && items.every(host))
-    && report.unconfirmed.every((item) => isNullableString(item.operationId) && typeof item.detail === "string")
-    && report.stillRunning.every((item) => typeof item.error === "string")
-    && report.acknowledged.every((item) => typeof item.detail === "string")
-    && report.notes.every((item) => typeof item.detail === "string")
-    && Array.isArray(report.reviewers) && report.reviewers.every((item) => item && typeof item.stageId === "string"
-      && Number.isInteger(item.attempt) && typeof item.flowId === "string" && Number.isInteger(item.round))
-    && (report.worktree === null || (typeof report.worktree === "object" && typeof report.worktree.dir === "string"
-      && Array.isArray(report.worktree.uncommitted) && report.worktree.uncommitted.every((item) => typeof item === "string")
-      && typeof report.worktree.truncated === "boolean"))
-    && (report.status !== "settled" || report.pending.length === 0);
-}
-
-function isTerminalReap(value: unknown): value is PipelineTerminalReap {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const reap = value as Partial<PipelineTerminalReap>;
-  return (reap.attemptRounds === undefined || (reap.attemptRounds !== null && typeof reap.attemptRounds === "object" && !Array.isArray(reap.attemptRounds)
-      && Object.values(reap.attemptRounds).every(round => Number.isInteger(round) && round >= 0)))
-    && Number.isInteger(reap.rounds) && (reap.rounds as number) >= 0
-    && Number.isInteger(reap.stopped) && (reap.stopped as number) >= 0
-    && typeof reap.lastAt === "string"
-    && (reap.settledAttempts === undefined
-      || (Array.isArray(reap.settledAttempts) && reap.settledAttempts.every((key) => typeof key === "string")))
-    && isNullableString(reap.settledAt);
-}
-
-function isStage(value: unknown): value is PipelineStage {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const stage = value as Partial<PipelineStage>;
-  const role = (value as { role?: unknown }).role;
-  if (!(
-    typeof stage.id === "string" &&
-    (stage.kind === "run" || isLegacyReviewLoopStage(stage)) &&
-    typeof stage.prompt === "string" &&
-    (stage.next === null || typeof stage.next === "string") &&
-    isFailEdge(stage.onFail) &&
-    (role === undefined || Boolean(role && typeof role === "object" && !Array.isArray(role) && (PIPELINE_ROLE_IDS as readonly unknown[]).includes((role as { roleId?: unknown }).roleId))) &&
-    (stage.engine === undefined || stage.engine === "claude" || stage.engine === "codex") &&
-    (stage.model === undefined || stage.model === null || typeof stage.model === "string") &&
-    (stage.effort === undefined || stage.effort === null || typeof stage.effort === "string") &&
-    (stage.serviceTier == null || typeof stage.serviceTier === "string") &&
-    (stage.preferredServiceTier === undefined || (typeof stage.preferredServiceTier === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(stage.preferredServiceTier))) &&
-    validAgentMemoryMax(stage.agentMemoryMaxBytes) &&
-    (stage.access === undefined || stage.access === "read-only" || stage.access === "read-write") &&
-    (stage.sandbox === undefined || stage.sandbox === "full" || stage.sandbox === "restricted") &&
-    (stage.outputs === undefined || (
-      stage.kind === "run" &&
-      Array.isArray(stage.outputs) &&
-      stage.outputs.length > 0 && stage.outputs.length <= MAX_STAGE_OUTPUTS &&
-      stage.outputs.every((output, index) => normalizeStageOutputPath(output) === output && stage.outputs!.indexOf(output) === index)
-    )) &&
-    isEffectiveRole(stage.effectiveRole)
-  )) return false;
-  if (cloudStageConfigurationError(stage as PipelineStage)) return false;
-  const effective = stage.effectiveRole;
-  const referencedRoleId = role === undefined ? null : (role as { roleId: EffectivePipelineRole["roleId"] }).roleId;
-  if (stage.outputs !== undefined && effective.access !== "read-only") return false;
-  if (effective.roleId !== referencedRoleId) return false;
-  if (isLegacyReviewLoopStage(stage) && !legacyReviewLoopShapeValid(stage as PipelineStage)) return false;
-  if (stage.engine !== undefined && stage.engine !== effective.engine) return false;
-  if (stage.model !== undefined && stage.model !== effective.model) return false;
-  if (stage.effort !== undefined && stage.effort !== effective.effort) return false;
-  if (stage.serviceTier != null && stage.serviceTier !== effective.serviceTier) return false;
-  if (stage.preferredServiceTier !== undefined && stage.preferredServiceTier !== effective.preferredServiceTier) return false;
-  if (stage.access !== undefined && stage.access !== effective.access) return false;
-  if (referencedRoleId === null && effective.promptScaffold !== null) return false;
-  if (referencedRoleId !== null && !effective.promptScaffold?.trim()) return false;
-  return true;
-}
-
-/**
- * The v3 conversation-graph contract (#353). Verdict-keyed successors: each
- * stage has at most one pass edge (`next`) and one fail edge (`onFail`). The
- * pass graph must be acyclic (so every pass path terminates at `null`), edge
- * targets must exist, and every review-loop must be pass-reachable from a run
- * stage (it reviews a run's session). Run-stage fail edges may target any stage;
- * their cycles terminate at the per-edge round budget. Review-loop stages use
- * their bound flow for verdict recovery and cannot define `onFail`. Shared by
- * the store validator, the create-time normalizer, and the set-edge action so
- * every mutation path applies the same graph contract.
- */
-export function pipelineGraphError(
-  stages: ReadonlyArray<Pick<PipelineStage, "id" | "kind" | "next"> & { onFail?: Pipeline["stages"][number]["onFail"] }>,
-  /** Decoding a stored record passes false: a legacy review-loop no run
-      reaches still loads (retire-flows §3), and start refuses it. Every edit
-      and every start keeps the rule. */
-  options: { legacyReachability?: boolean } = {},
-): string | null {
-  const ids = new Set(stages.map((stage) => stage.id));
-  const nextOf = new Map(stages.map((stage) => [stage.id, stage.next] as const));
-  for (const stage of stages) {
-    if (stage.next !== null && !ids.has(stage.next)) return `stage ${stage.id} next must reference an existing stage`;
-    if (stage.next === stage.id) return `stage ${stage.id} pass edge may not target itself`;
-    const onFail = stage.onFail ?? null;
-    if (isLegacyReviewLoopStage(stage) && onFail) return `review-loop stage ${stage.id} does not support onFail`;
-    if (onFail && !ids.has(onFail.to)) return `stage ${stage.id} onFail must reference an existing stage`;
-    if (onFail && (!Number.isInteger(onFail.maxRounds) || onFail.maxRounds < 1 || onFail.maxRounds > MAX_FAIL_EDGE_ROUNDS)) {
-      return `stage ${stage.id} onFail maxRounds must be an integer between 1 and ${MAX_FAIL_EDGE_ROUNDS}`;
-    }
-    if (onFail?.onExhausted !== undefined && !PIPELINE_FAIL_EDGE_EXHAUSTIONS.includes(onFail.onExhausted)) {
-      return `stage ${stage.id} onFail onExhausted must be advance, stop-after-fix or park`;
-    }
-  }
-  /* Out-degree-1 pass graph: walking `next` from any stage must terminate
-     within |stages| hops, else a pass cycle exists. */
-  for (const stage of stages) {
-    let cursor: string | null = stage.next;
-    for (let hops = 0; cursor !== null; hops += 1) {
-      if (cursor === stage.id || hops > stages.length) return `pipeline pass edges form a cycle through stage ${stage.id}`;
-      cursor = nextOf.get(cursor) ?? null;
-    }
-  }
-  if (options.legacyReachability === false) return null;
-  for (const stage of stages) {
-    if (!isLegacyReviewLoopStage(stage)) continue;
-    const reachable = legacyReviewLoopReachable(stages, stage.id);
-    /* #1026: this used to say "review-loop stage requires a preceding run
-       stage", which reads as an ordering rule and sent a caller reordering an
-       array that was already in the right order. The defect is a missing pass
-       edge: stages default to `next: null`, so nothing reaches the review-loop.
-       Name the unreachable stage and the edge that would reach it. */
-    if (!reachable) {
-      const runStages = stages.filter((candidate) => candidate.kind === "run");
-      if (runStages.length === 0) {
-        return `review-loop stage ${stage.id} is unreachable: the pipeline has no run stage, and a review-loop reviews the session of a run stage that reaches it`;
-      }
-      const source = runStages.findLast((candidate) => candidate.next === null) ?? runStages.at(-1)!;
-      return `review-loop stage ${stage.id} is unreachable: no run stage's next chain reaches it — set next: "${stage.id}" on run stage ${source.id}`;
-    }
-  }
-  return null;
-}
-
-function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> {
-  if (!value || typeof value !== "object") return false;
-  const delivery = value as NonNullable<Pipeline["delivery"]>;
-  const target = delivery.target;
-  if (!target || typeof target.repository !== "string" || !target.repository || typeof target.remote !== "string"
-    || typeof target.branch !== "string" || !target.branch.startsWith("refs/heads/")
-    || !["owner", "comparison"].includes(delivery.disposition) || !["enabled", "disabled"].includes(delivery.publish)
-    || typeof delivery.ownerId !== "string" || !delivery.ownerId || !Number.isSafeInteger(delivery.epoch) || delivery.epoch < 1
-    || typeof delivery.active !== "boolean" || !Array.isArray(delivery.journal) || delivery.journal.length > 100) return false;
-  if (delivery.disposition === "comparison" && (delivery.active || delivery.publish !== "disabled")) return false;
-  if (delivery.active && delivery.publish !== "enabled") return false;
-  const operation = delivery.operation;
-  return !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
-    && Number.isSafeInteger(operation.epoch) && operation.epoch === delivery.epoch
-    && (operation.fence === undefined || (typeof operation.fence === "string" && /^[0-9a-f]{64}$/.test(operation.fence)))
-    && (operation.app403Deadline === undefined || typeof operation.app403Deadline === "string" && Number.isFinite(Date.parse(operation.app403Deadline)))
-    && [operation.result?.failure?.observedAt, operation.executor?.result?.failure?.observedAt]
-      .every(at => at === undefined || typeof at === "string" && Number.isFinite(Date.parse(at)))
-    && ["pending", "running", "settled"].includes(operation.state));
-}
-
-/** #1938: the needs_review record and its continue-review grants. */
-function isReviewPending(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const pending = value as Record<string, unknown>;
-  return (pending.terminalRecheck === undefined || pending.terminalRecheck === true)
-    && typeof pending.stageId === "string" && pending.stageId.length > 0
-    && Number.isSafeInteger(pending.attempt) && (pending.attempt as number) >= 0
-    && typeof pending.fixStageId === "string" && pending.fixStageId.length > 0
-    && Number.isSafeInteger(pending.fixAttempt) && (pending.fixAttempt as number) > 0
-    && isNullableString(pending.reviewedHead)
-    && typeof pending.currentHead === "string"
-    && ["pass", "fail", "needs_decision"].includes(String(pending.verdict))
-    && Number.isSafeInteger(pending.findings) && (pending.findings as number) >= 0
-    && typeof pending.at === "string";
-}
-
-function isReviewGrant(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const grant = value as Record<string, unknown>;
-  return typeof grant.clientRequestId === "string" && grant.clientRequestId.length > 0 && grant.clientRequestId.length <= 200
-    && typeof grant.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(grant.expectedRevision)
-    && typeof grant.stageId === "string" && grant.stageId.length > 0
-    && (grant.terminalAttempt === undefined || Number.isSafeInteger(grant.terminalAttempt) && (grant.terminalAttempt as number) > 0)
-    && Number.isSafeInteger(grant.rounds) && (grant.rounds as number) >= 1 && (grant.rounds as number) <= MAX_FAIL_EDGE_ROUNDS
-    && isNullableString(grant.reviewedHead)
-    && typeof grant.currentHead === "string"
-    && isActor(grant.actor) && typeof grant.at === "string";
-}
-
-function isReviewAcceptance(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const acceptance = value as Record<string, unknown>;
-  return typeof acceptance.clientRequestId === "string" && acceptance.clientRequestId.length > 0 && acceptance.clientRequestId.length <= 200
-    && typeof acceptance.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(acceptance.expectedRevision)
-    && typeof acceptance.stageId === "string" && acceptance.stageId.length > 0
-    && Number.isSafeInteger(acceptance.attempt) && (acceptance.attempt as number) >= 0
-    && typeof acceptance.fixStageId === "string" && acceptance.fixStageId.length > 0
-    && Number.isSafeInteger(acceptance.fixAttempt) && (acceptance.fixAttempt as number) > 0
-    && isNullableString(acceptance.reviewedHead)
-    && typeof acceptance.currentHead === "string"
-    && isActor(acceptance.actor) && typeof acceptance.at === "string";
-}
-
-/** An explicit legacy review-loop conversion and the definition it replaced. */
-function isLegacyReviewConversion(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const conversion = value as Record<string, unknown>;
-  const original = conversion.original as Record<string, unknown> | null;
-  const reverted = conversion.reverted as Record<string, unknown> | undefined;
-  return typeof conversion.clientRequestId === "string" && conversion.clientRequestId.length > 0 && conversion.clientRequestId.length <= 200
-    && typeof conversion.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(conversion.expectedRevision)
-    && typeof conversion.stageId === "string" && conversion.stageId.length > 0
-    && typeof conversion.fixerStageId === "string" && conversion.fixerStageId.length > 0
-    && typeof conversion.implementerStageId === "string" && conversion.implementerStageId.length > 0
-    && Number.isSafeInteger(conversion.reviewLimit) && (conversion.reviewLimit as number) >= 1 && (conversion.reviewLimit as number) <= MAX_FAIL_EDGE_ROUNDS
-    && ["request", "flow", "default"].includes(String(conversion.reviewLimitSource))
-    && Boolean(original && typeof original === "object" && Array.isArray(original.stages) && original.stages.every(isStage)
-      && isRun(original.run) && (original.run as { stageId: string }).stageId === conversion.stageId
-      && (original.cursor === null || (typeof original.cursor === "object" && typeof (original.cursor as { stageId?: unknown }).stageId === "string"))
-      && (original.stateDetail === undefined || isNullableString(original.stateDetail)))
-    && typeof conversion.convertedGraphDigest === "string"
-    && isActor(conversion.actor) && typeof conversion.at === "string"
-    && (reverted === undefined || (Boolean(reverted) && typeof reverted === "object" && typeof reverted.clientRequestId === "string"
-      && reverted.clientRequestId.length > 0 && isActor(reverted.actor) && typeof reverted.at === "string"));
-}
-
-function isDecisionAnswer(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const answer = value as Record<string, unknown>;
-  return typeof answer.clientRequestId === "string" && answer.clientRequestId.length > 0 && answer.clientRequestId.length <= 200
-    && typeof answer.expectedRevision === "string" && /^[0-9a-f]{64}$/.test(answer.expectedRevision)
-    && typeof answer.stageId === "string" && answer.stageId.length > 0
-    && Number.isSafeInteger(answer.attempt) && (answer.attempt as number) > 0
-    && Number.isSafeInteger(answer.nextAttempt) && (answer.nextAttempt as number) > (answer.attempt as number)
-    && typeof answer.question === "string"
-    && typeof answer.answer === "string" && answer.answer.trim().length > 0 && answer.answer.length <= MAX_DECISION_ANSWER_CHARS
-    && isActor(answer.actor) && typeof answer.at === "string";
-}
-
-const MERGE_STATES = new Set(["refreshing", "queued", "checking", "waiting-checks", "updating", "merging", "merged", "blocked", "cancelled"]);
-const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
-
-function isRefreshOf(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const refresh = value as Record<string, unknown>;
-  return typeof refresh.pipelineId === "string" && !!refresh.pipelineId && typeof refresh.base === "string" && /^[0-9a-f]{40}$/i.test(refresh.base);
-}
-
-function isMergeRefresh(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const refresh = value as Record<string, unknown>;
-  return (refresh.baseBranch === undefined || typeof refresh.baseBranch === "string" && !!refresh.baseBranch)
-    && Number.isSafeInteger(refresh.attempt) && (refresh.attempt as number) >= 0
-    && typeof refresh.base === "string" && /^[0-9a-f]{40}$/i.test(refresh.base)
-    && typeof refresh.head === "string" && /^[0-9a-f]{40}$/i.test(refresh.head)
-    && typeof refresh.key === "string" && !!refresh.key
-    && typeof refresh.digest === "string" && /^[0-9a-f]{64}$/i.test(refresh.digest)
-    && typeof refresh.requestedAt === "string" && Number.isFinite(Date.parse(refresh.requestedAt))
-    && isNullableString(refresh.pipelineId);
-}
-
-/** The merge runner's record (#2187 §4.4). */
-function isPipelineMerge(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const merge = value as Record<string, unknown>;
-  return MERGE_STATES.has(String(merge.state))
-    && (merge.effectUncertain === undefined || typeof merge.effectUncertain === "boolean")
-    && (merge.refresh === undefined || isMergeRefresh(merge.refresh))
-    && (merge.state !== "refreshing" || merge.refresh !== undefined)
-    && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
-    && typeof merge.repository === "string" && merge.repository.length > 0
-    && ((Number.isSafeInteger(merge.prNumber) && (merge.prNumber as number) > 0)
-      || (merge.prNumber === null && merge.by === null && ["queued", "blocked", "cancelled"].includes(String(merge.state))))
-    && typeof merge.policyChangedAt === "string"
-    && typeof merge.reviewedHead === "string"
-    && isStringList(merge.chain)
-    && Array.isArray(merge.updates) && merge.updates.every((update) => Boolean(update) && typeof update === "object"
-      && typeof (update as Record<string, unknown>).requestedAt === "string" && isNullableString((update as Record<string, unknown>).head)
-      && [(update as Record<string, unknown>).commit, (update as Record<string, unknown>).base]
-        .every(sha => sha === undefined || (typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha))))
-    && isStringList(merge.seenChecks)
-    && isNullableString(merge.head) && isNullableString(merge.headSeenAt)
-    && (merge.lastChecks === null || isStringList(merge.lastChecks))
-    && isNullableString(merge.readAt) && isNullableString(merge.nextReadAt)
-    && (merge.readFailures === undefined || Number.isSafeInteger(merge.readFailures))
-    && typeof merge.requestedAt === "string"
-    && isNullableString(merge.mergedHead) && isNullableString(merge.mergeCommit)
-    && (merge.method === null || merge.method === "squash" || merge.method === "merge" || merge.method === "rebase")
-    && isNullableString(merge.mergedAt)
-    && Number.isSafeInteger(merge.attempts)
-    && isNullableString(merge.reason) && isNullableString(merge.blockedAt)
-    && typeof merge.updatedAt === "string";
-}
-
-/** #2187 §5.3: one entry per task, each naming a task the pipeline links. */
-function isTaskFinish(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const finish = value as Record<string, unknown>;
-  return typeof finish.taskId === "string" && finish.taskId.length > 0 && typeof finish.at === "string"
-    && (finish.outcome === "moved" || finish.outcome === "already-done");
-}
-
-function isTaskFinishWait(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const wait = value as Record<string, unknown>;
-  return typeof wait.taskId === "string" && wait.taskId.length > 0 && typeof wait.since === "string" && isStringList(wait.open);
-}
-
-/** Validation of a parsed record is total. A nested value of the wrong type
-    can throw inside a shape check (for example String({toString: null})); that
-    makes this record unreadable, while the JSON parser remains strict. */
-function isPipeline(value: unknown): value is Pipeline {
-  try { return isPipelineShape(value); }
-  catch { return false; }
-}
-
-/** Shared total validator for persisted projections that must match the
- * authoritative pipeline reader's admission contract. */
-export function isStoredPipeline(value: unknown): value is Pipeline {
-  return isPipeline(value);
-}
-
-export function isPipelineConversationSource(value: unknown): value is NonNullable<Pipeline["conversationSource"]> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const source = value as Record<string, unknown>;
-  return Object.keys(source).length === 4
-    && typeof source.conversationId === "string" && /^conversation_[A-Za-z0-9_-]{1,180}$/.test(source.conversationId)
-    && typeof source.branch === "string" && source.branch.length > 0 && source.branch.length <= 1024
-    && !/[\s\x00-\x1f]/u.test(source.branch)
-    && typeof source.head === "string" && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(source.head)
-    && typeof source.capturedAt === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(source.capturedAt)
-    && Number.isFinite(Date.parse(source.capturedAt)) && new Date(source.capturedAt).toISOString() === source.capturedAt;
-}
-
-function isPipelineShape(value: unknown): value is Pipeline {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const pipeline = value as Partial<Pipeline>;
-  if (!(
-    typeof pipeline.id === "string" &&
-    (pipeline.proactiveTaskIds === undefined || Array.isArray(pipeline.proactiveTaskIds)
-      && pipeline.proactiveTaskIds.length === 1 && pipeline.proactiveTaskIds.every(id => typeof id === "string" && !!id)) &&
-    (pipeline.conversationSource === undefined || isPipelineConversationSource(pipeline.conversationSource)) &&
-    isCloseCustody(pipeline) &&
-    (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
-    (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
-    isPublicationRecovery(pipeline.publicationRecovery) &&
-    (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
-    (pipeline.refreshOf === undefined || isRefreshOf(pipeline.refreshOf)) &&
-    typeof pipeline.task === "string" &&
-    Array.isArray(pipeline.taskIds) &&
-    pipeline.taskIds.every((taskId) => typeof taskId === "string") &&
-    new Set(pipeline.taskIds).size === pipeline.taskIds.length &&
-    (pipeline.creationIntent === undefined || isCreationIntent(pipeline.creationIntent)) &&
-    (pipeline.spec === undefined || typeof pipeline.spec === "string") &&
-    (pipeline.inputContext === undefined || isStagePromptContext(pipeline.inputContext)) &&
-    typeof pipeline.project === "string" &&
-    typeof pipeline.repoDir === "string" &&
-    typeof pipeline.worktreeDir === "string" &&
-    typeof pipeline.branch === "string" &&
-    typeof pipeline.baseBranch === "string" &&
-    typeof pipeline.baseRef === "string" &&
-    (pipeline.baseRefPinned === undefined || typeof pipeline.baseRefPinned === "boolean") &&
-    typeof pipeline.lastPassedCommit === "string" &&
-    (pipeline.publication === undefined || pipeline.publication === "internal" || pipeline.publication === "remote-branch") &&
-    (pipeline.publishedCommit === undefined || isNullableString(pipeline.publishedCommit)) &&
-    Array.isArray(pipeline.stages) &&
-    pipeline.stages.every(isStage) &&
-    Array.isArray(pipeline.runs) &&
-    pipeline.runs.every(isRun) &&
-    ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"].includes(String(pipeline.state)) &&
-    (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"].includes(String(pipeline.pausedState))) &&
-    (pipeline.pausedAt === undefined || isNullableString(pipeline.pausedAt)) &&
-    (pipeline.pause === undefined || (pipelinePauseInputSchema.safeParse(pipeline.pause).success
-      && (pipeline.pause.actor === undefined || pipeline.pause.actor === null || isActor(pipeline.pause.actor)))) &&
-    (pipeline.resumedAt === undefined || isNullableString(pipeline.resumedAt)) &&
-    (pipeline.controlGeneration === undefined || (typeof pipeline.controlGeneration === "string" && pipeline.controlGeneration.length > 0)) &&
-    isNullableString(pipeline.stateDetail) &&
-    isNullableString(pipeline.srcPath) &&
-    isNullableString(pipeline.srcConversationId) &&
-    (pipeline.srcDeputyConversationId === undefined || isNullableString(pipeline.srcDeputyConversationId)) &&
-    typeof pipeline.createdAt === "string" &&
-    isNullableString(pipeline.closedAt) &&
-    (pipeline.hiddenAt === undefined || isNullableString(pipeline.hiddenAt)) &&
-    (pipeline.dismissedAt === undefined || isNullableString(pipeline.dismissedAt)) &&
-    (pipeline.dismissedBy === undefined || pipeline.dismissedBy === null || isDismissedBy(pipeline.dismissedBy)) &&
-    (pipeline.unconfirmedHosts === undefined
-      || (Array.isArray(pipeline.unconfirmedHosts) && pipeline.unconfirmedHosts.every(isUnconfirmedHost))) &&
-    (pipeline.terminalReap === undefined || isTerminalReap(pipeline.terminalReap)) &&
-    (pipeline.restored === undefined || typeof pipeline.restored === "boolean") &&
-    (pipeline.decisionAnswers === undefined || (Array.isArray(pipeline.decisionAnswers) && pipeline.decisionAnswers.every(isDecisionAnswer))) &&
-    (pipeline.reviewPending === undefined || isReviewPending(pipeline.reviewPending)) &&
-    (pipeline.reviewGrants === undefined || (Array.isArray(pipeline.reviewGrants) && pipeline.reviewGrants.every(isReviewGrant))) &&
-    (pipeline.reviewAcceptances === undefined || (Array.isArray(pipeline.reviewAcceptances) && pipeline.reviewAcceptances.every(isReviewAcceptance))) &&
-    (pipeline.merge === undefined || isPipelineMerge(pipeline.merge)) &&
-    (pipeline.finishesTaskIds === undefined || (isStringList(pipeline.finishesTaskIds) && new Set(pipeline.finishesTaskIds).size === pipeline.finishesTaskIds.length)) &&
-    (pipeline.taskFinishes === undefined || (Array.isArray(pipeline.taskFinishes) && pipeline.taskFinishes.every(isTaskFinish))) &&
-    (pipeline.taskFinishWaits === undefined || (Array.isArray(pipeline.taskFinishWaits) && pipeline.taskFinishWaits.every(isTaskFinishWait))) &&
-    (pipeline.legacyReviewConversions === undefined || (Array.isArray(pipeline.legacyReviewConversions)
-      && pipeline.legacyReviewConversions.length <= MAX_LEGACY_REVIEW_CONVERSIONS && pipeline.legacyReviewConversions.every(isLegacyReviewConversion))) &&
-    (pipeline.graphEdits === undefined || (Array.isArray(pipeline.graphEdits) && pipeline.graphEdits.length <= MAX_PIPELINE_GRAPH_EDITS && pipeline.graphEdits.every(isGraphEdit))) &&
-    (pipeline.publicationAdmission === undefined || (Boolean(pipeline.publicationAdmission && typeof pipeline.publicationAdmission === "object")
-      && typeof pipeline.publicationAdmission.id === "string" && /^[0-9a-f]{40}$/i.test(pipeline.publicationAdmission.sha)
-      && /^[0-9a-f]{64}$/.test(pipeline.publicationAdmission.fence) && ["pending", "settled"].includes(pipeline.publicationAdmission.state)
-      && (pipeline.publicationAdmission.error === undefined || typeof pipeline.publicationAdmission.error === "string"))) &&
-    (pipeline.remoteAction === undefined || (Boolean(pipeline.remoteAction && typeof pipeline.remoteAction === "object")
-      && typeof pipeline.remoteAction.id === "string" && ["retry-stage", "takeover", "skip-stage"].includes(pipeline.remoteAction.action)
-      && ["pending", "settled"].includes(pipeline.remoteAction.state) && typeof pipeline.remoteAction.fence === "string"
-      && /^[0-9a-f]{64}$/.test(pipeline.remoteAction.fence)
-      && typeof pipeline.remoteAction.at === "string" && (pipeline.remoteAction.actor === null || isActor(pipeline.remoteAction.actor))
-      && (pipeline.remoteAction.settledAt === undefined || typeof pipeline.remoteAction.settledAt === "string")
-      && (pipeline.remoteAction.error === undefined || typeof pipeline.remoteAction.error === "string")
-      && (pipeline.remoteAction.retryReceipt === undefined || (Boolean(pipeline.remoteAction.retryReceipt)
-        && typeof pipeline.remoteAction.retryReceipt.launchId === "string"
-        && ["failed", "conflicted", "completed"].includes(pipeline.remoteAction.retryReceipt.state)
-        && (pipeline.remoteAction.retryReceipt.claimId === undefined || typeof pipeline.remoteAction.retryReceipt.claimId === "string")))
-      && (pipeline.remoteAction.action !== "takeover" || (Boolean(pipeline.remoteAction.takeover)
-        && typeof pipeline.remoteAction.takeover?.expectedOwner === "string"
-        && Number.isSafeInteger(pipeline.remoteAction.takeover?.expectedEpoch) && pipeline.remoteAction.takeover!.expectedEpoch > 0
-        && typeof pipeline.remoteAction.takeover?.reason === "string" && pipeline.remoteAction.takeover.reason.length > 0)))) &&
-    (pipeline.stageReports === undefined || (Array.isArray(pipeline.stageReports) && pipeline.stageReports.length <= MAX_PIPELINE_STAGE_REPORTS && pipeline.stageReports.every(isStageReportEntry))) &&
-    (pipeline.pos === undefined || (
-      typeof pipeline.pos === "object" && pipeline.pos !== null &&
-      Number.isFinite(pipeline.pos.x) && Number.isFinite(pipeline.pos.y)
-    ))
-  )) return false;
-  const stages = pipeline.stages as PipelineStage[];
-  const runs = pipeline.runs as Pipeline["runs"];
-  /* A draft is a scratchpad the operator assembles on the canvas (#136), so it
-     may hold 0–8 stages (v2 legacy shells are seeded on migration, but a raw
-     empty draft still loads and stays off the board projection). Closing or
-     deleting that draft preserves its empty graph in the closed record
-     (#1789). Every other state keeps the 1–8 invariant (#353: the minimum
-     started graph is one implement conversation). */
-  const minStages = pipeline.state === "draft" || pipeline.state === "closed" ? 0 : 1;
-  if (stages.length < minStages || stages.length > MAX_PIPELINE_STAGES || runs.length !== stages.length) return false;
-  const ids = stages.map((stage) => stage.id);
-  if (new Set(ids).size !== ids.length) return false;
-  if (pipelineGraphError(stages, { legacyReachability: false }) !== null) return false;
-  if (runs.some((run, index) => run.stageId !== stages[index]!.id)) return false;
-  const expectedWorktree = path.join(path.dirname(pipeline.repoDir!), `${path.basename(pipeline.repoDir!)}-pipeline-${pipeline.id}`);
-  if (pipeline.worktreeDir !== expectedWorktree || pipeline.branch !== `pipeline/${slugify(pipeline.task!)}-${pipeline.id}`) return false;
-  const cursor = pipeline.cursor;
-  if (cursor !== null && (
-    !cursor ||
-    typeof cursor !== "object" ||
-    !ids.includes(cursor.stageId) ||
-    !["pending", "spawning", "running", "reviewing", "committing"].includes(cursor.state) ||
-    !(cursor.input === undefined || isNullableString(cursor.input)) ||
-    !isActivation(cursor.activatedBy) ||
-    (cursor.activatedBy != null && !ids.includes(cursor.activatedBy.stageId))
-  )) return false;
-  if ((pipeline.state === "completed" || pipeline.state === "closed") && cursor !== null) return false;
-  if (pipeline.state === "draft") {
-    /* An empty draft has no stage to point the cursor at; once it holds stages the
-       cursor rests on the first, pending (Start spawns from there). */
-    if (stages.length === 0) {
-      if (cursor !== null) return false;
-    } else if (cursor?.stageId !== stages[0]!.id || cursor.state !== "pending") return false;
-    if (runs.some((run) => run.attempts.length > 0)) return false;
-    const baseEmpty = !pipeline.baseBranch && !pipeline.baseRef && !pipeline.lastPassedCommit;
-    const basePinned = Boolean(
-      pipeline.baseBranch &&
-      /^[0-9a-f]{40}$/i.test(pipeline.baseRef!) &&
-      pipeline.lastPassedCommit === pipeline.baseRef,
-    );
-    if ((!baseEmpty && !basePinned) || pipeline.closedAt) return false;
-  }
-  return true;
+/** Keyed raw reads keep queued effects fenced even when executable projections
+ * correctly exclude an unsupported pipeline. */
+export function pipelineRequiresNewerReader(id: string): boolean {
+  if (PIPELINES_SCHEMA_VERSION >= 6) return false;
+  return pipelineHasIntegrationMetadata(stateDatabaseFile(), id);
 }
 
 /** The seeded default action (#353): every pipeline, including a migrated v2
@@ -1244,6 +189,14 @@ export function controllerPipelineVersionNow(id: string): string {
 export async function controllerPipelineVersion(id: string): Promise<string> {
   return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-version", () => stateLockAttempt("pipelines.controller-version", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineControllerVersion(id)))));
 }
+export function pendingCpuStageRevision(id: string, stage: string, attempt: number): string | null {
+  return pipelineStore().pipelinePendingCpuStageRevision(id, stage, attempt);
+}
+export async function wakePipelineCpuStage(id: string, stage: string, attempt: number, revision: string, expiresAt: number): Promise<string | null> {
+  return waitForStateLock("pipelines.controller-cpu-wake", () => pipelineStore().wakePipelineCpuStage(id, stage, attempt, revision, expiresAt),
+    { waitMs: Math.max(0, expiresAt - Date.now()), subject: "pending-stage" });
+}
+
 export async function findControllerPipeline(id: string): Promise<Pipeline | null> {
   return waitForStateLock("pipelines.controller-candidate", () => stateLockAttempt("pipelines.controller-candidate", () => pipelineStore().pipelineControllerCandidate(id)));
 }
@@ -1276,6 +229,28 @@ export async function pipelineRecoveryWindow(after: { row_order: number; row_key
 export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
   return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
 }
+export async function pipelineControlOwnership(key: string) {
+  return waitForStateLock("pipelines.control-ownership", () => stateLockAttempt("pipelines.control-ownership", () =>
+    pipelineStore().pipelineControlOwnership(key)));
+}
+
+export async function claimPipelineControlOwnership(key: string, binding: string, ownerKey?: string, replaces?: string, settledKey?: string) {
+  return (await waitForStateLock("pipelines.control-ownership", pipelineStore))
+    .claimPipelineControlOwnership(key, binding, ownerKey, replaces, settledKey);
+}
+
+export async function consumePipelineControlOwnership(key: string, binding: string) {
+  return (await waitForStateLock("pipelines.control-ownership", pipelineStore)).consumePipelineControlOwnership(key, binding);
+}
+
+export async function settlePipelineControlOwnership(key: string, binding: string, markerKey: string, marker: string) {
+  return (await waitForStateLock("pipelines.control-ownership", pipelineStore))
+    .settlePipelineControlOwnership(key, binding, markerKey, marker);
+}
+
+export async function recordPipelineControllerSelection(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork, now: number) {
+  return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).recordPipelineTickSelection(work, now);
+}
 export async function deferPipelineControllerWork(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork) {
   return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).deferPipelineTick(work);
 }
@@ -1286,7 +261,7 @@ export async function acknowledgePipelineControllerWork(work: import("@/lib/stat
   return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).acknowledgePipelineTick(work, cursor, dueAt);
 }
 
-export type PipelineStartupOwnership = { id: string; attempts: Array<{ conversationId: string | null; state: string }>;
+export type PipelineStartupOwnership = { id: string; attempts: Array<{ conversationId: string | null; agentPath: string | null; sessionId: string | null; state: string; suspended?: true }>;
   survivors: import("@/lib/processIdentity").ProcessIdentity[] };
 type CompactPipelineEvidence = { key: string; ownership?: PipelineStartupOwnership; issue?: RegistryRecordIssue };
 type PreparedPipelineEvidence = { pipelines: Pipeline[]; ownership?: PipelineStartupOwnership[]; issues: RegistryRecordIssue[]; signature: string };
@@ -1294,7 +269,7 @@ let compactEvidence: CompactEvidenceCache<CompactPipelineEvidence> | undefined;
 function startupOwnership(pipeline: Pipeline): PipelineStartupOwnership {
   const attempts = pipeline.runs.flatMap(run => run.attempts);
   return { id: pipeline.id,
-    attempts: attempts.map(attempt => ({ conversationId: attempt.conversationId ?? null, state: attempt.state })),
+    attempts: attempts.map(attempt => ({ conversationId: attempt.conversationId ?? null, agentPath: attempt.agentPath ?? null, sessionId: attempt.sessionId ?? null, state: attempt.state, ...(attempt.suspension ? { suspended: true as const } : {}) })),
     survivors: [...attempts, ...(pipeline.closeTeardown?.hosts ?? []).map(host => host.evidence)]
       .flatMap(host => host.unresolvedTermination?.survivors.map(identity => ({ ...identity })) ?? []),
   };
@@ -1422,10 +397,43 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
   finally { if (!budget && pendingEvidence.get(pendingKey) === pending) pendingEvidence.delete(pendingKey); }
 }
 
-export async function loadPipelineOwnershipForStartupAsync(ids?: readonly string[], conversationIds?: ReadonlySet<string>): Promise<PipelineStartupOwnership[]> {
-  const evidence = admittedEvidence.getStore()?.current ?? await preparePipelineEvidence("ownership");
+/** Complete selected ownership, including attempts without membership. Never
+ * shares the global preparation promise or initializes the archive index. */
+async function prepareRecipientPipelineEvidence(selection: PipelineRecipientSelection, budget?: PipelineEvidenceBudget): Promise<PreparedPipelineEvidence> {
+  assertPipelineEvidenceBudget(budget);
+  const signature = evidenceSignature();
+  const rows = readRecipientPipelineEvidence(stateDatabaseFile(), selection);
+  const identities = new Set<string>();
+  const ownership: PipelineStartupOwnership[] = [];
+  const issues: RegistryRecordIssue[] = [];
+  for (const row of rows) {
+    assertPipelineEvidenceBudget(budget);
+    const key = registryRecordKey(row.value);
+    if (identities.has(key) || key !== row.key) throw new PipelineStoreError("recipient pipeline records have contradictory identities");
+    identities.add(key);
+    if (isPipeline(row.value)) ownership.push(startupOwnership(row.value));
+    else issues.push(pipelineRecordIssue(row.value, row.collection));
+  }
+  if (issues.length) throw new PipelineStoreError("recipient pipeline authority contains unreadable or unknown rows");
+  if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("recipient pipeline evidence changed during preparation");
+  return { pipelines: [], ownership, issues, signature };
+}
+
+/** Each supported identity independently retains custody, even before membership is recorded. */
+export function pipelineStartupAttemptMatches(attempt: PipelineStartupOwnership["attempts"][number], selection: PipelineRecipientSelection): boolean {
+  return !!(attempt.conversationId && selection.conversationIds.includes(attempt.conversationId)
+    || attempt.agentPath && selection.agentPaths?.includes(attempt.agentPath)
+    || attempt.sessionId && selection.sessionIds?.includes(attempt.sessionId));
+}
+
+export async function loadPipelineOwnershipForStartupAsync(ids?: readonly string[], conversationIds?: ReadonlySet<string>,
+  targets: Pick<PipelineRecipientSelection, "agentPaths" | "sessionIds"> = {}): Promise<PipelineStartupOwnership[]> {
+  const selection = { ...targets, ids: ids ?? [], conversationIds: [...conversationIds ?? []] };
+  const evidence = admittedEvidence.getStore()?.current ?? await (ids && conversationIds
+    ? prepareRecipientPipelineEvidence(selection) : preparePipelineEvidence("ownership"));
   const selected = ids && new Set(ids);
-  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).filter(row => !selected || selected.has(row.id) || row.attempts.some(attempt => attempt.conversationId !== null && conversationIds?.has(attempt.conversationId))).map(row => ({ ...row,
+  return (evidence.ownership ?? evidence.pipelines.map(startupOwnership)).filter(row => !selected || selected.has(row.id)
+    || row.attempts.some(attempt => pipelineStartupAttemptMatches(attempt, selection))).map(row => ({ ...row,
     attempts: row.attempts.map(attempt => ({ ...attempt })), survivors: row.survivors.map(identity => ({ ...identity })) }));
 }
 
@@ -1438,7 +446,7 @@ export async function loadPipelinesForStartupAsync(): Promise<Pipeline[]> {
   for (const pipeline of evidence.pipelines) {
     result.push(performanceSpans.sync("pipeline.copy", () => cloneLoadedPipeline(pipeline, resolveProject), 1));
     if (performance.now() - slice >= 4) {
-      await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+      await performanceSpans.wait("pipeline.yield", () => yieldToRuntime());
       // A project move may have committed while this copy yielded.
       resolveProject = projectAliasResolver();
       slice = performance.now();
@@ -1446,9 +454,10 @@ export async function loadPipelinesForStartupAsync(): Promise<Pipeline[]> {
   }
   return result;
 }
-export async function pipelineRegistryHealthAsync(): Promise<RegistryRecordIssue[]> {
+export async function pipelineRegistryHealthAsync(recipient?: PipelineRecipientSelection): Promise<RegistryRecordIssue[]> {
   const admitted = admittedEvidence.getStore()?.current;
   if (admitted) return admitted.issues.map(issue => ({ ...issue }));
+  if (recipient) return (await prepareRecipientPipelineEvidence(recipient)).issues;
   const signature = evidenceSignature();
   const version = stateEvidenceVersion(stateDatabaseFile());
   if (healthWitness?.signature === signature && healthWitness.version === version) {
@@ -1542,24 +551,27 @@ export function planPipelineStateMigration(): {
 
 /** Normalize defaults and project identity on decoded records. Nested config
     can retain input references; shared records need cloneLoadedPipeline. */
-function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
+function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject, ownsNestedValues = false): Pipeline {
+  const copyNested = <T>(value: T): T => ownsNestedValues ? value : structuredClone(value);
   const settledAttempts = pipeline.terminalReap?.settledAttempts
     ?? (pipeline.terminalReap?.settledAt
       ? pipeline.runs.flatMap((run) => run.attempts
           .filter((attempt) => Boolean(attempt.verdict || attempt.completedAt))
           .map((attempt) => `${run.stageId}:${attempt.n}`))
       : []);
-  return {
+  const outstandingHostKeys = new Set(pipeline.unconfirmedHosts?.map(hostTerminationKey));
+  const revived: Pipeline = {
     ...pipeline,
     conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
-    closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
-    closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
+    closeTeardown: pipeline.closeTeardown ? copyNested(pipeline.closeTeardown) : undefined,
+    closeReport: pipeline.closeReport ? copyNested(pipeline.closeReport) : undefined,
     project: resolveProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
+    ...(pipeline.taskClass ? { taskClass: { ...pipeline.taskClass } } : {}),
     proactiveTaskIds: pipeline.proactiveTaskIds ? [...pipeline.proactiveTaskIds] : undefined,
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
-    ...(pipeline.inputContext ? { inputContext: structuredClone(pipeline.inputContext) } : {}),
+    ...(pipeline.inputContext ? { inputContext: copyNested(pipeline.inputContext) } : {}),
     baseBranch: pipeline.baseBranch ?? "",
     baseRef: pipeline.baseRef ?? "",
     lastPassedCommit: pipeline.lastPassedCommit ?? "",
@@ -1573,6 +585,9 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
     unconfirmedHosts: pipeline.unconfirmedHosts?.length
       ? pipeline.unconfirmedHosts.map((host) => ({ ...host }))
       : undefined,
+    hostTerminationProofs: pipeline.hostTerminationProofs ? Object.fromEntries(Object.entries(pipeline.hostTerminationProofs)
+      .filter(([key]) => outstandingHostKeys.has(key))
+      .map(([key, proof]) => [key, { ...proof }])) : undefined,
     terminalReap: pipeline.terminalReap
       ? { ...pipeline.terminalReap, settledAttempts: [...settledAttempts] }
       : undefined,
@@ -1592,10 +607,14 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
+            ...(attempt.accounting ? { accounting: copyNested(attempt.accounting) } : {}),
+            ...(attempt.setup ? { setup: { ...attempt.setup, command: [...attempt.setup.command] } } : {}),
             ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
+            ...(attempt.roleMemoryDispatchWait ? { roleMemoryDispatchWait: { ...attempt.roleMemoryDispatchWait } } : {}),
+            ...(attempt.roleMemoryDelivery ? { roleMemoryDelivery: { ...attempt.roleMemoryDelivery } } : {}),
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
-            ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
+            ...(attempt.runtimeSwitches ? { runtimeSwitches: copyNested(attempt.runtimeSwitches) } : {}),
             launchId: attempt.launchId ?? null,
             conversationId: attempt.conversationId ?? null,
             sessionId: attempt.sessionId ?? null,
@@ -1634,12 +653,26 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
         : [],
     })),
   };
+  settleClosedPipelineAttempts(revived, (pipeline, stageId, attempt) => {
+    if (attempt.spawnCalls === 0) return "none";
+    try {
+      const base = `pipeline_${pipeline.id}_${stageId}_${attempt.n}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128);
+      const receipts = agentRegistry().pipelineSpawnHistory(base);
+      if (!receipts.length) return attempt.spawnCalls === undefined && attempt.startedAt ? "uncertain" : "none";
+      if (receipts.every(receipt => receipt.state === "failed" && receipt.membershipAdmitted === false
+        && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath)) return "no-host";
+      return receipts.some(receipt => receipt.state === "starting") ? "uncertain" : "launched";
+    } catch {
+      return "uncertain";
+    }
+  });
+  return revived;
 }
 
 /** Detach every nested field before a mutable reader or session sees a shared
     decoded record, including configuration and historical attempt evidence. */
 function cloneLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
-  return performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(structuredClone(pipeline), resolveProject), 1);
+  return performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(structuredClone(pipeline), resolveProject, true), 1);
 }
 
 /** Array slots detach on access. Length, direct lookup and append stay bounded;
@@ -1708,6 +741,8 @@ function decodePipeline(value: unknown, collection = "pipelines"): Pipeline | nu
 /** Unknown vocabulary is diagnosed separately from a broken known shape. The
     substituted copy is used only to validate structure, never for execution. */
 function pipelineRecordIssue(value: unknown, collection = "pipelines"): RegistryRecordIssue {
+  if (needsIntegrationReader(value)) return reportRegistryRecord(collection, value, "unknown-but-preserved",
+    "pipeline integration requires a newer reader; preserved without launch or settlement");
   const unknown: string[] = [];
   const copy = structuredClone(value);
   const visit = (node: unknown, location: string) => {
@@ -1758,7 +793,8 @@ function pipelineHasRecordedHost(pipeline: Pipeline): boolean {
 }
 
 function pipelineControllerActive(pipeline: Pipeline): boolean {
-  if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled";
+  if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled"
+    || Boolean(pipeline.unconfirmedHosts?.length || pipeline.closeReport?.unconfirmed.length || pipeline.closeReport?.stillRunning.length);
   if (pipeline.activationCloseRequested) return true;
   if (pipeline.state === "completed" || pipeline.state === "closed") {
     // A scoped controller holds an attempt window. Keep its eligibility
@@ -1774,6 +810,7 @@ export function pipelineStateCollectionSeeds(): [StateCollectionSeed<unknown>, S
     {
       collection: "pipelines",
       schemaVersion: PIPELINES_SCHEMA_VERSION,
+      compatibleSchemaVersions: [6],
       migrationId: "pipelines-json-v1",
       loadRecords: () => parsePipelinesFile(pipelinesFile()),
       key: registryRecordKey,
@@ -1783,6 +820,7 @@ export function pipelineStateCollectionSeeds(): [StateCollectionSeed<unknown>, S
     {
       collection: "pipelines_archive",
       schemaVersion: PIPELINES_SCHEMA_VERSION,
+      compatibleSchemaVersions: [6],
       migrationId: "pipelines-archive-json-v1",
       loadRecords: () => parsePipelinesFile(pipelinesArchiveFile()),
       key: registryRecordKey,
@@ -1792,6 +830,12 @@ export function pipelineStateCollectionSeeds(): [StateCollectionSeed<unknown>, S
   ];
 }
 
+/** The archive list keeps every lane's structure, ids, states and short
+    values in memory. Role scaffolds, prompts, stage inputs, outputs and report
+    texts are nine tenths of an archived lane and are read from its row when a
+    reader asks for one. */
+const ARCHIVED_PIPELINE_INLINE_TEXT = 512;
+
 function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteStateCollection<Pipeline> } {
   const filename = stateDatabaseFile();
   const held = pipelineStores.get(filename);
@@ -1800,6 +844,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
   const common = {
     readCacheKey: JSON.stringify(["pipeline-v1", PIPELINE_ROLE_IDS]),
     schemaVersion: PIPELINES_SCHEMA_VERSION,
+    compatibleSchemaVersions: [6],
     busyMessage: "pipeline state is busy",
     key: (pipeline: Pipeline) => pipeline.id,
     decode: decodePipeline,
@@ -1811,10 +856,15 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
       ? error
       : new PipelineStoreError("pipeline registry contains malformed records", { cause: error }),
     validate: (pipeline: Pipeline) => {
+      if (!hostTerminationCheckpointCurrent(pipeline)) throw new StateSnapshotChangedError();
+      for (const run of pipeline.runs) for (const attempt of run.attempts.slice(-2)) {
+        if (attempt.accounting) settleAttemptAccounting(attempt, pipeline.id);
+      }
       releaseTerminalDelivery(pipeline);
       if (!isPipeline(pipeline)) {
         throw new PipelineStoreError("refusing to persist a malformed pipeline record");
       }
+      assertPipelineNotRetiring(pipeline.id, () => pipelineRevision(pipeline));
     },
   };
   const active = new SqliteStateCollection<Pipeline>(filename, {
@@ -1828,6 +878,7 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
     collection: "pipelines_archive",
     decode: (value) => decodePipeline(value, "pipelines_archive"),
     strictDecode: true,
+    deferTextLongerThan: ARCHIVED_PIPELINE_INLINE_TEXT,
   });
   const created = { active, archive };
   pipelineStores.set(filename, created);
@@ -1896,7 +947,9 @@ export function loadPipelinesForList(): readonly Pipeline[] {
 export async function loadPipelinesForListAsync(): Promise<readonly Pipeline[]> {
   const rows = await pipelineStore().loadReadonlyAsync();
   if (!Object.isFrozen(rows)) {
-    await forEachCooperatively(rows, row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
+    // Incremental snapshots retain frozen records. Only changed graphs owe
+    // work; yielding for every retained row can exhaust a busy seat's budget.
+    await forEachCooperatively(rows.filter(row => !Object.isFrozen(row)), row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
     Object.freeze(rows);
   }
   return loadPipelinesForList();
@@ -1959,19 +1012,20 @@ export async function withPipelineStartupAdmission<T>(
   phase = "startup evidence",
   observeHold?: (heldMs: number) => void,
   compact = false,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; waitMs?: number; recipient?: PipelineRecipientSelection } = {},
 ): Promise<T> {
   return withViewerOperation("pipelines.startup-admission", () => withWaitCorrelation({ label: `pipelines.startup-admission:${phase}` }, async () => {
     let entered = false;
     let prepared: PreparedPipelineEvidence | undefined;
-    const waitMs = pipelineLockWaitMs();
+    const waitMs = Math.max(0, Math.min(pipelineLockWaitMs(), options.waitMs ?? Infinity));
     const deadline = performance.now() + waitMs;
     try {
       const outcome = await waitForStateLock("pipelines.startup-admission", async () => {
         try {
           let evidence = prepared;
           const evidenceBudget = { ...(waitMs > 0 ? { deadline } : {}), signal: options.signal };
-          if (!evidence) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget);
+          if (!evidence) evidence = await (options.recipient ? prepareRecipientPipelineEvidence(options.recipient, evidenceBudget)
+            : preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget));
           assertPipelineEvidenceBudget(evidenceBudget);
           const store = pipelineStore();
           assertPipelineEvidenceBudget(evidenceBudget);
@@ -1981,7 +1035,8 @@ export async function withPipelineStartupAdmission<T>(
             const currentSignature = evidenceSignature();
             assertPipelineEvidenceBudget(evidenceBudget);
             if (evidence.signature !== currentSignature) {
-              evidence = await preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget);
+              evidence = await (options.recipient ? prepareRecipientPipelineEvidence(options.recipient, evidenceBudget)
+            : preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget));
             }
           }
           prepared = evidence;
@@ -2039,8 +1094,11 @@ export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["
 }
 
 function releaseTerminalDelivery(pipeline: Pipeline): void {
-  if (pipeline.closeTeardown && (pipeline.closeTeardown.phase !== "settled" || pipeline.closeReport?.stillRunning.length || pipeline.closeReport?.unconfirmed.length)) return;
+  if (pipeline.state === "closed") withdrawPipelineMerge(pipeline, "Lane is closed", pipeline.closedAt ?? new Date().toISOString());
   const delivery = pipeline.delivery;
+  // Host teardown keeps its own durable custody. Closing withdraws this
+  // lane's right to start a publisher immediately; an existing writer below
+  // still fences the target until its outcome has been reconciled.
   // Parks retain the lane's claim so its cursor can resume and publish.
   if (!delivery?.active || (pipeline.state !== "closed" && pipeline.state !== "completed")) return;
   // An interrupted external write remains fenced until its result is known.
@@ -2049,6 +1107,19 @@ function releaseTerminalDelivery(pipeline: Pipeline): void {
   delivery.publish = "disabled";
   delivery.releasedAt = pipeline.closedAt ?? new Date().toISOString();
   deliveryJournal(pipeline, "release", `pipeline ${pipeline.state}`);
+}
+
+/** A completed comparison can resume delivery at its passed terminal stage,
+ * without repeating the work or inventing a review verdict. */
+export function completedComparisonPass(pipeline: Pipeline): string | null {
+  if (pipeline.state !== "completed" || pipeline.delivery?.disposition !== "comparison"
+    || pipeline.hiddenAt || !/^[0-9a-f]{40}$/i.test(pipeline.lastPassedCommit)) return null;
+  const terminal = pipeline.stages.filter(stage => {
+    const attempt = pipeline.runs.find(run => run.stageId === stage.id)?.attempts.at(-1);
+    return stage.next === null && attempt?.state === "passed" && attempt.verdict?.status === "pass"
+      && attempt.completedAt && !attempt.historical;
+  });
+  return terminal.length === 1 ? terminal[0]!.id : null;
 }
 
 export function pipelineDeliveryLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): Pipeline | null {
@@ -2074,11 +1145,25 @@ export function withDeliveryMutation<R>(operation: (tx: StateBoundedTransaction<
   return pipelineStore().boundedPatch(16, operation);
 }
 
-export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16): Promise<R> {
-  return refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).boundedPatchAsync(limit, (tx) => {
+export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16, admissionDeadline = Infinity): Promise<R> {
+  const remaining = () => Math.min(pipelineLockWaitMs(), Math.max(0, admissionDeadline - performance.now()));
+  return refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: remaining() })).boundedPatchAsync(limit, (tx) => {
     admitted();
     return operation(tx);
-  }, pipelineLockWaitMs()));
+  }, remaining()));
+}
+
+/** A short state admission publishes the durable fence. The sweep owns its
+ * lifetime outside this lease and re-reads authority before removing data. */
+export async function claimAttemptRetirement(pipelineId: string, directory: string, waitMs?: number) {
+  const owner = captureProcessIdentity(process.pid);
+  return waitForStateLock("pipelines.retirement-claim", () => {
+    const { active, archive } = stores();
+    return active.boundedPatch(2, tx => {
+      const pipeline = tx.get(pipelineId) ?? archive.get(pipelineId);
+      return admitAttemptRetirement(pipelineId, directory, pipeline ? pipelineRevision(pipeline) : "missing", owner);
+    }, undefined, { collection: archive, prepare: () => ({ records: [] }) });
+  }, { waitMs });
 }
 
 /** Called under the existing pipeline lease; indexed reads, no provisioning. */
@@ -2099,6 +1184,9 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
 
 export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: {
   requireOwner?: boolean;
+  /** Monotonic deadline shared by store opening and writer admission. */
+  admissionDeadline?: number;
+  assertAuthority?: () => void;
   /** Outside the lease; repeated after contention before another create attempt. */
   prepare?: () => Promise<void>;
   /** Synchronous creation-only freshness guard under the writer lease. */
@@ -2108,6 +1196,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
   onReplay?: () => void;
 } = {}): Promise<Pipeline> {
   const replay = (tx: StateBoundedTransaction<Pipeline>) => {
+    options.assertAuthority?.();
     if (pipeline.creationRequest) {
       const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
       if (existing) {
@@ -2124,7 +1213,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
     if (existing) return existing;
     if (preparationFailure) throw preparationFailure.error;
     options.admit?.();
-    const pullRequestRepository = target.pr ? githubRepositoryOfRemote(target.remote) : null;
+    const pullRequestRepository = target.pr ? deliveryPullRequestRepository(target) : null;
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
         ...(target.pr && pullRequestRepository ? { pullRequestRepository, prNumber: target.pr,
@@ -2139,7 +1228,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
   };
   const limit = options.requireOwner ? 4096 : 16;
   const prepare = options.prepare;
-  if (!prepare) return withDeliveryMutationAsync(create, limit);
+  if (!prepare) return withDeliveryMutationAsync(create, limit, options.admissionDeadline);
   return refuseBusyBeforeAdmission(admitted => waitForStateLock("pipelines.create", async () => {
     const store = pipelineStore();
     // A committed replay needs live authorization, but no fresh source capture.
@@ -2155,7 +1244,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
       // A peer may have committed while preparation was running or refused.
       return create(tx, preparationFailure);
     });
-  }, { waitMs: pipelineLockWaitMs(), subject: "pipelines" }));
+  }, { waitMs: Math.min(pipelineLockWaitMs(), Math.max(0, (options.admissionDeadline ?? Infinity) - performance.now())), subject: "pipelines" }));
 }
 
 export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): string | null {
@@ -2177,9 +1266,14 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     if (!previous?.delivery || previous.delivery.ownerId !== expectedOwner || previous.delivery.epoch !== expectedEpoch) {
       return { error: `delivery owner changed: current owner ${previous?.delivery?.ownerId ?? "none"}, epoch ${previous?.delivery?.epoch ?? 0}`, status: 409 };
     }
-    const old = tx.get(expectedOwner);
+    const activeOld = tx.get(expectedOwner);
+    // Closed owners can be archived while a comparison lane remains active.
+    // Read by id from both collections in this same transaction to retain the
+    // exact owner record and its epoch fence after that move.
+    const old = activeOld ?? tx.pipelineGet(expectedOwner);
     if (old?.delivery?.operation?.state === "running") return { error: `publisher ${expectedOwner} at epoch ${expectedEpoch} is in flight or its outcome is uncertain; reconcile it before takeover`, status: 409 };
-    if (pipeline.state === "closed" || pipeline.state === "completed") return { error: "a terminal lane cannot take ownership", status: 409 };
+    const completedStage = old?.state === "closed" ? completedComparisonPass(pipeline) : null;
+    if (pipeline.state === "closed" || (pipeline.state === "completed" && !completedStage)) return { error: "a terminal lane cannot take ownership without a passed comparison and a closed owner", status: 409 };
     const refused = old?.delivery?.operation;
     if (old && refused?.state === "settled" && refused.result?.ok === false) {
       const attempt = old.runs.find(run => run.stageId === old.cursor?.stageId)?.attempts.at(-1);
@@ -2190,7 +1284,8 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
       publicationInterrupted(refused.result) && !refused.result.failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
     }
     pipeline.publicationRecovery = mergePublicationRecovery(old?.publicationRecovery, pipeline.publicationRecovery);
-    if (old?.delivery) {
+    if (old?.delivery && activeOld) {
+      withdrawPipelineMerge(old, `Merge superseded by delivery owner ${pipeline.id}`, new Date().toISOString());
       old.delivery.active = false;
       old.delivery.publish = "disabled";
       old.delivery.releasedAt = new Date().toISOString();
@@ -2201,6 +1296,13 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
       ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal };
     delete pipeline.publication;
     pipeline.publishedCommit = null;
+    if (completedStage) {
+      pipeline.state = "running";
+      pipeline.closedAt = null;
+      pipeline.pausedState = null;
+      pipeline.cursor = { stageId: completedStage, state: "committing", input: null, activatedBy: null };
+      pipeline.stateDetail = null;
+    }
     deliveryJournal(pipeline, "takeover", reason, conversationId);
     const action = pipeline.remoteAction;
     if (action?.state === "pending" && action.action === "takeover"
@@ -2228,7 +1330,24 @@ export function savePipelines(pipelines: Pipeline[]): void {
 const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
 /** Shared archive rows, validated by revision, database identity and decoder
- * authority. Projection consumers must never mutate this frozen graph. */
+ * authority. Projection consumers must never mutate this frozen graph.
+ *
+ * Contract of a listed lane. Its structure and every value up to
+ * ARCHIVED_PIPELINE_INLINE_TEXT characters are in memory. A longer text (role
+ * scaffold, prompt, spec, stage input, output, report text) is read from the
+ * lane's row when a reader asks for it: one row read per lane, named
+ * `state.deferred-text` in the loop-gap reads, with rows kept decoded up to
+ * 32 MB. A reader that walks long text across the whole list therefore reads
+ * every archived row once per walk; take `selectArchivedPipelines` or a by-id
+ * read for that instead.
+ *
+ * A lane held across a rewrite of its own row keeps its listed values.
+ * `JSON.stringify` of it serializes the current row whole, so a response is
+ * one consistent record. A direct read of one of its long texts throws
+ * StateSnapshotChangedError, because the listed version's text is gone and a
+ * later version's text does not belong to the listed values. Archived rows
+ * are written once when a lane settles, so this needs the same lane archived
+ * again while a reader holds the list. */
 export function loadArchivedPipelinesForList(): readonly Pipeline[] {
   const rows = archiveStore().loadReadonly();
   freezeArchive(rows);
@@ -2238,7 +1357,7 @@ export function loadArchivedPipelinesForList(): readonly Pipeline[] {
 export async function loadArchivedPipelinesForListAsync(): Promise<readonly Pipeline[]> {
   const rows = await archiveStore().loadReadonlyAsync();
   if (!Object.isFrozen(rows)) {
-    await forEachCooperatively(rows, row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
+    await forEachCooperatively(rows.filter(row => !Object.isFrozen(row)), row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
     Object.freeze(rows);
   }
   return rows;
@@ -2275,6 +1394,8 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  const taskLinks = loadTasksByIds(new Set(pipeline.taskIds)).flatMap(task => task.workLinks ?? []);
+  if (issueDeliveryHoldsArchive(pipeline, nowMs, taskLinks)) return false;
   // The receipt sweep reads the hot collection, even after closure or hiding.
   if (pipeline.merge?.effectUncertain) return false;
   if (!pipelineActivitySettled(pipeline)) return false;
@@ -2314,22 +1435,22 @@ export async function archiveSettledPipelines(
 
 export function checkpointPipelineRollbackMirrorsForDemotion(): { pipelines: number; pipelinesArchive: number } {
   const { active, archive } = stores();
-  const pipelines = active.checkpointMirrorForDemotion((pipelines, revision) => {
-    atomicWriteJson(pipelinesFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
+  const pipelines = active.checkpointMirrorForDemotion((pipelines, revision, schemaVersion) => {
+    atomicWriteJson(pipelinesFile(), { schemaVersion, _sqliteRevision: revision, pipelines });
   });
-  const pipelinesArchive = archive.checkpointMirrorForDemotion((pipelines, revision) => {
-    atomicWriteJson(pipelinesArchiveFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
+  const pipelinesArchive = archive.checkpointMirrorForDemotion((pipelines, revision, schemaVersion) => {
+    atomicWriteJson(pipelinesArchiveFile(), { schemaVersion, _sqliteRevision: revision, pipelines });
   });
   return { pipelines, pipelinesArchive };
 }
 
 export async function checkpointPipelineRollbackMirrorsForDemotionAsync(): Promise<{ pipelines: number; pipelinesArchive: number }> {
   const { active, archive } = stores();
-  const pipelines = await active.checkpointMirrorForDemotionAsync((pipelines, revision) => {
-    atomicWriteJson(pipelinesFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
+  const pipelines = await active.checkpointMirrorForDemotionAsync((pipelines, revision, schemaVersion) => {
+    atomicWriteJson(pipelinesFile(), { schemaVersion, _sqliteRevision: revision, pipelines });
   });
-  const pipelinesArchive = await archive.checkpointMirrorForDemotionAsync((pipelines, revision) => {
-    atomicWriteJson(pipelinesArchiveFile(), { schemaVersion: PIPELINES_SCHEMA_VERSION, _sqliteRevision: revision, pipelines });
+  const pipelinesArchive = await archive.checkpointMirrorForDemotionAsync((pipelines, revision, schemaVersion) => {
+    atomicWriteJson(pipelinesArchiveFile(), { schemaVersion, _sqliteRevision: revision, pipelines });
   });
   return { pipelines, pipelinesArchive };
 }
@@ -2354,6 +1475,30 @@ export function pipelineRecordReader(pipelineId: string) {
 /** Full-record read by id: the hot registry first, then the archive. */
 export function findPipelineRecord(pipelineId: string): Pipeline | null {
   return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);
+}
+
+/** Task-local history, including archived lanes, without materializing every
+    unrelated stage and attempt in the installation. */
+export function loadPipelinesForTask(taskId: string): Pipeline[] {
+  const filename = stateDatabaseFile();
+  // Preserve the store's migration and schema admission for legacy installs.
+  const rows = stateCollectionsInitialized(filename, pipelineStateCollectionSeeds())
+    ? readPipelineRowsForTask(filename, taskId) : null;
+  if (rows === null) return [...loadPipelinesForList(), ...loadArchivedPipelinesForList()]
+    .filter(pipeline => pipeline.taskIds.includes(taskId));
+  return rows.flatMap(row => {
+    const pipeline = decodePipeline(row);
+    return pipeline?.taskIds.includes(taskId) ? [pipeline] : [];
+  });
+}
+
+export function loadPipelinesForSeatAgenda(taskIds: readonly string[], laneIds: readonly string[]): Pipeline[] {
+  const lanes = new Map<string, Pipeline>();
+  for (const row of readPipelineRowsForTasks(stateDatabaseFile(), taskIds, laneIds)) {
+    const lane = decodePipeline(row);
+    if (lane && !lanes.has(lane.id)) lanes.set(lane.id, lane);
+  }
+  return [...lanes.values()];
 }
 
 /** Bounded feed for consumers that need task membership changes without loading
@@ -2390,9 +1535,6 @@ export function pipelineTaskLinkError(
   return null;
 }
 
-function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "task";
-}
 
 export function pipelineIdentity(id: string, task: string, repoDir: string): Pick<Pipeline, "worktreeDir" | "branch"> {
   const repoName = path.basename(repoDir);
@@ -2403,8 +1545,10 @@ export function pipelineIdentity(id: string, task: string, repoDir: string): Pic
 }
 
 export function buildPipeline(input: {
+  taskClass?: import("./accounting").DeclaredClass;
   id: string;
   task: string;
+  prTitle?: string;
   taskIds?: string[];
   creationIntent?: PipelineCreationIntent;
   spec?: string;
@@ -2423,10 +1567,12 @@ export function buildPipeline(input: {
   return {
     id: input.id,
     task: input.task,
+    ...(input.prTitle ? { prTitle: input.prTitle } : {}),
     taskIds: [...new Set(input.taskIds ?? [])],
     ...(input.creationIntent ? { creationIntent: { ...input.creationIntent } } : {}),
     ...(input.spec ? { spec: input.spec } : {}),
     ...(input.inputContext ? { inputContext: structuredClone(input.inputContext) } : {}),
+    taskClass: { ...declaredClassSchema.parse(input.taskClass ?? {}), project: input.project },
     project: input.project,
     repoDir: input.repoDir,
     ...identity,
@@ -2441,7 +1587,7 @@ export function buildPipeline(input: {
       onFail: defaultStageFailEdge(stage, stage.onFail),
     })),
     runs: input.stages.map((stage) => ({ stageId: stage.id, attempts: [] })),
-    cursor: input.stages.length ? { stageId: input.stages[0]!.id, state: "pending", input: null, activatedBy: null } : null,
+    cursor: input.stages.length ? { admittedAt: input.state === "draft" || !Number.isFinite(Date.parse(input.now)) ? undefined : input.now, stageId: input.stages[0]!.id, state: "pending", input: null, activatedBy: null } : null,
     state: input.state ?? "provisioning",
     pausedState: null,
     stateDetail: null,

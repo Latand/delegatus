@@ -199,9 +199,15 @@ test("agent output closes the spent capacity chain before a later capacity cut i
   expect(f.sends).toHaveLength(1);
 });
 
-test("a fresh process honours the saved retry time", async () => {
+test.each([0, 3])("a fresh process honours the saved retry time and %i spent retries", async tries => {
   const f = await capacity();
   await recoverPipelineProviderTurn(f.id, f.h.ports);
+  if (tries) {
+    const lane = loadPipelines()[0]!, attempt = lane.runs[0]!.attempts[0]!;
+    attempt.providerRecoveryBudget!.tries = tries;
+    attempt.providerWait!.tries = tries;
+    savePipelines([lane]);
+  }
   const source = `import { defaultPipelinePorts,recoverPipelineProviderTurn } from "./src/lib/pipelines/engine.ts";
     import { loadPipelines } from "./src/lib/pipelines/store.ts";
     import { durableStageTurnEvidence } from "./src/lib/pipelines/durableEvidence.ts";
@@ -217,13 +223,16 @@ test("a fresh process honours the saved retry time", async () => {
       accountLabel:()=>"account A",allowedAccountIds:()=>null,
       resumeSeveredTurn:async()=>{sends++;return true;},scheduleTick:()=>{}};
     await recoverPipelineProviderTurn(lane.id,ports);
-    console.log(JSON.stringify({sends,wait:loadPipelines()[0].runs[0].attempts[0].providerWait}));`;
+    const saved=loadPipelines()[0];
+    console.log(JSON.stringify({sends,state:saved.state,wait:saved.runs[0].attempts[0].providerWait}));`;
   const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const errors = await new Response(child.stderr).text();
   expect({ code: await child.exited, errors }).toMatchObject({ code: 0 });
   const observed = JSON.parse(output);
   expect(observed.sends).toBe(0);
+  expect(observed.state).toBe(tries === 3 ? "needs_decision" : "running");
+  expect(observed.wait.tries).toBe(tries);
   expect(observed.wait.resumeAt).toBe(new Date(f.now() + 60_000).toISOString());
 });
 
@@ -367,7 +376,7 @@ test("watchdog recovery admits a later terminal lane while ordinary and first re
   } finally { release.resolve(); await ordinary; await control; await settleProviderRecoveries(); }
 });
 
-test.each([0, 3])("a known capacity cut checkpoints before held activity with %i spent tries", async tries => {
+test.each([0, 2, 3])("a known capacity cut checkpoints before held activity with %i spent tries", async tries => {
   const f = await capacity();
   const lane = loadPipelines()[0]!;
   lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries, startedAt: f.h.ports.now() };
@@ -386,22 +395,28 @@ test.each([0, 3])("a known capacity cut checkpoints before held activity with %i
     if (tries === 3) {
       await until(work);
       expect(activityReads).toBe(0);
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
       expect(loadPipelines()[0]!.stateDetail).toContain("model at capacity after 3 tries");
-    } else {
-      await until(entered.promise);
-      expect(loadPipelines()[0]!.stateDetail).toContain("waiting for model at capacity");
-      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.tries).toBe(0);
-      expire!();
-      await until(work);
-      expect(loadPipelines()[0]!.stateDetail).toContain("model at capacity");
+      return;
     }
-    expect(loadPipelines()[0]!.state).toBe("needs_decision");
-    const parked = structuredClone(loadPipelines()[0]);
-    for (let wake = 0; wake < 4; wake++) await recoverPipelineProviderTurn(f.id, f.h.ports);
+    await until(entered.promise);
+    expect(activityReads).toBe(1);
+    expect(loadPipelines()[0]!.stateDetail).toContain("waiting for model at capacity");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.tries).toBe(tries);
+    expire!();
+    await until(work);
+    const deferred = structuredClone(loadPipelines()[0]!);
+    expect(deferred.state).toBe("running");
+    expect(deferred.stateDetail).toContain("observation exceeded 15 seconds; retrying automatically");
+    expect(deferred.runs[0]!.attempts[0]!.state).toBe("running");
+    f.h.ports.conversationAgentActive = async () => null;
     release.resolve();
-    await work;
-    expect(loadPipelines()[0]).toEqual(parked);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(loadPipelines()[0]).toEqual(deferred);
     expect(f.sends).toHaveLength(0);
+    f.advance(Date.parse(deferred.runs[0]!.attempts[0]!.providerWait!.resumeAt) - f.now());
+    await recoverPipelineProviderTurn(f.id, f.h.ports);
+    expect(f.sends).toHaveLength(1);
   } finally { timer.mockRestore(); release.resolve(); await work; }
 });
 
@@ -476,45 +491,57 @@ test.each(["busy", "terminal", "continued", "cancelled", "admission"] as const)(
   } finally { timer.mockRestore(); release.resolve(); await settleProviderRecoveries(); }
 });
 
-test("a real observation deadline leaves a task-started-only active stage running", async () => {
+test.each([false, true])("a real observation deadline preserves automatic recovery in a fresh process, known cut=%s", async known => {
   const f = await capacity();
-  fs.writeFileSync(f.file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } }) + "\n");
+  if (known) { await recoverPipelineProviderTurn(f.id, f.h.ports); f.advance(60_000); }
+  else fs.writeFileSync(f.file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } }) + "\n");
   const original = structuredClone(loadPipelines()[0]!);
   const source = `import { defaultPipelinePorts,recoverPipelineProviderTurn } from "./src/lib/pipelines/engine.ts";
     import { loadPipelines } from "./src/lib/pipelines/store.ts";
-    let release, sends=0;
-    const ports={...defaultPipelinePorts(),conversationAgentActive:async()=>true,
-      durableTurnEvidence:async()=>{console.log("ready");await new Promise(done=>release=done);return {turn:"busy",message:null};},
-      resumeSeveredTurn:async()=>{sends++;return true;}};
+    import { durableStageTurnEvidence } from "./src/lib/pipelines/durableEvidence.ts";
+    let release, sends=0, clock=${JSON.stringify(f.h.ports.now())};
+    const held=async()=>{console.log("ready");await new Promise(done=>release=done);return null;};
+    const ports={...defaultPipelinePorts(),now:()=>clock,
+      conversationAgentActive:${known ? "held" : "async()=>true"},
+      durableTurnEvidence:${known ? `async(engine,_path,reportAt,startedAt,tail,afterCutAt)=>durableStageTurnEvidence(engine,${JSON.stringify(f.file)},reportAt,startedAt,tail,afterCutAt)` : 'async()=>{await held();return {turn:"busy",message:null};}'},
+      conversationTurnInterrupted:async()=>null,conversationOperatorStopped:async()=>false,runtimeHostEpoch:async()=>null,
+      conversationOutOfMemory:async()=>null,conversationHostUnavailableSince:async()=>null,
+      sourcePathAllowed:()=>true,spawnReceipt:()=>null,allowedAccountIds:()=>null,accountLabel:()=>"account A",
+      resumeSeveredTurn:async input=>{if(!await input.continuationAllowed())return false;sends++;return true;},scheduleTick:()=>{}};
     const keepAlive=setInterval(()=>{},1000);
     try { await recoverPipelineProviderTurn(${JSON.stringify(f.id)},ports); } finally { clearInterval(keepAlive); }
+    const deferred=structuredClone(loadPipelines()[0]);
     release(); await new Promise(done=>setImmediate(done));
-    console.log(JSON.stringify({lane:loadPipelines()[0],sends}));`;
+    const lateUnchanged=JSON.stringify(deferred)===JSON.stringify(loadPipelines()[0]);
+    if(${known}) {
+      clock=deferred.runs[0].attempts[0].providerWait.resumeAt;
+      ports.conversationAgentActive=async()=>null;
+      await recoverPipelineProviderTurn(${JSON.stringify(f.id)},ports);
+    }
+    console.log(JSON.stringify({deferred,lateUnchanged,lane:loadPipelines()[0],sends}));`;
   const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
+  const errorsRead = new Response(child.stderr).text();
   try {
-    const reader = child.stdout.getReader();
-    let output = "";
-    while (!output.includes("ready\n")) {
-      const chunk = await reader.read();
-      if (chunk.done) throw new Error("deadline probe exited before reading evidence");
-      output += new TextDecoder().decode(chunk.value);
-    }
-    const readyAt = performance.now();
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      output += new TextDecoder().decode(chunk.value);
-    }
-    const code = await child.exited;
-    const errors = await new Response(child.stderr).text();
-    expect({code,errors}).toMatchObject({code:0});
-    expect(performance.now() - readyAt).toBeGreaterThanOrEqual(PROVIDER_RECOVERY_DEADLINE_MS - 500);
+    const output = await new Response(child.stdout).text();
+    expect({ code: await child.exited, errors: await errorsRead }).toMatchObject({ code: 0 });
+    expect(output).toContain("ready\n");
     const observed = JSON.parse(output.trim().split("\n").at(-1)!);
-    expect(observed).toEqual({lane:original,sends:0});
-    expect(loadPipelines()[0]).toEqual(original);
+    expect(observed.lateUnchanged).toBe(true);
+    expect(observed.deferred.state).toBe("running");
+    if (known) {
+      expect(observed.deferred.stateDetail).toContain("observation exceeded 15 seconds; retrying automatically");
+      expect(observed.lane.state).toBe("running");
+      expect({ detail: observed.lane.stateDetail, tries: observed.lane.runs[0].attempts[0].providerWait.tries }).toMatchObject({ tries: 1 });
+      expect(observed.sends).toBe(1);
+    } else {
+      expect(observed.deferred).toEqual(original);
+      expect(observed.lane).toEqual(original);
+      expect(observed.sends).toBe(0);
+    }
   } finally {
     if (child.exitCode === null) child.kill();
     await child.exited;
+    await errorsRead;
   }
 });
 

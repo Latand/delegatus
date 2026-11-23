@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { StageTurnEvidence } from "./durableEvidence";
+import type { PipelinePorts } from "./engine";
 
 // Literal-object helpers append to the process's Git configuration. Clear
 // launch identity/configuration here as well as in each fixture's subprocess.
@@ -18,7 +19,10 @@ const { pipelineCorpus } = await import("./fixtures/corpus");
 const { realExec } = await import("@/lib/workflows/provision");
 const { registerPipelineTick } = await import("./controllerSignal");
 const restore = registerPipelineTick(async () => {});
-afterAll(() => { restore(); Object.assign(process.env, inheritedGit); fs.rmSync(state, { recursive: true, force: true }); });
+afterAll(async () => {
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  restore(); Object.assign(process.env, inheritedGit); fs.rmSync(state, { recursive: true, force: true });
+});
 
 function fixture({ emptyAccepted = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-publication-repair-"));
@@ -28,7 +32,8 @@ function fixture({ emptyAccepted = false } = {}) {
   let workingRepo = repo;
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith("GIT_")) env[key] = undefined;
-  Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "gitconfig") });
+  Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "gitconfig"),
+    GIT_AUTHOR_DATE: "2026-10-11T04:00:00Z", GIT_COMMITTER_DATE: "2026-10-11T04:00:00Z" });
   const git = (...args: string[]) => {
     const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", ...args], { cwd: workingRepo, env, encoding: "utf8" });
     if (result.status !== 0) throw new Error(result.stderr);
@@ -37,7 +42,9 @@ function fixture({ emptyAccepted = false } = {}) {
   git("init", "-q", "-b", "main"); git("init", "-q", "--bare", remote);
   git("commit", "-q", "--allow-empty", "-m", "base");
   const base = git("rev-parse", "HEAD");
-  git("remote", "add", "origin", remote); git("push", "-q", "origin", "main");
+  const deliveryRemote = "https://github.com/example/widgets.git";
+  git("config", `url.${remote}.insteadOf`, deliveryRemote);
+  git("remote", "add", "origin", deliveryRemote); git("push", "-q", "origin", "main");
   const lane = pipelineCorpus(2, 1)[1]!;
   git("checkout", "-q", "-b", lane.branch);
   fs.mkdirSync(path.join(repo, "src"));
@@ -57,25 +64,40 @@ function fixture({ emptyAccepted = false } = {}) {
   Object.assign(attempt, { state: "passed", verdict: { status: "pass", findings: [] },
     conversationId: "conversation_producer", agentPath: "/codex/producer.jsonl", paneId: null,
     startedAt: "2026-10-11T04:00:00.000Z", completedAt: "2026-10-11T04:01:00.000Z" });
-  lane.delivery = { target: { repository: "fixture", remote, branch: `refs/heads/${lane.branch}` },
+  lane.delivery = { target: { repository: "fixture", remote: deliveryRemote, branch: `refs/heads/${lane.branch}` },
     disposition: "owner", publish: "enabled", ownerId: lane.id, epoch: 1, active: true, journal: [] };
   savePipelines([lane]);
   let wall = Date.parse("2026-10-11T04:02:00.000Z");
   let turn: StageTurnEvidence = { turn: "terminal", message: { text: "accepted", ts: wall - 60_000 }, lastRecordAt: wall - 60_000 };
-  const requests: Array<{ text: string; clientMessageId: string; conversationId: string }> = [];
+  const requests: Array<Parameters<NonNullable<PipelinePorts["resumeSeveredTurn"]>>[0]> = [];
   const checkpoints: unknown[] = [];
   let pushes = 0;
-  const ports = { ...defaultPipelinePorts(),
+  const ports: PipelinePorts = { ...defaultPipelinePorts(),
     exec: async (...args: Parameters<typeof realExec>) => {
       if (args[0] === "git" && args[1][0] === "push") pushes++;
+      if (args[0] === "gh") {
+        const argv = args[1];
+        if (argv[0] !== "pr" || !["list", "view"].includes(argv[1]!)
+          || argv[argv.indexOf("--repo") + 1] !== "example/widgets") {
+          return { code: 1, stdout: "", stderr: "fixture PR service unavailable" };
+        }
+        // The verifier reads the head actually published to the bare remote.
+        const headRefName = git("symbolic-ref", "--short", "HEAD");
+        const headRefOid = git("ls-remote", "origin", `refs/heads/${headRefName}`).split(/\s+/)[0];
+        const pr = { number: 17, headRefName, headRefOid, baseRefName: "main", state: "OPEN", isCrossRepository: false };
+        return { code: 0, stdout: JSON.stringify(argv[1] === "list" ? [pr] : pr), stderr: "" };
+      }
       return realExec(args[0], args[1], args[2], { ...env, ...args[3] }, args[4]);
     },
     now: () => new Date(wall).toISOString(), scheduleTick: () => {},
     durableTurnEvidence: async () => turn, conversationDeliveryOutstanding: () => false,
+    publicationRepairProducerState: async () => "idle",
     conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false,
+    stageRepairDelivery: async (_conversationId: string, _clientMessageId: string, deadline: number) => ({ operationId: null,
+      state: wall >= deadline ? "failed" as const : "unavailable" as const, safeToReplace: false }),
     getFlow: () => null, worktreePresent: () => true,
     spawnAgent: async () => { throw new Error("this fixture cannot launch a real agent"); },
-    resumeSeveredTurn: async (input: { text: string; clientMessageId: string; conversationId: string }) => {
+    resumeSeveredTurn: async (input) => {
       requests.push(input);
       checkpoints.push(structuredClone(findPipelineRecord(lane.id)!.runs[0]!.attempts[0]));
       turn = { ...turn, turn: "busy" };
@@ -133,7 +155,7 @@ test.each(["declined", "deadline", "second refusal"])("an unrepairable publicati
     // The first line keeps the cause and the action a person takes.
     expect(detail.split("\n")[0]).toStartWith('publishing the passed stage: the repository\'s pre-push hook failed in its "privacy" phase');
     expect(detail).toContain("PRIVACY GATE: FAIL: fixture content");
-    expect(detail).toContain(kind === "declined" ? "outside the producer scope" : kind === "deadline" ? "did not finish" : "privacy");
+    expect(detail).toContain(kind === "declined" ? "outside the producer scope" : kind === "deadline" ? "delivery unknown failed" : "privacy");
     await h.tick();
     expect(h.requests).toHaveLength(1);
     expect(h.pushes()).toBe(kind === "second refusal" ? 2 : 1);
@@ -207,7 +229,8 @@ test("a repair commit refusal remains consumed if final park settlement is lost"
     const commitHook = path.join(h.root, "repo/.git/hooks/pre-commit");
     const marker = path.join(h.root, "commit-calls");
     fs.writeFileSync(commitHook, `#!/bin/sh\necho called >> '${marker}'\necho 'pre-commit: repair still invalid' >&2\nexit 1\n`, { mode: 0o700 });
-    h.endTurn(); await h.tick();
+    // Replay this settlement before a controller tick can start a new producer.
+    h.endTurn(); await settlePendingStageGit(h.ports);
     expect(h.current().state).toBe("needs_decision");
     expect(h.current().runs[0]!.attempts[0]!.publicationRepair?.outcome).toMatchObject({ status: "rejected", reason: expect.stringContaining("repair still invalid") });
     // Bun's toMatchObject writes its matchers into the received object, so clear the park on a fresh read.
@@ -215,7 +238,7 @@ test("a repair commit refusal remains consumed if final park settlement is lost"
     rejected.state = "running"; rejected.stateDetail = null;
     rejected.runs[0]!.attempts[0]!.state = "passed";
     savePipelines([rejected]);
-    await h.tick();
+    await settlePendingStageGit(h.ports);
     expect(h.current().state).toBe("needs_decision");
     expect(h.current().stateDetail!.split("\n")[0]).toStartWith('publishing the passed stage: the repository\'s pre-push hook failed in its "eslint" phase');
     expect(h.current().stateDetail).toContain("repair still invalid");
@@ -230,6 +253,8 @@ test("publication repair refuses a foreign checkout before committing any of its
     await h.tick();
     h.git("checkout", "-q", "-b", "foreign");
     fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    Object.assign(h.ports, { engineReadiness: undefined, resolveProjectSpawn: undefined,
+      structuredDeliveryPublication: () => "ready", cpuPressureHold: () => null });
     h.endTurn(); await h.tick();
     expect(h.current().state).toBe("needs_decision");
     expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
@@ -276,5 +301,531 @@ test("a refusal of an accepted head that changes no files retries three times an
     expect(current.runs[0]!.attempts[0]!.publicationRepair).toBeUndefined();
     expect(h.requests).toHaveLength(0);
     expect(h.pushes()).toBe(4);
+  } finally { h.cleanup(); }
+});
+
+test.each(["unreserved", "failed", "gone", "unavailable", "completed-gone", "running", "busy", "changed", "conflict"] as const)("retry-stage preserves the accepted head and replaces an unreachable producer: %s", async shape => {
+  const h = fixture();
+  try {
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: eslint' >&2\necho 'src/work.ts:1: repair required' >&2\nexit 1\n", { mode: 0o700 });
+    h.ports.resumeSeveredTurn = async () => false;
+    await h.tick();
+    h.advance(21 * 60_000);
+    // Stop at the publication park; the next full tick now auto-repairs it.
+    await settlePendingStageGit(h.ports);
+    expect(h.current().state).toBe("needs_decision");
+    const original = structuredClone(h.current().runs[0]!.attempts[0]!);
+    if (shape === "gone") h.git("commit", "-q", "--allow-empty", "-m", "producer repair before host loss");
+    const retainedHead = h.git("rev-parse", "HEAD");
+    const { patchPipeline } = await import("./engine");
+    expect((await patchPipeline(h.lane.id, { action: "override-stage", stageId: "build", prompt: "Repair the named publication failure using the current instructions." }, h.ports)).error).toBeUndefined();
+    const restarted = spawnSync(process.execPath, ["-e", `
+      const { defaultPipelinePorts, patchPipeline } = await import("./src/lib/pipelines/engine");
+      const ports: PipelinePorts = { ...defaultPipelinePorts(), now: () => "2026-10-11T04:23:00.000Z",
+        conversationAgentActive: async () => ${shape === "running" ? "true" : ["gone", "unavailable", "completed-gone", "conflict"].includes(shape) ? "false" : "null"},
+        publicationRepairProducerGone: async () => ${["gone", "unavailable", "completed-gone"].includes(shape) ? "true" : "null"},
+        conversationTurnInterrupted: async () => ${["gone", "unavailable"].includes(shape) ? JSON.stringify("dead") : "null"},
+        conversationDeliveryOutstanding: () => ${shape === "conflict"},
+        durableTurnEvidence: async () => ({ turn: "${shape === "busy" ? "busy" : "terminal"}",
+          lastRecordAt: Date.parse("${shape === "busy" ? "2026-10-11T04:23:00.000Z" : "2026-10-11T04:01:00.000Z"}"),
+          message: { text: "accepted", ts: Date.parse("2026-10-11T04:01:00.000Z") } }),
+        stageRepairDelivery: async () => {
+          ${shape === "changed" ? `const { findPipelineRecord, savePipelines } = await import("./src/lib/pipelines/store");
+          const lane = findPipelineRecord(${JSON.stringify(h.lane.id)});
+          lane.runs[0].attempts[0].startedAt = "2026-10-11T04:00:01.000Z";
+          savePipelines([lane]);` : ""}
+          return { operationId: ${["failed", "conflict"].includes(shape) ? JSON.stringify("failed-repair") : "null"},
+            state: "${["failed", "conflict"].includes(shape) ? "failed" : ["gone", "unavailable"].includes(shape) ? "unavailable" : "unreserved"}", safeToReplace: ${shape !== "conflict"} };
+        },
+      };
+      console.log(JSON.stringify(await patchPipeline(${JSON.stringify(h.lane.id)}, { action: "retry-stage" }, ports)));
+    `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 30_000 });
+    expect(restarted.status, restarted.stderr).toBe(0);
+    const answer = JSON.parse(restarted.stdout);
+    if (shape === "running" || shape === "busy" || shape === "changed" || shape === "conflict") {
+      expect(answer.error).toContain("may still be running");
+      expect(h.current().cursor?.state).toBe("committing");
+      return;
+    }
+    expect(answer.error).toBeUndefined();
+    const next = h.current();
+    expect(next.cursor).toMatchObject({ stageId: "build", state: "pending" });
+    expect(next.cursor!.input).toContain("src/work.ts:1: repair required");
+    expect(next.stages[0]!.prompt).toContain("current instructions");
+    expect(next.runs[0]!.attempts).toHaveLength(2);
+    expect(next.runs[0]!.attempts[1]!).toMatchObject({ n: 2, state: "pending", input: next.cursor!.input });
+    expect(next.lastPassedCommit).toBe(h.accepted);
+    expect(h.git("rev-parse", "HEAD")).toBe(retainedHead);
+    expect(h.git("merge-base", h.accepted, retainedHead)).toBe(h.accepted);
+    expect(next.runs[0]!.attempts[0]!.report).toEqual(original.report);
+    expect(next.runs[0]!.attempts[0]!.verdict).toEqual(original.verdict);
+    expect(h.pushes()).toBe(1);
+    let spawnedPrompt = "";
+    const spawnPorts: PipelinePorts = { ...h.ports, engineReadiness: undefined, resolveProjectSpawn: undefined,
+      cpuPressureHold: () => null,
+      structuredDeliveryPublication: () => "ready",
+      spawnAgent: async (input, onReserved) => {
+        spawnedPrompt = input.prompt;
+        await onReserved({ launchId: "replacement-launch", conversationId: "conversation_replacement", accountId: null });
+        return { launchId: "replacement-launch", conversationId: "conversation_replacement", sessionId: "replacement-session",
+          paneId: null, transcript: path.join(h.root, "replacement.jsonl"), accountId: null };
+      },
+    };
+    for (let n = 0; n < 3 && !spawnedPrompt; n++) await tickPipelines([], spawnPorts);
+    expect(spawnedPrompt, h.current().stateDetail ?? "replacement was not dispatched").toContain("Repair the named publication failure using the current instructions.");
+    expect(spawnedPrompt).toContain("src/work.ts:1: repair required");
+    expect(h.current().runs[0]!.attempts).toHaveLength(2);
+  } finally { h.cleanup(); }
+});
+
+test("the original stage Git binding survives a restart but a passed attempt cannot rehost it", async () => {
+  const h = fixture();
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { prepareStageGitGuard } = await import("@/lib/git/stageAttemptGuard");
+  const registryFile = path.join(h.root, "registry.json");
+  const registry = new AgentRegistry(registryFile);
+  try {
+    const conversation = registry.ensureForkedConversation("codex", path.join(h.root, "producer.jsonl"), null, emptyLaunchProfile({ cwd: h.repo }));
+    registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: h.lane.id, stageId: "build", round: 1,
+      role: "builder", slot: "build:1", stageOrder: 0, parentConversationId: null });
+    const lane = h.current();
+    Object.assign(lane.runs[0]!.attempts[0]!, { state: "running", launchId: "rehost-producer", conversationId: conversation.id });
+    savePipelines([lane]);
+    await prepareStageGitGuard("rehost-producer", h.repo, h.ports.exec, h.ports.now(), async () => {});
+    registry.close();
+    for (const stageState of ["running", "passed"] as const) {
+      const lane = h.current(); lane.runs[0]!.attempts[0]!.state = stageState; savePipelines([lane]);
+      const child = spawnSync(process.execPath, ["-e", `
+        const { AgentRegistry } = await import("./src/lib/agent/registry");
+        const { stageGitEnvironment } = await import("./src/lib/runtime/stageGitEnvironment");
+        const registry = new AgentRegistry(${JSON.stringify(registryFile)});
+        try {
+          const env = await stageGitEnvironment(registry, ${JSON.stringify(conversation.id)}, "resume-operation", ${JSON.stringify(h.repo)});
+          console.log(JSON.stringify({ restored: !!env.LLV_STAGE_GIT_RECEIPT }));
+        } catch (error) { console.log(JSON.stringify({ error: error.message })); }
+        finally { registry.close(); }
+      `], { env: process.env, cwd: process.cwd(), encoding: "utf8", timeout: 20_000 });
+      expect(child.status, child.stderr).toBe(0);
+      expect(JSON.parse(child.stdout)).toEqual(stageState === "running" ? { restored: true }
+        : { error: "stage Git rehost cannot prove its original attempt" });
+    }
+    expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+  } finally { registry.close(); h.cleanup(); }
+});
+
+
+test.each([false, true])("a dirty declined repair restores its accepted checkout before retry (declared outputs: %s)", async outputs => {
+  const h = fixture();
+  try {
+    if (outputs) {
+      const lane = h.current();
+      lane.stages[0]!.outputs = ["src/work.ts", "repair.txt"];
+      lane.stages[0]!.effectiveRole.access = "read-only";
+      lane.runs[0]!.attempts[0]!.effectiveRole.access = "read-only";
+      savePipelines([lane]);
+    }
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    expect(h.requests).toHaveLength(1);
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.git("add", "src/work.ts");
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 3;\n");
+    fs.writeFileSync(path.join(h.repo, "repair.txt"), "unfinished repair\n");
+    fs.writeFileSync(path.join(h.repo, "scratch.txt"), "untracked repair\n");
+    fs.writeFileSync(path.join(h.repo, "added.txt"), "staged repair\n");
+    h.git("add", "added.txt");
+    fs.writeFileSync(path.join(h.repo, ":(glob)*.txt"), "literal path\n");
+    h.endTurn('```json\n{"status":"fail","blocked":true,"blockedReason":"outside the producer scope"}\n```');
+    await settlePendingStageGit(h.ports);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail).toContain("outside the producer scope");
+    expect(h.git("status", "--porcelain")).toBe("");
+    expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+    expect(h.git("show", ":src/work.ts")).toBe("export const work = 1;");
+    expect(fs.existsSync(path.join(h.repo, "repair.txt"))).toBe(false);
+    fs.writeFileSync(h.hook, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const { patchPipeline } = await import("./engine");
+    expect((await patchPipeline(h.lane.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    await h.tick();
+    expect(h.current().state).toBe("completed");
+    expect(h.current().publishedCommit).toBe(h.accepted);
+    expect(h.requests).toHaveLength(1);
+  } finally { h.cleanup(); }
+});
+
+test.each(["controller", "takeover"])("a superseded admission records no failed check or spent budget through %s and restart", async consumer => {
+  const h = fixture();
+  try {
+    const lane = h.current();
+    lane.delivery!.operation = { id: "superseded-admission", epoch: 1, sha: h.accepted, state: "pending",
+      requestKey: "pass:build:1", passedStage: true };
+    const { publishPipelineBranch, pipelinePublicationFence } = await import("./git");
+    lane.delivery!.operation.fence = pipelinePublicationFence(lane);
+    savePipelines([lane]);
+    const { patchPipeline } = await import("./engine");
+    expect((await patchPipeline(lane.id, { action: "pause", reason: "Suspend publication admission" }, h.ports)).error).toBeUndefined();
+    const result = await publishPipelineBranch(h.current(), h.ports.exec, { acceptedSha: h.accepted, now: h.ports.now });
+    expect(result).toMatchObject({ ok: false, outcome: "superseded" });
+    expect(h.current().delivery!.operation!.result).toEqual(result);
+    expect(h.pushes()).toBe(0);
+    await settlePendingStageGit(h.ports);
+    expect(h.current().state).toBe("paused");
+    expect(h.current().delivery!.operation!.id).toBe("superseded-admission");
+    let recordId = lane.id;
+    if (consumer === "takeover") {
+      const { buildPipeline, createPipelineWithDelivery, takeoverPipelineDelivery } = await import("./store");
+      const successor = await createPipelineWithDelivery(buildPipeline({ id: "supersession-successor", task: "Continue publication",
+        project: lane.project, repoDir: lane.repoDir, stages: lane.stages, srcPath: null, srcConversationId: null,
+        now: h.ports.now(), state: "draft" }), lane.delivery!.target);
+      expect((await takeoverPipelineDelivery(successor.id, lane.id, 1, "continue publication", null)).error).toBeUndefined();
+      recordId = successor.id;
+    } else {
+      expect((await patchPipeline(lane.id, { action: "resume" }, h.ports)).error).toBeUndefined();
+      await settlePendingStageGit(h.ports);
+      expect(h.current().state).toBe("running");
+      expect(h.current().delivery!.operation).toMatchObject({ state: "pending", sha: h.accepted });
+      expect(h.current().delivery!.operation!.id).not.toBe("superseded-admission");
+      expect(h.requests).toHaveLength(0);
+      expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toBeUndefined();
+    }
+    const recovery = findPipelineRecord(recordId)!.publicationRecovery![h.accepted]!;
+    expect(recovery).toMatchObject({ failures: 0, totalAttempts: 0, history: [{ cause: "superseded", retryAt: null }] });
+    const reopened = spawnSync(process.execPath, ["-e", `
+      const { findPipelineRecord } = await import("./src/lib/pipelines/store");
+      console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(recordId)}).publicationRecovery));
+    `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 30_000 });
+    expect(reopened.status, reopened.stderr).toBe(0);
+    expect(JSON.parse(reopened.stdout)).toEqual({ [h.accepted]: recovery });
+    expect(h.pushes()).toBe(0);
+  } finally { h.cleanup(); }
+});
+
+
+test.each(["restore", "partial restore", "clean", "partial clean"])("refused repair cleanup resumes its durable intent in a new controller after %s interruption", async boundary => {
+  const h = fixture();
+  try {
+    if (boundary === "partial restore") {
+      fs.writeFileSync(path.join(h.repo, "src/other.ts"), "export const other = 1;\n");
+      h.git("add", "src/other.ts"); h.git("commit", "-q", "-m", "accepted second file");
+      h.accepted = h.git("rev-parse", "HEAD");
+      const lane = h.current(); lane.lastPassedCommit = h.accepted; savePipelines([lane]);
+    }
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.git("add", "src/work.ts");
+    if (boundary === "partial restore") {
+      fs.writeFileSync(path.join(h.repo, "src/other.ts"), "export const other = 2;\n");
+      h.git("add", "src/other.ts");
+    }
+    fs.writeFileSync(path.join(h.repo, "first.txt"), "first\n");
+    fs.writeFileSync(path.join(h.repo, "second.txt"), "second\n");
+    h.endTurn('```json\n{"status":"fail","blocked":true,"blockedReason":"cannot repair"}\n```');
+    const originalExec = h.ports.exec;
+    h.ports.exec = async (...args: Parameters<typeof realExec>) => {
+      const rollback = h.current().runs[0]!.attempts[0]!.publicationRepair?.rollback;
+      const mutation = args[0] === process.execPath && rollback?.phase === (boundary.includes("restore") ? "restore" : "clean");
+      if (mutation) {
+        if (boundary === "partial clean") fs.unlinkSync(path.join(h.repo, "first.txt"));
+        if (boundary === "partial restore") h.git("restore", `--source=${h.accepted}`, "--staged", "--worktree", "--", "src/work.ts");
+        return { code: 1, stdout: "", stderr: "fixture cleanup interrupted" };
+      }
+      return originalExec(...args);
+    };
+    await settlePendingStageGit(h.ports);
+    const intent = h.current().runs[0]!.attempts[0]!.publicationRepair!.rollback!;
+    expect(intent.phase).toBe(boundary.includes("restore") ? "restore" : "clean");
+    expect(h.git("show", `${intent.tree}:second.txt`)).toBe("second");
+    expect(h.git("show", `${intent.index}:src/work.ts`)).toBe("export const work = 2;");
+    expect(h.current().state).toBe("running");
+    expect(h.current().stateDetail).toContain("cannot repair");
+    const restarted = spawnSync(process.execPath, ["-e", `
+      const { findPipelineRecord, savePipelines } = await import("./src/lib/pipelines/store");
+      const { defaultPipelinePorts, settlePendingStageGit } = await import("./src/lib/pipelines/engine");
+      const lane = findPipelineRecord(${JSON.stringify(h.lane.id)});
+      const ports: PipelinePorts = { ...defaultPipelinePorts(), now: () => "2026-10-11T04:04:00.000Z",
+        scheduleTick: () => {}, conversationAgentActive: async () => false,
+        publicationRepairProducerState: async () => "idle",
+        conversationDeliveryOutstanding: () => false,
+        durableTurnEvidence: async () => ({ turn: "terminal", message: { text: "declined", ts: Date.parse("2026-10-11T04:03:00.000Z") } }),
+      };
+      await settlePendingStageGit(ports);
+      console.log(JSON.stringify(findPipelineRecord(lane.id).runs[0].attempts[0].publicationRepair));
+    `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 30_000 });
+    expect(restarted.status, restarted.stderr).toBe(0);
+    const repair = JSON.parse(restarted.stdout);
+    expect(repair.rollback.phase).toBe("done");
+    expect(repair.outcome).toMatchObject({ status: "rejected", reason: expect.stringContaining("cannot repair") });
+    expect(h.git("status", "--porcelain")).toBe("");
+    expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+    expect(h.requests).toHaveLength(1);
+    expect(h.pushes()).toBe(1);
+  } finally { h.cleanup(); }
+});
+
+test.each(["active", "native active", "native blocked", "native unknown", "branch", "head", "files"])("refused repair cleanup preserves a concurrent %s change", async race => {
+  const h = fixture();
+  try {
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.git("add", "src/work.ts");
+    h.endTurn('```json\n{"status":"fail","blocked":true,"blockedReason":"cannot repair"}\n```');
+    const originalExec = h.ports.exec;
+    let changed = false, active = false;
+    let native: "unknown" | "active" | "blocked" | "idle" = "idle";
+    h.ports.conversationAgentActive = async () => active;
+    h.ports.publicationRepairProducerState = async () => native;
+    h.ports.exec = async (...args: Parameters<typeof realExec>) => {
+      const result = await originalExec(...args);
+      // Change the premise after the cleanup intent has reached storage.
+      if (!changed && h.current().runs[0]!.attempts[0]!.publicationRepair?.rollback && args[1][0] === "write-tree") {
+        changed = true;
+        if (race === "active") { active = true; native = "unknown"; }
+        else if (race === "native active") native = "active";
+        else if (race === "native blocked") native = "blocked";
+        else if (race === "native unknown") native = "unknown";
+        else if (race === "branch") h.git("checkout", "-q", "-b", "foreign");
+        else if (race === "head") h.git("commit", "-q", "-m", "concurrent work");
+        else fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 4;\n");
+      }
+      return result;
+    };
+    await settlePendingStageGit(h.ports);
+    expect(changed).toBe(true);
+    expect(fs.readFileSync(path.join(h.repo, "src/work.ts"), "utf8")).toContain(race === "files" ? "work = 4" : "work = 2");
+    expect(h.current().runs[0]!.attempts[0]!.publicationRepair!.rollback!.phase).not.toBe("done");
+    if (race === "native unknown") {
+      expect(await h.requests[0]!.continuationAllowed?.()).toBe(false);
+      h.advance(30 * 60_000);
+      await settlePendingStageGit(h.ports);
+      expect(fs.readFileSync(path.join(h.repo, "src/work.ts"), "utf8")).toContain("work = 2");
+      expect(h.current().state).toBe("running");
+      native = "idle";
+      await settlePendingStageGit(h.ports);
+      expect(h.git("status", "--porcelain")).toBe("");
+      expect(h.current().state).toBe("needs_decision");
+      expect(h.current().stateDetail).toContain("cannot repair");
+    }
+    expect(h.requests).toHaveLength(1);
+    expect(h.pushes()).toBe(1);
+  } finally { h.cleanup(); }
+});
+
+
+test("refusal cleanup preserves ignored files and private controller handoffs", async () => {
+  const h = fixture();
+  try {
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    const privateDir = path.join(h.repo, ".artifacts/pipeline-stage-inputs/private");
+    fs.mkdirSync(privateDir, { recursive: true });
+    fs.writeFileSync(path.join(privateDir, "context.txt"), "controller handoff\n");
+    fs.appendFileSync(path.join(h.root, "repo/.git/info/exclude"), "\nignored.txt\n");
+    fs.writeFileSync(path.join(h.repo, "ignored.txt"), "ignored context\n");
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.git("add", "src/work.ts");
+    // The worktree matches HEAD while its index still holds a rejected change.
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 1;\n");
+    h.endTurn('```json\n{"status":"fail","blocked":true,"blockedReason":"cannot repair"}\n```');
+    await settlePendingStageGit(h.ports);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().runs[0]!.attempts[0]!.publicationRepair!.rollback!.phase).toBe("done");
+    expect(h.git("show", ":src/work.ts")).toBe("export const work = 1;");
+    expect(fs.readFileSync(path.join(privateDir, "context.txt"), "utf8")).toBe("controller handoff\n");
+    expect(fs.readFileSync(path.join(h.repo, "ignored.txt"), "utf8")).toBe("ignored context\n");
+  } finally { h.cleanup(); }
+});
+
+
+test.each(["index", "untracked", "executor"])("cleanup preserves a concurrent %s edit after its last Git snapshot", async kind => {
+  const h = fixture();
+  try {
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.git("add", "src/work.ts");
+    fs.writeFileSync(path.join(h.repo, "repair.txt"), "original repair\n");
+    h.endTurn('```json\n{"status":"fail","blocked":true,"blockedReason":"cannot repair"}\n```');
+    const originalExec = h.ports.exec;
+    let changed = false, indexReads = 0;
+    h.ports.exec = async (...args: Parameters<typeof realExec>) => {
+      if (!changed && kind === "executor" && args[0] === process.execPath) {
+        changed = true;
+        fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 4;\n");
+        h.git("add", "src/work.ts");
+        fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+      }
+      const result = await originalExec(...args);
+      const rollback = h.current().runs[0]!.attempts[0]!.publicationRepair?.rollback;
+      if (!changed && rollback && !args[3]?.GIT_INDEX_FILE) {
+        if (kind === "index" && rollback.phase === "restore" && args[1][0] === "write-tree" && ++indexReads === 2) {
+          changed = true;
+          fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 4;\n");
+          h.git("add", "src/work.ts");
+          fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+        } else if (kind === "untracked" && args[1][0] === "diff-tree") {
+          changed = true;
+          fs.writeFileSync(path.join(h.repo, "repair.txt"), "concurrent edit\n");
+        }
+      }
+      return result;
+    };
+    await settlePendingStageGit(h.ports);
+    expect(changed).toBe(true);
+    if (kind !== "untracked") expect(h.git("show", ":src/work.ts")).toBe("export const work = 4;");
+    else expect(fs.readFileSync(path.join(h.repo, "repair.txt"), "utf8")).toBe("concurrent edit\n");
+    expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+    expect(h.current().stateDetail).toContain("cannot repair");
+  } finally { h.cleanup(); }
+});
+
+
+test("a cleanup write deadline retains its snapshot and automatically recovers without a new repair turn", async () => {
+  const h = fixture();
+  try {
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.git("add", "src/work.ts");
+    h.endTurn('```json\n{"status":"fail","blocked":true,"blockedReason":"cannot repair"}\n```');
+    const directory = path.join(h.root, "slow-git"); fs.mkdirSync(directory);
+    const { shellQuote } = await import("@/lib/agent/cli");
+    const delegatePath = process.env.PATH!;
+    const delegateGit = Bun.which("git", { PATH: delegatePath })!;
+    const entered = path.join(h.root, "cleanup-entered");
+    // A launcher wrapper may search PATH again; delegate without this shim.
+    fs.writeFileSync(path.join(directory, "git"), `#!/bin/sh\nif [ "$1" = restore ]; then touch "$CLEANUP_ENTERED"; exec sleep 30; fi\nPATH=${shellQuote(delegatePath)} exec ${shellQuote(delegateGit)} "$@"\n`, { mode: 0o700 });
+    const originalExec = h.ports.exec;
+    h.ports.exec = async (...args: Parameters<typeof realExec>) => originalExec(args[0], args[1], args[2],
+      args[0] === process.execPath ? { ...args[3], PATH: `${directory}${path.delimiter}${process.env.PATH}`, CLEANUP_ENTERED: entered } : args[3], args[4]);
+    await settlePendingStageGit(h.ports);
+    expect(fs.existsSync(entered)).toBe(true);
+    expect(h.current().state).toBe("running");
+    expect(h.current().runs[0]!.attempts[0]!.publicationRepair!.rollback!.phase).toBe("restore");
+    expect(h.git("show", ":src/work.ts")).toBe("export const work = 2;");
+    h.ports.exec = originalExec;
+    await settlePendingStageGit(h.ports);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail).toContain("cannot repair");
+    expect(h.git("status", "--porcelain")).toBe("");
+    expect(h.requests).toHaveLength(1);
+    expect(h.pushes()).toBe(1);
+  } finally { h.cleanup(); }
+});
+
+
+test("repair cleanup keeps full-record reads bounded while revalidating its writes", async () => {
+  const h = fixture();
+  try {
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.git("add", "src/work.ts");
+    h.endTurn('```json\n{"status":"fail","blocked":true,"blockedReason":"cannot repair"}\n```');
+    const { spyOn } = await import("bun:test");
+    const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+    const original = SqliteStateCollection.prototype.get;
+    let reads = 0;
+    const probe = spyOn(SqliteStateCollection.prototype, "get").mockImplementation(function (this: typeof SqliteStateCollection.prototype, key: string) {
+      if (key === h.lane.id) reads++;
+      return original.call(this, key);
+    });
+    try { await settlePendingStageGit(h.ports); }
+    finally { probe.mockRestore(); }
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.git("status", "--porcelain")).toBe("");
+    expect(reads).toBeLessThan(20);
+  } finally { h.cleanup(); }
+});
+
+test.each(["published", "uncertain", "declined"])("repair settlement retains publisher custody through restart (%s)", async outcome => {
+  const h = fixture();
+  let release: (() => void) | undefined, publisher: Promise<unknown> | undefined;
+  try {
+    reviewedFixture(h);
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    fs.writeFileSync(h.hook, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const { patchPipeline } = await import("./engine");
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    const { publishPipelineBranch, reconcilePipelinePublication } = await import("./git");
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    publisher = publishPipelineBranch(h.current(), async (...args: Parameters<typeof realExec>) => {
+      if (args[0] === "git" && args[1][0] === "push") { entered(); await held; if (outcome === "uncertain") return { code: null, stdout: "", stderr: "interrupted push" }; }
+      return h.ports.exec(...args);
+    }, { acceptedSha: h.accepted, now: h.ports.now });
+    await ready;
+    const runningId = h.current().delivery!.operation!.id;
+    expect(h.current().delivery!.operation!.state).toBe("running");
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.endTurn(outcome === "declined" ? '```json\n{"status":"fail","blocked":true,"blockedReason":"cannot repair"}\n```' : "repaired");
+    await settlePendingStageGit(h.ports);
+    expect(h.current().delivery!.operation!.id).toBe(runningId);
+    expect(h.current().delivery!.operation!.state).toBe("running");
+    expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+    const restart = () => spawnSync(process.execPath, ["-e", `
+      const { defaultPipelinePorts, settlePendingStageGit } = await import("./src/lib/pipelines/engine");
+      const { findPipelineRecord } = await import("./src/lib/pipelines/store");
+      const ports = { ...defaultPipelinePorts(), now: () => "2026-10-11T04:04:00.000Z", scheduleTick: () => {},
+        conversationAgentActive: async () => false, publicationRepairProducerState: async () => "idle",
+        conversationDeliveryOutstanding: () => false };
+      await settlePendingStageGit(ports);
+      console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(h.lane.id)}).delivery.operation));
+    `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 30_000 });
+    let reopened = restart();
+    expect(reopened.status, reopened.stderr).toBe(0);
+    expect(JSON.parse(reopened.stdout)).toMatchObject({ id: runningId, state: "running" });
+    release!();
+    const result = await publisher; publisher = undefined;
+    expect(result).not.toMatchObject({ error: expect.stringContaining("reservation changed") });
+    if (outcome === "uncertain") {
+      expect(result).toMatchObject({ ok: true, uncertain: true });
+      const receipt = h.current().delivery!.operation!.executor!.result;
+      reopened = restart();
+      expect(reopened.status, reopened.stderr).toBe(0);
+      expect(JSON.parse(reopened.stdout)).toMatchObject({ id: runningId, state: "running", executor: { finished: true, result: receipt } });
+      expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+      expect(await reconcilePipelinePublication(h.lane.id, 1, h.ports.exec, null)).toBeNull();
+    } else expect(result).toMatchObject({ ok: true, remote: "published" });
+    await settlePendingStageGit(h.ports);
+    expect(h.git("status", "--porcelain")).toBe("");
+    if (outcome === "declined") {
+      expect(h.git("rev-parse", "HEAD")).toBe(h.accepted);
+      expect(h.current().state).toBe("needs_decision");
+    } else {
+      expect(h.current().runs[1]!.attempts[0]!.publicationRepair).toMatchObject({ reviewRequired: true, committedSha: h.git("rev-parse", "HEAD") });
+      expect(h.current().lastPassedCommit).not.toBe(h.accepted);
+      const repaired = h.current().lastPassedCommit!;
+      expect((await publishPipelineBranch(h.current(), h.ports.exec, { acceptedSha: repaired, now: h.ports.now })).ok).toBe(true);
+      await settlePendingStageGit(h.ports);
+      expect(h.current().cursor).toMatchObject({ stageId: "review", state: "pending" });
+      expect(h.current().runs[1]!.attempts[0]!.reviewHeadSha).toBe(h.accepted);
+    }
+  } finally { release?.(); if (publisher) await publisher; h.cleanup(); }
+});
+
+
+test("a repair supersedes a pending replacement admission without spending its attempt budget", async () => {
+  const h = fixture();
+  try {
+    reviewedFixture(h);
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: privacy' >&2\nexit 1\n", { mode: 0o700 });
+    await h.tick();
+    const { patchPipeline } = await import("./engine");
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
+    const pending = h.current().delivery!.operation!;
+    expect(pending.state).toBe("pending");
+    fs.writeFileSync(path.join(h.repo, "src/work.ts"), "export const work = 2;\n");
+    h.endTurn();
+    await settlePendingStageGit(h.ports);
+    expect(h.current().publicationRecovery![h.accepted]!.history).toContainEqual(expect.objectContaining({
+      operationId: pending.id, cause: "superseded", retryAt: null }));
+    expect(h.current().publicationRecovery![h.accepted]!.totalAttempts).toBe(1);
+    expect(h.current().runs[1]!.attempts[0]!.publicationRepair!.reviewRequired).toBe(true);
+    expect(h.pushes()).toBe(1);
   } finally { h.cleanup(); }
 });

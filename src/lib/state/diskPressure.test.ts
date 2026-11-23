@@ -8,6 +8,7 @@ import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
 
 import {
   DISK_CRITICAL_BYTES,
+  attemptRetentionCategory,
   DISK_RECOVERY_BYTES,
   DISK_SPACE_WAIT_PREFIX,
   DISK_WARNING_BYTES,
@@ -24,7 +25,20 @@ import {
 
 /* Every volume here is a fake probe answer: nothing reads a real disk. */
 const GiB = 1024 ** 3;
+test("retention category names reclaimable allocation and its deadline", () => {
+  const text = attemptRetentionCategory({ periodDays: 7, dueBytes: 2 * GiB, upcomingBytes: GiB, until: Date.parse("2026-11-08T12:00:00Z") });
+  expect(text).toContain("7 днів"); expect(text).toContain("2.00 GiB найближчими проходами");
+  expect(text).toContain("ще 1.00 GiB — до 2026-11-08");
+  expect(text).not.toContain("утримує активність"); expect(text).not.toContain("понад ліміт");
+  expect(attemptRetentionCategory()).toBe("Тимчасові дані агентів");
+});
 const provisionSource = { NODE_ENV: "test" as const, TMPDIR: "/srv/agent-temp", XDG_CONFIG_HOME: "/srv/delegatus-config" };
+test("retention category distinguishes the strict scratch age from evidence lifetime", () => {
+  const text = attemptRetentionCategory({ periodDays: 7, scratchPeriodDays: 1, evidencePeriodDays: 7,
+    dueBytes: GiB, upcomingBytes: 2 * GiB, until: Date.parse("2030-01-21T00:00:00Z") });
+  expect(text).toContain("scratch: понад 24 год"); expect(text).toContain("докази: 7 днів");
+  expect(text).toContain("загалом 1.00 GiB");
+});
 const probe = (free: Record<string, number>): DiskProbe => (directory) => {
   const volume = Object.keys(free).find((prefix) => directory.startsWith(prefix));
   return volume ? { volume, freeBytes: free[volume]! } : null;
@@ -272,7 +286,7 @@ test.skipIf(process.platform !== "linux")("System warns on idle host config pres
     expect(low.volumes).toContainEqual(expect.objectContaining({ volume: "host-temp", level: "critical", provisioning: true }));
     expect(diskPressureLabel(low)).toContain("1.00 GiB free");
     await Promise.all([...caches.values()].map(row => row.measuring));
-    freeBytes = 20 * GiB; time += 60_000;
+    freeBytes = 121 * GiB; time += 60_000;
     expect((await readDiskPressure(options)).episode).toBeNull();
   } finally {
     await Promise.all([...caches.values()].map(row => row.measuring));
@@ -816,7 +830,9 @@ test.skipIf(process.platform === "win32")("scratch, nested worktrees and other r
   process.env.LLV_STATE_DIR = state;
   const caches = new Map();
   const worktrees = [worktree, tempWorktree, nested, alias, path.join(alias, "nested")];
-  const options = { caches, worktrees, tempRoots: [{ path: scratch, via: "" }, { path: temp, via: "" }],
+  const options = { caches, worktrees, dockerUsage: async () => [
+    { kind: "dockerImages" as const, bytes: 4 * GiB }, { kind: "dockerCache" as const, bytes: GiB },
+  ], tempRoots: [{ path: scratch, via: "" }, { path: temp, via: "" }],
     roots: [{ role: "state", directory: state }], now: () => Date.parse("2026-10-06T12:00:00Z"),
     probe: () => ({ volume: "fixture", freeBytes: GiB }) };
   try {
@@ -826,12 +842,17 @@ test.skipIf(process.platform === "win32")("scratch, nested worktrees and other r
     expect(measured.consumers.find(row => row.kind === "worktrees")?.bytes)
       .toBe(await exclusiveBytes(worktree) + await exclusiveBytes(tempWorktree));
     expect(measured.consumers.find(row => row.kind === "temp")?.bytes)
-      .toBe(fs.statSync(path.join(other, "role.log")).blocks * 512);
+      .toBeGreaterThanOrEqual(288 * 1024);
     // The durable report itself is written during measurement. Its small
     // allocation does not affect the distinct 256 KiB scratch-file assertion.
     const stateBytes = measured.consumers.find(row => row.kind === "state")!.bytes;
-    expect(stateBytes).toBeGreaterThanOrEqual(256 * 1024);
-    expect(stateBytes).toBeLessThan(320 * 1024);
+    expect(stateBytes).toBeLessThan(256 * 1024);
+    expect(measured.consumers.find(row => row.kind === "dockerImages")?.bytes).toBe(4 * GiB);
+    expect(measured.consumers.find(row => row.kind === "dockerCache")?.bytes).toBe(GiB);
+    const du = Bun.spawnSync(["du", "-sk", state, other]).stdout.toString();
+    const total = du.trim().split("\n").reduce((sum, line) => sum + parseInt(line, 10) * 1024, 0);
+    const accounted = measured.consumers.filter(row => !row.kind.startsWith("docker")).reduce((sum, row) => sum + row.bytes, 0);
+    expect(Math.abs(accounted - total)).toBeLessThan(32 * 1024);
   } finally {
     await Promise.all([...caches.values()].map(row => row.measuring));
     if (original === undefined) delete process.env.LLV_STATE_DIR;
@@ -1001,4 +1022,23 @@ test.skipIf(process.platform !== "linux")("default Docker admission discovers th
     expect(paths).toContain("/proc/1/root" + source.TMPDIR);
     expect(scans).toBe(0);
   } finally { scan.mockRestore(); anchor.mockRestore(); }
+});
+
+
+test("a large nearly full volume opens pressure before the legacy ten GiB limit", () => {
+  const pressure = observeDiskPressure(diskVolumes([{ role: "state", directory: "/srv/state" }],
+    () => ({ volume: "disk", totalBytes: 1742 * GiB, freeBytes: 55.5 * GiB })), null, "2026-10-28T12:00:00Z");
+  expect(pressure.episode).toBe("2026-10-28T12:00:00Z");
+  expect(pressure.warningBytes).toBe(100 * GiB);
+});
+
+test("the disk threshold has an explicit legacy setting and a recovery margin", async () => {
+  const { diskWarningBytes } = await import("./diskPressure");
+  expect(diskWarningBytes(1742 * GiB, { LLV_DISK_PRESSURE_FREE_GIB: "0" })).toBe(10 * GiB);
+  expect(diskWarningBytes(1742 * GiB, { LLV_DISK_PRESSURE_FREE_GIB: "60" })).toBe(60 * GiB);
+  expect(diskWarningBytes(1742 * GiB, { LLV_DISK_PRESSURE_FREE_GIB: "bad" })).toBe(100 * GiB);
+  const volumes = (freeBytes: number) => diskVolumes([{ role: "state", directory: "/srv/state" }], () => ({ volume: "disk", totalBytes: 1742 * GiB, freeBytes }));
+  const low = observeDiskPressure(volumes(55 * GiB), null, "2026-10-28T12:00:00Z");
+  expect(observeDiskPressure(volumes(110 * GiB), low, "2026-10-28T12:01:00Z").episode).toBe(low.episode);
+  expect(observeDiskPressure(volumes(121 * GiB), low, "2026-10-28T12:02:00Z").episode).toBeNull();
 });

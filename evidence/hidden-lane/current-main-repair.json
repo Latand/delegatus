@@ -1,0 +1,1230 @@
+{
+  "testedSource": {
+    "revision": "835af1127058a87487426f49e0668bae091521c0",
+    "base": "ce7806df4acef79bbf76221943227e86c59863a9"
+  },
+  "merge": {
+    "command": [
+      "git",
+      "merge",
+      "--no-ff",
+      "origin/main",
+      "-m",
+      "Merge current main for hidden lane publication repair"
+    ],
+    "exitStatus": 0,
+    "createdMergeCommits": 0,
+    "observation": "Already up to date; the inherited merge commit includes the fetched main."
+  },
+  "checks": [
+    {
+      "tree": "head",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "exitStatus": 137,
+      "durationSeconds": 78.58,
+      "counts": {},
+      "log": "run-0.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/kanban/kanbanBoard.browser.test.tsx"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 2.46,
+      "counts": {
+        "pass": 1,
+        "skip": 306,
+        "fail": 0,
+        "expect() calls": 1
+      },
+      "log": "run-1.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/mcp/pipelineVisibility.integration.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 4.21,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "expect() calls": 227
+      },
+      "log": "run-2.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.attemptGitCustody.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 20.673,
+      "counts": {
+        "pass": 14,
+        "fail": 0,
+        "expect() calls": 123
+      },
+      "log": "run-3.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 63.42,
+      "counts": {
+        "pass": 9,
+        "fail": 0,
+        "expect() calls": 323
+      },
+      "log": "run-4.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 21.385,
+      "counts": {
+        "pass": 25,
+        "fail": 0,
+        "expect() calls": 217
+      },
+      "log": "run-5.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 57.401,
+      "counts": {
+        "pass": 8,
+        "fail": 0,
+        "expect() calls": 282
+      },
+      "log": "run-6.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.ports.part3.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 78.749,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "expect() calls": 521
+      },
+      "log": "run-7.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.part2.test.ts"
+      ],
+      "exitStatus": 1,
+      "durationSeconds": 77.737,
+      "counts": {
+        "pass": 21,
+        "fail": 2,
+        "expect() calls": 182
+      },
+      "log": "run-8.log"
+    },
+    {
+      "tree": "main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.part2.test.ts"
+      ],
+      "exitStatus": 1,
+      "durationSeconds": 115.035,
+      "counts": {
+        "pass": 50,
+        "fail": 2,
+        "expect() calls": 445
+      },
+      "log": "run-9.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.pending.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 12.354,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "expect() calls": 48
+      },
+      "log": "run-10.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.workerCapacity.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 29.76,
+      "counts": {
+        "pass": 23,
+        "fail": 0,
+        "expect() calls": 215
+      },
+      "log": "run-11.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.refreshCompletion.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 4.871,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "expect() calls": 14
+      },
+      "log": "run-12.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/listProjection.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 0.886,
+      "counts": {
+        "pass": 28,
+        "fail": 0,
+        "expect() calls": 90
+      },
+      "log": "run-13.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/mobile/mobileBoardModel.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 0.925,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "expect() calls": 114
+      },
+      "log": "run-14.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/kanban/stagesModel.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 0.833,
+      "counts": {
+        "pass": 22,
+        "fail": 0,
+        "expect() calls": 106
+      },
+      "log": "run-15.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.watchdogRegression.test.ts"
+      ],
+      "exitStatus": 0,
+      "durationSeconds": 4.543,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "expect() calls": 17
+      },
+      "log": "run-16.log"
+    },
+    {
+      "tree": "head",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "diagnostics": 0
+      },
+      "nodeHeapMiB": 11264,
+      "log": "typecheck-retry.log"
+    }
+  ],
+  "headTestTotals": {
+    "pass": 189,
+    "fail": 2,
+    "skip": 306,
+    "assertions": 2480
+  },
+  "baselineTestTotals": {
+    "pass": 50,
+    "fail": 2,
+    "assertions": 445
+  },
+  "preexistingFailures": [
+    "unadopted merge custody survives restart: head-changed",
+    "unadopted merge custody survives restart: review-changed"
+  ],
+  "initialTypecheck": {
+    "status": "No compiler verdict: the initial 4 GiB V8 heap was exhausted",
+    "exitStatus": 137,
+    "runtimeHeapMiB": 4096
+  },
+  "privacy": {
+    "command": [
+      "bun",
+      "scripts/privacy-publication-gate.ts",
+      "--base",
+      "origin/main",
+      "--require-known-values",
+      "--check-commits"
+    ],
+    "exitStatus": 0,
+    "durationSeconds": 716.997,
+    "log": "privacy.log",
+    "counts": {
+      "findings": 0
+    }
+  },
+  "renderedEvidence": {
+    "kind": "Retained frames; unchanged product source",
+    "framesInspectedAtNativeSize": 8,
+    "languages": [
+      "en",
+      "uk"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "hiddenAttentionRows": 0,
+    "restoredAttentionRows": 1,
+    "visibleIdentities": []
+  },
+  "checkedAt": "2026-11-13T09:21:09.319263+00:00",
+  "conditions": {
+    "runner": "Controller-supplied gate-slot.sh; recorded terminal completion via wait_for_check",
+    "wrapperGitBlob": "506676699d1887144c6bc635c5e937620c0e4af8",
+    "isolation": "Scratch exports; separate HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME, LLV_STATE_DIR and TMPDIR for each command",
+    "focusedExecution": "Sequential; each test process selects one explicit file",
+    "defaultTypecheckHeapMiB": 11264,
+    "gateServiceMemoryMax": "14G"
+  },
+  "publication": {
+    "command": [
+      "bash",
+      ".githooks/pre-push"
+    ],
+    "exitStatus": 0,
+    "counts": {
+      "selectedHeadFiles": 98,
+      "completedHeadFiles": 98,
+      "incompleteHeadFiles": 0,
+      "cleanupRefusals": 0
+    },
+    "steps": [
+      {
+        "name": "privacy",
+        "command": [
+          "bun",
+          "scripts/privacy-publication-gate.ts",
+          "--base",
+          "ce7806df4acef79bbf76221943227e86c59863a9",
+          "--require-known-values",
+          "--check-commits",
+          "--added-lines",
+          "--defer-unavailable-media"
+        ],
+        "exitStatus": 0,
+        "counts": {
+          "findings": 0
+        }
+      },
+      {
+        "name": "types",
+        "command": [
+          "bunx",
+          "tsc",
+          "--noEmit"
+        ],
+        "exitStatus": 0,
+        "durationSeconds": 449,
+        "counts": {
+          "diagnostics": 0
+        }
+      },
+      {
+        "name": "eslint",
+        "command": [
+          "bun",
+          "scripts/eslint-changes.ts",
+          "--base",
+          "ce7806df4acef79bbf76221943227e86c59863a9",
+          "./src/components/attention/needsYouPanel.fixture.tsx",
+          "./src/components/kanban/kanbanBoard.browser.test.tsx",
+          "./src/components/mobile/mobileBoardModel.ts",
+          "./src/lib/mcp/pipelineVisibility.integration.test.ts",
+          "./src/lib/pipelines/engine.attemptGit.fixture.ts",
+          "./src/lib/pipelines/engine.attemptGitCustody.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.fixture.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+          "./src/lib/pipelines/engine.ports.part3.test.ts",
+          "./src/lib/pipelines/engine.proactive.part2.test.ts",
+          "./src/lib/pipelines/engine.proactive.pending.test.ts",
+          "./src/lib/pipelines/engine.proactive.workerCapacity.test.ts",
+          "./src/lib/pipelines/engine.refreshCompletion.test.ts",
+          "./src/lib/pipelines/engine.ts",
+          "./src/lib/pipelines/laneMovement.ts",
+          "./src/lib/pipelines/listProjection.test.ts",
+          "./src/lib/pipelines/listProjection.ts"
+        ],
+        "exitStatus": 0,
+        "durationSeconds": 29,
+        "counts": {
+          "selectedFiles": 19,
+          "failures": 0
+        }
+      },
+      {
+        "name": "touched tests",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "ce7806df4acef79bbf76221943227e86c59863a9",
+          "./src/lib/mcp/pipelineVisibility.integration.test.ts",
+          "./src/lib/pipelines/engine.attemptGitCustody.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts",
+          "./src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+          "./src/lib/pipelines/engine.ports.part3.test.ts",
+          "./src/lib/pipelines/engine.proactive.part2.test.ts",
+          "./src/lib/pipelines/engine.proactive.pending.test.ts",
+          "./src/lib/pipelines/engine.proactive.workerCapacity.test.ts",
+          "./src/lib/pipelines/engine.refreshCompletion.test.ts",
+          "./src/lib/pipelines/listProjection.test.ts",
+          "./src/components/mobile/mobileBoardModel.test.ts",
+          "./src/lib/pipelines/engine.rolePrivacyEffects.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+          "./src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+          "./src/lib/pipelines/engine.providerBudget.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+          "./src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+          "./src/lib/pipelines/engine.providerReset.part3.test.ts",
+          "./src/lib/pipelines/engine.provisioning.test.ts",
+          "./src/lib/pipelines/engine.historyWrites.test.ts",
+          "./src/lib/pipelines/engine.succession.test.ts",
+          "./src/lib/pipelines/engine.creation.test.ts",
+          "./src/lib/pipelines/engine.missingWorktree.test.ts",
+          "./src/lib/pipelines/engine.roleMemoryDispatch.test.ts",
+          "./src/lib/pipelines/engine.recoveredPending.test.ts",
+          "./src/lib/pipelines/engine.containment.test.ts",
+          "./src/lib/pipelines/engine.closeAttempts.test.ts",
+          "./src/lib/pipelines/engine.controllerPass.test.ts",
+          "./src/lib/pipelines/engine.pauseMetadata.test.ts",
+          "./src/lib/pipelines/engine.settlementPreparation.test.ts",
+          "./src/lib/pipelines/engine.providerChains.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+          "./src/lib/pipelines/engine.recoveryAuthority.test.ts",
+          "./src/lib/pipelines/engine.controllerSnapshot.test.ts",
+          "./src/lib/pipelines/engine.succession.part3.test.ts",
+          "./src/lib/pipelines/engine.settlement.test.ts",
+          "./src/lib/pipelines/engine.accountGuard.test.ts",
+          "./src/lib/pipelines/engine.launchLease.test.ts",
+          "./src/lib/pipelines/engine.succession.part2.test.ts",
+          "./src/lib/pipelines/engine.cloud.test.ts",
+          "./src/lib/pipelines/engine.claudeCloud.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetChains.test.ts",
+          "./src/lib/pipelines/engine.accounting.test.ts",
+          "./src/lib/pipelines/engine.rolePrivacy.test.ts",
+          "./src/lib/pipelines/engine.suspendedRetry.test.ts",
+          "./src/lib/pipelines/engine.recoveryAdmission.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+          "./src/lib/pipelines/engine.spawnSilence.test.ts",
+          "./src/lib/pipelines/engine.recovery.part2.test.ts",
+          "./src/lib/pipelines/engine.terminalBudget.test.ts",
+          "./src/lib/pipelines/engine.spawnRetry.test.ts",
+          "./src/lib/pipelines/engine.routing.test.ts",
+          "./src/lib/pipelines/engine.fencedMessage.test.ts",
+          "./src/lib/pipelines/engine.activation.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+          "./src/lib/pipelines/engine.cpuQueue.test.ts",
+          "./src/lib/pipelines/engine.dependencies.test.ts",
+          "./src/lib/pipelines/engine.rolePrivacyEffects.part2.test.ts",
+          "./src/lib/pipelines/engine.restoreContinuation.test.ts",
+          "./src/lib/pipelines/engine.providerReset.test.ts",
+          "./src/lib/pipelines/engine.providerSignals.test.ts",
+          "./src/lib/pipelines/engine.ports.part2.test.ts",
+          "./src/lib/pipelines/engine.proactive.test.ts",
+          "./src/lib/pipelines/engine.settlementAuthority.test.ts",
+          "./src/lib/pipelines/engine.recovery.test.ts",
+          "./src/lib/pipelines/engine.providerReset.part2.test.ts",
+          "./src/lib/pipelines/engine.capacity.test.ts",
+          "./src/lib/pipelines/engine.watchdogRegression.test.ts",
+          "./src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+          "./src/lib/pipelines/engine.providerChains.part2.test.ts",
+          "./src/lib/pipelines/engine.publication.test.ts",
+          "./src/lib/pipelines/engine.setupRecipe.test.ts",
+          "./src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+          "./src/lib/pipelines/engine.rolePrivacyEffects.part3.test.ts",
+          "./src/lib/pipelines/engine.privacyCorrelation.test.ts",
+          "./src/lib/pipelines/engine.ports.test.ts"
+        ],
+        "exitStatus": 0,
+        "durationSeconds": 869,
+        "counts": {
+          "selectedHeadFiles": 80,
+          "completedHeadFiles": 80,
+          "incompleteHeadFiles": 0,
+          "reusedHeadFiles": 0,
+          "newFailures": 0,
+          "preexistingFailures": 12,
+          "fixed": 0,
+          "removedOrSkipped": 0,
+          "flaky": 1
+        },
+        "headFiles": [
+          {
+            "file": "src/components/mobile/mobileBoardModel.test.ts",
+            "durationMs": 2160,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/mcp/pipelineVisibility.integration.test.ts",
+            "durationMs": 7660,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.closeAttempts.test.ts",
+            "durationMs": 9188,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.claudeCloud.test.ts",
+            "durationMs": 14864,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.accounting.test.ts",
+            "durationMs": 16654,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+            "durationMs": 10517,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.capacity.test.ts",
+            "durationMs": 34161,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.cpuQueue.test.ts",
+            "durationMs": 4806,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.attemptGitCustody.test.ts",
+            "durationMs": 39604,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.dependencies.test.ts",
+            "durationMs": 4842,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.activation.test.ts",
+            "durationMs": 47381,
+            "failures": 1,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.historyWrites.test.ts",
+            "durationMs": 9564,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.accountGuard.test.ts",
+            "durationMs": 80900,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.fencedMessage.test.ts",
+            "durationMs": 41046,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.containment.test.ts",
+            "durationMs": 79510,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.creation.test.ts",
+            "durationMs": 54619,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.launchLease.test.ts",
+            "durationMs": 48384,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+            "durationMs": 81240,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+            "durationMs": 95516,
+            "failures": 1,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.pauseMetadata.test.ts",
+            "durationMs": 7413,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts",
+            "durationMs": 40849,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.privacyCorrelation.test.ts",
+            "durationMs": 3271,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.missingWorktree.test.ts",
+            "durationMs": 45687,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.proactive.pending.test.ts",
+            "durationMs": 20605,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts",
+            "durationMs": 85976,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+            "durationMs": 77070,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+            "durationMs": 94752,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.ports.test.ts",
+            "durationMs": 96682,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.proactive.workerCapacity.test.ts",
+            "durationMs": 54905,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.proactive.part2.test.ts",
+            "durationMs": 93713,
+            "failures": 2,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudget.test.ts",
+            "durationMs": 43106,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.ports.part3.test.ts",
+            "durationMs": 122433,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.cloud.test.ts",
+            "durationMs": 248934,
+            "failures": 1,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.proactive.test.ts",
+            "durationMs": 110492,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+            "durationMs": 54240,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+            "durationMs": 113554,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+            "durationMs": 102508,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+            "durationMs": 125043,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+            "durationMs": 142912,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+            "durationMs": 153098,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerChains.part2.test.ts",
+            "durationMs": 77170,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+            "durationMs": 155493,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+            "durationMs": 149735,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+            "durationMs": 160405,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerChains.test.ts",
+            "durationMs": 102178,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+            "durationMs": 154890,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.provisioning.test.ts",
+            "durationMs": 50318,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerSignals.test.ts",
+            "durationMs": 74048,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.recoveredPending.test.ts",
+            "durationMs": 39805,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.publication.test.ts",
+            "durationMs": 75633,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerReset.part2.test.ts",
+            "durationMs": 138949,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerReset.part3.test.ts",
+            "durationMs": 141814,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.recovery.part2.test.ts",
+            "durationMs": 72152,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.refreshCompletion.test.ts",
+            "durationMs": 6612,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.recovery.test.ts",
+            "durationMs": 54434,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+            "durationMs": 49883,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+            "durationMs": 60657,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.providerReset.test.ts",
+            "durationMs": 166537,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+            "durationMs": 34481,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+            "durationMs": 69587,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.restoreContinuation.test.ts",
+            "durationMs": 54154,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.settlementAuthority.test.ts",
+            "durationMs": 3454,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+            "durationMs": 76257,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.setupRecipe.test.ts",
+            "durationMs": 8750,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.settlementPreparation.test.ts",
+            "durationMs": 42109,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.rolePrivacyEffects.part2.test.ts",
+            "durationMs": 105910,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.spawnSilence.test.ts",
+            "durationMs": 21402,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.routing.test.ts",
+            "durationMs": 80956,
+            "failures": 8,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.rolePrivacyEffects.part3.test.ts",
+            "durationMs": 106746,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.spawnRetry.test.ts",
+            "durationMs": 67088,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.rolePrivacyEffects.test.ts",
+            "durationMs": 114474,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.watchdogRegression.test.ts",
+            "durationMs": 8287,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.suspendedRetry.test.ts",
+            "durationMs": 25755,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/listProjection.test.ts",
+            "durationMs": 1577,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.roleMemoryDispatch.test.ts",
+            "durationMs": 151350,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.terminalBudget.test.ts",
+            "durationMs": 48921,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.settlement.test.ts",
+            "durationMs": 144238,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.succession.part3.test.ts",
+            "durationMs": 91469,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.succession.part2.test.ts",
+            "durationMs": 96210,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/pipelines/engine.succession.test.ts",
+            "durationMs": 113983,
+            "failures": 0,
+            "completed": true
+          }
+        ]
+      },
+      {
+        "name": "Linux backend",
+        "command": [
+          "bun",
+          "scripts/verify-platform-backend.ts",
+          "--expect",
+          "linux"
+        ],
+        "exitStatus": 0,
+        "durationSeconds": 2,
+        "counts": {
+          "verdicts": 1,
+          "failures": 0
+        }
+      },
+      {
+        "name": "Linux tests",
+        "command": [
+          "bun",
+          "scripts/local-gate-tests.ts",
+          "--base",
+          "ce7806df4acef79bbf76221943227e86c59863a9",
+          "./scripts/owned-runner.portable.test.ts",
+          "./src/lib/proc/memory.test.ts",
+          "./src/lib/proc/portable.test.ts",
+          "./src/lib/proc/darwinIdentity.test.ts",
+          "./src/lib/proc/index.test.ts",
+          "./src/lib/proc/windowsSnapshot.test.ts",
+          "./src/lib/proc/windowsIdentity.test.ts",
+          "./src/lib/proc/windowsCwd.test.ts",
+          "./src/lib/proc/windows.test.ts",
+          "./src/lib/processGroup.test.ts",
+          "./src/lib/platformHome.test.ts",
+          "./src/lib/runtime/localEndpoint.test.ts",
+          "./src/lib/scanner/describe.test.ts",
+          "./src/lib/state/durableJson.test.ts",
+          "./src/runtime-host/socket.test.ts",
+          "./src/runtime-host/runtimeHostFence.test.ts",
+          "./bin/server-runtime.test.ts",
+          "./bin/bind-guard.test.ts"
+        ],
+        "exitStatus": 0,
+        "durationSeconds": 10,
+        "counts": {
+          "selectedHeadFiles": 18,
+          "completedHeadFiles": 18,
+          "incompleteHeadFiles": 0,
+          "reusedHeadFiles": 0,
+          "newFailures": 0,
+          "failedHeadFiles": 0
+        },
+        "headFiles": [
+          {
+            "file": "bin/bind-guard.test.ts",
+            "durationMs": 1304,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/proc/portable.test.ts",
+            "durationMs": 1311,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/platformHome.test.ts",
+            "durationMs": 1372,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/proc/memory.test.ts",
+            "durationMs": 1389,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/proc/darwinIdentity.test.ts",
+            "durationMs": 1485,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/proc/index.test.ts",
+            "durationMs": 1604,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "scripts/owned-runner.portable.test.ts",
+            "durationMs": 1625,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/proc/windows.test.ts",
+            "durationMs": 1009,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/proc/windowsCwd.test.ts",
+            "durationMs": 1008,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "bin/server-runtime.test.ts",
+            "durationMs": 2432,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/proc/windowsSnapshot.test.ts",
+            "durationMs": 1046,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/proc/windowsIdentity.test.ts",
+            "durationMs": 1101,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/processGroup.test.ts",
+            "durationMs": 1070,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/runtime/localEndpoint.test.ts",
+            "durationMs": 980,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/state/durableJson.test.ts",
+            "durationMs": 764,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/runtime-host/runtimeHostFence.test.ts",
+            "durationMs": 952,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/runtime-host/socket.test.ts",
+            "durationMs": 908,
+            "failures": 0,
+            "completed": true
+          },
+          {
+            "file": "src/lib/scanner/describe.test.ts",
+            "durationMs": 4544,
+            "failures": 0,
+            "completed": true
+          }
+        ]
+      }
+    ],
+    "baselineNotes": [
+      "FLAKY src/lib/pipelines/engine.cloud.test.ts: the Cloud runtime enforces the remaining stage deadline: expired=false size=70000 (base 2 pass/0 fail; head 1 pass/1 fail)",
+      "PRE-EXISTING src/lib/pipelines/engine.activation.test.ts: an internal terminal pass an older build left waiting on publication closes without the network (#1692)",
+      "PRE-EXISTING src/lib/pipelines/engine.controllerPass.test.ts: a bounded reconciliation preserves another lane's CPU ticket and FIFO age",
+      "PRE-EXISTING src/lib/pipelines/engine.proactive.part2.test.ts: unadopted merge custody survives restart: head-changed",
+      "PRE-EXISTING src/lib/pipelines/engine.proactive.part2.test.ts: unadopted merge custody survives restart: review-changed",
+      "PRE-EXISTING src/lib/pipelines/engine.routing.test.ts: a stage conversation switched to another account continues on the message held for the switch and settles on the successor's verdict without the fail edge (#1695 K6c)",
+      "PRE-EXISTING src/lib/pipelines/engine.routing.test.ts: a replaced attempt names its cause when no restart happened: dead",
+      "PRE-EXISTING src/lib/pipelines/engine.routing.test.ts: a replaced attempt names its cause when no restart happened: idle",
+      "PRE-EXISTING src/lib/pipelines/engine.routing.test.ts: a replaced attempt names its cause when no restart happened: stalled",
+      "PRE-EXISTING src/lib/pipelines/engine.routing.test.ts: a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write",
+      "PRE-EXISTING src/lib/pipelines/engine.routing.test.ts: a descendant that outlives the runtime's release is still signalled, and the attempt is replaced",
+      "PRE-EXISTING src/lib/pipelines/engine.routing.test.ts: an attempt that worked on after a restart and is stopped for silence later is not called a restart",
+      "PRE-EXISTING src/lib/pipelines/engine.routing.test.ts: an attempt that worked on after a restart and whose host is found gone later is not called a restart"
+    ],
+    "log": "native.log",
+    "publicationPerformed": false
+  },
+  "notes": [
+    "Product and test source are unchanged from the inherited accepted tree; the stage refreshes verification.",
+    "The earlier native publication refusal was not reproduced. Every selected head file completed on this fresh rehearsal; no cached file was reused.",
+    "The two focused assertion failures reproduce on exact main and are not new failures.",
+    "The initial 4 GiB typecheck failed from V8 heap exhaustion; the identical compiler command passes with the project-default 11 GiB allowance.",
+    "The regular browser collection has 306 gated skips. Retained enabled-case frames at unchanged product source were inspected separately.",
+    "Publication and pull request creation remain with the pipeline."
+  ]
+}

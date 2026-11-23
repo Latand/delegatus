@@ -1,3 +1,5 @@
+import { askDecisionsCeilingUsd } from "@/lib/openaiServices/decisions";
+import type { ClassifierProvider } from "@/lib/openaiServices/policy";
 import crypto from "node:crypto";
 
 import type { FinalAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
@@ -50,10 +52,11 @@ export interface AskSweepPorts {
   settings(): { enabled: boolean; capUsd: number };
   /** When the switch turned on: nothing older is sent. */
   enabledSince: number | null;
-  apiKey: string | null;
+  apiKey?: string | null;
+  resolve?(): { provider: ClassifierProvider; apiKey: string } | null;
   candidates: readonly AskCandidate[];
   finalMessage(candidate: AskCandidate): FinalAssistantMessage | null;
-  classify(text: string, apiKey: string): Promise<JevVerdict>;
+  classify(text: string, apiKey: string, provider?: ClassifierProvider): Promise<JevVerdict>;
   read(): OperatorAsksFileV1;
   write(mutation: (file: OperatorAsksFileV1) => void): void;
   /** Called once a new ask is recorded, so the board reads it without waiting. */
@@ -86,8 +89,9 @@ export function askId(subject: string, messageId: string): string {
  */
 export async function runAskSweep(ports: AskSweepPorts, sent: Map<string, number> = new Map()): Promise<AskSweepResult> {
   const result: AskSweepResult = { classified: 0, asks: [], skipped: 0, capped: 0, failed: 0, unreadable: false };
-  if (!ports.apiKey || !ports.settings().enabled) return result;
-  const credential = ports.apiKey;
+  if (!ports.settings().enabled) return result;
+  const resolve = () => ports.resolve ? ports.resolve() : ports.apiKey ? { provider: "openrouter" as const, "apiKey": ports.apiKey } : null;
+  if (!resolve()) return result;
   const horizon = ports.now().getTime() - ASK_MAX_AGE_MS;
   for (const [key, messageAt] of sent) if (messageAt < horizon) sent.delete(key);
   let state: OperatorAsksFileV1;
@@ -119,7 +123,9 @@ export async function runAskSweep(ports: AskSweepPorts, sent: Map<string, number
     }
     const settings = ports.settings();
     if (!settings.enabled) break;
-    const textKey = bodyKey(message.text);
+    const resolved = resolve();
+    if (!resolved) break;
+    const textKey = (resolved.provider === "openai" ? "openai:" : "") + bodyKey(message.text);
     const askFor = (score: number): OperatorAskRecord | null => score >= ASK_THRESHOLD ? {
       id: askId(candidate.subject, message.id),
       subject: candidate.subject,
@@ -154,7 +160,7 @@ export async function runAskSweep(ports: AskSweepPorts, sent: Map<string, number
       record(ask);
       continue;
     }
-    const ceiling = jevCostCeilingUsd(message.text);
+    const ceiling = resolved.provider === "openai" ? askDecisionsCeilingUsd(message.text) : jevCostCeilingUsd(message.text);
     const spend = currentSpend(ports.read(), now);
     if (spend.usd + ceiling > settings.capUsd) {
       ports.write((file) => { file.seen.push(seenKey); file.spend.capped += 1; });
@@ -173,7 +179,7 @@ export async function runAskSweep(ports: AskSweepPorts, sent: Map<string, number
     let verdict: JevVerdict | null = null;
     let failureCost = 0;
     try {
-      verdict = await ports.classify(message.text, credential);
+      verdict = await ports.classify(message.text, resolved.apiKey, resolved.provider);
     } catch (error) {
       verdict = null;
       failureCost = jevFailureCostUsd(error, ceiling);

@@ -34,6 +34,10 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+/** Passive authority observation for the existing files cache. */
+export const subscribeTeamAuthority = subscribe;
+export const readTeamAuthority = () => state;
+
 export async function refreshTeamView(): Promise<void> {
   if (typeof fetch !== "function") return;
   try {

@@ -368,6 +368,7 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
       if (!live) return;
       if (command.type === "mute") { muted = command.muted; return; }
       if (command.type === "interrupt") { interrupted = command.responseId; return; }
+      if (command.type === "episode") return;
       /* The page can only tap. The spoken answer is the script's own step, as
          the model's tool is the real session's; a speech command from outside
          is dropped, so it neither sends nor cancels. */

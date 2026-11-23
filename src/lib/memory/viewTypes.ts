@@ -3,6 +3,7 @@ export type MemoryTurnReason = "projectOff" | "memorySource" | "noKey" | "notOwn
   | "noCandidates" | "noMatches" | "prepared" | "unconfirmed" | "delivered";
 /** Browser-safe, numeric status. Counts cover the whole installation. */
 export interface MemorySettingView {
+  provider?: "openrouter" | "openai";
   enabled: boolean;
   reasons: Array<"projectOff" | "noKey" | "capped" | "notOwner">;
   lastTurn?: MemoryTurnReason | null;
@@ -20,6 +21,10 @@ export type MemoryImportReason = "integrity" | "backup_refused" | "source_change
 export interface MemorySourceView {
   choice: "delegatus" | "engines" | null;
   phase: "importing" | "draining" | "active" | null;
+  /** The installation has a place for the import to run: at least one active
+      orchestrator seat. False only when the seat store was read and holds none;
+      an unreadable store reads as true so nothing is held back on a guess. */
+  orchestrator?: boolean;
   import?: {
     counts: { files: number; parts: number; pendingFiles: number; pendingParts: number; pendingLoadedParts: number; adopted: number; dropped: number } | null;
     remainingGenerations: number;

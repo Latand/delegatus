@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import type { ApplyIntent } from "./apply";
-import { writeAtomic } from "./apply";
+import { writeJsonDurably } from "@/lib/state/durableJson";
 export function checkoutDeployments(directory: string): ViewerDeploymentStatus[] {
   const file = join(directory, "deployments.json");
   if (!existsSync(file)) return [];
@@ -25,7 +25,7 @@ export function saveCheckoutDeployment(directory: string, status: ViewerDeployme
   const rows = checkoutDeployments(directory);
   const index = rows.findIndex(row => row.deploymentId === status.deploymentId);
   if (index < 0) rows.push(status); else rows[index] = status;
-  writeAtomic(join(directory, "deployments.json"), rows);
+  writeJsonDurably(join(directory, "deployments.json"), rows, { space: 0 });
 }
 export function settleCheckoutDeployment(directory: string, intent: ApplyIntent): void {
   if (!intent.deploymentId) return;

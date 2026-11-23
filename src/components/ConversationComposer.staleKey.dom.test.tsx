@@ -1,0 +1,277 @@
+/**
+ * P1 — a dead conversation cannot be continued: the composer re-stamped a stale
+ * unresolved generation's idempotency key onto the operator's NEW message, so
+ * the send either silently replayed the stale bytes or hit the registry's
+ * reservation guard ("client message id is already reserved for another
+ * request") and the conversation became uncontinuable.
+ *
+ * These tests drive the REAL composer form against a mocked /api/runtime/send
+ * wire across an unmount/remount (the durable-records rebuild) and pin the key
+ * lifecycle: a genuinely new message always leaves under a FRESH key carrying
+ * ITS OWN text; a retry of a failed submission replays the original key and
+ * bytes exactly; an edited resend is a new message under a new key.
+ */
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { act, useSyncExternalStore } from "react";
+import { installActEnv } from "@/test-helpers/actEnv";
+import { Window } from "happy-dom";
+import { createRoot, type Root } from "react-dom/client";
+
+import type { RuntimeSessionView } from "@/hooks/useRuntime";
+import type { FileEntry } from "@/lib/types";
+import { setLocale, translate } from "@/lib/i18n";
+import { installConversationComposerRuntimeForTests, resetConversationComposerRuntimeForTests } from "@/test-helpers/conversationComposerRuntime";
+
+const dom = new Window();
+installActEnv();
+Object.assign(globalThis, {
+  window: dom,
+  document: dom.document,
+  navigator: dom.navigator,
+  Node: dom.Node,
+  HTMLElement: dom.HTMLElement,
+  HTMLButtonElement: dom.HTMLButtonElement,
+  Event: dom.Event,
+  CustomEvent: dom.CustomEvent,
+  MouseEvent: dom.MouseEvent,
+  File: dom.File,
+  FileReader: dom.FileReader,
+  requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+  cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
+  localStorage: dom.localStorage,
+  sessionStorage: dom.sessionStorage,
+});
+(dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({
+  matches: false,
+  media: query,
+  addEventListener() {},
+  removeEventListener() {},
+});
+
+/* A structured codex-app-server host for the conversation, so the send path is
+   `sendRuntimeMessage` — the seam the production defect lived on. */
+const structuredView: RuntimeSessionView = {
+  session: {
+    conversationId: "conv-stale-key",
+    hostKind: "codex-app-server",
+    host: "hosted",
+    capabilities: { imageInput: { supported: true }, runtimeSettings: { perTurnEffort: true, perTurnModel: false } },
+    recentReceipts: [],
+  },
+  uiState: {},
+  attentions: [],
+  receipts: [],
+  legacy: false,
+  structuredControlsEnabled: true,
+} as unknown as RuntimeSessionView;
+
+import { ConversationComposer } from "./ConversationComposer";
+import { setComposerAdmissionTimingForTests } from "./composerAdmissionDeadline";
+import { readOutbox, resetOutboxForTests, retryOutbox } from "./conversation/outbox";
+
+const realFetch = globalThis.fetch;
+
+const runtimeListeners = new Set<() => void>();
+const subscribeRuntime = (listener: () => void) => {runtimeListeners.add(listener);return () => {runtimeListeners.delete(listener);};};
+function useReceipts() {return useSyncExternalStore(subscribeRuntime,()=>structuredView.receipts,()=>structuredView.receipts);}
+
+beforeEach(() => {
+  setComposerAdmissionTimingForTests({ admissionDeadlineMs: 100, receiptReconciliationMs: 20, receiptPollIntervalMs: 5 });
+  structuredView.receipts = [];
+  installConversationComposerRuntimeForTests({
+    useRuntimeView: (candidate) => {useReceipts();return candidate.conversationId === "conv-stale-key" ? structuredView : null;},
+    refreshRuntime: async () => true,
+    useRuntimeReceipts: useReceipts,
+  });
+});
+
+afterEach(() => {
+  setComposerAdmissionTimingForTests(null);
+  resetConversationComposerRuntimeForTests();
+  setLocale("en");
+  globalThis.fetch = realFetch;
+  document.body.replaceChildren();
+  localStorage.clear();
+  sessionStorage.clear();
+  resetOutboxForTests();
+});
+
+const file: FileEntry = {
+  path: "/codex-stale-key.jsonl", root: "codex-sessions", name: "codex-stale-key.jsonl", project: "viewer",
+  title: "Codex", engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1,
+  size: 1, activity: "idle", proc: "running", pid: null, conversationId: "conv-stale-key",
+  pendingQuestion: null, waitingInput: null,
+} as FileEntry;
+
+interface SendBody {
+  idempotencyKey: string;
+  text: string;
+}
+
+function mockWire(sends: SendBody[], respond: Array<(body: SendBody) => { status: number; json: unknown }>): void {
+  let call = 0;
+  globalThis.fetch = (async (input: string | URL | Request, init?: { body?: string }) => {
+    const url = String(input);
+    if (url.startsWith("/api/runtime/send?")) {
+      const query = new URL(url, "http://fixture.invalid").searchParams;
+      expect(query.get("conversationId")).toBe("conv-stale-key");
+      expect(sends.some(send => send.idempotencyKey === query.get("clientMessageId"))).toBe(true);
+      return Response.json({ outcome: "unknown" });
+    }
+    if (url !== "/api/runtime/send") throw new Error(`unexpected request: ${url}`);
+    const body = JSON.parse(init?.body ?? "{}") as SendBody;
+    sends.push(body);
+    const script = respond[Math.min(call++, respond.length - 1)]!(body);
+    return { ok: script.status < 400, status: script.status, json: async () => script.json } as Response;
+  }) as typeof fetch;
+}
+
+const delivered = (body: SendBody) => ({
+  status: 200,
+  json: {
+    ok: true,
+    receipt: {
+      operationId: `op-${body.idempotencyKey}`,
+      idempotencyKey: body.idempotencyKey,
+      conversationId: "conv-stale-key",
+      kind: "send",
+      status: "delivered",
+      text: body.text,
+      at: new Date().toISOString(),
+      revision: 1,
+    },
+  },
+});
+
+async function renderInto(node: React.ReactElement): Promise<{ host: HTMLElement; root: Root }> {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(node);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  return { host, root };
+}
+
+const settle = async (fn: () => void) => {
+  await act(async () => {
+    fn();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+};
+
+function composerControls(host: HTMLElement) {
+  const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
+  const form = textarea.closest("form")!;
+  const propsKey = Object.keys(textarea).find((key) => key.startsWith("__reactProps$"))!;
+  const type = (value: string) =>
+    (textarea as unknown as Record<string, { onChange: (e: unknown) => void }>)[propsKey]!
+      .onChange({ target: { value } });
+  const submit = () => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event);
+  return { type, submit };
+}
+
+test("a remount cannot stamp a stale unresolved generation's key onto the operator's new message", async () => {
+  const sends: SendBody[] = [];
+  mockWire(sends, [
+    /* The host is gone: the first send fails on a 503 whose admission stays
+       uncertain, so the generation persists as an unresolved pending record —
+       the durable state the operator's tab rebuilds from. */
+    () => ({ status: 503, json: { ok: false, error: "structured host ownership is unavailable; retry after runtime synchronization" } }),
+    delivered,
+  ]);
+
+  const rendered = await renderInto(<ConversationComposer file={file} />);
+  const host = rendered.host;
+  let root = rendered.root;
+  await settle(() => composerControls(host).type("the message the dead host never received"));
+  await settle(() => composerControls(host).submit());
+  expect(sends).toHaveLength(1);
+  expect(sends[0]!.text).toBe("the message the dead host never received");
+  /* The unresolved generation is durable and cannot be locally retried. */
+  expect(sessionStorage.getItem("llvPendingSend:conv-stale-key")).toContain(sends[0]!.idempotencyKey);
+  expect(readOutbox("conv-stale-key").find((entry) => entry.deliveryUncertain)?.id).toBe(sends[0]!.idempotencyKey);
+
+  /* The tab reloads: the composer rebuilds its outbox state from the durable
+     records while the stale generation is still unresolved. */
+  await act(async () => root.unmount());
+  root = createRoot(host);
+  await act(async () => {
+    root.render(<ConversationComposer file={file} />);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  /* The bounded observation window ends without a terminal receipt: wait for
+     the composer to release the generation (its durable record drops the
+     reconciling marker and shows the unconfirmed notice) instead of sleeping
+     past the window. */
+  const stillReconciling = () => (JSON.parse(sessionStorage.getItem("llvPendingSend:conv-stale-key") ?? "[]") as { key: string; reconciling?: true }[])
+    .some(entry => entry.key === sends[0]!.idempotencyKey && entry.reconciling);
+  const released = () => !stillReconciling() && Boolean(host.textContent?.includes(translate("en", "composer.deliveryUnconfirmed")));
+  const deadline = performance.now() + 5_000;
+  while (!released() && performance.now() < deadline) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
+  }
+  expect(stillReconciling()).toBe(false);
+  expect(host.textContent).toContain(translate("en", "composer.deliveryUnconfirmed"));
+
+  /* The operator types a genuinely NEW message. It must leave under a FRESH
+     key carrying ITS OWN text — never the stale generation's key or bytes. */
+  await settle(() => composerControls(host).type("a brand new message"));
+  await settle(() => composerControls(host).submit());
+  /* The stale generation no longer holds this browser's wire: no receipt can be
+     made to arrive for a request that may never have been admitted, so waiting
+     on it would mute the conversation permanently (outbox `holdsLocalWireFence`).
+     After that bounded observation the new message leaves — and what matters here is that it
+     leaves as ITSELF, under a fresh key with its own text. */
+  expect(sends).toHaveLength(2);
+  expect(sends[1]!.text).toBe("a brand new message");
+  expect(sends[1]!.idempotencyKey).not.toBe(sends[0]!.idempotencyKey);
+  const fresh = readOutbox("conv-stale-key").find(entry => entry.text === "a brand new message")!;
+  expect(fresh.id).not.toBe(sends[0]!.idempotencyKey);
+  expect(fresh.id).toBe(sends[1]!.idempotencyKey);
+  /* The stale generation keeps its own key and its unknown fate, and a genuine
+     late receipt settles it without ever putting it back on the wire. */
+  const stale = readOutbox("conv-stale-key").find(entry => entry.id === sends[0]!.idempotencyKey)!;
+  expect(stale.deliveryUncertain).toBe(true);
+  structuredView.receipts = [delivered(sends[0]!).json.receipt as RuntimeSessionView["receipts"][number]];
+  await settle(() => {for (const listener of runtimeListeners) listener();});
+  expect(sends).toHaveLength(2);
+
+  await act(async () => root.unmount());
+});
+
+test("a retry replays the failed generation exactly while an edited resend is a new message", async () => {
+  const sends: SendBody[] = [];
+  mockWire(sends, [
+    body => ({ status: 503, json: { ok: false, receipt: {
+      operationId: "safe-original", conversationId: "conv-stale-key", idempotencyKey: body.idempotencyKey,
+      kind: "send", status: "failed", resend: "safe", reason: "pre-dispatch rejection",
+      at: new Date().toISOString(), revision: 1,
+    } } }),
+    delivered,
+  ]);
+
+  const { host, root } = await renderInto(<ConversationComposer file={file} />);
+  await settle(() => composerControls(host).type("recover the stalled worktree"));
+  await settle(() => composerControls(host).submit());
+  expect(sends).toHaveLength(1);
+
+  /* Retrying the failed bubble replays the SAME key with the SAME bytes: an
+     idempotent replay, never a second distinct message. */
+  const failed = readOutbox("conv-stale-key").find((entry) => entry.state === "failed")!;
+  await settle(() => retryOutbox("conv-stale-key", failed.id));
+  expect(sends).toHaveLength(2);
+  expect(sends[1]!.idempotencyKey).toBe(sends[0]!.idempotencyKey);
+  expect(sends[1]!.text).toBe(sends[0]!.text);
+
+  /* An edited resend is a NEW message: fresh key, its own bytes. */
+  await settle(() => composerControls(host).type("recover the stalled worktree, then report"));
+  await settle(() => composerControls(host).submit());
+  expect(sends).toHaveLength(3);
+  expect(sends[2]!.idempotencyKey).not.toBe(sends[0]!.idempotencyKey);
+  expect(sends[2]!.text).toBe("recover the stalled worktree, then report");
+
+  await act(async () => root.unmount());
+});

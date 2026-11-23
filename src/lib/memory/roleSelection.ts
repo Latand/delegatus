@@ -11,6 +11,7 @@ import { scopeKind } from "./roleScopes";
 import { swarmRulesEnabled } from "./settings";
 import { engineMemoryOff } from "./source";
 import { isSelectionEvidence, type SelectionEvidence } from "./roleSelectionProvider";
+import { alwaysOn, SHADOW_BLOCK_MAX_BYTES, type ShadowSelection } from "./roleSelect";
 
 type Attempt = NonNullable<MemoryEngineStart["attempt"]>;
 type Snapshot = ReturnType<typeof learnedRulesSnapshot>;
@@ -32,6 +33,8 @@ export interface RoleMemorySelection extends Attempt {
   evidence?: SelectionEvidence;
 }
 export const selectionKey = (attempt: Attempt) => JSON.stringify([attempt.pipelineId, attempt.stageId, attempt.attempt]);
+/** Legacy rows that skipped selection. */
+export const legacySelectionBypass = (row: RoleMemorySelection) => row.mode === "whole" && row.selector === "whole" && row.selectorVersion === "1" && ["whole", "no-brief"].includes(row.reason);
 const key = selectionKey;
 const seed = { collection: "role_memory_selection", schemaVersion: 1, migrationId: "role-memory-selection-v1", key, loadRecords: (): RoleMemorySelection[] => [] };
 function decode(value: unknown): RoleMemorySelection | null {
@@ -68,6 +71,19 @@ export function selectionCandidate(attempt: Attempt, snapshot: Snapshot): RoleMe
     mode: "whole", shadow: false, selector: "whole", selectorVersion: "1", reason: "whole", scopes: snapshot.scopes.map(scope => scope.scope), block: snapshot.block,
     entries: snapshot.entries, scores: [], shadowIds: [], removed: [] };
 }
+/** Project the selected ids through the real byte-bounded renderer once. The
+ * text, durable entries and ledger ids all describe exactly that projection. */
+export function selectedSnapshot(snapshot: Snapshot, selection: ShadowSelection, reader?: "operator") {
+  const protectedIds = alwaysOn(snapshot.candidates.flatMap(scope => [...scope.rules]));
+  const scopes = snapshot.candidates.map(scope => ({ ...scope, rules: scope.rules
+    .filter(rule => selection.selector === "whole" || selection.shadowIds.includes(rule.id))
+    .sort((a, b) => Number(protectedIds.has(b.id)) - Number(protectedIds.has(a.id))) }));
+  const rendered = renderLearnedRulesSelection(scopes, SHADOW_BLOCK_MAX_BYTES, { reader, engineMemoryOff: engineMemoryOff() }, protectedIds);
+  const rules = rendered.rules.map(rule => ({ id: rule.id, hash: hash(rule.rule) }));
+  return { ...snapshot, block: rendered.block, rules,
+    entries: rendered.rules.map(rule => [scopes.findIndex(scope => scope.rules.some(candidate => candidate.id === rule.id)), rule.id, hash(rule.rule)] as [number, string, string]),
+    scores: selection.scores.filter(([id]) => rules.some(rule => rule.id === id)) };
+}
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 /** Only explicit withdrawal or loss of the exact stored text changes a block.
  * Moves, rewrites and all other archives retain the first start's content. */
@@ -91,7 +107,8 @@ function withdrawn(row: RoleMemorySelection) {
     scopes[index].rules.push({ ...exact as RoleMemoryRule, id, scope: row.scopes[index] });
     return true;
   });
-  return { scopes, row: entries.length === row.entries.length ? row : { ...row, block: renderLearnedRulesSelection(scopes).block, entries, removed } };
+  return { scopes, row: entries.length === row.entries.length ? row : { ...row, block: renderLearnedRulesSelection(scopes).block, entries,
+    scores: row.scores.filter(([id]) => entries.some(([, retained]) => retained === id)), removed } };
 }
 
 /** Called inside ledger admission; every contender reads the row the single
@@ -100,8 +117,18 @@ export function frozenSelection(candidate: RoleMemorySelection, snapshot?: Snaps
   const store = roleSelectionCollection();
   if (!store) throw Error("memory selection is not prepared");
   try { return store.boundedPatch(2, tx => {
-    const existing = tx.get(key(candidate));
-    const { row, scopes } = withdrawn(existing ?? candidate);
+    const saved = tx.get(key(candidate));
+    const existing = saved && !legacySelectionBypass(saved) ? saved : null;
+    let { row, scopes } = withdrawn(existing ?? candidate);
+    if (row.shadow || Buffer.byteLength(row.block) > SHADOW_BLOCK_MAX_BYTES) {
+      // Retire persisted shadow rows too. Their chosen ids and exact historical
+      // texts already exist; conversion needs no new decision or current rewrite.
+      const selected = scopes.map(scope => ({ ...scope, rules: scope.rules.filter(rule => !row.shadow || row.selector === "whole" || row.shadowIds.includes(rule.id)) }));
+      const rendered = renderLearnedRulesSelection(selected, SHADOW_BLOCK_MAX_BYTES, { engineMemoryOff: engineMemoryOff() }, alwaysOn(selected.flatMap(scope => scope.rules)));
+      const ids = new Set(rendered.rules.map(rule => rule.id));
+      row = { ...row, mode: row.selector, shadow: false, block: rendered.block, entries: row.entries.filter(([, id]) => ids.has(id)), scores: row.scores.filter(([id]) => ids.has(id)) };
+      scopes = selected.map(scope => ({ ...scope, rules: scope.rules.filter(rule => ids.has(rule.id)) }));
+    }
     if (!existing || row !== existing) tx.put(row);
     // Consent also applies to resumed attempts. Retain the first durable
     // selection; the ledger records only the scopes delivered this time.
@@ -114,6 +141,6 @@ export function frozenSelection(candidate: RoleMemorySelection, snapshot?: Snaps
       block: visible.length === scopes.length ? row.block : renderLearnedRulesSelection(visible, Infinity, { engineMemoryOff: engineMemoryOff() }).block };
     return { block: delivered.block, scopes: !existing && snapshot ? snapshot.scopes.filter(scope => delivered.scopes.includes(scope.scope)) : delivered.scopes.map(scope => ({ scope, revisions: [] })),
       rules: delivered.entries.map(([, id, hash]) => ({ id, hash })), entries: delivered.entries,
-      reason: existing ? "frozen" : row.reason, shadowIds: row.shadowIds, removed: row.removed };
+      reason: existing ? "frozen" : row.reason, shadowIds: row.shadowIds, removed: row.removed, evidence: row.evidence };
   }); } finally { store.close(); }
 }

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -8,6 +8,8 @@ import { NextRequest } from "next/server";
 
 import { resetRuntimeHostRequestHealthForTests } from "@/lib/runtime/client";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
+import { markStructuredHostStartupFailed, markStructuredHostStartupProgress, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
+import { selfUpdateService } from "@/lib/selfUpdate/instance";
 
 import { GET as GET_DEPLOYMENT } from "./[deploymentId]/route";
 import { GET } from "./route";
@@ -17,6 +19,7 @@ const originalRuntimeEvents = process.env.LLV_RUNTIME_EVENTS;
 const originalRuntimeSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
 const sandboxes: string[] = [];
 const servers: net.Server[] = [];
+let restoreMode: () => void;
 
 function runtimeHostRequestHealth() {
   return {
@@ -30,9 +33,12 @@ function runtimeHostRequestHealth() {
 
 beforeEach(() => {
   resetRuntimeHostRequestHealthForTests();
+  const mode = spyOn(selfUpdateService(), "decide").mockResolvedValue({ mode: "managed", record: null, reason: null });
+  restoreMode = () => mode.mockRestore();
 });
 
 afterEach(async () => {
+  restoreMode();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
   if (originalRuntimeEvents === undefined) delete process.env.LLV_RUNTIME_EVENTS;
@@ -78,7 +84,6 @@ test("GET /api/runtime/deployments returns an empty live ledger with runtime-hos
   const methods = await serveRuntime({ deployments: [], nextCursor: null, hasMore: false });
 
   const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
-
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({
     count: 0,
@@ -266,4 +271,42 @@ test("runtime read routes keep a configured but unreachable plane distinct from 
       });
     }
   }
+});
+
+test("deployment list sends the Viewer's current adoption progress beside the runtime-host page", async () => {
+  const methods = await serveRuntime({ deployments: [], nextCursor: null, hasMore: false });
+  markStructuredHostStartupProgress({ phase: "refreshing transcripts", completedHosts: 16, totalHosts: 33 });
+  markStructuredHostStartupFailed("timeout", {
+    deadline: "structured startup read deadline exceeded",
+    hostKey: "codex:startup-fixture",
+    nextRetryAt: "2026-10-16T00:00:05.000Z",
+  });
+  try {
+    const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ deployments: [], structuredHostStartup: {
+      phase: "refreshing transcripts", state: "failed", completedHosts: 16, remainingHosts: 17,
+      deadline: "structured startup read deadline exceeded", hostKey: "codex:startup-fixture",
+      nextRetryAt: "2026-10-16T00:00:05.000Z",
+    } });
+    expect(methods).toEqual(["viewer-deployment-list"]);
+  } finally { markStructuredHostStartupReady(); }
+});
+
+test("deployment list includes the deadline and retry time before the first Viewer census", async () => {
+  const methods = await serveRuntime({ deployments: [], nextCursor: null, hasMore: false });
+  markStructuredHostStartupProgress({ phase: "waiting for structured startup", completedHosts: 0, totalHosts: null });
+  const failure = {
+    deadline: "structured startup pass deadline exceeded", hostKey: null,
+    nextRetryAt: "2026-10-16T00:00:05.000Z",
+  };
+  markStructuredHostStartupFailed("timeout", failure);
+  try {
+    const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ deployments: [], structuredHostStartup: {
+      state: "failed", phase: "waiting for structured startup", failurePhase: "waiting for structured startup", ...failure,
+    } });
+    expect(methods).toEqual(["viewer-deployment-list"]);
+  } finally { markStructuredHostStartupReady(); }
 });

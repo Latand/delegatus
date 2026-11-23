@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { bridgeReportsSetting, codexCloudEnvironmentId, mergeOnReviewSetting, reportTelegramChoice, resetProjectSettingsForTests, setCodexCloudEnvironmentId, setMergeOnReview, setReportTelegram } from "./settings";
+import { bridgeReportsSetting, codexCloudEnvironmentId, mergeOnReviewSetting, reportTelegramChoice, resetProjectSettingsForTests, setCodexCloudEnvironmentId, setMergeOnReview, setReportTelegram, setPipelineStageRuntime, pipelineStageRuntimeSetting } from "./settings";
 import { persistProjectAliases } from "./aliases";
 
 let directory: string;
@@ -22,6 +22,24 @@ afterEach(() => {
 });
 
 const NOW = "2026-10-01T00:00:00Z";
+
+test("runtime attribution survives decoding, aliases and other settings writers; legacy values stay readable", () => {
+  const file = path.join(directory, "project-settings.json");
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, projects: {
+    legacy: { pipelineStageRuntime: "codex-cloud" },
+    mixed: { pipelineStageRuntime: "local", pipelineStageRuntimeAudit: { runtime: "codex-cloud", changedAt: NOW, changedBy: "conversation_other" } },
+  } }));
+  expect(pipelineStageRuntimeSetting("legacy")).toEqual({ runtime: "codex-cloud", changedAt: null, changedBy: null });
+  expect(pipelineStageRuntimeSetting("mixed")).toEqual({ runtime: "local", changedAt: null, changedBy: null });
+  expect(setPipelineStageRuntime("project", "codex-cloud", "conversation_seat", NOW)).toBe(true);
+  setMergeOnReview("project", true, "operator", NOW);
+  resetProjectSettingsForTests();
+  expect(pipelineStageRuntimeSetting("project")).toEqual({ runtime: "codex-cloud", changedAt: NOW, changedBy: "conversation_seat" });
+  expect(persistProjectAliases([{ source: "old-runtime", target: "project", displayName: "Fixture" }])).toBe(true);
+  expect(pipelineStageRuntimeSetting("old-runtime")).toEqual(pipelineStageRuntimeSetting("project"));
+  expect(setPipelineStageRuntime("old-runtime", "local", "operator", NOW)).toBe(true);
+  expect(pipelineStageRuntimeSetting("project")).toEqual({ runtime: "local", changedAt: NOW, changedBy: "operator" });
+});
 
 test("switches and report destinations are copied on every read and after writes", () => {
   setMergeOnReview("project", true, "operator", NOW);

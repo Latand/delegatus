@@ -23,7 +23,7 @@ afterEach(() => {
 
 const TARGET = "b".repeat(40);
 
-function install() {
+function install(execOutcome: "throws" | "returns" = "throws") {
   const root = mkdtempSync(path.join(tmpdir(), "dlg-relaunch-custody-")); roots.push(root);
   const state = path.join(root, "state"), control = path.join(state, "self-update");
   const prior = path.join(root, "prior"), next = path.join(root, "next");
@@ -53,7 +53,7 @@ while (!fs.existsSync(${JSON.stringify(gate)} + "-released-" + attempt)) await B
   // The Viewer accepts an apply under a launcher that is already running.
   const accept = () => writeFileSync(applyFile, `${JSON.stringify(apply)}\n`);
   let stops = 0, execs = 0;
-  process.execve = (() => { execs++; throw new Error("fixture exec"); }) as typeof process.execve;
+  process.execve = (() => { execs++; if (execOutcome === "throws") throw new Error("fixture exec"); }) as unknown as typeof process.execve;
   const launcherState: Record<string, unknown> = {};
   const relaunch = (image: "prior" | "next") => createRelaunch({ paths, installRoot: prior, entry: path.join(image === "prior" ? prior : next, "bin", "cli.mjs"),
     release: image === "prior" ? { sha: "a".repeat(40), dir: prior, published: false } : { sha: TARGET, dir: next, published: true },
@@ -196,15 +196,17 @@ test.each(["no way to ask", "the question fails"] as const)("an automatic relaun
 
 /* An operator's request carries the operator's decision: it is not asked
    about again, and it reaches the stop that the starting intent admits. */
-test("an operator's relaunch is not put to the Viewer a second time", async () => {
-  const f = install();
+test.each(["throws", "returns"] as const)("an operator's relaunch is not put to the Viewer a second time, exec %s", async execOutcome => {
+  const f = install(execOutcome);
   const relaunch = f.relaunch("prior");
   f.accept();
   writeFileSync(f.paths.request, JSON.stringify(f.request));
   let asked = 0;
   const pending = relaunch.begin(f.request, { sha: TARGET, dir: f.next }, undefined, async () => { asked++; return true; });
   await f.load(0, () => {});
-  await expect(pending).rejects.toThrow("fixture exec");
+  // Both failures must return only after the real transition guard exits;
+  // the owned-child teardown independently checks that no guard survived.
+  await expect(pending).rejects.toThrow(execOutcome === "throws" ? "fixture exec" : "launcher exec returned without replacing the process");
   expect(asked).toBe(0);
   expect(f.stops()).toBe(1); expect(f.execs()).toBe(1);
   expect(JSON.parse(readFileSync(f.paths.trial, "utf8"))).toMatchObject({ requestId: f.request.requestId, state: "starting" });

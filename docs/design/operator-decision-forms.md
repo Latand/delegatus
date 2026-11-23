@@ -318,6 +318,13 @@ the operator": the delivered directives sat 3 bytes under their 15 100-byte
 share, and the schema already refuses a question without exactly one
 recommended option.
 
+As of mandate v65 the sentence "Before non-trivial or two-way work, or on
+request, ask there" is gone. A vague ask gets a quick bounded scope check first
+and the seat picks direct work, a pipeline or research itself; a form is for
+what stays materially ambiguous after that check, for an explicit
+operator-owned decision, or on request. Every operator question and approval
+still goes through a form.
+
 The reply-drafts paragraph (`prompt.ts:431-433`) loses its third sentence
 and gains "Decisions go to the form; drafts are for replies that are not a
 choice." The build measures the envelope tests (`prompt.test.ts`,

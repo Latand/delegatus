@@ -5,7 +5,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createViewerMcpHealthProbeServer, createViewerMcpServer, MCP_TOOL_NAMES } from "@/lib/mcp/server";
+import { createViewerMcpHealthProbeServer, createViewerMcpServer, MCP_TOOL_NAMES, RETIRED_FLOW_TOOL_NAMES } from "@/lib/mcp/server";
 import { probeMcpRuntime as legacyProbe } from "./fixtures/legacyMcpRuntimeProbe";
 
 test("ordinary stdio clients cannot discover the deprecated update bridge", async () => {
@@ -42,6 +42,30 @@ test("deprecated update bridge: every call refuses with the decision-form route 
   } finally { await client.close(); await server.close(); }
 });
 
+test("retired flow tools: absent from the tool list, answered with the replacement, and never enter the service", async () => {
+  let calls = 0;
+  const service = { async callTool() { calls++; throw new Error("retired flow tool entered the service"); } };
+  for (const [make, listed] of [[createViewerMcpServer, false], [createViewerMcpHealthProbeServer, true]] as const) {
+    const server = make(service);
+    const client = new Client({ name: "stale-flow-caller", version: "1" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      const names = (await client.listTools()).tools.map(tool => tool.name);
+      for (const name of RETIRED_FLOW_TOOL_NAMES) {
+        expect(MCP_TOOL_NAMES as readonly string[]).not.toContain(name);
+        expect(names.includes(name)).toBe(listed);
+        if (!listed) continue;
+        const answer = await client.callTool({ name, arguments: { clientRequestId: "stale", flowId: "flow-a", action: "close" } });
+        expect(answer.isError).toBe(true);
+        expect(answer.structuredContent).toMatchObject({ ok: false, code: "FLOW_RETIRED", retryable: false });
+        expect((answer.structuredContent as { error: string }).error).toContain("create_pipeline");
+      }
+    } finally { await client.close(); await server.close(); }
+  }
+  expect(calls).toBe(0);
+});
+
 test("deprecated update bridge: the unchanged old prober accepts the new candidate and rejects the same candidate without the bridge", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-old-new-"));
   const worker = path.join(sandbox, "candidate.ts");
@@ -62,7 +86,7 @@ test("deprecated update bridge: the unchanged old prober accepts the new candida
   try {
     const without = await legacyProbe({ ...options, args: [worker, "--without-bridge"] });
     expect(without.ok).toBe(false);
-    expect(without.detail).toBe("MCP runtime is missing tools: suggest_replies");
+    expect(without.detail).toBe("MCP runtime is missing tools: list_flows, get_flow, flow_action, suggest_replies");
     const withBridge = await legacyProbe(options);
     expect(withBridge.detail).toBeUndefined();
     expect(withBridge).toMatchObject({ ok: true, processReady: true, calls: { deploymentStatus: true, boardSnapshot: true } });

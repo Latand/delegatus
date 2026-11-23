@@ -10,6 +10,9 @@ import type { SeatTickSettingsActor } from "@/lib/monitor/seatTickSettings";
 export interface ReleaseRun {
   key: string; cut: string; lastTag: string; trigger: string; startedAt: number;
   requestedAt?: string | null;
+  /** Absent on legacy preparation lanes. One live record owns both phases. */
+  phase?: "publish";
+  releasePipelineId?: string;
   taskId: string | null; pipelineId: string | null; request: CreatePipelineRequest | null;
 }
 export interface ReleaseProject {

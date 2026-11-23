@@ -5,7 +5,7 @@ import { performanceSpans } from "./performanceSpans";
 export type CacheSize = { name: string; owner: string; count: number; bytes: number; unmeasured: number; basis: string };
 type Counter = { count: number; bytes: number; unmeasured: number; retired: boolean };
 type Registry = { rows: Map<string, CacheSize>; omitted: number; finalizer: FinalizationRegistry<{ row: CacheSize; counter: Counter }> };
-const host = globalThis as typeof globalThis & { __delegatusCacheTelemetry?: Registry };
+const host = process as typeof process & { __delegatusCacheTelemetry?: Registry };
 const registry = host.__delegatusCacheTelemetry ??= {
   rows: new Map<string, CacheSize>(), omitted: 0,
   finalizer: new FinalizationRegistry<{ row: CacheSize; counter: Counter }>(({ row, counter }) => {
@@ -108,9 +108,29 @@ export class MeasuredCache<K, V> extends Map<K, V> {
     this.charges.delete(key);
     return true;
   }
+  /** Promote an existing entry to MRU order without recomputing its byte charge. */
+  touch(key: K): boolean {
+    if (!super.has(key)) return false;
+    const value = super.get(key)!;
+    super.delete(key);
+    super.set(key, value);
+    return true;
+  }
   override clear(): void {
     super.clear(); this.charges.clear(); this.counter.set(0, 0);
   }
+}
+
+/** Promote an existing cache entry to MRU order without triggering a full
+ * charge re-walk when backed by a MeasuredCache (including across bundles). */
+export function touchCacheEntry<K, V>(cache: Map<K, V>, key: K): boolean {
+  const candidate = cache as Map<K, V> & { touch?: (entryKey: K) => boolean };
+  if (typeof candidate.touch === "function") return candidate.touch(key);
+  if (!cache.has(key)) return false;
+  const value = cache.get(key)!;
+  cache.delete(key);
+  cache.set(key, value);
+  return true;
 }
 
 /** Weak payloads follow their existing key's lifetime. The registry keeps only

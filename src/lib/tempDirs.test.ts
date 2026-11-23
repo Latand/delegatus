@@ -106,9 +106,9 @@ test("a test run through the preload leaves nothing in the temp dir it started w
   expect(leaked).toHaveLength(4);
   for (const entry of leaked) {
     const relative = path.relative(temp, entry).split(path.sep);
-    /* Every directory the run made sat inside its one root… */
-    expect(relative[0]).toStartWith(TEST_RUN_TEMP_PREFIX);
-    expect(relative.length).toBe(2);
+    /* Every parent belongs to the preload, including its startup-home root. */
+    expect(relative.length).toBeGreaterThanOrEqual(2);
+    for (const parent of relative.slice(0, -1)) expect(parent).toStartWith(TEST_RUN_TEMP_PREFIX);
   }
   /* …and the root went when the run ended. */
   expect(before).toEqual([]);

@@ -1,3 +1,4 @@
+import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -19,7 +20,11 @@ export function seatMcpHealth(
   stateDir: string,
   now: number,
   transport: "stdio" | "http" = "stdio",
+  engineObservation?: ViewerMcpObservation,
 ): SeatMcpHealth {
+  const observation = normalizeViewerMcpObservation(engineObservation);
+  if (observation?.denied.length) return { status: "dead", detail: `Viewer MCP engine approval denied: ${observation.denied.map(entry => entry.tool).join(", ")}` };
+  if (observation?.unverified) return { status: "dead", detail: "Viewer MCP engine capability recovery is unverified" };
   if (transport === "http") return { status: "untracked", detail: "shared HTTP MCP transport" };
   const digest = receipt?.spawnCapabilityDigest;
   if (!digest || !/^[0-9a-f]{64}$/.test(digest)) return { status: "untracked", detail: "no current MCP launch capability" };

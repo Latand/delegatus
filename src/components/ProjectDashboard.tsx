@@ -1,5 +1,7 @@
 "use client";
 
+import { usePipelineCreationCards } from "@/hooks/useFiles";
+
 import { Archive, Bot, Check, GitMerge, Users, EyeOff, Info, LayoutGrid, ListTodo, ListTree, MessageSquarePlus, Network, PanelRight, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -38,7 +40,7 @@ import { reviewerCloseMutations } from "./reviewerAutoClose";
 import { openProjectReviewHistory } from "./flows/ReviewHistory";
 import { isDirectReviewFlow } from "./flows/directReviewGroups";
 import { claimedReviewerDescendantPaths, isActiveFlow, resolveFlowMemberPaths } from "./flows/flowModel";
-import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPipeline, excludeCompactPipelineArtifacts, patchPipeline, pipelineFullPanePaths, pipelinesForProject, replaceCompactPipelineEphemeral, resolvePipelineMemberPaths, type PipelineTemplate } from "./pipelines/pipelineModel";
+import { compactPipelineArtifactPaths, compactPipelineLayoutFlows, createDraftPipeline, excludeCompactPipelineArtifacts, patchPipeline, pipelineFullPanePaths, pipelinesForProject, replaceCompactPipelineEphemeral, resolvePipelineMemberPaths, type PipelineDraftSource, type PipelineTemplate } from "./pipelines/pipelineModel";
 import { PipelineTemplatePicker } from "./pipelines/PipelineTemplatePicker";
 import { createProjectDashboardDerivation } from "./projectDashboardDerivation";
 import { buildSubagentTrays, subagentTraySignature } from "./scheme/subagentTray";
@@ -50,8 +52,7 @@ import { transcriptClaimResolver } from "./transcriptClaims";
 import { launchHistoryClaimPaths, pipelineRetryTarget, retryPipelineLaunch } from "./launchHistoryModel";
 import { isPlacedTask } from "./scheme/taskGeometry";
 import { loadExpandedTasks, persistExpandedTasks } from "./scheme/taskStacks";
-import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
-import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
+import { clearWorkflowDraftStorage, dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
 import { pushTaskToast, scrollClearOfToasts, TaskToastHost } from "./tasks/taskToast";
 import { cleanTitle } from "@/lib/title";
 import { MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
@@ -106,6 +107,7 @@ import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
 import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
+import { PipelineStageRuntimeRow } from "./PipelineStageRuntimeRow";
 import { ShareProjectRow } from "./links/ShareProjectRow";
 import { LearnedRulesRow } from "./roleMemory/LearnedRules";
 import { SoundToggle } from "./SoundToggle";
@@ -585,16 +587,19 @@ function ProjectDashboardView({
   const [openedConversation, setOpenedConversation] = useState<string | null>(null);
   /* Runtime receipts bridge the scan interval: a queued send immediately keeps
      its target on the board, then the next files poll carries the new turn. */
+  // Collapse protection is queried only for files on this project's board.
+  const projectConversationIds = useMemo(() => new Set(files.flatMap(file => file.conversationId ? [file.conversationId] : [])), [files]);
   const activeDeliverySignature = useRuntimeSelector(
     (state) => {
       const active = new Set(Object.values(state.store.operations)
         /* #1560: an injection being admitted keeps its card marked active
            between board polls, exactly as a send does. */
         .filter((receipt) => (receipt.kind === "send" || receipt.kind === "steer" || receipt.kind === "inject")
-          && ACTIVE_DELIVERY_RECEIPTS.has(receipt.status))
+          && ACTIVE_DELIVERY_RECEIPTS.has(receipt.status) && projectConversationIds.has(receipt.conversationId))
         .map((receipt) => receipt.conversationId));
-      for (const session of Object.values(state.store.sessions)) {
-        if (session.turn === "running" || session.turn === "interrupt_requested") active.add(session.conversationId);
+      for (const id of projectConversationIds) {
+        const turn = state.store.sessions[id]?.turn;
+        if (turn === "running" || turn === "interrupt_requested") active.add(id);
       }
       return [...active].sort().join("\n");
     },
@@ -1361,9 +1366,9 @@ function ProjectDashboardView({
   /* `+ Пайплайн` (#136, #196, #388): the picker admits a repository before it
      creates a DRAFT. Its world-space PipelineGroup opens with the full role
      chain and shared editor before the first run. */
-  const addPipelineDraft = async (template: PipelineTemplate | null, repoDir: string) => {
+  const addPipelineDraft = async (template: PipelineTemplate | null, repoDir: string, from?: PipelineDraftSource) => {
     onUserNavigate?.();
-    return createDraftPipeline(project, repoDir, template ?? undefined);
+    return createDraftPipeline(project, repoDir, template ?? undefined, undefined, from);
   };
 
   /* The handoff handle under a pane: a draft that continues this conversation
@@ -1696,7 +1701,9 @@ function ProjectDashboardView({
     [hasNodes, groupFiles, hiddenSet, collapsedPaths, launchHistoryPaths, compactPipelinePaths, project],
   );
   const hasArchiveNodes = archiveGroups.length > 0;
-  const schemeAvailable = hasNodes || hasArchiveNodes;
+  const creationCards = usePipelineCreationCards();
+  const hasAcceptedCreations = creationCards.some(card => card.receipt?.project === project);
+  const schemeAvailable = hasNodes || hasArchiveNodes || hasAcceptedCreations;
   const isolatedCompactHistoryPaths = useMemo(
     () => new Set(ephemeral.filter((path) => compactPipelinePaths.has(path))),
     [ephemeral, compactPipelinePaths],
@@ -1735,7 +1742,7 @@ function ProjectDashboardView({
   const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable;
   const projectView = landedOnConversation || desktopEmptyBoard ? "scheme" : resolveProjectView({
     preferredView,
-    hasNodes,
+    hasNodes: hasNodes || hasAcceptedCreations,
     hasArchiveNodes,
     hasHistoryRows: listAvailable,
   });
@@ -1974,11 +1981,14 @@ function ProjectDashboardView({
     viewBus.reportSlice({ mode, focusedPath: null, selectedPaths: selectionInOrder(order, board.selection, { includeUnordered: true }), visiblePaths, camera: null });
   }, [projectView, schemeAvailable, listAvailable, historyRows, isMobile, boardWindowSignature, board.selection, mobileBoardSignature]);
 
-  const pipelinesAlert = pipelinesError ? (
+  const pendingCreationNotice = creationCards.find(card => !card.receipt);
+  const pipelinesAlert = <>{pendingCreationNotice ? <div className="shrink-0 border-b border-border px-3 py-1.5 text-body text-secondary" role="status" data-creation-notice={pendingCreationNotice.status}>
+    {t(`pipelineCreation.${pendingCreationNotice.status}`)}
+  </div> : null}{pipelinesError ? (
     <div className="shrink-0 border-b border-border bg-warning-soft px-3 py-1.5 text-[11.5px] text-warning" role="alert">
       {t("dash.pipelinesUnavailable")}
     </div>
-  ) : null;
+  ) : null}</>;
   /* The board menu (README §3.1, §4.1; the layout of docs/design/header-menu.md): the create
      actions as cells, the places as labelled 44 px rows, the header's entries, and the project's
      rules with the danger-free Archive last on a page of their own. No row asks for confirmation;
@@ -2046,6 +2056,7 @@ function ProjectDashboardView({
       /* The project's merge and bridge report settings (#2187 §6, #2146), the
          same rows as the desktop ⋯. */
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
+      { kind: "custom", key: "stage-runtime", node: <PipelineStageRuntimeRow project={project} variant="sheet" /> },
       { kind: "custom", key: "share-project", node: <ShareProjectRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
       /* Role memory's rules window: always on, so a way in and no switch (docs/design/role-memory.md §3.1). */
@@ -2170,6 +2181,7 @@ function ProjectDashboardView({
               {/* The four project switches carry their explanations, so each pair is a page of its own. */}
               <BarMenuSection id="merging" title={t("dash.menu.merging")} icon={<GitMerge className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
                 <MergeOnReviewRow project={project} variant="menu" />
+                <PipelineStageRuntimeRow project={project} variant="menu" />
                 <ShareProjectRow project={project} variant="menu" />
               </BarMenuSection>
               <BarMenuSection id="seat" title={t("dash.menu.seat")} icon={<Bot className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>

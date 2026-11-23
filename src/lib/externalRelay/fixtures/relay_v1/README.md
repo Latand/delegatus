@@ -56,15 +56,23 @@ It contains the 14 I9/R7 operations and their complete schemas, totaling
 4,903 bytes. Production consumes the service's index and stores no operation
 list; the fixture has no role in production negotiation or execution.
 
-`owner-tools-off-v3-hashes.json` pins all 35 existing fixture and evidence
+`owner-tools-off-v3-hashes.json` pins 34 retained fixture and evidence
 JSON files, including K/P compact claims and completions. The earlier X1,
 X2 and X3 files retain their bytes. The owner-tier merge updates only the
 `card.json` pin to the reviewed owner-switch settings capture from #2677;
-the other 34 artifacts and all wire captures retain their original pins.
+the other 33 artifacts and all wire captures retain their original pins.
+The current `evidence/external-relay/chats.json` is a regenerated UI measurement
+record, updated for reply-chain conversations in #3017. Its obsolete byte pin
+was removed; the immutable wire captures remain checked byte for byte.
 `owner-tools-off-runner-hashes.json`
 was captured from the original Delegatus revision `39f654248666faa6e5deb01d59eeae305e64573f`
 through the existing runner test, under isolated state. It pins each role's
 prompts, schemas and calls, plus the OFF claim capabilities.
+
+The guest requester schema changes keep those historical captures intact.
+`actions-off-x2-2a-guest-schema-hashes.json` and
+`owner-tools-off-runner-guest-schema-hashes.json` pin the corresponding current
+runner schemas while guest answer negotiation is present.
 
 `evidence/external-relay/install_tool_loop_owner.json` extends the existing
 X2 runner capture format: its root is the reads run; `actions` contains
@@ -131,7 +139,7 @@ sides; this capture authorizes neither enablement nor deployment.
 | File | Bytes | SHA-256 |
 |---|---:|---|
 | `owner-tools-index.json` | 6730 | `13ffb1c99fde7ce1e74f3c7127f870b2a2c56dfc9e08a05984ae729dc926b93f` |
-| `owner-tools-off-v3-hashes.json` | 4760 | `bff586d8e1b96c2e3225d19b3227035c8da2c650d6c838dcc8ffa5814b4bde38` |
+| `owner-tools-off-v3-hashes.json` | 4652 | `df6899a7f7d3ad4d562463b08dd55e7e0a0e93e797a5802b1d7e848224e6b144` |
 | `owner-tools-off-runner-hashes.json` | 2879 | `709baf921762e4e9fdab4ab70eafd6141b0f7da7bac342d65ea7741374f9e9e2` |
 
 Original X4 capture before the R8 correction: 22,956 bytes, SHA-256
@@ -190,3 +198,128 @@ On-demand discovery fixtures, copied byte for byte from service revision `c3dcbb
 | `claimed_tools_on_demand_owner.json` | `2718a2057a2fcc23376c9919597508e20576ac1cb5ac1e4a94d7d25a26f0f2d9` |
 | `lookup_bodies.json` | `9a4d0939395368c537af193127ca985fcb78b16c8de6b821eac50efb0aef15f9` |
 | `lookup_results.json` | `965de49cc36a455c141b789e03d36a0738e27df29c461f7c355b7be3b1483160` |
+
+## Read-tool images
+
+`tool_result_images.json` is copied byte for byte from the service's
+`apps/backend/tests/fixtures/relay_v1/tool_result_images.json` at revision
+`ff616e1956c9234cd9507cd58ad035bfede3e725`: 2,015 bytes, SHA-256
+`176fdbef0f50b83973a21f998692d7f6df31d1df7da63011309bb5d27a2bd3a6`.
+The source README and `docs/design/relay-slice2-direct-tools.md` section 4.5
+were checked through the source API on 2026-11-13. All refs and opaque
+identifiers are synthetic.
+
+Decode `ToolCallResult.output` as JSON: avatar/photo descriptors are in
+`media[]`; video frame descriptors are in `selected_frames[].file`. Ready
+photos carry a request-local ref; unavailable photos carry their availability
+reason without a ref. Downloads require negotiated `relay_media_in` and the
+current pairing and lease. The source fixture expiry is intentionally fixed;
+tests bind expiry, byte length and frame encoding to their synthetic downloads.
+
+## Avatar image seeds
+
+Pass `seed_media_refs` to either image tool using ready inbound image refs or
+image refs successfully downloaded from earlier read-tool results in the same
+request. The optional array accepts one to ten unique refs in submitted order.
+Both `requester_context` and `relay_media_in` must be negotiated.
+
+`avatar_seed.json` is mirrored byte for byte from the paired service's
+`apps/backend/tests/fixtures/relay_v1/avatar_seed.json` at reviewed revision
+`e29441330685e4ff2e5d0709f35189f18534a621`, Git blob
+`adbfecae8821039ac2de15a312152da60294f051`, SHA-256
+`def8750ba2ce52f604c4a3e519b01502736b2b15c6bdb4ed5cb9f58c4dd02ba7`.
+The source generator was inspected: users, files, call IDs and opaque refs are
+synthetic. Its `negotiated_features` contains both required features.
+
+The fixture confirms that the service deduplicates the current avatar when it
+is also submitted as a seed, and places the current avatar before explicit
+seeds when `use_current_profile_photo` is true. The client forwards arguments
+without rewriting them. Roles, chat membership, seed resolution and charging
+remain service decisions. Unknown and unavailable seeds may be denied by the
+service; the client preserves that answer. A successful `generate_image` call
+does not establish that every seed was used: the service can skip unreadable
+seeds when another input is readable. An unreadable admitted seed for
+`update_self_profile_photo` is denied with `invalid_arguments` without charge.
+
+`avatarSeed.test.ts` drives every example through the real tool loop and an
+isolated HTTP double. It freezes download time for the fixture's fixed expiry
+and binds descriptor byte lengths to synthetic PNGs; submitted call arguments
+and service result outputs retain their fixture values. Unknown refs, refs
+from another request and eleven seeds are refused locally before dispatch.
+
+`action_finality.json` is the synthetic producer sample at revision
+`2450d7318a0f`, copied byte for byte (SHA-256
+`76e00df4fdacaa335d91b3d3db55fb1ff7ffc85a77863d66a00b1e05e0cc7351`).
+`actionFinality.test.ts` replays it through the HTTP client and consumer loop.
+
+The existing action wire captures include bounded receipt reads and the reply
+that a posted confirmation's eventual outcome is unavailable to the client.
+
+## Guest answers
+
+`claimed_guest_owner.json` is copied byte for byte from the paired service's
+`apps/backend/tests/fixtures/relay_v1/claimed_guest_owner.json` at revision
+`f27ca4e08746f685f54ea19084c82b5f64403848`: 4,721 bytes, SHA-256
+`61d6d384f956e70d9b0097da80ab855772b4091a5184efa41bf3e1d4df9ca4f5`.
+The design at that revision, `docs/design/relay-guest-mode.md` sections 3.1
+and 4, limits arbitrary history-item media to guest photos. Documents retain
+the trigger/direct-parent rule. All fixture identifiers are synthetic.
+
+The claim advertises `relay_guest_answers` together with `requester_context`.
+Guest requests preserve `delivery`, require final-only delivery and handoff-only
+service tools, and offer handoff even with an empty index. Neither structured
+answers nor native owner answers accept ignore. Final text is bounded by
+`answer.max_chars`, has `reply_to: null` and carries no rich parts. Descriptor
+progress steps are also suppressed. History photos retain their own item and
+reference; unsupported input is refused and unavailable descriptors remain
+explicit model context. Existing non-guest media scope is unchanged.
+
+`install_guest_loop.json` is emitted by `guestMode.test.ts` through the real
+claim builder, HTTP client and decision runner, with synthetic inference ports.
+Its baseline uses the exact guest request above. The runner selects the
+restricted ephemeral profile for guest delivery with either setting of owner
+tier. The requester selector still identifies the verified owner, while guest
+execution has no host tools, shared transcript or memory. Other conversation
+items remain escaped data. The tests cover both owner-tier settings, both
+tool-index sizes, reply/handoff, ten native input photos and rejection of an
+eleventh reference and per-item removal of a history document. Follow-up probes
+cover successful and failed Claude/Codex guest turns, ordinary owner continuity, another guest
+turn in the same and another chat, and Cloud's ephemeral thread confirmation
+and isolated native fallback.
+
+Run `bun test src/lib/externalRelay/guestMode.test.ts` through the gate wrapper
+in an isolated export. Set `LLV_RELAY_GUEST_LOOP_OUTPUT` to a scratch output to
+regenerate the capture; otherwise the test compares its complete bytes.
+Isolate HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR, and set
+LLV_VIEWER_CONTROL_URL to a closed loopback port. This capture proves no live
+service delivery; that cross-service rehearsal belongs to the paired seats.
+
+The service keeps ordinary sends behind `relay_send.py` `_authorize`; its
+repository `publish_message` also refuses another person's positive chat id.
+`delivery_allowed` rechecks the guest requester against the current pairing
+owner for final guest delivery. These checks were read at the pinned revision. The client neither derives a destination from
+opaque chat/message keys nor supplies one for guest delivery. Without
+`owner_delivery`, ordinary late owner replies retain pending-delivery-context and make
+no send/publish request.
+
+Historical non-guest captures and their pinned hashes retain their original bytes.
+Compatibility tests apply the additional claim feature when comparing current
+claims; non-guest prompt, schema, call and completion pins remain unchanged.
+The nearby action-finality lane also edits `prompt.ts` (tool-round framing) and
+this README. Guest framing changes `answerPrompt` only. PR #4051 also edits
+`protocol.ts` (attachment selectors), `runner.ts` (tool-result image collection),
+`mediaInputValidation.ts` (seed expiry/preview bounds) and `runner.test.ts`.
+Guest parsing, action selection, progress and photo scope are separate hunks;
+both changes must survive integration.
+
+The shared path is service claim → `requestSchema` → runner admission and
+`ownerTierFor` → prompt/schema and media preparation → checked decision →
+completion. Tool-index hydration starts only for advertised direct tools, which
+guest validation refuses. The guest guard precedes owner/prototype selection
+and reply-chain resolution. Request-local engine configs disable persistence
+and automatic memory. Guest answers use the existing secret scrubber before
+final validation. A missing delivery field keeps the prior defaults.
+
+| Guest capture | Bytes | SHA-256 |
+|---|---:|---|
+| `install_guest_loop.json` | 845 | `3397b1f7c5bdf32f195fc2534a562413bebf5d3fba446d15cbda742b28a5ab41` |

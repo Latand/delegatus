@@ -25,16 +25,12 @@ x-viewer-common: &viewer-common
     PATH: /usr/local/bin:${HOME:-/home/user}/.bun/bin:${HOME:-/home/user}/.npm-global/bin:${HOME:-/home/user}/.local/bin:/usr/bin:/bin
     XDG_CONFIG_HOME: ${HOME:-/home/user}/.config
     XDG_CACHE_HOME: ${HOME:-/home/user}/.cache
-    # New installations use /tmp. Deployers retain the existing endpoint and
-    # host mount when an earlier installation has a completed migration marker.
-    TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
     HF_HOME: ${HOME:-/home/user}/.cache/huggingface
     LLV_WHISPER_VENV: /opt/llv-whisper-venv
     LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}
     LLV_DOCKER_NSENTER_SHIMS: "1"
   volumes:
     - ${HOME:-/home/user}:${HOME:-/home/user}
-    - /tmp/tmux-${DELEGATUS_UID:-${LLV_UID:-1000}}:/tmp/tmux-${DELEGATUS_UID:-${LLV_UID:-1000}}
     - /tmp/claude-${DELEGATUS_UID:-${LLV_UID:-1000}}:/tmp/claude-${DELEGATUS_UID:-${LLV_UID:-1000}}
     # Agents on the host render evidence under /var/tmp (#2084); the Viewer
     # only reads it, through the image routes' evidence root.
@@ -69,7 +65,6 @@ services:
       LLV_GID: ${DELEGATUS_GID:-${LLV_GID:-1000}}
       LLV_DOCKER_GID: ${DELEGATUS_DOCKER_GID:-${LLV_DOCKER_GID:-957}}
       LLV_ENV_FILE: ${DELEGATUS_ENV_FILE:-${LLV_ENV_FILE:-${DELEGATUS_CONFIG_DIR:-${LLV_CONFIG_DIR:-${HOME:-/home/user}/.config/delegatus}}/service.env}}
-      LLV_TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
       LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}
       LLV_ALLOW_LEGACY_VIEWER: ${DELEGATUS_ALLOW_LEGACY_VIEWER:-${LLV_ALLOW_LEGACY_VIEWER:-0}}
       # The profile gate is the activation switch; a started runtime-host is
@@ -110,7 +105,6 @@ services:
       PATH: /usr/local/bin:${HOME:-/home/user}/.bun/bin:${HOME:-/home/user}/.npm-global/bin:${HOME:-/home/user}/.local/bin:/usr/bin:/bin
       XDG_CONFIG_HOME: ${HOME:-/home/user}/.config
       XDG_CACHE_HOME: ${HOME:-/home/user}/.cache
-      TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
       HF_HOME: ${HOME:-/home/user}/.cache/huggingface
       LLV_WHISPER_VENV: /opt/llv-whisper-venv
       LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}
@@ -132,7 +126,6 @@ services:
       PATH: /usr/local/bin:${HOME:-/home/user}/.bun/bin:${HOME:-/home/user}/.npm-global/bin:${HOME:-/home/user}/.local/bin:/usr/bin:/bin
       XDG_CONFIG_HOME: ${HOME:-/home/user}/.config
       XDG_CACHE_HOME: ${HOME:-/home/user}/.cache
-      TMUX_TMPDIR: ${DELEGATUS_TMUX_TMPDIR:-${LLV_TMUX_TMPDIR:-/tmp}}
       HF_HOME: ${HOME:-/home/user}/.cache/huggingface
       LLV_WHISPER_VENV: /opt/llv-whisper-venv
       LLV_TRANSCRIBE_BACKEND: ${DELEGATUS_TRANSCRIBE_BACKEND:-${LLV_TRANSCRIBE_BACKEND:-}}

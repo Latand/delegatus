@@ -13,6 +13,7 @@ import { isCanonicalBranchRef } from "@/lib/runtime/canonicalRevision";
 import { parseViewerDeploymentListCursor, viewerDeploymentPage } from "@/lib/runtime/contracts";
 import { RuntimeHostUnavailableError, runtimeHostClient, runtimeHostRequestHealth } from "@/lib/runtime/client";
 import { DeploymentRuntimeUnavailableError, requestViewerDeployment } from "@/lib/runtime/deploymentRuntime";
+import { structuredStartupStatus } from "@/lib/runtime/startupStatus";
 import { runtimeEventsRolledBack, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { authenticatedAgentSpawnCaller } from "@/app/api/spawn/admission";
@@ -43,6 +44,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       { status: 503 },
     );
   }
+  const startup = structuredStartupStatus();
+  const startupDetails = startup && (startup.state === "failed" || startup.phase !== "waiting for structured startup")
+    ? { structuredHostStartup: startup } : {};
   const decision = await selfUpdateService().decide();
   if (decision.mode === "checkout" || decision.mode === "package") {
     await selfUpdateService().snapshot();
@@ -54,7 +58,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     try {
       const page = viewerDeploymentPage(checkoutDeployments(statePath("self-update")), deploymentListLimit(request), cursor,
         request.nextUrl.searchParams.get("compact") === "true");
-      return NextResponse.json({ count: page.deployments.length, ...page });
+      return NextResponse.json({ count: page.deployments.length, ...page, ...startupDetails });
     } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Deployment ledger unavailable" }, { status: 503 }); }
   }
   const client = runtimeHostClient();
@@ -74,6 +78,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       count: page.deployments.length,
       ...page,
       runtimeHostRequests: runtimeHostRequestHealth(),
+      ...startupDetails,
     });
   } catch (error) {
     return NextResponse.json(
@@ -104,7 +109,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
  * #1032 deployed a revision that never existed for six hours. Either way the
  * ledger records the exact resolved SHA.
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
+export async function POST(request: NextRequest): Promise<NextResponse> { return deploymentPost(request, false); }
+
+/** Also mounted as POST /deployments/reconcile. An older Viewer has no such
+ * route and therefore cannot mistake reconciliation for deployment admission. */
+export async function PATCH(request: NextRequest): Promise<NextResponse> { return deploymentPost(request, true); }
+
+async function deploymentPost(request: NextRequest, reconcileOnly: boolean): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) return rejection;
   if (request.nextUrl.searchParams.get("kind") === "host-retirement") {
@@ -128,10 +139,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { status: 503 },
     );
   }
-  let body: { revision?: unknown; ref?: unknown; idempotencyKey?: unknown };
+  let body: { revision?: unknown; ref?: unknown; idempotencyKey?: unknown; reconcileOnly?: unknown };
   try { body = await request.json() as typeof body; }
   catch { return NextResponse.json({ error: "invalid JSON" }, { status: 400 }); }
   if (typeof body.idempotencyKey !== "string") return NextResponse.json({ error: "idempotencyKey is required" }, { status: 400 });
+  if (reconcileOnly) body.reconcileOnly = true;
+  if (body.reconcileOnly !== undefined && typeof body.reconcileOnly !== "boolean") return NextResponse.json({ error: "invalid reconciliation flag" }, { status: 400 });
   if (body.ref !== undefined && body.revision !== undefined) {
     return NextResponse.json(
       { error: "a deployment names either revision or ref, not both", reason: "target_ambiguous" },
@@ -173,18 +186,27 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const decision = await service.decide();
     authorize();
     if (decision.mode !== "managed") {
-      const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey }, authorize);
+      const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey, ...(body.reconcileOnly === true ? { reconcileOnly: true } : {}) }, authorize);
       await recordSeatDeploymentAdmission(body.idempotencyKey, receipt).catch(error => {
         console.error("[deploy admission] could not record the seat wake", error);
       });
       return NextResponse.json(receipt, { status: receipt.state === "accepted" ? 202 : 409 });
     }
-    const receipt = await requestViewerDeployment({ ...target, idempotencyKey: body.idempotencyKey }, authorize);
+    const receipt = await requestViewerDeployment({ ...target, idempotencyKey: body.idempotencyKey, ...(body.reconcileOnly === true ? { reconcileOnly: true } : {}) }, authorize);
     await recordSeatDeploymentAdmission(body.idempotencyKey, receipt).catch(error => {
       console.error("[deploy admission] could not record the seat wake", error);
     });
     return NextResponse.json(receipt, { status: receipt.state === "busy" ? 409 : 202 });
   } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "deploy_attempt_superseded") {
+      return NextResponse.json({ error: "This admission attempt was refused before execution. Retry with the same request key.",
+        code: "deploy_attempt_superseded", outcome: "not-executed", evidence: "not-admitted", nextAction: "retry-same-key", retryable: true }, { status: 409 });
+    }
+    // The service is shared through globalThis by independently bundled Next
+    // entry points. Its Error constructor can belong to a different bundle.
+    if (error && typeof error === "object" && "code" in error && error.code === "deploy_not_admitted") {
+      return NextResponse.json({ error: "Deployment was not admitted; this request key is permanently closed. A new key is permitted.", code: "deploy_not_admitted", outcome: "not-executed", evidence: "not-admitted", retryable: false, nextAction: "new-request-permitted" }, { status: 409 });
+    }
     if (error instanceof ProactiveExecutionFenced) return NextResponse.json({ error: error.message }, { status: 403 });
     if (error instanceof DeploymentRuntimeUnavailableError) {
       return NextResponse.json(

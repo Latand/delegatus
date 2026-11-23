@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,7 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 
 const {
   applySeatTickSettingsChange,
+  checkpointSeatTickSettingsRollbackMirrorForDemotion,
   defaultSeatTickSettings,
   effectiveSeatTickSettings,
   readSeatTickSettings,
@@ -56,6 +57,31 @@ const settingsFile = () => {
   fs.mkdirSync(directory, { recursive: true });
   return path.join(directory, "seat-tick-settings.json");
 };
+
+test("reading one project's tick settings does not copy other projects", () => {
+  const file = settingsFile();
+  const selected = { ...defaultSeatTickSettings("selected"), monitorPrompt: "selected instructions" };
+  writeSeatTickSettings("selected", selected, file);
+  for (let i = 0; i < 8; i++) {
+    const project = `unrelated-${i}`;
+    writeSeatTickSettings(project, { ...defaultSeatTickSettings(project), monitorPrompt: "unrelated instructions ".repeat(100) }, file);
+  }
+  const nativeClone = globalThis.structuredClone;
+  let unrelatedCopies = 0;
+  const clone = spyOn(globalThis, "structuredClone").mockImplementation((value, options) => {
+    if (value && typeof value === "object" && "key" in value && typeof value.key === "string"
+      && value.key.startsWith("p:unrelated-")) unrelatedCopies++;
+    return nativeClone(value, options);
+  });
+  try {
+    const read = readSeatTickSettings("selected", file);
+    expect(read.monitorPrompt).toBe(selected.monitorPrompt);
+    expect(unrelatedCopies).toBe(0);
+    read.monitorPrompt = "caller changed its copy";
+    expect(readSeatTickSettings("selected", file).monitorPrompt).toBe(selected.monitorPrompt);
+    expect(readSeatTickSettings("missing", file)).toEqual(defaultSeatTickSettings("missing"));
+  } finally { clone.mockRestore(); }
+});
 
 test("Turbo persists its original tier and finite credit approval; expiry clears approval and off preserves restoration work", () => {
   const actor: SeatTickSettingsActor = { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
@@ -189,7 +215,7 @@ test("operator instructions over the storage limit are refused without dropping 
   const current = { ...defaultSeatTickSettings(PROJECT), reason: "Keep these instructions." };
   const result = change(current, { reason: "x".repeat(501) });
   /* Named as the total that would be stored: the unattributed line, a newline and the 501 sent. */
-  expect(result).toEqual({ ok: false, error: "instructions (reason) are 526 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
+  expect(result).toEqual({ ok: false, error: "instructions (reason) must be at most 500 UTF-16 code units; actual length is 526. Provide a complete value within the limit and retry. Never truncate identity, guards or provenance." });
   expect(current.reason).toBe("Keep these instructions.");
 });
 
@@ -315,22 +341,37 @@ test("a prompt over the limit is refused with the limit and its own length, and 
   const result = change(kept, { monitorPrompt: "w".repeat(SEAT_TICK_PROMPT_LIMIT + 500) });
   expect(result).toEqual({
     ok: false,
-    error: `monitorPrompt is ${SEAT_TICK_PROMPT_LIMIT + 500} characters; the limit is ${SEAT_TICK_PROMPT_LIMIT}. Nothing was stored — shorten the note and send it again`,
+    error: expect.stringContaining(`actual length is ${SEAT_TICK_PROMPT_LIMIT + 500}`),
   });
   /* The refusal is a refusal of the whole change: the record it was applied to
      is untouched, there is no truncated version of the note anywhere. */
   expect(kept.monitorPrompt).toBe("the note that stands");
 });
 
-test("an over-long prompt already on disk still loads, clamped, so an old file never stops a check (#1450)", () => {
+test("an over-long prompt already on disk retains its complete text for recovery", () => {
   const file = settingsFile();
   fs.writeFileSync(file, JSON.stringify({
     version: 1,
     projects: { [PROJECT]: { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "n".repeat(SEAT_TICK_PROMPT_LIMIT + 5), updatedAt: new Date(NOW).toISOString() } },
   }));
   const loaded = readSeatTickSettings(PROJECT, file);
-  expect(loaded.monitorPrompt).toHaveLength(SEAT_TICK_PROMPT_LIMIT);
+  expect(loaded.monitorPrompt).toHaveLength(SEAT_TICK_PROMPT_LIMIT + 5);
   expect(loaded.updatedAt).toBe(new Date(NOW).toISOString());
+});
+
+test("monitor raw UTF-16 boundary refuses one over and retains the prior record", () => {
+  const exact = "🧭".repeat(SEAT_TICK_PROMPT_LIMIT / 2);
+  const kept = settingsOf(change(defaultSeatTickSettings(PROJECT), { monitorPrompt: exact }));
+  expect(kept.monitorPrompt).toBe(exact);
+  for (const over of [exact + "я", " " + exact]) {
+    const refused = change(kept, { monitorPrompt: over });
+    expect(refused).toMatchObject({ ok: false });
+    if (refused.ok) throw Error("accepted an overage");
+    expect(refused.error).toContain("actual length is 16001");
+    expect(refused.error).toContain("monitorPrompt");
+    expect(refused.error).toContain("16000 UTF-16 code units");
+    expect(kept.monitorPrompt).toBe(exact);
+  }
 });
 
 test("the prompt is untouched by the settings around it: quieting, restoring, and the expiry", () => {
@@ -501,7 +542,7 @@ test("the operator's field claims lines with no known author: 495 + «читай
   const legacy = { ...defaultSeatTickSettings(PROJECT), reason: LEGACY };
   expect(LEGACY.length).toBe(495);
   const over = asOperator(legacy, { reason: `${LEGACY}\nчитай`, clearUnknownInstructions: true });
-  expect(over).toEqual({ ok: false, error: "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
+  expect(over).toEqual({ ok: false, error: "instructions (reason) must be at most 500 UTF-16 code units; actual length is 501. Provide a complete value within the limit and retry. Never truncate identity, guards or provenance." });
   expect(legacy.reason).toBe(LEGACY);
   const shortened = settingsOf(asOperator(legacy, { reason: `${LEGACY.slice(0, 200)}\nчитай`, clearUnknownInstructions: true }));
   expect(shortened.reason).toBe(`${LEGACY.slice(0, 200)}\nчитай`);
@@ -613,12 +654,12 @@ test("the panel's preview of an edit is what the server stores, and the limit co
   const overPreview = previewSeatTickInstructions(current, { ...edit, text: over }, OPERATOR, NEXT_AT);
   expect(overPreview.ok && overPreview.lines.map(line => line.text).join("\n").length).toBe(501);
   expect(asOperator(current, { reason: over, clearUnknownInstructions: true, removeSeatNotes: edit.removeSeatNotes }))
-    .toEqual({ ok: false, error: "instructions (reason) are 501 characters; the limit is 500. Nothing was stored — shorten the instructions and send them again" });
+    .toEqual({ ok: false, error: "instructions (reason) must be at most 500 UTF-16 code units; actual length is 501. Provide a complete value within the limit and retry. Never truncate identity, guards or provenance." });
 });
 
 test("a field alone over the limit is refused with the total the panel previews, seat notes included", async () => {
   const { previewSeatTickInstructions } = await import("./seatTickInstructions");
-  const refusal = (count: number) => ({ ok: false as const, error: `instructions (reason) are ${count} characters; the limit is 500. Nothing was stored — shorten the instructions and send them again` });
+  const refusal = (count: number) => ({ ok: false as const, error: `instructions (reason) must be at most 500 UTF-16 code units; actual length is ${count}. Provide a complete value within the limit and retry. Never truncate identity, guards or provenance.` });
   const previewed = (current: SeatTickSettings, text: string, claimUnknown = false) => {
     const preview = previewSeatTickInstructions(current, { text, claimUnknown }, OPERATOR, NEXT_AT);
     return preview.ok ? preview.lines.map(line => line.text).join("\n").length : null;
@@ -703,4 +744,54 @@ test("malformed persisted windows turn maintenance off without changing curation
     writeSeatTickSettings("other-project", defaultSeatTickSettings("other-project"), sqliteFile);
     expect(row()).toEqual(before);
   } finally { database.close(); }
+});
+
+
+test("the designated seat replaces the 489-unit inherited block with its 360-unit review and returns the removed lines", () => {
+  const lines = [
+    { text: "x".repeat(301), author: null, at: null },
+    { text: "y".repeat(139), author: { ...SEAT, seatEpoch: 2 }, at: AT },
+    { text: "z".repeat(47), author: { ...SEAT, seatEpoch: 3 }, at: AT },
+  ];
+  const current = { ...defaultSeatTickSettings(PROJECT), reason: lines.map(l => l.text).join("\n"), instructionLines: lines };
+  expect(current.reason.length).toBe(489);
+  const result = applySeatTickSettingsChange(current, { reason: "r".repeat(360) }, { actor: SEAT, at: NEXT_AT, activeSeat: { conversationId: SEAT.conversationId!, seatEpoch: 7 } });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.error);
+  expect(result.settings.reason).toBe("r".repeat(360));
+  expect(result.replacedInherited).toEqual(lines);
+  expect(result.settings.instructionsReviewedAt).toBe(NEXT_AT);
+  const file = settingsFile(); writeSeatTickSettings(PROJECT, { ...result.settings, enabled: false, until: NEXT_AT }, file);
+  const stored = readSeatTickSettings(PROJECT, file);
+  checkpointSeatTickSettingsRollbackMirrorForDemotion(file);
+  expect(stored.instructionsReviewedAt).toBe(NEXT_AT);
+  expect(JSON.parse(fs.readFileSync(file, "utf8")).projects[PROJECT].instructionsReviewedAt).toBe(NEXT_AT);
+  const lapsed = effectiveSeatTickSettings(stored, Date.parse(NEXT_AT), HOUR_MS);
+  expect(seatTickSettingsAfterLapse(PROJECT, lapsed).instructionsReviewedAt).toBe(NEXT_AT);
+});
+
+for (const active of [null, { conversationId: "replacement-seat", seatEpoch: 8 }, { conversationId: SEAT.conversationId!, seatEpoch: 8 }]) test(`a stale designation cannot inherit (${JSON.stringify(active)})`, () => {
+  const current = { ...defaultSeatTickSettings(PROJECT), reason: "legacy" };
+  const result = applySeatTickSettingsChange(current, { reason: "current" }, { actor: SEAT, at: AT, activeSeat: active });
+  if (!result.ok) throw new Error(result.error);
+  expect(result.settings.reason).toBe("legacy\ncurrent");
+  expect(result.replacedInherited).toBeUndefined();
+  expect(result.settings.instructionsReviewedAt).toBeUndefined();
+});
+
+test("inheritance preserves operator, foreign-seat and agent entries, and unchanged inherited stamps", () => {
+  const authors = [null, { ...SEAT, seatEpoch: 2 }, { ...SEAT, seatEpoch: null }, SEAT, { ...SEAT, kind: "gateway" as const }, { ...SEAT, project: "elsewhere" }, { ...SEAT, kind: "agent" as const }, { ...SEAT, seatEpoch: 8 }, { ...SEAT, conversationId: "another-seat-same-epoch" }];
+  const lines = authors.map((author, i) => ({ text: `line ${i}`, author, at: AT }));
+  const current = { ...defaultSeatTickSettings(PROJECT), reason: lines.map(l => l.text).join("\n"), instructionLines: lines };
+  const context = { actor: SEAT, at: NEXT_AT, activeSeat: { conversationId: SEAT.conversationId!, seatEpoch: 7 } };
+  const result = applySeatTickSettingsChange(current, { reason: "line 0\nreviewed" }, context);
+  if (!result.ok) throw new Error(result.error);
+  expect(result.settings.instructionLines).toEqual([lines[0], { text: "reviewed", author: SEAT, at: NEXT_AT }, ...lines.slice(4)]);
+  expect(result.replacedInherited).toEqual(lines.slice(1, 3));
+  const cleared = applySeatTickSettingsChange(current, { reason: null }, context);
+  if (!cleared.ok) throw new Error(cleared.error);
+  expect(cleared.settings.instructionLines).toEqual(lines.slice(4));
+  const refused = applySeatTickSettingsChange(current, { reason: "x".repeat(500) }, context);
+  expect(refused.ok).toBe(false);
+  expect(current.instructionLines).toEqual(lines);
 });

@@ -104,6 +104,32 @@ test("without /proc a stopped step's root and helper are proven gone through sig
   expect((error as Error).message).toMatch(/"touched tests" was still running after \d+ s and was stopped; nothing was judged$/);
   for (const pid of pids) expect(await gone(pid), String(pid)).toBeTrue();
 }, 30_000);
+test("without /proc cancellation finds a nested step token outside the process tree", async () => {
+  const dir = real.mkdtempSync(path.join(tmpdir(), "gate-noproc-nested-")); roots.push(dir);
+  const tokenFile = path.join(dir, "token");
+  const cancel = new AbortController();
+  const pending = runSteps("pre-push", [{ name: "touched tests", command: [] }], {
+    root: dir, deadline: null, logDir: dir, say: () => {}, cancel: cancel.signal,
+    prepare: () => ({ env: process.env, command: [
+      "bash", "-c", 'printf "%s" "$LLV_GATE_STEP" > "$1.tmp"; mv "$1.tmp" "$1"; exec sleep 60', "step", tokenFile,
+    ] }),
+  });
+  try {
+    const readyBy = Date.now() + 5_000;
+    while (!real.existsSync(tokenFile) && Date.now() < readyBy) await Bun.sleep(10);
+    const inherited = real.readFileSync(tokenFile, "utf8");
+    const helper = Bun.spawn(["sleep", "60"], {
+      env: { ...process.env, LLV_GATE_STEP: `${inherited},nested-fixture` }, stdio: ["ignore", "ignore", "ignore"],
+    });
+    expect(running(helper.pid)).toBeTrue();
+    cancel.abort();
+    await pending;
+    expect(await gone(helper.pid)).toBeTrue();
+  } finally {
+    cancel.abort();
+    await pending;
+  }
+}, 30_000);
 test("with neither /proc nor ps the stop says it could not find the step's processes, never that they stopped", async () => {
   psBroken = true;
   const dir = real.mkdtempSync(path.join(tmpdir(), "gate-noproc-")); roots.push(dir);
@@ -114,9 +140,10 @@ test("with neither /proc nor ps the stop says it could not find the step's proce
 }, 30_000);
 test("a ps that answers slowly is cut off by the cleanup allowance, and the stop says what it could not prove", async () => {
   const dir = real.mkdtempSync(path.join(tmpdir(), "gate-noproc-")); roots.push(dir);
-  // Every query takes two seconds before the real ps answers.
+  // The ps shim itself is the slow process. Replacing it with sleep means
+  // spawnSync's timeout owns and reaps it without leaving a shell descendant.
   const slow = path.join(dir, "bin"); real.mkdirSync(slow);
-  real.writeFileSync(path.join(slow, "ps"), `#!/bin/sh\nsleep 2\nexec ${Bun.which("ps")} "$@"\n`, { mode: 0o755 });
+  real.writeFileSync(path.join(slow, "ps"), `#!/bin/sh\nexec ${Bun.which("sleep")} 60\n`, { mode: 0o755 });
   const searched = process.env.PATH;
   process.env.PATH = `${slow}${path.delimiter}${searched}`;
   try {

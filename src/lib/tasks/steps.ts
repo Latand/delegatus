@@ -1,10 +1,11 @@
-import { readTaskHold, storedTaskHold } from "./hold";
+import { textLengthError } from "@/lib/textLimits";
+import { validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
 import type { TaskHold, TaskStep } from "./types";
 
 export const TASK_STEPS_LIMIT = 20;
 const STEP_ID = /^[a-zA-Z0-9_-]{1,40}$/;
 
-export type TaskStepsResult = { ok: true; steps?: TaskStep[] } | { ok: false; error: string; status: 400; code: "TASK_INVALID_FIELD"; field: "steps" };
+export type TaskStepsResult = { ok: true; steps?: TaskStep[] } | { ok: false; error: string; status: 400; code: "TASK_INVALID_FIELD"; field: string };
 
 export interface DerivedTaskStep extends TaskStep {
   effectiveState: TaskStep["state"];
@@ -73,19 +74,30 @@ export function deriveTaskSteps(steps: readonly TaskStep[] | undefined, pipeline
 export function readTaskSteps(value: unknown, now: string, by: TaskHold["by"], conversationId?: string, previous: readonly TaskStep[] = [], notes?: string[]): TaskStepsResult {
   if (value === null || value === undefined) return { ok: true };
   const fail = (): TaskStepsResult => ({ ok: false, error: "steps must contain up to 20 valid checklist items", status: 400, code: "TASK_INVALID_FIELD", field: "steps" });
-  if (!Array.isArray(value) || value.length > TASK_STEPS_LIMIT) return fail();
+  if (!Array.isArray(value)) return fail();
+  if (value.length > TASK_STEPS_LIMIT) return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "steps", error: `steps must contain at most ${TASK_STEPS_LIMIT} items; actual count is ${value.length}` };
   const old = new Map(previous.map((step) => [step.id, step]));
   const seen = new Set<string>();
   const steps: TaskStep[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return fail();
     const raw = item as Record<string, unknown>;
-    if (typeof raw.id !== "string" || !STEP_ID.test(raw.id) || seen.has(raw.id)
+    if (typeof raw.id !== "string" || !STEP_ID.test(raw.id)) return {
+      ok: false, status: 400, code: "TASK_INVALID_FIELD", field: `steps.${steps.length}.id`,
+      error: typeof raw.id === "string" && (raw.id.length < 1 || raw.id.length > 40)
+        ? textLengthError(`steps.${steps.length}.id`, raw.id.length, 40, "UTF-16 code units", 1)
+        : `steps.${steps.length}.id must contain 1–40 ASCII letters/digits/underscore/hyphen; copy the exact valid id`,
+    };
+    if (typeof raw.text === "string" && raw.text.trim().length > 120) return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: `steps.${steps.length}.text`, error: textLengthError(`steps.${steps.length}.text`, raw.text.trim().length, 120, "UTF-16 code units") };
+    const holdError = validateTaskHoldInput(raw.hold, `steps.${steps.length}.hold`);
+    if (holdError) return holdError;
+    if (seen.has(raw.id)
       || typeof raw.text !== "string" || !raw.text.trim() || raw.text.trim().length > 120
       || !["done", "open", "dropped"].includes(String(raw.state))) return fail();
     seen.add(raw.id);
     const ref = raw.ref === undefined || raw.ref === null || raw.ref === "" ? undefined : typeof raw.ref === "string" || typeof raw.ref === "number" ? String(raw.ref).trim() : null;
-    if (ref === null || ref && ref.length > 200) return fail();
+    if (ref === null) return fail();
+    if (ref && ref.length > 200) return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: `steps.${steps.length}.ref`, error: textLengthError(`steps.${steps.length}.ref`, ref.length, 200, "UTF-16 code units") };
     let hold: TaskHold | undefined;
     if (Object.hasOwn(raw, "hold")) {
       if (raw.hold !== null) {

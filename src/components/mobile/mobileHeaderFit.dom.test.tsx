@@ -46,6 +46,7 @@ mock.module("@/hooks/useConversationCatalog", () => ({
 
 const { ProjectDashboard } = await import("@/components/ProjectDashboard");
 const { KeepAwakeProvider } = await import("@/components/KeepAwakeControl");
+const { SettingsWindowHost } = await import("@/components/settings/SettingsWindow");
 
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
 const G = globalThis as Record<string, unknown>;
@@ -61,7 +62,7 @@ const OVERRIDES: Record<string, unknown> = {
   Node: dom.Node,
   HTMLElement: dom.HTMLElement,
   HTMLButtonElement: dom.HTMLButtonElement,
-  Event: dom.Event,
+  Event: dom.Event, CustomEvent: dom.CustomEvent,
   KeyboardEvent: dom.KeyboardEvent,
   MouseEvent: dom.MouseEvent,
   PointerEvent: dom.MouseEvent,
@@ -320,19 +321,21 @@ const openMore = async (host: HTMLElement) => {
   await settle();
 };
 
-test("«Keep screen awake» is on the «⋯» menu's Settings page and holds a real sentinel (#712)", async () => {
+test("«Keep screen awake» is in the Settings window's General section and holds a real sentinel (#712)", async () => {
   const scene = wakeLockScene();
-  const host = mount((dashboard) => <KeepAwakeProvider environment={scene.factory}>{dashboard}</KeepAwakeProvider>);
+  const host = mount((dashboard) => <KeepAwakeProvider environment={scene.factory}>{dashboard}<SettingsWindowHost project={null} /></KeepAwakeProvider>);
   expect(await waitFor(() => shelfReady(host))).toBe(true);
 
   /* Closed, it costs the 390px row nothing — that is the whole point of the fold. */
   expect(header(host).querySelector('[data-testid="keep-awake-row"]')).toBeNull();
 
   await openMore(host);
-  /* The header menu's mix (docs/design/header-menu.md): the device rows live on Settings. */
+  /* The device rows live in the Settings window's General section. */
   flushSync(() => (header(host).querySelector('[data-mobile2-menu-row="settings"]') as unknown as HTMLButtonElement).click());
   await settle();
-  const row = header(host).querySelector('[data-testid="keep-awake-row"]') as unknown as HTMLElement;
+  flushSync(() => (dom.document.querySelector('[data-settings-section-row="general"]') as unknown as HTMLButtonElement).click());
+  await settle();
+  const row = dom.document.querySelector('[data-testid="keep-awake-row"]') as unknown as HTMLElement;
   expect(row).not.toBeNull();
   expect(row.textContent).toContain(translate("en", "keepAwake.label"));
   expect(row.getAttribute("data-wake-lock-status")).toBe("off");
@@ -344,7 +347,7 @@ test("«Keep screen awake» is on the «⋯» menu's Settings page and holds a r
 
   flushSync(() => control.click());
   await settle();
-  const active = header(host).querySelector('[data-testid="keep-awake-row"]') as unknown as HTMLElement;
+  const active = dom.document.querySelector('[data-testid="keep-awake-row"]') as unknown as HTMLElement;
   expect(active.getAttribute("data-wake-lock-status")).toBe("active");
   expect(scene.requests).toBe(1);
   expect(scene.granted.filter((sentinel) => !sentinel.released)).toHaveLength(1);

@@ -13,6 +13,23 @@ const { CompanionAdmission } = await import("./admission");
 const { INITIAL_COMPANION_STATE, reduceCompanion } = await import("./reducer");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
+for (const end of ["transport", "operator", "expired"] as const) test(`slice 3: closed ${end} polls keep cards and owe speech only inside the drop window`, () => {
+  let now = Date.UTC(2026, 10, 11, 12);
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const storage = new CompanionStorage(() => now);
+  const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => reports, send: async () => { throw new Error("unexpected send"); } }, () => now);
+  const p = admission.create({ project: `closed-${end}`, locale: "en", authority: "live-model" });
+  admission.emit(p.id, { type: "session.closed", reason: end === "operator" ? "operator" : "transport" }); admission.retire(p.id);
+  if (end === "expired") now += 30 * 60_000 + 1;
+  reports.push({ id: `outage-${end}`, seq: 1, project: p.project, at: new Date(now).toISOString(), class: "completed", body: "OUTAGE_RESULT",
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  expect(admission.pollReports(p.id)).toHaveLength(1);
+  now += 2000; admission.retire(p.id);
+  expect(admission.pollReports(p.id)).toEqual([]);
+  expect(admission.events(p.id, 0).filter(row => row.type === "orchestrator.report")).toHaveLength(1);
+  expect(admission.reportSpeech(p.id).map(row => row.reportId)).toEqual(end === "transport" ? [`outage-${end}`] : []);
+});
+
 test("a Live request needs no completed transcript and is sent at once, exactly once, with no tap", async () => {
   const sent: string[] = [];
   const admission = new CompanionAdmission(new CompanionStorage(), {
@@ -886,6 +903,7 @@ test("more reports than the speech queue holds arrive while the hand-off is bloc
       voiced.push(...parts.slice(entry.handed).map(part => `${entry.reportId}:${part}`));
       admission.speechHanded(session.id, entry.reportId, parts, parts.length);
     }
+    admission.resumeReplied(session.id);
   }
   expect(voiced).toEqual(["report-voice-1:part two", ...reports.slice(1).map(row => `${row.id}:${row.body}`)]);
   expect(admission.reportSpeech(session.id)).toEqual([]);
@@ -937,4 +955,57 @@ test("a queued voice directive follows a revoked seat across admission restart",
   expect(sent[1]!.text).toStartWith("[Delegatus] Redirected to you, the current orchestrator:");
   expect(sent[1]!.text).toContain("Review the pending plan.");
   expect(sent[1]!.key).not.toBe(sent[0]!.key);
+});
+
+test("slice 3: a report scanned on the dropped part is listed once there and owed once by its continuation", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  let now = Date.UTC(2026, 10, 11, 12);
+  const { CompanionLiveSessions } = await import("./liveSession");
+  const { FakeLiveProvider } = await import("./fakeProvider");
+  const { fixtureBoardReads } = await import("./boardReads.fixture");
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const storage = new CompanionStorage(() => now); storage.updateSettings({ enabled: true });
+  const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => reports, send: async () => { throw new Error("unexpected send"); } }, () => now);
+  const provider = new FakeLiveProvider();
+  const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider,
+    { now: () => now, key: () => "synthetic-credential", timers: false });
+  const p = await service.start({ project: "outage", locale: "en", sdp: "v=0" });
+  provider.replay(p.providerId, { type: "session.output_transcript.delta", event_id: "ready", delta: "Ready.", start_ms: 0, end_ms: 400 });
+  await service.drain(p.sessionId); await service.close(p.sessionId, "transport");
+  reports.push({ id: "outage-card", seq: 1, project: "outage", at: new Date(now).toISOString(), class: "completed", body: "OUTAGE_CARD",
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  expect(admission.pollReports(p.sessionId)).toHaveLength(1); now += 2000;
+  await service.close(p.sessionId); expect(admission.pollReports(p.sessionId)).toEqual([]);
+  const n = await service.start({ project: "outage", locale: "en", sdp: "v=1", resume: p.sessionId, cursor: {} });
+  expect(admission.reportSpeech(n.sessionId).map(row => row.reportId)).toEqual(["outage-card"]);
+  expect(admission.events(p.sessionId, 0).filter(row => row.type === "orchestrator.report")).toHaveLength(1);
+  expect(admission.events(n.sessionId, 0).filter(row => row.type === "orchestrator.report")).toHaveLength(1);
+  expect(admission.pollReports(p.sessionId)).toEqual([]); expect(admission.reportSpeech(p.sessionId)).toEqual([]);
+  await service.close(n.sessionId);
+});
+
+test("a reply settles only its receipted report and resume after admission restart", () => {
+  const storage = new CompanionStorage(() => Date.UTC(2026, 10, 11, 12));
+  const paths = { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } };
+  let admission = new CompanionAdmission(storage, paths);
+  const p = admission.create({ project: "receipted-reports", locale: "en", authority: "live-model" });
+  const point = { part: "previous-part", item: "previous-item" };
+  const entries: import("./storage").ReportSpeech[] = [
+    { reportId: "resume-one", project: p.project, status: "resume", text: "Resume", kind: "resume", resumeOf: point, handed: 1 },
+    { reportId: "resume-two", project: p.project, status: "confirmation", text: "Confirmation", kind: "notice", resumeOf: { part: "previous-part", item: "confirmation" }, handed: 1 },
+  ];
+  storage.change(document => {
+    document.sessions[p.id].reportSpeech = entries;
+    document.sessions[p.id].speechInFlight = ["report-one", "report-two"].map(reportId => ({ reportId, project: p.project, status: "completed", text: reportId, parts: [reportId], handed: 1 }));
+  });
+  admission.record(p.id, { id: "handoff-one", kind: "handoff", atMs: 0, data: { reportId: "report-one", reportPart: 0 } });
+  admission.record(p.id, { id: "handoff-resume", kind: "handoff", atMs: 0, data: { resumeOf: point } });
+  admission.record(p.id, { id: "reply-one", kind: "reply", atMs: 100, data: { text: "First reply", handoffIds: ["handoff-one", "handoff-resume"] } });
+  admission = new CompanionAdmission(new CompanionStorage(), paths);
+  admission.resumeReplied(p.id, ["handoff-one", "handoff-resume"]);
+  expect(admission.reportSpeech(p.id).map(row => row.reportId)).toEqual(["resume-two"]);
+  expect(storage.read().sessions[p.id].speechInFlight?.map(row => row.reportId)).toEqual(["report-two"]);
+  admission.resumeReplied(p.id, ["unknown-handoff"]);
+  expect(admission.reportSpeech(p.id).map(row => row.reportId)).toEqual(["resume-two"]);
+  expect(storage.read().sessions[p.id].speechInFlight?.map(row => row.reportId)).toEqual(["report-two"]);
 });

@@ -16,6 +16,9 @@ function matches(): boolean {
   return window.matchMedia(QUERY).matches;
 }
 
+/** The same answer outside render, for an event handler. */
+export const isPhoneViewport = matches;
+
 function subscribe(onChange: () => void) {
   const mq = window.matchMedia(QUERY);
   mq.addEventListener("change", onChange);

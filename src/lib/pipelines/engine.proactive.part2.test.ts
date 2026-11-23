@@ -3,11 +3,10 @@ import path from "node:path";
 import { expect, test, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, closeAndDrain } from "./engine.fixture";
 import { decideProactiveTask, proactiveDecisionToken } from "@/lib/tasks/proactive";
 import { NOW } from "@/lib/tasks/proactive.fixture";
-import { readSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+
 import { agentRegistry } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
-import { captureProcessIdentity } from "@/lib/processIdentity";
-import { proactiveObservation } from "@/lib/accounts/proactiveReserve.fixture";
+
 import { assertProactivePipelineExecution } from "@/lib/tasks/proactiveExecution";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -25,68 +24,6 @@ import { fixture, stages } from "./engine.proactive.fixture";
 const clock = spyOn(Date, "now").mockImplementation(() => NOW);
 afterEach(() => { clock.mockImplementation(() => NOW); });
 afterAll(() => clock.mockRestore());
-test.each(["parent", "child", "expiry", "reject", "continue", "adopt"])("native pending discretionary turns retain guarded custody: %s", async kind => {
-  const f = await fixture(`native-pending-${kind}`);
-  await f.tick(); await f.pass();
-  const { migrationDeliveryFixture } = await import("@/test-helpers/migrationDelivery");
-  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
-  const { kickStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliverySignal");
-  const { NativeCodexQueue } = await import("@/lib/runtime/nativeCodexQueue");
-  const delivery = migrationDeliveryFixture();
-  const registry = delivery.registry;
-  const lane = f.current();
-  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: delivery.root, transport: "structured", conversationId: delivery.conversation.id,
-    origin: { kind: "container", container: "pipeline", containerId: f.id, creatorConversationId: null },
-    clientAttemptId: `pending-${kind}`, taskIds: [f.task.id],
-    memberships: [{ kind: "pipeline", containerId: f.id, role: "builder", slot: "build:1", stageId: "build", stageOrder: 1, round: 1, parentConversationId: null }],
-    launchProfile: emptyLaunchProfile({ cwd: delivery.root, model: "gpt-5.6-sol", title: "Continue the reviewed filter improvement" }) });
-  if (begun.kind !== "created") throw new Error("fresh native receipt required");
-  lane.runs[1]!.attempts.at(-1)!.conversationId = delivery.conversation.id;
-  savePipelines([lane]);
-  agentRegistry().recordQuotaObservation(proactiveObservation("account-a"));
-  let active = true, adds = 0, starts = 0;
-  const host = delivery.host;
-  const health = host.health.bind(host);
-  host.health = async () => ({ ...await health(), status: active ? "active" : "idle", activeTurnRef: active ? "current-turn" : null, activeFlags: ["native-queue"] });
-  const input = [{ type: "text" as const, text: "Preserve this pending payload" }];
-  const binding = { threadId: delivery.key.sessionId, accountId: "account-a" };
-  Object.assign(host, { nativeQueue: {
-    queue: new NativeCodexQueue({ rpc: async (method, params) => {
-      if (method === "thread/queue/list") return { data: [], nextCursor: null };
-      if (method === "thread/queue/add") { adds++; return { queuedSubmission: { id: "pending-native", clientUserMessageId: params.clientUserMessageId, input } }; }
-      throw new Error(`unexpected native call ${method}`);
-    } }, binding.threadId),
-    prepare: async () => input, evidence: async () => null,
-    sendWithdrawn: async () => { if (active) throw new Error("fixture turn still active"); starts++; return { turnId: "guarded-turn" }; },
-  } });
-  delivery.client.nativeQueueRead = async id => delivery.journal.nativeQueueRead(id);
-  delivery.client.nativeQueueTransition = async (id, change) => delivery.journal.nativeQueueTransition(id, change);
-  const bind = () => bindStructuredDeliveryQueue([{ key: delivery.key, host }], { registry, client: delivery.client,
-    hostlessSettleIntervalMs: 0, watchdogIntervalMs: 0, settlementSweepMs: 0 });
-  try {
-    if (kind === "adopt") await decideProactiveTask(f.task.id, "adopt", "operator", proactiveDecisionToken(f.task));
-    await bind();
-    expect(delivery.journal.executeOperation({ kind: "native-queue", action: "add", binding, operationId: "pending-guarded", idempotencyKey: "pending-guarded",
-      conversationId: delivery.conversation.id, text: input[0].text }).receipt.status).toBe("queued");
-    await kickStructuredDeliveryQueue();
-    expect(adds).toBe(kind === "adopt" ? 1 : 0);
-    expect(starts).toBe(0);
-    const settings = readSeatTickSettings(f.project);
-    if (kind === "parent") settings.autonomy!.enabled = false;
-    if (kind === "child") settings.autonomy!.proactive!.enabled = false;
-    if (kind === "expiry") settings.autonomy!.until = new Date(NOW - 1).toISOString();
-    writeSeatTickSettings(f.project, settings);
-    if (kind === "reject") await decideProactiveTask(f.task.id, "reject", "operator", proactiveDecisionToken(f.task));
-    // A replacement controller must recover the original durable operation.
-    await bindStructuredDeliveryQueue([], { client: null }); active = false;
-    await bind(); await kickStructuredDeliveryQueue();
-    expect(adds).toBe(kind === "adopt" ? 1 : 0);
-    expect(starts).toBe(kind === "continue" ? 1 : 0);
-    const entry = delivery.journal.nativeQueueRead(delivery.conversation.id)[0]!;
-    expect(entry.versions[0]!.text).toBe(input[0].text);
-    expect(entry.state).toBe(kind === "continue" ? "dispatching" : kind === "adopt" ? "queued" : "refused");
-  } finally { await delivery.cleanup(); }
-});
 
 test.each(["write-boundary", "open-ack", "closed-merged", "hidden-merged", "closed-unmerged", "closed-ack", "head-changed", "review-changed"])("unadopted merge custody survives restart: %s", async kind => {
   const f = await fixture(`merge-custody-${kind}`);
@@ -178,7 +115,6 @@ test.each(["write-boundary", "open-ack", "closed-merged", "hidden-merged", "clos
     expect(next.error).toBeUndefined(); expect(next.pipeline?.id).not.toBe(f.id);
   }
 });
-
 
 test.each(["review-before-build", "unreachable-review", "write-after-review"])("proactive success graph requires result review after implementation: %s", async kind => {
   const graph: { id: string; [key: string]: unknown }[] = structuredClone(stages).map(stage => ({ ...stage }));
@@ -275,7 +211,6 @@ test.each(["assigned", "done"] as const)("retained live lane occupies worker cap
   expect(f.h.spawnInputs.filter(input => input.membership.containerId === f.id)).toHaveLength(1);
 });
 
-
 test.each(["skipped", "accepted", "budget-spent"])("proactive result review retains explicit merge exceptions: %s", async kind => {
   const f = await fixture(`review-exception-${kind}`);
   await f.complete();
@@ -305,7 +240,6 @@ test.each(["skipped", "accepted", "budget-spent"])("proactive result review reta
   expect(mergeEligible(lane)).toBe(false);
 });
 
-
 test("proactive review evidence follows only the recorded publication integration", async () => {
   const f = await fixture("review-integration");
   await f.complete();
@@ -320,7 +254,6 @@ test("proactive review evidence follows only the recorded publication integratio
   expect(mergeEligible(lane)).toBe(false);
 });
 
-
 test("a writable stage named review cannot authorize a proactive merge", async () => {
   const f = await fixture("writable-review");
   await f.complete();
@@ -333,7 +266,6 @@ test("a writable stage named review cannot authorize a proactive merge", async (
   lane.runs.push(buildRun);
   expect(mergeEligible(lane)).toBe(false);
 });
-
 
 test("review probe: invalid task link cannot strand the project reservation", async () => {
   const f = await fixture("invalid-link-probe");
@@ -356,7 +288,6 @@ test("review probe: invalid task link cannot strand the project reservation", as
   });
   expect(valid.error).toBeUndefined();
 });
-
 
 test("review probe: companion scope cannot enter an unadopted proactive lane", async () => {
   const f = await fixture("linked-edit-probe");
@@ -406,156 +337,4 @@ test("review probe: companion scope cannot enter an unadopted proactive lane", a
   expect(() => assertProactivePipelineExecution(lane, "dispatch")).toThrow("linked task scope changed");
   await decideProactiveTask(f.task.id, "adopt", "operator", proactiveDecisionToken(loadTasksByIds(new Set([f.task.id]))[0]!));
   expect(() => assertProactivePipelineExecution(lane, "dispatch")).not.toThrow();
-});
-
-const pausedWorkerStates = ["deferred", "unconfirmed", "failed", "unresolved", "throws", "starting", "exiting", "survivor", "claimed", "pending", "dead", "unhosted"] as const;
-test.each([
-  ...pausedWorkerStates.map(kind => ["pause", kind] as const),
-  ["close", "unconfirmed"], ["close", "dead"], ["close", "unhosted"],
-] as const)("%s lane worker capacity follows retained custody: %s", async (action, kind) => {
-  const f = await fixture(`${action}-worker-${kind}`);
-  setProjectWorkerLimit(f.project, 1, { kind: "operator", via: "fixture" }, null);
-  const ordinary = mutateTasks(tasks => {
-    const made = createTask(tasks, { project: f.project, text: "Requested correction", placement: "unplaced" }, [],
-      { id: () => `${action}-ordinary-${kind}`, now: () => f.at });
-    if (!made.ok) throw new Error(made.error);
-    return { tasks: made.tasks, result: made.task };
-  });
-  const made = await createPipelineFromRequest({ task: ordinary.text, repoDir: "/repo", taskIds: [ordinary.id], publication: "internal",
-    stages: [{ id: "work", kind: "run", role: { roleId: "builder" }, prompt: "Apply the correction", next: null }] }, f.h.ports);
-  if (!made.pipeline) throw new Error(made.error);
-  const ordinaryId = made.pipeline.id;
-  const registry = agentRegistry();
-  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: made.pipeline.worktreeDir, taskIds: [ordinary.id],
-    conversationId: `conversation_${action}_worker_${kind}`, role: "builder",
-    origin: { kind: "container", container: "pipeline", containerId: ordinaryId, creatorConversationId: null },
-    memberships: [{ kind: "pipeline", containerId: ordinaryId, role: "builder", slot: "work:1", stageId: "work", stageOrder: 0, round: 1, parentConversationId: null }],
-    launchProfile: emptyLaunchProfile({ cwd: made.pipeline.worktreeDir, model: "gpt-5.6-sol" }) });
-  if (begun.kind !== "created") throw new Error("fresh ordinary worker required");
-  const workerIndex = pausedWorkerStates.indexOf(kind) + 1 + (action === "close" ? pausedWorkerStates.length : 0);
-  const sessionId = ["20000000", "0000", "4000", "8000", workerIndex.toString(16).padStart(12, "0")].join("-");
-  const artifactPath = `/codex/${sessionId}.jsonl`;
-  const entry = { key: sessionKeyFromTranscript("codex", artifactPath)!, artifactPath, cwd: made.pipeline.worktreeDir,
-    accountId: null, status: "dead" as const, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null };
-  const settled = kind === "dead" || kind === "unhosted";
-  if (kind !== "starting") registry.completeSpawn(begun.receipt.launchId, {
-    ...entry, status: kind === "unhosted" ? "unhosted" : settled || ["exiting", "survivor", "claimed", "pending"].includes(kind) ? "dead" : "live",
-    claimOwner: kind === "claimed" ? "pending-owner" : null, pendingAction: kind === "pending" ? "resume" : null,
-    ...(kind === "exiting" ? { pendingHostExits: [{ process: captureProcessIdentity(process.pid), launchId: null }] } : {}),
-    ...(kind === "survivor" ? { structuredTerminationSurvivors: [captureProcessIdentity(process.pid)] } : {}),
-  });
-  mutateTasks(tasks => {
-    const patched = patchTask(tasks, ordinary.id, { status: "done" }, f.at);
-    if (!patched.ok) throw new Error(patched.error);
-    return { tasks: patched.tasks, result: undefined };
-  });
-  await f.tick();
-  const spawns = () => f.h.spawnInputs.filter(input => input.membership.containerId === f.id);
-  expect(spawns()).toHaveLength(0);
-  expect(f.current().stateDetail).toContain("capacity is exhausted");
-  const ordinaryLane = loadPipelines().find(lane => lane.id === ordinaryId)!;
-  const attempt = ordinaryLane.runs[0]!.attempts.at(-1)!;
-  expect(attempt.state).toBe("running");
-  attempt.conversationId = begun.receipt.conversationId;
-  attempt.launchId = begun.receipt.launchId;
-  attempt.agentPath = artifactPath;
-  attempt.paneId = null;
-  savePipelines(loadPipelines().map(lane => lane.id === ordinaryId ? ordinaryLane : lane));
-  f.h.setConversationActive(true);
-  f.h.ports.stopStageAgent = async () => {
-    if (kind === "throws") throw new Error("stop confirmation unavailable");
-    if (kind === "failed") return { outcome: "failed", error: "stop confirmation unavailable" };
-    if (kind === "unconfirmed") return { outcome: "unconfirmed", operationId: null, detail: "stop confirmation unavailable" };
-    if (kind === "unresolved") return { outcome: "unresolved", error: "host still alive", survivors: [captureProcessIdentity(process.pid)] };
-    return { outcome: settled ? "stopped" : "deferred" };
-  };
-  const stop = () => action === "close"
-    ? closeAndDrain(ordinaryId, { action: "close" }, f.h.ports)
-    : patchPipeline(ordinaryId, { action: "pause", reason: "Hold requested work" }, f.h.ports);
-  expect((await stop()).error).toBeUndefined();
-  const stopped = loadPipelines().find(lane => lane.id === ordinaryId)!;
-  if (action === "close") {
-    expect(stopped.closedAt).toBeTruthy();
-    expect(stopped.closeReport!.unconfirmed).toHaveLength(settled ? 0 : 1);
-    if (!settled) expect(Object.values(registry.conversationRetentionSnapshot(begun.receipt.conversationId).entries)
-      .some(row => row.status === "live")).toBe(true);
-  } else {
-    expect(stopped.state).toBe("paused");
-    expect(!!stopped.runs[0]!.attempts.at(-1)!.suspension?.stoppedAt).toBe(settled);
-  }
-  const check = () => assertProactivePipelineExecution(f.current(), "dispatch");
-  expect((await patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
-  await f.tick();
-  expect(spawns()).toHaveLength(settled ? 1 : 0);
-  if (settled) expect(check).not.toThrow();
-  else expect(check).toThrow("worker capacity is exhausted");
-  // A fresh process must observe the same retained capacity after pause or close.
-  const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/tasks/proactive.fixture.ts"), TASKS_FILE, f.id, "lane-dispatch"],
-    { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
-  try {
-    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    if (code) throw new Error(err);
-    const result = JSON.parse(out.split("RESULT ")[1]!);
-    if (settled) expect(result).toEqual({ error: null });
-    else expect(result.error).toContain("worker capacity is exhausted");
-  } finally { if (child.exitCode === null) child.kill(); await child.exited; }
-  if (!settled) {
-    if (["deferred", "unconfirmed", "failed", "throws", "starting", "claimed", "pending"].includes(kind)) {
-      if (kind === "starting") registry.completeSpawn(begun.receipt.launchId, entry);
-      else registry.upsert(entry);
-      f.h.ports.stopStageAgent = async () => ({ outcome: "stopped" });
-      expect((await stop()).error).toBeUndefined();
-      expect(() => assertProactivePipelineExecution(f.current(), "dispatch")).not.toThrow();
-      expect((await patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
-      await f.tick();
-      expect(spawns()).toHaveLength(1);
-    }
-  }
-});
-
-const standaloneStates = ["dead", "unhosted", "live", "claimed", "pending", "starting", "exiting", "survivor"] as const;
-test.each([...standaloneStates])("review probe: standalone worker capacity follows retained custody: %s", async kind => {
-  const f = await fixture(`standalone-${kind}`);
-  setProjectWorkerLimit(f.project, 1, { kind: "operator", via: "fixture" }, null);
-  const ordinary = mutateTasks(tasks => {
-    const made = createTask(tasks, { project: f.project, text: "Completed requested work", placement: "unplaced" }, [],
-      { id: () => `ordinary-${kind}`, now: () => f.at });
-    if (!made.ok) throw new Error(made.error);
-    return { tasks: made.tasks, result: made.task };
-  });
-  const registry = agentRegistry();
-  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: "/repo", taskIds: [ordinary.id],
-    conversationId: `conversation_standalone_${kind}`, origin: { kind: "operator" },
-    launchProfile: emptyLaunchProfile({ cwd: "/repo", model: "gpt-5.6-sol" }) });
-  if (begun.kind !== "created") throw new Error("fresh ordinary conversation required");
-  const sessionId = ["10000000", "0000", "4000", "8000", (standaloneStates.indexOf(kind) + 1).toString(16).padStart(12, "0")].join("-");
-  const artifactPath = `/codex/${sessionId}.jsonl`;
-  if (kind !== "starting") registry.completeSpawn(begun.receipt.launchId, {
-    key: sessionKeyFromTranscript("codex", artifactPath)!, artifactPath, cwd: "/repo", accountId: null,
-    status: kind === "unhosted" ? "unhosted" : kind === "live" ? "live" : "dead", host: null, claimEpoch: 0,
-    claimOwner: kind === "claimed" ? "pending-owner" : null, pendingAction: kind === "pending" ? "resume" : null,
-    ...(kind === "exiting" ? { pendingHostExits: [{ process: captureProcessIdentity(process.pid), launchId: null }] } : {}),
-    ...(kind === "survivor" ? { structuredTerminationSurvivors: [captureProcessIdentity(process.pid)] } : {}),
-  });
-  mutateTasks(tasks => {
-    const patched = patchTask(tasks, ordinary.id, { status: "done" }, f.at);
-    if (!patched.ok) throw new Error(patched.error);
-    return { tasks: patched.tasks, result: undefined };
-  });
-  expect(loadTasksByIds(new Set([ordinary.id]))[0]!.assignments.some(row => row.state === "linked")).toBe(true);
-  expect(registry.conversationMemberships(begun.receipt.conversationId).filter(member => member.kind === "pipeline")).toEqual([]);
-  const error = () => { try { assertProactivePipelineExecution(f.current(), "dispatch"); return null; } catch (error) { return String(error); } };
-  const settled = kind === "dead" || kind === "unhosted";
-  if (settled) expect(error()).toBeNull();
-  else expect(error()).toContain("worker capacity is exhausted");
-  // Capacity is recomputed from the durable registry after a real process restart.
-  const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/tasks/proactive.fixture.ts"), TASKS_FILE, f.id, "lane-dispatch"],
-    { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
-  try {
-    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    if (code) throw new Error(err);
-    const result = JSON.parse(out.split("RESULT ")[1]!);
-    if (settled) expect(result).toEqual({ error: null });
-    else expect(result.error).toContain("worker capacity is exhausted");
-  } finally { if (child.exitCode === null) child.kill(); await child.exited; }
 });

@@ -181,6 +181,27 @@ test("the picker saves a pasted topic link and shows a stored topic on the chip"
   expect(seatReportsReading({ reportTelegram: { chat: "team-reports", name: "Beta", topicId: 51865 }, reportChatTitle: "Team Reports", reportNameSuggestion: null }, t).face).toBe("Team Reports · topic 51865");
 });
 
+test("a successful topic downgrade shows its localized explanation in the picker", async () => {
+  const served = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT" && String(input).includes("/api/projects/settings")) {
+      const body = JSON.parse(String(init.body)) as { project: string };
+      puts.push(JSON.parse(String(init.body)));
+      stored[body.project] = { chat: "team-reports", name: "Beta" };
+      return json({ ok: true, project: body.project, reportTelegram: stored[body.project], reportNameSuggestion: null,
+        notice: "topic_removed", message: "This chat does not use topics; the report destination was saved for the whole chat without a topic." });
+    }
+    return served(input, init);
+  }) as typeof fetch;
+  const section = await mount("repo-beta");
+  const input = q<HTMLInputElement>(section, '[aria-label="Chat or topic link, @username or ID"]')!;
+  await act(async () => reactProps(input).onChange!({ target: { value: "https://t.me/c/1000000000101/12" } }));
+  await click(q(section, "[data-seat-reports-save]"));
+  expect(q(section, "[data-seat-reports-saved]")?.textContent).toBe("Reports go to the log and to Team Reports.");
+  expect(section.textContent).toContain(translate("en", "seatReports.topicRemoved"));
+  expect(section.textContent).not.toContain("This chat does not use topics; the report destination was saved for the whole chat without a topic.");
+});
+
 test("a pasted link to a chat the bot did not know is not shown as one agents may not post in", async () => {
   const fetchBeforeLink = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

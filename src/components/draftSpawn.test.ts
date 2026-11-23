@@ -211,6 +211,25 @@ describe("classifySpawnResponse — server → card outcome", () => {
     expect(classifySpawnResponse(409, false, { error: "spawn attempt conflicts with its original request" })).toEqual({ kind: "ambiguous" });
   });
 
+  test("409 project_account_refused without a launch is a visible preflight failure that names its reason", () => {
+    for (const reason of ["no_account_list", "outside_account_list"]) {
+      expect(classifySpawnResponse(409, false, { error: "codex account a is not allowed", code: "project_account_refused", reason })).toEqual({
+        kind: "failed-preflight",
+        message: "codex account a is not allowed",
+        reason,
+      });
+    }
+    /* Capacity refusals carry no reason; the launch is still refused before any worker. */
+    expect(classifySpawnResponse(409, false, { error: "no allowed account has capacity", code: "project_account_refused" })).toEqual({
+      kind: "failed-preflight",
+      message: "no allowed account has capacity",
+    });
+    /* A refusal that names a launch may have left a worker behind: still ambiguous. */
+    expect(classifySpawnResponse(409, false, { error: "x", code: "project_account_refused", reason: "no_account_list", launchId: "l1" })).toEqual({ kind: "ambiguous" });
+    /* Any other 409 stays ambiguous. */
+    expect(classifySpawnResponse(409, false, { error: "spawn attempt conflicts with its original request", code: "other" })).toEqual({ kind: "ambiguous" });
+  });
+
   test("5xx / opaque → ambiguous (a proxy 5xx could land after launch)", () => {
     expect(classifySpawnResponse(500, false, { error: "boom" })).toEqual({ kind: "ambiguous" });
     expect(classifySpawnResponse(502, false, null)).toEqual({ kind: "ambiguous" });

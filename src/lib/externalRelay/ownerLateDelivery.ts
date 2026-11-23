@@ -1,14 +1,85 @@
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { cloneClientKey, sendAsClone, type CloneSendInput } from "./cloneSend";
-import { ownerDeliverySchema, type ExternalRelayCompletion } from "./protocol";
-import { changeRunAsync, ownerStopPending, type PairedRelay, type RunRecord } from "./store";
+import { ownerDeliverySchema, requestSchema, type ExternalRelayCompletion } from "./protocol";
+import { changeRunAsync, ownerRelayStoreDeadline, ownerStopPending, type PairedRelay, type RunRecord } from "./store";
 import type { StagedAttachment } from "./attachments";
 import type { RelayAnswerDelivery } from "./answers";
 import { relayRequestInFlight } from "./activity";
+import { readAnswerRecord, recordLateAnswerExpired } from "./answers";
+import { ownerBindingRefusal, ownerTierFor } from "./profile";
+import { ownerFailureAnswer } from "./ownerRun";
+import { isDeepStrictEqual } from "node:util";
+import { answerCapabilities } from "./answerV2";
+import { isOwnerRequestTimeoutReply } from "./requestTimeout";
+import { ownerLateDeliveryAllowed } from "./ownerAuthority";
+
+/** Older custody rows retained the input in the answer record. Reconstruct only
+ * from that record and the already verified owner request, never from chat text. */
+export function ownerRecoveryRequest(run: RunRecord, relay: PairedRelay): unknown | null {
+  if (run.ownerTurn?.rawRequest) {
+    const raw = run.ownerTurn.rawRequest;
+    const parsed = requestSchema.safeParse(raw);
+    return parsed.success && parsed.data.request_id === run.requestId && parsed.data.lease_id === run.leaseId
+      && parsed.data.target_id === run.targetId && !ownerBindingRefusal(relay, parsed.data)
+      && ownerTierFor({ ownerTier: true }, parsed.data, { guestHandoff: true }) ? raw : null;
+  }
+  const record = readAnswerRecord(run.relayId, run.targetId, run.requestId);
+  if (!record?.profile?.owner || !run.ownerTurn?.request) return null;
+  const parsed = requestSchema.safeParse({ request_id: run.requestId, lease_id: run.leaseId,
+    kind: "answer", target_id: run.targetId, claimed_at: record.claimedAt ?? run.startedAt,
+    features: record.features, ...(record.chatKey ? { chat: { key: record.chatKey } } : {}),
+    input: record.input, answer: { max_chars: relay.limits.max_answer_chars, progress: "none" },
+    liveness: { poll_freshness_s: 60, claim_window_s: 5, ack_window_s: 10, heartbeat_interval_s: 10, stall_window_s: 45 } });
+  if (!parsed.success) return null;
+  const owner = ownerTierFor({ ownerTier: true }, parsed.data);
+  return owner && owner.text === run.ownerTurn.request.text && owner.requestText === run.ownerTurn.request.requestText
+    ? parsed.data : null;
+}
 
 type LateAnswer = NonNullable<NonNullable<RunRecord["ownerTurn"]>["lateAnswer"]>;
 const RETRY_MS = 30_000;
 const KEY_LIFETIME_MS = 24 * 60 * 60 * 1000;
+/** How long a late answer that cannot be delivered at all (its request carried
+ * no usable delivery context) keeps its alarm before it is written off. It
+ * equals the service's 24 h key lifetime, the window every attempted send
+ * already has from its first attempt. The request's start is the one timestamp
+ * such a row carries. An answer that can be delivered and was never attempted
+ * has no such limit: an install that was off for days still sends it. */
+export const OWNER_LATE_ANSWER_WINDOW_MS = KEY_LIFETIME_MS;
+/** Statuses the sweep never retries: nothing more will be sent for the row. */
+export function ownerLateAnswerTerminal(pending: Pick<LateAnswer, "status"> | undefined): boolean {
+  return pending?.status === "retry-expired" || pending?.status === "refused" || pending?.status === "uncertain";
+}
+/** True for an answer that has waited the whole window with no delivery context. */
+export function ownerLateAnswerUndeliverable(run: Pick<RunRecord, "startedAt" | "ownerTurn">, now = Date.now()): boolean {
+  if (run.ownerTurn?.lateAnswer?.status !== "pending-delivery-context" || ownerDeliverySchema.safeParse(run.ownerTurn.delivery).success) return false;
+  const started = Date.parse(run.startedAt);
+  return !Number.isFinite(started) || now - started >= OWNER_LATE_ANSWER_WINDOW_MS;
+}
+/** Writes an undeliverable late answer off as `retry-expired`, in the ledger
+ * and in its answer record. Needs no relay or target settings, so a paused or
+ * revoked relay's row still reaches its terminal state. Custody is retained. */
+export async function expireOwnerLateAnswer(requestId: string, now = Date.now()): Promise<boolean> {
+  let expired = false;
+  let ageMs: number | null = null;
+  let relayId = "", targetId = "";
+  await changeRunAsync(requestId, row => {
+    const pending = row.ownerTurn?.lateAnswer;
+    if (!pending || row.completionAccepted || !ownerLateAnswerUndeliverable(row, now)) return row;
+    expired = true;
+    relayId = row.relayId; targetId = row.targetId;
+    const started = Date.parse(row.startedAt);
+    ageMs = Number.isFinite(started) ? now - started : null;
+    return { ...row, ...(!ownerStopPending(row) && !relayRequestInFlight(requestId) ? { capacityReleased: true as const } : {}),
+      ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...pending, status: "retry-expired" as const } } };
+  }, ownerRelayStoreDeadline());
+  if (expired) {
+    recordLateAnswerExpired(relayId, targetId, requestId);
+    console.error("Owner relay late delivery expired", JSON.stringify({ event: "relay_late_answer_expired", requestId,
+      status: "retry-expired", ageMs }));
+  }
+  return expired;
+}
 const FILE_NOTE = "[Files were produced; late delivery supports text only, so files are omitted.]";
 // Telegram measures parsed text in UTF-16 units. Plain text avoids expansion
 // and preserves literal markup; a code point is never cut between surrogates.
@@ -45,42 +116,72 @@ function payloadsFor(pending: LateAnswer, relayId: string, requestId: string,
 export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: string,
   body: ExternalRelayCompletion, files: StagedAttachment[], authorize: () => boolean,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
-  const prepared = { pending: undefined as LateAnswer | undefined };
+  const prepared = { pending: undefined as LateAnswer | undefined, run: undefined as RunRecord | undefined };
   let targetId = "";
   let missingContextAlarm = false;
   try {
     await changeRunAsync(requestId, row => {
-      if (!row.ownerTurn || row.relayId !== relay.id || !authorize()) return row;
+      if (!row.ownerTurn || row.relayId !== relay.id || !authorize() || !ownerLateDeliveryAllowed(row)) return row;
       targetId = row.targetId;
-      const pending: LateAnswer = { ...row.ownerTurn.lateAnswer, body: row.ownerTurn.lateAnswer?.body ?? body,
+      let pending: LateAnswer = { ...row.ownerTurn.lateAnswer, body: row.ownerTurn.lateAnswer?.body ?? body,
         files: row.ownerTurn.lateAnswer?.files ?? files };
-      pending.clientKey ??= cloneClientKey(relay.id, "owner-late-answer", requestId, 0);
       if (row.ownerTurn.completionAttempt) return row;
-      if (!pending.parts) {
-        // Retain the exact payload of an older possibly delivered attempt. A
-        // definite unused-key refusal (no firstAttemptAt) can be recomposed.
-        const payloads = pending.payload && pending.firstAttemptAt !== undefined ? [pending.payload]
-          : payloadsFor(pending, relay.id, requestId, row.ownerTurn.delivery);
-        pending.parts = payloads?.map((payload, index) => ({ payload,
-          ...(index === 0 && pending.firstAttemptAt !== undefined ? { firstAttemptAt: pending.firstAttemptAt } : {}) }));
+      // Some older writers persisted the diagnostic and lateAnswer before
+      // failureReply was added. Treat that durable diagnostic as failure
+      // custody too, so legacy payloads receive the same sanitation.
+      if (row.ownerTurn.failureReply || row.ownerTurn.diagnostic) {
+        const request = requestSchema.safeParse(ownerRecoveryRequest(row, relay));
+        const owner = request.success && (row.ownerTurn.context ?? ownerTierFor({ ownerTier: true }, request.data));
+        if (!request.success || !owner || pending.body.outcome !== "answered") return row;
+        const answer = isOwnerRequestTimeoutReply(pending.body, answerCapabilities(request.data, "").plainMax)
+          ? pending.body.answer : ownerFailureAnswer(request.data, owner,
+            row.ownerTurn.diagnostic ?? ownerTurnDiagnostic("exception", "Owner request could not be completed"), [relay.credential]);
+        if (!answer) return row;
+        const clean: LateAnswer = { body: { ...pending.body, answer }, files: [] };
+        const payloads = payloadsFor(clean, relay.id, requestId, row.ownerTurn.delivery);
+        const changed = !isDeepStrictEqual(pending.body, clean.body) || pending.files.length > 0
+          || pending.payload !== undefined && !isDeepStrictEqual(pending.payload, payloads?.[0])
+          || pending.parts !== undefined && !isDeepStrictEqual(pending.parts.map(part => part.payload), payloads);
+        if (changed) {
+          // An old payload may already be visible. Never resend its internal
+          // text or substitute a new payload under its uncertain key.
+          const attempted = pending.firstAttemptAt !== undefined || pending.parts?.some(part => part.firstAttemptAt !== undefined || part.receipt)
+            || ["uncertain", "retry-expired"].includes(pending.status ?? "");
+          pending = attempted ? { ...pending, status: "uncertain" } : clean;
+        }
       }
-      pending.payload = pending.parts?.[0]?.payload ?? pending.payload;
-      if (!pending.parts) {
-        missingContextAlarm = pending.status !== "pending-delivery-context";
-        pending.status = "pending-delivery-context";
+      if (pending.status !== "uncertain") {
+        pending.clientKey ??= cloneClientKey(relay.id, "owner-late-answer", requestId, 0);
+        if (!pending.parts) {
+          // Retain the exact payload of an older possibly delivered attempt. A
+          // definite unused-key refusal (no firstAttemptAt) can be recomposed.
+          const payloads = pending.payload && pending.firstAttemptAt !== undefined ? [pending.payload]
+            : payloadsFor(pending, relay.id, requestId, row.ownerTurn.delivery);
+          pending.parts = payloads?.map((payload, index) => ({ payload,
+            ...(index === 0 && pending.firstAttemptAt !== undefined ? { firstAttemptAt: pending.firstAttemptAt } : {}) }));
+        }
+        pending.payload = pending.parts?.[0]?.payload ?? pending.payload;
+        if (!pending.parts) {
+          missingContextAlarm = pending.status !== "pending-delivery-context";
+          pending.status = "pending-delivery-context";
+        }
       }
       prepared.pending = pending;
+      prepared.run = row;
       return { ...row, ...(!ownerStopPending(row) && !relayRequestInFlight(requestId) ? { capacityReleased: true as const } : {}),
         ownerTurn: { ...row.ownerTurn, lateAnswer: pending } };
-    }, Date.now() + 5000);
+    }, ownerRelayStoreDeadline());
     let pending = prepared.pending;
-    if (!pending || !authorize()) return { body, delivery: "refused" };
+    const run = prepared.run;
+    if (!pending || !run || !authorize() || !ownerLateDeliveryAllowed(run)) return { body, delivery: "refused" };
+    body = pending.body;
+    if (pending.status === "uncertain") return { body, delivery: "unconfirmed" };
     if (!pending.parts) {
       if (missingContextAlarm) console.error("ALARM: Owner relay late delivery pending-delivery-context; answer retained without execution reservation", JSON.stringify({ requestId }));
       return { body, delivery: "unconfirmed" };
     }
     if (pending.parts.every(part => part.receipt)) return { body, delivery: "accepted" };
-    if (["uncertain", "retry-expired", "refused"].includes(pending.status ?? "") || (pending.nextAttemptAt ?? 0) > Date.now())
+    if (["retry-expired", "refused"].includes(pending.status ?? "") || (pending.nextAttemptAt ?? 0) > Date.now())
       return { body, delivery: "unconfirmed" };
     for (let index = 0; index < pending.parts.length; index++) {
       const part = pending.parts[index]!;
@@ -88,7 +189,8 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
       // Celestia forgets keys after 24h. Each unresolved part keeps its fence.
       if (part.firstAttemptAt !== undefined && Date.now() - part.firstAttemptAt >= KEY_LIFETIME_MS - 60_000) {
         await changeRunAsync(requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!,
-          lateAnswer: { ...row.ownerTurn!.lateAnswer!, status: "retry-expired" } } }), Date.now() + 5000);
+          lateAnswer: { ...row.ownerTurn!.lateAnswer!, status: "retry-expired" } } }), ownerRelayStoreDeadline());
+        recordLateAnswerExpired(relay.id, targetId, requestId);
         return { body, delivery: "unconfirmed" };
       }
       const hadUnresolvedAttempt = part.firstAttemptAt !== undefined;
@@ -99,9 +201,9 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
         pending = { ...saved, parts, firstAttemptAt: parts[0]!.firstAttemptAt,
           nextAttemptAt: Date.now() + RETRY_MS, status: "retry" };
         return { ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: pending } };
-      }, Date.now() + 5000);
+      }, ownerRelayStoreDeadline());
       const sent = await sendAsClone(relay, targetId, part.payload, { partIndex: index, beforeSend: () => {
-        if (!authorize()) throw new Error("owner relay revoked");
+        if (!authorize() || !ownerLateDeliveryAllowed(run)) throw new Error("owner relay revoked");
       } });
       await changeRunAsync(requestId, row => {
         const saved = row.ownerTurn!.lateAnswer!;
@@ -117,7 +219,7 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
           ...(sent.kind === "refused" && ["text_too_long", "format_invalid", "bad_request"].includes(sent.code)
             ? { status: "refused" as const } : {}) };
         return { ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: pending } };
-      }, Date.now() + 5000);
+      }, ownerRelayStoreDeadline());
       if (sent.kind !== "sent") {
         console.error("Owner relay late delivery pending", JSON.stringify({ requestId, outcome: sent.kind }));
         return { body, delivery: "unconfirmed" };

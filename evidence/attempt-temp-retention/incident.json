@@ -1,0 +1,697 @@
+{
+  "window": {
+    "start": "2026-11-03T20:14:00Z",
+    "end": "2026-11-04T20:14:00Z"
+  },
+  "source": "read-only user service journal",
+  "summaries": 757,
+  "retiredRoots": 490,
+  "reclaimedBytes": 202420436992,
+  "reclaimGBPerHour": 8.434184874666666,
+  "bareTickFailures": 37,
+  "inventoryBudgetFailures": 191,
+  "bareFindFailures": 114,
+  "tickOperationEvidence": [
+    {
+      "at": "2026-11-03T21:21:22+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 574849,
+          "completed": false,
+          "count": 3,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 44024,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-03T22:32:56+00:00",
+      "deltaSeconds": -1.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 633148,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 238932,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-03T23:43:25+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 628426,
+          "completed": false,
+          "count": 3,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 368966,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T00:55:04+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 696256,
+          "completed": false,
+          "count": 3,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 150259,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T02:06:12+00:00",
+      "deltaSeconds": -2.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 646011,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T03:18:38+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 746587,
+          "completed": false,
+          "count": 2,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 743592,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T04:16:34+00:00",
+      "deltaSeconds": 1.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 67261,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T04:35:23+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 999524,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "temp.sweep",
+          "durationMs": 943961,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T05:18:51+00:00",
+      "deltaSeconds": 74.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 8875,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T05:47:37+00:00",
+      "deltaSeconds": -1.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 55178,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T06:02:27+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 61286,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 51061,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T06:32:59+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 65483,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T07:04:01+00:00",
+      "deltaSeconds": -1.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 983065,
+          "completed": false,
+          "count": 3,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 89515,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T07:06:05+00:00",
+      "deltaSeconds": -1.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 62011,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T07:29:13+00:00",
+      "deltaSeconds": 1.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 63183,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T08:19:54+00:00",
+      "deltaSeconds": 3.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 948902,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "temp.sweep",
+          "durationMs": 931054,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T09:20:30+00:00",
+      "deltaSeconds": 4.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 70967,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T09:34:15+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 761072,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T10:45:54+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 708257,
+          "completed": false,
+          "count": 3,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T11:59:37+00:00",
+      "deltaSeconds": 1.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 822169,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "temp.sweep",
+          "durationMs": 813739,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T12:40:30+00:00",
+      "deltaSeconds": 89.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 27336,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T13:14:50+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 907391,
+          "completed": false,
+          "count": 3,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T14:25:31+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 640057,
+          "completed": false,
+          "count": 3,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T15:35:43+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 522877,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T16:46:55+00:00",
+      "deltaSeconds": -1.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 681403,
+          "completed": false,
+          "count": 2,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T16:55:45+00:00",
+      "deltaSeconds": -2.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 58123,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T17:58:04+00:00",
+      "deltaSeconds": 63.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 1983,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T18:33:41+00:00",
+      "deltaSeconds": -5.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 1175333,
+          "completed": false,
+          "count": 3,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 875585,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T18:35:50+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "temp.sweep",
+          "durationMs": 66836,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 12591,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T18:42:01+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 334405,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "temp.sweep",
+          "durationMs": 310855,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T18:45:25+00:00",
+      "deltaSeconds": -3.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 181707,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T19:17:04+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 1894570,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "temp.sweep",
+          "durationMs": 1839679,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T19:21:06+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 167483,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "temp.sweep",
+          "durationMs": 62505,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T19:25:27+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 254929,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "temp.sweep",
+          "durationMs": 201345,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T19:30:37+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 239053,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "temp.sweep",
+          "durationMs": 132002,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T19:48:08+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 1018930,
+          "completed": true,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "temp.sweep",
+          "durationMs": 991082,
+          "completed": true,
+          "count": 3,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-11-04T20:10:59+00:00",
+      "deltaSeconds": 0.0,
+      "operations": [
+        {
+          "name": "worktrees.sweep",
+          "durationMs": 1365714,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        },
+        {
+          "name": "temp.sweep",
+          "durationMs": 1309336,
+          "completed": false,
+          "count": 1,
+          "readBytes": 0,
+          "decodedJsonBytes": 0
+        }
+      ]
+    }
+  ],
+  "currentReadonlyFindProbe": {
+    "exit": 0,
+    "elapsedMs": 68.25241702608764,
+    "stderr": "",
+    "hostLoad": [
+      28.4,
+      30.25,
+      30.06
+    ]
+  },
+  "attribution": "Shared worker queue expiry and repeated active inventories exhaust the 60-second attempt request window. Original exception payloads are unavailable; the attribution uses source, timing and causal reproductions."
+}

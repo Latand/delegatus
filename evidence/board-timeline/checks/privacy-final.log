@@ -1,0 +1,4 @@
+$ LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json LLV_PRIVACY_OCR_LANGUAGES=eng+ukr bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main
+PRIVACY GATE: PASS
+
+exit: 0

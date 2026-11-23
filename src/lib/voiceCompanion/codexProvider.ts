@@ -14,7 +14,7 @@ import type { QuotaObservation } from "@/lib/accounts/migration/quotaPolicy";
 import { mapAppServerRateLimits } from "@/lib/limits";
 import { CodexAppServerClient, codexAccountBinary, type AppServerNotification, type AppServerRateLimits, type CodexAppServerChild } from "@/lib/accounts/codexAppServer";
 import type { CompanionPlan, Locale, PlanWindow } from "./contract";
-import { jsonObject, type LiveConnection, type LiveProvider, type LiveToolHandler } from "./provider";
+import { jsonObject, type LiveConnection, type LiveProvider, type LiveToolHandler, type SpeechOutcome } from "./provider";
 import { ADDED_TOOL_RULES, BACKEND_INSTRUCTIONS, LIVE_BACKEND_MODEL, interfaceLanguage, liveInstructions } from "./sessionConfig";
 import { codexSnapshotTool, EMPTY_VOICE_TOOLS, snapshotCodexTools, type VoiceToolSnapshot } from "@/lib/voiceTools/snapshot";
 import { COMPANION_TOOL_REGISTRY } from "./tools";
@@ -80,6 +80,7 @@ export function codexVoiceToolResult(result: unknown) {
   return { contentItems: [{ type: "inputText", text: JSON.stringify(result) },
     ...((result as SpeechReadResult | null)?.[VOICE_IMAGES] ?? []).map(image => ({ type: "inputImage", imageUrl: `data:${image.mime};base64,${image.data}` }))], success: true };
 }
+interface QueuedSpeech { text: string; settled?(outcome: SpeechOutcome): void }
 interface Call {
   client: CodexAppServerClient; account: VoiceAccount; cwd: string; id: string; createdAt: number; locale: Locale;
   events: unknown[]; event?(value: unknown): void; lost?(): void; tool?: LiveToolHandler;
@@ -90,7 +91,7 @@ interface Call {
   reachedMarker?: boolean;
   transcriptAdapter: CodexVoiceTranscript;
   writing: Promise<void>;
-  speech: string[]; speaking: boolean; awaitingSpeech: boolean;
+  speech: QueuedSpeech[]; speaking: boolean; awaitingSpeech: boolean;
   backingTurns: Set<string>; awaitingBackingSpeech: boolean;
   /** The limit sentence: waiting for the voice to be free, sent, then voiced to its end. */
   limitSpeech?: "pending" | "sent" | "done";
@@ -170,7 +171,7 @@ export class CodexLiveProvider implements LiveProvider {
           if (!active.sdpReceived) { rejectSdp(new CodexVoiceError("CODEX_LIMIT_REACHED", limit.resetsAt)); return; }
           // Reports not yet said stay unsaid: the limit sentence is the call's last.
           active.limitReached = true;
-          active.speech.length = 0;
+          for (const item of active.speech.splice(0)) item.settled?.("withdrawn");
           active.limitSpeech = "pending";
           this.emit(active, { type: "codex.limitReached", resetsAt: limit.resetsAt });
           this.flushSpeech(active);
@@ -257,7 +258,7 @@ export class CodexLiveProvider implements LiveProvider {
       }
       if (turn?.status !== "completed") {
         call.awaitingBackingSpeech = false;
-        if (turn?.status === "failed") this.queueSpeech(call, "The board could not be read just now.");
+        if (turn?.status === "failed") this.queueSpeech(call, { text: "The board could not be read just now." });
         else this.flushSpeech(call);
       }
     }
@@ -305,7 +306,7 @@ export class CodexLiveProvider implements LiveProvider {
         if (command.type === "session.commentary.append") {
           // A call that has failed or is stopping cannot voice it: refuse, so the caller keeps it owed.
           if (call.stopping || call.failed) throw new CodexVoiceError("PROVIDER_ERROR");
-          this.queueSpeech(call, text);
+          this.queueSpeech(call, { text });
         }
         else call.writing = call.writing.then(async () => {
           if (call.stopping || call.failed) return;
@@ -313,14 +314,24 @@ export class CodexLiveProvider implements LiveProvider {
           if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendText", codexVoiceText(id, text));
         }).catch(() => { call.failed = true; call.lost?.(); });
       }
+    }, speak: (text, settled) => {
+      if (call.stopping || call.failed) throw new CodexVoiceError("PROVIDER_ERROR");
+      const item: QueuedSpeech = { text, settled };
+      this.queueSpeech(call, item);
+      return { withdraw: () => {
+        const at = call.speech.indexOf(item);
+        if (at >= 0) call.speech.splice(at, 1);
+        return at >= 0;
+      } };
     }, dispose: () => {
       call.event = undefined; call.lost = undefined; call.tool = undefined;
       // Session recovery retains the open flag until hangup confirms reaping.
       void this.hangup(id, "").catch(() => {});
     } };
   }
-  private queueSpeech(call: Call, text: string): void {
-    if (!call.limitReached) call.speech.push(text);
+  private queueSpeech(call: Call, item: QueuedSpeech): void {
+    if (call.limitReached) item.settled?.("withdrawn");
+    else call.speech.push(item);
     this.flushSpeech(call);
   }
   /** Standalone speech can be lost while a backing answer is being voiced.
@@ -329,13 +340,15 @@ export class CodexLiveProvider implements LiveProvider {
   private flushSpeech(call: Call): void {
     if (call.stopping || call.failed || call.speaking || call.awaitingSpeech || call.backingTurns.size || call.awaitingBackingSpeech) return;
     // After the limit only its own sentence is said, once, on the same pacing as a report.
-    const text = call.limitReached ? call.limitSpeech === "pending" ? LIMIT_SPEECH[call.locale] : undefined : call.speech.shift();
-    if (text === undefined) return;
+    const item: QueuedSpeech | undefined = call.limitReached ? call.limitSpeech === "pending" ? { text: LIMIT_SPEECH[call.locale] } : undefined : call.speech.shift();
+    if (item === undefined) return;
     if (call.limitReached) call.limitSpeech = "sent";
     call.awaitingSpeech = true;
     call.writing = call.writing.then(async () => {
-      if (!call.stopping && !call.failed) await call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text });
-    }).catch(() => { call.failed = true; call.lost?.(); });
+      if (call.stopping || call.failed) { item.settled?.("withdrawn"); return; }
+      await call.client.request("thread/realtime/appendSpeech", { threadId: call.id, text: item.text });
+      item.settled?.("handed");
+    }).catch(() => { item.settled?.("uncertain"); call.failed = true; call.lost?.(); });
   }
   async hangup(id: string, _key: string): Promise<void> {
     void _key;

@@ -1,7 +1,8 @@
 import type { BoardTask } from "./types";
+import { prototypeDeliverySettled } from "@/lib/prototypeReview/deliveryPolicy";
 
 export function hasUndeliveredDecision(task: BoardTask): boolean {
-  return !!task.prototypeReviews?.some(round => round.decision && round.decision.delivery.state !== "sent");
+  return !!task.prototypeReviews?.some(round => round.decision && !prototypeDeliverySettled(round.decision.delivery));
 }
 
 export class TaskDecisionUndeliveredError extends Error {

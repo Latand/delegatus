@@ -71,6 +71,8 @@ export interface SnapshotRequestV1 {
   view?: { id?: string; deviceId?: string; resolution?: "latest-interaction" | "require-explicit" };
   scope?: { kind: ViewScopeKind; paths?: string[] };
   text?: { include?: boolean; lastMessages?: number; maxCharsPerConversation?: number };
+  /** Accepted from older clients and ignored; it named the caller for a
+      sibling lookup that no longer exists. */
   caller?: { pid?: number; transcriptPath?: string };
 }
 
@@ -118,7 +120,6 @@ export interface ViewerSnapshotV1 {
   /** Additive (#342): unresolved spawn placeholders in scope. `truncated` and
       `omittedCount` then cover only genuine budget truncation. */
   stubs: SnapshotSpawnStub[];
-  siblings: { selfResolution: "matched" | "unmatched" | "omitted"; agents: Array<{ transcriptPath: string; engine: "claude" | "codex" | "copilot"; project: string | null; title: string | null; activity: string | null; pid: number; self: boolean }> };
   scanner: { scannedAt: string; ageMs: number; durationMs: number; entryCount: number };
 }
 

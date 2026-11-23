@@ -10,6 +10,7 @@ import { withAgentConfigSandbox } from "@/lib/runtime/agentConfigSandbox";
 import { prepareAgentPublicationSpec, shellQuote, withSpawnCapability } from "@/lib/agent/cli";
 import { prepareHeadlessPublication } from "@/lib/agent/headless";
 import { applyClaudeSpawnPolicy } from "@/lib/agent/spawnPolicy";
+import { resolveSpawnRole, roleSpawnPrompt } from "@/lib/roles/registry";
 
 async function fixture(repositoryName = "renamed-project") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "repository-identity-"));
@@ -25,6 +26,42 @@ async function fixture(repositoryName = "renamed-project") {
   return { root, repo, source, run, close: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 const email = ["fixture", "example.invalid"].join("@");
+
+test.each(["configured", "privacy"] as const)("generated merger instruction honors the %s publication policy and bound commit identity", async policy => {
+  const f = await fixture();
+  try {
+    await f.run(["config", "user.name", "Repository Fixture"]);
+    await f.run(["config", "user.email", email]);
+    if (policy === "privacy") {
+      const manifest = JSON.parse(fs.readFileSync(path.resolve(import.meta.dir, "../../..", "package.json"), "utf8"));
+      fs.writeFileSync(path.join(f.repo, "package.json"), JSON.stringify({ scripts: { "privacy:check": manifest.scripts["privacy:check"] } }));
+      fs.mkdirSync(path.join(f.repo, "scripts"));
+      fs.writeFileSync(path.join(f.repo, "scripts/privacy-known-value-fingerprints.json"), "{}");
+    }
+    const source = await repositoryPublicationSource(f.repo, f.source);
+    const expected = policy === "configured"
+      ? { GIT_AUTHOR_NAME: "Repository Fixture", GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: "Repository Fixture", GIT_COMMITTER_EMAIL: email }
+      : controllerCommitIdentityEnv();
+    expect(source[REPOSITORY_IDENTITY]).toBe(policy === "configured"
+      ? JSON.stringify({ env: expected, coauthor: DELEGATUS_COAUTHOR }) : undefined);
+    // A later configuration change cannot replace the identity selected at launch.
+    await f.run(["config", "user.name", "Later Fixture"]);
+    await f.run(["config", "user.email", ["later", "example.invalid"].join("@")]);
+    const env = { ...f.source, ...agentPublicationIdentityEnv(source) };
+    expect(env).toMatchObject(expected);
+    const role = resolveSpawnRole({ role: "merger", roleParams: { prs: `12@${"a".repeat(40)}` } });
+    if (!role.ok) throw new Error(role.error);
+    const instruction = roleSpawnPrompt(role.value, "Merge the reviewed change.");
+    expect(instruction).toContain("Merge only listed PRs at their reviewed heads, using the publication identity selected at launch by the repository policy and its required attribution trailers. Do not change Git identity or forge credentials.");
+    expect(instruction).not.toContain("with the launched machine noreply identity and machine noreply trailers only");
+    const machineAttribution = "Co-Authored-By: Build Agent <" + ["no-reply", "build.example.invalid"].join("@") + ">";
+    await f.run(["commit", "--allow-empty", "-qm", policy === "configured" ? "reviewed change" : `reviewed change\n\n${machineAttribution}`], env);
+    expect(await f.run(["log", "-1", "--format=%an%n%ae%n%cn%n%ce"])).toBe([
+      expected.GIT_AUTHOR_NAME, expected.GIT_AUTHOR_EMAIL, expected.GIT_COMMITTER_NAME, expected.GIT_COMMITTER_EMAIL,
+    ].join("\n"));
+    expect(await f.run(["log", "-1", "--format=%(trailers:only)"])).toBe(policy === "configured" ? DELEGATUS_COAUTHOR : machineAttribution);
+  } finally { f.close(); }
+});
 
 test.each(["local", "global", "included", "worktree"] as const)("repository identity reads %s user config, ignoring inherited and role identities", async kind => {
   const f = await fixture();

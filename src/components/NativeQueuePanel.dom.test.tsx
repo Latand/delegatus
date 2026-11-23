@@ -870,7 +870,7 @@ test("the queue yields to the conversation above the composer, and scrolls its o
   /* THE STRUCTURAL HALF of the height repair. happy-dom lays nothing out, so
      what this can hold is the contract that makes the layout right: the panel
      YIELDS — `min-h-0`, and its own scroller, which is what lets a flexbox take
-     room back from it — inside the budget `TmuxComposer` gives the composer, it
+     room back from it — inside the budget `ConversationComposer` gives the composer, it
      keeps a ceiling for the surfaces where that budget cannot resolve, and the
      ROWS are the first element to scroll, with the header and the recovery
      section outside that scroller so the queue-level start and the replay
