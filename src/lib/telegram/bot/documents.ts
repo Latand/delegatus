@@ -67,13 +67,18 @@ const MIME: Record<(typeof DOCUMENT_EXTENSIONS)[number], string> = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ".xls": "application/vnd.ms-excel",
   ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 };
 /* What a file is, by its extension. The shown name may change the extension
    only within its class: a text file is never shown as a PDF or an image,
    and an image is never shown as text, which would skip the text scan. */
-type DocumentKind = "text" | "pdf" | "image" | "xlsx" | "xls" | "docx";
+const OFFICE_MAIN_PART = {
+  xlsx: "xl/workbook.xml",
+  docx: "word/document.xml",
+  pptx: "ppt/presentation.xml",
+} as const;
+type DocumentKind = "text" | "pdf" | "image" | keyof typeof OFFICE_MAIN_PART;
 const TYPE_CLASS: Record<(typeof DOCUMENT_EXTENSIONS)[number], DocumentKind> = {
   ".md": "text",
   ".markdown": "text",
@@ -87,8 +92,8 @@ const TYPE_CLASS: Record<(typeof DOCUMENT_EXTENSIONS)[number], DocumentKind> = {
   ".jpg": "image",
   ".jpeg": "image",
   ".xlsx": "xlsx",
-  ".xls": "xls",
   ".docx": "docx",
+  ".pptx": "pptx",
 };
 const ALLOWED: ReadonlySet<string> = new Set(DOCUMENT_EXTENSIONS);
 
@@ -552,31 +557,24 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
         : true;
   if (!signature) throw new DocumentRefusal("document_type", `${requested} does not hold what its ${extension} extension says`);
 
-  /* By the real file's class, so no shown name can skip it. Office containers
-     also scan the original bytes (including metadata and legacy XLS strings). */
-  const inspect = (bytes: Buffer) => {
-    const hit = documentBytesSecret(bytes);
-    if (hit) {
-      detected(warnings, { code: "document_secret", reason: `The file contains what looks like a secret (${hit.secretClass}, line ${hit.line}).`, secretClass: hit.secretClass, line: hit.line });
-    }
-  };
-  if (kind === "text" || kind === "xls" || kind === "xlsx" || kind === "docx") inspect(bytes);
-  if (kind === "xls" && !bytes.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))) {
-    throw new DocumentRefusal("document_type", "The XLS file must hold an Excel compound document.");
-  }
-  if (kind === "xlsx" || kind === "docx") {
+  // Use the resolved file's type so a shown filename cannot skip inspection.
+  let hit = kind === "text" ? documentBytesSecret(bytes) : null;
+  if (kind === "xlsx" || kind === "docx" || kind === "pptx") {
     try {
-      const names = inspectOfficeZip(bytes, DOCUMENT_MAX_BYTES, content => {
-        inspect(content);
-        for (const text of documentTexts(content)) inspect(Buffer.from(officeXmlText(text)));
+      hit = documentBytesSecret(bytes);
+      const names = inspectOfficeZip(bytes, DOCUMENT_MAX_BYTES, (name, content) => {
+        const text = officeXmlText(name, content);
+        hit ??= documentSecret(name) ?? documentBytesSecret(content) ?? (text === null ? null : documentSecret(text));
       });
-      if (!names.has("[Content_Types].xml") || !names.has(kind === "xlsx" ? "xl/workbook.xml" : "word/document.xml")) {
+      if (!names.has("[Content_Types].xml") || !names.has("_rels/.rels") || !names.has(OFFICE_MAIN_PART[kind])) {
         throw new Error("Missing Office package parts");
       }
-    } catch (error) {
-      if (error instanceof DocumentRefusal) throw error;
-      throw new DocumentRefusal("document_invalid", "The Office ZIP is damaged, unsupported, encrypted or exceeds the 20 MB expanded inspection limit.");
+    } catch {
+      throw new DocumentRefusal("document_invalid", "The Office package could not be fully inspected. Its ZIP or XML is damaged, unsupported, encrypted or exceeds inspection limits.");
     }
+  }
+  if (hit) {
+    detected(warnings, { code: "document_secret", reason: `The file contains what looks like a secret (${hit.secretClass}, line ${hit.line}).`, secretClass: hit.secretClass, line: hit.line });
   }
 
   const type = MIME[extension as keyof typeof MIME];

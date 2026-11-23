@@ -1,4 +1,5 @@
 import { inflateRawSync } from "node:zlib";
+import { SaxesParser, type SaxesTagNS } from "saxes";
 
 const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
   for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);
@@ -14,7 +15,7 @@ function crc32(bytes: Buffer): number {
  * directory and local headers must agree, and every member is inspected.
  * The caller's file limit also bounds total expanded bytes; unsupported,
  * encrypted, ZIP64 or damaged archives fail closed before any send. */
-export function inspectOfficeZip(bytes: Buffer, maxBytes: number, inspect: (bytes: Buffer) => void): Set<string> {
+export function inspectOfficeZip(bytes: Buffer, maxBytes: number, inspect: (name: string, bytes: Buffer) => void): Set<string> {
   const invalid = (): never => { throw new Error("Office ZIP cannot be fully inspected"); };
   let end = bytes.length - 22;
   let found = false;
@@ -28,6 +29,7 @@ export function inspectOfficeZip(bytes: Buffer, maxBytes: number, inspect: (byte
     || bytes.readUInt16LE(end + 8) !== count || !count || count > 4096
     || directory + bytes.readUInt32LE(end + 12) !== end) return invalid();
   const names = new Set<string>();
+  const filenameDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const ranges: Array<[number, number]> = [];
   let position = directory;
   let total = 0;
@@ -43,7 +45,7 @@ export function inspectOfficeZip(bytes: Buffer, maxBytes: number, inspect: (byte
       || local + 30 > directory || bytes.readUInt32LE(local) !== 0x04034b50
       || bytes.readUInt16LE(local + 6) !== flags || bytes.readUInt16LE(local + 8) !== method) return invalid();
     const name = bytes.subarray(position + 46, position + 46 + nameLength);
-    const filename = name.toString("utf8");
+    const filename = filenameDecoder.decode(name);
     if (names.has(filename) || bytes.readUInt16LE(local + 26) !== nameLength
       || !name.equals(bytes.subarray(local + 30, local + 30 + nameLength))) return invalid();
     names.add(filename);
@@ -58,11 +60,15 @@ export function inspectOfficeZip(bytes: Buffer, maxBytes: number, inspect: (byte
     } else if (bytes.readUInt32LE(local + 14) !== bytes.readUInt32LE(position + 16)
       || bytes.readUInt32LE(local + 18) !== compressed || bytes.readUInt32LE(local + 22) !== expanded) return invalid();
     const encoded = bytes.subarray(start, start + compressed);
-    const content = method === 0 ? encoded : inflateRawSync(encoded, { maxOutputLength: Math.max(1, maxBytes - total) });
+    let content = encoded;
+    if (method === 8) {
+      const inflated = inflateRawSync(encoded, { info: true, maxOutputLength: Math.max(1, expanded) });
+      if (inflated.engine.bytesWritten !== compressed) return invalid();
+      content = inflated.buffer;
+    }
     if (content.length !== expanded || crc32(content) !== bytes.readUInt32LE(position + 16)) return invalid();
     total += content.length;
-    inspect(name);
-    inspect(content);
+    inspect(filename, content);
     ranges.push([local, finish]);
     position = next;
   }
@@ -76,55 +82,106 @@ export function inspectOfficeZip(bytes: Buffer, maxBytes: number, inspect: (byte
   return names;
 }
 
-/** XML stores text across runs and entity references. Inspect the visible
- * character sequence too, so encoding or rich-text runs cannot hide a token.
- * This is inspection only: no entity expansion, external reads or execution. */
-export function officeXmlText(text: string): string {
-  const pieces: string[] = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    const open = text.indexOf("<", cursor);
-    if (open === -1) { pieces.push(text.slice(cursor)); break; }
-    pieces.push(text.slice(cursor, open));
-    if (text.startsWith("<!--", open)) {
-      const close = text.indexOf("-->", open + 4);
-      if (close === -1) { pieces.push(text.slice(open + 4)); break; }
-      cursor = close + 3;
-      continue;
-    }
-    const cdata = text.startsWith("<![CDATA[", open);
-    if (text.startsWith("<?", open)) {
-      const close = text.indexOf("?>", open + 2);
-      if (close === -1) { pieces.push(text.slice(open + 2)); break; }
-      cursor = close + 2;
-      continue;
-    }
-    let close: number;
-    if (cdata) close = text.indexOf("]]>", open + 9);
-    else {
-      let quote = "";
-      close = -1;
-      for (let index = open + 1; index < text.length; index++) {
-        const char = text[index]!;
-        if (quote) {
-          if (char === quote) quote = "";
-        } else if (char === "\"" || char === "'") quote = char;
-        else if (char === ">") { close = index; break; }
-      }
-    }
-    if (close === -1) { pieces.push(text.slice(open + (cdata ? 9 : 0))); break; }
-    if (cdata) pieces.push(text.slice(open + 9, close));
-    else if (/^<(?:[\w.-]+:)?br(?:\s[^>]*)?\s*\/?\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\n");
-    else if (/^<(?:[\w.-]+:)?tab(?:\s[^>]*)?\s*\/?\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\t");
-    else if (/^<(?:[\w.-]+:)?cr(?:\s[^>]*)?\s*\/?\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\n");
-    else if (/^<\/(?:[\w.-]+:)?(?:p|c|si|row|tr|tc|property)\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\n");
-    cursor = close + (cdata ? 3 : 1);
+const xmlWhitespaceByte = (byte: number | undefined) =>
+  byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d;
+const xmlStartByte = (byte: number | undefined) => byte === 0x3c || xmlWhitespaceByte(byte);
+
+function xmlEncoding(bytes: Buffer): "utf-8" | "utf-16le" | "utf-16be" {
+  if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (xmlStartByte(bytes[0]) && bytes[1] === 0)) return "utf-16le";
+  if ((bytes[0] === 0xfe && bytes[1] === 0xff) || (bytes[0] === 0 && xmlStartByte(bytes[1]))) return "utf-16be";
+  return "utf-8";
+}
+
+function startsWithXml(bytes: Buffer, encoding: ReturnType<typeof xmlEncoding>): boolean {
+  if (encoding === "utf-8") {
+    let index = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+    while (xmlWhitespaceByte(bytes[index])) index++;
+    return bytes[index] === 0x3c;
   }
-  return pieces.join("").replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (entity, name: string) => {
-      if (name.startsWith("#")) {
-        const point = name[1]?.toLowerCase() === "x" ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
-        return point <= 0x10ffff ? String.fromCodePoint(point) : entity;
-      }
-      return ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" } as Record<string, string>)[name.toLowerCase()] ?? entity;
-    });
+  const read = encoding === "utf-16le" ? bytes.readUInt16LE.bind(bytes) : bytes.readUInt16BE.bind(bytes);
+  let index = bytes.length >= 2 && read(0) === 0xfeff ? 2 : 0;
+  while (index + 1 < bytes.length && xmlWhitespaceByte(read(index))) index += 2;
+  return index + 1 < bytes.length && read(index) === 0x3c;
+}
+
+function officeBoundary({ uri, local }: SaxesTagNS): string {
+  switch (uri) {
+    case "http://schemas.openxmlformats.org/wordprocessingml/2006/main":
+    case "http://purl.oclc.org/ooxml/wordprocessingml/main":
+      if (local === "tab" || local === "ptab") return "\t";
+      return /^(p|br|cr|tr|tc)$/.test(local) ? "\n" : "";
+    case "http://schemas.openxmlformats.org/drawingml/2006/main":
+    case "http://purl.oclc.org/ooxml/drawingml/main":
+      return /^(p|br|tr|tc)$/.test(local) ? "\n" : "";
+    case "http://schemas.openxmlformats.org/spreadsheetml/2006/main":
+    case "http://purl.oclc.org/ooxml/spreadsheetml/main":
+      return /^(c|row|si|is|v|f)$/.test(local) ? "\n" : "";
+    case "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties":
+    case "http://purl.oclc.org/ooxml/officeDocument/customProperties":
+      return local === "property" ? "\n" : "";
+    default:
+      return "";
+  }
+}
+
+const XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace";
+
+/** Join adjacent runs, retaining text inside leaves and real layout boundaries.
+ * Two readings are returned, one line apart: one keeps every leaf's text as
+ * written, the other trims XML whitespace from the edges of leaves outside
+ * `xml:space="preserve"`, as Office does when it lays the text out, so a
+ * whitespace-only run cannot split a token in both. Fatal decoding and
+ * parsing apply to XML parts even after a secret is found. */
+export function officeXmlText(name: string, bytes: Buffer): string | null {
+  const encoding = xmlEncoding(bytes);
+  if (!/\.(?:xml|rels|vml|svg)$/i.test(name) && !startsWithXml(bytes, encoding)) return null;
+  const xml = new TextDecoder(encoding, { fatal: true }).decode(bytes);
+  const pieces: string[] = [];
+  const compact: string[] = [];
+  const attributes: string[] = [];
+  const hasChild: boolean[] = [];
+  const preserve: boolean[] = [];
+  const pending: string[] = [];
+  const flush = (keepWhitespace: boolean) => {
+    const text = pending.join("");
+    pending.length = 0;
+    if (!text || !(keepWhitespace || /[^ \t\r\n]/.test(text))) return;
+    pieces.push(text);
+    compact.push(preserve.at(-1) ? text : text.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, ""));
+  };
+  const boundary = (text: string) => { pieces.push(text); compact.push(text); };
+
+  const parser = new SaxesParser({ xmlns: true });
+  parser.on("xmldecl", (decl) => {
+    const declared = decl.encoding?.toLowerCase();
+    if (declared && declared !== encoding && !(declared === "utf-16" && encoding !== "utf-8")) {
+      throw new Error("Unsupported Office XML encoding");
+    }
+  });
+  parser.on("doctype", () => { throw new Error("Office XML document types are unsupported"); });
+  parser.on("opentagstart", () => {
+    if (hasChild.length >= 256) throw new Error("Office XML nesting exceeds inspection limit");
+  });
+  parser.on("opentag", (tag) => {
+    flush(false);
+    if (hasChild.length) hasChild[hasChild.length - 1] = true;
+    hasChild.push(false);
+    let preserved = preserve.at(-1) ?? false;
+    for (const attribute of Object.values(tag.attributes)) {
+      if (attribute.uri === XML_NAMESPACE && attribute.local === "space") preserved = attribute.value === "preserve";
+      if (attribute.uri !== "http://www.w3.org/2000/xmlns/") attributes.push(attribute.value);
+    }
+    preserve.push(preserved);
+  });
+  parser.on("text", (text) => { pending.push(text); });
+  parser.on("cdata", (text) => { pending.push(text); });
+  parser.on("closetag", (tag) => {
+    flush(!hasChild.pop());
+    preserve.pop();
+    const separator = officeBoundary(tag);
+    if (separator) boundary(separator);
+  });
+  parser.write(xml).close();
+  // Attribute values are separate from the displayed text and from each other.
+  return [pieces.join(""), compact.join(""), ...attributes].join("\n");
 }

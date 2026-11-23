@@ -36,46 +36,40 @@ export function officeZip(entries: Record<string, string | Buffer>, compressed =
   return Buffer.concat([...locals, central, end]);
 }
 
-export function officeParts(kind: "xlsx" | "docx", text = "Neutral report"): Record<string, string> {
-  const part = kind === "xlsx" ? "xl/workbook.xml" : "word/document.xml";
-  const mime = kind === "xlsx" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
+export function officeParts(kind: "xlsx" | "docx" | "pptx", text = "Neutral report"): Record<string, string> {
+  const part = { xlsx: "xl/workbook.xml", docx: "word/document.xml", pptx: "ppt/presentation.xml" }[kind];
+  const type = { xlsx: "spreadsheetml.sheet", docx: "wordprocessingml.document", pptx: "presentationml.presentation" }[kind];
+  const mime = `application/vnd.openxmlformats-officedocument.${type}.main+xml`;
+  const extraType = {
+    xlsx: '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+    docx: "",
+    pptx: '<Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>',
+  }[kind];
   const entries: Record<string, string> = {
-    "[Content_Types].xml": `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/${part}" ContentType="${mime}"/>${kind === "xlsx" ? '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' : ""}</Types>`,
+    "[Content_Types].xml": `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/${part}" ContentType="${mime}"/>${extraType}</Types>`,
     "_rels/.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="${part}"/></Relationships>`,
     [part]: kind === "xlsx"
       ? '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets></workbook>'
-      : `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`,
+      : kind === "pptx"
+        ? '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>'
+        : `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`,
   };
   if (kind === "xlsx") {
     entries["xl/_rels/workbook.xml.rels"] = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>';
     entries["xl/worksheets/sheet1.xml"] = `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>${text}</t></is></c></row></sheetData></worksheet>`;
+  } else if (kind === "pptx") {
+    entries["ppt/_rels/presentation.xml.rels"] = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/></Relationships>';
+    entries["ppt/slides/slide1.xml"] = `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+    <p:grpSpPr/>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="2" name="Report"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr/>
+      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>`;
   }
   return entries;
-}
-
-/** BIFF8 workbook with one LABEL cell, in a version-3 compound file. */
-export function legacyWorkbook(text = "Neutral report"): Buffer {
-  const record = (id: number, body: Buffer) => {
-    const header = Buffer.alloc(4); header.writeUInt16LE(id); header.writeUInt16LE(body.length, 2);
-    return Buffer.concat([header, body]);
-  };
-  const bof = (kind: number) => { const body = Buffer.alloc(16); body.writeUInt16LE(0x600); body.writeUInt16LE(kind, 2); return record(0x809, body); };
-  const bound = Buffer.alloc(14); bound.writeUInt32LE(42); bound[6] = 6; bound.write("Report", 8);
-  const label = Buffer.alloc(9 + text.length * 2); label.writeUInt16LE(text.length, 6); label[8] = 1; label.write(text, 9, "utf16le");
-  const workbook = Buffer.concat([bof(5), record(0x85, bound), record(0x0a, Buffer.alloc(0)), bof(0x10), record(0x204, label), record(0x0a, Buffer.alloc(0))]);
-  const file = Buffer.alloc(5632);
-  Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(file);
-  file.writeUInt16LE(0x3e, 24); file.writeUInt16LE(3, 26); file.writeUInt16LE(0xfffe, 28); file.writeUInt16LE(9, 30); file.writeUInt16LE(6, 32);
-  file.writeUInt32LE(1, 44); file.writeUInt32LE(4096, 56); file.writeInt32LE(-2, 60); file.writeInt32LE(-2, 68);
-  file.fill(0xff, 76, 512); file.writeUInt32LE(1, 76);
-  for (const [index, name, type, start, size] of [[0, "Root Entry", 5, -2, 0], [1, "Workbook", 2, 2, 4096]] as const) {
-    const at = 512 + index * 128;
-    file.write(name, at, "utf16le"); file.writeUInt16LE((name.length + 1) * 2, at + 64); file[at + 66] = type; file[at + 67] = 1;
-    file.writeInt32LE(-1, at + 68); file.writeInt32LE(-1, at + 72); file.writeInt32LE(index === 0 ? 1 : -1, at + 76);
-    file.writeInt32LE(start, at + 116); file.writeUInt32LE(size, at + 120);
-  }
-  file.fill(0xff, 1024, 1536); file.writeInt32LE(-2, 1024); file.writeInt32LE(-3, 1028);
-  for (let sector = 2; sector <= 9; sector++) file.writeInt32LE(sector === 9 ? -2 : sector + 1, 1024 + sector * 4);
-  workbook.copy(file, 1536);
-  return file;
 }
