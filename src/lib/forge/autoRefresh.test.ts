@@ -1959,7 +1959,7 @@ test("a recorded update whose push failed is pushed again as the same commit", a
   await h.sweep();
   const recorded = structuredClone(h.merge("queued-0")!);
   expect(recorded).toMatchObject({ state: "updating", readFailures: 1 });
-  expect(recorded.reason).toStartWith("Base update temporarily unavailable: fatal: unable to access the remote");
+  expect(recorded.reason).toBe("Base update temporarily unavailable: details withheld for privacy");
   expect(recorded.updates).toEqual([{ requestedAt: iso(T0), head: null, commit: pushes[0]!.commit, base: MAIN_1 }]);
   expect(h.prs.get(11)!.head).toBe(HEAD_A);
   h.advance(MERGE_POLL_MS);
@@ -2016,7 +2016,7 @@ test("base update failures stop at the durable bound after restart and release t
     h.advance(MERGE_POLL_MS);
     await h.run(10 * MERGE_POLL_MS, () => h.merges().length === 1);
     expect(h.merge("queued-0")).toMatchObject({ state: "blocked", readFailures: 3 });
-    expect(h.merge("queued-0")!.reason).toContain("connection refused");
+    expect(h.merge("queued-0")!.reason).toBe("Base update temporarily unavailable: details withheld for privacy");
     expect(pushes.filter(push => push.branch === "refs/heads/topic-0")).toHaveLength(2);
     expect(h.merges().map(args => args[2])).toEqual(["12"]);
     expect(h.creates).toEqual([]);
@@ -2961,7 +2961,7 @@ test.each([false, true])("an out-of-window refresh permits an expired failed rea
   expect(read).toBe(true);
   expect(h.merge("queued-1")).toMatchObject(retry
     ? { state: "queued", attempts: 1, headSeenAt: null, readFailures: 0 }
-    : { state: "queued", reason: "GitHub read failed: fixture forge unavailable", nextReadAt: iso(T0 + MERGE_POLL_MS), readFailures: 1 });
+    : { state: "queued", reason: "GitHub read failed: details withheld for privacy", nextReadAt: iso(T0 + MERGE_POLL_MS), readFailures: 1 });
   expect(h.creates).toHaveLength(1);
   expect(h.writes).toEqual([]);
   expect(h.merges()).toEqual([]);

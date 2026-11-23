@@ -10,11 +10,11 @@ import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
 import { isReminderVersion } from "./seatTickReminders";
+import { maintenanceAnnouncements } from "./seatMaintenanceDelivery";
 
 import {
   emptySeatTickState,
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
-  SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -269,6 +269,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
   const empty = emptySeatTickState();
   if (!value || typeof value !== "object" || Array.isArray(value)) return empty;
   const raw = value as Record<string, unknown>;
+  const lastTaskWakeAt = isoOrNull(raw.lastTaskWakeAt);
   const wakesWithoutChange: Partial<Record<SeatTickWakeReasonKind, number>> = {};
   const counters = (raw.wakesWithoutChange ?? {}) as Record<string, unknown>;
   for (const kind of SEAT_TICK_WAKE_REASON_KINDS) {
@@ -325,6 +326,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
         covers: conversationIds((raw.catchUpProgress as Record<string, unknown>).covers),
         ...(typeof (raw.catchUpProgress as Record<string, unknown>).after === "string" ? { after: String((raw.catchUpProgress as Record<string, unknown>).after) } : {}) } } : {}),
     lastWakeAt: isoOrNull(raw.lastWakeAt),
+    ...(lastTaskWakeAt ? { lastTaskWakeAt } : {}),
     lastWakeReasons: (Array.isArray(raw.lastWakeReasons) ? raw.lastWakeReasons : [])
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
     wakesWithoutChange,
@@ -354,7 +356,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     announcedLanes: conversationIds(raw.announcedLanes),
     /* Absent on every row from before #2063, and absent reads as empty: a
        settled deploy nobody announced is announced. */
-    announcedMaintenance: conversationIds(raw.announcedMaintenance).slice(-SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
+    announcedMaintenance: maintenanceAnnouncements(conversationIds(raw.announcedMaintenance)),
     announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     ...(typeof raw.formPageAfter === "string" && raw.formPageAfter.length > 0 && raw.formPageAfter.length <= 500 ? { formPageAfter: raw.formPageAfter } : {}),
     ...(isoOrNull(raw.deployResumeThrough) ? { deployResumeThrough: isoOrNull(raw.deployResumeThrough)! } : {}),
@@ -456,6 +458,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     eventsThrough: row.eventsThrough,
     localFinishedLaneCursor: row.localFinishedLaneCursor ?? null,
     lastWakeAt: row.lastWakeAt,
+    ...(row.lastTaskWakeAt ? { lastTaskWakeAt: row.lastTaskWakeAt } : {}),
     ...(row.formPageAfter ? { formPageAfter: row.formPageAfter } : {}),
     ...(row.deployResumeThrough ? { deployResumeThrough: row.deployResumeThrough } : {}),
     ...(row.itemsShown?.some(isReminderVersion) ? { itemsShown: row.itemsShown.filter(isReminderVersion) } : {}),

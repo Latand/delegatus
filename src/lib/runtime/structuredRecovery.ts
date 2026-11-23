@@ -116,8 +116,8 @@ export interface StructuredRecoveryRequest {
 
 /** No successor receipt exists yet; callers keep the original message queued. */
 export class StructuredRecoveryHeldForUpdateError extends Error {
-  constructor(message = "new autonomous recovery is held for the automatic update") {
-    super(message);
+  constructor(message = "new autonomous recovery is held for the automatic update", options?: ErrorOptions) {
+    super(message, options);
     this.name = "StructuredRecoveryHeldForUpdateError";
   }
 }
@@ -584,6 +584,7 @@ async function recoverCandidate(
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
                 omitSkillsInstructions: current.spec.launchProfile?.omitSkillsInstructions === true
                   || sessionOriginFor(registry.conversation(current.conversationId) ?? {}) === "delegated",
+                ...(current.spec.launchProfile?.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
                 cwd: current.spec.cwd, codexHome: account.home,
                 mcpServers: current.spec.launchProfile?.mcpServers ?? ["viewer"],
                 plugins: current.spec.launchProfile?.plugins ?? [],

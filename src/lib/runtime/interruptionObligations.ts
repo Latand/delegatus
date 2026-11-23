@@ -11,7 +11,7 @@ import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { initializeStateCollections, SqliteStateCollection, stateEvidenceVersion } from "@/lib/state/sqliteStateStore";
 import { writeJsonDurably, fsyncPath } from "@/lib/state/durableJson";
-import { withFileTransaction, withFileTransactionAsync, withFileTransactionAttempt, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { FileTransactionAdmissionError, withFileTransaction, withFileTransactionAsync, withFileTransactionAttempt, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENING } from "./recoveryNotices";
@@ -232,19 +232,54 @@ function createEmptyPending(directory: string): string {
   return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 }
 
+const INCOMPLETE_RECIPIENT_EVIDENCE = "recipient interruption evidence is unavailable or incomplete";
+const RECIPIENT_FILESYSTEM_ERROR_CODES = new Set([
+  "EACCES", "EDQUOT", "EEXIST", "EIO", "EISDIR", "EMFILE", "ENFILE", "ENOENT", "ENOMEM", "ENOSPC", "ENOTDIR",
+  "EPERM", "EROFS", "ETXTBSY", "ELOOP",
+]);
+
+function isRecipientFilesystemError(cause: unknown): cause is NodeJS.ErrnoException {
+  return cause instanceof Error && typeof (cause as NodeJS.ErrnoException).code === "string"
+    && RECIPIENT_FILESYSTEM_ERROR_CODES.has((cause as NodeJS.ErrnoException).code!);
+}
+
 function unavailableRecipientCuts(): never {
-  throw new Error("recipient interruption evidence is unavailable or incomplete");
+  throw new Error(INCOMPLETE_RECIPIENT_EVIDENCE);
+}
+
+export class RecipientInterruptionEvidenceError extends Error {
+  constructor(readonly category: "journal lock busy" | "source marker missing or mismatched"
+    | "pending journal changed" | "pending journal inspection failed" | "journal lock setup failed"
+    | "recipient index invalid or unavailable", options?: ErrorOptions) {
+    super(`${INCOMPLETE_RECIPIENT_EVIDENCE} (${category})`, options);
+    this.name = "RecipientInterruptionEvidenceError";
+  }
+}
+
+function recipientCutSource(directory: string): CutSource {
+  try { return cutSource(directory) ?? unavailableRecipientCuts(); }
+  catch (cause) { throw new RecipientInterruptionEvidenceError("source marker missing or mismatched", { cause }); }
 }
 
 /** Reads only the selected conversations, including resolved cuts used to
  * recognize a repeated restart. A persisted completeness witness is mandatory;
  * a cold recipient never imports journals or backfills other conversations. */
 function readRecipientInterruptionEvidence(directory: string, conversationIds: Iterable<string>) {
-  const source = cutSource(directory);
-  if (!source || fileStamp(`${directory}.pending.jsonl`) !== source.pendingStamp) unavailableRecipientCuts();
-  const records = withCutRows(directory, rows => rows.interruptionRecipients([...new Set(conversationIds)], RECIPIENT_RECORD_LIMIT));
-  if (JSON.stringify(cutSource(directory)) !== JSON.stringify(source)
-    || fileStamp(`${directory}.pending.jsonl`) !== source.pendingStamp) unavailableRecipientCuts();
+  const source = recipientCutSource(directory);
+  const pending = `${directory}.pending.jsonl`;
+  const pendingStamp = () => {
+    try { return fileStamp(pending); }
+    catch (cause) { throw new RecipientInterruptionEvidenceError("pending journal inspection failed", { cause }); }
+  };
+  if (pendingStamp() !== source.pendingStamp) throw new RecipientInterruptionEvidenceError("pending journal changed");
+  let records: InterruptionObligation[];
+  try {
+    records = withCutRows(directory, rows => rows.interruptionRecipients([...new Set(conversationIds)], RECIPIENT_RECORD_LIMIT));
+  } catch (cause) { throw new RecipientInterruptionEvidenceError("recipient index invalid or unavailable", { cause }); }
+  if (JSON.stringify(recipientCutSource(directory)) !== JSON.stringify(source)) {
+    throw new RecipientInterruptionEvidenceError("source marker missing or mismatched");
+  }
+  if (pendingStamp() !== source.pendingStamp) throw new RecipientInterruptionEvidenceError("pending journal changed");
   return { records, revision: digest(JSON.stringify([source.epoch, source.databaseIdentity, records])) };
 }
 
@@ -252,8 +287,13 @@ export function recipientInterruptionEvidence(directory: string, conversationIds
   try {
     return withFileTransactionAttempt(`${directory}.pending.jsonl`, "recipient interruption evidence is busy", () =>
       readRecipientInterruptionEvidence(directory, conversationIds));
-  } catch (error) {
-    throw new Error("recipient interruption evidence is unavailable or incomplete", { cause: error });
+  } catch (cause) {
+    if (cause instanceof RecipientInterruptionEvidenceError) throw cause;
+    if (cause instanceof FileTransactionAdmissionError) {
+      throw new RecipientInterruptionEvidenceError("journal lock busy", { cause });
+    }
+    if (isRecipientFilesystemError(cause)) throw new RecipientInterruptionEvidenceError("journal lock setup failed", { cause });
+    throw new Error(INCOMPLETE_RECIPIENT_EVIDENCE, { cause });
   }
 }
 
@@ -262,12 +302,24 @@ export function recipientInterruptionEvidence(directory: string, conversationIds
  * a missing or changed witness refuses before any writer runs. */
 export function recipientInterruptionObligationStore(directory: string, conversationIds: Iterable<string>): InterruptionObligationStore {
   const ids = new Set(conversationIds);
-  const run = <T>(operation: (store: ReturnType<typeof createInterruptionObligationStore>, records: InterruptionObligation[]) => T) =>
-    withFileTransactionAttempt(`${directory}.pending.jsonl`, "recipient interruption evidence is busy", () => {
-      const { records } = readRecipientInterruptionEvidence(directory, ids);
-      const store = createInterruptionObligationStore(directory, {}, true, false, records);
-      return store.mutation(() => operation(store, records));
-    });
+  const run = <T>(operation: (store: ReturnType<typeof createInterruptionObligationStore>, records: InterruptionObligation[]) => T) => {
+    try {
+      return withFileTransactionAttempt(`${directory}.pending.jsonl`, "recipient interruption evidence is busy", () => {
+        const { records } = readRecipientInterruptionEvidence(directory, ids);
+        const store = createInterruptionObligationStore(directory, {}, true, false, records);
+        return store.mutation(() => operation(store, records));
+      });
+    } catch (cause) {
+      if (cause instanceof RecipientInterruptionEvidenceError) throw cause;
+      if (cause instanceof FileTransactionAdmissionError) {
+        throw new RecipientInterruptionEvidenceError("journal lock busy", { cause });
+      }
+      if (isRecipientFilesystemError(cause)) {
+        throw new RecipientInterruptionEvidenceError("journal lock setup failed", { cause });
+      }
+      throw new Error(INCOMPLETE_RECIPIENT_EVIDENCE, { cause });
+    }
+  };
   return {
     list: () => recipientInterruptionEvidence(directory, ids).records,
     record: input => run(store => {

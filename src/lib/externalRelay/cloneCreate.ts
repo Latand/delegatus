@@ -6,7 +6,7 @@ import { createUrlAllowed, offersCloneCreate, validCloneName, validCloneUsername
 import { refreshRelayTargets } from "./poller";
 import {
   readRelayStore,
-  updateRelayStore,
+  updateRelayStoreAsync,
   type PairedRelay,
   type RelayCloneRequest,
 } from "./store";
@@ -104,7 +104,7 @@ async function cloneCall<T>(relay: PairedRelay, route: string, method: "GET" | "
 type CloneRecords = Pick<PairedRelay, "cloneRequest" | "cloneCreated">;
 /** Rewrites the relay's open request and created record together; an absent field leaves the store. */
 function setCloneRecords(relayId: string, change: (current: CloneRecords) => CloneRecords) {
-  updateRelayStore((store) => ({
+  return updateRelayStoreAsync((store) => ({
     ...store,
     relays: store.relays.map((relay) => {
       if (relay.id !== relayId) return relay;
@@ -147,7 +147,7 @@ export async function createCloneRequest(
   if (!createUrlAllowed(started.create_url)) throw new ExternalRelayError("malformed", result.status);
   const request: RelayCloneRequest = { ...started, name, username: input.username, requestedAt: new Date().toISOString() };
   let displaced = false;
-  setCloneRecords(relayId, (current) => {
+  await setCloneRecords(relayId, (current) => {
     // A clone that reached created while the relay was answering keeps its record.
     if (current.cloneCreated?.target_id) { displaced = true; return current; }
     return { ...current, cloneRequest: request };
@@ -172,7 +172,7 @@ export async function checkCloneRequest(relayId: string, requestId: string): Pro
   if (status.status !== "pending") {
     if (status.status === "created") await refreshRelayTargets(relayId);
     const targets = readRelayStore().relays.find((item) => item.id === relayId)?.targets ?? [];
-    setCloneRecords(relayId, (current) => {
+    await setCloneRecords(relayId, (current) => {
       // Only the request open here is recorded; a repeated read of one already recorded keeps it.
       if (current.cloneRequest?.request_id !== requestId) return current;
       if (status.status !== "created") return { ...current, cloneRequest: undefined };
@@ -201,7 +201,7 @@ export async function checkCloneRequest(relayId: string, requestId: string): Pro
 export async function cancelCloneRequest(relayId: string, requestId: string): Promise<void> {
   const relay = pairedRelay(relayId);
   if (relay.cloneCreated?.request_id === requestId && relay.cloneRequest?.request_id !== requestId) {
-    setCloneRecords(relayId, (current) => current.cloneCreated?.request_id === requestId ? { ...current, cloneCreated: undefined } : current);
+    await setCloneRecords(relayId, (current) => current.cloneCreated?.request_id === requestId ? { ...current, cloneCreated: undefined } : current);
     return;
   }
   try {
@@ -209,7 +209,7 @@ export async function cancelCloneRequest(relayId: string, requestId: string): Pr
   } catch (error) {
     if (!(error instanceof ExternalRelayError && error.status === 404)) throw error;
   }
-  setCloneRecords(relayId, (current) => current.cloneRequest?.request_id === requestId ? { ...current, cloneRequest: undefined } : current);
+  await setCloneRecords(relayId, (current) => current.cloneRequest?.request_id === requestId ? { ...current, cloneRequest: undefined } : current);
 }
 
 export type CloneAvatarCandidate = { storage_key: string; preview: string };

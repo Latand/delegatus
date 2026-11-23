@@ -219,15 +219,18 @@ test("issue 1268: a failed structured-host adoption pass makes the serving Viewe
     const progress = viewerDeploymentStructuredHostStartup(response.status, body);
     expect(promotedViewerReadinessPhase(progress)).toContain("adopting Claude hosts - runtime-host-unavailable");
 
-    expect(response.status).toBe(503);
+    expect(hasViewerDeploymentCapability(response.status, body)).toBe(true);
+    expect(viewerDeploymentReleaseReady(response.status, body)).toBe(false);
     expect(JSON.parse(body)).toMatchObject({
-      error: "structured host startup adoption is retrying after a failed pass",
+      admissionFence: true,
+      releaseReady: false,
       structuredDeliveryController: "ready",
       structuredHostStartup: {
         state: "failed",
         phase: "adopting Claude hosts",
         completedHosts: 7,
         totalHosts: 19,
+        remainingHosts: 12,
         failureCategory: "runtime-host-unavailable",
       },
     });
@@ -247,9 +250,11 @@ test("issue 572: serving health follows the process delivery controller", async 
     markStructuredHostStartupReady();
 
     const absent = deploymentCapability();
-    expect(absent.status).toBe(503);
-    expect(await absent.json()).toMatchObject({
-      error: "structured delivery controller is unavailable",
+    const absentBody = await absent.text();
+    expect(hasViewerDeploymentCapability(absent.status, absentBody)).toBe(true);
+    expect(viewerDeploymentReleaseReady(absent.status, absentBody)).toBe(false);
+    expect(JSON.parse(absentBody)).toMatchObject({
+      structuredDeliveryController: "unavailable",
       structuredHostStartup: { state: "ready" },
     });
 
@@ -267,7 +272,8 @@ test("issue 572: serving health follows the process delivery controller", async 
     });
 
     await bindStructuredDeliveryQueue([], { registry, client: null });
-    expect(deploymentCapability().status).toBe(503);
+    const again = deploymentCapability();
+    expect(viewerDeploymentReleaseReady(again.status, await again.text())).toBe(false);
 
     process.env.LLV_STATE_DIR = directory;
     process.env.PORT = "19002";

@@ -704,19 +704,11 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const move = (from: TaskStatus, to: TaskStatus, receipt: boolean, options: StatusMoveOptions = {}): void => {
     const raw = stored.current.get(taskId);
     if (!raw || (from === to && !Object.hasOwn(options, "hold") && !Object.hasOwn(options, "restoreHold"))) return;
-    const previousHold = controller.holdFor(raw) ?? null;
-    let settled: StatusMoveOutcome | null = null;
-    const operation = controller.move(raw, to, options);
-    const undo = (outcome: StatusMoveOutcome) => {
-      if (outcome.kind !== "saved") return;
-      move(to, from, false, { fenced: true, lineage: outcome.lineage, restoreHold: previousHold });
-    };
-    if (receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[to]) }), { kind: "undo", run: () => {
-      if (settled) undo(settled);
-      else void operation.then(undo);
-    } });
-    void operation.then((outcome: StatusMoveOutcome) => {
-      settled = outcome;
+    void controller.move(raw, to, options).then((outcome: StatusMoveOutcome) => {
+      if (outcome.kind === "saved" && receipt) showReceipt(t("mobile2.kanban.moved", { column: t(STATUS_LABEL[outcome.task.status]) }), {
+        kind: "undo",
+        run: () => move(outcome.task.status, outcome.from, false, { fenced: true, lineage: outcome.lineage, restoreHold: outcome.fromHold }),
+      });
       if (outcome.kind === "failed") showReceipt(t("kanban.moveFailed", { title: receiptTitle, error: outcome.error }), null, { error: true });
       else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title: receiptTitle, status: t(STATUS_LABEL[outcome.serverStatus]) }), null, { error: true });
     });
@@ -980,8 +972,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   selected={entry === status}
                   trailing={entry === status ? <Check className="h-4 w-4 text-accent" aria-hidden /> : undefined}
                   onSelect={() => {
-                    close();
-                    move(status, entry, true);
+                    if (entry === "blocked") setHoldEditing(true);
+                    else { close(); move(status, entry, true); }
                   }}
                   attrs={{ "data-phone-task-status": entry }}
                 />
