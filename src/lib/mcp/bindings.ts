@@ -51,7 +51,7 @@ import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
 import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
-import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
+import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageMachineAddress, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
 import { autoRotationFailureAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { readBridgeReportLog } from "@/lib/bridge/store";
@@ -5086,7 +5086,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const remote = await readRemoteAgentRows(project);
   const linkedSeats = linkedContext().links.filter(link => link.projects.has(project)).map(link => {
     const row = remote.rows.find(row => row.install === link.install && row.seat === 1);
-    return { machine: link.label, install: link.install, seat: row ? { engine: row.e, model: row.m, state: row.st, lastActivity: new Date(row.at).toISOString(), stale: row.stale }
+    return { machine: seatMessageMachineAddress(link), install: link.install, seat: row ? { engine: row.e, model: row.m, state: row.st, lastActivity: new Date(row.at).toISOString(), stale: row.stale }
       : peerSeatMessages(link.key) ? null : "unknown" };
   });
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
@@ -6212,7 +6212,7 @@ async function sendMessageToOrchestrator(
   const bound = context?.binding;
   const machine = bound?.target.identity?.startsWith("machine:") ? bound.target.identity.slice(8) : text(args.machine);
   if (machine) {
-    const link = resolveRemoteSeatMachine(machine, project, dependencies);
+    const link = resolveRemoteSeatMachine(machine, project, dependencies, !!bound?.target.identity?.startsWith("machine:"));
     if (link) {
       try {
         const message = bound?.sendPayload ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
@@ -6220,6 +6220,7 @@ async function sendMessageToOrchestrator(
         const clientMessageId = bound?.downstreamKey ?? orchestratorSendDownstreamKey(key);
         const response = await dispatchControl(control)("/api/orchestrator/message", {
           project, machine: link.install, text: message,
+          ...(bound?.target.identity?.startsWith("machine:") ? { boundMachineInstall: link.install } : {}),
           clientMessageId,
           ...(bound?.seatMessageFence ? { seatMessageFence: bound.seatMessageFence } : {}),
         }, callerCapabilityHeaders());
@@ -8620,12 +8621,12 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
   };
 }
 
-function resolveRemoteSeatMachine(machine: string, project: string, dependencies: ViewerMcpDomainDependencies) {
+function resolveRemoteSeatMachine(machine: string, project: string, dependencies: ViewerMcpDomainDependencies, exactInstallOnly = false) {
   const caller = attributionOf(dependencies);
   const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find(seat => seat.conversationId === caller.conversationId && seat.project && canonicalOrchestratorProject(seat.project) === project);
   if (!seat || caller.via) throw new McpToolRefusal("only this project's designated seat may relay over a link", { code: "orchestrator_relay_refused", retryable: false });
-  try { return resolveSeatMessageMachine(machine, project); }
+  try { return resolveSeatMessageMachine(machine, project, { exactInstallOnly }); }
   catch (error) {
     if (error instanceof SeatMessageRefusal) throw new McpToolRefusal(error.message, { code: error.code, outcome: "not-executed", nextAction: "new-request-permitted" });
     throw error;
