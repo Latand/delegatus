@@ -4,7 +4,7 @@ import { isClaudePrompt } from "@/lib/claudeProtocolUser";
 import { turnStateFromRecords } from "./nativeTurnState";
 import { fact, unknown, type Evidence, type Fact, type NativeTurn, type TranscriptVersion, type NativePromptAnchor } from "./model";
 
-type Engine = "codex" | "claude" | "copilot" | "claude-ledger";
+type Engine = "codex" | "claude" | "copilot" | "antigravity" | "claude-ledger";
 type RecordLike = Record<string, unknown>;
 const object = (v: unknown): RecordLike => v && typeof v === "object" && !Array.isArray(v) ? v as RecordLike : {};
 const string = (v: unknown): string | null => typeof v === "string" && v.length <= 256 ? v : null;
@@ -45,7 +45,7 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
     return record.kind === "item" && record.turnId === localRef && isClaudePrompt(item) && uuid
       ? { kind: "start", type: "host-user-frame", id: uuid, at: time(record.accountingAt) } : null;
   }
-  const data = engine === "codex" ? object(record.payload) : engine === "copilot" ? object(record.data) : record;
+  const data = engine === "codex" ? object(record.payload) : engine === "copilot" || engine === "antigravity" ? object(record.data) : record;
   const type = string(data.type ?? record.type) ?? "";
   const id = identity(data.turn_id ?? data.turnId ?? record.uuid ?? record.id);
   const at = time(record.timestamp);
@@ -97,7 +97,19 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
   if (type === "assistant.message") {
     return { kind: "continue", type, id: null, at, tools: Array.isArray(data.toolRequests) && data.toolRequests.length > 0 };
   }
-  if (["assistant.turn_end", "abort", "session.shutdown"].includes(type)) return { kind: "terminal", type, id: null, at, outcome: type === "abort" ? "interrupted" : type === "session.shutdown" ? "error" : "completed" };
+  if (["assistant.turn_end", "abort", "session.shutdown", "session.error", "session.quota_exhausted"].includes(type)) {
+    return {
+      kind: "terminal",
+      type,
+      id: null,
+      at,
+      outcome: type === "abort"
+        ? "interrupted"
+        : type === "session.shutdown" || type === "session.error" || type === "session.quota_exhausted"
+          ? "error"
+          : "completed",
+    };
+  }
   if (["assistant.turn_start", "tool.execution_start", "tool.execution_complete"].includes(type)) return { kind: "continue", type, id: null, at };
   return null;
 }
@@ -117,8 +129,8 @@ export function foldNativeBoundaries(events: readonly BoundaryEvent[], engine: E
         turn.tools = 0; continue;
       }
       if (engine === "claude" && turn?.state === "closed") recoveryClosed = { ...turn };
-      if (engine === "copilot") promptOrdinal++;
-      turn = { state: "open", nativeId: event.id, localRef, opening: event.type, closing: null, at: event.at, tools: 0, ...(engine === "copilot" ? { promptOrdinal, modelReady: false } : {}), ...(engine === "claude" ? { ancestry: event.id ? [event.id] : [] } : {}) };
+      if (engine === "copilot" || engine === "antigravity") promptOrdinal++;
+      turn = { state: "open", nativeId: event.id, localRef, opening: event.type, closing: null, at: event.at, tools: 0, ...(engine === "copilot" || engine === "antigravity" ? { promptOrdinal, modelReady: false } : {}), ...(engine === "claude" ? { ancestry: event.id ? [event.id] : [] } : {}) };
       requestedTools = false;
     } else if (event.kind === "terminal") {
       // Native ids on Codex terminals must agree with the latest start, or
@@ -130,7 +142,7 @@ export function foldNativeBoundaries(events: readonly BoundaryEvent[], engine: E
       if (!turn && engine !== "codex") continue;
       turn = { state: "closed", nativeId: turn?.nativeId ?? event.id, localRef,
         opening: turn?.opening ?? null, closing: event.type, at: event.at, tools: 0,
-        ...(engine === "claude" ? { ancestry: [...new Set([...(turn?.ancestry ?? []), ...(event.id ? [event.id] : [])])].slice(-16) } : {}), ...(engine === "copilot" ? { promptOrdinal } : {}), ...(event.outcome ? { outcome: event.outcome } : {}) };
+        ...(engine === "claude" ? { ancestry: [...new Set([...(turn?.ancestry ?? []), ...(event.id ? [event.id] : [])])].slice(-16) } : {}), ...(engine === "copilot" || engine === "antigravity" ? { promptOrdinal } : {}), ...(event.outcome ? { outcome: event.outcome } : {}) };
     } else if (turn) {
       if (event.type === "tool-summary") {
         turn.tools = Math.max(event.toolFloor ?? 0, turn.tools + (event.toolDelta ?? 0));
@@ -150,7 +162,7 @@ export function foldNativeBoundaries(events: readonly BoundaryEvent[], engine: E
       }
       if (event.kind === "tool") { turn.tools++; turn.state = "open"; turn.closing = null; }
       else if (event.kind === "output") { turn.tools = Math.max(0, turn.tools - 1); }
-      else if (engine === "copilot") {
+      else if (engine === "copilot" || engine === "antigravity") {
         if (event.type === "assistant.turn_start" || event.type === "assistant.message") turn.modelReady = true;
         if (event.tools !== undefined) { requestedTools = event.tools; turn.tools = event.tools ? 1 : 0; }
         turn.state = "open"; turn.closing = null;

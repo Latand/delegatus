@@ -182,7 +182,7 @@ export interface StructuredRecoveryDependencies {
   transportAvailable?: () => boolean;
   registry?: AgentRegistry;
   client?: RuntimeHostClient | null;
-  resolveAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null, project: string | null) => AccountContext;
+  resolveAccount?: (engine: "claude" | "codex" | "copilot" | "antigravity", accountId: string | null, project: string | null) => AccountContext;
   spawn?: typeof spawnStructuredConversation;
   processIdentity?: () => ProcessIdentity;
   requestDeliveryDrain?: () => void;
@@ -341,7 +341,7 @@ class StructuredRecoverySupersededError extends Error {
 
 interface RecoveryCandidate {
   conversationId: ViewerConversationId;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   key: SessionKey;
   path: string;
   accountId: string | null;
@@ -426,8 +426,8 @@ function candidateFor(
     ...(entry?.launchProfile ?? {}),
     cwd: entry?.launchProfile?.cwd || generation.launchProfile.cwd || entry?.cwd,
   });
-  /* Copilot reports no plan limits (design 3.11), so nothing can park it. */
-  const hostPark = hostLive && conversation.engine !== "copilot"
+  /* Copilot reports no plan limits (design 3.11); Antigravity quota lands in Slice 4. */
+  const hostPark = hostLive && conversation.engine !== "copilot" && conversation.engine !== "antigravity"
     ? park(conversation.engine, hostAccountId, snapshot, inheritedProfile.model)
     : null;
   const publishReady = hostLive && !hostPark;

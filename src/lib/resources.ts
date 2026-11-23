@@ -215,7 +215,7 @@ export interface StructuredHostRecord {
   agentState?: import("./agentState/model").AgentStateDisplay;
   /** Session key id (`<engine>:<sessionId>`), the row's stable target suffix. */
   id: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   sessionId: string | null;
   pid: number;
   /** Kernel start-time token captured with the pid; a recycled pid fails it. */
@@ -253,7 +253,7 @@ export interface StructuredHostKillRef {
   pid: number;
   startIdentity: string;
   bootEpoch: string | null;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   sessionId: string | null;
   conversationId: string | null;
   seat: boolean | null;

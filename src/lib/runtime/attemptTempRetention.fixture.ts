@@ -43,7 +43,9 @@ import { attemptTempAuthority, attemptScratchAuthority, backfillAttemptTempReten
 
 if (process.argv[2] === "--production-report") {
   Date.now = () => Number(process.argv[3]);
-  const report = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }) },
+  const report = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }),
+    ...(process.argv.includes("--fixture-container-inventory")
+      ? { references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true) } : {}) },
     { ...process.env, LLV_TEMP_SWEEP: "on" });
   process.stdout.write(JSON.stringify(report) + "\n");
   process.exit(0);

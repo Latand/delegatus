@@ -47,13 +47,15 @@ export type AccountCatalog = {
   /** GitHub Copilot accounts (docs/design/copilot-engine.md 3.9). `active` is
       empty until a managed account exists or one is selected. */
   copilot?: { active: string; accounts: CopilotAccountSummary[] };
+  /** Antigravity CLI (`agy`) single host account (docs/design/antigravity-engine.md §3.6). */
+  antigravity?: { active: string; accounts: AccountSummary[] };
 };
 
 /** A Copilot account adds the copyable login command a managed home needs. */
 export type CopilotAccountSummary = AccountSummary & { loginCommand: string | null };
 
 /** Every engine an account can launch. */
-export type AccountEngineName = Extract<Engine, "claude" | "codex" | "copilot">;
+export type AccountEngineName = Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">;
 
 export type AccountContext = {
   engine: AccountEngineName;
