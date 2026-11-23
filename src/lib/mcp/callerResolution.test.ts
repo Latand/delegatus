@@ -80,7 +80,7 @@ test.skipIf(process.platform !== "linux")("an unwatchable retained host path lea
   }
 
   await prepareRegistryForNativeCallers(registry, new AbortController().signal);
-  expect(registry.mcpNativeCallerSnapshot(session, null).snapshot?.nativeHostsIncomplete).toBe(true);
+  expect(registry.mcpNativeCallerSnapshot(session, null).snapshot).toMatchObject({ nativeHostsIncomplete: true });
 });
 
 test("every mutating tool resolves its policy caller once, including concurrent calls", async () => {

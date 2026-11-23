@@ -4,6 +4,7 @@ import path from "node:path";
 import { writeAuto, initialAuto } from "./selfUpdate/auto";
 import { writeDrain } from "./selfUpdate/drain";
 import { expect, test, spyOn } from "bun:test";
+import { normalizeRegistry } from "./agent/registry";
 import { loopProgressProbe } from "./agent/registryLockHolderFixture";
 import { checkStateDatabasesBeforeStores, completeViewerRuntimeActivation, createViewerStartupBarrier, prepareRegistryForNativeCallers, registerViewerRuntime, settleInterruptedTransfers, startCurrentReleaseControllers } from "./viewerInstrumentation";
 
@@ -17,6 +18,7 @@ test("legacy worktree catalog refinement cannot delay controller activation or r
     runIdentityMigration: async () => { order.push("identity"); },
     publishHotStateActivation: () => { order.push("hot-state"); },
     runClaudeLoginRecovery: async () => { order.push("login-recovery"); },
+    startStructuredHosts: null,
     startControllers: async () => { order.push("controllers"); },
     publishViewerReleaseReady: () => { order.push("release-ready"); },
     refineBoard: async () => { refinementStarted = true; await refinement; order.push("catalog-and-board-refinement"); },
@@ -36,7 +38,10 @@ test("native caller readiness waits through every artifact batch before controll
   let batches = 0;
   const controller = new AbortController();
   const registry = {
-    prepareReadOnlySnapshot: async () => { order.push("snapshot"); },
+    prepareReadOnlySnapshot: async () => {
+      order.push("snapshot");
+      return normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+    },
     prepareNativeCallerArtifacts: async () => {
       while (batches < 2) {
         batches += 1;
@@ -52,6 +57,7 @@ test("native caller readiness waits through every artifact batch before controll
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: async () => {},
       publishHotStateActivation: () => {},
+      startStructuredHosts: null,
       startControllers: async () => { order.push("controllers"); },
       publishViewerReleaseReady: () => { order.push("release-ready"); },
     });

@@ -464,7 +464,7 @@ describe("revision-bound Viewer readiness", () => {
       try {
         const address = server.address() as { port: number };
         const ready = await waitForViewerReadiness(address.port, {
-          revision, timeoutMs: 5_000, headers: () => ({ "x-test-probe": "fixture", ...fixtureHeaders() }), onPhase: journal.observe,
+          revision, timeoutMs: 5_000, probeAccess: () => ({ headers: { "x-test-probe": "fixture", ...fixtureHeaders() } }), onPhase: journal.observe,
         });
         expect(ready).toBeTrue();
         journal.finish();
@@ -486,7 +486,7 @@ describe("revision-bound Viewer readiness", () => {
   test("a perimeter refusal falls back with launcher credentials, while missing credentials and pending readiness fail", async () => {
     const attempts: string[] = [];
     const legacy = await waitForViewerReadiness(43123, {
-      revision, timeoutMs: 1_000, headers: fixtureHeaders,
+      revision, timeoutMs: 1_000, probeAccess: () => ({ headers: fixtureHeaders() }),
       probe: async (_port, endpoint, _revision, _budget, headers) => {
         attempts.push(`${endpoint}:${headers[authorizationHeader] ?? "missing"}`);
         return endpoint === "/api/ready" ? { httpStatus: 403 } : { httpStatus: headers[authorizationHeader] ? 200 : 403 };
@@ -496,19 +496,21 @@ describe("revision-bound Viewer readiness", () => {
     expect(legacy).toBeTrue();
     expect(attempts).toEqual([`/api/ready:${fixtureAuthorization}`, `/api/files:${fixtureAuthorization}`]);
 
-    attempts.length = 0;
-    let refusalNow = 0;
-    const refused = await waitForViewerReadiness(43123, {
-      revision, timeoutMs: 1_000, now: () => refusalNow, headers: () => ({}),
-      probe: async (_port, endpoint, _revision, budget, headers) => {
-        attempts.push(endpoint);
-        refusalNow += endpoint === "/api/ready" ? 1 : budget;
-        return { httpStatus: endpoint === "/api/ready" ? 404 : headers[authorizationHeader] ? 200 : 403 };
-      },
-      sleep: async () => {},
-    });
-    expect(refused).toBeFalse();
-    expect(attempts).toEqual(["/api/ready", "/api/files"]);
+    for (const headers of [{}, fixtureHeaders()]) {
+      attempts.length = 0;
+      let refusalNow = 0;
+      const refused = await waitForViewerReadiness(43123, {
+        revision, timeoutMs: 1_000, now: () => refusalNow, probeAccess: () => ({ headers }),
+        probe: async (_port, endpoint, _revision, budget) => {
+          attempts.push(endpoint);
+          refusalNow += endpoint === "/api/ready" ? 1 : budget;
+          return { httpStatus: endpoint === "/api/ready" ? 404 : 403 };
+        },
+        sleep: async () => {},
+      });
+      expect(refused).toBeFalse();
+      expect(attempts).toEqual(["/api/ready", "/api/files"]);
+    }
 
     attempts.length = 0;
     let now = 0;

@@ -1183,20 +1183,22 @@ async function main() {
     if (webRestartTimer) clearTimeout(webRestartTimer);
     webRestartTimer = null;
   };
-    const probeHeaders = () => {
-      /* The key the serving Viewer asks for, by the rule its own boot follows:
-         the one this launcher hands it, else the key file while the
-         phone-access flag or a links gate is present. The files are read on
-         every probe, because the Viewer can turn its gate on while this
-         launcher keeps running. A key no header can carry never reaches
-         fetch: its header error would include the rejected value. */
-      const childEnv = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
-      const key = viewerBootGateKey({ ...childEnv, LLV_STATE_DIR: childEnv.LLV_STATE_DIR || runtimeHostConfig.stateDirectory });
-      const value = typeof key === "string" ? key.trim() : "";
-      const headers = probeHeadersFrom(runtimeHostConfig.stateDirectory);
-      if (value && !/[^\t\x20-\x7e]/.test(value)) headers.authorization = `Bearer ${value}`;
-      return headers;
-    };
+  const probeAccess = () => {
+    /* The key the serving Viewer asks for, by the rule its own boot follows:
+       the one this launcher hands it, else the key file while the
+       phone-access flag or a links gate is present. The files are read on
+       every probe, because the Viewer can turn its gate on while this
+       launcher keeps running. A key no header can carry never reaches
+       fetch: its header error would include the rejected value. */
+    const childEnv = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
+    const key = viewerBootGateKey({ ...childEnv, LLV_STATE_DIR: childEnv.LLV_STATE_DIR || runtimeHostConfig.stateDirectory });
+    const value = typeof key === "string" ? key.trim() : "";
+    const headers = probeHeadersFrom(runtimeHostConfig.stateDirectory);
+    const accessKeyUnsendable = Boolean(key) && (!value || /[^\t\x20-\x7e]/.test(value));
+    if (value && !accessKeyUnsendable) headers.authorization = `Bearer ${value}`;
+    return { headers, accessKeyUnsendable };
+  };
+  const probeHeaders = () => probeAccess().headers;
   relaunch = createRelaunch({ paths: selfUpdate, installRoot: packageRoot, entry: cliPath,
     release: serverRef.release, servingRelease: () => serverRef.release, record: {
       set: (...input) => record?.set(...input), remove: () => record?.remove(),
@@ -1353,7 +1355,7 @@ async function main() {
   };
   const waitForReadiness = async (timeoutMs, { child, state, readiness }, revision) => {
     const ready = await waitForViewerReadiness(options.port, {
-      revision, timeoutMs, headers: probeHeaders, onPhase: readiness.observe,
+      revision, timeoutMs, probeAccess, onPhase: readiness.observe,
       assertChildRunning: () => {
         if (state.spawnError) throw new Error(`could not start (${state.spawnError.message})`);
         if (child.exitCode !== null || child.signalCode !== null) {

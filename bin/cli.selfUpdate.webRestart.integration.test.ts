@@ -42,6 +42,7 @@ const server = Bun.serve({
     const pathname = new URL(request.url).pathname;
     const authenticated = request.headers.get("authorization") === "Bearer " + process.env.LLV_TOKEN;
     appendFileSync(join(process.env.LLV_STATE_DIR, "fixture-readiness.jsonl"), JSON.stringify({ pathname, authenticated, pid: process.pid }) + "\\n");
+    if (pathname === "/api/files") return new Response(null, { status: authenticated ? 200 : 403 });
     if (pathname === "/") {
       if (!authenticated) return new Response("Forbidden", { status: 403 });
       return new Response('<script src="/_next/static/chunks/app.js"></script>', { headers: { "content-type": "text/html" } });
@@ -74,6 +75,7 @@ process.on("SIGTERM", stop);
   });
   expect(after.web).toMatchObject({ state: "healthy", revision: next.sha.slice(0, 7), error: null });
   const probes = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(probes).toContainEqual({ pathname: "/api/files", authenticated: true, pid: after.web.pid });
   expect(probes).toContainEqual({ pathname: "/", authenticated: true, pid: after.web.pid });
   expect(probes).toContainEqual({ pathname: "/_next/static/chunks/app.js", authenticated: false, pid: after.web.pid });
   expect((await fetch(`http://127.0.0.1:${running.port}/`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(200);

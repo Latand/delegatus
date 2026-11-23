@@ -426,14 +426,14 @@ function probeViewer(port, endpoint, revision, timeoutMs, headers) {
   }).catch(error => ({ error: readinessError(error) }));
 }
 
-/** The release is fixed for this child's lifetime. A 404 identifies the
- * legacy protocol and spends the remainder of the same budget on it.
+/** The release is fixed for this child's lifetime. A 404 or a perimeter
+ * refusal switches to the legacy probe within the same budget.
  * @param {number} port
- * @param {{ revision: string | null, timeoutMs: number, assertChildRunning?: () => void, headers?: () => Record<string, string>, onPhase?: (event: ReadinessPhase) => void, now?: () => number, sleep?: (ms: number) => Promise<void>, probe?: typeof probeViewer }} options
+ * @param {{ revision: string | null, timeoutMs: number, assertChildRunning?: () => void, probeAccess?: () => { headers: Record<string, string>, accessKeyUnsendable?: boolean }, onPhase?: (event: ReadinessPhase) => void, now?: () => number, sleep?: (ms: number) => Promise<void>, probe?: typeof probeViewer }} options
  */
 export async function waitForViewerReadiness(port, {
   revision, timeoutMs, assertChildRunning = () => {},
-  headers = () => ({}), onPhase = () => {},
+  probeAccess = () => ({ headers: {}, accessKeyUnsendable: false }), onPhase = () => {},
   now = () => performance.now(), sleep = readinessSleep, probe = probeViewer,
 }) {
   const deadline = now() + timeoutMs;
@@ -442,20 +442,23 @@ export async function waitForViewerReadiness(port, {
     assertChildRunning();
     // Legacy candidates still pass through their release's access perimeter.
     // Keep the launcher's probe credentials on the fallback request too.
-    const probeHeaders = headers();
+    const { headers, accessKeyUnsendable } = probeAccess();
     if (now() >= deadline) break;
     onPhase({ phase: "files", status: "running", endpoint });
     const started = now();
     const result = started < deadline
-      ? await probe(port, endpoint, revision, Math.max(1, Math.ceil(Math.min(5_000, deadline - started))), probeHeaders)
+      ? await probe(port, endpoint, revision, Math.max(1, Math.ceil(Math.min(5_000, deadline - started))), headers)
       : { error: "deadline" };
     const elapsedMs = now() - started;
     const { httpStatus } = result;
     const error = result.error ?? (started + elapsedMs > deadline ? "deadline"
       : endpoint === READY_ROUTE && httpStatus === 200 && result.revision !== revision ? "revision-mismatch" : undefined);
+    const accessRefused = httpStatus === 401 || httpStatus === 403;
+    // With an unsendable key, the old Viewer can only prove it is listening.
+    // The separate page probe still refuses the replacement and drives rollback.
     const ready = !error && (endpoint === READY_ROUTE
       ? httpStatus === 200
-      : httpStatus >= 200 && httpStatus < 400);
+      : (httpStatus >= 200 && httpStatus < 400) || (accessKeyUnsendable && accessRefused));
     onPhase({ phase: "files", status: ready ? "ready" : "failed", endpoint, httpStatus, error, elapsedMs,
       detail: error ?? (ready ? null : "http-status") });
     assertChildRunning();
@@ -463,7 +466,7 @@ export async function waitForViewerReadiness(port, {
     // A legacy build's proxy can deny an unknown route before Next can return
     // 404. Only those perimeter statuses identify the old protocol; 409/503
     // from a present endpoint remain decisive readiness refusals.
-    if (endpoint === READY_ROUTE && [401, 403, 404].includes(httpStatus)) {
+    if (endpoint === READY_ROUTE && (httpStatus === 404 || accessRefused)) {
       endpoint = LEGACY_READY_ROUTE;
       continue;
     }
