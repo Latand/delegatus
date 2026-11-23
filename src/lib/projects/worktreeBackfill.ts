@@ -329,16 +329,17 @@ export async function runWorktreeRecoveryAtStartup(
   log: (...args: unknown[]) => void = console.error,
   rescan: () => Promise<void> = rescanRecoveredWorktrees,
   deferRescan?: (refresh: () => Promise<void>) => void,
-): Promise<void> {
+): Promise<{ folded: number; leftAlone: number }> {
   const warn = () => log("[worktree recovery] startup recovery deferred; the next startup or full catalog scan retries");
-  let rescanRequired: boolean;
-  try { ({ rescanRequired } = applyWorktreeBackfill()); }
-  catch { warn(); return; }
-  if (!rescanRequired) return;
+  // This return is the worker's commit receipt. Transaction errors must reach
+  // the caller so the seat tick stays fenced and recovery can retry.
+  const { report, rescanRequired } = applyWorktreeBackfill();
+  if (!rescanRequired) return { folded: report.folded.length, leftAlone: report.leftAlone.length };
   const refresh = async () => {
     try { await rescan(); }
     catch { warn(); }
   };
   if (deferRescan) deferRescan(refresh);
   else await refresh();
+  return { folded: report.folded.length, leftAlone: report.leftAlone.length };
 }

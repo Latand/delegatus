@@ -2139,7 +2139,7 @@ export class SqliteAgentRegistryStore {
       }
       const aliases = this.nativeArtifactRead!.index.aliases(canonical);
       if (aliases && aliases.size > MCP_CALLER_CANDIDATE_LIMIT) {
-        snapshot.nativeHostsIncomplete = true;
+        snapshot.nativeHostsLookupLimitExceeded = true;
         return snapshot;
       }
       const spellings = new Set([artifact, canonical, ...(aliases ?? [])]);
@@ -2151,7 +2151,7 @@ export class SqliteAgentRegistryStore {
         LIMIT ?`).all(JSON.stringify([...spellings]), MCP_CALLER_CANDIDATE_LIMIT + 1);
       this.onRowPayloadRead?.("entries", hosts.length);
       if (hosts.length > MCP_CALLER_CANDIDATE_LIMIT) {
-        snapshot.nativeHostsIncomplete = true;
+        snapshot.nativeHostsLookupLimitExceeded = true;
         return snapshot;
       }
       const entries = Object.fromEntries(hosts.map(row => [row.row_key, this.parseRow("entries", row.row_key, row.value_json, true)]));

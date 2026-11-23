@@ -109,6 +109,7 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
     const relative = transcript && projects ? path.relative(projects, transcript) : null;
     if (!transcript || !relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)
       || path.basename(transcript) !== `${record.sessionId}.jsonl`) return refuse("transcript-outside-home");
+    if (snapshot.nativeHostsLookupLimitExceeded) return { ...refuse("evidence-incomplete"), retryable: false };
     if (snapshot.nativeHostsIncomplete) return refuse("evidence-incomplete");
     if (snapshot.nativeArtifact !== undefined && snapshot.nativeArtifact !== transcript) return refuse("session-changed");
     for (const entry of Object.values(snapshot.entries)) {

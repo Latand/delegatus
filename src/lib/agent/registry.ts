@@ -1065,6 +1065,8 @@ export interface RegistryFile {
 export type McpCallerRegistryRows = Pick<RegistryFile, "conversations" | "entries"> & {
   nativeGenerationAmbiguous?: true;
   nativeHostsIncomplete?: true;
+  /** The completed bounded lookup found more host evidence than it can inspect. */
+  nativeHostsLookupLimitExceeded?: true;
   nativeArtifact?: string;
 };
 

@@ -231,14 +231,14 @@ test("startup failure is deferred and retried on the next startup with no lost a
   const journal = path.join(f.state, "lifecycle-journal.json");
   fs.writeFileSync(journal, "broken");
   const logs: unknown[] = [];
-  await runWorktreeRecoveryAtStartup(message => logs.push(message), async () => {});
-  expect(logs).toHaveLength(1);
+  await expect(runWorktreeRecoveryAtStartup(message => logs.push(message), async () => {})).rejects.toThrow("unreadable");
+  expect(logs).toHaveLength(0);
   expect(readWorktreeRecoveries()).toEqual([]);
   expect(canonicalProject(directoryProjectId(cwd))).toBe(directoryProjectId(cwd));
   fs.writeFileSync(journal, JSON.stringify({ version: 1, lastSeq: 0, events: [], retired: [] }));
   await runWorktreeRecoveryAtStartup(message => logs.push(message), async () => {});
   expect(readLifecycleJournal().events[0]?.summary).toContain("sibling-name-and-branch-hint");
-  expect(logs).toHaveLength(1);
+  expect(logs).toHaveLength(0);
 });
 
 test.each([undefined, "tool", "mcp", "launcher", "deploy-adapter"])("automatic recovery refuses operator state for owner %s before reading any file", owner => {
@@ -302,6 +302,27 @@ test("the leased startup worker publishes recovery for the serving process", asy
   expect(projectInfoFromCwd(cwd)?.project).toBe(f.identity.project);
   expect(boardFor(f.identity.project, board).prefs.manual).toEqual(["conversation_old"]);
   expect(readLifecycleJournal().events.map(event => event.seq)).toEqual([1]);
+}, 30_000);
+
+test("the leased worker rejects an uncommitted recovery and returns a commit receipt on retry", async () => {
+  const f = fixture();
+  const cwd = f.repo + "-review";
+  const source = directoryProjectId(cwd);
+  f.transcript(cwd, { branch: "confirmed" }); f.write();
+  const board = path.join(f.state, "board.json");
+  expect(patchBoard(source, 0, { manual: ["conversation_old"] }, board).ok).toBe(true);
+  const database = new Database(path.join(f.state, "state.sqlite"));
+  database.exec("CREATE TRIGGER recovery_commit_failure BEFORE DELETE ON state_rows WHEN OLD.collection = 'board' BEGIN SELECT RAISE(ABORT, 'induced board failure'); END");
+  try {
+    await expect(recoverWorktreesInWorker(f.state, new AbortController().signal)).rejects.toThrow();
+    expect(readWorktreeRecoveries()).toEqual([]);
+    expect(canonicalProject(source)).toBe(source);
+    database.exec("DROP TRIGGER recovery_commit_failure");
+    const receipt = await recoverWorktreesInWorker(f.state, new AbortController().signal);
+    expect(receipt).toEqual({ folded: 1, leftAlone: 0 });
+    expect(canonicalProject(source)).toBe(f.identity.project);
+    expect(boardFor(f.identity.project, board).prefs.manual).toEqual(["conversation_old"]);
+  } finally { database.close(); }
 }, 30_000);
 
 test("a failed startup catalog refresh retries on the next startup without repeating the fold", async () => {

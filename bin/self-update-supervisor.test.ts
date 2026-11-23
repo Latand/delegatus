@@ -545,7 +545,7 @@ describe("revision-bound Viewer readiness", () => {
     expect(attempts).toEqual(["/api/ready"]);
   });
 
-  test("protocol is selected from the release artifact and keys must round-trip exactly", () => {
+  test("protocol is selected from the release artifact and keys must round-trip exactly", async () => {
     const dir = join(root, "protocol-release");
     const route = join(dir, ".next/server/app/api/ready/route.js");
     const source = join(dir, "src/app/api/ready/route.ts");
@@ -556,6 +556,27 @@ describe("revision-bound Viewer readiness", () => {
     // artifact was made before the route existed.
     expect(releaseHasRevisionReadiness({ dir })).toBeTrue();
     rmSync(source);
+    expect(releaseHasRevisionReadiness({ dir })).toBeFalse();
+    const packagedRoute = join(dir, "dist/standalone/.next/server/app/api/ready/route.js");
+    mkdirSync(join(dir, "dist/standalone/.next/server/app/api/ready"), { recursive: true });
+    writeFileSync(join(dir, "dist/standalone/server.js"), "");
+    writeFileSync(packagedRoute, "export {};");
+    expect(releaseHasRevisionReadiness({ dir })).toBeTrue();
+    const endpoints: string[] = [];
+    let now = 0;
+    const accepted = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 1_000, now: () => now,
+      allowLegacyFallback: !releaseHasRevisionReadiness({ dir }),
+      probe: async (_port, endpoint) => {
+        endpoints.push(endpoint);
+        now += 1;
+        return { httpStatus: endpoint === "/api/ready" ? 404 : 200 };
+      }, sleep: async milliseconds => { now += milliseconds; },
+    });
+    expect(accepted).toBeFalse();
+    expect(endpoints.length).toBeGreaterThan(0);
+    expect(endpoints.every(endpoint => endpoint === "/api/ready")).toBeTrue();
+    rmSync(packagedRoute);
     expect(releaseHasRevisionReadiness({ dir })).toBeFalse();
     writeFileSync(route, "export {};\n");
     expect(releaseHasRevisionReadiness({ dir })).toBeTrue();

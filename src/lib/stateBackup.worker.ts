@@ -16,8 +16,8 @@ process.stdin.on("end", async () => {
   if (request.operation === "worktree-recovery") {
     const { withStateMutationActivation } = await import("./state/stateMutationBarrier");
     const { runWorktreeRecoveryAtStartup } = await import("./projects/worktreeBackfill");
-    await withStateMutationActivation(() => runWorktreeRecoveryAtStartup());
-    process.stdout.write(`${JSON.stringify({ outcomes: [], worktreeRecoveryFinished: true })}\n`);
+    const recovery = await withStateMutationActivation(() => runWorktreeRecoveryAtStartup());
+    process.stdout.write(`${JSON.stringify({ outcomes: [], worktreeRecoveryFinished: true, worktreeRecovery: recovery })}\n`);
     return;
   }
   const response = request.operation === "checkpoint" ? await (async () => {

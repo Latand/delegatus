@@ -6,7 +6,7 @@ import { writeDrain } from "./selfUpdate/drain";
 import { expect, test, spyOn } from "bun:test";
 import { normalizeRegistry } from "./agent/registry";
 import { loopProgressProbe } from "./agent/registryLockHolderFixture";
-import { checkStateDatabasesBeforeStores, completeViewerRuntimeActivation, createViewerStartupBarrier, prepareRegistryForNativeCallers, registerViewerRuntime, settleInterruptedTransfers, startCurrentReleaseControllers } from "./viewerInstrumentation";
+import { checkStateDatabasesBeforeStores, completeViewerRuntimeActivation, createViewerStartupBarrier, prepareRegistryForNativeCallers, registerViewerRuntime, retryWorktreeRecoveryUntilCommitted, settleInterruptedTransfers, startCurrentReleaseControllers } from "./viewerInstrumentation";
 
 test("legacy worktree catalog refinement cannot delay controller activation or release readiness", async () => {
   const order: string[] = [];
@@ -44,6 +44,28 @@ test("seat tick actions wait for committed worktree recovery without blocking co
   finishRecovery();
   await recovery;
   await Promise.resolve();
+  expect(tickStarted).toBeTrue();
+});
+
+test("a failed recovery keeps the seat tick fenced until a same-generation retry commits", async () => {
+  const controller = new AbortController();
+  let attempts = 0;
+  let tickStarted = false;
+  const recovery = retryWorktreeRecoveryUntilCommitted(async () => {
+    attempts++;
+    if (attempts === 1) throw new Error("transaction held");
+    return { folded: 1, leftAlone: 0 };
+  }, controller.signal, () => {}, 0);
+  await startCurrentReleaseControllers({}, {
+    loadFlowPipelineController: async () => ({ startFlowPipelineController: () => {} }),
+    loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
+    loadSeatTick: async () => ({ startSeatTick: () => { tickStarted = true; return true; } }),
+  }, { beforeSeatTick: recovery });
+  await Promise.resolve();
+  expect(tickStarted).toBeFalse();
+  await recovery;
+  await Promise.resolve();
+  expect(attempts).toBe(2);
   expect(tickStarted).toBeTrue();
 });
 

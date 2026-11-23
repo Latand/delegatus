@@ -1133,6 +1133,7 @@ export interface BackupWorkerResponse {
   incidents?: StorageIncident[];
   recoveryFailure?: string;
   worktreeRecoveryFinished?: true;
+  worktreeRecovery?: { folded: number; leftAlone: number };
   checkpoint?: import("./hotStateAuthority").HotStateCheckpoint["revisions"];
 }
 
@@ -1206,10 +1207,16 @@ export async function checkpointHotStateRollbackMirrorsInWorker(stateDirectory: 
 
 /** The catalog and transcript evidence are read synchronously. Run recovery
     and its follow-up scan on the leased worker, outside the HTTP thread. */
-export async function recoverWorktreesInWorker(stateDirectory: string, signal: AbortSignal): Promise<void> {
+export async function recoverWorktreesInWorker(stateDirectory: string, signal: AbortSignal): Promise<{ folded: number; leftAlone: number }> {
   assertStateStartupMutation(stateDirectory, "worktree project recovery");
   const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "worktree-recovery" }, { signal });
-  if (response.worktreeRecoveryFinished !== true) throw new Error("the worktree recovery worker returned no verdict");
+  const recovery = response.worktreeRecovery;
+  if (response.worktreeRecoveryFinished !== true || !recovery
+    || !Number.isSafeInteger(recovery.folded) || recovery.folded < 0
+    || !Number.isSafeInteger(recovery.leftAlone) || recovery.leftAlone < 0) {
+    throw new Error("the worktree recovery worker returned no commit or verified no-op result");
+  }
+  return recovery;
 }
 
 async function runDurabilityWorker(

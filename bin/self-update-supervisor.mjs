@@ -418,7 +418,10 @@ export function releaseHasRevisionReadiness(release) {
   // build output predates that source. Compiled route output covers packaged
   // releases that omit the source tree.
   return existsSync(join(release.dir, "src/app/api/ready/route.ts"))
-    || existsSync(join(release.dir, ".next/server/app/api/ready/route.js"));
+    || existsSync(join(release.dir, ".next/server/app/api/ready/route.js"))
+    // npm packages execute from dist/standalone. Its compiled route tree is
+    // the protocol declaration for that selected artifact.
+    || existsSync(join(release.dir, "dist/standalone/.next/server/app/api/ready/route.js"));
 }
 
 /** Authorization values must survive both header construction and parsing

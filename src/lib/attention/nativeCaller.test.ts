@@ -117,6 +117,14 @@ test("incomplete native artifact evidence stays fail-closed and tells the caller
   expect(nativeAdmissionMessage({ reason: "evidence-incomplete", retryable: true })).toContain("Repeat the same request");
 });
 
+test("a completed native host lookup over its fixed candidate cap refuses without a pointless retry", () => {
+  const f = fixture();
+  Object.assign(f.snapshot, { nativeHostsLookupLimitExceeded: true });
+  expect(resolveNativeCaller(f.sources)).toEqual({ kind: "refused", reason: "evidence-incomplete", retryable: false });
+  Object.assign(f.snapshot, { nativeHostsLookupLimitExceeded: undefined, nativeHostsIncomplete: true });
+  expect(resolveNativeCaller(f.sources)).toEqual({ kind: "refused", reason: "evidence-incomplete", retryable: true });
+});
+
 test("a session id owned twice is refused", () => {
   const f = fixture(); Object.assign(f.snapshot.conversations, { other: { ...f.conversation, id: "conversation_other" } });
   refused(f.sources, "generation-ambiguous");

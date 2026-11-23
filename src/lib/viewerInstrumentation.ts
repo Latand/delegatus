@@ -643,6 +643,32 @@ export async function startCurrentReleaseControllers(
   scheduleAccountMigrationController(startAccountMigrationController, accountControllerDelayMs(env));
 }
 
+/** Keep the seat tick fenced through transient recovery failures. The signal
+ * belongs to this Viewer generation, so a retired release cannot publish a
+ * late success into its successor's gate. */
+export async function retryWorktreeRecoveryUntilCommitted(
+  recover: () => Promise<unknown>, signal: AbortSignal,
+  onFailure: (error: unknown) => void = () => {}, delayMs = 1_000,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      await recover();
+      if (signal.aborted) throw signal.reason ?? new Error("Viewer generation retired during worktree recovery");
+      return;
+    } catch (error) {
+      if (signal.aborted) throw signal.reason ?? error;
+      onFailure(error);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(done, delayMs);
+        function done() { signal.removeEventListener("abort", abort); resolve(); }
+        function abort() { clearTimeout(timer); signal.removeEventListener("abort", abort); reject(signal.reason ?? new Error("Viewer generation retired")); }
+        signal.addEventListener("abort", abort, { once: true });
+      });
+    }
+  }
+  throw signal.reason ?? new Error("Viewer generation retired before worktree recovery committed");
+}
+
 export async function initializeOperatorSpawnCapabilityAtStartup(
   env: Readonly<Record<string, string | undefined>> = process.env,
   log: (line: string) => void = (line) => console.error(line),
@@ -1141,13 +1167,11 @@ export async function registerViewerRuntime(): Promise<void> {
           // those records after controllers and readiness are available.
           const { recoverWorktreesInWorker } = await import("@/lib/state/durability");
           assertStartupActive();
-          try {
-            await recoverWorktreesInWorker(hotStateDirectory, startupAbort.signal);
-            finishWorktreeRecovery();
-          } catch {
-            assertStartupActive();
-            console.error("[worktree recovery] startup worker failed; the next startup or full catalog scan retries");
-          }
+          await retryWorktreeRecoveryUntilCommitted(
+            () => recoverWorktreesInWorker(hotStateDirectory, startupAbort.signal), startupAbort.signal,
+            error => console.error("[worktree recovery] startup worker failed; retrying in this Viewer generation", error instanceof Error ? error.name : "unknown"),
+          );
+          finishWorktreeRecovery();
           assertStartupActive();
           const { prepareBoardSummary } = await import("@/app/api/files/operatorProjection");
           assertStartupActive();

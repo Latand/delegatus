@@ -62,6 +62,37 @@ test("compaction preserves unverified delivery evidence and blocks exact-key rep
   }
 });
 
+test("native caller snapshot marks a completed host lookup over the candidate cap as hard evidence incomplete", async () => {
+  if (process.platform !== "linux") return;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-native-host-cap-"));
+  const artifact = path.join(directory, `${crypto.randomUUID()}.jsonl`);
+  fs.writeFileSync(artifact, "{}");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const conversation = registry.ensureConversation("claude", artifact, "default");
+    const sessionId = conversation.generations[0]!.id;
+    const host = {
+      kind: "codex-app-server" as const, endpoint: "stdio:native-cap",
+      process: { pid: 71, startIdentity: "native-cap-process" }, eventCursor: 0,
+      protocolVersion: "v2", writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+    };
+    for (let index = 0; index < 257; index++) {
+      registry.upsert({
+        key: { engine: "codex", sessionId: `native-cap-${index}` }, artifactPath: artifact, cwd: directory,
+        accountId: "default", launchProfile: emptyLaunchProfile({ cwd: directory }), status: "unhosted",
+        host: null, structuredHost: host, claimEpoch: 0, claimOwner: null, pendingAction: null,
+      });
+    }
+    await registry.prepareNativeCallerArtifacts();
+    const snapshot = registry.mcpNativeCallerSnapshot(sessionId, null);
+    expect(snapshot?.snapshot.nativeHostsLookupLimitExceeded).toBeTrue();
+    expect(snapshot?.snapshot.nativeHostsIncomplete).toBeUndefined();
+  } finally {
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("lazy owner enumeration retains loaded, modified, inserted and deleted transaction rows", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-owner-enumeration-"));
   const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
