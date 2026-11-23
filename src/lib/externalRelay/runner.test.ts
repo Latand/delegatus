@@ -4420,7 +4420,9 @@ for (const leaseWorker of [false, true]) test(`long rich refusal is recorded and
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "The answer was too long to deliver after the service refused its original format. Please request a shorter answer." } });
     expect(completions).toHaveLength(2);
     const record = readAnswerRecord(paired.id, request.target_id, request.request_id);
-    expect(record).toMatchObject({ outcome: "failure_notice", delivery: "accepted", answer: { text }, completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
+    expect(record).toMatchObject({ outcome: "failure_notice", delivery: "accepted", answer: { text },
+      drops: [{ part: "answer", reason: "rich_limit_exceeded" }],
+      completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
     expect(log.mock.calls).toContainEqual(["External relay completion refused", { request: request.request_id.slice(0, 8), status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }]);
     expect(JSON.stringify(record?.completionRefusals)).not.toContain("private parser input");
   } finally { log.mockRestore(); await service.close(); }
@@ -4500,22 +4502,26 @@ test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])
     await Bun.write(${JSON.stringify(marker)},path.dirname(out));
     console.log(JSON.stringify({type:'thread.started',thread_id:'thread_image'}));
     console.log(JSON.stringify({type:'item.completed',item:{type:'image_generation_call'}}));
-    await Bun.write(out,JSON.stringify({action:${JSON.stringify(mode==="ignore"?"ignore":"reply")},text:${JSON.stringify(mode==="media_only_refused"?"":"Picture")},reply_to:'m1',format:'plain',buttons:[],attachments:[{path:${mode==="outside"?JSON.stringify(path.join(root,"outside.png")):"file"},kind:'photo',caption:'Picture'}]}));`);
+    await Bun.write(out,JSON.stringify({action:${JSON.stringify(mode==="ignore"?"ignore":"reply")},text:${JSON.stringify(mode==="media_only_refused"?"":"Picture")},reply_to:'m1',format:'plain',buttons:[],attachments:[{path:${mode==="outside"?JSON.stringify(path.join(root,"outside.png")):"file"},kind:'photo',caption:''}]}));`);
   const paired=relay(`${server.origin}/v1`);
   try {
-    const result=await runClaimedRequest(paired,request,undefined,{command});
+    const result=await runClaimedRequestWithLeaseWorker(paired,request,undefined,{command,leaseWorker:mode==="ok"});
     seenRunDir=fs.readFileSync(marker,"utf8");
     if(mode==="lease_lost") {expect(result).toBeNull();expect(sent).toEqual([]);}
     else if(mode==="media_only_refused") expect(result).toMatchObject({outcome:"failed",reason:"invalid_answer"});
     else if(mode==="ignore") expect(result).toMatchObject({outcome:"answered",answer:{action:"ignore",text:"",format:"plain",buttons:[]}});
     else if(mode==="refused") expect(result).toMatchObject({outcome:"failed",reason:"invalid_answer"});
     else if(mode==="outside") {expect(result).toMatchObject({outcome:"answered"});expect(result && "answer" in result ? result.answer.attachments??[]:[]).toEqual([]);}
-    else {expect(result).toMatchObject({outcome:"answered",answer:{attachments:[{kind:"photo",caption:"Picture"}]}});}
+    else {expect(result).toMatchObject({outcome:"answered",answer:{attachments:[{kind:"photo",caption:""}]}});}
     expect(puts).toBe(mode==="outside" || mode==="ignore"?0:1);
     expect(fs.existsSync(seenRunDir)).toBe(false);
     const record=readAnswerRecord(paired.id,request.target_id,request.request_id);
     expect(record).toHaveProperty("features",request.features);
     expect(JSON.stringify(record)).not.toContain(seenRunDir);
+    if(mode==="ok") {
+      expect(sent).toEqual([result]);
+      expect(record).toMatchObject({delivery:"accepted",drops:[],answer:{attachments:[{kind:"photo",caption:""}]}});
+    }
     if(mode==="outside") expect(record).toHaveProperty("drops",[{part:"attachment",index:0,reason:"outside_run"}]);
     if(mode.includes("refused")) expect(record).toHaveProperty("drops",[{part:"attachment",reason:"unsupported_media_type"},...(mode==="refused"?[{part:"answer",reason:"attachment_not_ready"}]:[])]);
   } finally {await server.close();}
@@ -4526,7 +4532,8 @@ test.each([["claude",false,false],["codex",false,false],["codex",true,false],["c
   const { richRequest }=await import("./rich.fixture");
   const { viewerMcpBindings, productionDomainDependencies }=await import("@/lib/mcp/bindings");
   const ownerHome=fs.mkdtempSync(path.join("/tmp","relay-rich-owner-"));
-  fs.mkdirSync(path.join(ownerHome,"handoff")); const file=path.join(ownerHome,"handoff","report.md");fs.writeFileSync(file,"# Report");
+  const handoff=path.join(ownerHome,"handoff");
+  fs.mkdirSync(handoff); let file=path.join(handoff,"report.md");fs.writeFileSync(file,"# Report");
   const oldHome=process.env.HOME, oldState=process.env.LLV_STATE_DIR; process.env.HOME=ownerHome; process.env.LLV_STATE_DIR=path.join(ownerHome,"state");
   const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}_${leaseLost}_${composed}`;
   request.input.requester={key:"u1",is_owner:true,is_admin:true,is_anonymous_admin:false,can_delete_messages:true,can_restrict_members:true};
@@ -4548,7 +4555,18 @@ test.each([["claude",false,false],["codex",false,false],["codex",true,false],["c
   const lastMessage=composed ? "Answered in the chat.\n\nSources:\n- [Source](https://example.com/source)" : text;
   try {
     const result=await runClaimedRequest(paired,request,undefined,{timeoutMs:10000,ownerPorts:{
-      launch:async body=>{expect(body.prompt).toContain("<format>");expect(body.prompt).toContain("relay_answer");return {status:202,body:{conversationId}};},
+      launch:async body=>{
+        expect(body.prompt).toContain("<format>");
+        expect(body.prompt).toContain(JSON.stringify(handoff));
+        const runDir=readRunLedger().runs.find(row=>row.requestId===request.request_id)!.runDir;
+        const outputDir=path.join(runDir,"outbox");
+        expect(body.prompt).toContain(JSON.stringify(outputDir));
+        if(composed) {
+          file=path.join(outputDir,"report.md");
+          fs.writeFileSync(file,"# Report");
+        }
+        return {status:202,body:{conversationId}};
+      },
       observe:async()=>{
         try{
           await expect(binding({deputy:"seat"}).relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
