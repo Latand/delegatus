@@ -65,6 +65,356 @@ test("a check awaits its production journal and closes completed phase spans", a
   }
 });
 
+async function withCheckJournal(name: string, worker: boolean, run: (file: string) => Promise<void>) {
+  const { stopSeatTickJournalWorkerForTests } = await import("./seatTickJournalWorker");
+  const previous = {
+    LLV_SEAT_TICK_AUDIT_FILE: process.env.LLV_SEAT_TICK_AUDIT_FILE,
+    LLV_SEAT_TICK_JOURNAL_WORKER: process.env.LLV_SEAT_TICK_JOURNAL_WORKER,
+  };
+  const file = path.join(SANDBOX, name, "runs.ndjson");
+  process.env.LLV_SEAT_TICK_AUDIT_FILE = file;
+  process.env.LLV_SEAT_TICK_JOURNAL_WORKER = worker ? "1" : "0";
+  try { await run(file); }
+  finally {
+    if (worker) await stopSeatTickJournalWorkerForTests();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+test("the next sweep records a check once after a legacy journal writer releases its lock", async () => {
+  const { readSeatTickRecords } = await import("./journalStore");
+  const { withFileTransactionAsync } = await import("@/lib/state/fileTransaction");
+  await withCheckJournal("busy-legacy-journal", false, async file => {
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    const entered = deferred(), release = deferred();
+    const held = withFileTransactionAsync(file, "fixture journal writer", async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    try {
+      await entered.promise;
+      await reconcileSeatTick(rig.deps, [PROJECT]);
+      expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
+    } finally {
+      release.resolve();
+      await held;
+    }
+    await reconcileSeatTick(rig.deps, []);
+    await reconcileSeatTick(rig.deps, []);
+    expect(readSeatTickRecords(10, file, PROJECT)).toEqual([expect.objectContaining({
+      project: PROJECT, at: new Date(NOW).toISOString(),
+    })]);
+  });
+});
+
+test("every sweep checks the full roster while SQLite is busy and a successor records every result once", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
+  await withCheckJournal("busy-sqlite-journal", false, async file => {
+    importLegacySeatTickJournal(file);
+    const initialBatch = writePendingCheck(file, 1);
+    const unfinishedBatch = writePendingCheck(file, 2);
+    const temporary = `${unfinishedBatch}.tmp`;
+    fs.renameSync(unfinishedBatch, temporary);
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    const projects = ["second-project", "third-project", PROJECT];
+    rig.deps.sources!.activeSeats = () => projects;
+    const started: string[] = [];
+    rig.deps.workStarted = work => { started.push(work.project); };
+    let choices = 0;
+    Object.assign(rig.deps, {
+      ownsTraffic: () => true, recordSuccessions: () => [], release: null, maintenance: null,
+      curation: {
+        reconcile: async () => null,
+        launchIfDue: async () => { choices++; return null; },
+      },
+    });
+    const database = new Database(statePath("state.sqlite"));
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const realNow = performance.now.bind(performance);
+    let offsetMs = 0;
+    const monotonic = spyOn(performance, "now").mockImplementation(() => realNow() + offsetMs);
+    const checkIds: string[] = [];
+    const pendingDir = `${file}.pending-checks`;
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      for (let sweep = 0; sweep < 4; sweep++) {
+        const records = await reconcileSeatTick(rig.deps);
+        expect(started.splice(0)).toEqual(projects);
+        expect(choices).toBe(sweep + 1);
+        expect(records.map(record => record.project)).toEqual(projects);
+        checkIds.push(...records.map(record => record.timing!.checkId));
+        // Let the next sweep try the backlog again against the same holder.
+        offsetMs += 60_001;
+      }
+      const direct = await runSeatTickCheck(PROJECT, rig.deps);
+      expect(started).toEqual([PROJECT]);
+      checkIds.push(direct!.timing!.checkId);
+      expect(new Set(checkIds).size).toBe(checkIds.length);
+      expect(readSeatTickRecords(50, file)).toEqual([]);
+      expect(fs.readdirSync(pendingDir).filter(name => name.endsWith(".json"))).toHaveLength(checkIds.length + 1);
+      const tickWarnings = warn.mock.calls.filter(([line]) => String(line).startsWith("[seat tick] "));
+      expect(tickWarnings).toEqual([
+        [expect.stringMatching(/journal is busy \(StateLockDeferredError\).*saved for retry/)],
+      ]);
+    } finally {
+      database.close();
+      monotonic.mockRestore();
+      warn.mockRestore();
+    }
+
+    const child = Bun.spawn([process.execPath, "-e", `
+      import fs from "node:fs";
+      import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+      const batch = ${JSON.stringify(initialBatch)};
+      const bytes = fs.readFileSync(batch);
+      const sweep = () => reconcileSeatTick({
+        ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null,
+      }, []);
+      await sweep();
+      // A stopped publisher may leave its batch behind after SQLite commits.
+      fs.writeFileSync(batch, bytes, { flag: "wx", mode: 0o600 });
+      await sweep();
+    `], { stdout: "ignore", stderr: "pipe" });
+    const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    if (exit !== 0) throw new Error(`seat tick successor exited ${exit}: ${stderr}`);
+    expect(stderr.split("\n").filter(line => /^\[seat tick\].*journal/.test(line))).toEqual([]);
+    // The successor leaves the unfinished batch for its publisher.
+    expect(fs.readdirSync(pendingDir)).toEqual([path.basename(temporary)]);
+    const recorded = readSeatTickRecords(50, file);
+    expect(recorded[0]).toMatchObject({ project: PROJECT, items: 1 });
+    expect(recorded.slice(1).map(record => record.timing?.checkId).sort()).toEqual(checkIds.sort());
+  });
+});
+
+function writePendingCheck(file: string, order: number) {
+  const id = order.toString(16).padStart(32, "0");
+  const record = { schemaVersion: 1, at: new Date(NOW).toISOString(), project: PROJECT, seatEpoch: null,
+    verdict: "quiet", reasons: [], items: order, deferred: 0, eventsThrough: 0, delivery: null };
+  const directory = `${file}.pending-checks`;
+  fs.mkdirSync(directory, { recursive: true });
+  const batch = path.join(directory, `${String(order).padStart(16, "0")}-${id}.json`);
+  fs.writeFileSync(batch, JSON.stringify([{ id, record }]));
+  return batch;
+}
+
+test("one healthy sweep drains all visible batches in order before journaling its own check", async () => {
+  const { readSeatTickRecords } = await import("./journalStore");
+  await withCheckJournal("healthy-journal-backlog", false, async file => {
+    for (const order of [3, 1, 2]) writePendingCheck(file, order);
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    const records = await reconcileSeatTick(rig.deps, [PROJECT]);
+    expect(records).toHaveLength(1);
+    expect(readSeatTickRecords(10, file, PROJECT)).toEqual([
+      ...[1, 2, 3].map(items => expect.objectContaining({ items })),
+      records[0],
+    ]);
+    expect(fs.readdirSync(`${file}.pending-checks`)).toEqual([]);
+  });
+});
+
+test("a check journals directly when the SQLite writer releases after 150 ms", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { readSeatTickRecords } = await import("./journalStore");
+  await withCheckJournal("short-sqlite-hold", true, async file => {
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    // Warm the real worker and create the directory before watching publication.
+    await runSeatTickCheck(PROJECT, rig.deps);
+    const directory = `${file}.pending-checks`;
+    const database = new Database(statePath("state.sqlite"));
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let release: ReturnType<typeof setTimeout> | undefined;
+    const watcher = fs.watch(directory, () => {
+      if (release || !fs.readdirSync(directory).some(name => name.endsWith(".json"))) return;
+      release = setTimeout(() => database.exec("ROLLBACK"), 150);
+    });
+    rig.deps.workStarted = () => { database.exec("BEGIN IMMEDIATE"); };
+    try {
+      const record = await runSeatTickCheck(PROJECT, rig.deps);
+      if (!record) throw new Error("expected a seat tick record after the writer released");
+      expect(release).toBeDefined();
+      expect(database.inTransaction).toBe(false);
+      expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(2);
+      expect(readSeatTickRecords(10, file, PROJECT).at(-1)).toEqual(record);
+      expect(fs.readdirSync(directory)).toEqual([]);
+      expect(warn.mock.calls).toEqual([]);
+    } finally {
+      clearTimeout(release);
+      watcher.close();
+      database.close();
+      warn.mockRestore();
+    }
+  });
+});
+
+test.each(["append", "replay"] as const)("a non-busy %s failure names the SQLite error class once and keeps the result for retry", async mode => {
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
+  await withCheckJournal(`rejected-journal-${mode}`, mode === "append", async file => {
+    importLegacySeatTickJournal(file);
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    const database = new Database(statePath("state.sqlite"));
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      database.exec(`CREATE TRIGGER reject_journal_insert BEFORE INSERT ON state_rows
+        WHEN NEW.row_key LIKE 'r:%' BEGIN SELECT RAISE(ABORT, 'fixture refusal'); END`);
+      if (mode === "replay") writePendingCheck(file, 1);
+      await reconcileSeatTick(rig.deps, mode === "append" ? [PROJECT] : []);
+      await reconcileSeatTick(rig.deps, []);
+      const tickWarnings = warn.mock.calls.filter(([line]) => String(line).startsWith("[seat tick] "));
+      expect(tickWarnings).toEqual([[expect.stringContaining("SQLiteError")]]);
+      expect(String(tickWarnings[0]![0])).not.toMatch(/busy/i);
+      expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
+      expect(fs.readdirSync(`${file}.pending-checks`)).toHaveLength(1);
+    } finally {
+      database.exec("DROP TRIGGER IF EXISTS reject_journal_insert");
+      database.close();
+      warn.mockRestore();
+    }
+  });
+});
+
+test("a wall-clock rollback cannot extend the bounded pending-journal cooldown", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
+  const { SeatTickPendingJournal } = await import("./seatTickPendingJournal");
+  await withCheckJournal("monotonic-journal-cooldown", false, async file => {
+    importLegacySeatTickJournal(file);
+    writePendingCheck(file, 1);
+    const wall = spyOn(Date, "now").mockReturnValue(1_000);
+    let monotonic = 10;
+    const clock = spyOn(performance, "now").mockImplementation(() => monotonic);
+    const database = new Database(statePath("state.sqlite"));
+    const journal = new SeatTickPendingJournal(file);
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      await journal.ready();
+      expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
+      database.close();
+      wall.mockReturnValue(-3_599_000);
+      monotonic += 60_001;
+      await journal.ready();
+      expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+      await journal.ready();
+      expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+    } finally {
+      database.close();
+      wall.mockRestore();
+      clock.mockRestore();
+    }
+  });
+});
+
+test("a process exit after a busy append reply leaves its result for one successor replay", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
+  await withCheckJournal("exit-after-busy-reply", true, async file => {
+    importLegacySeatTickJournal(file);
+    const database = new Database(statePath("state.sqlite"));
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      const child = Bun.spawn([process.execPath, "-e", `
+        import { SeatTickPendingJournal } from "./src/lib/monitor/seatTickPendingJournal";
+        await new SeatTickPendingJournal(process.env.LLV_SEAT_TICK_AUDIT_FILE).append({
+          schemaVersion: 1, at: "2026-08-28T12:00:00.000Z", project: "viewer", seatEpoch: null,
+          verdict: "quiet", reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null,
+        });
+        process.exit(0);
+      `], { stdout: "pipe", stderr: "pipe" });
+      const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      expect({ exit, stderr }).toEqual({ exit: 0, stderr: expect.stringContaining("FileTransactionBusyError") });
+      expect(fs.readdirSync(`${file}.pending-checks`).filter(name => name.endsWith(".json"))).toHaveLength(1);
+      expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
+    } finally { database.close(); }
+    const recover = Bun.spawn([process.execPath, "-e", `
+      import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+      await reconcileSeatTick({ ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null }, []);
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(await recover.exited).toBe(0);
+    expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+    const replay = Bun.spawn([process.execPath, "-e", `
+      import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+      await reconcileSeatTick({ ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null }, []);
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(await replay.exited).toBe(0);
+    expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+  });
+});
+
+test("a worker reply lost after commit replays its preassigned receipt exactly once", async () => {
+  const { readSeatTickRecords } = await import("./journalStore");
+  const { configureSeatTickJournalWorkerForTests, stopSeatTickJournalWorkerForTests } = await import("./seatTickJournalWorker");
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { importLegacySeatTickJournal } = await import("./journalStore");
+  const previous = { audit: process.env.LLV_SEAT_TICK_AUDIT_FILE, worker: process.env.LLV_SEAT_TICK_JOURNAL_WORKER };
+  const restoreWorker = configureSeatTickJournalWorkerForTests({ timeoutMs: 1_000, dropReplies: 1 });
+  const file = path.join(SANDBOX, "lost-worker-reply", "runs.ndjson");
+  process.env.LLV_SEAT_TICK_AUDIT_FILE = file;
+  process.env.LLV_SEAT_TICK_JOURNAL_WORKER = "1";
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    await reconcileSeatTick(rig.deps, [PROJECT]);
+    expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+    const [batch] = fs.readdirSync(`${file}.pending-checks`);
+    expect(batch).toBeDefined();
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+      await reconcileSeatTick({ ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null }, []);
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(await child.exited).toBe(0);
+    expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+
+    const busyFile = path.join(SANDBOX, "lost-busy-reply", "runs.ndjson");
+    process.env.LLV_SEAT_TICK_AUDIT_FILE = busyFile;
+    importLegacySeatTickJournal(busyFile);
+    const database = new Database(statePath("state.sqlite"));
+    let databaseOpen = true;
+    const restoreBusyReply = configureSeatTickJournalWorkerForTests({ timeoutMs: 1_500, dropReplies: 1 });
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      const busyRig = harness({ state: RECENT });
+      delete busyRig.deps.appendRecord;
+      await reconcileSeatTick(busyRig.deps, [PROJECT]);
+      expect(readSeatTickRecords(10, busyFile, PROJECT)).toEqual([]);
+      database.close();
+      databaseOpen = false;
+      const retry = Bun.spawn([process.execPath, "-e", `
+        import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+        await reconcileSeatTick({ ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null }, []);
+      `], { stdout: "pipe", stderr: "pipe" });
+      expect(await retry.exited).toBe(0);
+      expect(readSeatTickRecords(10, busyFile, PROJECT)).toHaveLength(1);
+    } finally {
+      if (databaseOpen) database.close();
+      restoreBusyReply();
+    }
+  } finally {
+    warn.mockRestore();
+    restoreWorker();
+    await stopSeatTickJournalWorkerForTests();
+    if (previous.audit === undefined) delete process.env.LLV_SEAT_TICK_AUDIT_FILE;
+    else process.env.LLV_SEAT_TICK_AUDIT_FILE = previous.audit;
+    if (previous.worker === undefined) delete process.env.LLV_SEAT_TICK_JOURNAL_WORKER;
+    else process.env.LLV_SEAT_TICK_JOURNAL_WORKER = previous.worker;
+  }
+});
+
 function deployRig() {
   const rig = harness({ state: RECENT, seatDeployments: [{ deploymentId: "deploy-own", conversationId: CONVERSATION }],
     deployments: { "deploy-own": { phase: "succeeded", terminal: true, revision: "a".repeat(40) } },
@@ -588,23 +938,22 @@ test.skipIf(!childMode)("seat deadline subprocess case", async () => {
 
 test.skipIf(!!childMode)("a deadline in a real process preserves the wake for the restarted controller", async () => {
   const filename = path.join(fs.mkdtempSync(path.join(SANDBOX, "deadline-process-")), "state.json");
+  const runner = path.resolve(import.meta.dir, "../../../scripts/owned-runner.ts");
   for (const mode of ["expire", "recover"]) {
-    const child = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "seat deadline subprocess case"], {
-      env: { ...process.env, LLV_SEAT_DEADLINE_TEST_MODE: mode, LLV_SEAT_DEADLINE_TEST_STATE: filename }, stdio: ["pipe", "pipe", "pipe"],
+    const child = spawn(process.execPath, [runner, "--budget", "15000", process.execPath,
+      "test", import.meta.path, "--test-name-pattern", "seat deadline subprocess case"], {
+      env: { ...process.env, LLV_SEAT_DEADLINE_TEST_MODE: mode, LLV_SEAT_DEADLINE_TEST_STATE: filename }, stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "", errors = "";
     child.stdout.on("data", chunk => { output += chunk.toString(); });
     child.stderr.on("data", chunk => { errors += chunk.toString(); });
-    const timeout = setTimeout(() => { child.kill("SIGKILL"); }, 15_000);
-    try {
-      const code = await new Promise<number | null>((resolve, reject) => {
-        child.once("error", reject); child.once("exit", resolve);
-      });
-      expect({ code, errors }).toMatchObject({ code: 0 });
-      expect(output).toContain(`DEADLINE_DONE:${mode}`);
-      expect(output).toContain("PREPARATION_READY");
-      if (mode === "expire") expect(output).toMatch(/DEADLINE_READY:[^\s]+/);
-      else expect(output).toMatch(/RECOVERY_READY:[^\s]+/);
-    } finally { clearTimeout(timeout); child.stdin.end(); }
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject); child.once("close", resolve);
+    });
+    expect({ code, errors }).toMatchObject({ code: 0 });
+    expect(output).toContain(`DEADLINE_DONE:${mode}`);
+    expect(output).toContain("PREPARATION_READY");
+    if (mode === "expire") expect(output).toMatch(/DEADLINE_READY:[^\s]+/);
+    else expect(output).toMatch(/RECOVERY_READY:[^\s]+/);
   }
 });

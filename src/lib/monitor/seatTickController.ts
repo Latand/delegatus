@@ -59,7 +59,8 @@ import type { ProposalIssue } from "./githubEvidence";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { recordedProjectRemote, projectAliasSnapshot, withProjectAliasSnapshot } from "@/lib/projects/aliases";
-import { appendSeatTickRecord, appendSeatTickRecordAsync, readSeatTickAlarmRecords, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
+import { appendSeatTickRecord, readSeatTickAlarmRecords, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
+import { SeatTickPendingJournal } from "./seatTickPendingJournal";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
@@ -1473,11 +1474,26 @@ const dispatchCall = new AsyncLocalStorage<{ clientMessageId: string; token: str
 export async function runSeatTickCheck(project: string, dependencies: SeatTickControllerDependencies = {}): Promise<SeatTickRunRecord | null> {
   const policy = dependencies.policy === undefined ? seatTickPolicy() : dependencies.policy;
   if (!policy) return null;
+  const journal = dependencies.appendRecord ? null : new SeatTickPendingJournal();
+  if (journal) await journal.ready();
+  return runSeatTickCheckWithJournal(project, { ...dependencies, policy }, journal);
+}
+
+async function runSeatTickCheckWithJournal(
+  project: string,
+  dependencies: SeatTickControllerDependencies,
+  journal: SeatTickPendingJournal | null,
+): Promise<SeatTickRunRecord | null> {
+  const policy = dependencies.policy === undefined ? seatTickPolicy() : dependencies.policy;
+  if (!policy) return null;
   project = canonicalOrchestratorProject(project);
   const work = new SeatTickWork(project, Math.min(dependencies.workBudgetMs ?? policy.checkIntervalMs / 4, policy.checkIntervalMs / 4),
     dependencies.workClock, dependencies.workScheduler);
   dependencies.workStarted?.(work);
-  const writeRecord = dependencies.appendRecord ?? appendSeatTickRecordAsync;
+  let journaled = true;
+  const writeRecord = dependencies.appendRecord ?? (async (row: SeatTickRunRecord) => {
+    if (!await journal!.append(row)) journaled = false;
+  });
   let journalWrites = Promise.resolve();
   let pendingRecord: SeatTickRunRecord | undefined;
   const flushRecord = () => {
@@ -1558,7 +1574,9 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
     console.error(`[seat tick] ${record.detail}`);
     append(record);
   } finally { work.close(); flushRecord(); await journalWrites; }
-  if (record) {
+  // An alarm needs the check's complete journal history, which may still be
+  // queued. The check result itself is already in the pending journal.
+  if (record && journaled) {
     // This notice must survive the deadline that ended the failed check. It
     // gets one separate, bounded admission and carries no delivery authority.
     try {
@@ -1602,11 +1620,9 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
 /**
  * One check of one project: read, decide, maybe wake, journal.
  *
- * Returns the journal line it wrote, so a caller — a test, or a future status
- * surface — reads exactly what was recorded rather than a parallel summary. It
- * throws only if the journal append itself fails; every other failure becomes
- * an `error` line, because a check that vanished silently is the ambiguity this
- * journal exists to remove.
+ * Returns the journal line it produced, including an `error` line for a
+ * failed check. The caller owns writing that line and any earlier settlement
+ * lines.
  */
 async function runSeatTickAttempt(
   project: string,
@@ -3075,6 +3091,11 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   }
   // A foreground resume uses the same handoff/drain fence as the clock.
   if (requestedProjects && (activeRestartGate(statePath("self-update", "auto-admission.json")) || activeDrain())) return [];
+  // The audit backlog can outlive the last seat in the roster. Give it the
+  // first attempt before the sweep opens other stores or starts new checks.
+  const journal = dependencies.appendRecord ? null : new SeatTickPendingJournal();
+  if (journal) await journal.ready();
+  if (generation !== tickHost.__llvSeatTickGeneration) return [];
   followProjectSuccessions(dependencies.recordSuccessions);
   const records: SeatTickRunRecord[] = [];
   const projects = new Set(requestedProjects?.map(canonicalOrchestratorProject) ?? seatTickProjects(sources));
@@ -3083,7 +3104,8 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   if (incumbent && !requestedProjects) projects.add(canonicalOrchestratorProject(incumbent.project));
   const curator = dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation;
   let curationAllowed = true;
-  const curation = curator ? curationForSweep(curator, [...projects].sort(), () => curationAllowed && generation === tickHost.__llvSeatTickGeneration, true) : null;
+  const curation = curator ? curationForSweep(curator, [...projects].sort(),
+    () => curationAllowed && generation === tickHost.__llvSeatTickGeneration, true) : null;
   // Enqueue the whole roster before any owed callbacks. A waiting project has
   // no SeatTickWork and spends no budget; every project gets a turn this pass.
   const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {
@@ -3091,7 +3113,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
     release: dependencies.release === undefined ? releaseControllerForSources(sources) : dependencies.release,
     curation,
     maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance,
-  })));
+  }, journal)));
   records.push(...checked.filter((record): record is SeatTickRunRecord => record !== null));
   // Curation chooses from refreshed wake stamps after the roster. Waiting for
   // that barrier inside a queued check would expire every earlier project.
@@ -3119,7 +3141,11 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
 export const SEAT_TICK_CHECK_CONCURRENCY = 1;
 
 type ActiveProjectCheck = { promise: Promise<SeatTickRunRecord | null>; work?: SeatTickWork; owed: boolean };
-function checkSeatTickProject(project: string, dependencies: SeatTickControllerDependencies): Promise<SeatTickRunRecord | null> {
+function checkSeatTickProject(
+  project: string,
+  dependencies: SeatTickControllerDependencies,
+  journal: SeatTickPendingJournal | null,
+): Promise<SeatTickRunRecord | null> {
   const checks = tickHost.__llvSeatTickProjects ??= new Map();
   const active = checks.get(project);
   if (active) {
@@ -3146,10 +3172,10 @@ function checkSeatTickProject(project: string, dependencies: SeatTickControllerD
       await yieldToRuntime();
       if (generation !== tickHost.__llvSeatTickGeneration) return null;
       kickTurboWork(project, dependencies.turbo);
-      return await runSeatTickCheck(project, { ...dependencies, workStarted: work => {
+      return await runSeatTickCheckWithJournal(project, { ...dependencies, workStarted: work => {
         entry.work = work;
         dependencies.workStarted?.(work);
-      } });
+      } }, journal);
     } catch (error) {
       console.error("[seat tick] check could not be journaled", error instanceof Error ? error.name : "unknown");
       return null;
@@ -3160,7 +3186,7 @@ function checkSeatTickProject(project: string, dependencies: SeatTickControllerD
         // A callback which arrived during this check is a fresh obligation.
         // Coalesce it once; the new check re-reads all durable state.
         const fresh = dependencies.curation?.fresh?.(project);
-        void checkSeatTickProject(project, fresh ? { ...dependencies, curation: fresh } : dependencies);
+        void checkSeatTickProject(project, fresh ? { ...dependencies, curation: fresh } : dependencies, journal);
       }
     }
   });
