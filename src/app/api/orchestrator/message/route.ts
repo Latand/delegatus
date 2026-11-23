@@ -45,11 +45,14 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse> {
     if (typeof body.machine !== "string" || !body.machine.trim() || typeof body.clientMessageId !== "string" || !body.clientMessageId.trim() || body.clientMessageId.length > 128) {
       return NextResponse.json({ error: "machine and clientMessageId are required for a linked relay", code: "malformed", admission: "refused" }, { status: 400 });
     }
+    if (body.boundMachineInstall !== undefined && body.boundMachineInstall !== body.machine) {
+      return NextResponse.json({ error: "bound machine identity does not match the selected machine", code: "malformed", admission: "refused" }, { status: 400 });
+    }
     const sender = linkedRelayCaller(req, project);
     if (!sender) return NextResponse.json({ error: "only this project's designated seat may relay over a link", code: "orchestrator_relay_refused", admission: "refused" }, { status: 403 });
     if (voice) return NextResponse.json({ error: "voice delegation requires the operator's confirmed proposal", code: "voice_admission_refused", admission: "refused" }, { status: 403 });
     try {
-      const link = resolveSeatMessageMachine(body.machine, project);
+      const link = resolveSeatMessageMachine(body.machine, project, { exactInstallOnly: body.boundMachineInstall === body.machine });
       if (link) return NextResponse.json(queueSeatMessage(link, project, body.text, sender.conversationId, body.clientMessageId, typeof body.seatMessageFence === "string" ? body.seatMessageFence : undefined));
     } catch (error) {
       if (error instanceof SeatMessageRefusal) return NextResponse.json({ error: error.message, code: error.code,

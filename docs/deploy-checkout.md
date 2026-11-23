@@ -61,6 +61,13 @@ stdout at 4 MiB. A missing owner, folded live owner, unreadable or projected
 tail, failed store read, or more than 200 live owners refuses publication.
 The census refreshes immediately before the stop under the same bound.
 
+The refresh includes busy standalone mergers with a durable role, current
+native generation and verified host and writer identities. The switch writes
+these observations to the private `checkout-mergers.json` inventory before
+submitting the service stop. Pipeline merger attempts keep their existing
+controller ownership. The post-switch verdict accounts for each captured
+standalone conversation, including one first seen in the final refresh.
+
 The baseline MCP health read remains mandatory and unchanged. A baseline
 readiness refusal prints only the failing check names (`http`,
 `runtimeSocket`, `mcp`, `service`). Re-run the read-only preflight at most five
@@ -226,6 +233,24 @@ outcome requests a decision after the bounded reads if serving is healthy.
 A terminal host-loss error without a live replacement
 records lost work. A stage's ordinary completed verdict also counts as completed
 work when its host exits.
+
+A surviving standalone merger keeps its original work. The replacement Viewer
+checks the captured host and writer before recording a continuation. It leaves
+live or unverifiable custody in place and checks again with the existing
+one-to-30-second startup backoff. The checkout recovery window is 15 minutes
+from the pre-stop capture. An explicit stop, a settled turn or a finished batch
+ends the recovery without starting a replacement. If the engine closed its
+turn while reporting the interruption, the pre-stop lock on the captured
+unfinished batch still calls for reconciliation, even if the driver removed
+the lock during shutdown.
+
+The existing interruption and delivery journals own the one continuation to
+the original conversation. A recovered switch outcome needs both a live host
+and the matching delivered continuation. Missing proof leaves the outcome
+unknown in the switch verdict. The continuation directs the original merger
+to verify its retained batch and each external operation before acting.
+Missing gate receipts grant no pass. Live, uncertain and terminal operations
+stay with their existing custody and evidence.
 
 Every serving sample also checks placement: the unit must configure
 `Slice=delegatus.slice`, its `ControlGroup` must be that slice's own

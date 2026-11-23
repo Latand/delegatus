@@ -13,7 +13,8 @@ import { endRequesterLease, requesterLeaseWriter, type RequesterLease } from "./
 
 export type TransportResult = Awaited<ReturnType<typeof completeRelayRequest>>;
 type Frame = { type: "http_refusal"; record: RelayHttpRefusal } | { type: "ready" } | { type: "heartbeat"; seq: number; phase: "attempt" | "acknowledged" | "failed" | "completion_pending" | "post_completion"; status: number; code?: string }
-  | { type: "refusal"; refusal: CompletionRefusal } | { type: "completion"; result?: TransportResult; error?: true } | { type: "refresh_features" } | { type: "drained" };
+  | { type: "refusal"; refusal: CompletionRefusal } | { type: "downgrade"; refusal: CompletionRefusal }
+  | { type: "completion"; result?: TransportResult; error?: true } | { type: "refresh_features" } | { type: "drained" };
 // A validated 128 KB answer may expand to 768 KB when JSON escapes control
 // characters. Keep an explicit per-frame cap with room for the envelope.
 const MAX_FRAME_BYTES = 1024 * 1024;
@@ -41,7 +42,8 @@ export class RelayLeaseTransport {
 
   constructor(private readonly relay: PairedRelay, private readonly requestId: string, private readonly targetId: string, private readonly leaseId: string,
     private readonly intervalMs: number, private readonly onHeartbeat: (frame: Extract<Frame, { type: "heartbeat" }>) => void,
-    initialProgress: ExternalRelayProgress | null = null, private readonly onRefreshFeatures?: () => void, launch = relayLeaseTransportLaunch(), private readonly onRefusal?: (refusal: CompletionRefusal) => void,
+    initialProgress: ExternalRelayProgress | null = null, private readonly onRefreshFeatures?: () => void, launch = relayLeaseTransportLaunch(),
+    private readonly onRefusal?: (refusal: CompletionRefusal) => void, private readonly onDowngrade?: (refusal: CompletionRefusal) => void,
     private readonly requesterLease?: RequesterLease) {
     this.child = spawnLeasedHelper("relay-lease", { command: launch.executable, args: [launch.workerPath], cwd: process.cwd(), env: process.env }, undefined,
       { input: true, stdout: "pipe", stderr: "ignore" });
@@ -81,6 +83,7 @@ export class RelayLeaseTransport {
         if (frame.type === "heartbeat") { this.onHeartbeat(frame); continue; }
         if (frame.type === "refresh_features") { this.onRefreshFeatures?.(); continue; }
         if (frame.type === "refusal") { console.error("External relay completion refused", { request: this.requestId.slice(0, 8), ...frame.refusal }); this.onRefusal?.(frame.refusal); continue; }
+        if (frame.type === "downgrade") { this.onDowngrade?.(frame.refusal); continue; }
         if (frame.type === "drained") { this.drainedResolve(); continue; }
         if (frame.type === "completion") {
           if (frame.result) this.completeResolve?.(frame.result);
@@ -135,7 +138,8 @@ export class InlineRelayLeaseTransport {
     private readonly leaseId: string, private readonly intervalMs: number,
     private readonly onHeartbeat: (frame: Extract<Frame, { type: "heartbeat" }>) => void,
     progress: ExternalRelayProgress | null, private readonly onRefreshFeatures?: () => void,
-    private readonly onRefusal?: (refusal: CompletionRefusal) => void, requesterLease?: RequesterLease) {
+    private readonly onRefusal?: (refusal: CompletionRefusal) => void, private readonly onDowngrade?: (refusal: CompletionRefusal) => void,
+    requesterLease?: RequesterLease) {
     this.progressValue = progress;
     if (requesterLease) this.requesterLease = requesterLeaseWriter(requesterLease);
     this.nextDue = Date.now() + intervalMs;
@@ -214,7 +218,7 @@ export class InlineRelayLeaseTransport {
       ownerAuthorization ? () => ownerAuthorization === "status"
         ? ownerRelayStatusReplyAuthorized(this.relay.id, this.targetId, this.requestId, body, plainMax)
         : (ownerAuthorization === "failure" ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(this.relay.id, this.targetId, this.requestId) : undefined,
-      async () => { this.onRefreshFeatures?.(); }, plainMax, this.onRefusal);
+      async () => { this.onRefreshFeatures?.(); }, plainMax, this.onRefusal, undefined, this.onDowngrade);
     this.completing = false;
     this.accepted = result.delivery === "accepted";
     if (this.pendingLeaseLoss) {
