@@ -10,7 +10,7 @@ import { KanbanBoard, kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBesi
 import type { TaskMutationPorts } from "./useTaskMutations";
 import { DWELL_MS } from "./useColumnDwell";
 import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
-import { timelineStorageKey } from "./boardTimelineStore";
+import { earlierKey, timelineStorageKey } from "./boardTimelineStore";
 
 /* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
    what an open card holds, so its cards start open. */
@@ -27,6 +27,8 @@ Object.assign(globalThis, {
   document: dom.document,
   navigator: dom.navigator,
   localStorage: dom.localStorage,
+  sessionStorage: dom.sessionStorage,
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   Node: dom.Node,
   HTMLElement: dom.HTMLElement,
   HTMLInputElement: dom.HTMLInputElement,
@@ -108,29 +110,34 @@ const click = (element: Element | null | undefined) => {
   flushSync(() => (element as HTMLElement).click());
 };
 
-test.each(["completed", "needs_decision"] as const)("Timeline expands resumed work from a %s stage and keeps its completed bar", async state => {
+/** One stage conversation linked to its task, with a lane whose single attempt ran in it. */
+async function resumedLane(state: "completed" | "needs_decision") {
   const { buildPipeline } = await import("@/lib/pipelines/store");
   const { resolvePipelineRole, pipelineRoleLookup } = await import("@/lib/pipelines/roles");
-  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "timeline-mount-"));
+  const now = 1_800_000_000, stamp = (ago: number) => new Date((now - ago) * 1000).toISOString();
+  const file = { path: "/fixture/conversation-301.jsonl", conversationId: "conversation_fixture_301", title: "Conversation 301", project: "fixture", root: "claude-projects", kind: "session", fmt: "claude", engine: "claude",
+    mtime: now - 600, size: 100, activity: "live", proc: null, pid: null, parent: null, model: "opus", pendingQuestion: null, waitingInput: null, name: "conversation-301",
+    lastTurn: { startedAt: (now - 120) * 1000, endedAt: null }, lastAgentWorkAt: (now - 30) * 1000 } as unknown as FileEntry;
+  // The stage's conversation is linked to its task, as a launch records it; the chart takes «working» from the card, as the kanban counts it.
+  const owner = task("resumed", "assigned", "Resume the build", { assignments: [{ path: file.path, conversationId: file.conversationId!, panePid: null, state: "delivered", error: null, at: stamp(1800) }] });
+  const role = { roleId: "builder" as const };
+  const resolved = resolvePipelineRole({ role, engine: "codex", model: null, effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
+  if (!resolved.role) throw new Error(resolved.error);
+  const lane = buildPipeline({ id: "resumed-lane", task: owner.text, project: "fixture", taskIds: [owner.id], repoDir: "/fixture",
+    srcPath: null, srcConversationId: null, now: stamp(3600), stages: [{ id: "build", kind: "run", next: null, prompt: "Build", role, effectiveRole: resolved.role }] });
+  lane.state = state;
+  lane.cursor = state === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null };
+  lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
+    agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
+  return { owner, file, lane };
+}
+const noWrites: TaskMutationPorts = { patch: async () => { throw new Error("unexpected write"); }, read: async () => null, changed: () => {} };
+
+test.each(["completed", "needs_decision"] as const)("Timeline expands resumed work from a %s stage and keeps its completed bar", async state => {
   dom.localStorage.removeItem(timelineStorageKey("fixture"));
   try {
-    const now = 1_800_000_000, stamp = (ago: number) => new Date((now - ago) * 1000).toISOString();
-    const file = { path: "/fixture/conversation-301.jsonl", conversationId: "conversation_fixture_301", title: "Conversation 301", project: "fixture", root: "claude-projects", kind: "session", fmt: "claude", engine: "claude",
-      mtime: now - 600, size: 100, activity: "live", proc: null, pid: null, parent: null, model: "opus", pendingQuestion: null, waitingInput: null, name: "conversation-301",
-      lastTurn: { startedAt: (now - 120) * 1000, endedAt: null }, lastAgentWorkAt: (now - 30) * 1000 } as unknown as FileEntry;
-    // The stage's conversation is linked to its task, as a launch records it; the chart takes «working» from the card, as the kanban counts it.
-    const owner = task("resumed", "assigned", "Resume the build", { assignments: [{ path: file.path, conversationId: file.conversationId!, panePid: null, state: "delivered", error: null, at: stamp(1800) }] });
-    const role = { roleId: "builder" as const };
-    const resolved = resolvePipelineRole({ role, engine: "codex", model: null, effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
-    if (!resolved.role) throw new Error(resolved.error);
-    const lane = buildPipeline({ id: "resumed-lane", task: owner.text, project: "fixture", taskIds: [owner.id], repoDir: "/fixture",
-      srcPath: null, srcConversationId: null, now: stamp(3600), stages: [{ id: "build", kind: "run", next: null, prompt: "Build", role, effectiveRole: resolved.role }] });
-    lane.state = state;
-    lane.cursor = state === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null };
-    lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
-      agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
-    const { host } = mount([owner], { patch: async () => { throw new Error("unexpected write"); }, read: async () => null, changed: () => {} }, { files: [file], manual: [file], pipelines: [lane], barTrail: undefined });
+    const { owner, file, lane } = await resumedLane(state);
+    const { host } = mount([owner], noWrites, { files: [file], manual: [file], pipelines: [lane], barTrail: undefined });
     click(host.querySelector("[data-board-timeline-toggle]"));
     expect(host.querySelector('[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("0");
     click(host.querySelector('[data-timeline-task="resumed"] [data-timeline-expand]'));
@@ -138,7 +145,71 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
     expect(host.querySelectorAll('[data-live="1"] [data-timeline-bar]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-live="0"] [data-timeline-bar]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-timeline-strip]')).toHaveLength(2);
-  } finally { dom.localStorage.removeItem(timelineStorageKey("fixture")); fs.rmSync(directory, { recursive: true, force: true }); }
+  } finally { dom.localStorage.removeItem(timelineStorageKey("fixture")); }
+});
+
+test("a stage row of the chart opens its attempt's conversation by click and by keyboard, as the board's own chips do", async () => {
+  dom.localStorage.removeItem(timelineStorageKey("fixture"));
+  try {
+    const { owner, file, lane } = await resumedLane("completed");
+    const opened: string[] = [];
+    const { host } = mount([owner], noWrites, { files: [file], manual: [file], pipelines: [lane], barTrail: undefined, onConversationOpened: path => opened.push(path) });
+    click(host.querySelector("[data-board-timeline-toggle]"));
+    click(host.querySelector('[data-timeline-task="resumed"] [data-timeline-expand]'));
+    const rows = [...host.querySelectorAll<HTMLElement>(".bt-stage")];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.dataset.openable).toBe("1");
+    // A tap anywhere on the row, its bars included, opens the conversation.
+    click(rows[0]!.querySelector(".bt-stage-bar"));
+    expect(opened).toEqual([file.path]);
+    // The label is the keyboard stop (its keys are exercised against the chart alone, below).
+    expect(rows[0]!.querySelector(".bt-label")?.getAttribute("role")).toBe("button");
+  } finally { dom.localStorage.removeItem(timelineStorageKey("fixture")); }
+});
+
+test("a stage row with no recorded conversation is no control, and the earlier-work button keeps its own click", async () => {
+  const { BoardTimeline } = await import("./BoardTimeline");
+  const { owner, file, lane } = await resumedLane("completed");
+  const attempt = lane.runs[0]!.attempts[0]!;
+  const opened: unknown[] = [];
+  const card = { id: "task:resumed", project: "fixture", task: owner, working: 1, motion: { key: "working" } } as never;
+  const render = (attemptPatch: { conversationId: string | null; agentPath: string | null }, hours: number) => {
+    Object.assign(attempt, attemptPatch);
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    roots.push(root);
+    flushSync(() => root.render(<BoardTimeline project="fixture" cards={[card]} pipelines={[lane]} members={[{ taskId: owner.id, file }]} nowMs={1_800_000_000_000}
+      preference={{ view: "timeline", hours, expanded: { resumed: true, [earlierKey("resumed")]: true } }} onPreference={() => {}} onOpenConversation={target => opened.push(target)}
+      loadWork={async () => null} />));
+    return host;
+  };
+  const keyOn = (host: HTMLElement, key: string) => flushSync(() => host.querySelector(".bt-stage .bt-label")!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }) as unknown as Event));
+  const bare = render({ conversationId: null, agentPath: null }, 24);
+  const row = bare.querySelector<HTMLElement>(".bt-stage")!;
+  expect(row.dataset.openable).toBeUndefined();
+  expect(row.querySelector('[role="button"]')).toBeNull();
+  flushSync(() => row.click());
+  expect(opened).toEqual([]);
+  expect(bare.querySelector(".bt-stage .bt-label")?.getAttribute("role")).toBeNull();
+  // An attempt that ended before a one-hour window offers to page back to it; that button keeps its own click.
+  const at = (ago: number) => new Date((1_800_000_000 - ago) * 1000).toISOString();
+  Object.assign(attempt, { startedAt: at(18_000), completedAt: at(16_200) });
+  const recorded = render({ conversationId: file.conversationId!, agentPath: file.path }, 1);
+  const earlier = recorded.querySelector<HTMLElement>(".bt-earlier");
+  expect(earlier).toBeTruthy();
+  flushSync(() => earlier!.click());
+  expect(opened).toEqual([]);
+  flushSync(() => recorded.querySelector<HTMLElement>(".bt-stage")!.click());
+  expect(opened).toEqual([{ conversationId: file.conversationId, agentPath: file.path }]);
+  // The label is the keyboard stop: Enter and Space open, other keys do not.
+  const label = recorded.querySelector<HTMLElement>(".bt-stage .bt-label")!;
+  expect(label.getAttribute("role")).toBe("button");
+  expect(label.tabIndex).toBe(0);
+  for (const key of ["Tab", "a", "ArrowDown"]) keyOn(recorded, key);
+  expect(opened).toHaveLength(1);
+  for (const key of ["Enter", " "]) keyOn(recorded, key);
+  expect(opened).toHaveLength(3);
 });
 
 test("a working card the projection found no lane or turn for says who works and carries the live mark", async () => {
@@ -291,7 +362,7 @@ test("a column names its cards' status, so a card draws no status pill; S opens 
   expect(card.getAttribute("aria-label")).toContain("In progress");
 
   card.focus();
-  flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event));
+  flushSync(() => card.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event));
   const menu = host.querySelector<HTMLElement>(".menu");
   expect(menu?.getAttribute("aria-label")).toBe("Status of «Repair old links»");
   expect([...menu!.querySelectorAll('[role="menuitemradio"]')].map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "true", "false", "false"]);
@@ -311,7 +382,7 @@ test("a refused write returns the card to its column with an error receipt and R
   const { host } = mount([task("a", "assigned", "Repair old links")], ports);
   const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
   card.focus();
-  flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
+  flushSync(() => card.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
   expect(columnOf(host, "a")).toBe("blocked");
   await tick();
   await tick();
@@ -348,7 +419,7 @@ test("find narrows each column and says how many of how many it shows", () => {
   flushSync(() => {
     setter.call(input, "links");
     input.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
-    input.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event);
   });
   expect(host.querySelector(".column[data-status=inbox] .col-head .n")?.textContent).toBe("1 of 2");
   expect(columnOf(host, "a")).toBeNull();
@@ -363,11 +434,11 @@ test("/ inside the board finds a task and never reaches the Viewer's global sear
   try {
     const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
     card.focus();
-    flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "/", bubbles: true }) as unknown as Event));
+    flushSync(() => card.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }) as unknown as Event));
     expect(document.activeElement?.hasAttribute("data-kanban-search")).toBe(true);
     expect(globalSearch).toBe(0);
     (document.activeElement as HTMLElement).blur();
-    const outside = new dom.KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true });
+    const outside = new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true });
     document.body.dispatchEvent(outside as unknown as Event);
     expect(globalSearch).toBe(1);
     expect(outside.defaultPrevented).toBe(false);
@@ -389,13 +460,13 @@ test("U undoes the last edit after its receipt has closed (#1856)", async () => 
   const { host } = mount([task("a", "inbox", "Write the release notes")], ports);
   const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
   card.focus();
-  flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
+  flushSync(() => card.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
   await tick();
   expect(columnOf(host, "a")).toBe("assigned");
   /* The receipt is closed by hand: the edit stays in the board's history. */
   click([...host.querySelectorAll("[data-kanban-receipt] .close")].at(-1));
   expect(host.querySelector("[data-kanban-receipt]")).toBeNull();
-  flushSync(() => document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "u", bubbles: true }) as unknown as Event));
+  flushSync(() => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "u", bubbles: true }) as unknown as Event));
   await tick();
   expect(patches).toEqual([
     { id: "a", body: { status: "assigned", expectedProject: "fixture", expectedRevision: REV(1) } },
@@ -509,7 +580,7 @@ test("the mouse resting in a narrow column widens it after the dwell, with the c
     rest("blocked", 900);
     wait(DWELL_MS * 2);
     expect(wideColumns(host)).toEqual(["done"]);
-    flushSync(() => document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
+    flushSync(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
     expect(host.querySelector(".menu")).toBeNull();
 
     /* A reader composer's menu (model, mic, account) portals to the body, outside
@@ -693,7 +764,7 @@ test("O folds and unfolds the orchestrator seat while no field holds the keys", 
     />,
   ));
   const folded = () => JSON.parse(localStorage.getItem("llv:kanban-seat:v2") ?? "{}").collapsed?.fixture;
-  const press = (target: EventTarget) => flushSync(() => target.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "o", bubbles: true }) as unknown as Event));
+  const press = (target: EventTarget) => flushSync(() => target.dispatchEvent(new KeyboardEvent("keydown", { key: "o", bubbles: true }) as unknown as Event));
   /* A short test window starts the seat folded; each press flips it. */
   press(document.body);
   const first = folded();
