@@ -233,6 +233,15 @@ function createEmptyPending(directory: string): string {
 }
 
 const INCOMPLETE_RECIPIENT_EVIDENCE = "recipient interruption evidence is unavailable or incomplete";
+const RECIPIENT_FILESYSTEM_ERROR_CODES = new Set([
+  "EACCES", "EEXIST", "EIO", "EISDIR", "EMFILE", "ENFILE", "ENOENT", "ENOMEM", "ENOSPC", "ENOTDIR",
+  "EPERM", "EROFS", "ETXTBSY", "ELOOP",
+]);
+
+function isRecipientFilesystemError(cause: unknown): cause is NodeJS.ErrnoException {
+  return cause instanceof Error && typeof (cause as NodeJS.ErrnoException).code === "string"
+    && RECIPIENT_FILESYSTEM_ERROR_CODES.has((cause as NodeJS.ErrnoException).code!);
+}
 
 function unavailableRecipientCuts(): never {
   throw new Error(INCOMPLETE_RECIPIENT_EVIDENCE);
@@ -240,7 +249,8 @@ function unavailableRecipientCuts(): never {
 
 export class RecipientInterruptionEvidenceError extends Error {
   constructor(readonly category: "journal lock busy" | "source marker missing or mismatched"
-    | "pending journal changed" | "recipient index invalid or unavailable", options?: ErrorOptions) {
+    | "pending journal changed" | "pending journal inspection failed" | "journal lock setup failed"
+    | "recipient index invalid or unavailable", options?: ErrorOptions) {
     super(`${INCOMPLETE_RECIPIENT_EVIDENCE} (${category})`, options);
     this.name = "RecipientInterruptionEvidenceError";
   }
@@ -259,7 +269,7 @@ function readRecipientInterruptionEvidence(directory: string, conversationIds: I
   const pending = `${directory}.pending.jsonl`;
   const pendingStamp = () => {
     try { return fileStamp(pending); }
-    catch (cause) { throw new RecipientInterruptionEvidenceError("pending journal changed", { cause }); }
+    catch (cause) { throw new RecipientInterruptionEvidenceError("pending journal inspection failed", { cause }); }
   };
   if (pendingStamp() !== source.pendingStamp) throw new RecipientInterruptionEvidenceError("pending journal changed");
   let records: InterruptionObligation[];
@@ -279,9 +289,10 @@ export function recipientInterruptionEvidence(directory: string, conversationIds
       readRecipientInterruptionEvidence(directory, conversationIds));
   } catch (cause) {
     if (cause instanceof RecipientInterruptionEvidenceError) throw cause;
-    if (cause instanceof FileTransactionAdmissionError || cause instanceof Error) {
+    if (cause instanceof FileTransactionAdmissionError) {
       throw new RecipientInterruptionEvidenceError("journal lock busy", { cause });
     }
+    if (isRecipientFilesystemError(cause)) throw new RecipientInterruptionEvidenceError("journal lock setup failed", { cause });
     throw new Error(INCOMPLETE_RECIPIENT_EVIDENCE, { cause });
   }
 }

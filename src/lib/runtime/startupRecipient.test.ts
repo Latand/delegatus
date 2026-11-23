@@ -15,8 +15,8 @@ setDefaultTimeout(60_000);
 
 for (const [fault, category] of [
   ["lock", "journal lock busy"],
-  ["pending journal symlink loop", "pending journal changed"],
-  ["lock queue path is a file", "journal lock busy"],
+  ["pending journal symlink loop", "pending journal inspection failed"],
+  ["lock queue path is a file", "journal lock setup failed"],
   ["missing marker", "source marker missing or mismatched"],
   ["mismatched marker", "source marker missing or mismatched"],
   ["journal", "pending journal changed"],

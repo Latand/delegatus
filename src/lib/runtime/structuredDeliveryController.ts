@@ -1645,7 +1645,6 @@ export async function bindStructuredDeliveryQueue(
   let diagnosedGuard: Promise<void> | null = null;
   let nextGuardLogAt = 0;
   let suppressedGuardFailures = 0;
-  const guardFailures = new WeakSet<object>();
   const guardHosts = () => {
     if (!registry.quotaObservations("codex").some(row => accountCreditGuardBlock("codex", row.accountId, row.limits))) {
       guardHostPage.reset();
@@ -1675,11 +1674,7 @@ export async function bindStructuredDeliveryQueue(
     });
   const enforceGuardWithDiagnostic = (onlyIfChanged = false): Promise<void> => {
     if (diagnosedGuard) return diagnosedGuard;
-    const run = Promise.resolve().then(() => enforceGuard(onlyIfChanged)).then(() => {
-      nextGuardLogAt = 0;
-      suppressedGuardFailures = 0;
-    }, error => {
-      if ((typeof error === "object" && error !== null) || typeof error === "function") guardFailures.add(error as object);
+    const run = Promise.resolve().then(() => enforceGuard(onlyIfChanged)).then(undefined, error => {
       if (!stopped && state.activeQueue === queue) {
         const now = performance.now();
         if (nextGuardLogAt === 0 || now >= nextGuardLogAt) {
@@ -1697,8 +1692,12 @@ export async function bindStructuredDeliveryQueue(
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
   const drainWithRetry = async (afterAdmission = false, freshAdmission = false, conversationId?: string): Promise<void> => {
     if (stopped) return;
+    let guardFailed = false;
     try {
-      if (!startupPending) await enforceGuardWithDiagnostic();
+      if (!startupPending) {
+        try { await enforceGuardWithDiagnostic(); }
+        catch (error) { guardFailed = true; throw error; }
+      }
       if (freshAdmission && conversationId) await queue.drainFreshAdmission(conversationId);
       else if (afterAdmission) await queue.drainAfterAdmission(freshAdmission);
       else await queue.drain();
@@ -1714,9 +1713,7 @@ export async function bindStructuredDeliveryQueue(
       if (retryScheduled && (!freshAdmission || !conversationId)) {
         drainBackoffMs = Math.min(retryMs * 2, DELIVERY_DRAIN_MAX_BACKOFF_MS);
       }
-      const isGuardFailure = ((typeof error === "object" && error !== null) || typeof error === "function")
-        && guardFailures.has(error as object);
-      if (!isGuardFailure) controllerDiagnosticError(
+      if (!guardFailed) controllerDiagnosticError(
           retryScheduled
             ? "[structured delivery] queue drain failed; retry scheduled"
             : "[structured delivery] queue drain failed; retry already pending",
