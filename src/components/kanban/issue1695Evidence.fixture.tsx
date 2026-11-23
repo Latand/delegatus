@@ -5785,7 +5785,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "account-row" ?
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" focusRule={new URLSearchParams(location.search).get("focus") ?? undefined} onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
