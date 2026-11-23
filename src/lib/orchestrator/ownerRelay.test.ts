@@ -91,8 +91,6 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
   else delete process.env.LLV_SPAWN_CAPABILITY;
   const domain: Partial<ViewerMcpDomainDependencies> = {
     registrySnapshot: () => registry.readOnlySnapshot(),
-    listTaskRecords: () => [],
-    listPipelineRecords: () => [],
     completedFileScan: async () => ({ generation: 1, targetGeneration: 1, cacheStatus: "hit", requestCount: 1, cloneDurationMs: 0, snapshot: {
       files: [], complete: true, projectCatalog: [
         { project: "project-a", displayName: "Example sender", smt: 1, conversations: 1 },
@@ -118,7 +116,8 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
     },
   };
   const bindings = viewerMcpBindings(undefined, transport, domain as ViewerMcpDomainDependencies);
-  return { bindings, posts, service: createMcpToolService(bindings, new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as ViewerMcpDomainDependencies), { recovery: viewerMcpRecoverableTools(domain as ViewerMcpDomainDependencies) }) };
+  const policy = viewerMcpToolPolicy(domain as ViewerMcpDomainDependencies);
+  return { bindings, policy, posts, service: createMcpToolService(bindings, new MemoryMcpReceiptStore(), policy, { recovery: viewerMcpRecoverableTools(domain as ViewerMcpDomainDependencies) }) };
 }
 
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
@@ -160,11 +159,12 @@ function relayArgs(key = "owner-seat-send") {
   return { clientRequestId: key, project: "project-b", text: "Please implement this work.", origin: { kind: "operator" } };
 }
 
-test("ordinary Viewer reads skip seat and deputy attribution", async () => {
+test("ordinary Viewer read policy skips seat and deputy attribution", () => {
   const sender = actor();
   let resolutions = 0;
-  const service = toolsFor(sender, undefined, () => { resolutions++; }).service;
-  expect(await service.callTool("list_tasks", { project: "project-b" })).toMatchObject({ ok: true });
+  const { policy } = toolsFor(sender, undefined, () => { resolutions++; });
+  // The board read binding has its own project-seat scope checks.
+  expect(policy.permit("list_tasks", { project: "project-b" })).toEqual({ allowed: true });
   expect(resolutions).toBe(0);
 });
 
