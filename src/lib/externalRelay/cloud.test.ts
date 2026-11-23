@@ -289,7 +289,7 @@ test.each([false, true])(`Cloud WebSocket sends the selected model ${model ?? "d
 for (const failCloud of [false, true]) test(`owner relay routes through repo Cloud environment${failCloud ? " and falls back locally once on confirmed failure" : ""}`, async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const relay: PairedRelay = { id: "owner_cloud", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
-    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
       project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
@@ -346,7 +346,7 @@ test("owner Cloud execution completes after heartbeat lease loss and delivers on
     return { body: { status: "ok" } };
   });
   const relay: PairedRelay = { id: "owner_cloud_lease_lost", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
-    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
       project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
@@ -386,7 +386,7 @@ test("owner Cloud trims duplicated optional history and sends one bounded turn",
     return { body: { status: "ok" } };
   });
   const relay: PairedRelay = { id: "owner_cloud_large_prompt", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
-    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
       project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
@@ -500,7 +500,7 @@ for (const credentialSource of ["relay", "cloud"] as const) for (const rich of [
     });
     const relayCredential = credentialSource === "relay" ? secret : "fixture";
     const relay: PairedRelay = { id: "cloud_scrub", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "", credential: relayCredential,
-      owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+      owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
       limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 32000 },
       targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true,
         engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
@@ -540,7 +540,7 @@ for (const state of ["unresolved", "deleted", "reassigned", "switch-before-launc
   test(`Cloud local owner repository admission: ${state}`, async () => {
     const repository = seedRepository();
     const paired: PairedRelay = { id: "local_cloud", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1", name: "Relay", description: "", credential: "fixture",
-      owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+      owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
       limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
       targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true,
         engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: state === "unresolved" ? "unknown" : repository.project,
@@ -593,7 +593,7 @@ for (const prior of ["none", "action", "unknown", "reassigned", "rich"] as const
     const tool = priorAction ? "write_note" : "lookup_notes";
     const effect = priorAction ? "action" : "read";
     const relay: PairedRelay = { id: "cloud_tools", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1", name: "Relay", description: "", credential: "fixture",
-      owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-10-20T12:00:00Z", paused: false,
+      owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: "2026-10-20T12:00:00Z", paused: false,
       limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
       targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true,
         engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: repository.project, cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };

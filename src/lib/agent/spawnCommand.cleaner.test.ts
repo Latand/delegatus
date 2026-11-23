@@ -106,7 +106,7 @@ test("guest owner relay spawn is request-bound and materializes restricted read-
   const id = "relay-owner-handoff-fixture";
   const relay = { id: "owner-handoff", api_base: "http://127.0.0.1:1/v1", credential: "x".repeat(43), name: "Fixture",
     origin: "http://127.0.0.1:1", description: "Fixture", pairedAt: "2026-10-01T00:00:00Z", paused: false,
-    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null },
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     limits: { max_response_bytes: 4096, max_wait_s: 25, max_answer_chars: 1000 },
     targets: [{ id: "target", name: "Target", answered_by: "install" as const, fallback: "service" as const, enabled: true,
       ownerTier: true, engine: "codex" as const, model: "auto", effort: "low", project: null, concurrency: 1, hardCapMinutes: 3 }] };
@@ -116,7 +116,9 @@ test("guest owner relay spawn is request-bound and materializes restricted read-
     runDir: root, startedAt: "2026-10-01T00:00:00Z", ownerTurn: { clientAttemptId: id, rawRequest: { delivery: "guest" } } }, 1)).toBe("added");
 
   expect((await launch(id, { ownerRelayHandoffOnly: true }, { autonomousStructured: true })).status).toBe(403);
-  changeRun("owner-handoff-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, seatHandoff: true } }));
+  changeRun("owner-handoff-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, seatHandoff: true,
+    rawRequest: { delivery: "guest", input: { requester: { is_owner: true, is_anonymous_admin: false } } },
+    entry: { id: "earlier-switch-target", kind: "paired-owner", tier: "owner", project: null, label: "Paired owner" } } }));
   const rejected = await launch(`${id}-spoof`, { ownerRelayHandoffOnly: true }, { autonomousStructured: true });
   expect(rejected.status).toBe(403);
   for (const elevated of [
@@ -170,29 +172,30 @@ test("guest owner relay spawn is request-bound and materializes restricted read-
   } finally { access.cleanup(); }
 });
 
+// The first admission opens the isolated stores. Its test timeout includes
+// that cold setup as well as the drain and replay under the gate's CPU quota.
 test("an accepted disk cleaner request stays replayable when a drain starts after 202", async () => {
   let held = false;
   let deferred: (() => Promise<void>) | undefined;
   let actuations = 0;
   const cleanerSeed = await cleanerAttempt("cleaner-drain-after-acceptance");
   const id = cleanerSeed.runId;
-  const accepted = await launch(id, {}, {
-    held: () => held,
-    defer: work => { deferred = work; },
-    spawn: async input => {
-      actuations++;
-      expect(input.receipt.clientAttemptId).toBe(id);
-      expect(input.receipt.queuedPinnedSpawn?.prompt).toBeTruthy();
-      return { state: "running" } as never;
-    },
-  });
-  expect(accepted.status).toBe(202);
-  expect(accepted.receipt?.scheduledCleanerRunId).toBeUndefined();
-  expect(deferred).toBeDefined();
-  const payload = accepted.receipt!.queuedPinnedSpawn;
-  held = true;
-  writeDrain(drainFile(), { id: "cleaner-after-202", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 });
   try {
+    const accepted = await launch(id, {}, {
+      held: () => held,
+      defer: work => { deferred = work; },
+      spawn: async () => {
+        actuations++;
+        return { state: "running" } as never;
+      },
+    });
+    expect(accepted.status).toBe(202);
+    expect(accepted.receipt?.scheduledCleanerRunId).toBeUndefined();
+    expect(deferred).toBeDefined();
+    const payload = structuredClone(accepted.receipt!.queuedPinnedSpawn);
+    expect(payload?.prompt).toBeTruthy();
+    held = true;
+    writeDrain(drainFile(), { id: "cleaner-after-202", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 });
     await deferred!();
     const deferredReceipt = registry.spawnReceipt(accepted.receipt!.launchId)!;
     expect(deferredReceipt.state).toBe("starting");
@@ -202,22 +205,23 @@ test("an accepted disk cleaner request stays replayable when a drain starts afte
     expect(actuations).toBe(0);
     held = false;
     releaseDrain(drainFile(), "cleaner-after-202");
+    const replayed: Array<NonNullable<typeof accepted.receipt>> = [];
     await terminalizeStaleStructuredSpawns(registry, { effectBatch: async () => [], operationStatus: async () => null,
       snapshot: async () => ({ revision: 0, sessions: [] }) } as unknown as RuntimeHostClient, {
       resolveSpawnAccount: () => ({ engine: "codex", accountId: "fixture-codex", kind: "managed", home: path.join(root, "codex"),
         transcriptRoot: path.join(root, "codex", "sessions"), env: { NODE_ENV: "test" } }),
       resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
       spawnStructuredConversation: async input => {
-        actuations++;
-        expect(input.receipt.clientAttemptId).toBe(id);
-        expect(input.receipt.queuedPinnedSpawn?.prompt).toBeTruthy();
+        replayed.push(input.receipt);
         return { state: "running" } as never;
       },
     });
-    expect(actuations).toBe(1);
-    expect(registry.spawnReceiptForClientAttempt(id)?.clientAttemptId).toBe(id);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]).toMatchObject({ launchId: accepted.receipt!.launchId, clientAttemptId: id });
+    expect(replayed[0]?.queuedPinnedSpawn).toEqual(payload);
+    expect(registry.spawnReceiptForClientAttempt(id)?.launchId).toBe(accepted.receipt!.launchId);
   } finally { releaseDrain(drainFile(), "cleaner-after-202"); cleanerSeed.cleanup(); }
-});
+}, 15_000);
 
 test("manual Cleaner launch cannot claim scheduled provenance by reusing the active run id", async () => {
   const cleanerSeed = await cleanerAttempt("cleaner-provenance-shape-mismatch");

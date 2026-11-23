@@ -4,18 +4,27 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { once } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { runInNewContext } from "node:vm";
 import { NextRequest } from "next/server";
-import { POST as deploymentPost } from "@/app/api/runtime/deployments/route";
+import { GET as deploymentList, POST as deploymentPost } from "@/app/api/runtime/deployments/route";
+import { GET as deploymentCapabilities } from "@/app/api/runtime/deployments/capabilities/v1/route";
+import { markStructuredHostStartupFailed, markStructuredHostStartupProgress, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
+import { setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
 import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { ViewerDeploymentCoordinator } from "../../runtime-host/deployment";
 import { FakeDeploymentAdapter } from "../../runtime-host/fixtures/fakeDeploymentAdapter";
 import { RuntimeJournal } from "../../runtime-host/journal";
+import { RuntimeHost } from "../../runtime-host/host";
+import { serveRuntimeHost } from "../../runtime-host/socket";
 import { productionViewerControlDependencies, viewerMcpBindings, viewerMcpToolPolicy, type ViewerControlDependencies } from "./bindings";
 import { createMcpToolService, createViewerMcpServer, McpDeploymentPendingError, SqliteMcpReceiptStore } from "./server";
+import { handleMcpHttpRequest, setMcpHttpDependenciesForTests } from "./http";
 import { recordSeatDeploymentAdmission, seatDeploymentsFile, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
 // The owner test must outlast every bounded restart and its awaited teardown.
@@ -37,6 +46,118 @@ const domain = {
 };
 
 describe.serial("deployment bindings", () => {
+test("startup timeouts leave durable deploy admission open and unsafe handoff fails", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-startup-timeout-"));
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 1_000 });
+  const adapter = new FakeDeploymentAdapter();
+  const healthy = adapter.promotedHealth;
+  adapter.promotedHealth = { ...healthy, ok: false, detail: "Viewer writer and live-host proof is incomplete" };
+  const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 27, startIdentity: "27:1" });
+  const incumbent = adapter.current;
+  const runtimeSocket = path.join(root, "runtime.sock");
+  const runtime = serveRuntimeHost(runtimeSocket, new RuntimeHost(journal, undefined, coordinator));
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = runtimeSocket;
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  setSelfUpdateServiceForTests(new SelfUpdateService({ ...productionDeps(), mode: async () => ({ mode: "managed", record: null, reason: null }) }));
+  setDeploymentRuntimeForTests((request, authorize) => {
+    authorize?.();
+    return coordinator.requestViewerDeployment(request);
+  });
+  let posts = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const { pathname } = new URL(request.url);
+    if (pathname === "/api/mcp") return handleMcpHttpRequest(new NextRequest(request));
+    if (pathname.endsWith("/capabilities/v1")) return deploymentCapabilities();
+    if (request.method === "GET") return deploymentList(new NextRequest(request));
+    posts++;
+    return deploymentPost(new NextRequest(request));
+  } });
+  const previous = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  const args = { revision: SHA, clientRequestId: "admission-during-adoption-timeout", full: true };
+  const handoffArgs = { ...args, clientRequestId: "handoff-during-adoption-timeout" };
+  let designated = true;
+  const caller = { ...domain, authorizedSeats: () => designated ? domain.authorizedSeats() : [] } as never;
+  const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), caller), store);
+  setMcpHttpDependenciesForTests({ service: async () => service, conversationForCapability: () => SEAT });
+  const client = new Client({ name: "startup-admission-test", version: "1.0.0" });
+  const stdioClient = new Client({ name: "startup-admission-stdio-test", version: "1.0.0" });
+  const stdioRoot = path.join(root, "stdio");
+  const directories = { HOME: path.join(stdioRoot, "home"), XDG_CONFIG_HOME: path.join(stdioRoot, "config"),
+    TMPDIR: path.join(stdioRoot, "tmp"), LLV_STATE_DIR: path.join(stdioRoot, "state") };
+  for (const directory of Object.values(directories)) fs.mkdirSync(directory, { recursive: true });
+  const stdio = new StdioClientTransport({
+    command: process.execPath,
+    args: [path.join(process.cwd(), "bin/mcp-server.mjs")],
+    env: { ...directories, PATH: process.env.PATH ?? "", LLV_VIEWER_CONTROL_URL: server.url.origin, LLV_SPAWN_CAPABILITY: "a".repeat(43) },
+    stderr: "pipe",
+  });
+  try {
+    await once(runtime, "listening");
+    await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", server.url), {
+      requestInit: { headers: { "x-llv-spawn-capability": "a".repeat(43) } },
+    }));
+    const call = async (request = args) => (await client.callTool({ name: "deploy_exact_sha", arguments: request })).structuredContent;
+    const failure = {
+      deadline: "structured startup pass deadline exceeded", hostKey: null,
+      nextRetryAt: "2026-10-16T00:00:05.000Z",
+    };
+    const failBeforeCensus = () => {
+      markStructuredHostStartupProgress({ phase: "waiting for structured startup", completedHosts: 0, totalHosts: null });
+      markStructuredHostStartupFailed("timeout", failure);
+    };
+    failBeforeCensus();
+    expect(await call()).toMatchObject({ ok: true, state: "accepted" });
+    const admitted = journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)!;
+    expect(admitted.revision).toBe(SHA);
+    await coordinator.waitForDeployment(admitted.deploymentId);
+    expect(adapter.current).toEqual(incumbent);
+    expect(journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)).toMatchObject({
+      phase: "rolled-back", terminal: true, error: "Viewer writer and live-host proof is incomplete",
+    });
+    failBeforeCensus();
+    expect(await call()).toMatchObject({ ok: true, deploymentId: admitted.deploymentId, replayed: true });
+    adapter.promotedHealth = healthy;
+    adapter.verifyHostFailure = new Error("runtime-host handoff evidence is unavailable");
+    expect(await call(handoffArgs)).toMatchObject({ ok: true, state: "accepted" });
+    const handoff = journal.viewerDeploymentByIdempotencyKey(handoffArgs.clientRequestId)!;
+    await coordinator.waitForDeployment(handoff.deploymentId);
+    expect(journal.viewerDeploymentByIdempotencyKey(handoffArgs.clientRequestId)).toMatchObject({
+      phase: "failed", terminal: true, error: "runtime-host handoff evidence is unavailable",
+    });
+    await stdioClient.connect(stdio);
+    for (const reader of [client, stdioClient]) {
+      for (const [name, args] of [["get_orchestrator", { project: PROJECT }], ["deployment_status", {}]] as const) {
+        expect((await reader.callTool({ name, arguments: args })).structuredContent)
+          .toMatchObject({ ok: true, structuredHostStartup: {
+            state: "failed", phase: "waiting for structured startup", failureCategory: "timeout", ...failure,
+          } });
+      }
+    }
+    designated = false;
+    expect(await call()).toMatchObject({ ok: false, code: "deploy_caller_not_designated" });
+    expect(posts).toBe(2);
+  } finally {
+    await stdioClient.close(); await stdio.close();
+    await client.close();
+    setMcpHttpDependenciesForTests(null);
+    setDeploymentRuntimeForTests(null);
+    setSelfUpdateServiceForTests(null);
+    for (const request of [args, handoffArgs]) {
+      const admitted = journal.viewerDeploymentByIdempotencyKey(request.clientRequestId);
+      if (admitted) await coordinator.waitForDeployment(admitted.deploymentId);
+    }
+    markStructuredHostStartupReady();
+    store.close(); server.stop(true);
+    await new Promise<void>(resolve => { runtime.close(() => resolve()); });
+    journal.close();
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 15_000);
+
 test.each(["pending", "red"])("not-green %s is retryable with the same key after a lost control reply", async state => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-not-green-"));
   let requests = 0, green = false;

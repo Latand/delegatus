@@ -5,6 +5,7 @@ import { isMainThread, SHARE_ENV, Worker } from "node:worker_threads";
 import { attachReadAttributionWorker } from "@/lib/readAttribution";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 
+import type { SeatTickJournalAppendOptions } from "./journalStore";
 import type { SeatTickRunRecord } from "./types";
 
 /*
@@ -31,6 +32,8 @@ import type { SeatTickRunRecord } from "./types";
 
 const ANSWER_TIMEOUT_MS = 10_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
+let answerTimeoutMs = ANSWER_TIMEOUT_MS;
+let repliesToDrop = 0;
 
 type Pending = { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
 interface Held {
@@ -40,7 +43,7 @@ interface Held {
   detach(): void;
 }
 
-type Done = { type: "seat-tick-journal-done"; id: number; ok: boolean; error?: { message: string; busy: boolean } };
+type Done = { type: "seat-tick-journal-done"; id: number; ok: boolean; error?: { name: string; message: string; busy: boolean } };
 
 let held: Held | null = null;
 let consecutiveFailures = 0;
@@ -76,8 +79,15 @@ function settle(state: Held, message: Done): void {
   clearTimeout(pending.timer);
   if (state.pending.size === 0) state.worker.unref();
   consecutiveFailures = 0;
-  if (message.ok) pending.resolve();
-  else pending.reject(message.error?.busy ? new FileTransactionBusyError(message.error.message) : new Error(message.error?.message ?? "seat tick journal append failed"));
+  if (message.ok) {
+    pending.resolve();
+    return;
+  }
+  const error = message.error?.busy
+    ? new FileTransactionBusyError(message.error.message)
+    : new Error(message.error?.message ?? "seat tick journal append failed");
+  if (message.error) error.name = message.error.name;
+  pending.reject(error);
 }
 
 function worker(): Held | null {
@@ -97,7 +107,10 @@ function worker(): Held | null {
   created.unref();
   const state: Held = { worker: created, pending: new Map(), next: 0, detach: attachReadAttributionWorker(created, "seat-tick-journal") };
   created.on("message", (message: unknown) => {
-    if (message && typeof message === "object" && (message as Done).type === "seat-tick-journal-done") settle(state, message as Done);
+    if (message && typeof message === "object" && (message as Done).type === "seat-tick-journal-done") {
+      if (repliesToDrop > 0) { repliesToDrop--; return; }
+      settle(state, message as Done);
+    }
   });
   created.on("error", (error) => {
     consecutiveFailures += 1;
@@ -115,7 +128,9 @@ function worker(): Held | null {
  * Hand one record to the journal worker. Null when no worker runs here: the
  * caller appends on its own thread.
  */
-export function appendThroughSeatTickJournalWorker(record: SeatTickRunRecord, filePath: string): Promise<void> | null {
+export function appendThroughSeatTickJournalWorker(
+  record: SeatTickRunRecord, filePath: string, options: SeatTickJournalAppendOptions,
+): Promise<void> | null {
   const state = worker();
   if (!state) return null;
   const id = ++state.next;
@@ -124,15 +139,18 @@ export function appendThroughSeatTickJournalWorker(record: SeatTickRunRecord, fi
       if (!state.pending.delete(id)) return;
       consecutiveFailures += 1;
       // A worker that stopped answering is replaced; what it held is rejected.
-      retire(state, new FileTransactionBusyError("the seat tick journal worker did not answer"));
-      reject(new FileTransactionBusyError("the seat tick journal worker did not answer"));
-    }, ANSWER_TIMEOUT_MS);
+      // A worker may have committed before losing its reply. This is distinct
+      // from a busy store, where the append never committed.
+      const error = new Error("the seat tick journal worker did not answer");
+      retire(state, error);
+      reject(error);
+    }, answerTimeoutMs);
     timer.unref?.();
     // A pending append keeps the process alive until it is answered.
     if (state.pending.size === 0) state.worker.ref();
     state.pending.set(id, { resolve, reject, timer });
     try {
-      state.worker.postMessage({ type: "seat-tick-journal-append", id, record, filePath });
+      state.worker.postMessage({ type: "seat-tick-journal-append", id, record, filePath, options });
     } catch (error) {
       state.pending.delete(id);
       clearTimeout(timer);
@@ -145,6 +163,14 @@ export function appendThroughSeatTickJournalWorker(record: SeatTickRunRecord, fi
 /** Test seam: how many journal workers this process started. */
 export function seatTickJournalWorkersStartedForTests(): number {
   return started;
+}
+
+/** Test seam for exercising an append whose worker committed but reply vanished. */
+export function configureSeatTickJournalWorkerForTests(options: { timeoutMs?: number; dropReplies?: number }): () => void {
+  const previous = { answerTimeoutMs, repliesToDrop };
+  if (options.timeoutMs !== undefined) answerTimeoutMs = options.timeoutMs;
+  if (options.dropReplies !== undefined) repliesToDrop = options.dropReplies;
+  return () => { answerTimeoutMs = previous.answerTimeoutMs; repliesToDrop = previous.repliesToDrop; };
 }
 
 /** Test seam: stop the worker and forget its failures. */

@@ -8,7 +8,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { requestSchema, checkedAnswer, guestAnswerSchema, INVALID_REQUESTER_DETAIL, offersHandoff, type ExternalRelayRequest } from "./protocol";
 import { relayClaimBody } from "./poller";
 import { relayCall } from "./client";
-import { ownerTierFor } from "./profile";
+import { ownerTierFor, ownerHandoffFor, elevatedRequesterFor } from "./profile";
 import { ownerAnswer } from "./ownerRun";
 import { answerCapabilities } from "./answerV2";
 import { runClaimedRequest } from "./runner";
@@ -26,6 +26,13 @@ import { ownerRunRoot } from "./runDirectory";
 const dir = path.join(import.meta.dir, "fixtures/relay_v1");
 const source = fs.readFileSync(path.join(dir, "claimed_guest_owner.json"));
 const guest = (): ExternalRelayRequest => requestSchema.parse(JSON.parse(source.toString()).request);
+function setGuestRequester(request: ExternalRelayRequest, isOwner: boolean) {
+  const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
+  const key = isOwner ? trigger.author.key : "guest_requester";
+  trigger.author = { ...trigger.author, key };
+  request.input.requester = { key, is_owner: isOwner, is_anonymous_admin: false,
+    is_admin: false, can_restrict_members: false, can_delete_messages: false };
+}
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-guest-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 const home = path.join(root, "account"); fs.mkdirSync(home);
@@ -39,7 +46,7 @@ beforeEach(() => fs.rmSync(path.join(root, "state"), { recursive: true, force: t
 afterAll(() => { accountManager.resolveHeadlessSpawn = original; fs.rmSync(root, { recursive: true, force: true }); });
 function paired(origin: string, ownerTier = true): PairedRelay {
   return { id: "guest_fixture", origin, api_base: `${origin}/v1`, name: "Fixture", description: "", credential: "x".repeat(43),
-    owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-10-06T12:00:00Z", paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: "2026-10-06T12:00:00Z", paused: false,
     features: ["progress_steps"], limits: { max_wait_s: 25, max_response_bytes: 1048576, max_answer_chars: 4000 },
     targets: [{ ...newTargetSettings({ target_id: guest().target_id, name: "Fixture", answered_by: "install", fallback: "service" }),
       engine: "claude", model: "fixture", ownerTier, memberLimitPerHour: null }] };
@@ -54,27 +61,64 @@ test("service guest bytes preserve delivery and use the restricted authority sel
   expect(ownerTierFor({ ownerTier: true }, ordinary)).not.toBeNull();
   expect(ownerTierFor({ ownerTier: true }, request)).toBeNull();
   expect(ownerTierFor({ ownerTier: false }, request)).toBeNull();
-  for (const changed of [{ is_owner: false }, { is_anonymous_admin: true }, { key: "foreign" }]) {
+  for (const changed of [{ is_anonymous_admin: true }, { key: "foreign" }]) {
     const hostile = { ...request, input: { ...request.input, requester: { ...request.input.requester!, ...changed } } };
     expect(requestSchema.safeParse(hostile).success).toBe(false);
   }
   expect(relayClaimBody(paired("http://127.0.0.1:1")).features).toContain("relay_guest_answers");
 });
 
+for (const principal of ["owner", "trusted", "untrusted", "anonymous"] as const) {
+  test(`guest handoff selector admits only the paired owner (${principal})`, () => {
+    const request = guest();
+    if (principal !== "owner") setGuestRequester(request, false);
+    const relay = paired("http://127.0.0.1:1");
+    const target = relay.targets[0]!;
+    target.project = "project-b";
+    target.requesters = { revision: 1, entries: [
+      { id: "paired", kind: "paired-owner", project: target.project, label: "Paired owner", source: "board", addedAt: relay.pairedAt },
+      { id: "trusted", kind: "requester", key: request.input.requester!.key, project: target.project,
+        label: "Trusted requester", source: "board", addedAt: relay.pairedAt },
+    ] };
+    if (principal === "untrusted") target.requesters.entries = target.requesters.entries.filter(entry => entry.kind !== "requester");
+    if (principal === "anonymous") request.input.requester!.is_anonymous_admin = true;
+    expect(elevatedRequesterFor(relay, target, request, [relay])).toBeNull();
+    const instruction = ownerHandoffFor(relay, target, request, [relay]);
+    if (principal === "owner") expect(instruction?.entry).toMatchObject({ kind: "paired-owner", tier: "owner" });
+    else expect(instruction).toBeNull();
+    expect(requestSchema.safeParse(request).success).toBe(principal !== "anonymous");
+    expect(readRunLedger().runs).toEqual([]);
+    relay.paused = true;
+    expect(ownerHandoffFor(relay, target, request, [relay])).toBeNull();
+  });
+}
+
+test("a paired owner of a different install cannot use guest owner handoff", () => {
+  const request = guest();
+  const relay = paired("http://127.0.0.1:1");
+  const other = { ...relay, id: "other", owner: { ...relay.owner, id: "102" } };
+  expect(ownerHandoffFor(relay, relay.targets[0]!, request, [relay, other])).toBeNull();
+});
+
 test("guest contract refuses direct service tools, progress, destinations and rich output", () => {
   const request = guest(), rich = richRequest(true);
   for (const changed of [
-    { delivery: "other" }, { input: { ...request.input, format: rich.input.format } }, { answer: { ...request.answer, progress: "notes" } },
+    { delivery: "private" }, { delivery: "business" },
+    { input: { ...request.input, format: rich.input.format } }, { answer: { ...request.answer, progress: "notes" } },
     { owner_delivery: { chat_id: 41, reply_to_message_id: 1, message_thread_id: null } },
     { input: { ...request.input, tools: [{ name: "search_docs", summary: "Read", mode: "direct", effect: "read", parameters: { type: "object" } }] } },
-    { input: { ...request.input, requester: { ...request.input.requester!, is_owner: false } } },
+    { owner_delivery: { chat_id: "opaque" } },
+    { input: { ...request.input, requester: null } },
+    { input: { ...request.input, requester: { ...request.input.requester!, is_owner: false, is_admin: true } } },
+    { input: { ...request.input, requester: { ...request.input.requester!, is_owner: false, can_restrict_members: true } } },
+    { input: { ...request.input, requester: { ...request.input.requester!, is_owner: false, can_delete_messages: true } } },
     { answer: { ...request.answer, attachments: { max_items: 1, max_total_bytes: 1024, kinds: ["photo"] } } },
   ]) expect(requestSchema.safeParse({ ...request, ...changed }).success).toBe(false);
   expect(answerCapabilities({ ...request, input: { ...request.input, format: rich.input.format },
     answer: { ...request.answer, attachments: rich.answer.attachments }, features: ["relay_rich_messages", "relay_media_out"] }, "codex")).toMatchObject({ rich: false, media: false, generate: false });
 });
 
-for (const delivery of ["ordinary", "guest"] as const) for (const scenario of ["forged owner flag", "swapped trigger author", "owner flag cleared", "duplicate trigger"] as const)
+for (const delivery of ["ordinary", "guest"] as const) for (const scenario of ["forged owner flag", "swapped trigger author", "contradictory owner destination", "duplicate trigger"] as const)
   test(`${delivery} rejects ${scenario} before choosing a session or loading the tool index`, async () => {
     const request = guest();
     const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
@@ -93,8 +137,7 @@ for (const delivery of ["ordinary", "guest"] as const) for (const scenario of ["
       request.input.conversation.push({ ...trigger, author: { ...trigger.author, key: "other_author" } });
     } else {
       request.input.requester!.is_owner = false;
-      if (delivery === "ordinary")
-        request.owner_delivery = { chat_id: 42, reply_to_message_id: 1, message_thread_id: null };
+      request.owner_delivery = { chat_id: 42, reply_to_message_id: 1, message_thread_id: null };
     }
     expect(requestSchema.safeParse(request).success).toBe(false);
     const endpoints: string[] = [];
@@ -236,7 +279,10 @@ test("service-verified owner on guest delivery gets a request-local seat handoff
         launches++;
         launchPrompt = String(input.prompt);
         launchProfile = input;
-        sentRequest.current = readRunLedger().runs.find(run => run.requestId === request.request_id)?.ownerTurn?.request ?? null;
+        const turn = readRunLedger().runs.find(run => run.requestId === request.request_id)?.ownerTurn;
+        sentRequest.current = turn?.request ?? null;
+        expect(turn).toMatchObject({ seatHandoff: true, entry: { kind: "paired-owner", tier: "owner" } });
+        expect(turn?.leaseDeadlineAt).toBeUndefined();
         expect(input.mcpServers).toContain("viewer");
         return { status: 202, body: { conversationId: "conversation_verified_guest_owner" } };
       },
@@ -325,26 +371,112 @@ test("guest delivery cannot enter owner tier when the triggering author mismatch
 
 test("an ordinary guest requester receives no owner-tier handoff", async () => {
   const request = guest();
-  request.input.requester!.is_owner = false;
+  setGuestRequester(request, false);
+  const command = path.join(root, "non-owner-guest-agent");
+  fs.writeFileSync(command, `#!${process.execPath}
+await Bun.stdin.text();
+console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));
+console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{action:'reply',text:'Restricted reply',reply_to:null}}));`);
+  fs.chmodSync(command, 0o700);
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const relay = paired(server.origin, true);
   updateRelayStore(state => ({ ...state, relays: [relay] }));
   let ownerLaunches = 0;
   try {
-    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts: {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command, ownerPorts: {
       launch: async () => { ownerLaunches++; throw new Error("a guest requester cannot launch owner execution"); },
       observe: async () => ({ state: "ended", finalText: "Unexpected owner execution." }), stop: async () => {}, pollMs: 1,
     } });
     expect(ownerLaunches).toBe(0);
     expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner ?? false).toBe(false);
-    expect(result).not.toBeNull();
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Restricted reply", reply_to: null } });
   } finally { await server.close(); }
 }, 30_000);
 
+test("ordinary non-owner claims use the existing restricted member path", () => {
+  const request = guest();
+  delete request.delivery;
+  request.input.requester!.is_owner = false;
+  request.input.tools = [{ name: "private_lookup", summary: "Private lookup", audience: "owner",
+    mode: "direct", effect: "read", spec: "1".repeat(16) }];
+  expect(requestSchema.safeParse(request).success).toBe(true);
+  expect(ownerTierFor({ ownerTier: true }, request)).toBeNull();
+  expect(callableTools(request)).toEqual([]);
+});
+
+for (const [isOwner, descriptorOffersGuestAnswers] of [[true, false], [true, true], [false, false]] as const)
+test(`guest history reaches the native runner with is_owner=${isOwner}, descriptor guest offer=${descriptorOffersGuestAnswers}`, async () => {
+  const sharp = (await import("sharp")).default;
+  const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
+  const request = guest();
+  request.features = ["requester_context", "relay_media_in"];
+  setGuestRequester(request, isOwner);
+  const trigger = request.input.conversation[0]!;
+  request.input.owner_instructions = null;
+  request.input.short_term_memory = null;
+  request.input.tools = [];
+  delete request.input.tool_guidance;
+  const photoRef = "business_photo";
+  request.input.conversation.unshift({ ...trigger, id: "guest_exchange", sent_at: "2026-10-06T11:00:00Z",
+    text: "Earlier guest exchange" }, {
+    ...trigger, id: "business_history", sent_at: "2026-10-06T11:05:00Z", text: "Business history for this chat",
+    media: [{ ref: photoRef, kind: "photo", availability: "ready", mime_type: "image/png",
+      byte_size: bytes.length, expires_at: "2099-01-01T00:00:00Z" }],
+  });
+  expect(requestSchema.parse(request)).toEqual(request);
+
+  const mediaLeases: unknown[] = [], completions: unknown[] = [];
+  const claims: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/claim")) { claims.push(body); return { body: { request } }; }
+    if (req.url?.endsWith(`/media/${photoRef}`)) {
+      mediaLeases.push(req.headers["delegatus-relay-lease"]);
+      return { headers: { "content-type": "image/png", "content-length": String(bytes.length) }, raw: bytes };
+    }
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const relay = paired(server.origin);
+  relay.features!.push("relay_media_in");
+  if (descriptorOffersGuestAnswers) relay.features!.push("relay_guest_answers");
+  updateRelayStore(s => ({ ...s, relays: [relay] }));
+  const capture = path.join(root, "guest-media-input.json"), command = path.join(root, "guest-media-agent");
+  fs.writeFileSync(command, `#!${process.execPath}
+const args = process.argv.slice(2);
+require('fs').writeFileSync(${JSON.stringify(capture)}, await Bun.stdin.text());
+console.log(JSON.stringify({type:'system',subtype:'init',session_id:args[args.indexOf('--session-id')+1],tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));
+console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{action:'reply',text:'Done.',reply_to:null}}));`, { mode: 0o700 });
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-06T12:00:01Z"));
+  try {
+    const claimed = await relayCall<{ request: unknown }>(relay.api_base, "/requests/claim", "POST", relayClaimBody(relay), relay.credential);
+    expect(claims).toHaveLength(1);
+    expect((claims[0] as { features: string[] }).features).toContain("relay_guest_answers");
+    expect((claims[0] as { features: string[] }).features).not.toContain("relay_isolated_requesters");
+    const result = await runClaimedRequest(relay, claimed.body!.request, undefined, { leaseWorker: false, command, ownerIntentCommand: ordinaryIntent() });
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Done.", reply_to: null } });
+    expect(completions).toEqual([result]);
+    expect(mediaLeases).toEqual([request.lease_id]);
+    const contents = JSON.parse(fs.readFileSync(capture, "utf8")).message.content;
+    const prompt = contents.find((item: { type: string }) => item.type === "text").text;
+    expect(prompt).toContain("Earlier guest exchange");
+    expect(prompt).toContain("Business history for this chat");
+    expect(contents.filter((item: { type: string }) => item.type === "image")).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/png", data: bytes.toString("base64") } },
+    ]);
+    expect(readAnswerRecord(relay.id, request.target_id, request.request_id)).toMatchObject({
+      requester: { key: trigger.author.key, is_owner: isOwner }, profile: { webSearch: true },
+    });
+    expect(readConversations()).toEqual([]);
+  } finally { clock.mockRestore(); await server.close(); }
+}, 30_000);
+
 // Reuses the verifier's real-runner follow-up probe with synthetic canaries.
-for (const engine of ["claude", "codex"] as const) for (const fails of [false, true])
-  test(`guest context is request-local across owner and guest follow-ups: ${engine}, fails=${fails}`, async () => {
+for (const engine of ["claude", "codex"] as const) for (const fails of [false, true]) for (const isOwner of [true, false])
+  test(`guest context is request-local across follow-ups: ${engine}, fails=${fails}, is_owner=${isOwner}`, async () => {
     const request = guest();
+    // Capture the ordinary owner's identity before setting up the guest turn.
+    const ownerTrigger = { ...request.input.conversation[0]! };
+    setGuestRequester(request, isOwner);
     const trigger = request.input.conversation.find(m => m.id === request.input.respond_to)!;
     const markers = ["PRIVATE_HISTORY_CANARY", "PRIVATE_BUSINESS_CANARY", "PRIVATE_MEDIA_CANARY"];
     request.input.conversation.unshift({ ...trigger, id: "private_history", reply_to: null,
@@ -393,7 +525,7 @@ ${fails ? "process.exit(1);" : engine === "claude" ? `console.log(JSON.stringify
     };
     const clean = (id: string, delivery?: "guest") => ({ ...guest(), request_id: id, delivery,
       input: { ...guest().input, tools: [], short_term_memory: null,
-        conversation: [{ ...trigger, id, text: "Follow up", reply_to: id === "owner_prime" ? trigger.id : "owner_prime" }], respond_to: id, request_text: "Follow up" } });
+        conversation: [{ ...ownerTrigger, id, text: "Follow up", reply_to: id === "owner_prime" ? ownerTrigger.id : "owner_prime" }], respond_to: id, request_text: "Follow up" } });
     try {
       // Prime an ordinary owner pin through the production runner, then interleave guest work.
       expect((await runClaimedRequest(relay, clean("owner_prime"), undefined, { leaseWorker: false, ownerPorts }))?.outcome).toBe("answered");
@@ -568,8 +700,10 @@ fs.writeFileSync(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:
   } finally { clock.mockRestore(); await server.close(); }
 }, 30_000);
 
-for (const ownerTier of [true, false]) test(`Codex Cloud hands ordinary guest history photos back to the hosted assistant with ownerTier=${ownerTier}`, async () => {
+for (const ownerTier of [true, false]) for (const isOwner of [true, false])
+test(`Codex Cloud hands guest history photos back with ownerTier=${ownerTier}, is_owner=${isOwner}`, async () => {
   const request = guest(); request.features = ["requester_context", "relay_media_in"];
+  setGuestRequester(request, isOwner);
   const message = request.input.conversation[0]!;
   message.media = [{ ref: "media_00000000000000000000000000000001", kind: "photo", availability: "ready",
     mime_type: "image/png", byte_size: 77, expires_at: "2099-01-01T00:00:00Z" }];

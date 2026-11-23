@@ -2250,6 +2250,7 @@ export async function claudeStructuredHostOptions(
     appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry ? { engine: "claude", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.account.claudeProvider) } : undefined),
     mcpServers: profile.mcpServers,
     validateTelegramGrant,
+    ...(profile.ownerRelayHandoffOnly ? { tools: ["Read"] } : {}),
     readOnly: launchProfileEngineReadOnly(profile),
     restricted: profile.sandbox === "restricted",
     model: input.account.claudeProvider
@@ -2337,6 +2338,7 @@ export async function defaultStartHost(
       operatorDecisionForms: operatorDecisionFormsRequired(input.receipt.agentRole, input.receipt.artifactPath ?? input.spec.transcript),
       cleanMemory: profile.cleanMemory === true,
       nativeMemoryEnabled,
+      ...(profile.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
       omitSkillsInstructions: profile.omitSkillsInstructions === true || sessionOriginFor(input.receipt) === "delegated",
       developerInstructions: await learnedRulesForLaunchProfile(profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env, nativeMemoryEnabled }),
       mcpServers: profile.mcpServers,

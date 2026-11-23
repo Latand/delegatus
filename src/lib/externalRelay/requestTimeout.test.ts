@@ -28,7 +28,7 @@ for (const kind of ["inline", "worker"] as const)
       });
       const paired: PairedRelay = {
         id: "status_fixture", origin: service.origin, api_base: `${service.origin}/v1`, name: "Fixture", description: "",
-        credential: "x".repeat(43), owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+        credential: "x".repeat(43), owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
         pairedAt: "2026-10-22T12:00:00Z", paused: false,
         limits: { max_response_bytes: 1_048_576, max_wait_s: 25, max_answer_chars: 4000 },
         targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true,

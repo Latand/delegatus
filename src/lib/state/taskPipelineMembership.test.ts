@@ -3,7 +3,7 @@ import { Database, type Statement } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initializeStateCollections, readPipelineRowsForTask } from "./sqliteStateStore";
+import { initializeStateCollections, readPipelineRowsForTask, readPipelineRowsForTasks } from "./sqliteStateStore";
 
 type Lane = { id: string; taskIds: string[] };
 const LANES = 120;
@@ -138,3 +138,35 @@ test("a collection revision that moved backwards discards the kept membership", 
     expect(ids(readPipelineRowsForTask(filename, "task-8"))).toEqual(["pipelines-2", "pipelines-8", "pipelines_archive-8"]);
   } finally { db.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("batched seat membership reads seek the same rows above the legacy cache limit", () => {
+  const { root, filename, db } = fixture("seat-membership-index");
+  const real = Database.prototype.query;
+  let selection = "";
+  const spy = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+    if (sql.includes("CROSS JOIN pipeline_task_membership")) selection = sql;
+    return real.call(this, sql);
+  } as never);
+  try {
+    const requested = ["task-3", "task-4", "task-missing", "task-3"];
+    const referenced = ["pipelines_archive-3", "pipelines_archive-6"];
+    const answer = ["pipelines-3", "pipelines-4", "pipelines_archive-3", "pipelines_archive-4", "pipelines_archive-6"];
+    const insert = db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,?,1,0)");
+    for (const [from, to] of [[0, 19_800], [19_800, 39_800]] as const) {
+      db.transaction(() => {
+        for (let index = from; index < to; index++) insert.run(`history-${index}`, JSON.stringify({ id: `history-${index}`, taskIds: ["unrelated"] }), 1_000 + index);
+      })();
+      expect(ids(readPipelineRowsForTasks(filename, requested, referenced))).toEqual(answer);
+      expect(ids(readPipelineRowsForTasks(filename, requested, referenced))).toEqual(answer);
+      const plan = db.query<{ detail: string }, [string, string]>(`EXPLAIN QUERY PLAN ${selection}`).all(JSON.stringify(requested), JSON.stringify(referenced)).map(row => row.detail);
+      expect(plan).toContainEqual(expect.stringContaining("SEARCH m USING COVERING INDEX pipeline_task_membership_lookup (task_id=?)"));
+      expect(plan.filter(step => step.startsWith("SEARCH r"))).toHaveLength(2);
+    }
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines_archive' AND row_key='pipelines_archive-4'")
+      .run(JSON.stringify({ id: "pipelines_archive-4", taskIds: "task-4" }));
+    expect(ids(readPipelineRowsForTasks(filename, requested, referenced))).toEqual(answer.filter(id => id !== "pipelines_archive-4"));
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines_archive' AND row_key='pipelines_archive-4'")
+      .run(JSON.stringify({ id: "pipelines_archive-4", taskIds: ["task-4", "task-4"] }));
+    expect(ids(readPipelineRowsForTasks(filename, requested, referenced))).toEqual(answer);
+  } finally { spy.mockRestore(); db.close(); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
