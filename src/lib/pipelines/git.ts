@@ -5,7 +5,7 @@ import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDep
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 export { preparePipelineSetup } from "./setupRecipe";
-import { publicationEnvironmentFailure, publicationFailurePhase, publicationPrivacyConfigurationFault, publicationPrivacyRefusal } from "./publicationHistory";
+import { publicationEnvironmentFailure, publicationFailurePhase, publicationPrivacyConfigurationFault, publicationPrivacyDrift, publicationPrivacyRefusal } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -1664,7 +1664,7 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const transport = publicationTransportLine(failure.outputTail);
   if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
   if (failure.admissionDeadline && failure.retryableDeadline) {
-    const deadline = lines.find(line => /^pre-push: CPU admission deadline exceeded after \d+ ms; checks did not start$/.test(line));
+    const deadline = lines.find(line => /^pre-push: CPU admission deadline exceeded after \d+ ms; (?:checks|publication tool preparation) did not start$/.test(line));
     return deadline?.slice("pre-push: ".length) ?? "the pre-push hook's CPU admission lock-wait budget expired before checks started";
   }
   const phase = publicationFailurePhase(failure);
@@ -2212,6 +2212,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: deadlineKind !== null,
           ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
+          ...(!preparingDependencies && publicationPrivacyDrift(rawOutput) ? { retryablePrivacyDrift: true } : {}),
           ...(privacyConfigurationFault ? { privacyConfigurationFault: true } : {}),
           ...(!preparingDependencies && rawPhase !== "privacy" && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };

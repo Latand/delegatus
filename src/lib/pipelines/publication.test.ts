@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFailure, publicationTransportLine, pipelinePublishesRemoteBranch } from "./publication";
+import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFailure, publicationTransportLine, publicationDeadlineKind, pipelinePublishesRemoteBranch } from "./publication";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
+import { recoverablePublication } from "./publicationHistory";
 
 test.each(["remote: fatal error in commit_refs_rules", "! [remote rejected] HEAD -> lane (pre-receive hook declined)"])(
   "a remote ref refusal retains its diagnostic: %s", async line => {
@@ -30,6 +31,22 @@ async function admissionFailureOutput(): Promise<string> {
 
 test("a production admission lock deadline before checks start is retryable", async () => {
   expect(publicationDeadlineOnly(await admissionFailureOutput())).toBe(true);
+});
+
+test("publication tool preparation admission timeout keeps its capacity retry classification", async () => {
+  const reason = "CPU admission deadline exceeded after 60000 ms; publication tool preparation did not start";
+  const output = `pre-push: CPU admission for publication checks\npre-push: ${reason}`;
+  expect(publicationDeadlineKind(output)).toBe("admission");
+  const { publicationFailureCause } = await import("./git");
+  expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 75, signal: null, durationMs: 60_000,
+    outputTail: output, admissionDeadline: true, retryableDeadline: true })).toBe(reason);
+});
+
+test("external privacy catalog drift is eligible for a fresh preparation on the accepted head", () => {
+  const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 8,
+    outputTail: "pre-push: privacy\npublication check inputs changed; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE)",
+    retryablePrivacyDrift: true as const, changedFiles: 2 };
+  expect(recoverablePublication({ ok: false, error: "privacy inputs changed", failure })).toBe(true);
 });
 
 test("the publication admission deadline retains the hook's reason", async () => {

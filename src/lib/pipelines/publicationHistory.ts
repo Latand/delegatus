@@ -19,6 +19,14 @@ export function publicationPrivacyRefusal(line: string): boolean {
   return /^PRIVACY GATE:[ \t]*FAIL$|^pre-push: privacy:.*(?:failed|refused)/.test(line.trim());
 }
 
+export function publicationPrivacyDrift(output: string): boolean {
+  const lines = output.split("\n").map(line => line.trim());
+  const drift = lines.filter(line => /^(?:pre-push: )?publication check inputs changed; changed components: privacy files \(LLV_PRIVACY_(?:KNOWN_VALUES_FILE|KNOWN_VALUE_FINGERPRINTS_FILE)\)(?:, privacy files \(LLV_PRIVACY_(?:KNOWN_VALUES_FILE|KNOWN_VALUE_FINGERPRINTS_FILE)\))*(?:; gate failed)?$/.test(line));
+  if (!drift.length) return false;
+  return lines.every(line => drift.includes(line) || line === "pre-push: privacy"
+    || /^error: failed to push some refs to '.+'$/.test(line));
+}
+
 /** Every failed scanner report must contain only its configuration fault.
  * Missing or mixed summaries retain the scanner's refusal. */
 export function publicationPrivacyConfigurationFault(output: string): boolean {
@@ -69,7 +77,7 @@ export function publicationRemoteRefusal(failure: PipelinePublicationFailure | u
 
 export function recoverablePublication(result: { error: string; failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded" }): boolean {
   if (result.outcome === "superseded") return false;
-  return result.failure?.retryableApp403 === true || result.failure?.retryableDeadline === true || publicationInterrupted(result)
+  return result.failure?.retryableApp403 === true || result.failure?.retryableDeadline === true || result.failure?.retryablePrivacyDrift === true || publicationInterrupted(result)
     || result.failure?.changedFiles === 0 && publicationFailurePhase(result.failure) !== "privacy" && !publicationRemoteRefusal(result.failure);
 }
 

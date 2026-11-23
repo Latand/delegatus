@@ -181,7 +181,7 @@ for (const scenario of ["slow privacy", "changed input", "changed privacy input"
           transportBudget = options?.timeoutMs ?? 0;
           hookAllowance = Number(env?.LLV_GATE_PUSH_DEADLINE) - Date.now();
           if (scenario === "changed input") fs.appendFileSync(path.join(f.dir, "example.ts"), "// changed after preparation\n");
-          if (scenario === "changed privacy input") fs.appendFileSync(f.env.LLV_PRIVACY_KNOWN_VALUES_FILE!, "refreshed synthetic fixture value\n");
+          if (scenario === "changed privacy input" && pushes === 1) fs.appendFileSync(f.env.LLV_PRIVACY_KNOWN_VALUES_FILE!, "refreshed synthetic fixture value\n");
         }
         const hookEnv = { ...f.env, ...env };
         if (f.env.LLV_PRIVACY_KNOWN_VALUES_FILE) hookEnv.LLV_PRIVACY_KNOWN_VALUES_FILE = f.env.LLV_PRIVACY_KNOWN_VALUES_FILE;
@@ -193,16 +193,26 @@ for (const scenario of ["slow privacy", "changed input", "changed privacy input"
         expect(result.ok ? "" : result.error).toMatch(scenario === "changed input"
           ? /publication inputs cannot be certified: dirty worktree/
           : /publication check inputs changed; changed components: privacy files \(LLV_PRIVACY_KNOWN_VALUES_FILE\)/);
+        if (scenario === "changed privacy input") {
+          expect(result.ok ? undefined : result.failure?.retryablePrivacyDrift, result.ok ? "success" : result.failure?.outputTail).toBe(true);
+          expect(http.events().some(event => event.kind === "rpc")).toBeFalse();
+          fs.writeFileSync(f.env.LLV_PRIVACY_KNOWN_VALUES_FILE!, "initial synthetic fixture value\n");
+          const beforeRetry = f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts").length;
+          const retried = await publishPipelineBranch(findPipelineRecord(subject.id)!, exec, { acceptedSha: f.head });
+          expect(retried).toMatchObject({ ok: true, sha: f.head, remote: "published" });
+          expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(beforeRetry + 1);
+          expect(http.rpc()).toBe(1);
+        }
       } else {
         expect(result).toMatchObject({ ok: true, sha: f.head, remote: "published" });
         expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
       }
       expect(transportBudget).toBe(PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS);
       expect(hookAllowance).toBe(transportBudget - PUBLICATION_PACK_MARGIN_MS);
-      expect(pushes).toBe(1);
-      expect(http.rpc()).toBe(["slow privacy", "capped budget"].includes(scenario) ? 1 : 0);
-      expect(http.events().filter(event => event.kind === "checks")).toHaveLength(1);
-      expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(1);
+      expect(pushes).toBe(scenario === "changed privacy input" ? 2 : 1);
+      expect(http.rpc()).toBe(["slow privacy", "capped budget", "changed privacy input"].includes(scenario) ? 1 : 0);
+      expect(http.events().filter(event => event.kind === "checks")).toHaveLength(scenario === "changed privacy input" ? 2 : 1);
+      expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(scenario === "changed privacy input" ? 2 : 1);
       const events = http.events().map(event => event.kind);
       expect(events.indexOf("privacy-complete")).toBeGreaterThanOrEqual(0);
       expect(events.indexOf("privacy-complete")).toBeLessThan(events.indexOf("mint"));

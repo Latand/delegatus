@@ -1094,6 +1094,8 @@ export type PipelinePublicationFailure = {
   retryableDeadline?: boolean;
   /** The proven deadline expired during CPU admission before checks started. */
   admissionDeadline?: true;
+  /** Preparation refused only because its external privacy catalog changed. */
+  retryablePrivacyDrift?: true;
   /** The scanner reported only a configuration fault, and this head changes
       none of its script inputs. Computed on complete output before redaction. */
   privacyConfigurationFault?: true;

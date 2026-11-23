@@ -5,7 +5,7 @@ import { AppServerCloudTransport, cloudCheckInputs, cloudRefusalLine, runCloudCh
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { procBackend } from "../src/lib/proc";
 import { captureProcessIdentity, processIdentityMayOwn, processIdentityMayRun, type ProcessIdentity } from "../src/lib/processIdentity";
 import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -17,6 +17,7 @@ import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerpri
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
+import { readSafeRegularFile } from "./privacy-safe-path";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -1010,12 +1011,39 @@ const publicationObservationInputs = (env: NodeJS.ProcessEnv) => fingerprint(pub
 /** Bind the exact external privacy inputs used by the prepared scan into its
  * receipt. The transport hook checks these hashes and never repeats the scan. */
 function publicationPrivacyFiles(env: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(["LLV_PRIVACY_KNOWN_VALUES_FILE", "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE"]
-    .filter(name => env[name]).map(name => {
-      const file = env[name]!;
-      try { return [name, fileFingerprint(file)]; }
+  const sources: [string, string | undefined][] = [
+    ["LLV_PRIVACY_KNOWN_VALUES_FILE", env.LLV_PRIVACY_KNOWN_VALUES_FILE],
+    ["LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE", env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE ?? path.join(import.meta.dir, "privacy-known-value-fingerprints.json")],
+  ];
+  return Object.fromEntries(sources.filter((entry): entry is [string, string] => !!entry[1]).map(([name, file]) => {
+      if (!existsSync(file)) return [name, "missing"];
+      try { return [name, createHash("sha256").update(readSafeRegularFile(file)).digest("hex")]; }
       catch { throw new Error(`publication privacy inputs cannot be certified; changed components: privacy files (${name})`); }
     }));
+}
+
+export function snapshotPublicationPrivacyFiles(env: NodeJS.ProcessEnv, directory: string): { env: NodeJS.ProcessEnv; hashes: Record<string, string> } {
+  const snapshotEnv = { ...env };
+  const hashes: Record<string, string> = {};
+  const sources = [
+    ["LLV_PRIVACY_KNOWN_VALUES_FILE", env.LLV_PRIVACY_KNOWN_VALUES_FILE],
+    ["LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE", env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE ?? path.join(import.meta.dir, "privacy-known-value-fingerprints.json")],
+  ] as const;
+  for (const [name, source] of sources) {
+    if (!source) continue;
+    if (!existsSync(source)) { hashes[name] = "missing"; continue; }
+    try {
+      const bytes = readSafeRegularFile(source);
+      const copy = path.join(directory, `${name.toLowerCase()}.snapshot`);
+      writeFileSync(copy, bytes, { mode: 0o600, flag: "wx" });
+      snapshotEnv[name] = copy;
+      hashes[name] = createHash("sha256").update(bytes).digest("hex");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "unknown read failure";
+      throw new Error(`publication privacy inputs cannot be safely snapshotted (${reason}); changed components: privacy files (${name})`);
+    }
+  }
+  return { env: snapshotEnv, hashes };
 }
 
 const independentSteps = ["types", "eslint", "touched tests", "Linux backend", "Linux tests"];
@@ -1131,6 +1159,9 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       ...process.env,
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json"),
     };
+    const sourcePrivacyEnv = { ...privacyEnv };
+    const privacySnapshot = publicationPrepare ? snapshotPublicationPrivacyFiles(privacyEnv, sandbox) : undefined;
+    if (privacySnapshot) Object.assign(privacyEnv, privacySnapshot.env);
     const prepare = async (step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env) => {
       const command = [...step.command];
       const env: NodeJS.ProcessEnv = { ...(step.isolated || mode === "pre-push" && !["privacy", "frozen install", "supply chain"].includes(step.name) ? isolated : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
@@ -1232,7 +1263,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     const publicationInputs = inputReader?.snapshot();
     checkTransportDeadline();
     const observationComponents = publicationObservationComponents(process.env);
-    const privacyFiles = publicationPrepare ? publicationPrivacyFiles(privacyEnv) : undefined;
+    const privacyFiles = privacySnapshot?.hashes;
     const checkComponents: Record<string, string> = { ...observationComponents, plan: fingerprint(steps),
       ...(privacyFiles ? { "privacy files": fingerprint(privacyFiles) } : {}) };
     if (publicationInputs) Object.assign(checkComponents, publicationInputs.components);
@@ -1241,7 +1272,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       const changed = [...inputReader!.changed(publicationInputs!),
         ...(Object.keys(observationComponents) as (keyof typeof observationComponents)[]).filter(name => observationComponents[name] !== observation[name])];
       if (privacy) {
-        const current = publicationPrivacyFiles(privacyEnv);
+        const current = publicationPrivacyFiles(sourcePrivacyEnv);
         changed.push(...Object.keys(privacy).filter(name => privacy[name] !== current[name]).map(name => `privacy files (${name})`));
       }
       if (changed.length) throw new Error(`publication inputs changed during ${phase}; changed components: ${changed.join(", ")}`);

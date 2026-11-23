@@ -2253,20 +2253,24 @@ test.each(["pure", "assertion", "privacy", "started", "cleanup"] as const)("admi
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
 
-test.each(["pure", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {
+test.each(["pure", "admission", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {
   const box = await publishSandbox();
   try {
     const head = await box.commit("change.txt", "accepted work\n");
     const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
     const refusal = kind === "assertion" ? "(fail) named assertion" : kind === "cleanup" ? "owned runner: budget cleanup failed: fixture refusal" : "";
-    fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh\ncat <<'EVIDENCE'\n${refusal}\nowned runner: deadline expired\npre-push: no verdict within the push budget of 10 s: "types" was still running\nEVIDENCE\nexit 75\n`, { mode: 0o700 });
+    const timeout = kind === "admission"
+      ? "pre-push: CPU admission for publication checks\npre-push: CPU admission deadline exceeded after 60000 ms; publication tool preparation did not start"
+      : "owned runner: deadline expired\npre-push: no verdict within the push budget of 10 s: \"types\" was still running";
+    fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh\ncat <<'EVIDENCE'\n${refusal}\n${timeout}\nEVIDENCE\nexit 75\n`, { mode: 0o700 });
     await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
     const result = await publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected publication refusal");
-    expect(result.failure?.retryableDeadline).toBe(kind === "pure");
+    expect(result.failure?.retryableDeadline).toBe(kind === "pure" || kind === "admission");
+    expect(result.failure?.admissionDeadline).toBe(kind === "admission" ? true : undefined);
     expect(result.outcome).toBe(kind === "pure" ? "not-landed" : undefined);
-    expect(recoverablePublication(result)).toBe(kind === "pure");
+    expect(recoverablePublication(result)).toBe(kind === "pure" || kind === "admission");
     expect(await box.originHead()).toBe("");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
