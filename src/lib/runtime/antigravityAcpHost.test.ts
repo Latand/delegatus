@@ -939,15 +939,234 @@ describe("AntigravityAcpHost", () => {
     host = await AntigravityAcpHost.adopt(retentionSessionId, makeOpts(retentionSessionId));
     const totalEchoes = baseEventStore.load(retentionSessionId).filter((ev) => ev.kind === "item" && ev.deliveryEcho).length;
     expect(totalEchoes).toBe(4097);
+
+    // Instrument baseEventStore.scan & load AFTER adopt() to prove keyed O(1) lookup (0 ledger scans!).
+    let scanVisits = 0;
+    let loadCalls = 0;
+    const origScan = baseEventStore.scan.bind(baseEventStore);
+    const origLoad = baseEventStore.load.bind(baseEventStore);
+    baseEventStore.scan = async (session, visit) => origScan(session, (event) => {
+      scanVisits += 1;
+      visit(event);
+    });
+    baseEventStore.load = (session) => {
+      loadCalls += 1;
+      return origLoad(session);
+    };
+
+    const evFirst = await host.sessionMaterializationEvidence(firstEntry.id);
+    expect(evFirst).toEqual({ state: "materialized" });
+    // Caller mutating returned evidence object MUST NOT mutate internal host state.
+    (evFirst as { state: string }).state = "tampered";
     expect(await host.sessionMaterializationEvidence(firstEntry.id)).toEqual({ state: "materialized" });
     expect((await host.sessionMaterializationEvidence("edge-never-sent")).state).toBe("absent");
     const promptsBeforeRetentionRetry = outboundPrompts.length;
     const retentionRetry = await host.send(firstEntry);
     expect(retentionRetry).toEqual(firstReceipt);
     expect(outboundPrompts.length - promptsBeforeRetentionRetry).toBe(0);
+
+    // Cold send after eviction: 0 ledger scans, 0 full loads.
+    const coldEntry = { id: "edge-cold-after-eviction", text: "Cold message after eviction" };
+    const coldReceipt = await host.send(coldEntry);
+    expect(coldReceipt.outcome).toBe("turn-started");
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await tick();
+    expect(await host.sessionMaterializationEvidence(coldEntry.id)).toEqual({ state: "materialized" });
+    expect(scanVisits).toBe(0);
+    expect(loadCalls).toBe(0);
+
+    // Second SQLite connection sees committed indexed rows immediately without lock contention.
+    const { Database } = await import("bun:sqlite");
+    const readerDb = new Database(path.join(antigravityHome, "delivery-acceptance.sqlite"), { readonly: true });
+    try {
+      const rowFirst = readerDb.query<{ state: string; turn_id: string }, [string, string]>(
+        "SELECT state, turn_id FROM antigravity_delivery_acceptance WHERE session_id = ? AND delivery_id = ?",
+      ).get(retentionSessionId, firstEntry.id);
+      const rowCold = readerDb.query<{ state: string }, [string, string]>(
+        "SELECT state FROM antigravity_delivery_acceptance WHERE session_id = ? AND delivery_id = ?",
+      ).get(retentionSessionId, coldEntry.id);
+      expect(rowFirst).toEqual({ state: "accepted", turn_id: firstTurnId });
+      expect(rowCold).toEqual({ state: "accepted" });
+    } finally {
+      readerDb.close();
+    }
+
+    // Concurrent send() of the same cold ID after eviction (including across an async refill yield):
+    // MUST dispatch at most 1 prompt and return the same turnId to both callers.
+    const coldRaceEntry = { id: "edge-concurrent-cold", text: "Concurrent cold send" };
+    let releaseRefill!: () => void;
+    const refillGate = new Promise<void>((resolve) => { releaseRefill = resolve; });
+    let signalRefillEntered!: () => void;
+    const refillEntered = new Promise<void>((resolve) => { signalRefillEntered = resolve; });
+    let interceptFirstScan = true;
+    baseEventStore.scan = async (session, visit) => {
+      const result = await origScan(session, visit);
+      if (interceptFirstScan) {
+        interceptFirstScan = false;
+        signalRefillEntered();
+        await refillGate;
+      }
+      return result;
+    };
+    const oldTime = new Date(Date.now() - 15 * 60_000);
+    fs.utimesSync(host.identity.path, oldTime, oldTime);
+    expect(await host.releaseIdleEventWindow(() => true)).toBe(true);
+    const promptsBeforeRace = outboundPrompts.length;
+    const firstRace = host.send(coldRaceEntry);
+    await refillEntered;
+    const secondRacePromise = host.send(coldRaceEntry);
+    releaseRefill();
+    const [raceA, raceB] = await Promise.all([firstRace, secondRacePromise]);
+    expect(raceA.outcome).toBe("turn-started");
+    expect(raceB.outcome).toBe("turn-started");
+    if (raceA.outcome !== "turn-started" || raceB.outcome !== "turn-started") throw new Error("expected turn-started");
+    expect(raceA.turnId).toBe(raceB.turnId);
+    expect(outboundPrompts.length - promptsBeforeRace).toBe(1);
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await tick();
+
+    // Concurrent miss on fallback scan path (simulated index fallback where call 1 pauses mid-scan
+    // while call 2 dispatches and completes the same delivery ID): MUST NOT double-send!
+    const fallbackRaceEntry = { id: "edge-concurrent-fallback", text: "Concurrent fallback scan" };
+    let releaseFallbackScan!: () => void;
+    const fallbackGate = new Promise<void>((resolve) => { releaseFallbackScan = resolve; });
+    let signalFallbackEntered!: () => void;
+    const fallbackEntered = new Promise<void>((resolve) => { signalFallbackEntered = resolve; });
+    let fallbackScanCount = 0;
+    baseEventStore.scan = async (session, visit) => {
+      fallbackScanCount += 1;
+      const result = await origScan(session, visit);
+      if (fallbackScanCount === 1) {
+        signalFallbackEntered();
+        await fallbackGate;
+      }
+      return result;
+    };
+    (host as unknown as { deliveryIndexHealthy: boolean }).deliveryIndexHealthy = false;
+    const promptsBeforeFallbackRace = outboundPrompts.length;
+    const firstFallback = host.send(fallbackRaceEntry);
+    await fallbackEntered;
+    const secondFallback = await host.send(fallbackRaceEntry);
+    expect(secondFallback.outcome).toBe("turn-started");
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await tick();
+    expect(await host.sessionMaterializationEvidence(fallbackRaceEntry.id)).toEqual({ state: "materialized" });
+    releaseFallbackScan();
+    const resumedFallback = await firstFallback;
+    expect(resumedFallback.outcome).toBe("turn-started");
+    if (resumedFallback.outcome !== "turn-started" || secondFallback.outcome !== "turn-started") {
+      throw new Error("expected turn-started");
+    }
+    expect(resumedFallback.turnId).toBe(secondFallback.turnId);
+    expect(outboundPrompts.length - promptsBeforeFallbackRace).toBe(1);
+    const echoesForFallback = origLoad(retentionSessionId)
+      .filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === fallbackRaceEntry.id);
+    expect(echoesForFallback).toHaveLength(1);
+
+    baseEventStore.scan = origScan;
+    baseEventStore.load = origLoad;
+
     const echoesForFirst = baseEventStore.load(retentionSessionId)
       .filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === firstEntry.id);
     expect(echoesForFirst).toHaveLength(1);
     await host.release();
+  });
+
+  it("bases delivery acceptance on ACP's actual response when interrupt races end_turn, and keeps release-mid-prompt unavailable", async () => {
+    const baseEventStore = new FileRuntimeEventStore(path.join(stateDir, "runtime-events-interrupt-race"));
+    const outboundPrompts: string[] = [];
+    let lastPromptId = 0;
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+    const makeOpts = (sessionId: string): AntigravityAcpHostOptions => ({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore: baseEventStore,
+      shutdownGraceMs: 50,
+      processIdentity: () => "start-id-interrupt-race",
+      signalProcess: ((_pid: number, signal?: NodeJS.Signals | number) => {
+        fake.signals.push(signal ?? "SIGTERM");
+        fake.closeChild(0);
+        return true;
+      }) as typeof process.kill,
+      spawnProcess: () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          } else if (method === "session/new" || method === "session/resume") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+          } else if (method === "session/prompt" && id !== undefined) {
+            lastPromptId = id;
+            outboundPrompts.push(String(id));
+          } else if (method === "session/close") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          }
+        });
+        return fake.child;
+      },
+    });
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    // A. Interrupt raced with ACP completing end_turn: MUST record materialized (NOT failed)
+    //    and deduplicate retries on both the same host and after adopt().
+    const raceSessionId = `ag_int_race_${crypto.randomUUID().slice(0, 8)}`;
+    const raceEntry = { id: "interrupt-raced-end-turn", text: "Complete before cancel" };
+    let host = await AntigravityAcpHost.start(makeOpts(raceSessionId));
+    const initial = await host.send(raceEntry);
+    expect(initial.outcome).toBe("turn-started");
+    if (initial.outcome !== "turn-started") throw new Error("expected turn-started");
+    const interruption = host.interrupt(initial.turnId);
+    expect(fake.received.some((req) => req.method === "session/cancel")).toBe(true);
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await interruption;
+
+    expect(await host.sessionMaterializationEvidence(raceEntry.id)).toEqual({ state: "materialized" });
+    const promptsBeforeSameHostRetry = outboundPrompts.length;
+    const sameHostRetry = await host.send(raceEntry);
+    expect(sameHostRetry).toEqual(initial);
+    expect(outboundPrompts.length - promptsBeforeSameHostRetry).toBe(0);
+    await host.release();
+
+    host = await AntigravityAcpHost.adopt(raceSessionId, makeOpts(raceSessionId));
+    expect(await host.sessionMaterializationEvidence(raceEntry.id)).toEqual({ state: "materialized" });
+    const promptsBeforeAdoptRetry = outboundPrompts.length;
+    const adoptRetry = await host.send(raceEntry);
+    expect(adoptRetry).toEqual(initial);
+    expect(outboundPrompts.length - promptsBeforeAdoptRetry).toBe(0);
+
+    // B. Paired control: ACP explicitly answers stopReason="cancelled" before any updates -> failed, retry allowed.
+    const cancelledEntry = { id: "explicit-acp-cancelled", text: "Cancel before acceptance" };
+    const cancelledInitial = await host.send(cancelledEntry);
+    if (cancelledInitial.outcome !== "turn-started") throw new Error("expected turn-started");
+    const cancelledInt = host.interrupt(cancelledInitial.turnId);
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "cancelled" } });
+    await cancelledInt;
+    expect((await host.sessionMaterializationEvidence(cancelledEntry.id)).state).toBe("failed");
+    const promptsBeforeCancelRetry = outboundPrompts.length;
+    const cancelRetry = await host.send(cancelledEntry);
+    expect(cancelRetry.outcome).toBe("turn-started");
+    expect(outboundPrompts.length - promptsBeforeCancelRetry).toBe(1);
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await tick();
+    expect(await host.sessionMaterializationEvidence(cancelledEntry.id)).toEqual({ state: "materialized" });
+    await host.release();
+
+    // C. Host released mid-prompt before ACP answers: MUST stay unavailable (never blind resend).
+    const releaseSessionId = `ag_rel_mid_${crypto.randomUUID().slice(0, 8)}`;
+    const releaseEntry = { id: "release-mid-prompt", text: "Unanswered before release" };
+    host = await AntigravityAcpHost.start(makeOpts(releaseSessionId));
+    expect((await host.send(releaseEntry)).outcome).toBe("turn-started");
+    await host.release();
+    expect((await host.sessionMaterializationEvidence(releaseEntry.id)).state).toBe("unavailable");
+    const adoptedAfterRelease = await AntigravityAcpHost.adopt(releaseSessionId, makeOpts(releaseSessionId));
+    expect((await adoptedAfterRelease.sessionMaterializationEvidence(releaseEntry.id)).state).toBe("unavailable");
+    const promptsBeforeReleaseRetry = outboundPrompts.length;
+    expect((await adoptedAfterRelease.send(releaseEntry)).outcome).toBe("rejected");
+    expect(outboundPrompts.length - promptsBeforeReleaseRetry).toBe(0);
+    await adoptedAfterRelease.release();
   });
 });

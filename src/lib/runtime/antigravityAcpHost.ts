@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -164,27 +165,265 @@ function reduceDeliveryAcceptanceEvent(
   return current;
 }
 
-function reduceDeliveryAcceptanceIntoMap(
-  map: Map<string, DeliveryAcceptanceRecord>,
-  event: RuntimeEvent,
-): void {
-  if (event.kind !== "item") return;
-  const itemObj = record(event.item);
-  const itemEntryId = stringField(itemObj, "entryId");
+function extractDeliveryEventIds(event: RuntimeEvent): string[] {
+  if (event.kind !== "item") return [];
+  const ids: string[] = [];
   const echoId = event.deliveryEcho?.operationId;
-  if (echoId) {
-    const next = reduceDeliveryAcceptanceEvent(map.get(echoId), event, echoId);
+  if (echoId) ids.push(echoId);
+  const itemObj = record(event.item);
+  const itemType = stringField(itemObj, "type");
+  const itemEntryId = stringField(itemObj, "entryId");
+  if (
+    itemEntryId
+    && itemEntryId !== echoId
+    && (itemType === "antigravity.delivery_dispatched" || itemType === "antigravity.delivery_failed")
+  ) {
+    ids.push(itemEntryId);
+  }
+  return ids;
+}
+
+function reduceDeliveryAcceptanceIntoMap(
+  map: Map<string, { record: DeliveryAcceptanceRecord; seq: number }>,
+  event: RuntimeEvent,
+): boolean {
+  const ids = extractDeliveryEventIds(event);
+  if (ids.length === 0) return false;
+  let updated = false;
+  for (const id of ids) {
+    const prev = map.get(id);
+    const next = reduceDeliveryAcceptanceEvent(prev?.record, event, id);
     if (next) {
-      map.delete(echoId);
-      map.set(echoId, next);
+      map.delete(id);
+      map.set(id, { record: next, seq: event.seq });
+      updated = true;
     }
   }
-  if (itemEntryId && itemEntryId !== echoId) {
-    const next = reduceDeliveryAcceptanceEvent(map.get(itemEntryId), event, itemEntryId);
-    if (next) {
-      map.delete(itemEntryId);
-      map.set(itemEntryId, next);
+  return updated;
+}
+
+interface DeliveryAcceptanceRow {
+  state: string;
+  turn_id: string;
+  accepted_at: string | null;
+  reason: string | null;
+}
+
+function deliveryRecordFromRow(row: DeliveryAcceptanceRow | null | undefined): DeliveryAcceptanceRecord | null {
+  if (!row) return null;
+  if (row.state === "accepted") {
+    return { state: "accepted", turnId: row.turn_id, acceptedAt: row.accepted_at ?? "" };
+  }
+  if (row.state === "failed") {
+    return { state: "failed", turnId: row.turn_id, reason: row.reason ?? "Antigravity rejected delivery" };
+  }
+  if (row.state === "unavailable") {
+    return { state: "unavailable", turnId: row.turn_id, reason: row.reason ?? "Antigravity delivery acceptance is unavailable" };
+  }
+  return null;
+}
+
+function sameDeliveryRecord(a: DeliveryAcceptanceRecord | null, b: DeliveryAcceptanceRecord): boolean {
+  if (!a || a.state !== b.state || a.turnId !== b.turnId) return false;
+  if (a.state === "accepted" && b.state === "accepted") return a.acceptedAt === b.acceptedAt;
+  if (a.state === "failed" && b.state === "failed") return a.reason === b.reason;
+  if (a.state === "unavailable" && b.state === "unavailable") return a.reason === b.reason;
+  return true;
+}
+
+/** Durable O(1) keyed index of Antigravity delivery acceptance facts by
+    `(session_id, delivery_id)`, confined inside `<antigravityHome>`.
+    All SQL uses SQLite 3.39-safe syntax (macOS system SQLite compatible). */
+class AntigravityDeliveryIndex {
+  private readonly db: Database;
+
+  private constructor(db: Database) {
+    this.db = db;
+  }
+
+  static open(antigravityHome: string, readonly = false): AntigravityDeliveryIndex | null {
+    const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+    if (!sqlite) return null;
+    const resolvedHome = path.resolve(antigravityHome);
+    if (!readonly) fs.mkdirSync(resolvedHome, { recursive: true, mode: 0o700 });
+    const homeStat = fs.lstatSync(resolvedHome);
+    if (homeStat.isSymbolicLink() || !homeStat.isDirectory()) {
+      throw new Error("Antigravity home root must be a real directory");
     }
+    const canonicalHome = fs.realpathSync(resolvedHome);
+    const dbPath = path.join(canonicalHome, "delivery-acceptance.sqlite");
+    try {
+      const dbStat = fs.lstatSync(dbPath);
+      if (dbStat.isSymbolicLink() || !dbStat.isFile()) {
+        throw new Error("Antigravity delivery index path must be a regular file");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (readonly) return null;
+    }
+    const db = new sqlite.Database(dbPath, readonly ? { readonly: true } : { create: true });
+    try {
+      if (!readonly) {
+        try { fs.chmodSync(dbPath, 0o600); } catch { /* best effort */ }
+        db.exec(
+          "PRAGMA busy_timeout=5000;"
+          + "PRAGMA journal_mode=WAL;"
+          + "PRAGMA synchronous=NORMAL;"
+          + "CREATE TABLE IF NOT EXISTS antigravity_delivery_acceptance ("
+          + "  session_id TEXT NOT NULL,"
+          + "  delivery_id TEXT NOT NULL,"
+          + "  state TEXT NOT NULL,"
+          + "  turn_id TEXT NOT NULL,"
+          + "  accepted_at TEXT,"
+          + "  reason TEXT,"
+          + "  seq INTEGER NOT NULL,"
+          + "  PRIMARY KEY (session_id, delivery_id)"
+          + ");"
+          + "CREATE TABLE IF NOT EXISTS antigravity_delivery_ledger_sync ("
+          + "  session_id TEXT PRIMARY KEY,"
+          + "  synced_seq INTEGER NOT NULL,"
+          + "  synced_count INTEGER NOT NULL,"
+          + "  max_delivery_seq INTEGER NOT NULL"
+          + ");",
+        );
+      } else {
+        db.exec("PRAGMA busy_timeout=5000;");
+      }
+      return new AntigravityDeliveryIndex(db);
+    } catch (error) {
+      try { db.close(); } catch { /* ignore */ }
+      throw error;
+    }
+  }
+
+  get(sessionId: string, deliveryId: string): DeliveryAcceptanceRecord | null {
+    const row = this.db.query<DeliveryAcceptanceRow, [string, string]>(
+      "SELECT state, turn_id, accepted_at, reason FROM antigravity_delivery_acceptance WHERE session_id = ? AND delivery_id = ?",
+    ).get(sessionId, deliveryId);
+    return deliveryRecordFromRow(row);
+  }
+
+  syncSession(
+    sessionId: string,
+    ledgerTailSeq: number,
+    entries: ReadonlyMap<string, { record: DeliveryAcceptanceRecord; seq: number }>,
+    maxDeliverySeq: number,
+  ): void {
+    const syncRow = this.db.query<
+      { synced_seq: number; synced_count: number; max_delivery_seq: number },
+      [string]
+    >(
+      "SELECT synced_seq, synced_count, max_delivery_seq FROM antigravity_delivery_ledger_sync WHERE session_id = ?",
+    ).get(sessionId);
+
+    let firstKey: string | undefined;
+    let firstVal: { record: DeliveryAcceptanceRecord; seq: number } | undefined;
+    let lastKey: string | undefined;
+    let lastVal: { record: DeliveryAcceptanceRecord; seq: number } | undefined;
+    for (const [k, v] of entries) {
+      if (firstKey === undefined) { firstKey = k; firstVal = v; }
+      lastKey = k;
+      lastVal = v;
+    }
+
+    const spotOk = (firstKey === undefined || sameDeliveryRecord(this.get(sessionId, firstKey), firstVal!.record))
+      && (lastKey === undefined || lastKey === firstKey || sameDeliveryRecord(this.get(sessionId, lastKey), lastVal!.record));
+
+    if (
+      syncRow
+      && syncRow.synced_seq === ledgerTailSeq
+      && syncRow.synced_count === entries.size
+      && syncRow.max_delivery_seq === maxDeliverySeq
+      && spotOk
+    ) {
+      return;
+    }
+
+    const rebuild = !syncRow
+      || ledgerTailSeq < syncRow.synced_seq
+      || entries.size < syncRow.synced_count
+      || maxDeliverySeq < syncRow.max_delivery_seq
+      || (firstKey !== undefined && firstVal!.seq <= syncRow.synced_seq && !sameDeliveryRecord(this.get(sessionId, firstKey), firstVal!.record));
+
+    const upsert = this.db.query(
+      "INSERT OR REPLACE INTO antigravity_delivery_acceptance (session_id, delivery_id, state, turn_id, accepted_at, reason, seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    const updateSync = this.db.query(
+      "INSERT OR REPLACE INTO antigravity_delivery_ledger_sync (session_id, synced_seq, synced_count, max_delivery_seq) VALUES (?, ?, ?, ?)",
+    );
+    const deleteSession = this.db.query(
+      "DELETE FROM antigravity_delivery_acceptance WHERE session_id = ?",
+    );
+
+    this.db.transaction(() => {
+      if (rebuild) deleteSession.run(sessionId);
+      const minSeq = rebuild ? 0 : syncRow!.synced_seq;
+      for (const [deliveryId, entry] of entries) {
+        if (!rebuild && entry.seq <= minSeq) continue;
+        const rec = entry.record;
+        upsert.run(
+          sessionId,
+          deliveryId,
+          rec.state,
+          rec.turnId,
+          rec.state === "accepted" ? rec.acceptedAt : null,
+          rec.state === "failed" || rec.state === "unavailable" ? rec.reason : null,
+          entry.seq,
+        );
+      }
+      updateSync.run(sessionId, ledgerTailSeq, entries.size, maxDeliverySeq);
+    })();
+  }
+
+  applyEvent(sessionId: string, event: RuntimeEvent): void {
+    const ids = extractDeliveryEventIds(event);
+    if (ids.length === 0) return;
+    const selectRow = this.db.query<DeliveryAcceptanceRow, [string, string]>(
+      "SELECT state, turn_id, accepted_at, reason FROM antigravity_delivery_acceptance WHERE session_id = ? AND delivery_id = ?",
+    );
+    const upsert = this.db.query(
+      "INSERT OR REPLACE INTO antigravity_delivery_acceptance (session_id, delivery_id, state, turn_id, accepted_at, reason, seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    const selectSync = this.db.query<
+      { synced_seq: number; synced_count: number; max_delivery_seq: number },
+      [string]
+    >(
+      "SELECT synced_seq, synced_count, max_delivery_seq FROM antigravity_delivery_ledger_sync WHERE session_id = ?",
+    );
+    const updateSync = this.db.query(
+      "INSERT OR REPLACE INTO antigravity_delivery_ledger_sync (session_id, synced_seq, synced_count, max_delivery_seq) VALUES (?, ?, ?, ?)",
+    );
+
+    this.db.transaction(() => {
+      let inserted = 0;
+      for (const deliveryId of ids) {
+        const existingRow = selectRow.get(sessionId, deliveryId);
+        const existing = deliveryRecordFromRow(existingRow) ?? undefined;
+        const next = reduceDeliveryAcceptanceEvent(existing, event, deliveryId);
+        if (!next) continue;
+        if (!existingRow) inserted += 1;
+        upsert.run(
+          sessionId,
+          deliveryId,
+          next.state,
+          next.turnId,
+          next.state === "accepted" ? next.acceptedAt : null,
+          next.state === "failed" || next.state === "unavailable" ? next.reason : null,
+          event.seq,
+        );
+      }
+      const syncRow = selectSync.get(sessionId);
+      updateSync.run(
+        sessionId,
+        Math.max(syncRow?.synced_seq ?? 0, event.seq),
+        (syncRow?.synced_count ?? 0) + inserted,
+        Math.max(syncRow?.max_delivery_seq ?? 0, event.seq),
+      );
+    })();
+  }
+
+  close(): void {
+    try { this.db.close(); } catch { /* already closed */ }
   }
 }
 
@@ -508,6 +747,9 @@ export class AntigravityAcpHost implements EngineHost {
   private readonly sentEntries = new Map<string, string>();
   private readonly deliveryAcceptance = new Map<string, DeliveryAcceptanceRecord>();
   private deliveryAcceptanceEvicted = false;
+  private deliveryMutationSeq = 0;
+  private deliveryIndex: AntigravityDeliveryIndex | null = null;
+  private deliveryIndexHealthy = false;
   private readonly stateListeners = new Set<(state: HostState) => void>();
   private readonly stdoutDecoder = new StringDecoder("utf8");
   private readonly launchFlags: readonly string[];
@@ -685,9 +927,11 @@ export class AntigravityAcpHost implements EngineHost {
         await withHostStopOrigin({ path: "antigravity-startup-cleanup", operationId: host.identity.sessionId }, () => host.release());
       } catch (cleanupError) {
         host.closeTranscriptFd();
+        host.closeDeliveryIndex();
         throw new StructuredHostAdoptionCleanupError(safeError(error), host, { cause: cleanupError });
       }
       host.closeTranscriptFd();
+      host.closeDeliveryIndex();
       throw new Error(safeError(error));
     }
   }
@@ -893,6 +1137,13 @@ export class AntigravityAcpHost implements EngineHost {
     }
   }
 
+  private closeDeliveryIndex(): void {
+    if (!this.deliveryIndex) return;
+    const index = this.deliveryIndex;
+    this.deliveryIndex = null;
+    index.close();
+  }
+
   private recordSentEntry(entryId: string, turnId: string): void {
     this.sentEntries.delete(entryId);
     this.sentEntries.set(entryId, turnId);
@@ -902,7 +1153,8 @@ export class AntigravityAcpHost implements EngineHost {
     }
   }
 
-  private recordDeliveryAcceptance(entryId: string, record: DeliveryAcceptanceRecord): void {
+  private recordDeliveryAcceptance(entryId: string, record: DeliveryAcceptanceRecord, liveMutation = true): void {
+    if (liveMutation) this.deliveryMutationSeq += 1;
     this.deliveryAcceptance.delete(entryId);
     this.deliveryAcceptance.set(entryId, record);
     if (this.deliveryAcceptance.size > ANTIGRAVITY_SENT_ENTRY_MEMORY) {
@@ -911,14 +1163,26 @@ export class AntigravityAcpHost implements EngineHost {
     }
   }
 
-  /** Point-reads durable delivery state from the runtime event ledger after
+  /** Point-reads durable delivery state by `(sessionId, deliveryId)` after
       in-memory LRU eviction so older accepted or uncertain delivery ids are
-      never forgotten or blindly re-sent. */
+      never forgotten or blindly re-sent, without scanning the JSONL ledger. */
   private async lookupDurableDeliveryAcceptance(entryId: string): Promise<DeliveryAcceptanceRecord | null> {
     if (this.identity.sessionId === "pending") return null;
+    const mutationBefore = this.deliveryMutationSeq;
     try {
       let current: DeliveryAcceptanceRecord | undefined;
-      if (this.eventStore.scan) {
+      if (this.deliveryIndexHealthy) {
+        if (this.deliveryIndex) {
+          current = this.deliveryIndex.get(this.identity.sessionId, entryId) ?? undefined;
+        } else {
+          const readonlyIndex = AntigravityDeliveryIndex.open(this.options.antigravityHome, true);
+          try {
+            current = readonlyIndex?.get(this.identity.sessionId, entryId) ?? undefined;
+          } finally {
+            readonlyIndex?.close();
+          }
+        }
+      } else if (this.eventStore.scan) {
         await this.eventStore.scan(this.identity.sessionId, (event) => {
           current = reduceDeliveryAcceptanceEvent(current, event, entryId);
         });
@@ -927,9 +1191,15 @@ export class AntigravityAcpHost implements EngineHost {
           current = reduceDeliveryAcceptanceEvent(current, event, entryId);
         }
       }
+      if (this.deliveryMutationSeq !== mutationBefore) {
+        // Never overwrite fresher live state with an older durable snapshot.
+        return this.deliveryAcceptance.get(entryId) ?? current ?? null;
+      }
       if (!current) return null;
-      this.recordDeliveryAcceptance(entryId, current);
-      if (current.state === "accepted") {
+      if (!this.deliveryAcceptance.has(entryId)) {
+        this.recordDeliveryAcceptance(entryId, current, false);
+      }
+      if (current.state === "accepted" && !this.sentEntries.has(entryId)) {
         this.recordSentEntry(entryId, current.turnId || `restored:${entryId}`);
       }
       return current;
@@ -1016,17 +1286,37 @@ export class AntigravityAcpHost implements EngineHost {
   }
 
   async send(entry: QueueEntry): Promise<DeliveryReceipt> {
+    const mutationAtEntry = this.deliveryMutationSeq;
     const refill = this.dead || this.releasing || this.released ? undefined : this.refillEventWindow();
     if (refill) await refill;
     if (this.unavailable()) return { outcome: "rejected", reason: "dead-host" };
     const normalized = normalizeQueueEntry(entry);
-    const already = this.sentEntries.get(normalized.id);
-    if (already) return { outcome: "turn-started", turnId: already };
-    let priorAcceptance = this.deliveryAcceptance.get(normalized.id);
-    if (!priorAcceptance && this.deliveryAcceptanceEvicted) {
-      priorAcceptance = (await this.lookupDurableDeliveryAcceptance(normalized.id)) ?? undefined;
+
+    let priorAcceptance: DeliveryAcceptanceRecord | undefined;
+    let sawConcurrentMutation = this.deliveryMutationSeq !== mutationAtEntry;
+    for (;;) {
+      const mutationBefore = this.deliveryMutationSeq;
+      const already = this.sentEntries.get(normalized.id);
+      if (already) return { outcome: "turn-started", turnId: already };
+      const cached = this.deliveryAcceptance.get(normalized.id);
+      if (cached) {
+        priorAcceptance = cached;
+        break;
+      }
+      if (!this.deliveryAcceptanceEvicted) {
+        priorAcceptance = undefined;
+        break;
+      }
+      const durable = await this.lookupDurableDeliveryAcceptance(normalized.id);
       if (this.unavailable()) return { outcome: "rejected", reason: "dead-host" };
+      if (this.deliveryMutationSeq !== mutationBefore) {
+        sawConcurrentMutation = true;
+        continue;
+      }
+      priorAcceptance = durable ?? undefined;
+      break;
     }
+
     if (priorAcceptance?.state === "accepted") {
       const restoredTurnId = priorAcceptance.turnId || `restored:${normalized.id}`;
       this.recordSentEntry(normalized.id, restoredTurnId);
@@ -1036,6 +1326,9 @@ export class AntigravityAcpHost implements EngineHost {
       return { outcome: "turn-started", turnId: priorAcceptance.turnId };
     }
     if (priorAcceptance?.state === "unavailable") {
+      return { outcome: "rejected", reason: "stale-turn", refusal: priorAcceptance.reason };
+    }
+    if (priorAcceptance?.state === "failed" && sawConcurrentMutation) {
       return { outcome: "rejected", reason: "stale-turn", refusal: priorAcceptance.reason };
     }
     if (this.running || this.outstandingPrompt) return { outcome: "rejected", reason: "stale-turn" };
@@ -1082,6 +1375,7 @@ export class AntigravityAcpHost implements EngineHost {
       if (this.outstandingPrompt === running) this.outstandingPrompt = null;
       this.sentEntries.delete(normalized.id);
       this.deliveryAcceptance.delete(normalized.id);
+      this.deliveryMutationSeq += 1;
       settle();
       return { outcome: "rejected", reason: "dead-host", refusal: "Antigravity runtime event ledger failed before prompt dispatch" };
     }
@@ -1091,8 +1385,11 @@ export class AntigravityAcpHost implements EngineHost {
       (result) => {
         const stopReason = stringField(result, "stopReason");
         const usage = record(record(result)?.usage);
-        const interrupted = this.cancelledTurns.has(turnId) || stopReason === "cancelled";
-        if (!interrupted || running.accepted) {
+        // Base acceptance on ACP's actual response, separate from any local
+        // interrupt request: if ACP raced and answered `end_turn` (not
+        // `cancelled`), ACP executed the prompt and it MUST be marked accepted.
+        const acpCancelled = stopReason === "cancelled";
+        if (!acpCancelled || running.accepted) {
           if (!this.confirmDeliveryAcceptance(running)) {
             if (this.outstandingPrompt === running) this.outstandingPrompt = null;
             settle();
@@ -1114,12 +1411,12 @@ export class AntigravityAcpHost implements EngineHost {
           );
         }
         this.flushPendingAssistantText(turnId);
-        const status = interrupted
+        const status = acpCancelled
           ? "interrupted"
           : stopReason === "end_turn" || stopReason === "max_tokens" || stopReason === "max_turn_requests"
             ? "completed"
             : "error";
-        if (interrupted) {
+        if (acpCancelled) {
           this.appendTranscriptRecord("abort", { turnId, reason: "user_initiated" });
         } else if (status === "completed") {
           this.appendTranscriptRecord("assistant.turn_end", {
@@ -1261,7 +1558,8 @@ export class AntigravityAcpHost implements EngineHost {
     }
     let acceptance = this.deliveryAcceptance.get(deliveryId);
     if (!acceptance && this.deliveryAcceptanceEvicted) {
-      acceptance = (await this.lookupDurableDeliveryAcceptance(deliveryId)) ?? undefined;
+      const lookedUp = await this.lookupDurableDeliveryAcceptance(deliveryId);
+      acceptance = this.deliveryAcceptance.get(deliveryId) ?? lookedUp ?? undefined;
     }
     if (acceptance?.state === "accepted") return { state: "materialized" };
     if (acceptance?.state === "unavailable") return { state: "unavailable", reason: acceptance.reason };
@@ -1393,18 +1691,20 @@ export class AntigravityAcpHost implements EngineHost {
   private restore(): void {
     const stored = this.eventStore.load(this.identity.sessionId);
     this.eventWindow.restore(stored);
+    const durableTailSeq = stored.at(-1)?.seq ?? 0;
     this.cursor = reconcileRuntimeEventCursor(
       this.identity.sessionId,
-      stored.at(-1)?.seq ?? 0,
+      durableTailSeq,
       this.cursor,
       this.options.onEventCursorRecovery,
     );
     let restoredTurn: string | null = null;
     const restoredAttention = new Set<string>();
-    const restoredAcceptance = new Map<string, DeliveryAcceptanceRecord>();
+    const restoredAcceptance = new Map<string, { record: DeliveryAcceptanceRecord; seq: number }>();
+    let maxDeliverySeq = 0;
     for (const event of stored) {
-      if (event.kind === "item") {
-        reduceDeliveryAcceptanceIntoMap(restoredAcceptance, event);
+      if (event.kind === "item" && reduceDeliveryAcceptanceIntoMap(restoredAcceptance, event)) {
+        maxDeliverySeq = event.seq;
       }
       if (event.kind === "turn-started") restoredTurn = event.turnId;
       if (event.kind === "turn-ended" && event.turnId === restoredTurn) restoredTurn = null;
@@ -1415,13 +1715,27 @@ export class AntigravityAcpHost implements EngineHost {
         restoredAttention.clear();
       }
     }
+    try {
+      this.closeDeliveryIndex();
+      this.deliveryIndex = AntigravityDeliveryIndex.open(this.options.antigravityHome);
+      if (this.deliveryIndex) {
+        this.deliveryIndex.syncSession(this.identity.sessionId, durableTailSeq, restoredAcceptance, maxDeliverySeq);
+        this.deliveryIndexHealthy = true;
+      } else {
+        this.deliveryIndexHealthy = false;
+      }
+    } catch (error) {
+      this.deliveryIndexHealthy = false;
+      this.closeDeliveryIndex();
+      console.warn("[antigravity] delivery acceptance index unavailable; falling back to ledger lookup", safeError(error));
+    }
     if (restoredAcceptance.size > ANTIGRAVITY_SENT_ENTRY_MEMORY) {
       this.deliveryAcceptanceEvicted = true;
     }
-    for (const [entryId, acceptance] of restoredAcceptance) {
-      this.recordDeliveryAcceptance(entryId, acceptance);
-      if (acceptance.state === "accepted") {
-        this.recordSentEntry(entryId, acceptance.turnId || `restored:${entryId}`);
+    for (const [entryId, entry] of restoredAcceptance) {
+      this.recordDeliveryAcceptance(entryId, entry.record, false);
+      if (entry.record.state === "accepted") {
+        this.recordSentEntry(entryId, entry.record.turnId || `restored:${entryId}`);
       }
     }
     if (restoredTurn) this.emit({ kind: "turn-ended", turnId: restoredTurn, status: "error" });
@@ -1450,6 +1764,14 @@ export class AntigravityAcpHost implements EngineHost {
       this.ledgerFailed = true;
       this.fail(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return false;
+    }
+    if (this.deliveryIndex && this.deliveryIndexHealthy) {
+      try {
+        this.deliveryIndex.applyEvent(this.identity.sessionId, sequenced);
+      } catch (error) {
+        this.deliveryIndexHealthy = false;
+        console.warn("[antigravity] delivery acceptance index update failed; falling back to ledger lookup", safeError(error));
+      }
     }
     this.eventWindowRevision += 1;
     this.eventWindow.append(sequenced);
@@ -1682,19 +2004,14 @@ export class AntigravityAcpHost implements EngineHost {
     this.attentions.clear();
     if (running && !this.dead) {
       if (!running.accepted) {
-        const reason = `Antigravity host released before ACP confirmed delivery ${running.entryId}`;
-        const persisted = this.emit({
-          kind: "item",
+        // Do NOT emit `antigravity.delivery_failed` on host release: ACP
+        // already received `session/prompt` after durable `delivery_dispatched`,
+        // so release without an explicit ACP rejection leaves delivery `unavailable`.
+        this.recordDeliveryAcceptance(running.entryId, {
+          state: "unavailable",
           turnId: running.turnId,
-          phase: "completed",
-          item: { type: "antigravity.delivery_failed", entryId: running.entryId, turnId: running.turnId, reason },
+          reason: `Antigravity host released before ACP confirmed delivery ${running.entryId}`,
         });
-        this.recordDeliveryAcceptance(
-          running.entryId,
-          persisted
-            ? { state: "failed", turnId: running.turnId, reason }
-            : { state: "unavailable", turnId: running.turnId, reason: `Antigravity delivery ${running.entryId} outcome could not be persisted during release` },
-        );
       }
       this.flushPendingAssistantText(running.turnId);
       this.appendTranscriptRecord("abort", { turnId: running.turnId, reason: "host_release" });
@@ -1707,6 +2024,7 @@ export class AntigravityAcpHost implements EngineHost {
     this.released = true;
     this.releasing = false;
     this.emit({ kind: "session-status", status: "unhosted" });
+    this.closeDeliveryIndex();
     this.closeSubscribers();
     this.memoryCell?.close();
     const cleanup = this.releaseCleanup;
