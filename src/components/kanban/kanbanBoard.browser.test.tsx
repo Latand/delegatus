@@ -47096,7 +47096,7 @@ describe("relay requester enrolment on the board", () => {
     const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
     const sockets = ownedBrowserSocketEnvironment();
     const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
-    const readings: { frame: string; width: number; overflow: boolean; shortControls: number; splitTimes: number }[] = [];
+    const readings: { frame: string; width: number; overflow: boolean; shortControls: number; splitTimes: number; danglingSeparators: number }[] = [];
     try {
       for (const width of [1440, 1000, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         const phone = width === 390;
