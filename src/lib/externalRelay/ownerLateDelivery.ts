@@ -21,7 +21,7 @@ export function ownerRecoveryRequest(run: RunRecord, relay: PairedRelay): unknow
     const parsed = requestSchema.safeParse(raw);
     return parsed.success && parsed.data.request_id === run.requestId && parsed.data.lease_id === run.leaseId
       && parsed.data.target_id === run.targetId && !ownerBindingRefusal(relay, parsed.data)
-      && ownerTierFor({ ownerTier: true }, parsed.data) ? raw : null;
+      && ownerTierFor({ ownerTier: true }, parsed.data, { guestHandoff: true }) ? raw : null;
   }
   const record = readAnswerRecord(run.relayId, run.targetId, run.requestId);
   if (!record?.profile?.owner || !run.ownerTurn?.request) return null;

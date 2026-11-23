@@ -1,8 +1,10 @@
 import { expect, test, harness, PROJECT, CONVERSATION, RECENT, OVERDUE,
-  OPEN_LANE, pipelineRecord, fs, path, spawn, spyOn, SANDBOX, readSeatTickState, writeSeatTickState, emptySeatTickState, NOW,
-  runSeatTickCheck, reconcileSeatTick, startSeatTick, stopSeatTick, DEFAULT_SEAT_TICK_POLICY } from "./seatTickController.fixture";
+  OPEN_LANE, pipelineRecord, fs, path, spawn, spyOn, SANDBOX, readSeatTickState, writeSeatTickState, emptySeatTickState, NOW, MINUTE,
+  runSeatTickCheck, reconcileSeatTick, startSeatTick, stopSeatTick, DEFAULT_SEAT_TICK_POLICY,
+  childFixture, childRig, defaultSeatTickSettings } from "./seatTickController.fixture";
 import type { DeliveryOutcome } from "@/lib/delivery";
 import type { DeadlineScheduler } from "@/lib/deadline";
+import { setSystemTime } from "bun:test";
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -422,6 +424,57 @@ function deployRig() {
   rig.deps.mcpHealth = () => ({ status: "dead", detail: "stdio host gone" });
   return rig;
 }
+
+test("task-page cadence starts at delayed delivery confirmation", async () => {
+  const fixture = childFixture("task-confirmation-cadence");
+  const child = fixture.spawn({ title: "live worker", turn: "busy", host: "live" });
+  const previousWake = new Date(fixture.now - 31 * MINUTE).toISOString();
+  fixture.seed({ lastWakeAt: previousWake, lastTaskWakeAt: previousWake });
+  let now = fixture.now;
+  let taskId = "task_waiting";
+  setSystemTime(now);
+  const settings = { ...defaultSeatTickSettings(fixture.project), wakeIntervalMinutes: 30 };
+  const sweep = async (delayedDelivery = false) => {
+    const rig = childRig(fixture, {
+      now,
+      settings,
+      tasks: [{ id: "task_waiting", status: "assigned" }],
+      childActivity: { [child.id]: { lifecycle: "running", reason: "host_alive_turn_active", turnState: "busy" } },
+      ...(delayedDelivery ? { deliverWith: async () => {
+        now += 3_000;
+        setSystemTime(now);
+        return { ok: true, target: "structured", outcome: "delivered", structured: true } as const;
+      } } : {}),
+    });
+    rig.deps.sources!.tasks = () => [{ id: taskId, project: fixture.project, status: "assigned", text: "waiting task",
+      placement: "unplaced", assignments: [], createdAt: new Date(now - 60 * MINUTE).toISOString(), updatedAt: new Date(now - 60 * MINUTE).toISOString() }] as never;
+    rig.deps.sources!.now = () => now;
+    Object.assign(rig.deps, { ownsTraffic: () => true, recordSuccessions: () => [], curation: null, maintenance: null, release: null });
+    return { rig, records: await reconcileSeatTick(rig.deps, [fixture.project]) };
+  };
+
+  try {
+    const first = await sweep(true);
+    expect(first.records[0]).toMatchObject({ verdict: "wake", reasons: expect.arrayContaining(["unstarted-task"]) });
+    expect(first.rig.sent).toHaveLength(1);
+    expect(readSeatTickState(fixture.project, fixture.stateFile).lastTaskWakeAt).toBe(new Date(fixture.now + 3_000).toISOString());
+
+    now = fixture.now + 30 * MINUTE;
+    setSystemTime(now);
+    const boundary = await sweep();
+    expect(boundary.records[0]).toMatchObject({ verdict: "quiet" });
+    expect(boundary.rig.sent).toEqual([]);
+
+    taskId = "task_next_page";
+    now += 3_000;
+    setSystemTime(now);
+    const eligible = await sweep();
+    expect(eligible.records[0]).toMatchObject({ verdict: "wake", reasons: expect.arrayContaining(["unstarted-task"]) });
+    expect(eligible.rig.sent).toHaveLength(1);
+  } finally {
+    setSystemTime();
+  }
+});
 
 test.each(["priority", "deploy gather", "general gather", "controller"] as const)(
   "a recorded settlement bypasses a separate 120-second pending lookup: %s", async mode => {

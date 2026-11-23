@@ -825,8 +825,11 @@ async function showDecisions(panel: HTMLElement) {
   headToTop(details.querySelector("summary")!, 6);
   if (PHONE) fitSheet(scroller(details)!);
 }
-/** The learned rules window from the board's ⋯ (on the phone, the menu's project rules), on All rules with one role chosen. */
-async function openRules(role: string, expand: string | null): Promise<HTMLElement> {
+/** The level rows the window's list offers, by scope. */
+const EVERY_ORCHESTRATOR = "role:*:orchestrator";
+const PROJECT_LEVEL = `project:${PROJECT}`;
+/** The learned rules window from the board's ⋯ (on the phone, the menu's project rules), on one level of the list, with one rule expanded. */
+async function openRules(level: string, expand: string | null): Promise<HTMLElement> {
   if (PHONE) {
     await press(() => shown('[data-mobile2-open="menu"]'));
     await press(() => shown('[data-mobile2-menu-row="rules"]'));
@@ -836,8 +839,8 @@ async function openRules(role: string, expand: string | null): Promise<HTMLEleme
     await press(() => shown("[data-bar-more-menu] [data-learned-rules-open]"));
   }
   const rulesWindow = await waitFor(() => document.querySelector<HTMLElement>("[data-rules-window]"));
-  await press(() => [...rulesWindow.querySelectorAll<HTMLElement>("nav button")].find((button) => button.textContent === label("memoryProfile.allRules")));
-  await press(() => rulesWindow.querySelector<HTMLElement>(`[data-rules-role="${role}"]`));
+  /* A row stays held until the rules arrive; a press on it before then does nothing. */
+  await press(() => [...rulesWindow.querySelectorAll<HTMLButtonElement>("[data-profile-level]")].find((row) => row.getAttribute("data-profile-level") === level && !row.disabled));
   if (expand) await press(() => rulesWindow.querySelector<HTMLElement>(`[data-learned-rule="${expand}"] button[aria-expanded]`));
   /* The window's close control took the focus when it opened; a picture needs no ring on it. */
   (document.activeElement as HTMLElement | null)?.blur();
@@ -883,7 +886,7 @@ async function navigateView(view: string) {
     if (view === "autonomy") settleAutonomy(await openSeatTick());
     if (view === "decisions") await showDecisions(await openSeatTick());
     if (view === "rules") {
-      const rulesWindow = await openRules("orchestrator", RULE_IDS.O1);
+      const rulesWindow = await openRules(EVERY_ORCHESTRATOR, RULE_IDS.O1);
       const box = scroller(rulesWindow.querySelector(`[data-learned-rule="${RULE_IDS.O1}"]`)!);
       if (box) {
         /* The opened rule grows over a few frames; the lines are judged once the window has stopped growing. */
@@ -896,7 +899,7 @@ async function navigateView(view: string) {
       }
     }
     if (view === "curator") {
-      const rulesWindow = await openRules("builder", null);
+      const rulesWindow = await openRules(PROJECT_LEVEL, null);
       rulesWindow.querySelector<HTMLDetailsElement>("details[data-curation-history]")!.open = true;
       await press(() => rulesWindow.querySelector<HTMLElement>('[data-rules-history="project"][aria-expanded="false"]'));
       headToTop(rulesWindow.querySelector('[data-rules-section="project"]')!, 6);
@@ -942,12 +945,12 @@ async function navigateView(view: string) {
   }
   if (view === "fold") return;
   if (view === "rules") {
-    await openRules("orchestrator", RULE_IDS.O1);
+    await openRules(EVERY_ORCHESTRATOR, RULE_IDS.O1);
     return;
   }
   if (view === "curator") {
-    /* The builder's rule the curator rewrote from two, the passes with their undo, and what it archived. */
-    const rulesWindow = await openRules("builder", RULE_IDS.B1);
+    /* The curator's passes with their undo, and what it archived from the project's rules. */
+    const rulesWindow = await openRules(PROJECT_LEVEL, null);
     rulesWindow.querySelector<HTMLDetailsElement>("details[data-curation-history]")!.open = true;
     await press(() => rulesWindow.querySelector<HTMLElement>('[data-rules-history="project"][aria-expanded="false"]'));
     return;

@@ -881,6 +881,9 @@ role memory is a default feature. This is what the lane builds.
    launch is reserved, never sent without them. No pipeline record, attempt
    input or composer artifact in the checkout holds rule text.
 6. **Controls.** No switch: role memory is always on (operator, 2026-10-07).
+   (The window described below was superseded on 2026-11-20 by the layout of
+   [the S7 build brief](redesign-2026-11/s7-build-brief.md); the text stays as
+   history.)
    The one way to stop it, for safety, is the installation's setting
    `LLV_ROLE_MEMORY=off`, which stops both the request and the injection and
    leaves stored rules as they are; the window then says so. One row,

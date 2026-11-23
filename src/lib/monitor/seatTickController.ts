@@ -2793,7 +2793,11 @@ async function check(
           }
           const ownsDispatch = !accounting || (state.outstandingWake?.clientMessageId === clientMessageId && state.outstandingWake.dispatch?.token === token);
           if (ownsDispatch && outcome && wakeReached(outcome)) {
-            const landed = seatTickWakeCommit(state, commit, input.now);
+            // Task-page cadence starts when delivery is confirmed, not when
+            // this check assembled its snapshot. The transport has no arrival
+            // timestamp here, so sample the clock only after its success.
+            const reachedAt = sources.now();
+            const landed = seatTickWakeCommit(state, commit, reachedAt, new Date(reachedAt).toISOString());
             if (accounting) {
               await seatTickMutation("settle", () => accounting.settle(clientMessageId, landed, "landed", null, state.outstandingWake ?? undefined));
               state = accounting.readState();

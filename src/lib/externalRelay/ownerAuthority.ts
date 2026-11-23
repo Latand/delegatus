@@ -3,9 +3,10 @@ import { procBackend } from "@/lib/proc";
 import { bridgeDirectiveBody } from "@/lib/bridge/directive";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { agentRegistry } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
-import { externalRelayFile, runHoldsConversation, type PairedRelay, type RunLedger, type RelayStore, type RunRecord } from "./store";
+import { changeRunAsync, ownerRelayStoreDeadline, externalRelayFile, runHoldsConversation, type PairedRelay, type RunLedger, type RelayStore, type RunRecord } from "./store";
 import type { ExternalRelayCompletion } from "./protocol";
 import { isOwnerRequestTimeoutReply } from "./requestTimeout";
 import { bindRequesterEntry, canonicalRelayProject, legacyRequesterId, pairedOwnerTier, requesterEntries } from "./trustedRequesters";
@@ -19,9 +20,18 @@ function currentRunEntry(run: RunRecord, relay: PairedRelay, relays: readonly Pa
   if (!entry || canonicalRelayProject(entry.project) !== canonicalRelayProject(target.project)) return null;
   if (!saved && (entry.kind !== "paired-owner" || entry.source !== "earlier-switch")) return null;
   const current = bindRequesterEntry(relay, entry, relays);
+  // An accepted owner handoff already froze its recipient. A later target
+  // default must not invalidate its receipt; grant removal still revokes it.
+  const acceptedOwnerHandoff = current.tier === "owner" && run.ownerTurn.handoffOutcome?.status === "accepted";
   if (saved && (current.kind !== saved.kind || current.tier !== saved.tier
-    || canonicalRelayProject(current.project) !== canonicalRelayProject(saved.project))) return null;
+    || !acceptedOwnerHandoff && canonicalRelayProject(current.project) !== canonicalRelayProject(saved.project))) return null;
   return saved ?? current;
+}
+
+function verifiedGuestHandoff(run: RunRecord): boolean {
+  const requester = (run.ownerTurn?.rawRequest as { input?: { requester?: { is_owner?: unknown; is_anonymous_admin?: unknown } } } | undefined)?.input?.requester;
+  return run.ownerTurn?.seatHandoff === true && run.ownerTurn.entry?.tier === "owner"
+    && requester?.is_owner === true && requester.is_anonymous_admin === false;
 }
 
 function requesterDeadlineAllows(run: RunRecord): boolean {
@@ -34,6 +44,7 @@ function requesterLeaseAllows(run: RunRecord, tier: "owner" | "requester"): bool
 }
 
 export function ownerRunSettingsAllow(run: RunRecord, store: Pick<RelayStore, "relays">): boolean {
+  if (run.ownerTurn && guestOwnerTurn(run.ownerTurn) && !verifiedGuestHandoff(run)) return false;
   if (run.ownerTurn?.prototype !== true) return effectiveOwnerRunTier(run, store) !== null;
   const relay = store.relays.find(relay => relay.id === run.relayId);
   const target = relay?.targets.find(target => target.id === run.targetId);
@@ -78,6 +89,60 @@ export function liveOwnerRelayRequest(conversationId: string) {
   return run ? { requestId: run.requestId, relayId: run.relayId, targetId: run.targetId, tier: run.ownerTurn?.entry?.tier } : null;
 }
 
+export function liveOwnerRelayProject(conversationId: string): string | null {
+  const run = liveOwnerRelayRun(conversationId);
+  const store = readAuthorityStore();
+  return store?.relays.find(relay => relay.id === run?.relayId)?.targets.find(target => target.id === run?.targetId)?.project ?? null;
+}
+
+export function ownerRelayHandoffOutcome(relayId: string, targetId: string, requestId: string) {
+  try {
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
+    return ledger.runs.find(run => run.requestId === requestId && run.relayId === relayId && run.targetId === targetId)
+      ?.ownerTurn?.handoffOutcome ?? null;
+  } catch { return null; }
+}
+
+/** Persist the actual Viewer handoff result on the live owner request. */
+export async function recordOwnerRelayHandoffOutcome(conversationId: string, outcome: NonNullable<RunRecord["ownerTurn"]>["handoffOutcome"]): Promise<boolean> {
+  const live = liveOwnerRelayRun(conversationId);
+  if (!live?.ownerTurn || live.ownerTurn.entry?.tier !== "owner" || !live.ownerIdentity) return false;
+  let recorded = false;
+  await changeRunAsync(live.requestId, current => {
+    if (current.leaseId !== live.leaseId || current.relayId !== live.relayId || current.targetId !== live.targetId
+      || current.conversationId !== conversationId || current.ownerIdentity !== live.ownerIdentity
+      || !current.ownerTurn || current.ownerTurn.cancel
+      || procBackend.processIdentity(current.ownerPid) !== current.ownerIdentity
+      || !ownerRelayAuthorized(current.relayId, current.targetId, current.requestId)) return current;
+    recorded = true;
+    return { ...current, ownerTurn: { ...current.ownerTurn, handoffOutcome: outcome } };
+  }, ownerRelayStoreDeadline());
+  return recorded;
+}
+
+/** The launch grant remains restricted when its relay run pauses or settles. */
+export function ownerRelayHandoffOnlyGrant(conversationId: string): boolean {
+  const conversation = agentRegistry().conversation(conversationId as ViewerConversationId);
+  return conversation?.generations.some(generation => generation.launchProfile.ownerRelayHandoffOnly === true) ?? false;
+}
+
+function guestOwnerTurn(turn: NonNullable<RunRecord["ownerTurn"]>): boolean {
+  return (turn.rawRequest as { delivery?: unknown } | undefined)?.delivery === "guest";
+}
+
+/** The intent probe runs before an owner turn exists. Read settings without
+ * taking the pairing lock or creating state in the native launch guard. */
+export function ownerRelayIntentEnabled(relayId: string, targetId: string): boolean {
+  try {
+    const store = JSON.parse(fs.readFileSync(externalRelayFile("relays"), "utf8")) as RelayStore;
+    const relay = store.v === 1 ? store.relays.find(row => row.id === relayId) : null;
+    const target = relay?.targets.find(target => target.id === targetId && target.enabled);
+    return relay?.paused === false && !!target && requesterEntries(relay, target).some(entry => entry.kind === "paired-owner"
+      && canonicalRelayProject(entry.project) === canonicalRelayProject(target.project)
+      && bindRequesterEntry(relay, entry, store.relays).tier === "owner");
+  } catch { return false; }
+}
+
 function liveOwnerRelayRun(conversationId: string): RunRecord | null {
   return conversationRelayAuthority(conversationId)?.run ?? null;
 }
@@ -120,6 +185,7 @@ function conversationRelayAuthority(conversationId: string): { run: RunRecord | 
         const delivery = owner && snapshot.heldDeliveries[owner.deliveryId];
         if (delivery?.conversationId !== conversationId || delivery.state !== "delivered") continue;
       }
+      if (guestOwnerTurn(run.ownerTurn) && !verifiedGuestHandoff(run)) continue;
       const authorized = { ...run, ownerTurn: { ...run.ownerTurn, entry } };
       if (requesterRun) return { run: authorized, requester: true };
       owner ??= authorized;
@@ -204,6 +270,7 @@ function ownerRelayReplyAuthorized(relayId: string, targetId: string, requestId:
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
     const run = ledger.runs.find(r => r.requestId === requestId && r.relayId === relayId && r.targetId === targetId);
     return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn
+      && (reply !== "agent" || !guestOwnerTurn(run.ownerTurn) || run.ownerTurn.seatHandoff === true)
       && (!run.ownerTurn.cancel || reply === "status" || reply === "failure" && (run.ownerTurn.confirmed === true || !!run.ownerTurn.quarantinedAt) && !!run.ownerTurn.diagnostic)
       && ownerRunSettingsAllow(run, store);
   } catch { return false; }
@@ -218,7 +285,8 @@ async function readToolAuthority(relayId: string, targetId: string, requestId: s
   const ledger = JSON.parse(ledgerText) as RunLedger;
   const run = ledger.runs.find(row => row.requestId === requestId && row.relayId === relayId && row.targetId === targetId);
   const turn = run?.ownerTurn;
-  if (store.v !== 1 || ledger.v !== 1 || !run || !turn || turn.cancel || turn.quarantinedAt) return null;
+  if (store.v !== 1 || ledger.v !== 1 || !run || !turn || turn.cancel || turn.quarantinedAt
+    || guestOwnerTurn(turn) && !verifiedGuestHandoff(run)) return null;
   return { run, turn, tier: configuredRunTier(run, store) };
 }
 
@@ -249,6 +317,22 @@ export function ownerRelaySpawnAuthorized(clientAttemptId: string | null | undef
     return !!run && !run.ownerTurn?.prototype && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
       && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId);
   } catch { return false; }
+}
+
+/** Request-bound permission for the restricted guest-owner handoff spawn. */
+export function ownerRelayHandoffSpawnAuthorized(clientAttemptId: string | null | undefined): boolean {
+  if (!clientAttemptId) return false;
+  try {
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
+    if (ledger.v !== 1) return false;
+    return ledger.runs.some(run => run.ownerTurn?.clientAttemptId === clientAttemptId
+      && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
+      && run.ownerTurn.seatHandoff === true
+      && guestOwnerTurn(run.ownerTurn)
+      && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId));
+  } catch {
+    return false;
+  }
 }
 
 /** A queued continuation remains bound to its durable owner turn after the
