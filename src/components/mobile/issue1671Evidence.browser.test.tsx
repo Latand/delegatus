@@ -1,4 +1,4 @@
-import { captureAppConnectForms, withAppConnectBrowserTemp, captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAppConnectForms, ownedBrowserSocketEnvironment, withAppConnectBrowserTemp, captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -479,6 +479,7 @@ describe("shared memory settings", () => {
     const previous = { ...process.env };
     process.env.LLV_STATE_DIR = path.join(root, "state");
     process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    const releaseTarget = path.join(process.env.LLV_STATE_DIR, "viewer-release.json");
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.PORT;
     delete process.env.LLV_STAGING;
@@ -510,7 +511,7 @@ describe("shared memory settings", () => {
         delete process.env.OPENROUTER_API_KEY;
         process.env.PORT = "9876";
         fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
-        fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:9875" }));
+        fs.writeFileSync(releaseTarget, JSON.stringify({ endpoint: "http://127.0.0.1:9875", revision: "a".repeat(40) }));
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings`, { width, height: 900 }, "light", lang, "reduce", width === 390);
         /* The operator's own browser session, as the Viewer's page navigation sets it. */
         await context.addCookies([{ name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
@@ -594,7 +595,9 @@ describe("shared memory settings", () => {
           await openPage("memory");
           await reasonIs("memoryPage.reason.notOwner");
           await measure("inactive");
+          // Return to standalone mode so SQLite can write the spend ledger.
           delete process.env.PORT;
+          fs.rmSync(releaseTarget);
           memoryIndex().recordInjectionActivity("decisions");
           memoryIndex().recordInjectionActivity("noMatches");
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
@@ -1093,14 +1096,18 @@ browserTest("linked installs: a failed Settings read keeps the dialog usable", a
  */
 browserTest("external relay: settings and the setup guide's step at 390 and desktop widths in en and uk, light and dark", async () => {
   const { base, stop } = await serveFixture();
-  const out = path.resolve(".artifacts/external-relay");
+  const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "external-relay");
   fs.mkdirSync(out, { recursive: true });
-  const launched = await chromium.launchServer({ headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const sockets = ownedBrowserSocketEnvironment();
+  const launched = await chromium.launchServer({ env: sockets.env, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) }).catch(error => {
+    sockets.close(); stop(); throw error;
+  });
   const browserPid = launched.process().pid ?? null;
-  const browser = await chromium.connect(launched.wsEndpoint());
   const readings: Record<string, unknown>[] = [];
   const failures: string[] = [];
   try {
+    const browser = await chromium.connect(launched.wsEndpoint());
     for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) for (const scheme of SCHEMES) {
       const phone = width === 390;
       const open = async (scene: string) => {
@@ -1170,7 +1177,9 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
               })),
               pairedAs: Array.from(element.querySelectorAll("[data-external-relay-paired-at]")).map((node) => node.textContent),
               /* A line the row cuts short: who it is paired as, a target's model and load, or what it still needs. */
-              cut: Array.from(element.querySelectorAll("[data-external-relay-paired-at], [data-external-relay-running] .truncate")).filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => node.textContent),
+              cut: Array.from(element.querySelectorAll("[data-external-relay-paired-at], [data-external-relay-running] .truncate, [data-external-relay-grant-caption]"))
+                .filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => node.textContent),
+              reviewDestination: element.querySelector("[data-external-relay-review-destination]")?.textContent ?? null,
               pairing: element.querySelector("[data-external-relay-pairing]")?.getAttribute("data-external-relay-pairing") ?? null,
               pairingText: (element.querySelector("[data-external-relay-pairing]") as HTMLElement | null)?.innerText ?? null,
               lastOutcome: element.querySelector("[data-external-relay-last-outcome]")?.textContent ?? null,
@@ -1187,15 +1196,8 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
                   settings: Array.from(target.querySelectorAll("select")).map((select) => (select as HTMLSelectElement).value),
                   settingsText: Array.from(target.querySelectorAll("select")).map((select) => (select as HTMLSelectElement).selectedOptions[0]?.textContent ?? null),
                   memberLimit: (target.querySelector("[data-external-relay-member-limit]") as HTMLInputElement | null)?.value ?? null,
-                  ownerTier: (() => {
-                    const control = target.querySelector<HTMLElement>("[data-external-relay-owner-tier]");
-                    const hint = target.querySelector<HTMLElement>("[data-external-relay-owner-tier-hint]");
-                    const box = control?.getBoundingClientRect();
-                    return { on: control?.getAttribute("aria-checked") === "true", label: control?.getAttribute("aria-label") ?? null,
-                      caption: target.querySelector("[data-external-relay-owner-tier-caption]")?.textContent ?? null,
-                      box: box ? { width: box.width, height: box.height } : null,
-                      hint: hint?.textContent ?? null, hintOverflow: hint ? hint.scrollWidth > hint.clientWidth : null };
-                  })(),
+                  grantStatus: target.querySelector("[data-external-relay-grant-status]")?.textContent ?? null,
+                  grantCaption: target.querySelector("[data-external-relay-grant-caption]")?.textContent ?? null,
                   answeredHere: toggle?.getAttribute("aria-checked") === "true",
                   switchDisabled: toggle?.disabled ?? null,
                   noAccount: target.querySelector("[data-external-relay-no-account]") !== null,
@@ -1214,10 +1216,8 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
             await page.locator("[data-external-relay=relay-1] [data-external-relay-target=bot-1] [data-external-relay-target-fold]").click();
             const unfolded = await read();
             extra.unfolded = unfolded.targets[0];
-            expect(unfolded.targets[0]!.ownerTier).toMatchObject({ on: true, hintOverflow: false });
-            expect(unfolded.targets[0]!.ownerTier.label).toContain(translate(locale, "externalRelay.target.ownerTier"));
-            expect(unfolded.targets[0]!.ownerTier.caption).toBe(translate(locale, "externalRelay.target.ownerTierOn"));
-            if (phone) expect(unfolded.targets[0]!.ownerTier.box!.height).toBeGreaterThanOrEqual(44);
+            expect(unfolded.targets[0]!.grantStatus).toBe(translate(locale, "externalRelay.target.grant.active"));
+            expect(reading.targets[0]!.grantCaption).toBe(translate(locale, "externalRelay.target.grant.active"));
             extra.unfoldedShortControls = unfolded.shortControls;
             extra.unfoldedOverflow = unfolded.overflow;
             await page.locator("[data-external-relay=relay-1] [data-external-relay-target=bot-1]").scrollIntoViewIfNeeded();
@@ -1248,6 +1248,8 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
             if (reading.targets.length !== 7) failures.push(`${label}: ${reading.targets.length} target rows`);
             if (reading.targets.some((target) => target.open || target.settings.length)) failures.push(`${label}: a target opened unasked`);
             const [first, second, third] = reading.targets;
+            expect(second?.grantCaption).toBe(translate(locale, "externalRelay.target.grant.suspended"));
+            expect(reading.reviewDestination).toBe(translate(locale, "externalRelay.review.ready", { target: "Support bot" }));
             if (first?.answeredHere !== true || !first.summary?.includes(locale === "uk" ? "1 з 2" : "1 of 2")) failures.push(`${label}: the first target reads ${JSON.stringify(first)}`);
             if (!second?.warned || !second.switchDisabled) failures.push(`${label}: a Codex target without a Codex account can be switched on`);
             if (!third?.switchDisabled) failures.push(`${label}: a target with no engine can be switched on`);
@@ -1266,6 +1268,7 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
             if (locale === "en" && !reading.lastOutcome?.startsWith("Answered")) failures.push(`${label}: last outcome reads ${JSON.stringify(reading.lastOutcome)}`);
           }
           if (scene === "troubled") {
+            expect(reading.reviewDestination).toBe(translate(locale, "externalRelay.review.pairingOwner", { target: "Support bot" }));
             const tones = reading.stateLines.map((line) => `${line.state}:${line.tone}`);
             if (JSON.stringify(tones) !== JSON.stringify(["credential_rejected:danger", "unreachable:warning"])) failures.push(`${label}: poller lines ${JSON.stringify(tones)}`);
             const [refused, unreachable] = reading.stateLines;
@@ -1324,12 +1327,15 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
         failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
       } finally { await context.close(); }
     }
+    await browser.close();
   } finally {
-    await browser.close(); await launched.close(); stop();
-    if (launched.process().exitCode === null && launched.process().signalCode === null) {
-      failures.push(`the browser ${browserPid} outlived its close`);
-      await stopFixtureProcess(launched.process());
-    }
+    try {
+      await launched.close();
+      if (launched.process().exitCode === null && launched.process().signalCode === null) {
+        failures.push(`the browser ${browserPid} outlived its close`);
+        await stopFixtureProcess(launched.process());
+      }
+    } finally { sockets.close(); stop(); }
   }
   fs.mkdirSync("evidence/external-relay", { recursive: true });
   fs.writeFileSync("evidence/external-relay/card.json", `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", browser: { pid: browserPid, closed: true }, readings, failures }, null, 2)}\n`);

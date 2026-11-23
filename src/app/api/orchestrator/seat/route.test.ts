@@ -548,3 +548,19 @@ test("canonical status reads use the folder's resolved display name without cura
     for (const mock of [spawn, stamp, readiness, report, now]) mock.mockRestore();
   }
 });
+
+test("the panel can reuse the same seat while receiving a fresh tick, and a moved seat replaces it", async () => {
+  const project = "repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const read = (base: string) => seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=" + project,
+    { headers: { "x-delegatus-seat-base": base } }));
+  const first = await read("initial");
+  const revision = first.headers.get("x-delegatus-seat-revision");
+  expect(revision).toMatch(/^[a-f0-9]{64}$/);
+  expect(await first.json()).toHaveProperty("seat", null);
+  const repeat = await read(revision!);
+  expect(await repeat.json()).toMatchObject({ unchanged: true });
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", mode: "spawn", clientRequestId: "req_changed_00001" });
+  const changed = await read(revision!);
+  expect(changed.headers.get("x-delegatus-seat-revision")).not.toBe(revision);
+  expect(await changed.json()).toHaveProperty("pending.intent.clientRequestId", "req_changed_00001");
+});

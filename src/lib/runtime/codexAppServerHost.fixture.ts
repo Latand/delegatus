@@ -525,7 +525,7 @@ export async function nextEvent(iterable: AsyncIterable<unknown>): Promise<unkno
 
 export let metadataState: string;
 
-export function installCodexHostFixture() {
+export function installCodexHostFixture(setState?: (directory: string) => void) {
   let previousMetadataState: string | undefined;
   let restoreFeatures: () => void;
   let restoreVersion: () => void;
@@ -536,6 +536,7 @@ export function installCodexHostFixture() {
     previousMetadataState = process.env.LLV_STATE_DIR;
     metadataState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-metadata-"));
     process.env.LLV_STATE_DIR = metadataState;
+    setState?.(metadataState);
   });
   afterEach(() => {
     restoreVersion();

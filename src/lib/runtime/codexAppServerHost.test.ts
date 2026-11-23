@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type SpawnOptionsWithoutStdio } from "node:child_process";
+import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { describe, expect, spyOn, test } from "bun:test";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -15,6 +15,8 @@ import { CodexAppServerHost } from "./codexAppServerHost";
 import { CodexSocketTransport } from "./codexSocketTransport";
 import { FileRuntimeEventStore } from "./eventStore";
 import { projectEngineHostEvent } from "./engineHostEvents";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureProcess } from "../testing/fixtureProcess";
 import { gateCheckTool } from "./gateCheckTool";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
@@ -404,16 +406,76 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.169.1"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+test.skipIf(process.platform !== "linux").each([false, true])("a second recorded check returns its verdict while the same turn already holds a wait (turn ends=%s)", async turnEnds => {
+  const server = new FakeAppServer("overlapping-gates");
+  const host = await CodexAppServerHost.start({ cwd: metadataState, env: { ...process.env, TMPDIR: metadataState },
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  let child: ReturnType<typeof spawn> | undefined;
+  const reply = (id: string) => new Promise<Record<string, unknown>>(resolve => {
+    const listener = (message: Record<string, unknown>) => {
+      if (message.id === id) { server.off("client-request", listener); resolve(message); }
+    };
+    server.on("client-request", listener);
+  });
+  const call = (id: string, log: string, turnId = "turn-1") => server.request(id, "item/tool/call", {
+    threadId: "overlapping-gates", turnId, callId: id, tool: gateCheckTool.name, arguments: { log, reason: "overlapping check" },
+  });
+  try {
+    await host.send({ id: "opening", text: "check both results" });
+    const firstLog = path.join(metadataState, "first.log"), firstDir = `${firstLog}.gate`;
+    fs.mkdirSync(firstDir); fs.writeFileSync(firstLog, "first check\n");
+    const recorder = cpuOwnerIdentity(process.pid);
+    fs.writeFileSync(path.join(firstDir, "owner.json"), JSON.stringify(recorder));
+    fs.writeFileSync(path.join(firstDir, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(firstDir), deadlineUptimeMs: custodyClock() + 60_000 }));
+    const firstReply = reply("first-wait");
+    call("first-wait", firstLog);
+    expect(server.requests.filter(row => row.id === "first-wait")).toHaveLength(0);
+
+    // Run the actual recorder in its own private portable gate. The first
+    // callback stays pending throughout this command's start and completion.
+    const bin = path.join(metadataState, "bin"); fs.mkdirSync(bin);
+    for (const name of ["bash", "date", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm", "which", "true"])
+      fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
+    const log = path.join(metadataState, "second.log");
+    child = spawn("/bin/bash", [path.resolve(import.meta.dir, "../../../scripts/gate-slot.sh"), "--record", log,
+      "/bin/bash", "-c", 'printf "second verdict\\n"; exit 23'], { stdio: ["ignore", "pipe", "pipe"], env: {
+      PATH: bin, HOME: metadataState, TMPDIR: metadataState, XDG_CONFIG_HOME: metadataState, LLV_STATE_DIR: metadataState,
+      NODE_ENV: "test", LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: metadataState, LLV_GATE_SLOTS: "1",
+      LLV_GATE_RUNNER: "off", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off",
+    } });
+    let output = "";
+    child.stdout!.on("data", data => { output += data; });
+    child.stderr!.on("data", data => { output += data; });
+    const code = await new Promise<number | null>((resolve, reject) => { child!.once("error", reject); child!.once("close", resolve); });
+    expect(output).toContain("recording started");
+    expect(code).toBe(23);
+    const secondReply = reply("second-wait");
+    call("second-wait", log);
+    expect((await secondReply).result).toMatchObject({ success: true, contentItems: [{ text: expect.stringContaining('"code":23') }] });
+    expect(server.requests.filter(row => row.id === "first-wait")).toHaveLength(0);
+
+    const foreignReply = reply("foreign-wait");
+    call("foreign-wait", log, "foreign-turn");
+    expect((await foreignReply).result).toMatchObject({ success: false });
+    if (turnEnds) server.notify("turn/completed", { threadId: "overlapping-gates", turn: { id: "turn-1", status: "completed" } });
+    fs.writeFileSync(path.join(firstDir, "exit"), "37\n");
+    expect((await firstReply).result).toMatchObject(turnEnds
+      ? { success: false, contentItems: [{ text: expect.stringContaining("gate wait owner changed; result unknown") }] }
+      : { success: true, contentItems: [{ text: expect.stringContaining('"code":37') }] });
+    expect((await host.health()).pendingAttention).toEqual([]);
+  } finally { if (child) await stopFixtureProcess(child); await host.release(); }
+}, 30_000);
+
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0", "0.170.1"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
   // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
-  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.169.1": { pin: "0.169.0", schema: "0.169.0" } };
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.170.1": { pin: "0.170.0", schema: "0.170.0" } };
   const pin = unpinned[version]?.pin ?? version;
   const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  if (version === "0.169.1") server.threadResponseExtra = { futureHint: "available" };
+  if (version === "0.170.1") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
-    if (version !== "0.169.1") return raw;
+    if (version !== "0.170.1") return raw;
     const bundle = JSON.parse(raw);
     bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
     return JSON.stringify(bundle);
@@ -441,7 +503,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-    if (version === "0.169.1") {
+    if (version === "0.170.1") {
       expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
     }
   } finally {
@@ -456,7 +518,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.169.0, 0.168.0, 0.167.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.170.0, 0.169.0, 0.168.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -849,4 +911,41 @@ test("Codex drains resume notifications before awaiting Viewer discovery", async
     expect((await host.health()).status).toBe("idle");
     expect(child.requests.some(request => request.method === "turn/start" || request.method === "thread/queue/start")).toBe(false);
   } finally { await host.release(); }
+});
+
+test.skipIf(process.platform === "win32")("a replaced startup adapter disconnects without signalling the native Codex listener", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cb-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const child = new FakeAppServer();
+  const signals: NodeJS.Signals[] = [];
+  const disconnected = Promise.withResolvers<void>();
+  const listener = Bun.serve({
+    unix: socket,
+    fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
+    websocket: {
+      open(connection) { child.stdout.on("data", chunk => { connection.send(String(chunk).trimEnd()); }); },
+      message(_connection, message) { child.stdin.write(String(message) + "\n"); },
+      close() { disconnected.resolve(); },
+    },
+  });
+  fs.chmodSync(socket, 0o600);
+  let host: CodexAppServerHost | undefined;
+  try {
+    host = await CodexAppServerHost.adopt("thread-149", {
+      cwd: directory, eventStore: new MemoryEventStore(),
+      socketOwner: { endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid) },
+      signalProcess: (_pid, signal) => { signals.push(signal); },
+      shutdownGraceMs: 25,
+    });
+    host.setWriterFence(() => false);
+    host.detachAfterStartupCustodyLoss();
+    await host.release();
+    await disconnected.promise;
+    expect(signals).toEqual([]);
+    expect(fs.statSync(socket).isSocket()).toBe(true);
+  } finally {
+    listener.stop(true);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

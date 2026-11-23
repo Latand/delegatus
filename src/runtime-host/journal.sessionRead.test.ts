@@ -5,7 +5,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { RuntimeJournal } from "./journal";
 import { RuntimeHost } from "./host";
-import { runtimeScope } from "@/lib/runtime/contracts";
+import { runtimeScope, type RuntimeStartupSessionEvidence } from "@/lib/runtime/contracts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-session-read-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -54,6 +54,58 @@ test("keyed RPC shares snapshot normalization, identity precedence and absence s
     expect(await host.handle({ id: "invalid", method: "session-read", params: { conversationId: 42 } })).toMatchObject({ ok: false });
     expect(snapshotSpy).not.toHaveBeenCalled();
   } finally { snapshotSpy.mockRestore(); journal.close(); }
+});
+
+test("runtime host binds bounded startup evidence to the session checkpoint and journal generation", async () => {
+  const filename = path.join(root, "startup-evidence.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const host = new RuntimeHost(journal);
+  const id = "conversation_startup_runtime";
+  const missing = "conversation_startup_missing";
+  const evidence = async (conversationIds: string[], includeEvidence = false, target = host) => {
+    const response = await target.handle({ id: "startup-read", method: "startup-session-evidence", params: { conversationIds, includeEvidence } });
+    expect(response.ok).toBe(true);
+    return response.result as RuntimeStartupSessionEvidence;
+  };
+  try {
+    const absent = await evidence([missing], true);
+    expect(absent).toMatchObject({ sessions: [null], evidence: null });
+    journal.append({ scope: runtimeScope("session", id), kind: "session-status", payload: {
+      host: "hosted", turn: "running", liveTurn: { text: "turn body", turnId: "active", items: [] },
+    } });
+    const before = await evidence([id, missing]);
+    const present = await evidence([id], true);
+    expect(before.effectsVersion).toBe(absent.effectsVersion);
+    expect(present).toEqual({ generation: before.generation, version: before.version, effectsVersion: before.effectsVersion, sessions: [before.sessions[0]!],
+      evidence: { conversationId: id, host: "hosted", turn: "running", recentReceipts: [] } });
+    expect(before.sessions[0]).toBeGreaterThan(0);
+    expect(before.sessions[1]).toBeNull();
+    const peer = new RuntimeJournal(filename, { structuredHosts: true });
+    try {
+      const command = peer.executeOperation({ kind: "send", conversationId: id, idempotencyKey: "startup-evidence-send", text: "queued" });
+      const current = await evidence([id], true);
+      expect(current.version).not.toBe(before.version);
+      expect(current.effectsVersion).not.toBe(before.effectsVersion);
+      expect(current.sessions[0]).toBeGreaterThan(before.sessions[0]!);
+      expect(current.evidence?.recentReceipts).toEqual([
+        expect.objectContaining({ operationId: command.operationId, status: command.receipt.status }),
+      ]);
+      expect((await evidence([id], false, new RuntimeHost(peer))).generation).not.toBe(before.generation);
+      peer.transitionOperation(command.operationId, "failed");
+      const settled = await evidence([id], true);
+      expect(settled.effectsVersion).not.toBe(current.effectsVersion);
+      expect(settled.evidence?.recentReceipts).toEqual([
+        expect.objectContaining({ operationId: command.operationId, status: "failed" }),
+      ]);
+    } finally { peer.close(); }
+    for (const params of [
+      { conversationIds: Array(129).fill(id) },
+      { conversationIds: [id, missing], includeEvidence: true },
+      { conversationIds: [42] },
+    ]) {
+      expect(await host.handle({ id: "invalid", method: "startup-session-evidence", params })).toMatchObject({ ok: false });
+    }
+  } finally { journal.close(); }
 });
 
 test("upgrade creates the artifact index without rewriting old projections or consumer cursors", () => {
@@ -123,6 +175,24 @@ test("an event bound to a session revision is recorded only while the row still 
       expect(await host.handle({ id: "invalid", method: "append-session-fenced", params: { event } })).toMatchObject({ ok: false });
       expect(journal.publishedSeq()).toBe(seq);
     }
+    const withdrawal = {
+      scope, kind: "pipeline.provider-continuation-cancelled", payload: { conversationId: "conversation_fenced" },
+      producer: { kind: "viewer-command", eventKey: `pipeline-withdrawal:${"a".repeat(64)}:1` },
+      expectedSessionRevision: current.revision,
+    };
+    for (const method of ["append", "operation"] as const) {
+      for (const event of [withdrawal, { ...withdrawal,
+        producer: { kind: "viewer-command" }, producerKey: withdrawal.producer.eventKey }]) {
+        expect(await host.handle({ id: method, method, params: { event } })).toMatchObject({ ok: false });
+      }
+    }
+    for (const event of [{ ...withdrawal, payload: { conversationId: "conversation_other" } },
+      { ...withdrawal, expectedSessionRevision: undefined }, { ...withdrawal, kind: "session-status" },
+      { ...withdrawal, operationId: "fixture-other-operation" }]) {
+      expect(await host.handle({ id: "invalid-withdrawal", method: "append-session-fenced", params: { event } })).toMatchObject({ ok: false });
+    }
+    expect(journal.publishedSeq()).toBe(seq);
+    expect(journal.producerCursor("viewer-command", `pipeline-withdrawal:${"a".repeat(64)}:`)).toBe(0);
     expect(await host.handle({ id: "current", method: "append-session-fenced", params: { event: status({ host: "dead", turn: "unknown", activeTurnId: null }, current.revision) } }))
       .toMatchObject({ ok: true });
     expect(journal.readSession({ conversationId: "conversation_fenced" })).toMatchObject({ host: "dead", turn: "unknown", activeTurnId: null });

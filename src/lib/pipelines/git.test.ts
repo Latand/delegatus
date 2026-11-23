@@ -9,6 +9,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
+import { withProvisioningTurn } from "./provisioningTurn";
 import { readWorktreeProvenance } from "./worktreeProvenance";
 import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
@@ -94,37 +95,61 @@ test("an unpinned base without origin resolves local main without fetching", asy
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+function publicationChildReachedCloseBarrier(markerExists: boolean, commandFinished: boolean): boolean {
+  return markerExists && !commandFinished;
+}
+
+test("lane-close barrier rejects a publication marker from an expired probe", () => {
+  expect(publicationChildReachedCloseBarrier(true, true)).toBe(false);
+});
+
 test.each(["probe", "push-reply"] as const)("closing a lane during a real publication %s fences its outcome", async (phase) => {
   const box = await publishSandbox();
   const { patchPipeline, defaultPipelinePorts } = await import("./engine");
   const { registerPipelineTick } = await import("./controllerSignal");
-  const restoreTick = registerPipelineTick(async () => {});
-  const head = await box.commit("accepted.txt", "accepted\n");
+  const entered = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
   const bin = path.join(box.root, "bin"); fs.mkdirSync(bin);
-  const entered = path.join(bin, "entered"), released = path.join(bin, "released");
-  const gitBinary = Bun.which("git")!;
+  const enteredPath = path.join(box.root, "publish-entered");
+  const releasedPath = path.join(box.root, "publish-released");
+  const gitBinary = Bun.which("git", { PATH: process.env.PATH });
+  if (!gitBinary) throw new Error("git is unavailable on the sanitized PATH");
   fs.writeFileSync(path.join(bin, "git"), phase === "probe"
     ? '#!/bin/sh\nif [ "$1" = "ls-remote" ]; then touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; fi\nexec "$PUBLISH_GIT" "$@"\n'
     : '#!/bin/sh\nif [ "$1" = "push" ]; then "$PUBLISH_GIT" "$@" || exit $?; touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; exit 0; fi\nexec "$PUBLISH_GIT" "$@"\n', { mode: 0o700 });
-  const previous = { PATH: process.env.PATH, PUBLISH_ENTERED: process.env.PUBLISH_ENTERED, PUBLISH_RELEASED: process.env.PUBLISH_RELEASED, PUBLISH_GIT: process.env.PUBLISH_GIT };
-  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, PUBLISH_ENTERED: entered, PUBLISH_RELEASED: released, PUBLISH_GIT: gitBinary });
+  const restoreTick = registerPipelineTick(async () => {});
+  let publicationCommandFinished = false;
+  const exec: ExecPort = async (command, args, cwd, env, options) => {
+    const resultPromise = realExec(command, args, cwd, command === "git" ? {
+      ...env,
+      PATH: `${bin}:${env?.PATH ?? process.env.PATH ?? ""}`,
+      PUBLISH_ENTERED: enteredPath,
+      PUBLISH_RELEASED: releasedPath,
+      PUBLISH_GIT: gitBinary,
+    } : env, options);
+    if (command === "git" && args[0] === (phase === "probe" ? "ls-remote" : "push")) {
+      void Promise.resolve(resultPromise).then(() => { publicationCommandFinished = true; }, () => { publicationCommandFinished = true; });
+      while (!fs.existsSync(enteredPath) && !publicationCommandFinished) await Bun.sleep(5);
+      if (fs.existsSync(enteredPath)) entered.resolve();
+    }
+    return resultPromise;
+  };
   let pending: ReturnType<typeof publishPipelineBranch> | undefined;
   try {
-    pending = publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
-    // Wait for the actual Git boundary. Startup under a busy runner is outside
-    // the publication contract; the test's infrastructure deadline bounds it.
-    let settled = false;
-    void pending.then(() => { settled = true; }, () => { settled = true; });
-    while (!fs.existsSync(entered) && !settled) await Bun.sleep(5);
-    expect(fs.existsSync(entered)).toBe(true);
+    const head = await box.commit("accepted.txt", "accepted\n");
+    pending = publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(await Promise.race([entered.promise.then(() => true), pending.then(() => false)])).toBe(true);
+    // The marker alone is insufficient: an expired probe may create it as it
+    // exits. The child must still be live when the lane-close barrier begins.
+    expect(publicationChildReachedCloseBarrier(fs.existsSync(enteredPath), publicationCommandFinished)).toBe(true);
     const ports = { ...defaultPipelinePorts(), stopStageAgent: async () => ({ outcome: "not-running" as const }), paneAgentAlive: async () => false, stageHostResident: async () => false };
     expect((await patchPipeline(box.subject.id, { action: "close" }, ports)).error).toBeUndefined();
-    fs.writeFileSync(released, "");
+    fs.writeFileSync(releasedPath, "");
     expect(await pending).toMatchObject(phase === "probe" ? { ok: false, error: expect.stringContaining("superseded") }
       : { ok: true, remote: "unreachable", uncertain: true, detail: expect.stringContaining("superseded") });
     expect(findPipelineRecord(box.subject.id)!.state).toBe("closed");
     expect(findPipelineRecord(box.subject.id)!.publishedCommit).not.toBe(head);
-    const remote = await realExec(gitBinary, ["show-ref", "--verify", `refs/heads/${box.subject.branch}`], box.origin);
+    const remote = await realExec("git", ["show-ref", "--verify", `refs/heads/${box.subject.branch}`], box.origin);
     if (phase === "probe") expect(remote.code).not.toBe(0);
     else {
       expect(remote.code).toBe(0);
@@ -133,10 +158,9 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
       expect(findPipelineRecord(box.subject.id)!.delivery!.journal.at(-1)!.reason).toContain("reconcile");
     }
   } finally {
-    fs.writeFileSync(released, "");
+    fs.writeFileSync(releasedPath, "");
     try { await pending; }
     finally {
-      for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
       restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
     }
   }
@@ -189,6 +213,47 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   if (result.code !== 0) throw new Error(result.stderr || result.stdout);
   return result.stdout.trim();
 }
+
+test("another lane checks out the same repository while the first prepares its hook dependencies", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-peer-"));
+  const repo = path.join(root, "repo");
+  const entered = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
+  const waited = Promise.withResolvers<void>();
+  const runs: Promise<unknown>[] = [];
+  try {
+    fs.mkdirSync(repo);
+    await git(repo, "init", "-b", "main");
+    fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ name: "provision-fixture" }));
+    await git(repo, "add", "package.json");
+    expect((await realExec("git", ["commit", "-m", "Seed fixture"], repo, controllerCommitIdentityEnv())).code).toBe(0);
+    const baseRef = await git(repo, "rev-parse", "HEAD");
+    const run = (id: string, stall: boolean) => {
+      const lane = { ...pipeline(), id, delivery: undefined, publication: "internal" as const,
+        repoDir: repo, worktreeDir: path.join(root, id), baseBranch: "main", branch: "pipeline/" + id, baseRef };
+      return withProvisioningTurn(repo, lane.worktreeDir, previous => {
+        if (!stall) waited.resolve();
+        return previous;
+      }, ready => provisionPipelineWorktreeAsync(lane, async (command, args, cwd, signal, options) => {
+        if (stall && command === "git" && args[0] === "check-ignore" && cwd === lane.worktreeDir) {
+          entered.resolve();
+          await finish.promise;
+        }
+        return realProvisionExec(command, args, cwd, signal, options);
+      }, undefined, ready));
+    };
+    const first = run("aabbcc01", true); runs.push(first);
+    await Promise.race([entered.promise, first.then(() => { throw new Error("first lane missed dependency setup"); })]);
+    const second = run("aabbcc02", false); runs.push(second);
+    const outcome = await Promise.race([second, waited.promise.then(() => "waiting for the first toolchain")]);
+    expect(outcome).toMatchObject({ ok: true, sha: baseRef });
+    expect(await git(path.join(root, "aabbcc02"), "rev-parse", "HEAD")).toBe(baseRef);
+    finish.resolve();
+    expect(await first).toMatchObject({ ok: true, sha: baseRef });
+  } finally {
+    finish.resolve(); await Promise.allSettled(runs);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 async function isolatedIdentityRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-identity-"));
@@ -840,7 +905,8 @@ test.each(["direct", "provision"] as const)("portable base consumers fetch witho
     await git(source, "push", "origin", "main");
     const head = await git(source, "rev-parse", "HEAD");
     fs.mkdirSync(bin);
-    fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
+    // Use the PATH sanitized by the test preload, since Bun.which defaults to the startup PATH.
+    fs.symlinkSync(Bun.which("git", { PATH: process.env.PATH })!, path.join(bin, "git"));
     expect(Bun.which("timeout", { PATH: bin })).toBeNull();
     expect(Bun.which("gtimeout", { PATH: bin })).toBeNull();
     const calls: Array<{ command: string; args: string[]; timeoutMs?: number }> = [];

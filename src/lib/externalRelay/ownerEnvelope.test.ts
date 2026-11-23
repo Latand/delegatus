@@ -47,7 +47,7 @@ const target = { id: "target_1", name: "Target", answered_by: "install", fallbac
 
 function pairedRelay(origin: string): PairedRelay {
   return { id: "relay_envelope", origin: origin, api_base: origin + "/v1", name: "Test", description: "Test",
-    credential: "x".repeat(43), owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    credential: "x".repeat(43), owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     pairedAt: at, paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: [{ ...target }] };
 }
 beforeEach(() => { process.env.LLV_STATE_DIR = path.join(root, `case-${++caseNumber}`); });
@@ -71,6 +71,144 @@ function toolRows(prompt: string): Array<Record<string, unknown>> {
   return Array.isArray(index) ? index : index.rows.map(row => Object.fromEntries(index.columns.map((key, i) => [key, row[i]])));
 }
 
+function incidentClaim(reply: boolean, emptyToolSummaries = false, compactHistory = false) {
+  const r = request();
+  const trigger = r.input.conversation.at(-1)!;
+  const history = Array.from({ length: 39 }, (_, i) => ({
+    ...trigger, id: `history-${i}`, sent_at: new Date(Date.parse(at) - (39 - i) * 1000).toISOString(),
+    text: i >= 29 || (reply && i === 4) ? `Update ${i}: the group agreed to review the draft on Friday.`
+      : "Earlier discussion. ".repeat(compactHistory ? 8 : 65),
+    reply_to: null,
+  }));
+  return requestSchema.parse({ ...r, input: { ...r.input,
+    instructions: "s".repeat(6200), owner_instructions: "o".repeat(15000),
+    conversation: [...history, { ...trigger, sent_at: at, reply_to: reply ? history[4]!.id : null }],
+    short_term_memory: "Remember the agreed review window. ".repeat(73),
+    tools: Array.from({ length: 80 }, (_, i) => ({ name: `service_operation_${i}`, summary: emptyToolSummaries ? "" : "<".repeat(100),
+      mode: "direct", effect: "read", audience: "owner", parameters: { type: "object", properties: {} } })),
+  } });
+}
+
+for (const mode of ["fresh", "reply", "continuation"] as const)
+test(`incident-sized ${mode} owner claim delivers recent history and memory within the envelope`, () => {
+  const r = incidentClaim(mode === "reply", true, true);
+  r.input.instructions = "s".repeat(2000);
+  r.input.owner_instructions = "o".repeat(9000);
+  const owner = ownerTierFor(target, r)!;
+  const prior = r.input.conversation.slice(0, -1).map(row => row.id);
+  const prepared = mode === "continuation"
+    ? ownerContinuationPrompt(r, owner, 1, { seen: prior, staticDigest: prepareOwnerPrompt(r, owner, 1).digest })
+    : prepareOwnerPrompt(r, owner, 1);
+  const rows = section(prepared.prompt, "conversation") as typeof r.input.conversation;
+  console.info("Incident-sized relay", { mode, promptBytes: Buffer.byteLength(prepared.prompt), rows: rows.length,
+    sections: [...prepared.prompt.matchAll(/^<([a-z_]+)>$/gm)].map(match => match[1]) });
+  expect(r.input.conversation).toHaveLength(40);
+  expect(r.input.tools).toHaveLength(80);
+  assertStructuredTextEnvelope(prepared.prompt);
+  expect(rows.map(row => row.id)).toEqual(mode === "continuation" ? r.input.conversation.slice(-11).map(row => row.id)
+    : r.input.conversation.map(row => row.id));
+  expect(rows.at(-1)!.reply_to).toBe(mode === "reply" ? "history-4" : null);
+  expect(section(prepared.prompt, "short_term_memory")).toBe(r.input.short_term_memory!);
+  if (mode !== "continuation") {
+    expect(section(prepared.prompt, "relay_context_budget")).toMatchObject({ tool_entries_omitted: 80 });
+    expect(prepared.prompt).toContain("Use relay_service_tools with op list");
+  } else {
+    expect(toolRows(prepared.prompt)).toHaveLength(80);
+  }
+  if (mode === "reply") {
+    expect(section(prepared.prompt, "owner_reply_context")).toMatchObject({ message_id: "history-4" });
+    expect(rows.find(row => row.id === "history-4")?.text).toBe(r.input.conversation[4]!.text);
+  }
+});
+
+test("owner Cloud preview keeps the catalogue with the required context for native fallback", () => {
+  const r = incidentClaim(false);
+  const owner = ownerTierFor(target, r)!;
+  const prepared = prepareOwnerPrompt(r, owner, 1, { requireToolTable: true });
+  assertStructuredTextEnvelope(prepared.prompt);
+  expect(toolRows(prepared.context!)).toHaveLength(80);
+  expect(section(prepared.context!, "short_term_memory")).toBe(r.input.short_term_memory!);
+});
+
+test("owner context keeps all 40 rows when shortening tool summaries suffices", () => {
+  const r = incidentClaim(false);
+  r.input.instructions = "Answer from the chat history.";
+  r.input.owner_instructions = null;
+  for (const row of r.input.conversation.slice(0, -11)) row.text = row.text.slice(0, 200);
+  const prepared = prepareOwnerPrompt(r, ownerTierFor(target, r)!, 1);
+  assertStructuredTextEnvelope(prepared.prompt);
+  expect((section(prepared.prompt, "conversation") as typeof r.input.conversation).map(row => row.id))
+    .toEqual(r.input.conversation.map(row => row.id));
+  expect(section(prepared.prompt, "short_term_memory")).toBe(r.input.short_term_memory!);
+  expect(toolRows(prepared.prompt).map(tool => tool.name)).toEqual(r.input.tools!.map(tool => tool.name));
+  expect(section(prepared.prompt, "relay_context_budget")).toEqual({ tool_summaries_shortened: 80 });
+});
+
+test("tool-table reduction is compared against history trimming", () => {
+  const r = incidentClaim(false, true, true);
+  for (const row of r.input.conversation.slice(0, -1)) row.text = "The group agreed Friday.";
+  r.input.instructions = "s".repeat(8000);
+  r.input.owner_instructions = "o".repeat(11640);
+  const owner = ownerTierFor(target, r)!;
+  const prepared = prepareOwnerPrompt(r, owner, 1);
+  const rows = section(prepared.prompt, "conversation") as typeof r.input.conversation;
+  console.info("Tool table history comparison", { bytes: Buffer.byteLength(prepared.prompt), rows: rows.length,
+    cuts: section(prepared.prompt, "relay_context_budget") });
+  assertStructuredTextEnvelope(prepared.prompt);
+  expect(rows.map(row => row.id)).toEqual(r.input.conversation.slice(-32).map(row => row.id));
+  expect(rows.at(-1)!.id).toBe(r.input.conversation.at(-1)!.id);
+  expect(section(prepared.prompt, "short_term_memory")).toBe(r.input.short_term_memory!);
+  expect(section(prepared.prompt, "relay_context_budget")).toMatchObject({
+    older_message_texts_omitted: 8, tool_entries_omitted: 80,
+  });
+});
+
+test("owner context discloses omitted documents and retains the explicit reply's attachment", () => {
+  const r = request();
+  r.input.owner_instructions = "o".repeat(15000);
+  r.input.short_term_memory = "Remember the discussion.";
+  const requiredDocument = { title: "Quoted document", message_id: "quote", text: "The decision was recorded here." };
+  r.input.documents = [requiredDocument, { title: "Optional document", text: "x".repeat(16000) }];
+  const prepared = prepareOwnerPrompt(r, ownerTierFor(target, r)!, 1);
+  assertStructuredTextEnvelope(prepared.prompt);
+  expect(section(prepared.prompt, "documents")).toEqual([requiredDocument]);
+  expect(section(prepared.prompt, "short_term_memory")).toBe(r.input.short_term_memory!);
+  expect(section(prepared.prompt, "relay_context_budget")).toEqual({ documents_omitted: 1 });
+});
+
+test("oversized continuation delivers the complete incident window and memory through its context file", async () => {
+  const r = incidentClaim(true);
+  for (const row of r.input.conversation.slice(-11, -1)) row.text = 'Quoted <data> "я😀" '.repeat(200);
+  const owner = ownerTierFor(target, r)!;
+  const seen = r.input.conversation.slice(0, -1).map(row => row.id);
+  const prepared = ownerContinuationPrompt(r, owner, 1, { seen, staticDigest: null });
+  let delivered = false;
+  const result = await runOwnerAgent({ request: r, owner, target: { ...target }, accountId: null, hardCapMs: 2000,
+    preparedPrompt: prepared, continuation: { conversationId: "conversation_incident", prompt: prepared.prompt },
+    onConversation: () => {}, ports: {
+      launch: async () => { throw new Error("expected a continuation"); },
+      continue: async (turn, prompt, _target, authorize) => {
+        authorize();
+        assertStructuredTextEnvelope(prompt);
+        const file = section(prompt, "relay_context_file") as string;
+        const context = fs.readFileSync(file, "utf8");
+        expect(section(context, "conversation")).toEqual([
+          ...r.input.conversation.slice(0, -1), { ...r.input.conversation.at(-1), text: undefined, text_reference: "owner_request.text" },
+        ]);
+        expect(section(context, "owner_reply_context")).toMatchObject({ message_id: "history-4" });
+        expect(section(context, "short_term_memory")).toBe(r.input.short_term_memory!);
+        expect(toolRows(context)).toHaveLength(80);
+        delivered = true;
+        return { ok: true, structured: true, target: turn.conversationId!, outcome: "delivered", operationId: turn.clientAttemptId,
+          receipt: { operationId: turn.clientAttemptId, idempotencyKey: turn.clientAttemptId, conversationId: turn.conversationId!,
+            kind: "send", status: "delivered", at, revision: 1 } };
+      },
+      observe: async () => ({ state: "ended", finalText: "The review window is Friday." }), stop: async () => {}, pollMs: 1,
+    } }).done;
+  expect(result.status).toBe("done");
+  expect(delivered).toBe(true);
+});
+
 for (const mode of ["fresh", "resumed"] as const)
 test(`${mode} prompt reduces escaped tool summaries by rendered size and retains tool contracts`, () => {
   const r = request("A short quoted message");
@@ -88,19 +226,17 @@ test(`${mode} prompt reduces escaped tool summaries by rendered size and retains
 });
 
 for (const mode of ["fresh", "resumed"] as const)
-test(`${mode} prompt keeps the requested bridge-report fact ahead of unrelated memory`, () => {
+test(`${mode} prompt carries the requested bridge report and oversized memory in the context file`, () => {
   const r = request("What is MIDDLE_FIELD?");
   r.input.short_term_memory = "unrelated memory ".repeat(1500);
   const owner = ownerTierFor(target, r)!;
   owner.bridgeReport = { project: "project-b", sourceSeat: "seat-b", reportId: "report-b",
     reportText: "L".repeat(1400) + " MIDDLE_FIELD=amber " + "R".repeat(1555) };
-  const prompt = mode === "fresh" ? ownerRunPrompt(r, owner, 1)
-    : ownerContinuationPrompt(r, owner, 1, { seen: [], staticDigest: null }).prompt;
-  assertStructuredTextEnvelope(prompt);
-  expect(section(prompt, "bridge_report")).toMatchObject({ project: "project-b", sourceSeat: "seat-b", reportId: "report-b" });
-  expect(section(prompt, "bridge_report")).toMatchObject({ reportText: owner.bridgeReport!.reportText });
-  expect(prompt).not.toContain("unrelated memory");
-  if (mode === "resumed") expect(section(prompt, "short_term_memory")).toBeNull();
+  const prepared = mode === "fresh" ? prepareOwnerPrompt(r, owner, 1)
+    : ownerContinuationPrompt(r, owner, 1, { seen: [], staticDigest: null });
+  assertStructuredTextEnvelope(prepared.prompt);
+  expect(section(prepared.context!, "bridge_report")).toEqual(owner.bridgeReport);
+  expect(section(prepared.context!, "short_term_memory")).toBe(r.input.short_term_memory!);
 });
 
 test("a mandatory-size refusal reaches the completion route and replay after restart does not launch or answer twice", async () => {
@@ -208,13 +344,15 @@ for (const mode of ["fresh", "resumed"] as const) {
     const original = JSON.stringify(r);
     const owner = ownerTierFor(target, r)!;
     const prepared = compose(r, owner);
-    const messages = section(prepared.prompt, "conversation") as { id: string; text?: string }[];
-    expect(prepared.prompt).toContain("Requested fact: amber.");
-    expect(prepared.prompt.match(/Requested fact: amber\./g)).toHaveLength(1);
-    expect(section(prepared.prompt, "owner_instructions")).toBe(r.input.owner_instructions);
-    expect(section(prepared.prompt, "service_instructions")).toBe(r.input.instructions);
-    expect(toolRows(prepared.prompt)).toHaveLength(80);
-    expect(prepared.seen).toContain("quote");
+    const context = prepared.context!;
+    const messages = section(context, "conversation") as { id: string; text?: string }[];
+    expect(messages.map(message => message.id)).toEqual(r.input.conversation.map(message => message.id));
+    expect(context.match(/Requested fact: amber\./g)).toHaveLength(1);
+    expect(section(context, "owner_instructions")).toBe(r.input.owner_instructions);
+    expect(section(context, "service_instructions")).toBe(r.input.instructions);
+    expect(section(context, "short_term_memory")).toBe(r.input.short_term_memory!);
+    expect(toolRows(context)).toHaveLength(80);
+    expect(prepared.seen).not.toContain("quote");
     expect(prepared.seen).not.toContain("old-0");
     expect(messages.find(m => m.id === "quote")!.text).toBe(r.input.conversation.at(-2)!.text);
     let sent = "", launches = 0, continues = 0;
@@ -230,7 +368,8 @@ for (const mode of ["fresh", "resumed"] as const) {
       } }).done;
     expect(result.status).toBe("done");
     expect(launches).toBe(mode === "fresh" ? 1 : 0); expect(continues).toBe(mode === "resumed" ? 1 : 0);
-    expect(sent).toBe(prepared.prompt); assertStructuredTextEnvelope(sent);
+    expect(section(sent, "relay_context_file")).toEqual(expect.any(String));
+    assertStructuredTextEnvelope(sent);
     console.info("measured relay prompt", { mode, conversationBytes, promptBytes: Buffer.byteLength(sent) });
     expect(JSON.stringify(r)).toBe(original);
   });
@@ -288,6 +427,7 @@ test(`${mode} ${shape} delivers full Cyrillic context and answers within the env
     // matching the two measured mandatory totals through the real renderer.
     r.input.instructions = "s".repeat(mode === "fresh" ? 3192 : 4690);
     r.input.owner_instructions = "я".repeat(7400) + "<".repeat(100) + "o".repeat(92);
+    r.input.short_term_memory = "m".repeat(7500);
     r.features = richRequest().features;
     r.input.format = richRequest().input.format;
     r.input.tools = Array.from({ length: 80 }, (_, i) => ({ name: `read_${String(i).padStart(32, "0")}`,
@@ -362,6 +502,46 @@ test(`${mode} instruction alone over the byte bound refuses before dispatch`, as
 });
 
 for (const mode of ["fresh", "resumed"] as const)
+test(`${mode} context fallback budgets the actual escaped run-directory path`, async () => {
+  const r = incidentClaim(false);
+  r.input.conversation.at(-1)!.text = "x".repeat(30000);
+  r.input.instructions = "s".repeat(6200);
+  r.input.owner_instructions = "o".repeat(15000);
+  for (const row of r.input.conversation.slice(-11, -1)) row.text = "Required context. ".repeat(900);
+  const owner = ownerTierFor(target, r)!;
+  const prepared = prepareOwnerPrompt(r, owner, 1);
+  expect(prepared.context).toBeDefined();
+  const directory = path.join(root, ...Array.from({ length: 4 }, () => '"'.repeat(180)), `relay-\\-context-${mode}`);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const placeholder = "<relay_context_file>\n\"\"\n</relay_context_file>";
+  const renderedPath = path.join(directory, `owner-context-${"0".repeat(36)}.txt`);
+  const substituted = prepared.prompt.replace(placeholder, `<relay_context_file>\n${json(renderedPath)}\n</relay_context_file>`);
+  expect(Buffer.byteLength(substituted)).toBeGreaterThan(MAX_STRUCTURED_TEXT_BYTES);
+  let deliveredFile = "";
+  let dispatchedPrompt = "";
+  const done = await runOwnerAgent({ request: r, owner, target: { ...target }, accountId: null, hardCapMs: 2000,
+    preparedPrompt: prepared, contextDirectory: directory,
+    ...(mode === "resumed" ? { continuation: { conversationId: `context_path_${mode}`, prompt: prepared.prompt } } : {}),
+    onConversation: () => {}, ports: {
+      launch: async body => { const prompt = String(body.prompt); dispatchedPrompt = prompt; assertStructuredTextEnvelope(prompt);
+        deliveredFile = section(prompt, "relay_context_file") as string; return { status: 202,
+          body: { conversationId: `conversation_context_path_${mode}`, initialMessage: "delivered" } }; },
+      continue: async (turn, prompt, _target, authorize) => { authorize(); dispatchedPrompt = prompt; assertStructuredTextEnvelope(prompt);
+        deliveredFile = section(prompt, "relay_context_file") as string;
+        return { ok: true, structured: true, target: turn.conversationId!, outcome: "delivered", operationId: turn.clientAttemptId,
+          receipt: { operationId: turn.clientAttemptId, idempotencyKey: turn.clientAttemptId, conversationId: turn.conversationId!,
+            kind: "send", status: "delivered", at, revision: 1 } }; },
+      observe: async () => ({ state: "ended", finalText: "done" }), stop: async () => {}, pollMs: 1,
+    } }).done;
+  expect(done.status).toBe("done");
+  expect(dispatchedPrompt).toContain("Read the context file for the full framing");
+  expect(section(dispatchedPrompt, "owner_request")).toMatchObject({ text: owner.text });
+  const preparedContext = prepared.context;
+  if (typeof preparedContext !== "string") throw new Error("context fallback did not prepare its full file contents");
+  expect(fs.readFileSync(deliveredFile, "utf8")).toBe(preparedContext);
+});
+
+for (const mode of ["fresh", "resumed"] as const)
 for (const failure of ["write", "authority"] as const)
 test(`${mode} context ${failure} failure prevents dispatch`, async () => {
   const r = request("я".repeat(16000));
@@ -416,12 +596,13 @@ test(`mandatory refusal has a readable ${language} answer and numeric diagnostic
 });
 
 for (const status of ["ok", "outcome_unknown", "confirmation_pending"] as const)
-test(`Cloud overflow fallback answers with the prior ${status} action result without repeating it`, async () => {
-  let posts = 0, cloud = 0, launches = 0;
+test(`Cloud settles the ${status} action result before repeating any work`, async () => {
+  let cloud = 0, launches = 0;
+  const actionIds: string[] = [];
   const service = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/tool-calls")) {
-      posts++;
       const call = body as { call_id: string; tool: string };
+      actionIds.push(call.call_id);
       return { body: { call_id: call.call_id, tool: call.tool, status, output: "<".repeat(6000), truncated: false,
         effect: "action", delivered: false, replayed: false, calls_remaining: 15,
         ...(status === "confirmation_pending" ? { confirmation_id: "fixture-confirmation", expires_at: "2099-01-01T00:00:00Z" } : {}) } };
@@ -462,8 +643,18 @@ test(`Cloud overflow fallback answers with the prior ${status} action result wit
         return { status: 202, body: { conversationId: "conversation_cloud_context", initialMessage: "delivered" } };
       }, observe: async () => ({ state: "ended", finalText: `Prior action: ${status}.` }), stop: async () => {}, pollMs: 1 },
     });
-    expect(result).toMatchObject({ outcome: "answered", answer: { text: `Prior action: ${status}.` } });
-    expect({ posts, cloud, launches }).toEqual({ posts: 1, cloud: 1, launches: 1 });
-    expect(fs.existsSync(path.dirname(contextFile))).toBe(false);
+    expect(cloud).toBe(1);
+    expect([...new Set(actionIds)]).toEqual([expect.any(String)]);
+    if (status === "ok") {
+      expect(result).toMatchObject({ outcome: "answered", answer: { text: "Prior action: ok." } });
+      expect(actionIds).toHaveLength(1);
+      expect(launches).toBe(1);
+      expect(fs.existsSync(path.dirname(contextFile))).toBe(false);
+    } else {
+      expect(launches).toBe(0);
+      expect(result).toMatchObject({ outcome: "answered", answer: { text: status === "outcome_unknown"
+        ? "The outcome of write_note remains unknown."
+        : "A confirmation for write_note was posted in the chat. Its eventual outcome is not visible to me." } });
+    }
   } finally { account.mockRestore(); resetProjectDirectoryCacheForTests(); await service.close(); }
 });

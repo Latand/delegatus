@@ -11,9 +11,14 @@ import { runtimeScope } from "@/lib/runtime/contracts";
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "journal-startup-"));
 let next = 0;
 const fixture = path.join(directory, "large.sqlite");
-// Give the 300,000-row seed its own setup budget under gate contention.
-// The startup tests retain their separate limits and the full history.
-beforeAll(() => largeJournal(fixture), 300_000);
+const historySize = 300_000;
+// Fixture setup competes with the other publication lanes. Its allowance
+// covers the seed alone. Each journal startup check keeps its own deadline.
+beforeAll(() => {
+  const started = performance.now();
+  largeJournal(fixture, historySize);
+  console.log(JSON.stringify({ journalFixtureRows: historySize, seedMs: Math.round(performance.now() - started) }));
+}, 300_000);
 afterAll(() => fs.rmSync(directory, { recursive: true, force: true }));
 function copy(source = fixture): string { const f = path.join(directory, `copy-${next++}.sqlite`); fs.copyFileSync(source, f); return f; }
 function meta(f: string, key: string): string | null { const db = new Database(f, { readonly: true }); try { return db.query<{ value: string }, [string]>("SELECT value FROM journal_meta WHERE key=?").get(key)?.value ?? null; } finally { db.close(); } }
@@ -33,6 +38,11 @@ function measure(f: string, options = {}): ReturnType<typeof walCommits> {
 
 test.skipIf(process.platform !== "linux")("large-history cold boot does not resurrect receipts or write history", () => {
   const f = copy();
+  const seeded = new Database(f, { readonly: true });
+  try {
+    expect(seeded.query<{ count: number }, []>("SELECT count(*) AS count FROM events").get()?.count).toBe(historySize);
+    expect(seeded.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode).toBe("wal");
+  } finally { seeded.close(); }
   const before = receiptKeys(f).length;
   const measured = processWrites(() => { const journal = new RuntimeJournal(f); expect(journal.isWritable()).toBe(true); journal.close(); });
   console.log(JSON.stringify({ boot: "cold-300k", durationMs: measured.durationMs, wchar: measured.wchar, syscw: measured.syscw, receiptsBefore: before, receiptsAfter: receiptKeys(f).length }));

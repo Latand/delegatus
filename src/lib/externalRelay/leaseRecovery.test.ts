@@ -25,7 +25,7 @@ afterAll(() => { accountManager.resolveHeadlessSpawn = originalSelection; fs.rmS
 
 function relay(apiBase: string): PairedRelay {
   return { id: "relay_recovery", origin: apiBase.replace(/\/v1$/, ""), api_base: apiBase, name: "Fixture", description: "",
-    credential: "x".repeat(43), owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    credential: "x".repeat(43), owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     pairedAt: "2026-01-01T00:00:00.000Z", paused: false,
     limits: { max_response_bytes: 1_048_576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true,

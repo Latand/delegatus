@@ -47,6 +47,7 @@ export type EphemeralAgentRequest = {
   hardCapMs: number;
   /** The engine's own native web search, the one tool a relay answer may use (relay.md §B.6). */
   webSearch?: boolean;
+  authorizeLaunch?(): void;
   inputImages?: readonly string[];
   inputFile?: string;
   imageGeneration?: { readableRoot: string; readableMediaRoot?: string };
@@ -482,11 +483,15 @@ export async function runEphemeralAgent(
       });
     },
   });
+  const launchAuthorized = () => {
+    request.authorizeLaunch?.();
+    return launch();
+  };
   let launched: ReturnType<typeof launchDetached>;
   try {
     if (request.engine === "codex") {
       const { waitForCodexProcess, withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
-      launched = await withCodexCliLaunch(request.runtime?.command ?? built.command, async () => launch(), async result => {
+      launched = await withCodexCliLaunch(request.runtime?.command ?? built.command, async () => launchAuthorized(), async result => {
         if (!result?.pid) return;
         try { await waitForCodexProcess(result.handle); }
         catch (error) {
@@ -495,7 +500,7 @@ export async function runEphemeralAgent(
           throw error;
         }
       });
-    } else launched = launch();
+    } else launched = launchAuthorized();
   } catch (error) {
     clearInterval(ticker);
     finish({ status: "failed", answer: null, durationMs: 0, code: null, signal: null });

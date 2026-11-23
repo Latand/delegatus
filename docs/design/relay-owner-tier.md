@@ -439,9 +439,9 @@ that the owner's request merely points at.
 | R2 | no requester block, or `null` | today's path |
 | R3 | `is_owner: false` (members, admins, the owner posting anonymously or as a channel) | today's path |
 | R4 | malformed requester block | `declined` / `invalid_request`, nothing launched (today) |
-| R5 | `is_owner: true` with `is_anonymous_admin: true` (cannot happen by the service's derivation; refused anyway) | today's path |
-| R6 | `respond_to` null, or naming no message in `conversation` | today's path |
-| R7 | the message answered was written by someone else (`author.key` ≠ `requester.key`) or by the assistant (`author.self`) | today's path |
+| R5 | `is_owner: true` with `is_anonymous_admin: true` (cannot happen by the service's derivation) | `declined` / `invalid_request` before any tool list or session (amended 2026-11-21) |
+| R6 | `respond_to` null, or naming no message in `conversation` | with a requester block: `declined` / `invalid_request` before any tool list or session (amended 2026-11-21); without one: today's path |
+| R7 | the message answered was written by someone else (`author.key` ≠ `requester.key`) or by the assistant (`author.self`) | `declined` / `invalid_request` before any tool list or session (amended 2026-11-21) |
 | R8 | a `compact` request | `runCompactRequest`, never an agent (`runner.ts:164-170`) |
 | R9 | relay paused, target disabled, not configured | today's declines (`runner.ts:238-242`) |
 | R10 | update drain | `declined` / `busy` (`runner.ts:269`, `:403`); the spawn lane holds too |

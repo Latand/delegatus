@@ -12,43 +12,48 @@ function canonical(value: unknown): string {
 export function largeJournal(filename: string, count = 300_000, options: { migrated?: boolean; missingNonEngineReceipts?: number; emptyReceipts?: boolean } = {}): void {
   new RuntimeJournal(filename).close();
   const db = new Database(filename, { strict: true });
-  db.exec("PRAGMA journal_mode=WAL; BEGIN IMMEDIATE");
+  // The seed is private and disposable. Write its pages once, then restore
+  // WAL before handing the database to a journal startup or succession test.
+  db.exec("PRAGMA journal_mode=MEMORY");
+  db.exec("PRAGMA synchronous=OFF");
+  db.exec("BEGIN IMMEDIATE");
+  // Bulk-build the real event indexes after inserting the history to avoid
+  // updating their trees on every insert. Preserve the journal's own DDL.
+  const eventIndexes = db.query<{ name: string; sql: string }, []>(
+    "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'events' AND sql IS NOT NULL ORDER BY name",
+  ).all();
+  for (const { name } of eventIndexes) db.exec(`DROP INDEX "${name.replaceAll('"', '""')}"`);
   const insert = db.query(`INSERT INTO events VALUES ($seq,$event_id,$scope,$revision,$kind,$payload_json,$created_at,$occurred_at,$recorded_at,$producer_kind,$producer_account_id,$producer_key,$producer_host_epoch,$operation_id,$causation_id,$correlation_id,$prev_hash,$hash)`);
   const receipt = db.query("INSERT INTO producer_receipts VALUES (?,?,?) ON CONFLICT(producer_kind,producer_key) DO UPDATE SET event_json=excluded.event_json");
   const latest = new Map<string, number>();
   const nonEngine = Math.max(Math.floor(count / 30), options.missingNonEngineReceipts ?? 0);
   const engineCount = count - nonEngine - Math.floor(count / 30);
   const payload = { conversationId: "conversation-fixture", turnId: "turn-fixture", text: "synthetic journal history ".repeat(7) };
+  const payloadJson = canonical(payload);
   const time = "2026-01-01T00:00:00.000Z";
-  const unsigned = {
-    seq: 0, event_id: "", scope: "session:conversation-fixture", revision: 0, kind: "fixture.history",
-    payload_json: canonical(payload), created_at: 1767225600000, occurred_at: time, recorded_at: time,
-    producer_kind: "", producer_account_id: null, producer_key: null as string | null,
-    producer_host_epoch: null, operation_id: null, causation_id: null, correlation_id: null,
-  };
-  // This row has only primitive values. Reuse its canonical key order for every hash.
-  const hashKeys = Object.keys(unsigned).sort((a, b) => a.localeCompare(b));
   const receiptEvent = (seq: number, kind: string, key: string) => canonical({
     schemaVersion: 1, seq, eventId: `event-${seq}`, scope: { type: "session", id: "conversation-fixture" },
-    revision: seq, kind: unsigned.kind, occurredAt: time, recordedAt: time,
+    revision: seq, kind: "fixture.history", occurredAt: time, recordedAt: time,
     producer: { kind, eventKey: key }, causationId: null, correlationId: null, payload,
   });
+  let hashFields: string[] | undefined;
   let previous = "0".repeat(64);
   for (let seq = 1; seq <= count; seq++) {
     const engine = seq <= engineCount;
     const prefix = `engine-host:codex:session-${seq % 400}:`;
     const producer_key = engine ? `${prefix}${seq}` : seq <= engineCount + nonEngine ? `native:op-${seq - engineCount}` : null;
     const producer_kind = engine ? "codex-app-server" : "viewer";
-    unsigned.seq = seq;
-    unsigned.revision = seq;
-    unsigned.event_id = `event-${seq}`;
-    unsigned.producer_kind = producer_kind;
-    unsigned.producer_key = producer_key;
-    const hash = createHash("sha256").update(`${previous}\n${JSON.stringify(unsigned, hashKeys)}`).digest("hex");
+    const unsigned = { seq, event_id: `event-${seq}`, scope: "session:conversation-fixture", revision: seq, kind: "fixture.history", payload_json: payloadJson, created_at: 1767225600000, occurred_at: time, recorded_at: time, producer_kind, producer_account_id: null, producer_key, producer_host_epoch: null, operation_id: null, causation_id: null, correlation_id: null };
+    // All unsigned columns are scalars; the payload column already contains canonical JSON.
+    hashFields ??= Object.keys(unsigned).sort();
+    const hash = createHash("sha256").update(`${previous}\n${JSON.stringify(unsigned, hashFields)}`).digest("hex");
     insert.run({ ...unsigned, prev_hash: previous, hash });
     previous = hash;
-    if (engine) latest.set(prefix, seq);
-    else if (producer_key && seq - engineCount > (options.missingNonEngineReceipts ?? 0)) receipt.run(producer_kind, producer_key, receiptEvent(seq, producer_kind, producer_key));
+    if (engine) {
+      latest.set(prefix, seq);
+    } else if (producer_key && seq - engineCount > (options.missingNonEngineReceipts ?? 0)) {
+      receipt.run(producer_kind, producer_key, receiptEvent(seq, producer_kind, producer_key));
+    }
   }
   for (const [prefix, seq] of latest) {
     const key = `${prefix}${seq}`;
@@ -62,7 +67,9 @@ export function largeJournal(filename: string, count = 300_000, options: { migra
   for (const [key, value] of [["seq", String(count)], ["published_seq", String(count)], ["hash", previous]]) db.query("UPDATE journal_meta SET value=? WHERE key=?").run(value!, key!);
   if (options.migrated) db.query("INSERT OR REPLACE INTO journal_meta VALUES (?,?)").run("producer_receipts_backfill_version", "1");
   if (!options.migrated) db.exec("DELETE FROM journal_meta WHERE key='producer_receipts_backfill_version'");
-  db.exec("COMMIT; PRAGMA wal_checkpoint(TRUNCATE)");
+  for (const { sql } of eventIndexes) db.exec(sql);
+  db.exec("COMMIT");
+  db.exec("PRAGMA journal_mode=WAL");
   db.close();
 }
 

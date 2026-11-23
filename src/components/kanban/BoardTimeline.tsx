@@ -1,10 +1,11 @@
 "use client";
 
-import { ChartGantt, ChevronLeft, ChevronRight, Flag, Minus, Plus } from "lucide-react";
+import { ArrowUpRight, ChartGantt, ChevronLeft, ChevronRight, Flag, Minus, Plus } from "lucide-react";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { BAR_CONTROL, BAR_OUTLINED, BAR_PRESSED } from "@/components/ProjectBar";
 import { useLocale } from "@/lib/i18n";
 import { projectTaskTimelines, type TaskTimeline, type TimelineAttempt, type TimelineMember } from "@/lib/board/taskTimeline";
+import { attemptWork, attemptWorkWindows, mergeWorkWindows } from "@/lib/board/attemptWork";
 import { HOUR, anchorShift, attemptSegment, clipSpan, compareTimelineRows, dueMark, pageTo, startWords, timelineDuration, timelineWindow, type DueMark } from "@/lib/board/taskTimelineView";
 import { formatDue } from "@/lib/tasks/helpers";
 import { timelineGroup, type KanbanCard, type TimelineGroup } from "./kanbanModel";
@@ -14,9 +15,14 @@ import type { Pipeline, PipelineRoleId } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import { STAGE_TONES, stageDisplayName, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { StageGlyph } from "./StageGlyph";
+import { useAttemptWork, loadAttemptWork, type WorkLoader, type WantedWork } from "./useAttemptWork";
 import { TIMELINE_HOURS, earlierKey, earlierOpen, groupKey, groupOpen, timelineExpanded, type TimelinePreference } from "./boardTimelineStore";
 
 const STILL_LONG_DAYS = DONE_TASK_BOARD_RETENTION_MS / 86_400_000;
+/** The width of the return control at the axis's right edge; the CSS reads it as `--bt-back`. */
+const BACK_WIDTH = 104;
+/** The room a flag's head needs to the right of its pole. */
+const FLAG_HEAD = 6;
 const chipState = (attempt: TimelineAttempt): StageChipState => attempt.state === "spawning" || attempt.stopped
   || !attempt.live && ["running", "reviewing", "committing"].includes(attempt.state) ? "pending" : attempt.state;
 // Offsets inside a row, from its top, where no text line is cut in two.
@@ -45,10 +51,17 @@ export function BoardTimelineToggle({ active, onToggle }: { active: boolean; onT
   </button>;
 }
 
-export function BoardTimeline({ project, cards, pipelines, members, nowMs, preference, onPreference, phone = false }: {
+/** What a stage row records of the conversation it ran in; the board's own open-conversation action takes it. */
+export interface AttemptConversation { conversationId: string | null; agentPath: string | null }
+
+export function BoardTimeline({ project, cards, pipelines, members, nowMs, preference, onPreference, phone = false, onOpenConversation, loadWork = loadAttemptWork }: {
   project: string; cards: readonly KanbanCard[]; pipelines: readonly Pipeline[]; nowMs: number;
   members?: readonly TimelineMember[];
   preference: TimelinePreference; onPreference: (patch: Partial<TimelinePreference>) => void; phone?: boolean;
+  /** Opens the conversation of a stage row, the way a stage chip on a card does. A row without one is not a control. */
+  onOpenConversation?: (target: AttemptConversation) => void;
+  /** Reads the turn windows behind a stage's working time; replaceable for tests. */
+  loadWork?: WorkLoader;
 }) {
   const { t, locale } = useLocale();
   const tasks = useMemo(() => cards.flatMap(card => card.task ? [card.task] : []), [cards]);
@@ -230,11 +243,24 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
       : attempt.state === "reviewing" ? t("timeline.reviewing") : t(`kanban.graphState.${chipState(attempt)}`);
   const elapsed = (start: number | null, end: number | null) => t("timeline.elapsed", { duration: duration(start, end) });
   // A task's start in words that do not depend on the window, with how long it has been open.
-  const since = (start: number | null, end: number | null) => start === null || end === null ? elapsed(null, null)
+  const since = (start: number | null, end: number | null) => start === null ? t("timeline.startUnknown") : end === null ? elapsed(null, null)
     : t("timeline.since", { start: startWords(start, nowMs, locale), duration: duration(start, end) });
+  const attemptIdentity = (attempt: TimelineAttempt) => attempt.conversationId || attempt.agentPath || null;
   const turnDuration = (attempt: TimelineAttempt) => attempt.observedTurn
     ? t("timeline.lastTurn", { duration: duration(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) })
     : t("timeline.workUnknown");
+  // The agent's own working time: the turn windows of its transcript, clipped to the attempt. Until the first read answers it says so,
+  // and when the transcript cannot be read it falls back to the one observed turn, labelled as such, or to «unknown».
+  const workOf = (attempt: TimelineAttempt) => {
+    const identity = attemptIdentity(attempt);
+    const read = identity ? workReads.get(identity) : undefined;
+    return { read, work: attemptWork(attempt, read?.work, nowMs), pending: !!identity && !read };
+  };
+  const workText = (attempt: TimelineAttempt) => {
+    const { work, pending } = workOf(attempt);
+    return work.kind === "known" ? t("timeline.worked", { duration: timelineDuration(work.ms, locale, t) })
+      : pending ? t("timeline.workLoading") : turnDuration(attempt);
+  };
   const tone = (attempt: TimelineAttempt) => STAGE_TONES[chipState(attempt)];
   // Engine identity stays constant when an attempt's outcome changes.
   const agentColor = (attempt: TimelineAttempt) => attempt.engine === "claude" ? "var(--color-claude)"
@@ -244,6 +270,8 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
     if (start === null || end === null || end < start || start > nowMs) return null;
     return clipSpan(start, Math.min(end, nowMs), view, laneWidth);
   };
+  // The live mark is a fixed number of pixels wide, its right edge on the now line; it never stands for a span of time.
+  const liveMark = (at: number) => at >= 0 && at <= laneWidth ? { width: phone ? 8 : 10, left: at - (phone ? 8 : 10) } : null;
   // A stage that ended before the window's left edge offers to page the window back to it.
   const hiddenBefore = (attempt: TimelineAttempt) => attempt.startedAtMs !== null && attempt.endAtMs !== null && attempt.endAtMs >= attempt.startedAtMs && attempt.startedAtMs <= nowMs
     && Math.min(attempt.endAtMs, nowMs) < view.start;
@@ -254,8 +282,17 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
   // A history control above the visible range grows a phone stage row, so the fitted viewport is measured again when the count changes.
   const earlierCount = shown.reduce((count, row) => timelineExpanded(preference, row.task.taskId) && earlierOpen(preference, row.task.taskId)
     ? count + [...row.task.pipelines.flatMap(pipeline => pipeline.attempts), ...row.task.agents].filter(hiddenBefore).length : count, 0);
+  // The working time of every open stage row is read from its transcript; closed tasks cost nothing.
+  const wanted: WantedWork[] = shown.flatMap(row => timelineExpanded(preference, row.task.taskId)
+    ? [...row.task.pipelines.flatMap(pipeline => pipeline.attempts), ...row.task.agents].flatMap(attempt => {
+      const identity = attemptIdentity(attempt);
+      return identity ? [{ identity, settled: !attempt.live && attempt.endAtMs !== null }] : [];
+    }) : []);
+  const workReads = useAttemptWork(wanted, nowMs, loadWork);
+  // A read that lands rewrites a stage row's words and fill, so the fitted viewport is measured again, without moving a chart someone scrolled.
+  useLayoutEffect(() => fit(false), [fit, workReads]);
   useLayoutEffect(() => fit(false), [fit, earlierCount]);
-  // The axis grows a row for the return control while the window is paged back.
+  // Paging back changes which phone stage rows carry the «‹ date» lane, and so their height.
   useLayoutEffect(() => fit(true), [fit, view.paged]);
   const nowLine = nowX >= 0 && nowX <= laneWidth ? <i className="bt-now" style={{ left: nowX }} aria-hidden /> : null;
   const stepHours = [1, 3, 6, 12, 24, 48, 72, 168].find(hours => hours * HOUR * pxPerMs >= 44) ?? 168;
@@ -298,7 +335,8 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
     if (mark.place === "in") return <>
       <div className="bt-due-slot"><span className="bt-due-words text-label" data-timeline-due={tone} title={title}
         style={{ marginLeft: mark.x, transform: `translateX(-${anchorShift(mark.x, laneWidth)}%)` }}>{words}</span></div>
-      <i className="bt-flag" data-timeline-flag={tone} style={{ left: mark.x }} aria-hidden />
+      <i className="bt-flag" data-timeline-flag={tone} data-flag-head={mark.x > laneWidth - FLAG_HEAD - 1 ? "left" : undefined}
+        style={{ left: Math.min(Math.max(1, mark.x), laneWidth - 1) }} aria-hidden />
     </>;
     return <div className="bt-due-slot"><span className={`bt-due-words bt-due-edge text-label${mark.place === "after" ? " bt-due-right" : ""}`} data-timeline-due-edge={mark.place === "before" ? "left" : "right"} data-timeline-due={tone} title={title}>
       {mark.place === "before" ? <><ChevronLeft size={11} aria-hidden /><Flag size={11} aria-hidden />{words}</> : <>{words}<Flag size={11} aria-hidden /><ChevronRight size={11} aria-hidden /></>}
@@ -317,6 +355,10 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
     const foldOpen = earlierOpen(preference, task.taskId);
     const foldEnd = folded.reduce((latest, attempt) => Math.max(latest, Math.min(attempt.endAtMs!, nowMs)), 0);
     const foldWords = t("timeline.earlierStages", { count: folded.length, end: `${date(foldEnd)} ${time(foldEnd)}` });
+    // A working card the projection found no lane or turn for: its row still says that someone works.
+    const bare = !attempts.length && card.working > 0;
+    const liveAttempt = attempts.find(attempt => attemptSegment(attempt, nowMs)?.kind === "live");
+    const liveBox = liveAttempt || bare ? liveMark(nowX) : null;
     const lineSpan = task.startedAtMs !== null && task.startedAtMs <= nowMs ? clipSpan(task.startedAtMs, nowMs, view, laneWidth, 0) : null;
     const clipped = task.startedAtMs !== null && task.startedAtMs < view.start;
     return <Fragment key={task.taskId}>
@@ -328,9 +370,9 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
             <span className="bt-text"><span className="bt-title">{title}</span>{" "}
               <span className="bt-meta">
                 <span data-timeline-since="">{since(task.startedAtMs, task.endAtMs)}</span>{" "}
-                {stages.length || !task.agents.length ? <><span>{t("timeline.stages", { count: stages.length })}</span>{" "}</> : null}
-                {task.agents.length ? <><span>{t("mobile2.kanban.agents", { count: task.agents.length })}</span>{" "}</> : null}
-                {open ? null : current ? <span>{name(current)} · {stateWord(current)}</span> : <span>{t("timeline.waiting")}</span>}
+                {!bare && (stages.length || !task.agents.length) ? <><span>{t("timeline.stages", { count: stages.length })}</span>{" "}</> : null}
+                {task.agents.length || bare ? <><span>{t("mobile2.kanban.agents", { count: bare ? card.working : task.agents.length })}</span>{" "}</> : null}
+                {open ? null : current ? <span>{name(current)} · {stateWord(current)}</span> : bare ? <span>{t("kanban.graphState.running")}</span> : <span>{t("timeline.waiting")}</span>}
               </span>
             </span>
           </button>
@@ -343,17 +385,19 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
             {clipped && lineSpan ? <ChevronLeft className="bt-clip-glyph" size={11} aria-hidden /> : null}
             {attempts.map(attempt => {
               const segment = attemptSegment(attempt, nowMs);
-              if (!segment) return null;
+              if (!segment || segment.kind === "live") return null;
               const common = { "data-timeline-segment": "", "data-start-ms": segment.startMs, "data-end-ms": segment.kind === "span" ? segment.endMs : undefined };
               if (segment.kind === "tick") {
                 const box = clipSpan(segment.startMs, segment.startMs, view, laneWidth, 3);
                 return box ? <span key={`s${attempt.key}`} {...common} data-timeline-tick="" className="bt-segment" style={{ left: box.left, width: 3, background: tone(attempt).color }}
-                  title={`${name(attempt)} · ${t("timeline.endUnknown")}`} /> : null;
+                  title={attempt.endAtMs === null ? `${name(attempt)} · ${t("timeline.endUnknown")}` : `${name(attempt)} · ${stateWord(attempt)} · ${elapsed(attempt.startedAtMs, attempt.endAtMs)}`} /> : null;
               }
               const box = clipSpan(segment.startMs, segment.endMs, view, laneWidth);
               return box ? <span key={`s${attempt.key}`} {...common} className="bt-segment" style={{ left: box.left, width: box.width, background: tone(attempt).color }}
                 title={`${name(attempt)} · ${stateWord(attempt)} · ${elapsed(attempt.startedAtMs, attempt.endAtMs)}`} /> : null;
             })}
+            {liveBox ? <span className="bt-live-mark" data-timeline-live="" style={{ left: liveBox.left, width: liveBox.width, background: `linear-gradient(to right, transparent, ${liveAttempt ? tone(liveAttempt).color : STAGE_TONES.running.color})` }}
+              title={`${liveAttempt ? name(liveAttempt) : t("mobile2.kanban.agents", { count: card.working })} · ${t("kanban.graphState.running")} · ${t("timeline.startUnknown")}`} /> : null}
             {attempts.map(attempt => {
               const bounds = attempt.observedTurn ? bar(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) : null;
               if (!bounds) return null;
@@ -375,24 +419,40 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
       </div> : null}
       {open ? attempts.filter(attempt => foldOpen || !folded.includes(attempt)).map(attempt => {
         const bounds = bar(attempt.startedAtMs, attempt.endAtMs);
-        const work = attempt.observedTurn ? bar(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) : null;
+        // The fill is the agent's turn time from its transcript; one observed turn stands in until that is read, and when it cannot be.
+        const found = workOf(attempt);
+        const turns = attemptWorkWindows(attempt, found.read?.work, nowMs);
+        const observedBox = attempt.observedTurn ? bar(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) : null;
+        const works = turns ? mergeWorkWindows(turns, 2 / pxPerMs).flatMap(([from, to]) => {
+          const box = clipSpan(from, to, view, laneWidth, 2);
+          return box ? [{ ...box, startMs: from, endMs: to }] : [];
+        }) : attempt.observedTurn && observedBox ? [{ ...observedBox, startMs: attempt.observedTurn.startedAtMs, endMs: attempt.observedTurn.endAtMs }] : [];
+        const target = onOpenConversation && attemptIdentity(attempt) ? { conversationId: attempt.conversationId, agentPath: attempt.agentPath } : null;
         const model = attempt.engine && attempt.model ? { engine: attempt.engine, model: attempt.model } : null;
         const earlier = hiddenBefore(attempt);
         // A start without an end draws the same 3 px tick the task row draws.
         const segment = attemptSegment(attempt, nowMs);
-        const tickBox = segment?.kind === "tick" ? clipSpan(segment.startMs, segment.startMs, view, laneWidth, 3) : null;
-        return <div className="bt-row bt-stage" key={attempt.key} data-timeline-attempt={attempt.key} data-live={attempt.live ? "1" : "0"} data-earlier={earlier ? "1" : "0"}>
-          <div className="bt-label">
-            <div className="bt-stage-name text-body font-semibold text-primary"><StageGlyph state={chipState(attempt)} model={model} fallback="mark" badge={false} live={attempt.live} /><span>{name(attempt)}</span></div>
-            <div className="bt-meta text-label text-secondary"><span>{stateWord(attempt)}</span><span>{elapsed(attempt.startedAtMs, attempt.endAtMs)}</span><span>{turnDuration(attempt)}</span></div>
+        // A waiting stage has a lifecycle box and no tick; only a start with no lifecycle end draws one.
+        const tickBox = segment?.kind === "tick" && attempt.endAtMs === null ? clipSpan(segment.startMs, segment.startMs, view, laneWidth, 3) : null;
+        const stageLive = segment?.kind === "live" ? liveMark(nowX) : null;
+        // The whole row opens the stage's conversation; the label is its keyboard stop, and the earlier-work button keeps its own click.
+        const open = target ? () => onOpenConversation!(target) : null;
+        return <div className="bt-row bt-stage" key={attempt.key} data-timeline-attempt={attempt.key} data-live={attempt.live ? "1" : "0"} data-earlier={earlier ? "1" : "0"} data-openable={open ? "1" : undefined}
+          onClick={open ? event => { if (!(event.target as Element).closest("button")) open(); } : undefined}>
+          <div className="bt-label" {...(open ? { role: "button", tabIndex: 0, "data-timeline-open": "", "aria-label": t("timeline.openAttempt", { stage: name(attempt) }),
+            onKeyDown: (event: KeyboardEvent<HTMLElement>) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open(); } } } : {})}>
+            <div className="bt-stage-name text-body font-semibold text-primary"><StageGlyph state={chipState(attempt)} model={model} fallback="mark" badge={false} live={attempt.live} /><span>{name(attempt)}</span>{open ? <ArrowUpRight size={13} className="bt-open-cue" data-timeline-open-cue="" aria-hidden /> : null}</div>
+            <div className="bt-meta text-label text-secondary"><span>{stateWord(attempt)}</span><span data-timeline-work-time={found.work.kind === "known" ? "known" : found.pending ? "loading" : "unknown"}>{workText(attempt)}</span><span data-timeline-wall="">{elapsed(attempt.startedAtMs, attempt.endAtMs)}</span></div>
             <div className="bt-runtime text-caption text-secondary">{[attempt.engine, attempt.model].filter(Boolean).join(" · ")}</div>
           </div>
           {lane(<>
             {bounds ? <>
-            <span className="bt-stage-bar" data-timeline-bar="" data-start-ms={attempt.startedAtMs ?? undefined} data-end-ms={attempt.endAtMs ?? undefined} style={{ ...bounds, background: "transparent", borderColor: `color-mix(in srgb, ${tone(attempt).color} 60%, transparent)` }} title={`${name(attempt)} · ${elapsed(attempt.startedAtMs, attempt.endAtMs)} · ${turnDuration(attempt)}`} />
-            {work ? <span className="bt-stage-work" data-timeline-work="" data-start-ms={attempt.observedTurn?.startedAtMs} data-end-ms={attempt.observedTurn?.endAtMs} style={{ ...work, background: agentColor(attempt) }} title={turnDuration(attempt)} /> : null}
+            <span className="bt-stage-bar" data-timeline-bar="" data-start-ms={attempt.startedAtMs ?? undefined} data-end-ms={attempt.endAtMs ?? undefined} style={{ ...bounds, background: "transparent", borderColor: `color-mix(in srgb, ${tone(attempt).color} 60%, transparent)` }} title={`${name(attempt)} · ${workText(attempt)} · ${elapsed(attempt.startedAtMs, attempt.endAtMs)}`} />
+            {works.map(work => <span key={work.startMs} className="bt-stage-work" data-timeline-work="" data-start-ms={work.startMs} data-end-ms={work.endMs} style={{ left: work.left, width: work.width, background: agentColor(attempt) }} title={workText(attempt)} />)}
             </> : null}
-            {tickBox && segment ? <span className="bt-segment bt-stage-tick" data-timeline-tick="" data-start-ms={segment.startMs} style={{ left: tickBox.left, width: 3, background: tone(attempt).color }}
+            {stageLive ? <span className="bt-live-mark bt-stage-live" data-timeline-live="" style={{ left: stageLive.left, width: stageLive.width, background: `linear-gradient(to right, transparent, ${tone(attempt).color})` }}
+              title={`${name(attempt)} · ${stateWord(attempt)} · ${t("timeline.startUnknown")}`} /> : null}
+            {tickBox && segment && segment.kind === "tick" ? <span className="bt-segment bt-stage-tick" data-timeline-tick="" data-start-ms={segment.startMs} style={{ left: tickBox.left, width: 3, background: tone(attempt).color }}
               title={`${name(attempt)} · ${t("timeline.endUnknown")}`} /> : null}
             {earlier ? <button type="button" className="bt-earlier text-label text-secondary" style={{ left: 6 }}
               aria-label={t("timeline.reveal", { stage: name(attempt) })} onClick={() => setPaged({ key: pageKey, end: pageTo(view.liveEnd, preference.hours, attempt.startedAtMs!) })}>‹ {date(attempt.startedAtMs!)} {time(attempt.startedAtMs!)}</button> : null}
@@ -443,16 +503,17 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
         if (state.active) { previousTop.current = element.scrollTop; state.placed = true; return; }
         fitRows();
       }}>
-      <div style={{ width: laneWidth + labelWidth, "--bt-label": `${labelWidth}px`, "--bt-phone-width": `${viewport}px` } as CSSProperties}>
+      <div style={{ width: laneWidth + labelWidth, "--bt-label": `${labelWidth}px`, "--bt-back": `${BACK_WIDTH}px`, "--bt-phone-width": `${viewport}px` } as CSSProperties}>
         <div className="bt-axis" data-paged={view.paged ? "1" : undefined}>
           {phone ? null : <div className="bt-axis-label text-label text-secondary">{t("timeline.task")}</div>}
           <div className="bt-axis-lane" style={{ width: laneWidth }}>
             {days.map(day => {
               const left = Math.max(x(day.start), 0);
               const right = Math.min(x(day.end), laneWidth);
-              return right - left >= 52 && left + 5 + 52 <= laneWidth ? <span className="bt-day text-caption text-secondary" key={day.start} style={{ left: left + 5 }}>{date(day.start)}</span> : null;
+              // On the phone the return control spans both axis rows, so a day label gives way to it.
+              return right - left >= 52 && left + 5 + 52 <= laneWidth && !(phone && view.paged && left + 5 + 52 > laneWidth - BACK_WIDTH) ? <span className="bt-day text-caption text-secondary" key={day.start} style={{ left: left + 5 }}>{date(day.start)}</span> : null;
             })}
-            {ticks.filter(ms => x(ms) >= 0 && x(ms) + 40 <= laneWidth && (nowLabelLeft === null || x(ms) + 40 <= nowLabelLeft - 46 || x(ms) >= nowLabelLeft + 46)).map(ms => <span className="bt-tick text-caption text-muted" key={ms} style={{ left: x(ms) }}>{time(ms)}</span>)}
+            {ticks.filter(ms => x(ms) >= 0 && x(ms) + 40 <= (view.paged ? laneWidth - BACK_WIDTH : laneWidth) && (nowLabelLeft === null || x(ms) + 40 <= nowLabelLeft - 46 || x(ms) >= nowLabelLeft + 46)).map(ms => <span className="bt-tick text-caption text-muted" key={ms} style={{ left: x(ms) }}>{time(ms)}</span>)}
             {nowLabelLeft !== null ? <span data-timeline-now-label="" className="bt-now-label text-caption font-semibold text-accent"
               style={{ left: nowLabelLeft }}>{t("timeline.now")} {time(nowMs)}</span> : null}
             {view.paged ? <button type="button" data-timeline-now-label="" data-timeline-back="" className="bt-now-back text-caption font-semibold text-accent" aria-label={t("timeline.backToNow")} title={t("timeline.backToNow")}

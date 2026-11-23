@@ -9,6 +9,17 @@ export const fingerprint = (value: unknown) => createHash("sha256").update(JSON.
 export function fileFingerprint(file: string): string {
   return existsSync(file) && statSync(file).isFile() ? createHash("sha256").update(readFileSync(file)).digest("hex") : "missing";
 }
+
+/** The Bash wrappers read this file before launching the gate or comparator.
+ * Bind the file behind startup effects such as umask and resource limits. */
+export function shellStartupFingerprint(root: string, startup: string | undefined): string | null {
+  if (!startup) return null;
+  const file = realpathSync(path.resolve(root, startup));
+  const stat = statSync(file);
+  const bytes = fileFingerprint(file);
+  if (!stat.isFile() || bytes === "missing") throw new Error("BASH_ENV is not a readable file");
+  return fingerprint([startup, file, stat.dev, stat.ino, bytes]);
+}
 /** Include installed bytes: a lockfile alone cannot detect an edited compiler
  * or plugin. Bounded traversal follows package links, including an external
  * dependency directory, while breaking cycles. Hash large files in chunks.
@@ -89,7 +100,7 @@ export function gateToolFiles(root: string): string[] {
 
 /** Isolation replaces these before a check reads them, or they only record
  * how this process was started. */
-const ROOTS = new Set(["HOME", "BASH_ENV", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "TMPDIR", "LLV_GATE_TEMP_ROOT", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
+const ROOTS = new Set(["HOME", "BASH_ENV", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_GATE_TEMP_ROOT", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
   "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "NODE_ENV", "LLV_VIEWER_CONTROL_URL"]);
 const BOOKKEEPING = new Set(["PWD", "OLDPWD", "SHLVL", "_", "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "MANAGERPID",
   "TERM", "COLORTERM", "PAGER", "GIT_PAGER", "GH_PAGER", "NO_COLOR", "FORCE_COLOR"]);
@@ -101,7 +112,7 @@ const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIO
 const IDENTITY = /^GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)$/;
 /** Admission, placement and the signal boundary decide where and when a check
  * runs, never what it checks. The boundary's host epoch is keyed instead. */
-const TRANSPORT = /^(?:LLV_DESTRUCTIVE_GUARD_[A-Z_]+|LLV_SIGNAL_SANDBOX|LLV_CHECK_(?:BROKER|ADMISSION_FILE)|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|DELEGATUS_(?:GATE_CPU_HEADROOM|CHECK_(?:ADMISSION_OWNER|BROKER))|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
+const TRANSPORT = /^(?:LLV_DESTRUCTIVE_GUARD_[A-Z_]+|LLV_SIGNAL_SANDBOX|LLV_CHECK_(?:BROKER|ADMISSION_FILE)|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|DELEGATUS_(?:GATE_CPU_HEADROOM|CHECK_(?:ADMISSION_OWNER|BROKER))|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
 const declaredInputs = (env: Partial<NodeJS.ProcessEnv>) => new Set((env.LLV_GATE_CHECK_ENV ?? "").split(",").map(name => name.trim()).filter(Boolean));
 
 /** One environment for every reusable check, whoever starts the hook: a stage
@@ -148,12 +159,17 @@ export function hostEpoch(env: Partial<NodeJS.ProcessEnv>): string {
 /** Key everything that reaches a check from `env`, which is either a
  * checkEnvironment result or a test comparison's own inherited environment:
  * values for inputs, presence for a commit identity, the host epoch for the
- * signal boundary and the bytes of explicit Git configuration files.
+ * signal boundary and the bytes of explicit Git configuration files. An
+ * explicit declaration also binds inputs that normally serve as transport.
  */
 export function environmentFingerprint(env: Partial<NodeJS.ProcessEnv>): string {
-  const inputs = Object.entries(env).filter(([name, value]) => value !== undefined && !ROOTS.has(name) && !BOOKKEEPING.has(name)
-    && !IDENTITY.test(name) && (KEYED.test(name) || !TRANSPORT.test(name))
-    && !/^(?:GIT_CONFIG(?:_COUNT|_PARAMETERS)?|GIT_CONFIG_(?:KEY|VALUE)_\d+|LLV_PRIVACY_[A-Z0-9_]+)$/.test(name))
+  const declared = declaredInputs(env);
+  const inputs = Object.entries(env).filter(([name, value]) => {
+    if (value === undefined || ROOTS.has(name) || name === "LLV_SIGNAL_SANDBOX" || name.startsWith("LLV_GATE_PUBLICATION_")
+      || /^(?:GIT_CONFIG(?:_COUNT|_PARAMETERS)?|GIT_CONFIG_(?:KEY|VALUE)_\d+)$/.test(name)) return false;
+    return declared.has(name) || (!BOOKKEEPING.has(name) && !IDENTITY.test(name) && !/^LLV_PRIVACY_[A-Z0-9_]+$/.test(name)
+      && (KEYED.test(name) || !TRANSPORT.test(name)));
+  })
     .map(([name, value]) => [name, name === "PATH" ? checkEnvironment({ PATH: value, LLV_AGENT_FORGE_DIR: env.LLV_AGENT_FORGE_DIR }).PATH : value])
     .filter(([name]) => name !== "LLV_AGENT_FORGE_DIR")
     .sort(([a], [b]) => a!.localeCompare(b!));

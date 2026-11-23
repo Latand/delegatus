@@ -28,6 +28,8 @@ import { NoCopilotAccountError, UnknownCopilotAccountError } from "@/lib/account
 import { agentRegistry, prepareAgentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnLauncher, type SpawnRequest } from "@/lib/agent/registry";
 import { reasoningFromBody } from "@/lib/agent/efforts";
 import { guardedDiskCleanerProfile } from "./cleanerLaunchPolicy";
+import { ownerRelayHandoffSpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
+import { scheduledCleanerRunProvenance } from "@/lib/cleaner/store";
 import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHEDULED_REPORT_SESSION_CLASS, type McpSessionClass } from "@/lib/agent/mcpAllowlist";
 import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUGINS, sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
@@ -102,6 +104,8 @@ const PIN_FALLBACK_TITLE_UK_MESSAGE = uk["spawnCard.pinUnavailableFallback"];
 const PIN_FALLBACK_TITLE_UK = typeof PIN_FALLBACK_TITLE_UK_MESSAGE === "string"
   ? PIN_FALLBACK_TITLE_UK_MESSAGE
   : PIN_FALLBACK_TITLE_EN;
+
+class CleanerDrainHold extends Error {}
 
 /** Viewer-authored task titles follow the operator's interface language
     (docs/design/orchestrator-reports.md §3.5, §4.2). The request's
@@ -372,7 +376,7 @@ export function spawnLauncherFor(
   return { value: null };
 }
 
-type SpawnCommandBody = { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; inheritedServiceTier?: unknown; account?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown };
+type SpawnCommandBody = { engine?: unknown; model?: unknown; cwd?: unknown; prompt?: unknown; title?: unknown; images?: unknown; src?: unknown; parent?: unknown; parentConversationId?: unknown; effort?: unknown; fast?: unknown; serviceTier?: unknown; inheritedServiceTier?: unknown; account?: unknown; accountId?: unknown; clientAttemptId?: unknown; taskId?: unknown; role?: unknown; roleParams?: unknown; confirm?: unknown; reviews?: unknown; allowSubagents?: unknown; mcpServers?: unknown; plugins?: unknown; project?: unknown; supersedes?: unknown; launcherConversationId?: unknown; notifyLauncher?: unknown; ownerRelayHandoffOnly?: unknown };
 
 export async function executeSpawnRequest(
   req: NextRequest,
@@ -566,6 +570,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   if (agentInitiated && body.allowSubagents === true && authenticatedCaller?.kind !== "operator") {
     return NextResponse.json({ error: "allowSubagents requires an authenticated Viewer operator spawn" }, { status: 403 });
   }
+  const ownerRelayHandoffOnly = body.ownerRelayHandoffOnly === true;
+  if (body.ownerRelayHandoffOnly !== undefined && typeof body.ownerRelayHandoffOnly !== "boolean")
+    return NextResponse.json({ error: "ownerRelayHandoffOnly must be a boolean" }, { status: 400 });
   /* Explicit project ownership (issue #315): a deliberate operator decision,
      validated here and admitted as the conversation's durable projectOwnership.
      Sidebar selection or worker-initiated spawns never create ownership. */
@@ -707,6 +714,12 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         || (typeof body.reviews === "string" && Boolean(body.reviews.trim()));
     const parentSource = parent ? (bodyCarriedSelector ? "explicit" as const : "inferred-caller" as const) : null;
     const parentConversationId = parent?.conversationId ?? null;
+    if (ownerRelayHandoffOnly && (dependencies.autonomousStructured !== true
+      || !ownerRelayHandoffSpawnAuthorized(typeof body.clientAttemptId === "string" ? body.clientAttemptId : null)
+      || body.allowSubagents === true || requestedPlugins.value?.length
+      || requestedMcpServers && requestedMcpServers.some(name => name !== "viewer"))) {
+      return NextResponse.json({ error: "owner relay handoff spawn is not authorized or exceeds its tool grant" }, { status: 403 });
+    }
     const pipelineSourceConversationId = typeof body.src === "string" && body.src.trim()
       ? parentConversationId
       : null;
@@ -787,7 +800,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
        and a plugin is a channel outside it. */
     const plugins = reportClassGrant
       ? [...SCHEDULED_REPORT_PLUGINS]
-      : pluginAllowlistForSession({
+      : ownerRelayHandoffOnly ? [] : pluginAllowlistForSession({
         engine,
         origin: sessionOrigin,
         requested: requestedPlugins.value,
@@ -797,7 +810,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
        keep the Viewer baseline. This is the request as it was asked, which is
        what an attempt is matched by when it is replayed; the launch itself
        takes {@link grantedServers}. */
-    const requestedServers = requestedTelegram && (existingAttempt || (telegramLeftOut && !reportClassGrant))
+    const requestedServers = ownerRelayHandoffOnly ? ["viewer"]
+      : requestedTelegram && (existingAttempt || (telegramLeftOut && !reportClassGrant))
       ? grantedMcpServers(requestedMcpServers ?? [])
       : existingAttempt && implicitRootTelegram && !reportClassGrant
       ? existingAttempt.launchProfile.mcpServers
@@ -808,7 +822,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       : (seatLaunch || requestedSeatGrant) && requestedTelegram
         ? grantedMcpServers(requestedMcpServers)
       : mcpServersForSession({ origin: sessionOrigin, requested: requestedMcpServers });
-    const grantedServers = telegramLeftOut ? requestedServers.filter((name) => name !== "telegram") : requestedServers;
+    const grantedServers = ownerRelayHandoffOnly ? ["viewer"]
+      : telegramLeftOut ? requestedServers.filter((name) => name !== "telegram") : requestedServers;
     const requestDigestForAccount = (accountId: string, preserveOperationalTitleReplay = false) => {
       const digests = spawnRequestDigests({
         engine,
@@ -823,6 +838,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         mcpServers: requestedServers,
         ...(plugins.length ? { plugins } : {}),
         ...(body.allowSubagents === true ? { allowSubagents: true } : {}),
+        ...(ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
         ...(explicitProject ? { project: explicitProject } : {}),
         parent: spawnParentSelector({ parentConversationId: parentConversationId ?? undefined }),
         ...(reviewedConversationId ? { reviews: spawnParentSelector({ parentConversationId: reviewedConversationId }) } : {}),
@@ -900,6 +916,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       launcher: launcher.value,
       launchProfile,
       clientAttemptId,
+      scheduledCleanerRunId: scheduledCleanerRunProvenance(clientAttemptId, body),
       requestDigest,
       ...(taskIds?.length ? { taskIds } : {}),
       /* Durable launch DISPLAY payload (issue #614/#615): the RAW operator
@@ -1076,7 +1093,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       title: string | null,
     ) => {
       const specBase = freshSpecFor(engine, cwd, {
-        ...(diskCleaner ? { readOnly: true } : {}),
+        ...(diskCleaner || ownerRelayHandoffOnly ? { readOnly: true } : {}),
         ...(engine === "codex" ? { omitSkillsInstructions: sessionOrigin === "delegated" } : {}),
         model: selectedModel.model,
         effort: reasoning.effort,
@@ -1100,11 +1117,12 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         ...specBase,
         launchProfile: emptyLaunchProfile({
           ...(specBase.launchProfile ?? {}),
-          ...(diskCleaner ? { sandbox: "restricted", permissionMode: "never" } : {}),
+          ...(diskCleaner || ownerRelayHandoffOnly ? { sandbox: "restricted", permissionMode: "never" } : {}),
+          ...(ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
           cwd,
           parentConversationId,
           ...(workspacePrincipal ? { workspace: workspacePrincipal } : {}),
-          allowSubagents: body.allowSubagents === true,
+          allowSubagents: ownerRelayHandoffOnly ? false : body.allowSubagents === true,
           mcpServers: grantedServers,
           plugins,
           permissionMode,
@@ -1333,8 +1351,21 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             && Boolean(receipt.admissionOwner && current.admissionOwner
               && sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)),
         });
+        const releaseCleanerAdmission = async () => {
+          if (!diskCleaner || !dependencies.autonomousAdmissionHeld?.()) return false;
+          while (true) {
+            const current = registry.spawnReceipt(receipt.launchId);
+            if (current?.state !== "starting" || !current.admissionOwner || !receipt.admissionOwner
+              || !sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)) return true;
+            const released = await registry.deliveryWrite({ label: "spawn.cleaner-drain-hold" }, () =>
+              registry.releaseSpawnActuation(receipt.launchId, receipt.admissionOwner!));
+            if (released.acquired) return true;
+            await new Promise(resolve => setTimeout(resolve, 25));
+          }
+        };
         try { authorizeLaunch(receipt); }
         catch {
+          if (await releaseCleanerAdmission()) return;
           await failOwnedAdmission("autonomous launch authorization revoked");
           return;
         }
@@ -1359,6 +1390,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             }
             try { authorizeLaunch(receipt); }
             catch {
+              if (await releaseCleanerAdmission()) throw new CleanerDrainHold("cleaner launch held by update drain");
               await failOwnedAdmission("autonomous launch authorization revoked");
               throw new Error("autonomous launch authorization revoked");
             }
@@ -1372,7 +1404,15 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
                 imageRefs,
                 registry,
                 client: runtimeClient,
-                authorize: () => authorizeLaunch(receipt),
+                authorize: () => {
+                  try { authorizeLaunch(receipt); }
+                  catch (error) {
+                    if (diskCleaner && dependencies.autonomousAdmissionHeld?.()) {
+                      throw new CleanerDrainHold("cleaner launch held by update drain", { cause: error });
+                    }
+                    throw error;
+                  }
+                },
               });
             } catch (error) {
               // The launcher may already have settled its own failure. That
@@ -1386,6 +1426,10 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
           }, dependencies.runtimeAdmissionRetry);
           await recordActualSpawnAccountOffLoop(registry, receipt, launchAccount.accountId, response.path);
         } catch (error) {
+          if (error instanceof CleanerDrainHold) {
+            await releaseCleanerAdmission();
+            return;
+          }
           spawnDiagnosticError("[spawn] structured launch failed", {
             launchId: receipt.launchId,
             conversationId: receipt.conversationId,

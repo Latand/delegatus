@@ -232,6 +232,11 @@ export function readAttentionDismissals(filePath = attentionDismissalsFile(), no
   return file.updatedAt ? file : { ...file, updatedAt: now.toISOString() };
 }
 
+/** A task patch can resolve its decision form while holding the task writer. */
+export function readExistingAttentionDismissals(filePath = attentionDismissalsFile()): AttentionDismissalsFileV1 {
+  return dismissalsStore.readExisting(filePath);
+}
+
 /** Each conversation's dismissal, by durable id and by transcript path, for
     the `/api/files` projection. */
 export function attentionDismissalIndex(file: AttentionDismissalsFileV1 = readAttentionDismissals(), includeRestored = false): Map<string, AttentionDismissalV1> {
