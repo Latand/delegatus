@@ -152,7 +152,7 @@ test.each(["before-dispatch", "after-success"] as const)(
       h.ports.resolveProjectSpawn = (engine, request) => {
         selectionRequests.push(request);
         const selection = selectProjectAccount({ ...request, engine, accounts, observations, now,
-          bindings: accounts.map(({ id }) => ({ project: lane.project!, engine, accountId: id, createdAt: new Date(now).toISOString() })) });
+          bindings: engine === "antigravity" ? [] : accounts.map(({ id }) => ({ project: lane.project!, engine, accountId: id, createdAt: new Date(now).toISOString() })) });
         return selection.kind === "available" ? { kind: "available", account: { engine, accountId: selection.accountId!, kind: "managed",
           home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } } : selection;
       };
