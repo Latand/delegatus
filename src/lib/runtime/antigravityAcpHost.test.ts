@@ -1265,5 +1265,34 @@ describe("AntigravityAcpHost", () => {
     expect(replay).toEqual({ outcome: "turn-started", turnId: altTurn });
     expect(outboundPrompts.length - promptsBefore).toBe(0);
     await host.release();
+
+    // 5. Held BEGIN IMMEDIATE write lock on shared delivery-acceptance.sqlite MUST NOT stall
+    //    the event loop during adopt()/start() — fail fast on SQLITE_BUSY and fall back to JSONL.
+    const { Database } = await import("bun:sqlite");
+    const indexPath = path.join(antigravityHome, "delivery-acceptance.sqlite");
+    const blocker = new Database(indexPath);
+    blocker.exec("BEGIN IMMEDIATE");
+    try {
+      const startAt = performance.now();
+      let timerFiredAt = 0;
+      const timerDone = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          timerFiredAt = performance.now() - startAt;
+          resolve();
+        }, 15);
+      });
+      const contended = await AntigravityAcpHost.adopt(forkSessionId, makeOpts());
+      const adoptMs = performance.now() - startAt;
+      await timerDone;
+      expect(adoptMs).toBeLessThan(200);
+      expect(timerFiredAt).toBeLessThan(150);
+      // Fallback ledger lookup still proves `alternate-middle` materialized and `old-middle` absent.
+      expect(await contended.sessionMaterializationEvidence("alternate-middle")).toEqual({ state: "materialized" });
+      expect((await contended.sessionMaterializationEvidence("old-middle")).state).toBe("absent");
+      await contended.release();
+    } finally {
+      blocker.exec("ROLLBACK");
+      blocker.close();
+    }
   });
 });
