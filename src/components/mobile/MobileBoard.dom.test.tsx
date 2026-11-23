@@ -138,7 +138,7 @@ const OVERRIDES: Record<string, unknown> = {
        the footer seats one first. */
     if (url.startsWith("/api/orchestrator/seat")) {
       seatReads += 1;
-      return jsonResponse({ seat: seatAnswer, pending: null, exists: true });
+      return Response.json({ seat: seatAnswer, pending: null, exists: true });
     }
     if (url.startsWith("/api/limits")) return { ok: false, status: 503, json: async () => ({}), text: async () => "" };
     return jsonResponse({});

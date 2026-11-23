@@ -101,7 +101,7 @@ test.each(["bin/guide.md", "src/runtime-host/guide.md"])("runtime prose plans ex
 test("cold runtime builds reject invalid dynamic route/page contracts and tooling errors", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "gate-next-contracts-")); roots.push(dir);
   symlinkSync(path.join(root, "node_modules"), path.join(dir, "node_modules"), "dir");
-  for (const file of ["tsconfig.json", "tsconfig.production.json", "bin/envAlias.mjs"])
+  for (const file of ["tsconfig.json", "tsconfig.production.json", "bin/envAlias.mjs", "public/audio/dictation-capture.js"])
     { mkdirSync(path.dirname(path.join(dir, file)), { recursive: true }); writeFileSync(path.join(dir, file), readFileSync(path.join(root, file))); }
   writeFileSync(path.join(dir, "production.config.ts"), readFileSync(path.join(root, "next.config.ts")));
   // App-specific worker entries need the full repository. Keep production's

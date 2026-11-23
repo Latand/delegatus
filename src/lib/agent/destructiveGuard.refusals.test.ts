@@ -1,9 +1,9 @@
 // destructive-code: head-only; refusal writers and readers share fake state.
-import { afterEach, expect, setSystemTime, test } from "bun:test";
+import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { journal } from "../../../bin/destructive-guard.mjs";
-import { DestructiveRefusalIngester, destructiveRefusalPorts, guardRefusalsForState, type GuardIngestPorts } from "./destructiveGuard.refusals";
+import { DestructiveRefusalIngester, destructiveRefusalPorts, guardRefusalsForState, type GuardIngestPorts, type GuardJournalRow } from "./destructiveGuard.refusals";
 import { computeDestructivePolicy } from "./destructiveGuard";
 import { guardFixture } from "./destructiveGuard.fixture";
 import { attentionReason } from "@/components/attention";
@@ -29,6 +29,39 @@ test("installation and ingestion alarms round-trip through the real lifecycle wr
     expect(events.map(event => [event.type, event.at])).toEqual([["destructive_guard_off", at], ["destructive_guard_off", at]]);
   } finally {
     setSystemTime(); closeAgentRegistryForTests();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test("a refusal with no ancestry snapshot is recorded without an attributed conversation", async () => {
+  const f = guardFixture(); fixtures.push(f);
+  const previous = process.env.LLV_STATE_DIR;
+  const { agentRegistry, closeAgentRegistryForTests } = await import("./registry");
+  const { readLifecycleJournal } = await import("@/lib/lifecycle/journal");
+  closeAgentRegistryForTests(); process.env.LLV_STATE_DIR = f.state;
+  const lookup = spyOn(agentRegistry(), "mcpCallerSnapshot").mockReturnValue({ snapshot: null, rootConversationId: null });
+  try {
+    journal("hook", "rm", "fixture cleanup", f.cwd,
+      { given: f.state, resolved: f.state, rule: "sealed", entry: "fixture state", kind: "state" }, {}, f.env);
+    const file = f.env.LLV_DESTRUCTIVE_GUARD_JOURNAL!;
+    f.assertOwned(file);
+    const row: GuardJournalRow = JSON.parse(fs.readFileSync(file, "utf8"));
+    row.id = "ancestry-unavailable";
+    row.at = "2026-11-23T12:00:00.000Z";
+    delete row.caller;
+    row.parents = [{ pid: 42, comm: "fixture", args: "fixture", startTime: "1" }];
+    fs.writeFileSync(file, JSON.stringify(row) + "\n");
+
+    const ports = await destructiveRefusalPorts();
+    await new DestructiveRefusalIngester(f.state, ports).ingest();
+
+    expect(lookup).toHaveBeenCalledWith(null, [42], null);
+    const events = readLifecycleJournal().events.filter(event => event.type === "destructive_refused");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ key: "destructive-refused:ancestry-unavailable", conversationId: null });
+  } finally {
+    lookup.mockRestore();
+    closeAgentRegistryForTests();
     if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
   }
 });

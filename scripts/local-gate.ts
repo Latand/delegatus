@@ -18,6 +18,7 @@ import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pip
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
 import { readSafeRegularFile } from "./privacy-safe-path";
+import { PRIVACY_GENERATOR_BUN_VERSION } from "./privacy-generator-runtime";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -56,6 +57,9 @@ const lintable = (file: string) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file);
 const proseOnly = (file: string) => /\.(?:md|mdx|txt)$/i.test(file);
 
 export const NATIVE_GROUP = "native Codex";
+export const privacyGeneratorTest = "scripts/privacy-publication-gate.test.ts";
+const needsPrivacyGenerator = (step: Step) => step.name === "touched tests" &&
+  step.command.some(argument => argument === privacyGeneratorTest || argument === `./${privacyGeneratorTest}`);
 
 /** The cold full-project check needs headroom for generated Next validators. */
 export function viewerBuildEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -337,15 +341,15 @@ async function install(command: string[], root: string, env: NodeJS.ProcessEnv, 
   if (outcome.stopped) throw new StoppedPreparing(outcome.ranMs ?? 0);
   if (outcome.code !== 0) throw new Error(`installing ${command.at(-1)} failed (${outcome.code})`);
 }
-async function pinnedRuntime(root: string, cache: string, until: number, cancel?: AbortSignal, env: NodeJS.ProcessEnv = process.env): Promise<string> {
-  const version = pinnedBunVersion(readFileSync(path.join(root, "Dockerfile"), "utf8"));
+const gateBunBinary = (cache: string, version: string) => path.join(cache, `bun-${version}`, "node_modules/.bin/bun");
+async function pinnedRuntime(root: string, cache: string, version: string, until: number, cancel?: AbortSignal, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const current = spawnSync(process.execPath, ["--version"], { encoding: "utf8", env });
   if (current.status === 0 && current.stdout.trim() === version) return process.execPath;
   const prefix = path.join(cache, `bun-${version}`);
-  const binary = path.join(prefix, "node_modules/.bin/bun");
+  const binary = gateBunBinary(cache, version);
   if (!existsSync(binary)) await install(["bash", "scripts/gate-slot.sh", "npm", "install", "--prefix", prefix, "--no-save", `bun@${version}`], root, env, until, cancel);
   const actual = spawnSync(binary, ["--version"], { encoding: "utf8", env });
-  if (actual.status !== 0 || actual.stdout.trim() !== version) throw new Error("cached Bun does not match Dockerfile pin");
+  if (actual.status !== 0 || actual.stdout.trim() !== version) throw new Error(`cached Bun does not match pin ${version}`);
   return binary;
 }
 export async function codexFixture(root: string, cache: string, version: string, until: number, env: NodeJS.ProcessEnv = process.env, cancel?: AbortSignal): Promise<string> {
@@ -678,7 +682,13 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
       const head = git(root, ["rev-parse", "HEAD"]), tree = git(root, ["rev-parse", "HEAD^{tree}"]);
       const runtimeCache = path.join(env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
       const pins = steps.filter(step => step.pinned).length && existsSync(path.join(root, "Dockerfile"))
-        ? [path.join(runtimeCache, `bun-${pinnedBunVersion(readFileSync(path.join(root, "Dockerfile"), "utf8"))}/node_modules/.bin/bun`)] : [];
+        ? [gateBunBinary(runtimeCache, pinnedBunVersion(readFileSync(path.join(root, "Dockerfile"), "utf8")))] : [];
+      if (steps.some(needsPrivacyGenerator)) {
+        pins.push(gateBunBinary(runtimeCache, PRIVACY_GENERATOR_BUN_VERSION));
+        const configured = env.LLV_PRIVACY_GENERATOR_BUN?.trim();
+        const resolved = Bun.which(configured || `bun-${PRIVACY_GENERATOR_BUN_VERSION}`, { PATH: checkEnv.PATH ?? "", cwd: root });
+        if (resolved) pins.push(resolved);
+      }
       for (const version of new Set(steps.flatMap(step => step.codex ? [step.codex] : []))) {
         const target = process.arch === "x64" ? "x86_64" : "aarch64";
         pins.push(path.join(runtimeCache, `codex-${version}/node_modules/@openai/codex-linux-${process.arch}/vendor/${target}-unknown-linux-musl/bin/codex`));
@@ -1132,9 +1142,14 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       delete env.LLV_GATE_FULL_TYPES;
       if (step.name === "privacy") Object.assign(env, privacyEnv);
       if (step.pinned) {
-        runtime ??= pinnedRuntime(root, cache, until, cancel, env);
+        runtime ??= pinnedRuntime(root, cache, pinnedBunVersion(readFileSync(path.join(root, "Dockerfile"), "utf8")), until, cancel, env);
         command[0] = await runtime;
         env.PATH = `${path.dirname(command[0])}${path.delimiter}${env.PATH ?? ""}`;
+      }
+      if (needsPrivacyGenerator(step)) {
+        // The touched-test process keeps its normal Bun. Only the fixture and
+        // the independent provenance reproduction use the generator's pin.
+        env.LLV_PRIVACY_GENERATOR_BUN = await pinnedRuntime(root, cache, PRIVACY_GENERATOR_BUN_VERSION, until, cancel, env);
       }
       if (step.name === "runtime host") command.push("--runtime", command[0]!);
       if (step.codex) {
@@ -1191,7 +1206,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       const budget = cpuWaitBudget(process.env);
       try {
         const until = deadline!.at + (deadline!.cpuWaitMs ?? 0);
-        for (const step of steps.filter(step => step.pinned || step.codex)) {
+        for (const step of steps.filter(step => step.pinned || step.codex || needsPrivacyGenerator(step))) {
           const ready = await prepared(prepare, step, until, undefined, budget.env);
           if (isOutcome(ready)) throw new NoVerdict(step, deadline!, ready);
         }

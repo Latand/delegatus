@@ -204,9 +204,10 @@ export async function destructiveRefusalPorts(current: () => boolean = () => tru
       if (!conversation && row.parents.length) {
         // This registry read uses the structured-pid index on SQLite. Match the
         // recorded start token as well as pid before attributing an ancestor.
-        const { snapshot } = registry.mcpCallerSnapshot("", row.parents.map(parent => parent.pid), null);
+        const { snapshot } = registry.mcpCallerSnapshot(null, row.parents.map(parent => parent.pid), null);
+        const entries = Object.values(snapshot?.entries ?? {});
         for (const parent of row.parents) {
-          const entry = Object.values(snapshot.entries).find(entry => entry.structuredHost?.process?.pid === parent.pid
+          const entry = entries.find(entry => entry.structuredHost?.process?.pid === parent.pid
             && parent.startTime && entry.structuredHost.process.startIdentity === `${parent.pid}:${parent.startTime}`);
           if (entry) { conversation = registry.conversationForPath(entry.artifactPath); if (conversation) break; }
         }

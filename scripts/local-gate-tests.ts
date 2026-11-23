@@ -5,7 +5,8 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
-import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment } from "./local-gate";
+import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment, privacyGeneratorTest } from "./local-gate";
+import { PRIVACY_GENERATOR_BUN_VERSION } from "./privacy-generator-runtime";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
@@ -703,7 +704,14 @@ export async function touchedTests(root: string, baseRef: string, selected: read
         installed = installedFingerprint(root);
       }
     } catch { log("touched-tests: baseline reuse disabled: tool inputs could not be fingerprinted"); }
-    const environment = environmentFingerprint(inherited);
+    const baselineEnvironment = () => {
+      const environment = environmentFingerprint(inherited);
+      if (!oldFiles.includes(privacyGeneratorTest)) return environment;
+      const configured = inherited.LLV_PRIVACY_GENERATOR_BUN?.trim();
+      const binary = Bun.which(configured || `bun-${PRIVACY_GENERATOR_BUN_VERSION}`, { PATH: fileRunnerPath(inherited), cwd: root });
+      return fingerprint([environment, configured, binary ? fileFingerprint(binary) : null]);
+    };
+    const environment = baselineEnvironment();
     const context = [3, base, remote, Bun.version, process.platform, process.arch, fileFingerprint(process.execPath), graph.fingerprint, installed, tools, environment, budgets];
     const cacheKey = (file: string) => fingerprint([context, file,
       head.failures.some(site => site.file === file && site.kind === "error") ? "whole file"
@@ -722,7 +730,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const fresh = freshFiles.length ? await runFiles(prepareBaseline(), freshFiles, sandbox, inherited, "baseline", { ...runOptions, sites: head.failures }) : empty;
     let unchangedTools = false;
     try {
-      unchangedTools = !!installed && installedFingerprint(root) === installed && environmentFingerprint(inherited) === environment
+      unchangedTools = !!installed && installedFingerprint(root) === installed && baselineEnvironment() === environment
         && fingerprint(gateToolFiles(toolRoot).map(file => [file, fileFingerprint(path.join(toolRoot, file))])) === fingerprint(tools);
     } catch { /* A changed or unreadable input cannot certify a new record. */ }
     if (graph.shareable && unchangedTools) for (const file of freshFiles) {
