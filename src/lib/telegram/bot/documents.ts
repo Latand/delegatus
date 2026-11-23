@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import sharp from "sharp";
 import path from "node:path";
-import { inspectOfficeZip, officeXmlText } from "./officeDocuments";
+import { inspectOfficePackage } from "./officeDocuments";
 
 import { knownProviderSecretOffset } from "@/lib/accounts/providerSecretRedaction";
 import { BEARER_TOKEN, TOKEN_FAMILY_PATTERN } from "@/lib/view/compactText";
@@ -562,8 +562,7 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
   if (kind === "xlsx" || kind === "docx" || kind === "pptx") {
     try {
       hit = documentBytesSecret(bytes);
-      const names = inspectOfficeZip(bytes, DOCUMENT_MAX_BYTES, (name, content) => {
-        const text = officeXmlText(name, content);
+      const names = inspectOfficePackage(bytes, DOCUMENT_MAX_BYTES, (name, content, text) => {
         hit ??= documentSecret(name) ?? documentBytesSecret(content) ?? (text === null ? null : documentSecret(text));
       });
       if (!names.has("[Content_Types].xml") || !names.has("_rels/.rels") || !names.has(OFFICE_MAIN_PART[kind])) {

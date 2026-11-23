@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
-import { officeParts, officeZip } from "@/lib/telegram/bot/officeDocuments.fixture";
+import { commentHidingArchive, hiddenSeparators, officeParts, officeWordRun, officeZip } from "@/lib/telegram/bot/officeDocuments.fixture";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-office-"));
 const original = { ...process.env };
@@ -366,6 +366,54 @@ test.each([
 ] as const)("%s with an embedding that cannot be inspected refuses without a confirmation", async (name, build) => {
   const before = transport.callsOf("sendDocument").length;
   const answer = await send(file(name, build()));
+  expect(answer).toMatchObject({ ok: false, code: "document_invalid" });
+  expect(object(answer.details)).not.toHaveProperty("confirmation");
+  expect(transport.callsOf("sendDocument")).toHaveLength(before);
+});
+
+const separatorSecret = ["gh", "p_", "Ab9".repeat(12)].join("");
+const separated = (left: string, right: string) => hiddenSeparators(left, right).map(([label, kind, part, xml]) =>
+  [label, kind, officeZip({ ...officeParts(kind), [part]: xml })] as const);
+
+test.each(separated(separatorSecret.slice(0, 10), separatorSecret.slice(10)))("%s cannot split a displayed token from per-send consent", async (label, kind, bytes) => {
+  const before = transport.callsOf("sendDocument").length;
+  const answer = await send(file(`hidden-${label.replaceAll(" ", "-")}.${kind}`, bytes));
+  expect(answer).toMatchObject({ ok: false, code: "document_secret", details: { confirmation: { id: expect.any(String) } } });
+  expect(transport.callsOf("sendDocument")).toHaveLength(before);
+});
+
+test("the same hidden markup around neutral text still sends without a confirmation", async () => {
+  const cases = separated("Neutral", "Report");
+  const before = transport.callsOf("sendDocument").length;
+  for (const [label, kind, bytes] of cases) {
+    expect(await send(file(`hidden-clean-${label.replaceAll(" ", "-")}.${kind}`, bytes))).toMatchObject({ ok: true });
+  }
+  expect(transport.callsOf("sendDocument")).toHaveLength(before + cases.length);
+});
+
+test.each([[true, "document_secret"], [false, null]] as const)("DOCX text hidden through the related styles part (hidden %s) is left out of the displayed line", async (hidden, code) => {
+  const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+  const bytes = officeZip({
+    ...officeParts("docx"),
+    "word/_rels/document.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="custom/look.xml"/></Relationships>',
+    "word/custom/look.xml": `<w:styles ${W}><w:style w:type="character" w:styleId="Quiet"><w:rPr>${hidden ? "<w:vanish/>" : "<w:b/>"}</w:rPr></w:style></w:styles>`,
+    "word/document.xml": `<w:document ${W}><w:body><w:p>${officeWordRun(separatorSecret.slice(0, 10))}${officeWordRun(".", '<w:rStyle w:val="Quiet"/>')}${officeWordRun(separatorSecret.slice(10))}</w:p></w:body></w:document>`,
+  });
+  const before = transport.callsOf("sendDocument").length;
+  const answer = await send(file(`styled-${hidden}.docx`, bytes));
+  if (code) {
+    expect(answer).toMatchObject({ ok: false, code, details: { confirmation: { id: expect.any(String) } } });
+    expect(transport.callsOf("sendDocument")).toHaveLength(before);
+  } else {
+    expect(answer).toMatchObject({ ok: true });
+    expect(transport.callsOf("sendDocument")).toHaveLength(before + 1);
+  }
+});
+
+test.each(formats)("%s whose archive comment hides a second package refuses without a confirmation", async kind => {
+  const bytes = commentHidingArchive(content(kind), content(kind, separatorSecret));
+  const before = transport.callsOf("sendDocument").length;
+  const answer = await send(file(`comment-hidden.${kind}`, bytes));
   expect(answer).toMatchObject({ ok: false, code: "document_invalid" });
   expect(object(answer.details)).not.toHaveProperty("confirmation");
   expect(transport.callsOf("sendDocument")).toHaveLength(before);

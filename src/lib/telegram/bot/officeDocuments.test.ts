@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { inspectOfficeZip, officeXmlText } from "./officeDocuments";
-import { officeZip } from "./officeDocuments.fixture";
+import { inspectOfficeZip, officeXmlText, wordStyles } from "./officeDocuments";
+import { commentHidingArchive, hiddenSeparators, officeWordRun as wordRun, officeZip } from "./officeDocuments.fixture";
 
 const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
 const S = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
@@ -84,7 +84,8 @@ test("Word shows a non-breaking hyphen and a symbol character; a soft hyphen sho
 test("math runs and markup-compatibility wrappers still join in every reading", () => {
   const secret = token();
   const xml = `<w:document ${W} xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><w:body><w:p><m:oMath><m:r><m:t>${secret.slice(0, 10)}</m:t></m:r><m:r><m:t>${secret.slice(10, 20)}</m:t></m:r></m:oMath><mc:AlternateContent><mc:Choice Requires="w"><w:r><w:t>${secret.slice(20)}</w:t></w:r></mc:Choice></mc:AlternateContent></w:p></w:body></w:document>`;
-  expect(lines("word/document.xml", xml).filter(line => line.includes(secret))).toHaveLength(3);
+  // The three run-joining readings and the displayed reading of a consumer that understands the choice.
+  expect(lines("word/document.xml", xml).filter(line => line.includes(secret))).toHaveLength(4);
 });
 
 const neutralXlsx = () => officeZip({ "[Content_Types].xml": "<Types/>", "xl/worksheets/sheet1.xml": `<worksheet ${S}><sheetData><row><c><v>1</v></c></row></sheetData></worksheet>` });
@@ -125,4 +126,54 @@ test("the expanded-byte limit counts embedded packages' members too", () => {
   const total = inner.length + Buffer.byteLength(strings);
   expect(() => inspectOfficeZip(outer, total, () => {})).not.toThrow();
   expect(() => inspectOfficeZip(outer, total - 1, () => {})).toThrow();
+});
+
+const MC = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:fixture:extension"';
+const word = (body: string, root = "") => `<w:document ${W} ${MC} ${root}><w:body><w:p>${body}</w:p></w:body></w:document>`;
+const choice = (shown: string, hidden: string) => `<mc:AlternateContent><mc:Choice Requires="x">${hidden}</mc:Choice><mc:Fallback>${shown}</mc:Fallback></mc:AlternateContent>`;
+
+test.each(hiddenSeparators("Alpha", "Beta"))("%s does not split the displayed text", (_label, _kind, name, xml) => {
+  expect(lines(name, xml)).toContain("AlphaBeta");
+});
+
+test("a displayed separator keeps the halves apart in every reading", () => {
+  for (const xml of [word(wordRun("Alpha") + wordRun(".") + wordRun("Beta")), word(wordRun("Alpha") + wordRun(".", '<w:vanish w:val="0"/>') + wordRun("Beta")),
+    word(wordRun("Alpha") + choice(wordRun(".") + wordRun("Beta"), wordRun(".") + wordRun("Beta")))]) {
+    expect(lines("word/document.xml", xml).some(line => line.includes("AlphaBeta"))).toBe(false);
+  }
+});
+
+test("a choice whose namespaces a consumer understands replaces its fallback", () => {
+  const xml = word(wordRun("Alpha") + `<mc:AlternateContent><mc:Choice Requires="x">${wordRun("Beta")}</mc:Choice><mc:Fallback>${wordRun("Gamma")}</mc:Fallback></mc:AlternateContent>`);
+  const text = lines("word/document.xml", xml);
+  expect(text).toContain("AlphaBeta");
+  expect(text).toContain("AlphaGamma");
+});
+
+test("text hidden through a Word style is left out, and direct formatting overrides the style", () => {
+  const styles = wordStyles(Buffer.from(`<w:styles ${W}><w:style w:type="character" w:styleId="Quiet"><w:rPr><w:vanish/></w:rPr></w:style><w:style w:type="character" w:styleId="Quieter"><w:basedOn w:val="Quiet"/></w:style></w:styles>`));
+  expect(styles).toBeDefined();
+  const hiddenByStyle = word(wordRun("Alpha") + wordRun(".", '<w:rStyle w:val="Quieter"/>') + wordRun("Beta"));
+  expect(officeXmlText("word/document.xml", Buffer.from(hiddenByStyle), styles)!.split("\n")).toContain("AlphaBeta");
+  const shownDirectly = word(wordRun("Alpha") + wordRun(".", '<w:rStyle w:val="Quiet"/><w:vanish w:val="false"/>') + wordRun("Beta"));
+  expect(officeXmlText("word/document.xml", Buffer.from(shownDirectly), styles)!.split("\n").some(line => line.includes("AlphaBeta"))).toBe(false);
+  expect(wordStyles(Buffer.from(`<worksheet ${S}/>`))).toBeUndefined();
+});
+
+test("a part offering more alternative namespaces than can be inspected throws", () => {
+  const prefixes = ["a1", "a2", "a3", "a4", "a5", "a6", "a7"];
+  const declarations = prefixes.map(prefix => `xmlns:${prefix}="urn:fixture:${prefix}"`).join(" ");
+  const branches = (count: number) => prefixes.slice(0, count).map(prefix => `<mc:AlternateContent><mc:Choice Requires="${prefix}">${wordRun("One")}</mc:Choice><mc:Fallback>${wordRun("Two")}</mc:Fallback></mc:AlternateContent>`).join("");
+  expect(() => officeXmlText("word/document.xml", Buffer.from(word(branches(6), declarations)))).not.toThrow();
+  expect(() => officeXmlText("word/document.xml", Buffer.from(word(branches(7), declarations)))).toThrow();
+});
+
+test("an archive comment cannot hide a second archive from inspection", () => {
+  const entries = { "[Content_Types].xml": "<Types/>", "docProps/custom.xml": "<property>Neutral</property>" };
+  const clean = officeZip(entries);
+  expect(() => inspectOfficeZip(commentHidingArchive(clean, officeZip({ "docProps/custom.xml": "<property>Other</property>" })), 1 << 20, () => {})).toThrow();
+  const commented = Buffer.concat([clean, Buffer.from("note")]);
+  commented.writeUInt16LE(4, clean.length - 2);
+  expect(() => inspectOfficeZip(commented, 1 << 20, () => {})).toThrow();
+  expect(() => inspectOfficeZip(clean, 1 << 20, () => {})).not.toThrow();
 });

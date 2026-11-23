@@ -24,6 +24,9 @@ const COMPOUND_FILE = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe
 const ZIP_NAME = /\.(?:zip|jar|epub|xps|oxps|thmx|xlsb|xlam|od[tspg]|(?:doc|dot|xls|xlt|ppt|pot|pps|ppa|sld|vsd|vss|vst)[xm])$/i;
 
 type Budget = { bytes: number; entries: number };
+/** Receives each member under its full name and the name of its package
+ * (empty for the file itself, `outer/` for an embedded package). */
+type Inspect = (name: string, bytes: Buffer, packagePrefix: string) => void;
 
 const END_OF_DIRECTORY = Buffer.from([0x50, 0x4b, 0x05, 0x06]);
 
@@ -51,16 +54,19 @@ function embeddedZip(name: string, bytes: Buffer): boolean {
  * up to {@link OFFICE_MAX_NESTING} levels, and its members reach `inspect` as
  * `outer/inner` names. The caller's byte limit bounds the expanded bytes of
  * every level together, and 4096 entries bound them all. Unsupported,
- * encrypted, ZIP64, damaged or too deeply nested archives and embedded OLE
- * compound files fail closed before any send. Returns the top-level names. */
-export function inspectOfficeZip(bytes: Buffer, maxBytes: number, inspect: (name: string, bytes: Buffer) => void): Set<string> {
+ * encrypted, ZIP64, damaged, commented or too deeply nested archives and
+ * embedded OLE compound files fail closed before any send. Returns the
+ * top-level names. */
+export function inspectOfficeZip(bytes: Buffer, maxBytes: number, inspect: Inspect): Set<string> {
   return inspectZip(bytes, { bytes: maxBytes, entries: OFFICE_MAX_ENTRIES }, inspect, "", 0);
 }
 
-function inspectZip(bytes: Buffer, budget: Budget, inspect: (name: string, bytes: Buffer) => void, prefix: string, depth: number): Set<string> {
+function inspectZip(bytes: Buffer, budget: Budget, inspect: Inspect, prefix: string, depth: number): Set<string> {
   const invalid = (): never => { throw new Error("Office ZIP cannot be fully inspected"); };
   const end = endOfDirectory(bytes);
-  if (end === -1) return invalid();
+  // Office writers leave the archive comment empty. A comment could hold a
+  // second archive whose directory other readers choose, so it is refused.
+  if (end === -1 || end !== bytes.length - 22) return invalid();
   const count = bytes.readUInt16LE(end + 10);
   const directory = bytes.readUInt32LE(end + 16);
   if (bytes.readUInt16LE(end + 4) || bytes.readUInt16LE(end + 6)
@@ -108,7 +114,7 @@ function inspectZip(bytes: Buffer, budget: Budget, inspect: (name: string, bytes
     }
     if (content.length !== expanded || crc32(content) !== bytes.readUInt32LE(position + 16)) return invalid();
     budget.bytes -= content.length;
-    inspect(prefix + filename, content);
+    inspect(prefix + filename, content, prefix);
     if (content.subarray(0, COMPOUND_FILE.length).equals(COMPOUND_FILE)) return invalid();
     if (embeddedZip(filename, content)) {
       if (depth >= OFFICE_MAX_NESTING) return invalid();
@@ -153,10 +159,16 @@ const WORD = new Set(["http://schemas.openxmlformats.org/wordprocessingml/2006/m
 const DRAWING = new Set(["http://schemas.openxmlformats.org/drawingml/2006/main", "http://purl.oclc.org/ooxml/drawingml/main"]);
 const SHEET = new Set(["http://schemas.openxmlformats.org/spreadsheetml/2006/main", "http://purl.oclc.org/ooxml/spreadsheetml/main"]);
 const CUSTOM_PROPERTIES = new Set(["http://schemas.openxmlformats.org/officeDocument/2006/custom-properties", "http://purl.oclc.org/ooxml/officeDocument/customProperties"]);
+const MATH = new Set(["http://schemas.openxmlformats.org/officeDocument/2006/math", "http://purl.oclc.org/ooxml/officeDocument/math"]);
+const COMPATIBILITY = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 /* Namespaces whose elements may sit between pieces of one displayed run of
    text: Office math runs and markup-compatibility wrappers around content. */
-const INLINE = new Set(["http://schemas.openxmlformats.org/officeDocument/2006/math", "http://purl.oclc.org/ooxml/officeDocument/math",
-  "http://schemas.openxmlformats.org/markup-compatibility/2006"]);
+const INLINE = new Set([...MATH, COMPATIBILITY]);
+
+const wordValue = (tag: SaxesTagNS, local: string) => Object.values(tag.attributes).find(a => WORD.has(a.uri) && a.local === local)?.value;
+/** A WordprocessingML on/off property: present without a value means on. */
+const wordOn = (tag: SaxesTagNS) => !/^(?:0|false|off)$/i.test(wordValue(tag, "val") ?? "on");
+const plainValue = (tag: SaxesTagNS, local: string) => Object.values(tag.attributes).find(a => a.uri === "" && a.local === local)?.value;
 
 /** What closing `tag` adds to the text. `text` serves both run-joining
  * readings; `separated` also ends every element of a namespace without text
@@ -169,7 +181,7 @@ function officeBoundary(tag: SaxesTagNS, parent: SaxesTagNS | undefined): { text
     if (local === "noBreakHyphen") return both("-");
     if (local === "sym") {
       // Symbol fonts map their glyphs at F000-F0FF; either way a character shows.
-      const code = Number.parseInt(Object.values(tag.attributes).find(a => WORD.has(a.uri) && a.local === "char")?.value ?? "", 16);
+      const code = Number.parseInt(wordValue(tag, "char") ?? "", 16);
       return both(Number.isInteger(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code >= 0xf000 && code <= 0xf0ff ? code - 0xf000 : code) : "");
     }
     return both(/^(p|br|cr|tr|tc)$/.test(local) ? "\n" : "");
@@ -184,37 +196,19 @@ function officeBoundary(tag: SaxesTagNS, parent: SaxesTagNS | undefined): { text
 
 const XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace";
 
-/** Join adjacent runs, retaining text inside leaves and real layout boundaries.
- * Three readings are returned, one line apart: one keeps every leaf's text as
- * written, the second trims XML whitespace from the edges of leaves outside
- * `xml:space="preserve"`, as Office does when it lays the text out, so a
- * whitespace-only run cannot split a token in both, and the third trims the
- * same way and also ends every element outside the run-bearing namespaces, so
- * neighbouring leaves cannot glue onto a token. Fatal decoding and parsing
- * apply to XML parts even after a secret is found. */
-export function officeXmlText(name: string, bytes: Buffer): string | null {
-  const encoding = xmlEncoding(bytes);
-  if (!/\.(?:xml|rels|vml|svg)$/i.test(name) && !startsWithXml(bytes, encoding)) return null;
-  const xml = new TextDecoder(encoding, { fatal: true }).decode(bytes);
-  const pieces: string[] = [];
-  const compact: string[] = [];
-  const separated: string[] = [];
-  const attributes: string[] = [];
-  const open: SaxesTagNS[] = [];
-  const hasChild: boolean[] = [];
-  const preserve: boolean[] = [];
-  const pending: string[] = [];
-  const flush = (keepWhitespace: boolean) => {
-    const text = pending.join("");
-    pending.length = 0;
-    if (!text || !(keepWhitespace || /[^ \t\r\n]/.test(text))) return;
-    pieces.push(text);
-    const trimmed = preserve.at(-1) ? text : text.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, "");
-    compact.push(trimmed);
-    separated.push(trimmed);
-  };
+type XmlHandlers = {
+  open(tag: SaxesTagNS, resolve: (prefix: string) => string | undefined): void;
+  text(text: string): void;
+  close(tag: SaxesTagNS): void;
+};
 
+/** Parse one XML part strictly: fatal decoding, a declared encoding that
+ * matches the bytes, no document type and at most 256 levels of nesting. */
+function parseOfficeXml(bytes: Buffer, handlers: XmlHandlers): number {
+  const encoding = xmlEncoding(bytes);
+  const xml = new TextDecoder(encoding, { fatal: true }).decode(bytes);
   const parser = new SaxesParser({ xmlns: true });
+  let depth = 0;
   parser.on("xmldecl", (decl) => {
     const declared = decl.encoding?.toLowerCase();
     if (declared && declared !== encoding && !(declared === "utf-16" && encoding !== "utf-8")) {
@@ -223,32 +217,369 @@ export function officeXmlText(name: string, bytes: Buffer): string | null {
   });
   parser.on("doctype", () => { throw new Error("Office XML document types are unsupported"); });
   parser.on("opentagstart", () => {
-    if (hasChild.length >= 256) throw new Error("Office XML nesting exceeds inspection limit");
+    if (depth >= 256) throw new Error("Office XML nesting exceeds inspection limit");
   });
   parser.on("opentag", (tag) => {
-    flush(false);
-    if (hasChild.length) hasChild[hasChild.length - 1] = true;
-    hasChild.push(false);
-    open.push(tag);
-    let preserved = preserve.at(-1) ?? false;
-    for (const attribute of Object.values(tag.attributes)) {
-      if (attribute.uri === XML_NAMESPACE && attribute.local === "space") preserved = attribute.value === "preserve";
-      if (attribute.uri !== "http://www.w3.org/2000/xmlns/") attributes.push(attribute.value);
-    }
-    preserve.push(preserved);
+    depth++;
+    handlers.open(tag, prefix => tag.ns?.[prefix] ?? parser.resolve(prefix));
   });
-  parser.on("text", (text) => { pending.push(text); });
-  parser.on("cdata", (text) => { pending.push(text); });
+  parser.on("text", handlers.text);
+  parser.on("cdata", handlers.text);
   parser.on("closetag", (tag) => {
-    flush(!hasChild.pop());
-    preserve.pop();
-    open.pop();
-    const { text, separated: apart } = officeBoundary(tag, open.at(-1));
-    pieces.push(text);
-    compact.push(text);
-    separated.push(apart);
+    depth--;
+    handlers.close(tag);
   });
   parser.write(xml).close();
+  return xml.length;
+}
+
+/** Which Word styles hide their text (`w:vanish`), from a package's styles part. */
+export type WordStyles = {
+  defaults?: boolean;
+  byId: Map<string, { basedOn?: string; vanish?: boolean }>;
+  defaultOf: Map<string, string>;
+};
+
+/** Read a WordprocessingML styles part, or undefined for any other part. */
+export function wordStyles(bytes: Buffer): WordStyles | undefined {
+  const styles: WordStyles = { byId: new Map(), defaultOf: new Map() };
+  const path: string[] = [];
+  let entry: { basedOn?: string; vanish?: boolean } | undefined;
+  let root: SaxesTagNS | undefined;
+  parseOfficeXml(bytes, {
+    open(tag) {
+      root ??= tag;
+      const local = WORD.has(tag.uri) ? tag.local : "";
+      const parent = path.at(-1), grand = path.at(-2), great = path.at(-3);
+      if (local === "style" && parent === "styles" && path.length === 1) {
+        const type = wordValue(tag, "type") ?? "paragraph", id = wordValue(tag, "styleId");
+        entry = {};
+        if (id !== undefined) {
+          if (!styles.byId.has(`${type}:${id}`)) styles.byId.set(`${type}:${id}`, entry);
+          if (/^(?:1|true|on)$/i.test(wordValue(tag, "default") ?? "") && !styles.defaultOf.has(type)) styles.defaultOf.set(type, id);
+        }
+      } else if (local === "basedOn" && parent === "style" && entry) entry.basedOn = wordValue(tag, "val");
+      else if (local === "vanish" && parent === "rPr" && grand === "style" && entry) entry.vanish = wordOn(tag);
+      else if (local === "vanish" && parent === "rPr" && grand === "rPrDefault" && great === "docDefaults") styles.defaults = wordOn(tag);
+      path.push(local);
+    },
+    text() {},
+    close() { path.pop(); },
+  });
+  return root && WORD.has(root.uri) && root.local === "styles" ? styles : undefined;
+}
+
+/** A style's own `w:vanish`, or the nearest one along its `basedOn` chain. */
+function styleVanish(styles: WordStyles | undefined, type: string, id: string | undefined): boolean | undefined {
+  for (let step = 0, current = id; styles && current !== undefined && step < 64; step++) {
+    const entry = styles.byId.get(`${type}:${current}`);
+    if (!entry) return undefined;
+    if (entry.vanish !== undefined) return entry.vanish;
+    current = entry.basedOn;
+  }
+  return undefined;
+}
+
+function relationships(bytes: Buffer): Array<{ type: string; target: string }> {
+  const found: Array<{ type: string; target: string }> = [];
+  parseOfficeXml(bytes, {
+    open(tag) {
+      const type = plainValue(tag, "Type"), target = plainValue(tag, "Target");
+      if (tag.local === "Relationship" && type && target && plainValue(tag, "TargetMode") !== "External") found.push({ type, target });
+    },
+    text() {},
+    close() {},
+  });
+  return found;
+}
+
+/** Resolve a relationship target against its source part, as a lower-case member name. */
+function partName(source: string, target: string): string {
+  let decoded = target;
+  try { decoded = decodeURIComponent(target); } catch { /* keep the target as written */ }
+  const segments = decoded.startsWith("/") ? [] : source.split("/").slice(0, -1);
+  for (const segment of decoded.split("/")) {
+    if (segment === "..") segments.pop();
+    else if (segment && segment !== ".") segments.push(segment);
+  }
+  return segments.join("/").toLowerCase();
+}
+
+const relationshipsName = (part: string) => {
+  const slash = part.lastIndexOf("/");
+  return `${part.slice(0, slash + 1)}_rels/${part.slice(slash + 1)}.rels`;
+};
+
+/** The styles part Word applies to the package's main document, found through
+ * the package and document relationships as Word finds it. */
+function packageWordStyles(members: Map<string, Buffer>): WordStyles | undefined {
+  const root = members.get("_rels/.rels");
+  const main = root && relationships(root).find(relationship => /\/officeDocument$/.test(relationship.type));
+  if (!main) return undefined;
+  const document = partName("", main.target);
+  const documentRelationships = members.get(relationshipsName(document));
+  const styles = documentRelationships && relationships(documentRelationships).find(relationship => /\/styles$/.test(relationship.type));
+  const part = styles && members.get(partName(document, styles.target));
+  return part && wordStyles(part);
+}
+
+/** Inspect a package with {@link inspectOfficeZip} and hand every member, with
+ * the text {@link officeXmlText} reads from it, to `visit`. Text is read once
+ * the whole package has been checked, so the Word styles of each package
+ * (the file itself or an embedded one) apply to all of its parts. */
+export function inspectOfficePackage(bytes: Buffer, maxBytes: number, visit: (name: string, bytes: Buffer, text: string | null) => void): Set<string> {
+  const members: Array<[string, Buffer, string]> = [];
+  const names = inspectOfficeZip(bytes, maxBytes, (name, content, prefix) => { members.push([name, content, prefix]); });
+  const styles = new Map<string, WordStyles | undefined>();
+  for (const [name, content, prefix] of members) {
+    if (!styles.has(prefix)) {
+      const own = members.filter(member => member[2] === prefix).map(([member, data]) => [member.slice(prefix.length).toLowerCase(), data] as const);
+      styles.set(prefix, packageWordStyles(new Map(own)));
+    }
+    visit(name, content, officeXmlText(name, content, styles.get(prefix)));
+  }
+  return names;
+}
+
+/* The displayed reading. Word, Excel and PowerPoint lay out only part of the
+   text a part holds: hidden runs, the side of a tracked change the view does
+   not show, field instructions, phonetic guides and the markup-compatibility
+   content a consumer does not select stay out of the line around them, and a
+   text box or drawing anchored inside a line forms its own story. A piece
+   carries what decides whether it shows, and each reading keeps the pieces one
+   consumer and one view would show. */
+type Alternate = { branches: Array<{ requires: string[] | null }> };
+type Need = { ns: string } | { alternate: Alternate; branch: number } | { never: true };
+type WordParagraph = { style?: string; vanish?: boolean; special?: boolean; markStyle?: string; web?: boolean; deleted?: boolean; inserted?: boolean };
+type WordRun = { paragraph?: WordParagraph; vanish?: boolean; style?: string; web?: boolean };
+type Kind = "p" | "pPr" | "mark" | "r" | "rPr" | undefined;
+type Frame = {
+  tag?: SaxesTagNS; kind: Kind; needs: Need[]; own: Need[]; story: number; runs: WordRun[]; flags: number;
+  ignorable: ReadonlySet<string>; process: ReadonlySet<string>; alternate?: Alternate; paragraph?: WordParagraph; run?: WordRun;
+};
+type Piece = { text: string; needs: Need[]; story: number; runs: WordRun[]; flags: number; mark?: WordParagraph };
+const DELETED = 1, INSERTED = 2, FIELD = 4;
+const WORD_TEXT = new Set(["t", "delText", "instrText", "delInstrText"]);
+const SHEET_RUN_CONTAINERS = new Set(["si", "is", "text", "r", "rPr", "rPh"]);
+type View = "final" | "original" | "web";
+/** Distinct namespaces a part may make a consumer choose between; 2^6 readings at most. */
+const MAX_ALTERNATIVE_NAMESPACES = 6;
+
+function displayedText(styles: WordStyles | undefined) {
+  const frames: Frame[] = [{ kind: undefined, needs: [], own: [], story: 0, runs: [], flags: 0, ignorable: new Set(), process: new Set() }];
+  const pieces: Piece[] = [];
+  let stories = 0;
+
+  const runVanish = (run: WordRun) => run.vanish
+    ?? styleVanish(styles, "character", run.style ?? styles?.defaultOf.get("character"))
+    ?? styleVanish(styles, "paragraph", run.paragraph?.style ?? styles?.defaultOf.get("paragraph"))
+    ?? styles?.defaults ?? false;
+  const markVanish = (mark: WordParagraph) => mark.special || (mark.vanish
+    ?? styleVanish(styles, "character", mark.markStyle)
+    ?? styleVanish(styles, "paragraph", mark.style ?? styles?.defaultOf.get("paragraph"))
+    ?? styles?.defaults ?? false);
+  const hidden = (piece: Piece, view: View) => {
+    if (piece.flags & FIELD) return true;
+    if (piece.flags & (view === "original" ? INSERTED : DELETED)) return true;
+    if (piece.runs.some(run => runVanish(run) || (view === "web" && run.web))) return true;
+    const mark = piece.mark;
+    return !!mark && (markVanish(mark) || !!(view === "original" ? mark.inserted : mark.deleted) || (view === "web" && !!mark.web));
+  };
+
+  return {
+    open(tag: SaxesTagNS, resolve: (prefix: string) => string | undefined) {
+      const parent = frames.at(-1)!;
+      const attribute = (uri: string, local: string) => Object.values(tag.attributes).find(a => a.uri === uri && a.local === local)?.value;
+      const prefixes = (value: string | undefined) => value?.split(/[ \t\r\n]+/).filter(Boolean) ?? [];
+      const uriOf = (prefix: string) => resolve(prefix) ?? `unbound:${prefix}`;
+      const frame: Frame = { ...parent, tag, kind: undefined, own: parent.needs, alternate: undefined };
+      const ignorable = prefixes(attribute(COMPATIBILITY, "Ignorable"));
+      if (ignorable.length) frame.ignorable = new Set([...parent.ignorable, ...ignorable.map(uriOf)]);
+      const process = prefixes(attribute(COMPATIBILITY, "ProcessContent"));
+      if (process.length) frame.process = new Set([...parent.process, ...process.map(name => {
+        const colon = name.indexOf(":");
+        return colon === -1 ? name : `${uriOf(name.slice(0, colon))} ${name.slice(colon + 1)}`;
+      })]);
+      // A consumer that does not understand an ignorable namespace drops the
+      // element, keeping only the children of one it was asked to process.
+      if (tag.uri !== COMPATIBILITY && frame.ignorable.has(tag.uri)) {
+        frame.own = [...parent.needs, { ns: tag.uri }];
+        if (!frame.process.has(`${tag.uri} ${tag.local}`) && !frame.process.has(`${tag.uri} *`)) frame.needs = frame.own;
+      }
+      if (parent.alternate) {
+        // A consumer shows the first choice whose namespaces it understands, else the fallback.
+        const choice = tag.uri === COMPATIBILITY && tag.local === "Choice", fallback = tag.uri === COMPATIBILITY && tag.local === "Fallback";
+        const need: Need = choice || fallback
+          ? { alternate: parent.alternate, branch: parent.alternate.branches.push({ requires: choice ? prefixes(attribute("", "Requires")).map(uriOf) : null }) - 1 }
+          : { never: true };
+        frame.needs = frame.own = [...frame.needs, need];
+      } else if (tag.uri === COMPATIBILITY && tag.local === "AlternateContent") frame.alternate = { branches: [] };
+
+      const local = tag.local;
+      if (WORD.has(tag.uri)) {
+        const paragraph = parent.paragraph, run = parent.run;
+        if (parent.kind === "pPr" && local === "pStyle") paragraph!.style = wordValue(tag, "val");
+        else if (parent.kind === "pPr" && local === "rPr") frame.kind = "mark";
+        else if (parent.kind === "mark") {
+          if (local === "vanish") paragraph!.vanish = wordOn(tag);
+          else if (local === "specVanish") paragraph!.special = wordOn(tag);
+          else if (local === "rStyle") paragraph!.markStyle = wordValue(tag, "val");
+          else if (local === "webHidden") paragraph!.web = wordOn(tag);
+          else if (local === "del" || local === "moveFrom") paragraph!.deleted = true;
+          else if (local === "ins" || local === "moveTo") paragraph!.inserted = true;
+        } else if (parent.kind === "rPr") {
+          if (local === "vanish") run!.vanish = wordOn(tag);
+          else if (local === "rStyle") run!.style = wordValue(tag, "val");
+          else if (local === "webHidden") run!.web = wordOn(tag);
+        } else if (local === "p") {
+          frame.kind = "p";
+          frame.paragraph = {};
+        } else if (local === "pPr" && parent.kind === "p") frame.kind = "pPr";
+        else if (local === "rPr" && parent.kind === "r") frame.kind = "rPr";
+        else if (local === "del" || local === "moveFrom" || local === "delText") frame.flags |= DELETED;
+        else if (local === "ins" || local === "moveTo") frame.flags |= INSERTED;
+        else if (local === "instrText" || local === "delInstrText") frame.flags |= FIELD;
+        else if (local === "drawing" || local === "pict" || local === "object" || local === "rt") frame.story = ++stories;
+      } else if (SHEET.has(tag.uri) && local === "rPh") frame.story = ++stories;
+      if ((WORD.has(tag.uri) || MATH.has(tag.uri)) && local === "r" && parent.kind !== "rPr" && parent.kind !== "mark") {
+        frame.kind = "r";
+        frame.run = { paragraph: frame.paragraph };
+        frame.runs = [...parent.runs, frame.run];
+      }
+      frames.push(frame);
+    },
+    text(text: string) {
+      const frame = frames.at(-1)!, tag = frame.tag;
+      // Office lays out text only from its text leaves; characters written
+      // straight into a run, a paragraph or an alternative container are not shown.
+      if (!text || frame.alternate || (tag && ((WORD.has(tag.uri) && !WORD_TEXT.has(tag.local))
+        || ((DRAWING.has(tag.uri) || MATH.has(tag.uri)) && tag.local !== "t") || (SHEET.has(tag.uri) && SHEET_RUN_CONTAINERS.has(tag.local))))) return;
+      pieces.push({ text, needs: frame.own, story: frame.story, runs: frame.runs, flags: frame.flags });
+    },
+    close(tag: SaxesTagNS) {
+      const frame = frames.pop()!;
+      const parent = frames.at(-1)?.tag;
+      const boundary = SHEET.has(tag.uri) && (tag.local === "phoneticPr" || tag.local === "rPh") ? "" : officeBoundary(tag, parent).text;
+      if (boundary) {
+        pieces.push({ text: boundary, needs: frame.own, story: frame.story, runs: frame.runs, flags: frame.flags,
+          ...(frame.kind === "p" ? { mark: frame.paragraph } : {}) });
+      }
+    },
+    /** Every distinct story of every reading, within `limit` characters. */
+    readings(limit: number): string[] {
+      const alternates = new Set<Alternate>(), namespaces = new Set<string>(), views = new Set<View>(["final"]);
+      for (const piece of pieces) {
+        for (const need of piece.needs) {
+          if ("ns" in need) namespaces.add(need.ns);
+          else if ("alternate" in need) alternates.add(need.alternate);
+        }
+        if (piece.flags & (DELETED | INSERTED) || piece.mark?.deleted || piece.mark?.inserted) views.add("original");
+        if (piece.runs.some(run => run.web) || piece.mark?.web) views.add("web");
+      }
+      for (const alternate of alternates) for (const branch of alternate.branches) for (const uri of branch.requires ?? []) namespaces.add(uri);
+      const variable = [...namespaces];
+      if (variable.length > MAX_ALTERNATIVE_NAMESPACES) throw new Error("Office XML offers too many markup-compatibility alternatives to inspect");
+      const found = new Set<string>();
+      let size = 0;
+      for (let mask = 0; mask < 1 << variable.length; mask++) {
+        const understood = new Set(variable.filter((_, index) => mask & (1 << index)));
+        const chosen = new Map<Alternate, number>();
+        for (const alternate of alternates) {
+          const choice = alternate.branches.findIndex(branch => branch.requires?.every(uri => understood.has(uri)));
+          chosen.set(alternate, choice !== -1 ? choice : alternate.branches.findIndex(branch => branch.requires === null));
+        }
+        const shows = (need: Need) => "ns" in need ? understood.has(need.ns) : "alternate" in need && chosen.get(need.alternate) === need.branch;
+        for (const view of views) {
+          const reading = new Map<number, string[]>();
+          for (const piece of pieces) {
+            if (!piece.needs.every(shows) || hidden(piece, view)) continue;
+            const story = reading.get(piece.story);
+            if (story) story.push(piece.text);
+            else reading.set(piece.story, [piece.text]);
+          }
+          for (const story of reading.values()) {
+            const text = story.join("");
+            if (found.has(text)) continue;
+            size += text.length;
+            if (size > limit) throw new Error("Office XML alternatives exceed the inspection limit");
+            found.add(text);
+          }
+        }
+      }
+      return [...found];
+    },
+  };
+}
+
+/** Join adjacent runs, retaining text inside leaves and real layout boundaries.
+ * Readings are returned one line apart: one keeps every leaf's text as
+ * written, the second trims XML whitespace from the edges of leaves outside
+ * `xml:space="preserve"`, as Office does when it lays the text out, so a
+ * whitespace-only run cannot split a token in both, and the third trims the
+ * same way and also ends every element outside the run-bearing namespaces, so
+ * neighbouring leaves cannot glue onto a token. The displayed readings follow:
+ * each story of the text a consumer shows, in every view and for every set of
+ * markup-compatibility namespaces it may understand, leaving out hidden runs
+ * (directly or through `styles`), field instructions, the side of a tracked
+ * change the view hides and unselected alternatives, so text Office does not
+ * display cannot split a token it does. Those trim only a leaf that does not
+ * itself preserve its spaces. Fatal decoding and parsing apply to XML parts
+ * even after a secret is found. */
+export function officeXmlText(name: string, bytes: Buffer, styles?: WordStyles): string | null {
+  if (!/\.(?:xml|rels|vml|svg)$/i.test(name) && !startsWithXml(bytes, xmlEncoding(bytes))) return null;
+  const pieces: string[] = [];
+  const compact: string[] = [];
+  const separated: string[] = [];
+  const attributes: string[] = [];
+  const open: SaxesTagNS[] = [];
+  const hasChild: boolean[] = [];
+  const preserve: boolean[] = [];
+  const ownPreserve: boolean[] = [];
+  const pending: string[] = [];
+  const shown = displayedText(styles);
+  const trim = (text: string) => text.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, "");
+  const flush = (keepWhitespace: boolean) => {
+    const text = pending.join("");
+    pending.length = 0;
+    if (!text || !(keepWhitespace || /[^ \t\r\n]/.test(text))) return;
+    pieces.push(text);
+    const trimmed = preserve.at(-1) ? text : trim(text);
+    compact.push(trimmed);
+    separated.push(trimmed);
+    shown.text(ownPreserve.at(-1) ? text : trim(text));
+  };
+
+  const length = parseOfficeXml(bytes, {
+    open(tag, resolve) {
+      flush(false);
+      if (hasChild.length) hasChild[hasChild.length - 1] = true;
+      hasChild.push(false);
+      let preserved = preserve.at(-1) ?? false, own = false;
+      for (const attribute of Object.values(tag.attributes)) {
+        if (attribute.uri === XML_NAMESPACE && attribute.local === "space") {
+          preserved = attribute.value === "preserve";
+          own = preserved;
+        }
+        if (attribute.uri !== "http://www.w3.org/2000/xmlns/") attributes.push(attribute.value);
+      }
+      preserve.push(preserved);
+      ownPreserve.push(own);
+      shown.open(tag, resolve);
+      open.push(tag);
+    },
+    text(text) { pending.push(text); },
+    close(tag) {
+      flush(!hasChild.pop());
+      preserve.pop();
+      ownPreserve.pop();
+      open.pop();
+      const { text, separated: apart } = officeBoundary(tag, open.at(-1));
+      pieces.push(text);
+      compact.push(text);
+      separated.push(apart);
+      shown.close(tag);
+    },
+  });
   // Attribute values are separate from the displayed text and from each other.
-  return [pieces.join(""), compact.join(""), separated.join(""), ...attributes].join("\n");
+  return [pieces.join(""), compact.join(""), separated.join(""), ...shown.readings(4 * length + (1 << 20)), ...attributes].join("\n");
 }

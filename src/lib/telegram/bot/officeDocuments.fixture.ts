@@ -37,6 +37,61 @@ export function officeZip(entries: Record<string, string | Buffer>, compressed =
   return Buffer.concat([...locals, central, end]);
 }
 
+const NAMESPACES = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:fixture:extension"';
+const WORD = `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ${NAMESPACES}`;
+export const officeWordRun = (text: string, properties = "") => `<w:r>${properties ? `<w:rPr>${properties}</w:rPr>` : ""}<w:t>${text}</w:t></w:r>`;
+const run = officeWordRun;
+const word = (body: string, root = "") => `<w:document ${WORD} ${root}><w:body><w:p>${body}</w:p></w:body></w:document>`;
+const sheet = (string: string, root = "") => `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ${NAMESPACES} ${root}><sheetData><row r="1"><c r="A1" t="inlineStr"><is>${string}</is></c></row></sheetData></worksheet>`;
+const slide = (paragraph: string) => `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ${NAMESPACES}><p:cSld><p:spTree><p:sp><p:txBody><a:bodyPr/><a:p>${paragraph}</a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`;
+const choice = (shown: string, hidden: string) => `<mc:AlternateContent><mc:Choice Requires="x">${hidden}</mc:Choice><mc:Fallback>${shown}</mc:Fallback></mc:AlternateContent>`;
+const revision = 'w:id="1" w:author="Reviewer" w:date="2026-01-01T00:00:00Z"';
+
+/** Parts that put text Office does not display between the two displayed
+ * halves `left` and `right` of one token: [label, kind, part name, XML]. */
+export const hiddenSeparators = (left: string, right: string) => [
+  ["Word hidden run", "docx", "word/document.xml", word(run(left) + run(".", "<w:vanish/>") + run(right))],
+  ["Word tracked deletion", "docx", "word/document.xml", word(`${run(left)}<w:del ${revision}><w:r><w:delText>.</w:delText></w:r></w:del>${run(right)}`)],
+  ["Word tracked insertion in the original view", "docx", "word/document.xml", word(`${run(left)}<w:ins ${revision}>${run(".")}</w:ins>${run(right)}`)],
+  ["Word characters outside a text element", "docx", "word/document.xml", word(`${run(left)}<w:r>.</w:r>${run(right)}`)],
+  ["Word characters inside an alternative container", "docx", "word/document.xml", word(`${run(left)}<mc:AlternateContent>.<mc:Fallback>${run(right)}</mc:Fallback></mc:AlternateContent>`)],
+  ["Word field instruction", "docx", "word/document.xml", word(`${run(left)}<w:r><w:instrText>.</w:instrText></w:r>${run(right)}`)],
+  ["Word ignorable element", "docx", "word/document.xml", word(`${run(left)}<x:note>.</x:note>${run(right)}`, 'mc:Ignorable="x"')],
+  ["Word unselected choice", "docx", "word/document.xml", word(run(left) + choice(run(right), run(".")))],
+  ["Word ruby text", "docx", "word/document.xml", word(`${run(left)}<w:r><w:ruby><w:rubyPr/><w:rt>${run(".")}</w:rt><w:rubyBase>${run(right)}</w:rubyBase></w:ruby></w:r>`)],
+  ["Word text box anchored inside the line", "docx", "word/document.xml", word(`${run(left)}<w:r><w:pict><w:txbxContent><w:p>${run(".")}</w:p></w:txbxContent></w:pict></w:r>${run(right)}`)],
+  ["Word web-hidden run in the web view", "docx", "word/document.xml", word(run(left) + run(".", "<w:webHidden/>") + run(right))],
+  ["Word hidden paragraph mark", "docx", "word/document.xml", `<w:document ${WORD}><w:body><w:p><w:pPr><w:rPr><w:vanish/></w:rPr></w:pPr>${run(left)}</w:p><w:p>${run(right)}</w:p></w:body></w:document>`],
+  ["Word deleted paragraph mark", "docx", "word/document.xml", `<w:document ${WORD}><w:body><w:p><w:pPr><w:rPr><w:del ${revision}/></w:rPr></w:pPr>${run(left)}</w:p><w:p>${run(right)}</w:p></w:body></w:document>`],
+  ["Word inherited preserved spaces", "docx", "word/document.xml", `<w:document ${WORD} xml:space="preserve"><w:body><w:p><w:r><w:t>${left}\n   </w:t></w:r>${run(right)}</w:p></w:body></w:document>`],
+  ["Excel phonetic run", "xlsx", "xl/worksheets/sheet1.xml", sheet(`<r><t>${left}</t></r><rPh sb="0" eb="1"><t>.</t></rPh><r><t>${right}</t></r>`)],
+  ["Excel empty phonetic run", "xlsx", "xl/worksheets/sheet1.xml", sheet(`<r><t>${left}</t></r><rPh sb="0" eb="1"><t></t></rPh><r><t>${right}</t></r>`)],
+  ["Excel ignorable element", "xlsx", "xl/worksheets/sheet1.xml", sheet(`<r><t>${left}</t></r><x:note>.</x:note><r><t>${right}</t></r>`, 'mc:Ignorable="x"')],
+  ["PowerPoint unselected choice", "pptx", "ppt/slides/slide1.xml", slide(`<a:r><a:t>${left}</a:t></a:r>${choice(`<a:r><a:t>${right}</a:t></a:r>`, "<a:r><a:t>.</a:t></a:r>")}`)],
+] as const;
+
+/** Move every offset of `zip` by `base`, as if it began `base` bytes into another file. */
+function relocated(zip: Buffer, base: number): Buffer {
+  const moved = Buffer.from(zip), end = moved.length - 22;
+  let position = moved.readUInt32LE(end + 16);
+  for (let index = 0; index < moved.readUInt16LE(end + 10); index++) {
+    moved.writeUInt32LE(moved.readUInt32LE(position + 42) + base, position + 42);
+    position += 46 + moved.readUInt16LE(position + 28) + moved.readUInt16LE(position + 30) + moved.readUInt16LE(position + 32);
+  }
+  moved.writeUInt32LE(moved.readUInt32LE(end + 16) + base, end + 16);
+  return moved;
+}
+
+/** A clean archive whose comment holds a second archive that other readers open instead. */
+export function commentHidingArchive(clean: Buffer, hidden: Buffer): Buffer {
+  // The trailing byte stops the hidden end record's comment length from reaching the end.
+  const tail = Buffer.concat([relocated(hidden, clean.length), Buffer.from([0])]);
+  const outer = Buffer.from(clean);
+  outer.writeUInt16LE(tail.length, outer.length - 2);
+  return Buffer.concat([outer, tail]);
+}
+
+
 export function officeParts(kind: "xlsx" | "docx" | "pptx", text = "Neutral report"): Record<string, string> {
   const part = { xlsx: "xl/workbook.xml", docx: "word/document.xml", pptx: "ppt/presentation.xml" }[kind];
   const type = { xlsx: "spreadsheetml.sheet", docx: "wordprocessingml.document", pptx: "presentationml.presentation" }[kind];

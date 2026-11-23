@@ -25,10 +25,14 @@ server.
   file and destination. Office files are decompressed in memory and every
   entry is scanned, including the text Office shows: runs joined across
   formatting and XML indentation, with paragraphs, cells and comments kept
-  apart. Embedded Office files, such as a chart's workbook, are opened and
-  scanned the same way, up to two levels deep. Inspection allows up to 4096
-  entries and 20 MB of expanded content across all levels. An Office file that
-  cannot be fully inspected (encrypted, damaged, malformed XML, unsupported, or
+  apart. Text Office does not show in the line (hidden text, either side of a
+  tracked change, field codes, phonetic guides, unselected compatibility
+  alternatives, text boxes) cannot split a shown token. Embedded Office files,
+  such as a chart's workbook, are opened and scanned the same way, up to two
+  levels deep. Inspection allows up to 4096 entries and 20 MB of expanded
+  content across all levels. An Office file that cannot be fully inspected
+  (encrypted, damaged, malformed XML, unsupported, carrying an archive
+  comment, offering more than six compatibility namespaces in one part, or
   holding an embedded OLE object) is refused. Confirmation grants no standing
   permission.
 - **Reports.** The orchestrator can send its reports to one of these chats.
