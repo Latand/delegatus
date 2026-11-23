@@ -5,7 +5,7 @@ import { claudeProjectRoots } from "@/lib/accounts/claude";
 import type { FileEntry } from "@/lib/types";
 
 import { listAnswerRecords, RELAY_ANSWER_LIST_LIMIT, RELAY_ANSWER_RETENTION_DAYS, relayAnswersRoot, type RelayAnswerSummary } from "./answers";
-import { conversationCodexHome, readConversations, type RelayConversation } from "./conversations";
+import { conversationCodexHome, elevatedConversationAuthority, readConversations, type RelayConversation } from "./conversations";
 import { relayChatsProject, shortChatKey, type RelayAnswerRow, type RelayChatRow, type RelayChatsPayload } from "./relayChats";
 import { readRelayStore } from "./store";
 
@@ -117,7 +117,7 @@ export function relayChats(): RelayChatsPayload {
   const store = readRelayStore();
   const relays = store.relays.map((relay) => ({ id: relay.id, name: relay.name, origin: relay.origin }));
   const chats: RelayChatRow[] = records.flatMap((record) => {
-    if (record.authority === "owner-tier") return [];
+    if (elevatedConversationAuthority(record.authority)) return [];
     const relay = store.relays.find((item) => item.id === record.relayId);
     if (!relay) return [];
     const target = relay.targets.find((item) => item.id === record.targetId) ?? null;
