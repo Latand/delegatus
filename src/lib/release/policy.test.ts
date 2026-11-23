@@ -47,8 +47,18 @@ test.each([
 test.each([false, true])("an unowned version bump reports a version mismatch (previous tag published: %s)", async registryHasTag => {
   const input = { ...ready(), mainVersion: "1.1.0", registryHasTag, requested: true };
   expect(await releaseState(input)).toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
+  expect(await releaseState({ ...input, releasePrMerged: true })).toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
   expect(await releaseState({ ...input, live: true })).toMatchObject({ state: "in-flight", reason: "release-in-flight" });
   expect(await releaseState({ ...input, publishing: true })).toMatchObject({ state: registryHasTag ? "due" : "in-flight" });
+  expect(await releaseState({ ...input, publishing: true, releasePrMerged: true })).toMatchObject({ state: "due" });
+});
+
+test.each([
+  [4, { live: true }], [5, { checks: "red" as const }], [7, { hold: "incident" }],
+  [9, { deploying: true }], [10, { tools: ["Chrome"] }],
+] as [number, Partial<ReleaseInput>][]) ("verified release PR still respects blocker %s", async (blocker, patch) => {
+  expect(await releaseState({ ...ready(), mainVersion: "1.1.0", registryHasTag: false,
+    publishing: true, releasePrMerged: true, ...patch })).toMatchObject({ blocker });
 });
 
 test.each([

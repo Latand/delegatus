@@ -57,14 +57,17 @@ async function admit(project: string, ports: ReleasePorts): Promise<string | nul
   row = readReleaseProject(project);
   run = row.live;
   if (!run || run.key !== claim.key || run.cut !== claim.cut || run.pipelineId || !run.request) return null;
-  if (run.trigger === "recovery") {
-    const candidate = observed.recovery;
-    if (!candidate || candidate.commit !== run.request.baseRef
-      || !run.request.stages.some(stage => stage.id === "review" && stage.prompt?.includes(`PR ${candidate.pr}`))) {
+  const candidate = observed.recovery;
+  const releasePrMerged = !!candidate && candidate.commit === run.request.baseRef
+    && run.request.stages.some(stage => stage.id === "review" && stage.prompt?.includes(`PR ${candidate.pr}`));
+  if (run.trigger === "recovery" || run.phase === "publish" && !observed.policy.registryHasTag) {
+    if (!releasePrMerged) {
       return settle(project, ports, run, "failed", "release-recovery-evidence-changed") ? "release: recovery-candidate-changed" : null;
     }
   }
-  const safety = await releaseState({ ...observed.policy, requested: run.phase === "publish" ? run.trigger === "requested" : true, publishing: run.phase === "publish", frozenCut: run.cut, hold: row.hold?.reason ?? null });
+  const safety = await releaseState({ ...observed.policy, requested: run.phase === "publish" ? run.trigger === "requested" : true,
+    publishing: run.phase === "publish", releasePrMerged: run.phase === "publish" && releasePrMerged,
+    frozenCut: run.cut, hold: row.hold?.reason ?? null });
   if (safety.state !== "due") {
     if (run.trigger === "recovery") return settle(project, ports, run, "failed", `release-recovery-safety:${safety.reason}`)
       ? `release: ${safety.reason}` : null;
@@ -208,7 +211,8 @@ export function productionReleaseController(ports: ReleasePorts): ReleaseControl
       if (!ports.settings(project)?.enabled) return null;
       if (!observed) { retireInapplicableBlocker(project); return NOT_APPLICABLE; }
       const recovery = observed.policy.mainVersion !== observed.policy.lastTag.version ? observed.recovery : null;
-      const decision = await releaseState({ ...observed.policy, publishing: !!recovery, hold: row.hold?.reason ?? null, requested: !!row.request,
+      const decision = await releaseState({ ...observed.policy, publishing: !!recovery, releasePrMerged: !!recovery,
+        hold: row.hold?.reason ?? null, requested: !!row.request,
         settled: row.history.at(-1) ?? null });
       if (!ports.settings(project)?.enabled) return null;
       const now = ports.now();
