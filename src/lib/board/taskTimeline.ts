@@ -12,6 +12,9 @@ export interface TimelineAttempt {
   state: PipelineAttemptState;
   historical: boolean;
   roleId: string | null;
+  /** The conversation this attempt ran in, as recorded; what a click on its row opens. */
+  conversationId: string | null;
+  agentPath: string | null;
   engine: Exclude<FileEntry["engine"], "shell"> | null;
   model: string | null;
   startedAtMs: number | null;
@@ -120,6 +123,8 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number, fileFor: (identity:
         attempt: attempt.n,
         state: attempt.state,
         historical: attempt.historical === true,
+        conversationId: attempt.conversationId ?? null,
+        agentPath: attempt.agentPath ?? null,
         roleId: role ? role.roleId : attempt.definition?.role?.roleId ?? stage?.role?.roleId ?? null,
         engine: role ? role.engine : stage?.engine ?? null,
         model: role ? role.model : stage?.model ?? null,
@@ -222,6 +227,7 @@ export function projectTaskTimelines(input: {
     })) continue;
     const rows = members.get(taskId) ?? [];
     rows.push({ key, pipelineId: null, stageId: "", kind: "run", attempt: 1, state: "running", historical: false,
+      conversationId: file.conversationId ?? null, agentPath: file.path,
       roleId: file.durableLineage?.role ?? null, engine: file.engine === "shell" ? null : file.engine,
       model: file.model, startedAtMs, completedAtMs: null, endAtMs: startedAtMs === null ? null : nowMs,
       workEndAtMs: startedAtMs === null ? null : nowMs,
