@@ -1020,7 +1020,8 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
   const endedAt = run ? seatTickLocalTime(run.endedAt ?? run.claimedAt, now, locale) ?? t("seatTick.unknown") : null;
   const startedAt = running ? seatTickLocalTime(running.claimedAt, now, locale) : null;
   const nextAt = seatTickLocalTime(value.nextRunAt, now, locale);
-  const counts = run && !value.runsError ? ([
+  const runCounts = run?.counts;
+  const counts = runCounts ? ([
     ["calls", "seatTick.curation.count.calls"],
     ["changed", "seatTick.curation.count.changed"],
     ["rewritten", "seatTick.curation.count.rewritten"],
@@ -1030,7 +1031,7 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
     ["archived", "seatTick.curation.count.archived"],
     ["restored", "seatTick.curation.count.restored"],
   ] as const).flatMap(([key, label]) => {
-    const count = run.counts[key];
+    const count = runCounts[key];
     return count > 0 ? [t(label, { count })] : [];
   }).join(" · ") : "";
   const next = value.waitingOn

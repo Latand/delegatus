@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
+import { afterEach, beforeEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,7 @@ import { recordNativeHook, nativeTranscriptCallProof } from "@/lib/attention/nat
 import { nativeCallerRefusal } from "@/lib/attention/nativeCaller";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { Database } from "bun:sqlite";
+import { taskListIndex, taskListIndexes, taskListSeekSql } from "@/lib/state/taskListIndexes";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { AgentRegistry, type RegistryConversation, type RegistryFile } from "@/lib/agent/registry";
@@ -23,6 +24,7 @@ import { createViewerMcpServer, createMcpToolService, SqliteMcpReceiptStore, req
   type McpToolArgs, type McpToolService, type McpToolResult, type McpReceiptStore } from "./server";
 import { withWorkspaceMcpFence } from "./workspaceFence";
 import { McpPageCursorStore } from "./pageCursors";
+import { BoardSelection } from "./boardSelection";
 
 const AT = "2026-11-06T12:00:00.000Z";
 const OWN = "repo-11111111111111111111111111111111", FOREIGN = "repo-22222222222222222222222222222222";
@@ -155,6 +157,83 @@ function refused(result: McpToolResult, code: string) {
   expect(result).not.toHaveProperty("tasks"); expect(result).not.toHaveProperty("pipelines"); expect(result).not.toHaveProperty("nextCursor");
   if (!result.ok && result.details) expect(result.details.retryable).toBe(false);
 }
+
+test("a large retained board returns an authorized page while projection rebuild is slow", async () => {
+  const h = await harness();
+  h.indexed();
+  saveTasks(Array.from({ length: 3500 }, (_, index): BoardTask => ({
+    id: `task_${String(index).padStart(4, "0")}`, project: index % 2 ? OWN : FOREIGN,
+    text: index % 2 ? "Own matching task" : "FOREIGN_PAYLOAD_CANARY",
+    status: index % 4 === 1 ? "blocked" : "inbox", placement: "unplaced",
+    assignments: [], createdAt: AT, updatedAt: AT,
+  })));
+  const rebuild = spyOn(BoardSelection.prototype, "sync").mockImplementation(() => {
+    Bun.sleepSync(300);
+    throw Error("slow projection did not complete");
+  });
+  try {
+    const start = performance.now();
+    const result = await h.call("list_tasks", { openOnly: true, statuses: ["blocked"], query: "matching", limit: 5 });
+    const elapsed = Math.round(performance.now() - start);
+    console.log("large task list with 300 ms rebuild fault", elapsed, "ms");
+    expect(result).toMatchObject({ ok: true, count: 5, partial: true,
+      omissions: ["total", "remainingCount", "omittedCount"], hasMore: true, nextCursor: expect.any(String),
+      tasks: [3497, 3493, 3489, 3485, 3481].map(index => expect.objectContaining({ id: `task_${index}`, project: OWN })),
+    });
+    expect(h.wire()).not.toContain("FOREIGN_PAYLOAD_CANARY");
+    expect(rebuild).not.toHaveBeenCalled();
+    expect(elapsed).toBeLessThan(4_000);
+  } finally { rebuild.mockRestore(); }
+});
+
+test("sparse filters advance across tied timestamps and skip terminal and foreign history", async () => {
+  const h = await harness();
+  h.indexed();
+  const tasks = Array.from({ length: 2300 }, (_, index): BoardTask => ({
+    id: `task_${String(index).padStart(4, "0")}`, project: index % 2 ? OWN : FOREIGN,
+    text: index < 6 || index % 2 === 0 || index > 1100 ? "ГОЛКА" : "noise",
+    status: index > 1100 ? "done" : "blocked", placement: "unplaced", assignments: [], createdAt: AT, updatedAt: AT,
+  }));
+  saveTasks(tasks);
+  const db = new Database(h.domain.taskSelectionSource!()!.filename, { readonly: true });
+  try {
+    for (const scoped of [false, true]) for (const phase of ["head", "tied", "older"] as const) {
+      const values = phase === "tied" ? [AT, "task_0777"] : phase === "older" ? [AT, ""] : [""];
+      const plan = db.query<{ detail: string }, Array<string | number>>("EXPLAIN QUERY PLAN " + taskListSeekSql(scoped, phase))
+        .all(...(scoped ? [OWN, "blocked"] : ["blocked"]), ...values, 257).map(row => row.detail);
+      expect(plan).toEqual([expect.stringMatching(/^SEARCH state_rows USING (?:COVERING )?INDEX state_rows_task_list/)]);
+    }
+  } finally { db.close(); }
+  const args = { openOnly: true, query: "голка", limit: 2 };
+  const first = await h.call("list_tasks", args);
+  expect(first).toMatchObject({ ok: true, tasks: [], hasMore: true, nextCursor: expect.any(String) });
+  const second = await h.call("list_tasks", { ...args, cursor: first.nextCursor });
+  expect(second).toMatchObject({ ok: true, tasks: [], hasMore: true, nextCursor: expect.any(String) });
+  expect(second.nextCursor).not.toBe(first.nextCursor);
+  const third = await h.call("list_tasks", { ...args, cursor: second.nextCursor });
+  expect(third).toMatchObject({ ok: true, tasks: [{ id: "task_0005" }, { id: "task_0003" }], hasMore: true, remainingCount: 1,
+    partial: true, omissions: ["total", "omittedCount"] });
+  const fourth = await h.call("list_tasks", { ...args, cursor: third.nextCursor });
+  expect(fourth).toMatchObject({ ok: true, tasks: [{ id: "task_0001" }], hasMore: false, nextCursor: null, remainingCount: 0 });
+  expect(fourth).not.toHaveProperty("total");
+});
+
+test("a missing board index defers the page and leaves explicit ID reads available", async () => {
+  const h = await harness();
+  h.indexed();
+  const source = h.domain.taskSelectionSource!()!;
+  const db = new Database(source.filename);
+  try {
+    db.exec(`DROP INDEX ${taskListIndex.project}`);
+    expect(await h.call("list_tasks", { limit: 1 })).toMatchObject({ ok: true, tasks: [], hasMore: null,
+      omissions: ["taskPage", "total", "remainingCount", "omittedCount"], retryHint: expect.any(String) });
+    expect(await h.call("list_tasks", { ids: ["task_0", "task_1"] })).toMatchObject({ ok: true, total: 1,
+      tasks: [{ id: "task_0", project: OWN }], nextCursor: null, remainingCount: 0 });
+  } finally {
+    for (const sql of taskListIndexes) db.exec(sql);
+    db.close();
+  }
+});
 
 for (const tool of TOOLS) {
   test(`${tool}: SDK key/name/folder/alias and direct reads select identical own rows`, async () => {

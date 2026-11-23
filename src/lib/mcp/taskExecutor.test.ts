@@ -80,6 +80,22 @@ test("the state-writer seed and executor share the declared fixture", async () =
   expect(result.ok).toBe(true);
 });
 
+test("a cold large task page and keyed read share one healthy worker generation", async () => {
+  const executor = create();
+  const started = performance.now();
+  const [page, keyed] = await Promise.all([
+    call(executor, "list_tasks", { project: "fixture", limit: 5 }),
+    call(executor, "get_task", { taskId: seedTaskId }),
+  ]);
+  expect(page).toMatchObject({ ok: true, count: 5, hasMore: true, nextCursor: expect.any(String),
+    partial: true, omissions: ["total", "remainingCount", "omittedCount"] });
+  expect(keyed.ok).toBe(true);
+  expect(performance.now() - started).toBeLessThan(30_000);
+  const next = await call(executor, "list_tasks", { project: "fixture", limit: 5, cursor: page.nextCursor });
+  expect(next).toMatchObject({ ok: true, count: 5 });
+  expect(next.tasks).not.toEqual(page.tasks);
+});
+
 test("a seed with split store roots fails before announcing readiness", async () => {
   const sandbox = fs.mkdtempSync(path.join(root, "seed-refusal-"));
   const initial = path.join(sandbox, "initial"), retargeted = path.join(sandbox, "retargeted");

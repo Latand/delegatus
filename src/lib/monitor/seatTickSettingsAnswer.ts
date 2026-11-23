@@ -1,6 +1,6 @@
 import { turboActive } from "./turbo";
 import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, type SeatTickCheckErrorAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
-import { curationAnswer, curationAnswerCooperatively, type CurationAnswer } from "@/lib/memory/curation/answer";
+import { curationAnswer, readCurationPanel, type CurationAnswer } from "@/lib/memory/curation/answer";
 import { autonomyActive, proactiveActive, type AutonomySetting } from "./autonomy";
 import { viewerOwnProjectKeys } from "./seatTickSources";
 import { releaseStatus, type ReleaseStatus } from "@/lib/release/answer";
@@ -387,22 +387,11 @@ export async function seatTickSettingsAnswerCooperatively(
   project: string, changed: boolean, actor: SeatTickSettingsActor,
   signal?: AbortSignal, ports: SeatTickSettingsAnswerPorts = {},
 ): Promise<SeatTickSettingsAnswer> {
-  const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(Error("curation panel read timed out")), 5000);
-  const requestSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
-  try {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      requestSignal.throwIfAborted();
-      const now = (ports.now ?? Date.now)();
-      const settings = (ports.settings ?? readSeatTickSettings)(project);
-      const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
-      const curation = await curationAnswerCooperatively(project, effective, now, requestSignal);
-      requestSignal.throwIfAborted();
-      if (JSON.stringify((ports.settings ?? readSeatTickSettings)(project)) !== JSON.stringify(settings)) continue;
-      return seatTickSettingsAnswer(project, changed, actor, { ...ports, now: () => now, settings: () => settings, curation: () => curation });
-    }
-    throw Error("seat tick settings changed while being read");
-  } finally { clearTimeout(timer); }
+  signal?.throwIfAborted();
+  const readSettings = ports.settings ?? readSeatTickSettings;
+  const { now, settings, curation } = await readCurationPanel(project, readSettings(project), readSettings,
+    { budget: 5000, wakeIntervalMs: SEAT_TICK_WAKE_INTERVAL_MS, signal, now: ports.now });
+  return seatTickSettingsAnswer(project, changed, actor, { ...ports, now: () => now, settings: () => settings, curation: () => curation });
 }
 
 /** Compact tool reads include a failure only; successful attempts stay in the journal. */

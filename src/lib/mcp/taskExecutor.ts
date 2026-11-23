@@ -313,6 +313,8 @@ export class McpTaskExecutor {
       const job = this.pending.get(reply.id);
       const result = reply.http ? { http: reply.http } : reply.result;
       if (!job || (!result && !reply.error)) throw new Error("invalid task executor reply");
+      // A completed call proves liveness even when heartbeats queue behind replies.
+      heartbeat();
       job.finish(reply.error ? new Error(reply.error) : undefined, result);
     }, id => {
       if (id === 0) return;

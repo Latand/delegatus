@@ -10698,6 +10698,14 @@ export class AgentRegistry {
       { skipColdKeyInitialization: true });
   }
 
+  /** Board disclosure checks use keyed rows and aliases from one registry read. */
+  withBoardCallerLookup<T>(read: (lookup: Pick<ConversationLookup, "conversation" | "canonicalConversationId">) => T): T {
+    return this.readKeyed(file => read({
+      canonicalConversationId: id => resolveConversationAlias(file, id),
+      conversation: id => file.conversations[resolveConversationAlias(file, id)] ?? null,
+    }), { skipColdKeyInitialization: true });
+  }
+
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
     return this.readKeyed(file => resolveConversationAlias(file, id), { skipColdKeyInitialization: true });
   }
