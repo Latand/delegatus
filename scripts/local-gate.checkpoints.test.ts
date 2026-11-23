@@ -15,15 +15,16 @@ test("shared comparator inputs retain every split test group in publication sele
   const groups = ["scripts/local-gate-tests.test.ts", "scripts/local-gate-tests.retry.test.ts", "scripts/local-gate-tests.recovery.test.ts", "scripts/local-gate-tests.teardown.test.ts",
     "scripts/local-gate-tests.rendezvous.test.ts", "scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate-tests.dependencies.test.ts"];
   const publication = ["scripts/local-gate.runtime.test.ts", "scripts/local-gate.execution.test.ts", "scripts/local-gate.groups.test.ts", "scripts/local-gate.invalidation.test.ts", "scripts/local-gate.git.test.ts", "scripts/local-gate.lint.test.ts", "scripts/local-gate.native.test.ts", "scripts/local-gate.binding.test.ts", "scripts/local-gate.hooks.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.test.ts"];
+  const checkpoints = ["scripts/local-gate.checkpoints.test.ts", "scripts/local-gate.checkpoints.hook.test.ts"];
   const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/local-gate-tests.fixture.ts", "scripts/local-gate-tests.ts", "scripts/gate-cache.ts"]),
-    tests: [...groups, ...publication, "scripts/local-gate.checkpoints.test.ts", "scripts/unrelated.test.ts"],
+    tests: [...groups, ...publication, ...checkpoints, "scripts/unrelated.test.ts"],
     linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
   const selected = (file: string) => plan("pre-push", [file], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
   expect(selected("scripts/local-gate-tests.fixture.ts")).toEqual(groups.map(file => `./${file}`).sort());
   for (const shared of ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"]) {
-    expect(selected(shared)).toEqual([...groups, ...publication, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
+    expect(selected(shared)).toEqual([...groups, ...publication, ...checkpoints].map(file => `./${file}`).sort());
   }
-  expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
+  expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, ...checkpoints].map(file => `./${file}`).sort());
 });
 
 test("shared compiler fixtures retain every owned launch matrix in publication selection", () => {
@@ -59,9 +60,9 @@ test("fixture contract", () => { ${interrupted ? "process.exit(124);" : "expect(
   const base = git("rev-parse", "HEAD"); git("update-ref", "refs/remotes/origin/main", base);
   writeFileSync(path.join(repo, "b.test.ts"), source("b", true));
   git("add", "."); git("commit", "-m", "Add incomplete check fixture");
-  const run = (extra: Partial<NodeJS.ProcessEnv> = {}) => {
-    const result = spawnSync(process.execPath, [path.join(import.meta.dir, "local-gate-tests.ts"), "--base", base, "./a.test.ts", "./b.test.ts"],
-      { cwd: repo, env: { ...env, ...extra }, encoding: "utf8", timeout: 30_000 });
+  const run = (extra: Partial<NodeJS.ProcessEnv> = {}, cwd = repo, comparison = base) => {
+    const result = spawnSync(process.execPath, [path.join(import.meta.dir, "local-gate-tests.ts"), "--base", comparison, "./a.test.ts", "./b.test.ts"],
+      { cwd, env: { ...env, ...extra }, encoding: "utf8", timeout: 30_000 });
     return { status: result.status, output: result.stdout + result.stderr };
   };
   const samples = () => readFileSync(marker, "utf8").trim().split("\n").reduce((counts, name) => {
@@ -85,6 +86,44 @@ serviceTest("an incomplete head run retains only complete green files across fre
   const changed = f.run(); expect(changed.status, changed.output).toBe(0);
   expect(f.samples()).toEqual({ a: 2, b: 3 });
   const green = f.run(); expect(green.status, green.output).toBe(0);
+  expect(f.samples()).toEqual({ a: 2, b: 3 });
+}, 60_000);
+
+serviceTest("external roots with gate-shaped names retain their distinct checkpoint keys", () => {
+  const f = fixture();
+  const rootsFor = (name: string) => isolatedEnvironment(path.join(f.root, `delegatus-local-gate-${name}`), process.env);
+  const first = rootsFor("aaaaaa"), second = rootsFor("bbbbbb");
+  const checkpoint = "reused complete green head file a.test.ts";
+  expect(f.run(first).output).not.toContain(checkpoint);
+  expect(f.run(second).output).not.toContain(checkpoint);
+  expect(f.run(first).output).toContain(checkpoint);
+  expect(f.samples()).toEqual({ a: 2, b: 3 });
+}, 60_000);
+
+serviceTest.each(["XDG_STATE_HOME", "XDG_RUNTIME_DIR"])("changing only an external %s invalidates head checkpoints", name => {
+  const f = fixture();
+  const pathFor = (id: string) => {
+    const directory = path.join(f.root, id);
+    mkdirSync(directory);
+    return { [name]: directory, LLV_GATE_CHECK_ENV: name };
+  };
+  const first = pathFor("first"), second = pathFor("second");
+  const checkpoint = "reused complete green head file a.test.ts";
+  expect(f.run(first).output).not.toContain(checkpoint);
+  expect(f.run(second).output).not.toContain(checkpoint);
+  expect(f.run(first).output).toContain(checkpoint);
+  expect(f.samples()).toEqual({ a: 2, b: 3 });
+}, 60_000);
+
+serviceTest("identical detached worktrees in the shared cache require their own file observations", () => {
+  const f = fixture();
+  const peer = path.join(f.root, "peer");
+  f.git("checkout", "--detach");
+  f.git("worktree", "add", "--detach", peer, "HEAD");
+  const checkpoint = "reused complete green head file a.test.ts";
+  expect(f.run().output).not.toContain(checkpoint);
+  expect(f.run({}, peer).output).not.toContain(checkpoint);
+  expect(f.run().output).toContain(checkpoint);
   expect(f.samples()).toEqual({ a: 2, b: 3 });
 }, 60_000);
 
@@ -127,6 +166,33 @@ serviceTest("head checkpoints invalidate environment and ignored inputs, and ref
   for (const name of readdirSync(cache)) writeFileSync(path.join(cache, name), "incomplete receipt");
   expect(f.run().status).toBe(0);
   expect(f.samples()).toEqual({ a: 5, b: 5 });
+}, 60_000);
+
+serviceTest("head checkpoints invalidate installed dependency bytes and the merge base", () => {
+  const f = fixture();
+  const dependency = path.join(f.repo, "node_modules", "fixture", "index.js");
+  mkdirSync(path.dirname(dependency), { recursive: true });
+  mkdirSync(path.join(f.repo, ".git/info"), { recursive: true });
+  writeFileSync(path.join(f.repo, ".git/info/exclude"), "node_modules/\n");
+  writeFileSync(dependency, "export default 1;\n");
+  writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b"));
+  f.git("add", "."); f.git("commit", "-m", "Complete fixture check");
+  const base = f.git("rev-parse", "HEAD^"), head = f.git("rev-parse", "HEAD");
+  const run = (comparison = base) => {
+    f.git("update-ref", "refs/remotes/origin/main", comparison);
+    const result = f.run({}, f.repo, comparison);
+    expect(result.status, result.output).toBe(0);
+    return result.output;
+  };
+  const checkpoint = "reused complete green head file";
+  expect(run()).not.toContain(checkpoint);
+  expect(run().match(new RegExp(checkpoint, "g"))).toHaveLength(2);
+  writeFileSync(dependency, "export default 2;\n");
+  expect(run()).not.toContain(checkpoint);
+  expect(f.samples()).toEqual({ a: 2, b: 2 });
+  expect(run(head)).not.toContain(checkpoint);
+  expect(f.samples()).toEqual({ a: 3, b: 3 });
+  expect(run(head).match(new RegExp(checkpoint, "g"))).toHaveLength(2);
 }, 60_000);
 
 serviceTest("an aggregate deadline preserves completed files without certifying the interrupted run", () => {

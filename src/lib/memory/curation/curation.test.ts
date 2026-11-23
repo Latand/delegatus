@@ -846,6 +846,30 @@ test("scheduled custody survives a process restart and retains the original fini
   } finally { f.registry.close(); }
 }, 20_000);
 
+test("a curator permission check sees a receipt revoked by a second registry connection", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT } = await import("./custody.fixture");
+  const { curatorRecoveryGuard } = await import("./admission");
+  const previousBackend = process.env.LLV_AGENT_REGISTRY_SQLITE;
+  process.env.LLV_AGENT_REGISTRY_SQLITE = "sqlite";
+  let peer: AgentRegistry | undefined, registry: AgentRegistry | undefined;
+  try {
+    fixture(roleScope(CUSTODY_PROJECT, "builder"));
+    const f = scheduledCustodyFixture(dir);
+    registry = f.registry;
+    const { pass } = await f.start();
+    const check = await curatorRecoveryGuard(pass.conversationId!, f.sources);
+    expect(check().id).toBe(pass.id);
+    peer = new AgentRegistry(path.join(dir, "custody-registry.json"));
+    peer.agentStateWrite(file => { file.receipts[pass.launchId!]!.state = "failed"; });
+    expect(check).toThrow();
+  } finally {
+    peer?.close();
+    registry?.close();
+    if (previousBackend === undefined) delete process.env.LLV_AGENT_REGISTRY_SQLITE;
+    else process.env.LLV_AGENT_REGISTRY_SQLITE = previousBackend;
+  }
+});
+
 test.each(["seat-epoch", "seat-conversation", "designation", "host-gone", "wakes-off", "curator-off", "deployment", "memory-off", "receipt-failed", "wrong-conversation", "machine-claim-lost"] as const)("scheduled custody still refuses %s after wake expiry", async kind => {
   const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
   const { curatorRecoveryGuard } = await import("./admission");

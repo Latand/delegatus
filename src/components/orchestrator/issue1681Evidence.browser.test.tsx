@@ -53,8 +53,22 @@ const serverActionBoundary: BunPlugin = {
 };
 
 const browserTest = process.env.LLV_SEAT_TICK_BROWSER_TEST === "1" ? test : test.skip;
-const EVIDENCE = path.resolve("evidence/issue-1681");
+const EVIDENCE = path.resolve(process.env.LLV_EVIDENCE_DIR
+  ? path.join(process.env.LLV_EVIDENCE_DIR, "seat-tick") : "evidence/issue-1681");
 const OUT = path.resolve(".artifacts/issue-1681");
+
+async function launchBrowser() {
+  const originalTmp = process.env.TMPDIR;
+  const browserTmp = process.env.LLV_BROWSER_TMPDIR;
+  if (browserTmp) process.env.TMPDIR = browserTmp;
+  try {
+    return await chromium.launch({ headless: true, args: ["--no-sandbox"],
+      ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), env: { ...process.env } });
+  } finally {
+    if (originalTmp === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = originalTmp;
+  }
+}
 
 interface Rect { x: number; y: number; width: number; height: number }
 
@@ -298,7 +312,7 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
       );
     },
   });
-  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const browser = await launchBrowser();
   const base = `http://127.0.0.1:${server.port}`;
   let evidence: Record<string, unknown>;
   try {
@@ -586,7 +600,7 @@ browserTest("#2396 rendered: the seat tick panel at 1440 and 390, light and dark
       );
     },
   });
-  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const browser = await launchBrowser();
   const base = `http://127.0.0.1:${server.port}`;
   const desktops: Awaited<ReturnType<typeof panelDesktop>>[] = [];
   const phones: Awaited<ReturnType<typeof panelPhone>>[] = [];
@@ -689,7 +703,7 @@ browserTest("context auto-rotation rendered in the shared tick panel, English an
       );
     },
   });
-  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const browser = await launchBrowser();
 
   const base = `http://127.0.0.1:${server.port}`;
   const readings: unknown[] = [];
@@ -778,13 +792,13 @@ browserTest("automatic releases rendered in the shared tick panel, English and U
       );
     },
   });
-  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const browser = await launchBrowser();
 
   const base = `http://127.0.0.1:${server.port}`;
   const readings: unknown[] = [];
   try {
     for (const theme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
-      for (const layout of [{ width: 1440, height: 900, dock: 440, surface: "desktop" }, { width: 390, height: 844, dock: 0, surface: "phone" }]) {
+      for (const layout of [{ width: 1440, height: 900, dock: 440, surface: "desktop" }, { width: 768, height: 900, dock: 440, surface: "desktop" }, { width: 390, height: 844, dock: 0, surface: "phone" }]) {
         const context = await browser.newContext({ viewport: { width: layout.width, height: layout.height }, colorScheme: theme });
         try {
           const page = await context.newPage();
@@ -837,6 +851,29 @@ browserTest("automatic releases rendered in the shared tick panel, English and U
           await page.click(phone ? '[data-mobile2-open="tick"]' : "[data-seat-tick-chip]");
           await page.waitForSelector("[data-seat-tick-release]");
           expect(await page.locator("[data-seat-tick-release-reason]").count()).toBe(0);
+          await page.goto(`${base}/?surface=${layout.surface}&dock=${layout.dock}&locale=${locale}&release=mismatch&face=default`);
+          await page.waitForSelector(phone ? "[data-seat-tick-row]" : "[data-seat-tick-chip]");
+          await page.click(phone ? '[data-mobile2-open="tick"]' : "[data-seat-tick-chip]");
+          await page.waitForSelector("[data-seat-tick-release-reason]");
+          const topMismatch = await page.locator("[data-seat-tick-release-reason-top]").evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            const host = document.querySelector("[data-seat-tick-popover]") ?? document.querySelector('[data-mobile2-sheet="tick"]')!;
+            const bounds = host.getBoundingClientRect();
+            return { top: rect.top, bottom: rect.bottom, hostTop: bounds.top, hostBottom: bounds.bottom,
+              text: element.textContent, fullTextVisible: rect.top >= Math.max(0, bounds.top) && rect.bottom <= Math.min(innerHeight, bounds.bottom) };
+          });
+          expect(topMismatch.text).toBe(translate(locale, "seatTick.release.wait.versionMismatch"));
+          expect(topMismatch.fullTextVisible, `${locale} ${theme} ${layout.width}: ${JSON.stringify(topMismatch)}`).toBe(true);
+          const mismatch = await page.locator("[data-seat-tick-release-reason]").evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            const host = document.querySelector("[data-seat-tick-popover]") ?? document.querySelector('[data-mobile2-sheet="tick"]')!;
+            const bounds = host.getBoundingClientRect();
+            return { top: rect.top, bottom: rect.bottom, hostTop: bounds.top, hostBottom: bounds.bottom,
+              text: element.textContent, fullTextVisible: rect.top >= Math.max(0, bounds.top) && rect.bottom <= Math.min(innerHeight, bounds.bottom) };
+          });
+          expect(mismatch.text).toBe(translate(locale, "seatTick.release.wait.versionMismatch"));
+          expect(mismatch.fullTextVisible, `${locale} ${theme} ${layout.width}: ${JSON.stringify(mismatch)}`).toBe(true);
+          readings.push({ theme, locale, viewport: layout, mismatch });
         } finally { await context.close(); }
       }
     }

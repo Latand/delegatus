@@ -31,6 +31,7 @@ export interface BoundaryEvent {
   opensWork?: boolean;
   synthetic?: boolean;
   release?: boolean;
+  nativeCodexTerminal?: boolean;
 }
 
 /** Remove message bodies before retaining any recovery page. */
@@ -53,7 +54,8 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
     // The ordinary user echo has no native id and follows task_started. It
     // must not erase that id and let an older cached terminal close this turn.
     if (type === "user_message") return { kind: "start", type, id, at };
-    if (["task_complete", "turn_complete", "turn_completed", "turn_aborted"].includes(type)) return { kind: "terminal", type, id, at, outcome: type === "turn_aborted" ? "interrupted" : "completed" };
+    if (["task_complete", "turn_complete", "turn_completed", "turn_aborted"].includes(type)) return { kind: "terminal", type, id, at, outcome: type === "turn_aborted" ? "interrupted" : "completed",
+      ...(record.type === "event_msg" && (data.turn_id ?? data.turnId) ? { nativeCodexTerminal: true } : {}) };
     if (/tool|function|command/.test(type)) return { kind: /output|_result$/.test(type) ? "output" : "tool", type, id, at };
     return null;
   }
@@ -206,10 +208,13 @@ interface Cached {
   /** The turn came from the tail after an unrecoverable record, without its
       opening. Appends rescan the tail rather than fold onto it. */
   tail?: boolean;
+  tailTerminal?: BoundaryEvent;
 }
 export interface TranscriptAcquisition {
   turn: Fact<NativeTurn>;
   readonly transcript: Fact<TranscriptVersion>;
+  /** A native boundary awaiting independent confirmation from the host. */
+  readonly tailTerminal?: BoundaryEvent;
 }
 export class AgentTranscriptCache {
   private readonly rows = new Map<string, Cached>();
@@ -411,7 +416,7 @@ export class AgentTranscriptCache {
     finally { await handle?.close(); }
   }
   private answer(cached: Cached, evidence: Evidence, localRef: string | null): TranscriptAcquisition {
-    return { transcript: fact(cached.version, evidence), turn: cached.complete && cached.turn
+    return { transcript: fact(cached.version, evidence), ...(cached.tailTerminal ? { tailTerminal: cached.tailTerminal } : {}), turn: cached.complete && cached.turn
       ? fact({ ...cached.turn, localRef }, { ...evidence, ...(cached.turn.at === null ? {} : { eventAt: cached.turn.at }) })
       : cached.complete && cached.version.size === 0 && localRef === null
         ? fact({ state: "absent", nativeId: null, localRef: null, opening: null, closing: null, at: null, tools: 0 }, evidence)
@@ -426,6 +431,10 @@ export async function transcriptVersionMatches(path: string, signature: string):
 }
 
 function settleFromTail(cached: Cached, turn: NativeTurn | null, refusal: string): void {
+  const last = cached.events.at(-1);
+  if (!turn && last?.nativeCodexTerminal && last.id && !cached.events.some(event => event.kind === "start")) {
+    cached.tailTerminal = last;
+  }
   cached.events = []; cached.complete = true; cached.turn = turn; cached.tail = true;
   if (turn) delete cached.refusal; else cached.refusal = refusal;
 }

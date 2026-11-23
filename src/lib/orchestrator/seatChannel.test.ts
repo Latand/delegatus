@@ -1,8 +1,10 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { initializeStateCollections } from "@/lib/state/sqliteStateStore";
 import { startComposerPayloadRuntime, type ComposerPayloadRuntime } from "@/lib/runtime/fixtures/composerPayloadRuntime";
-import { UnixRuntimeHostClient } from "@/lib/runtime/client";
+import { UnixRuntimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 import { lookupOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { deliverConversationMessage } from "@/lib/delivery";
@@ -310,6 +312,41 @@ test("withdrawal cannot end a message that entered dispatch during its journal w
   expect(runtime.journal.operationResult(original.operationId)?.receipt.status).toBe("delivering");
 }));
 
+test("a retained unknown observes peer settlement during the journal read and resumes on new evidence", async () => {
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "seat-channel-peer-"));
+  process.env.LLV_STATE_DIR = root;
+  const filename = path.join(root, "registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const conversation = registry.ensureConversation("codex", path.join(root, "former.jsonl"), null);
+    const held = registry.holdDelivery(conversation.id, "fixture", "retained-send");
+    const operationId = held.command.operationId;
+    const revocation = { project: "channel-project", conversationId: conversation.id, seatEpoch: 1, revokedAt: AT };
+    const record = { fromConversationId: conversation.id, fromOperationId: operationId, revokedSeatEpoch: 1,
+      project: revocation.project, class: "channel", outcome: "unknown", at: AT, revokedAt: AT,
+      payload: { text: held.text }, clientMessageId: held.clientMessageId, revision: 4 };
+    initializeStateCollections(path.join(root, "state.sqlite"), [{ collection: "seat-channel", schemaVersion: 1,
+      migrationId: "seat-channel-v1", key: () => operationId, controllerActive: () => true, loadRecords: () => [record] }]);
+    let missing = true;
+    const ports: SeatChannelPorts = { registry, ownsTraffic: () => true, now: () => Date.parse(AT),
+      enqueue: async () => { throw Error("already delivered"); }, client: { operationStatus: async () => {
+        if (!missing) return { operationId, receipt: { status: "failed", reason: "cancelled" } };
+        peer.recordDeliveryOutcome(held.id, "delivered");
+        return null;
+      } } as unknown as RuntimeHostClient };
+    expect(await reconcileSeatChannel(revocation, ports)).toBe(false);
+    expect(seatChannelRecord(operationId)).toMatchObject({ revision: 4, outcome: "unknown" });
+    missing = false;
+    expect(await reconcileSeatChannel(revocation, ports)).toBe(true);
+    expect(seatChannelRecord(operationId)?.outcome).toBe("dropped");
+  } finally {
+    peer.close();
+    registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a held withdrawal that loses its registry race is never redirected", async () => fixture(async (runtime, ports) => {
   designate(runtime);
   const original = await ports.enqueue({ path: runtime.artifactPath, conversationId: runtime.conversationId,
@@ -321,10 +358,8 @@ test("a held withdrawal that loses its registry race is never redirected", async
   const delivery = snapshot.heldDeliveries[owner.deliveryId]!;
   const racingRegistry = new Proxy(runtime.registry, {
     get(target, key) {
-      if (key === "readOnlySnapshot") return () => {
-        const current = target.readOnlySnapshot();
-        return { ...current, heldDeliveries: { ...current.heldDeliveries, [delivery.id]: { ...delivery, state: "held" } } };
-      };
+      if (key === "heldDeliveryById") return (id: string) =>
+        id === delivery.id ? { ...delivery, state: "held" } : target.heldDeliveryById(id);
       if (key === "deliveryWrite") return async (metadata: Parameters<typeof target.deliveryWrite>[0], write: () => unknown) => {
         if (metadata.label === "delivery.seat-channel") return { acquired: true, value: "too-late" as const };
         return target.deliveryWrite(metadata, write as never);

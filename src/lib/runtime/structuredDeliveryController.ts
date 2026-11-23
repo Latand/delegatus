@@ -4,6 +4,7 @@ import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sendFailureWarningSuppressed, sweepSendFailureNotices } from "./sendFailureNotice";
 import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "./agentScope";
 import { withHostStopOrigin } from "./hostExit";
+import { checkoutMergerCutForOperation, currentCheckoutMerger } from "./checkoutMergerRecovery";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
@@ -12,7 +13,7 @@ import { AgentTranscriptCache } from "@/lib/agentState/transcript";
 import { registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
-import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
+import { detachCodexHostForViewerRestart, flushStructuredHostPersistence, matchesStructuredHostCustody, structuredHostCustody, type AdoptedHostCustody } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
@@ -90,7 +91,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends, settleEchoedSend } from "./sendSettlement";
+import { confirmJournalDelivery, deliveryRouteOf, fencePendingSends, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends, settleEchoedSend } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary, realtimeBoundConversationIds } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -104,6 +105,7 @@ import {
 type ObservableEngineHost = EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
 type IdentityBoundEngineHost = ObservableEngineHost & {
   releaseIfOwned?(expected: Readonly<ProcessIdentity>): Promise<boolean>;
+  detachAfterStartupCustodyLoss?(): void;
 };
 type StructuredConversationRecovery = typeof import("./structuredRecovery")["recoverDeadStructuredConversation"];
 export interface StructuredDeliveryHost {
@@ -115,6 +117,7 @@ export interface StructuredDeliveryHost {
       outlives its claim never publishes under a successor's fence. */
   writerEpoch?: number | null;
   mcpOwner?: SeatTickConversation["viewerMcpOwner"];
+  custody?: AdoptedHostCustody | null;
 }
 
 interface HostAttachment {
@@ -122,7 +125,17 @@ interface HostAttachment {
   stopEvents: () => Promise<void>;
 }
 
-type PreparedStartupPublication = { registry: AgentRegistry; snapshot: RegistryFile };
+type PreparedStartupPublication = {
+  registry: AgentRegistry;
+  snapshot: RegistryFile;
+  ownsHost?: (item: StructuredDeliveryHost) => boolean;
+};
+
+type RegisterStructuredDeliveryHost = (
+  item: StructuredDeliveryHost,
+  ownsOperation?: () => Promise<boolean>,
+  ownsStartupHost?: () => boolean,
+) => Promise<() => Promise<void>>;
 
 /* One lifecycle per host (#1191). The seat a delivery resolves the host from
    and the registration that owns its state subscription, event pump and
@@ -131,11 +144,7 @@ type PreparedStartupPublication = { registry: AgentRegistry; snapshot: RegistryF
    successor goes live, and filled in by the registration that follows. Giving
    the seat up sets `cancelled`, which that registration can no longer commit
    past — so a host released or terminated mid-registration stays gone. */
-interface HostRegistration {
-  key: SessionKey;
-  host: ObservableEngineHost;
-  writerEpoch?: number | null;
-  mcpOwner?: SeatTickConversation["viewerMcpOwner"];
+interface HostRegistration extends StructuredDeliveryHost {
   attachment: HostAttachment | null;
   cancelled: boolean;
 }
@@ -148,6 +157,7 @@ const DELIVERY_DRAIN_MAX_BACKOFF_MS = 1_000;
 /** How often the delivery watchdog looks for stalls, overdue wakes and lanes
     to reconcile. */
 const DELIVERY_WATCHDOG_MS = 1_000;
+const GUARD_RETRY_LOG_INTERVAL_MS = 60_000;
 /** How often accepted sends past their settlement deadline are ended with no
     reader asking (incident 2026-10-06). */
 const DELIVERY_SETTLEMENT_SWEEP_MS = 15_000;
@@ -166,11 +176,12 @@ interface ControllerState {
   activeHosts: Map<string, EngineHost> | null;
   heapCounts?: (() => { registrations: number; attachments: number; pendingPublishChains: number }) | null;
   readMcpObservation?: ((conversationId: string) => ViewerMcpObservation | undefined) | null;
-  registerActiveHost: ((item: StructuredDeliveryHost, ownsOperation?: () => Promise<boolean>) => Promise<() => Promise<void>>) | null;
+  registerActiveHost: RegisterStructuredDeliveryHost | null;
   /* The hosts this generation currently serves, as re-registrable items. A
      successor takes them over at the swap, so a rebind never leaves a
      conversation without a resolvable host (#1191). */
   activeRegistrations: (() => readonly StructuredDeliveryHost[]) | null;
+  activeRegistration?: ((key: SessionKey) => StructuredDeliveryHost | undefined) | null;
   republishActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   releaseActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>) => Promise<boolean>) | null;
@@ -275,6 +286,7 @@ function retireStructuredDeliveryPublication(): void {
   state.readMcpObservation = null;
   state.registerActiveHost = null;
   state.activeRegistrations = null;
+  state.activeRegistration = null;
   state.republishActiveHost = null;
   state.releaseActiveHost = null;
   state.terminateActiveHost = null;
@@ -319,9 +331,10 @@ function hostProjectionKey(state: HostState): string {
 export async function publishStructuredHostProjection(
   client: RuntimeHostClient,
   event: RuntimeEventInput,
+  invalidateFiles = true,
 ): Promise<void> {
   await client.append(event);
-  await publishFilesRevision(client);
+  if (invalidateFiles) await publishFilesRevision(client);
 }
 
 function hostResolver(
@@ -968,6 +981,9 @@ export async function bindStructuredDeliveryQueue(
       progressStore.note(operationId, conversationId, note);
     },
     stalled: (operationId) => progressStore.stalled(operationId),
+    flush: () => !stopped && state.activeQueue === queue && progressStore.flush(),
+    releaseRecoveryAttempt: (operationId, attempt, executorId) => !stopped && state.activeQueue === queue
+      && progressStore.releaseRecoveryAttempt(operationId, attempt, executorId),
     deadline: (operationId, deadlineAt, policy) => {
       if (!stopped && state.activeQueue === queue) progressStore.deadline(operationId, deadlineAt, policy);
     },
@@ -1077,6 +1093,20 @@ export async function bindStructuredDeliveryQueue(
         return !!session && runtimeIdleKillMatches({ ...session, retirementBlocked: false }, session.sessionKey, fence);
       },
       seatQuotaDispatchGuard: prepareSeatQuotaDispatch,
+      checkoutMergerDispatchGuard: async (operationId, conversationId) => {
+        const cut = checkoutMergerCutForOperation(registry.filename, conversationId, operationId);
+        if (!cut) throw new StructuredSendRefusedError("checkout merger recovery window or inventory changed");
+        if (await hasRuntimeSwitchKill(client, conversationId, cut.capturedAt, [], true, true)) {
+          throw new StructuredSendRefusedError("the merger was explicitly stopped");
+        }
+        return () => {
+          const current = currentCheckoutMerger(registry.livenessConversationSnapshot(cut.conversationId), cut);
+          if (!checkoutMergerCutForOperation(registry.filename, conversationId, operationId)
+            || current?.claimEpoch !== cut.claimEpoch + 1) {
+            throw new StructuredSendRefusedError("checkout merger recovery authority changed");
+          }
+        };
+      },
       bindDeliveryGeneration: async (operationId, generationId) => {
         const bound = await registry.bindDeliveryOperationGenerationOffLoop(operationId, generationId);
         /* The queue defers the message and comes back; nothing was handed over. */
@@ -1154,6 +1184,9 @@ export async function bindStructuredDeliveryQueue(
       },
       ...(typeof client.events === "function" ? { events: (afterEventSeq: number) => client.events(afterEventSeq) } : {}),
       status: async (operationId: string) => (await client.operationStatus(operationId))?.receipt ?? null,
+      fencePendingSends: operationIds => fencePendingSends(operationIds, { registry, client, progress, assertActive: () => {
+        if (stopped || state.activeQueue !== queue) throw new Error("delivery executor retired");
+      } }),
       /* The durable delivery record's own fence (#1131): a send a receipt query
          already ended — the only answer it could give while this socket was
          unreachable — must not be actuated when the socket comes back. */
@@ -1609,6 +1642,9 @@ export async function bindStructuredDeliveryQueue(
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
   let guarding: Promise<void> | null = null;
+  let diagnosedGuard: Promise<void> | null = null;
+  let nextGuardLogAt = 0;
+  let suppressedGuardFailures = 0;
   const guardHosts = () => {
     if (!registry.quotaObservations("codex").some(row => accountCreditGuardBlock("codex", row.accountId, row.limits))) {
       guardHostPage.reset();
@@ -1636,11 +1672,32 @@ export async function bindStructuredDeliveryQueue(
       guarding = null;
       if (guardHostPage.pending && !stopped && state.activeQueue === queue) scheduleDrain();
     });
+  const enforceGuardWithDiagnostic = (onlyIfChanged = false): Promise<void> => {
+    if (diagnosedGuard) return diagnosedGuard;
+    const run = Promise.resolve().then(() => enforceGuard(onlyIfChanged)).then(undefined, error => {
+      if (!stopped && state.activeQueue === queue) {
+        const now = performance.now();
+        if (nextGuardLogAt === 0 || now >= nextGuardLogAt) {
+          controllerDiagnosticError("[structured delivery] paid-credit guard retry pending",
+            nextGuardLogAt === 0 ? error : { suppressedFailures: suppressedGuardFailures });
+          nextGuardLogAt = now + GUARD_RETRY_LOG_INTERVAL_MS;
+          suppressedGuardFailures = 0;
+        } else suppressedGuardFailures++;
+      }
+      throw error;
+    }).finally(() => { if (diagnosedGuard === run) diagnosedGuard = null; });
+    diagnosedGuard = run;
+    return run;
+  };
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
   const drainWithRetry = async (afterAdmission = false, freshAdmission = false, conversationId?: string): Promise<void> => {
     if (stopped) return;
+    let guardFailed = false;
     try {
-      if (!startupPending) await enforceGuard();
+      if (!startupPending) {
+        try { await enforceGuardWithDiagnostic(); }
+        catch (error) { guardFailed = true; throw error; }
+      }
       if (freshAdmission && conversationId) await queue.drainFreshAdmission(conversationId);
       else if (afterAdmission) await queue.drainAfterAdmission(freshAdmission);
       else await queue.drain();
@@ -1656,12 +1713,12 @@ export async function bindStructuredDeliveryQueue(
       if (retryScheduled && (!freshAdmission || !conversationId)) {
         drainBackoffMs = Math.min(retryMs * 2, DELIVERY_DRAIN_MAX_BACKOFF_MS);
       }
-      controllerDiagnosticError(
-        retryScheduled
-          ? "[structured delivery] queue drain failed; retry scheduled"
-          : "[structured delivery] queue drain failed; retry already pending",
-        error,
-      );
+      if (!guardFailed) controllerDiagnosticError(
+          retryScheduled
+            ? "[structured delivery] queue drain failed; retry scheduled"
+            : "[structured delivery] queue drain failed; retry already pending",
+          error,
+        );
     }
   };
   requestDrain = () => {
@@ -1938,32 +1995,36 @@ export async function bindStructuredDeliveryQueue(
      host while the caller was told it is live (#1191). Re-drive the item
      through whoever owns the publication now; with nobody owning it, the
      caller learns the controller is unavailable and can retry. */
-  const registerThroughSuccessor = async (
-    item: StructuredDeliveryHost,
-    ownsOperation?: () => Promise<boolean>,
-  ): Promise<() => Promise<void>> => {
+  const registerThroughSuccessor: RegisterStructuredDeliveryHost = async (item, ownsOperation, ownsStartupHost) => {
     const successor = state.registerActiveHost;
     if (!successor || successor === register) throw new StructuredDeliveryControllerUnavailableError();
-    return await successor(item, ownsOperation);
+    return await successor(item, ownsOperation, ownsStartupHost);
   };
-  const register = async (
-    item: StructuredDeliveryHost,
-    ownsOperation?: () => Promise<boolean>,
-  ): Promise<() => Promise<void>> => {
-    if (superseded()) return await registerThroughSuccessor(item, ownsOperation);
-    if (ownsOperation && !await ownsOperation()) return async () => {};
+  const register: RegisterStructuredDeliveryHost = async (item, ownsOperation, ownsStartupHost) => {
+    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, ownsStartupHost);
+    if ((ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) return async () => {};
     const key = sessionKeyId(item.key);
     const current = registrations.get(key);
     const publicationEntry = entryForHost(registry, item);
     /* A carried-over seat keeps the epoch it was registered at. */
     if (item.writerEpoch === undefined) item = { ...item, writerEpoch: publicationEntry?.structuredHost?.writerClaimEpoch ?? null };
     if (item.mcpOwner === undefined) item = { ...item, mcpOwner: viewerMcpOwnerForEntry(publicationEntry ?? undefined) };
+    if (item.custody === undefined) item = { ...item, custody: structuredHostCustody(publicationEntry) };
     /* The same host under the same key either already holds a registration of
        this generation, with nothing left to do, or holds a carried-over seat
        this call is filling in. Any other host under that key is replaced. */
     const seat = current && current.host === item.host ? current : null;
     if (seat?.attachment) return async () => {};
-    if (current && !seat) await unregisterHost(key, current.host);
+    if (current && !seat) {
+      if (current.custody && item.custody && matchesStructuredHostCustody(item.custody, publicationEntry)
+        && !matchesStructuredHostCustody(current.custody, publicationEntry)) {
+        // The successor can own the same native listener. Disconnect only
+        // the predecessor adapter before removing its event subscription.
+        (current.host as IdentityBoundEngineHost).detachAfterStartupCustodyLoss?.();
+      }
+      await unregisterHost(key, current.host);
+      if (ownsStartupHost?.() === false) return async () => {};
+    }
     /* The seat was given up while this registration was in flight — released,
        terminated, replaced, or filled in by another call. Its lifecycle ended
        there, so this call must not commit: the host would come back after its
@@ -1972,7 +2033,7 @@ export async function bindStructuredDeliveryQueue(
       && (seat.cancelled || seat.attachment !== null || registrations.get(key) !== seat);
     const initialState = await item.host.health();
     if (abandoned()) return async () => {};
-    if (ownsOperation && !await ownsOperation()) return async () => {};
+    if ((ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) return async () => {};
     const publicationConversationId = publicationEntry
       ? conversationIdForEntry(registry, publicationEntry)
       : null;
@@ -1995,9 +2056,11 @@ export async function bindStructuredDeliveryQueue(
     if (abandoned()) return async () => {};
     /* The journal read above is an await of its own: the operation is asked
        again before anything about this host is projected. */
-    if (ownsOperation && !await ownsOperation()) return async () => {};
+    if ((ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) return async () => {};
     await publishHostState(client, registry, item, initialState);
-    if (abandoned() || (ownsOperation && !await ownsOperation())) {
+    // Startup custody is a keyed read. Keep it synchronous with installing
+    // the attachment so a queued replacement cannot cross the final check.
+    if (abandoned() || (ownsOperation && !await ownsOperation()) || ownsStartupHost?.() === false) {
       const restoreCurrentProjection = async () => {
         await refreshCurrentProjection(publicationConversationId);
       };
@@ -2010,7 +2073,7 @@ export async function bindStructuredDeliveryQueue(
        is never handed on: the successor carried it over only if it still
        existed at the swap, and re-driving a released host would republish it. */
     if (abandoned()) return async () => {};
-    if (superseded()) return await registerThroughSuccessor(item, ownsOperation);
+    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, ownsStartupHost);
     const observable = item.host as ObservableEngineHost;
     let deliveryState = deliveryStateKey(initialState);
     let projectedState = hostProjectionKey(initialState);
@@ -2106,7 +2169,7 @@ export async function bindStructuredDeliveryQueue(
        registration of the same host sees a seat that is already filled in and
        stands down instead of installing a second subscription and pump. */
     const registration: HostRegistration = seat
-      ?? { key: item.key, host: item.host, writerEpoch: item.writerEpoch, mcpOwner: item.mcpOwner, attachment: null, cancelled: false };
+      ?? { ...item, attachment: null, cancelled: false };
     registration.writerEpoch ??= item.writerEpoch;
     registration.mcpOwner ??= item.mcpOwner;
     registry.invalidateAccountCreditGuard();
@@ -2166,7 +2229,7 @@ export async function bindStructuredDeliveryQueue(
   for (const item of inherited) {
     const id = sessionKeyId(item.key);
     if (registrations.has(id)) continue;
-    seatRegistration(id, { key: item.key, host: item.host, writerEpoch: item.writerEpoch, mcpOwner: item.mcpOwner, attachment: null, cancelled: false });
+    seatRegistration(id, { ...item, attachment: null, cancelled: false });
   }
   state.activeHosts = hosts;
   state.readMcpObservation = conversationId => {
@@ -2193,7 +2256,8 @@ export async function bindStructuredDeliveryQueue(
     for (const registration of registrations.values()) if (registration.attachment) attachments++;
     return { registrations: registrations.size, attachments, pendingPublishChains: publishChains.size };
   };
-  state.activeRegistrations = () => [...registrations.values()].map(({ key, host, writerEpoch, mcpOwner }) => ({ key, host, writerEpoch, mcpOwner }));
+  state.activeRegistrations = () => [...registrations.values()].map(({ key, host, writerEpoch, mcpOwner, custody }) => ({ key, host, writerEpoch, mcpOwner, custody }));
+  state.activeRegistration = key => registrations.get(sessionKeyId(key));
   state.republishActiveHost = async (key) => {
     const registration = registrations.get(sessionKeyId(key));
     if (!registration) return false;
@@ -2287,9 +2351,9 @@ export async function bindStructuredDeliveryQueue(
     return freshAdmission && conversationId ? drainWithRetry(true, true, conversationId) : generalDrain(true, freshAdmission);
   }, async () => {
     if (stopped) return;
-    if (!startupPending) await enforceGuard();
+    if (!startupPending) await enforceGuardWithDiagnostic();
     // A shared guard may have begun before this cycle's quota observation.
-    if (!startupPending && !stopped) await enforceGuard(true);
+    if (!startupPending && !stopped) await enforceGuardWithDiagnostic(true);
     if (!stopped && state.activeQueue === queue) scheduleDrain();
   });
   state.stopActive = () => {
@@ -2319,6 +2383,7 @@ export async function bindStructuredDeliveryQueue(
       state.readMcpObservation = null;
       state.registerActiveHost = null;
       state.activeRegistrations = null;
+      state.activeRegistration = null;
       state.republishActiveHost = null;
       state.releaseActiveHost = null;
       state.terminateActiveHost = null;
@@ -2376,7 +2441,13 @@ export async function bindStructuredDeliveryQueue(
         });
       }, assertActive);
       await phase("registering structured delivery hosts");
-      for (const item of items) await register(item);
+      for (const item of items) {
+        assertActive();
+        await register(item, undefined, prepared?.ownsHost ? () => {
+          assertActive();
+          return prepared.ownsHost!(item);
+        } : undefined);
+      }
       assertActive();
       if (superseded()) {
         const successor = state.completeActive;
@@ -2475,12 +2546,25 @@ export async function bindStructuredDeliveryQueue(
      its deadline is ended, all with the browser closed. */
   const watchdogMs = dependencies.watchdogIntervalMs ?? DELIVERY_WATCHDOG_MS;
   if (watchdogMs > 0) {
+    let watchingGuard = false;
+    const watchGuard = async () => {
+      // Several ticks can share one in-flight guard pass. Report its result once.
+      if (watchingGuard) return;
+      watchingGuard = true;
+      try {
+        await enforceGuardWithDiagnostic(true);
+      } catch {
+        // Guard failures remain pending for the next watchdog or drain attempt.
+      } finally {
+        watchingGuard = false;
+      }
+    };
     watchdogTimer = setInterval(() => {
       /* A7: it runs while startup still seats hosts. Marking stalls and lost
          wakes only writes records; an unregistered host's target stays
          deferred by the drain, which notes `startup` on its records. */
       if (stopped || state.activeQueue !== queue) return;
-      void enforceGuard(true).catch(error => controllerDiagnosticError("[structured delivery] paid-credit guard retry pending", error));
+      void watchGuard();
       void queue.tick().catch((error) => {
         controllerDiagnosticError("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
       });
@@ -2606,6 +2690,14 @@ export function hasStructuredDeliveryHost(key: SessionKey): boolean {
   return state.activeHosts?.has(sessionKeyId(key)) ?? false;
 }
 
+export function structuredDeliveryRegistration(registry: AgentRegistry, key: SessionKey): StructuredDeliveryHost | undefined {
+  return state.activeRegistry === registry ? state.activeRegistration?.(key) : undefined;
+}
+
+export function structuredDeliveryRegistrations(registry: AgentRegistry): readonly StructuredDeliveryHost[] {
+  return state.activeRegistry === registry ? state.activeRegistrations?.() ?? [] : [];
+}
+
 /** Scalar attachment counts from the current publication; reads no payload. */
 export function structuredDeliveryHeapCounts() {
   return state.activeHosts ? { hosts: state.activeHosts.size, ...state.heapCounts?.() } : { hosts: 0, registrations: 0, attachments: 0, pendingPublishChains: 0 };
@@ -2701,8 +2793,9 @@ export function retainUnpublishedStructuredLaunchHost(item: UnpublishedLaunchHos
 export async function publishStructuredDeliveryHost(
   item: StructuredDeliveryHost,
   ownsOperation?: () => Promise<boolean>,
+  ownsStartupHost?: () => boolean,
 ): Promise<() => Promise<void>> {
-  return requireStructuredDeliveryControllerPublication()(item, ownsOperation);
+  return requireStructuredDeliveryControllerPublication()(item, ownsOperation, ownsStartupHost);
 }
 
 /** Adjust one startup row without replaying historical publication or disturbing

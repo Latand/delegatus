@@ -134,8 +134,8 @@ export function viewerDeploymentStructuredHostStartup(
   status: number,
   body: string,
 ): ViewerStructuredHostStartupProgress | null {
-  // Failed startup deliberately answers 503 without advertising readiness.
-  // Its diagnostic remains readable; capability/serving gates still need 200.
+  // Older Viewers can send startup diagnostics with a 503. Capability and
+  // serving checks still require their own positive evidence.
   if (status !== 503 && !hasViewerDeploymentCapability(status, body)) return null;
   try {
     const progress = (JSON.parse(body) as { structuredHostStartup?: unknown }).structuredHostStartup;

@@ -22,6 +22,8 @@ import type { MessageOrigin } from "./messageOrigin";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
+import { CHECKOUT_MERGER_OPERATION_PREFIX, checkoutMergerCustody, checkoutMergerCutForOperation, currentCheckoutMerger } from "./checkoutMergerRecovery";
+import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop, stopOrphanedStructuredHost, type StructuredOrphanStopDependencies } from "./registry";
 import { forgetOrphanedHostGrace, ORPHANED_HOST_IN_FLIGHT_GRACE_MS, ORPHANED_HOST_STOP_REFUSED_HOLD_MS, structuredHostOrphaned } from "./orphanedHost";
 import { restartCutEvidenceHolds } from "./restartCutHold";
@@ -114,8 +116,8 @@ export interface StructuredRecoveryRequest {
 
 /** No successor receipt exists yet; callers keep the original message queued. */
 export class StructuredRecoveryHeldForUpdateError extends Error {
-  constructor(message = "new autonomous recovery is held for the automatic update") {
-    super(message);
+  constructor(message = "new autonomous recovery is held for the automatic update", options?: ErrorOptions) {
+    super(message, options);
     this.name = "StructuredRecoveryHeldForUpdateError";
   }
 }
@@ -582,6 +584,7 @@ async function recoverCandidate(
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
                 omitSkillsInstructions: current.spec.launchProfile?.omitSkillsInstructions === true
                   || sessionOriginFor(registry.conversation(current.conversationId) ?? {}) === "delegated",
+                ...(current.spec.launchProfile?.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
                 cwd: current.spec.cwd, codexHome: account.home,
                 mcpServers: current.spec.launchProfile?.mcpServers ?? ["viewer"],
                 plugins: current.spec.launchProfile?.plugins ?? [],
@@ -931,6 +934,29 @@ export async function recoverDeadStructuredConversation(
 ): Promise<StructuredRecoveryResult | null> {
   if (!(dependencies.transportAvailable ?? structuredTransportAvailable)()) return null;
   const registry = dependencies.registry ?? agentRegistry();
+  if (request.operationId?.startsWith(CHECKOUT_MERGER_OPERATION_PREFIX)) {
+    const { conversationId, operationId, admissionGuard, authorityGuard } = request;
+    const cut = conversationId && checkoutMergerCutForOperation(registry.filename, conversationId, operationId);
+    const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
+    if (!cut || !client) return null;
+    const snapshot = () => registry.livenessConversationSnapshot(cut.conversationId);
+    if (checkoutMergerCustody(snapshot(), cut) !== "ended"
+      || await hasRuntimeSwitchKill(client, cut.conversationId, cut.capturedAt, [], true, true)
+      || checkoutMergerCustody(snapshot(), cut) !== "ended") return null;
+    const authorize = () => {
+      const file = snapshot();
+      const current = currentCheckoutMerger(file, cut);
+      if (!checkoutMergerCutForOperation(registry.filename, cut.conversationId, operationId)
+        || !current || current.claimEpoch !== cut.claimEpoch + 1 && checkoutMergerCustody(file, cut) !== "ended") {
+        throw new DeliveryAdmissionRefusedError("checkout merger recovery authority changed");
+      }
+    };
+    request = { ...request,
+      admissionGuard: key => { admissionGuard?.(key); authorize(); },
+      authorityGuard: () => { (authorityGuard ?? admissionGuard)?.(); authorize(); },
+    };
+    authorize();
+  }
   if (dependencies.ownership && !await dependencies.ownership.owns()) {
     throw new StructuredRecoverySupersededError();
   }

@@ -199,22 +199,40 @@ revision production has served for six hours without a rollback. Every release
 retakes the README pictures. Asking before publication is on until the operator
 chooses «Випустити й більше не питати» or turns the checkbox off.
 
-1. Start a release branch at that verified cut. Keep changes to the changelog,
-   version, audit pins/lockfile, README text/pictures and capture scripts.
-   Product fixes go through their own deployment and soak.
-2. Write the user-facing changelog from every PR in the range, including closed
-   batch-merged PRs. Pick minor for additions/changes, patch for fixes/security.
-   Breaking changes require an operator decision. Bump `package.json`.
+1. Start the release branch at the verified cut. Keep it there; do not merge
+   or rebase newer product changes into it. Run `bun scripts/bootstrap-release-tools.ts`.
+   Limit the release PR's own changes to `CHANGELOG.md`, `package.json`,
+   `bun.lock`, `patches/**`, `README.md`, `docs/media/readme/**` and `scripts/**`.
+2. Write the changelog from `git log --first-parent <last-release-cut>..<cut>`, including
+   closed batch-merged PRs. The annotated tag records the previous release cut
+   in `Release-Cut: <full-sha>`; older tags without that field use the tag commit.
+   Pick minor for additions/changes, patch for
+   fixes/security. Breaking changes require an operator decision. Bump
+   `package.json` and open the release PR.
 3. Build and run `scripts/capture-readme-media.ts` under isolated state through
    `scripts/gate-slot.sh`. Commit the eight vectors and their provenance. Have
    the pictures checked visually, then have the complete release reviewed.
-4. Run `bun scripts/release-verify.ts --preflight --cut <full-cut-sha> --tag vX.Y.Z`
-   on the reviewed clean head. It refuses an existing local/remote tag or npm
-   version, stale picture provenance, or a product file in the diff.
-5. Obtain the operator's go when the release setting requires it. Push an
-   annotated `vX.Y.Z` tag on the reviewed release head, message `Delegatus X.Y.Z`.
-   The release PR merges into main after the pipeline finishes; the tag carries
-   the soaked product source plus release metadata.
+4. The ordinary merge queue refreshes and merges the reviewed PR. The review
+   and publish stages in the successor lane use the clean checkout at that
+   exact integrated commit. Both run
+   `bun scripts/release-verify.ts --preflight --cut <full-cut-sha> --tag vX.Y.Z --pr <number>`
+   with the version from that commit's `package.json`. Preflight verifies the
+   merged PR, current `origin/main`, ancestry from the cut and README provenance.
+   Provenance is compared with the capture driver and seed at the merged PR's
+   reviewed head; the original production cut remains the changelog boundary.
+   It checks the release PR's own delta and verifies that the frozen cut is an
+   ancestor of the integrated main commit. A squash may include product PRs
+   merged after the cut. The release tag records the cut, so those later PRs
+   remain eligible for the next changelog.
+5. Obtain the operator's go when the release setting requires it. Recheck
+   release blockers and rerun the same preflight immediately before any push.
+   Follow its action:
+
+   - `create-and-push` permits creating and pushing the annotated `vX.Y.Z` tag
+     on the verified commit with messages `Delegatus X.Y.Z` and
+     `Release-Cut: <full-cut-sha>`.
+   - `push-existing` permits pushing the matching local tag object.
+   - `verify-remote` proceeds directly to publication verification.
 6. Every `v*` tag starts `publish.yml` and `docker-image.yml`. After immutable
    tag verification, `publish.yml` publishes to npm through OIDC and creates
    a GitHub Release in parallel jobs. The GitHub Release is titled
@@ -230,6 +248,21 @@ chooses «Випустити й більше не питати» or turns the ch
    for npm version/latest/integrity, all three Docker tags with amd64 and arm64
    on the same manifest, and successful macOS installation. It is read-only
    and safe to repeat after an interruption.
+
+### Recover a merged release without a tag
+
+`release-version-mismatch` means that main's package version differs from the
+latest stable release tag and no live release owns the version bump. The seat
+can see it in `seat_tick_settings`. The controller holds new release requests
+until the version and tag agree.
+
+If main is ahead, find the merged release PR, its recorded production cut and
+its integrated commit. Resume publication for that same version from step 4
+with the usual release checks and approval. If the evidence cannot be
+recovered, or the version bump was unintended, bring a release-metadata
+correction through the normal review and merge queue to restore the tagged
+version on main. If main is behind the latest tag, reconcile the version on
+main with the immutable release through the same queue.
 
 Never retag, delete the tag or publish a version again. A failed publish can be
 recovered by dispatching `publish.yml` with the existing immutable tag; it skips

@@ -48,6 +48,7 @@ import { registryConversationsForEntryKey, registryKeysMatchingBounded, registry
 import { entryRevision, readAgentProjection, subjectId as agentStateSubjectId } from "@/lib/agentState/store";
 import { cachedAgentObservationForRevision } from "@/lib/agentState/projectionCache";
 import { fileSignature } from "@/lib/agentState/transcript";
+import { hostTurnRecordIdentity } from "./eventStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 import { recoverMemberAdoption } from "./memberAdoptionRecovery";
@@ -307,7 +308,10 @@ function sameMaterialHostState(left: HostState, right: HostState): boolean {
     && sameStrings(left.activeFlags, right.activeFlags);
 }
 
-export type StructuredHostPersistenceStop = (() => Promise<void>) & { flush(): Promise<void> };
+export type StructuredHostPersistenceStop = (() => Promise<void>) & {
+  flush(): Promise<void>;
+  custody: AdoptedHostCustody;
+};
 
 const persistenceGlobal = globalThis as typeof globalThis & {
   __delegatusHostPersistence?: WeakMap<object, StructuredHostPersistenceStop>;
@@ -665,8 +669,10 @@ async function bindStructuredHostPersistence(
     throw error;
   }
   if (stopped) unsubscribe();
+  const { endpoint, process } = columnsFromState(initialState, writerClaimEpoch);
   const binding = Object.assign(stop, {
     flush: () => withoutOperationLease(() => enqueue(() => withoutOperationLease(persistPending))),
+    custody: { claimOwner, claimEpoch: writerClaimEpoch, writerEpoch: writerClaimEpoch, endpoint, process },
   });
   hostPersistence.set(host, binding);
   host.setPersistenceFlush?.(binding.flush);
@@ -781,14 +787,42 @@ export async function bindAntigravityHostPersistence(
   );
 }
 
+export interface AdoptedHostCustody {
+  claimOwner: AgentRegistryEntry["claimOwner"];
+  claimEpoch: number;
+  writerEpoch: StructuredHostColumns["writerClaimEpoch"];
+  endpoint: string;
+  process: ProcessIdentity | null;
+}
+
+export function structuredHostCustody(entry: AgentRegistryEntry | null | undefined): AdoptedHostCustody | null {
+  if (!entry?.structuredHost) return null;
+  const { endpoint, process, writerClaimEpoch } = entry.structuredHost;
+  return { claimOwner: entry.claimOwner, claimEpoch: entry.claimEpoch, writerEpoch: writerClaimEpoch, endpoint, process };
+}
+
+export function matchesStructuredHostCustody(
+  custody: AdoptedHostCustody | null | undefined,
+  entry: AgentRegistryEntry | null | undefined,
+): boolean {
+  const host = entry?.structuredHost;
+  return Boolean(custody && entry && host && entry.claimOwner === custody.claimOwner && entry.claimEpoch === custody.claimEpoch
+    && host.writerClaimEpoch === custody.writerEpoch && host.endpoint === custody.endpoint
+    && (custody.process && host.process
+      ? sameRecordedProcessIdentity(host.process, custody.process) && host.process.bootEpoch === custody.process.bootEpoch
+      : host.process === custody.process));
+}
+
 export interface AdoptedCodexHost {
   key: SessionKey;
   host: CodexAppServerHost;
+  custody?: AdoptedHostCustody;
 }
 
 export interface AdoptedClaudeHost {
   key: SessionKey;
   host: ClaudeStreamBrokerHost;
+  custody?: AdoptedHostCustody;
 }
 
 export type StructuredHostAdoptionFilter = (entry: AgentRegistryEntry) => boolean;
@@ -948,6 +982,7 @@ function settledOrphanWithPendingDelivery(registry: AgentRegistry, entry: AgentR
   if (!fresh || !proc.determined || proc.value.status !== "alive" || !sameRecordedProcessIdentity(proc.value.identity, process)
     || !owner.determined || owner.value !== "absent" || !turn.determined || turn.value.state === "open"
     || !attention.determined || attention.value.length !== 0 || !transcript.determined || !obligations.determined) return false;
+  if (turn.evidence.source === "operation-ledger" && hostTurnRecordIdentity(entry.key.sessionId) !== turn.evidence.ref) return false;
   const expectedProcessSignature = (() => {
     try { return fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })); } catch { return null; }
   })();
@@ -1537,10 +1572,11 @@ export async function adoptCodexRegistryHosts(
             ? dependencies.adoptHost(entry.key.sessionId, options)
             : CodexAppServerHost.adopt(entry.key.sessionId, options));
           memberCurrent?.();
-          await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
+          const binding = await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
             "unhosted", { onCheckpoint: custody?.checkpoint });
-          adopted.push({ key: entry.key, host });
-          dependencies.onAdopted?.({ key: entry.key, host });
+          const item = { key: entry.key, host, custody: binding.custody };
+          adopted.push(item);
+          dependencies.onAdopted?.(item);
         } catch (error) {
           try { await custody?.cleanup(); } catch { /* live setup remains durably owned for reconciliation */ }
           if (error instanceof StructuredHostAdoptionCleanupError
@@ -1706,10 +1742,11 @@ export async function adoptClaudeRegistryHosts(
             ? dependencies.adoptHost(entry.key.sessionId, options)
             : ClaudeStreamBrokerHost.adopt(entry.key.sessionId, options));
           memberCurrent?.();
-          await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
+          const binding = await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
             "unhosted", { onCheckpoint: custody?.checkpoint });
-          adopted.push({ key: entry.key, host });
-          dependencies.onAdopted?.({ key: entry.key, host });
+          const item = { key: entry.key, host, custody: binding.custody };
+          adopted.push(item);
+          dependencies.onAdopted?.(item);
         } catch (error) {
           try { await custody?.cleanup(); } catch { /* live setup remains durably owned for reconciliation */ }
           if (error instanceof StructuredHostAdoptionCleanupError

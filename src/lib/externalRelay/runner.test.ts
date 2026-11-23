@@ -22,7 +22,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest as runClaimedRequestWithLeaseWorker, runningCount } from "./runner";
 import { relayActivity, relayOutcomeLabel } from "./activity";
-import { changeRun, dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
+import { changeRun, dropRun, externalRelayFile, readRelayStore, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
@@ -68,6 +68,12 @@ accountManager.resolveHeadlessSpawn = (() => ({
 afterAll(() => {
   accountManager.resolveHeadlessSpawn = original;
 });
+/** The service's requester is the trigger's author: a substituted requester also writes the trigger. */
+function askedBy<I extends { respond_to: string | null; conversation: readonly { id: string; author: { key: string } }[] }>(
+  input: I, requester: Record<string, unknown> | null) {
+  return { ...input, requester, conversation: !requester ? input.conversation : input.conversation.map(message =>
+    message.id === input.respond_to ? { ...message, author: { ...message.author, key: String(requester.key) } } : message) };
+}
 function relay(api_base: string): PairedRelay {
   return {
     id: "relay_1",
@@ -77,8 +83,8 @@ function relay(api_base: string): PairedRelay {
     description: "Test",
     credential: "x".repeat(43),
     owner: {
-      namespace: "test",
-      id: "owner",
+      namespace: "telegram",
+      id: "101",
       display_name: "Owner",
       handle: null,
     },
@@ -250,8 +256,8 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
-test.each(["enabled", "disabled", "long-reservation"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
-  const ownerTier = kind === "enabled";
+test.each(["enabled", "two-pairing-owners", "disabled", "long-reservation", "numbered-prose"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
+  const ownerTier = kind === "enabled" || kind === "two-pairing-owners";
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
@@ -259,12 +265,15 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
     return { body: { status: "ok" } };
   });
   const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = ownerTier;
-  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const second = { ...paired, id: "other-pairing", owner: { ...paired.owner, id: "202" }, targets: [] };
+  updateRelayStore(s => ({ ...s, relays: kind === "two-pairing-owners" ? [paired, second] : [paired] }));
   let selections = 0, launches = 0;
   const previous = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
   const copy = prototypeCopyLine(round);
-  const text = kind === "long-reservation" ? `${copy}, ${"я".repeat(20_000 - copy.length - 2)}` : `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
+  const prose = "Show 2  GIF previews.\nKeep  the captions.";
+  const text = kind === "long-reservation" ? `${copy}, ${"я".repeat(20_000 - copy.length - 2)}`
+    : kind === "numbered-prose" ? `${prototypeReference(round)} · ${prose}` : `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
   const request = { ...contextRequest, request_id: `prototype-owner-${kind}`, answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
     ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
     conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
@@ -277,13 +286,14 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
     if (duplicate !== null) expect(duplicate).toMatchObject({ outcome: "answered" });
     expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
     const task = loadTasks()[0]!, decision = task.prototypeReviews![0]!.decision!;
-    expect(decision).toMatchObject({ chosen: kind === "long-reservation" ? [] : [2], originalReply: text,
-      answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })) });
+    expect(decision).toMatchObject({ chosen: kind === "long-reservation" || kind === "numbered-prose" ? [] : [2], originalReply: text,
+      answers: round.questions!.map(q => kind === "numbered-prose"
+        ? { questionId: q.id, options: [], other: true } : { questionId: q.id, options: [0] }) });
     if (kind === "long-reservation") {
       expect(decision.recommendedWithReservation).toBe(true);
       expect(decision.comment).toBe(text.slice(copy.length));
       if (result?.outcome === "answered") expect(result.answer.text).toContain("рекомендовані з застереженням");
-    } else expect(decision.comment).toBe("Keep these controls.");
+    } else expect(decision.comment).toBe(kind === "numbered-prose" ? prose : "Keep these controls.");
     expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${round.id}`);
     if (kind === "long-reservation") {
       expect(Buffer.byteLength(decision.delivery.text)).toBeLessThanOrEqual(32_000);
@@ -334,19 +344,21 @@ test("the claimed relay records an Other token before a recommendation marker", 
   } finally { await server.close(); }
 });
 
-for (const scenario of ["references", "lease-lost", "revoked", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
+for (const scenario of ["references", "lease-lost", "revoked", "revoked-with-two-owners", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const paired = relay("https://unused.invalid/v1"); paired.targets[0]!.ownerTier = scenario !== "disabled";
   const server = await startTestRelay((req) => {
     if (req.url?.endsWith("/heartbeat")) {
       if (scenario === "lease-lost") return { status: 409, body: { error: { code: "lease_lost", message: "gone" } } };
-      if (scenario === "revoked") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, ownerTier: false }] }] }));
+      if (scenario === "revoked" || scenario === "revoked-with-two-owners") updateRelayStore(s => ({ ...s,
+        relays: s.relays.map(relay => relay.id === paired.id ? { ...relay, targets: [{ ...paired.targets[0]!, ownerTier: false }] } : relay) }));
       if (scenario === "disabled") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, enabled: false }] }] }));
     }
     return { body: { status: "ok" } };
   });
   paired.api_base = `${server.origin}/v1`; paired.origin = server.origin;
-  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const second = { ...paired, id: "other-pairing", owner: { ...paired.owner, id: "202" }, targets: [] };
+  updateRelayStore(s => ({ ...s, relays: scenario === "revoked-with-two-owners" ? [paired, second] : [paired] }));
   const text = prototypeCopyLine(round, 2) + (scenario === "references" ? `\n${prototypeReference(round)}` : "");
   try {
     const result = await runClaimedRequest(paired, { ...contextRequest, request_id: `prototype-${scenario}`, answer: { ...contextRequest.answer, max_chars: 4000 },
@@ -1223,7 +1235,7 @@ test("a duplicate claim leaves the held lease alone", async () => {
     await server.close();
   }
 });
-test("newly confirmed targets default to a 30 minute hard cap", async () => {
+test("newly confirmed targets default to a 30 minute hard cap and have no grants", async () => {
   const owner = {
     namespace: "test", id: "owner", display_name: "Owner", handle: null,
   };
@@ -1248,6 +1260,9 @@ test("newly confirmed targets default to a 30 minute hard cap", async () => {
     }));
     const confirmed = await confirmRelayPairing("pending_cap", owner.id);
     expect(confirmed.targets[0].hardCapMinutes).toBe(30);
+    const stored = readRelayStore().relays.find(relay => relay.id === confirmed.id)!.targets[0];
+    expect(stored).not.toHaveProperty("requesters");
+    expect(stored).not.toHaveProperty("ownerTier");
   } finally {
     await server.close();
   }
@@ -1587,7 +1602,7 @@ test("the member limit declines a member past it, per chat, and never counts the
     paired.targets[0] = { ...paired.targets[0]!, id: "target_limit", memberLimitPerHour: 2, ...target };
     return runClaimedRequest(paired, {
       ...sampleRequest, request_id: `rq_limit_${n}`, target_id: paired.targets[0]!.id, chat: { key: chat },
-      input: { ...sampleRequest.input, requester },
+      input: askedBy(sampleRequest.input, requester),
     }, undefined, { command: script });
   };
   const member = { key: "u_m", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false };
@@ -1631,7 +1646,7 @@ test("pre-launch capacity and drain declines leave the member's allowance availa
   paired.id = "relay_admission";
   paired.targets[0]!.memberLimitPerHour = 2;
   const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
-  const request = (id: string) => ({ ...sampleRequest, request_id: id, chat: { key: "chat_key_admissionaa" }, input: { ...sampleRequest.input, requester } });
+  const request = (id: string) => ({ ...sampleRequest, request_id: id, chat: { key: "chat_key_admissionaa" }, input: askedBy(sampleRequest.input, requester) });
   const command = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
   const previous = accountManager.resolveHeadlessSpawn;
   try {
@@ -1664,7 +1679,7 @@ test("launched hand-offs, failed agents and running agents each consume the memb
   paired.id = "relay_count_launched";
   paired.targets[0] = { ...paired.targets[0]!, concurrency: 2, memberLimitPerHour: 1 };
   const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
-  const request = (id: string, chatKey: string) => ({ ...contextRequest, request_id: id, chat: { key: chatKey }, input: { ...contextRequest.input, requester } });
+  const request = (id: string, chatKey: string) => ({ ...contextRequest, request_id: id, chat: { key: chatKey }, input: askedBy(contextRequest.input, requester) });
   const handoff = handoffStub(path.join(root, "admission-handoff"));
   const failure = stub("process.exit(1)");
   const release = path.join(root, "admission-release");
@@ -1734,7 +1749,7 @@ test("service-built roles answer and the real runner and poller emit cross-check
     expect(limited?.outcome === "declined" && [...limited.detail!].length).toBeLessThanOrEqual(200);
     // These fixtures use the same key as the counted member; the role flags exempt them.
     for (const role of ["admin", "owner"])
-      expect(await runClaimedRequest(paired, { ...fixture(role), request_id: `rq_wire_exempt_${role}`, input: { ...fixture(role).input, requester: { ...fixture(role).input.requester, key: member.input.requester.key } } }, undefined, { command })).toMatchObject({ outcome: "answered" });
+      expect(await runClaimedRequest(paired, { ...fixture(role), request_id: `rq_wire_exempt_${role}`, input: askedBy(fixture(role).input, { ...fixture(role).input.requester, key: member.input.requester.key }) }, undefined, { command })).toMatchObject({ outcome: "answered" });
 
     updateRelayStore((store) => ({ ...store, relays: [paired] }));
     ensureExternalRelayPollers();
@@ -1784,7 +1799,7 @@ async function runLoopCase(options: {
   response?: (body: WireCall, attempt: number) => { status?: number; body?: unknown; drop?: boolean } | Promise<{ status?: number; body?: unknown; drop?: boolean }>;
   completeResponse?: (body: unknown, attempt: number) => { status?: number; body?: unknown };
   runtime?: ToolLoopRuntime & { ownerPorts?: import("./ownerRun").OwnerRunPorts };
-  relayId?: string; ownerTier?: boolean;
+  relayId?: string; ownerTier?: boolean; owner?: PairedRelay["owner"];
   reverseReadArrival?: boolean;
   heartbeatResponse?: (seq: number) => { status?: number; body?: unknown };
   features?: string[];
@@ -1831,6 +1846,7 @@ async function runLoopCase(options: {
   });
   const paired = relay(`${server.origin}/v1`);
   if (options.features) paired.features = options.features;
+  if (options.owner) paired.owner = options.owner;
   paired.id = options.relayId ?? `loop_${crypto.randomUUID()}`;
   paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null, ...(options.ownerTier !== undefined ? { ownerTier: options.ownerTier } : {}) };
   const previousSelection = accountManager.resolveHeadlessSpawn;
@@ -2084,7 +2100,7 @@ test(`X2 is generated by the real poller and runner with X1 pending and pages ($
     const x2Rounds = fs.readFileSync(path.join(root, "x2-seen"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     const hashes = { schemas: x2Rounds.slice(-3).map((r) => hash(JSON.stringify(r.schema))),
       calls: calls.flatMap((entry) => entry.attempts.map((attempt) => hash(JSON.stringify(attempt.request)))) };
-    const hashFile = path.join(x1Dir, "actions-off-x2-2a-hashes.json");
+    const hashFile = path.join(x1Dir, "actions-off-x2-2a-guest-schema-hashes.json");
 
     const output = JSON.stringify({ x1: { revision: "a0d9245bcac2c2246f29f180f8bd21aa825d478c", claim: "claimed_tools_member.json",
       claim_sha256: createHash("sha256").update(fs.readFileSync(path.join(x1Dir, "claimed_tools_member.json"))).digest("hex") },
@@ -2267,7 +2283,7 @@ test("N1 owner switch OFF preserves v3 runner bytes with additive deadline negot
   const output = JSON.stringify(hashes, null, 2) + "\n";
   if (process.env.LLV_RELAY_CAPTURE_OWNER_N1) fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_OWNER_N1, output);
   else {
-    const expected = JSON.parse(fs.readFileSync(path.join(x1Dir, "owner-tools-off-runner-hashes.json"), "utf8"));
+    const expected = JSON.parse(fs.readFileSync(path.join(x1Dir, "owner-tools-off-runner-guest-schema-hashes.json"), "utf8"));
     const claim = JSON.parse(expected.claim);
     claim.features.push("request_deadline", "relay_guest_answers");
     expected.claim = JSON.stringify(claim);
@@ -3019,7 +3035,7 @@ for (const engine of ["codex", "claude"] as const)
       request.input.request_text = task === "react" ? "React with 👍 to message m_b40b71a0a9d43622ee0e2e6a." : "When is the meetup?";
       request.input.short_term_memory = null;
       request.input.documents = [];
-      request.input.conversation = [];
+      request.input.conversation = request.input.conversation.filter(message => message.id === request.input.respond_to);
       const run = await runLoopCase({ request, live: { engine, home: accountHome }, response: (body) => {
         if ("tool" in body && body.tool === "react_to_message") return actionResponse("action_ok", body);
         return { body: { ...x1Results.ok, call_id: body.call_id, output: "The meetup is Friday." } };
@@ -3047,14 +3063,15 @@ test("chain switches preserve the service wire and legacy record fields", async 
   const cases = ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin", "action_react", "action_ban"];
   const surfaces: Record<string, unknown> = {};
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  const owner = { namespace: "test", id: "owner", display_name: "Owner", handle: null };
   async function replay(role: string, ownerTier?: boolean) {
     const request = x1Request(role.startsWith("action_") ? "actions_admin" : role);
-    const run = await runLoopCase({ request, ownerTier, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
+    const run = await runLoopCase({ request, owner, ownerTier, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
     const record = { ...run.record, startedAt: "time", finishedAt: "time", durationMs: 0 };
     if (record.profile) { record.profile = { ...record.profile }; delete record.profile.pageRead; }
     const view = (await import("./store")).publicRelay({ ...run.paired, origin: "https://fixture.example", api_base: "https://fixture.example/v1", pairedAt: "time" });
-    if (ownerTier !== undefined) delete view.targets[0]!.ownerTier;
-    return { calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(view)) };
+    const legacyView = { ...view, targets: view.targets.map(({ grantStatus: _status, ...target }) => target) };
+    return { calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(legacyView)) };
   }
   for (const role of cases) surfaces[role] = await replay(role);
   if (process.env.LLV_RELAY_CAPTURE_2B) { fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_2B, JSON.stringify({ ...snapshot, surfaces }, null, 2) + "\n"); return; }
@@ -3262,6 +3279,50 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
     } finally { fs.rmSync(switchFile, { force: true }); await server.close(); }
   });
 
+test("owner tier run keeps an enrolment code in chat history out of its run ledger and answer record, and recovery replays", async () => {
+  const { ownerRecoveryRequest } = await import("./ownerLateDelivery");
+  const code = "DLG-0123456789AB";
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const id = "owner_history_code";
+  const history = { ...contextRequest.input.conversation[0], id: "earlier", author: { key: "u2", name: "Person", self: false },
+    text: `@clone please add me ${code}` };
+  const request = { ...contextRequest, request_id: id, chat: { key: "owner-group" },
+    input: { ...contextRequest.input, conversation: [history, ...contextRequest.input.conversation],
+      requester: { ...contextRequest.input.requester, is_owner: true } } };
+  let observed = false;
+  try {
+    const completion = await runClaimedRequest(paired, request, undefined, {
+      command: "/missing-owner-must-never-run-cli", timeoutMs: 4000,
+      ownerPorts: {
+        launch: async body => {
+          expect(JSON.stringify(body).includes(code)).toBe(false);
+          return { status: 202, body: { conversationId: "conversation_owner_history" } };
+        },
+        observe: async () => {
+          const ledger = fs.readFileSync(externalRelayFile("runs"), "utf8");
+          expect(ledger.includes("DLG-")).toBe(false);
+          expect(ledger.includes("[enrolment code]")).toBe(true);
+          const run = readRunLedger().runs.find(run => run.requestId === id)!;
+          const replay = ownerRecoveryRequest(run, paired);
+          expect(replay).toMatchObject({ request_id: id, input: { conversation: [{ text: "@clone please add me [enrolment code]" }, { text: "Hello" }] } });
+          expect(requestSchema.safeParse(replay).success).toBe(true);
+          observed = true;
+          return { state: "ended", finalText: "Owner reply" };
+        },
+        stop: async () => {}, pollMs: 5,
+      },
+    });
+    expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Owner reply" } });
+    expect(observed).toBe(true);
+    const record = readAnswerRecord(paired.id, "target_1", id);
+    expect(record).not.toBeNull();
+    expect(JSON.stringify(record).includes("DLG-")).toBe(false);
+  } finally { await server.close(); }
+});
+
 
 for (const phase of ["running", "pending"] as const) test(`owner cutoff through PATCH stops ${phase} host work and withholds late reply`, async () => {
   const { NextRequest } = await import("next/server");
@@ -3296,7 +3357,7 @@ for (const phase of ["running", "pending"] as const) test(`owner cutoff through 
     const origin = "http://127.0.0.1:8899";
     const response = await PATCH(new NextRequest(`${origin}/api/external-relay/relays/${paired.id}`, {
       method: "PATCH", headers: { cookie: `llv_operator=${soloBrowserSession()}`, origin, host: "127.0.0.1:8899", "content-type": "application/json" },
-      body: JSON.stringify({ target: { id: "target_1", ownerTier: false } }),
+      body: JSON.stringify({ target: { id: "target_1", enabled: false } }),
     }), { params: Promise.resolve({ id: paired.id }) });
     expect(response.status).toBe(200);
     if (phase === "pending") expect(readRunLedger().runs[0]?.ownerTurn).toMatchObject({ cancel: "kill" });
@@ -4411,7 +4472,9 @@ for (const leaseWorker of [false, true]) test(`long rich refusal is recorded and
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "The answer was too long to deliver after the service refused its original format. Please request a shorter answer." } });
     expect(completions).toHaveLength(2);
     const record = readAnswerRecord(paired.id, request.target_id, request.request_id);
-    expect(record).toMatchObject({ outcome: "failure_notice", delivery: "accepted", answer: { text }, completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
+    expect(record).toMatchObject({ outcome: "failure_notice", delivery: "accepted", answer: { text },
+      drops: [{ part: "answer", reason: "rich_limit_exceeded" }],
+      completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
     expect(log.mock.calls).toContainEqual(["External relay completion refused", { request: request.request_id.slice(0, 8), status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }]);
     expect(JSON.stringify(record?.completionRefusals)).not.toContain("private parser input");
   } finally { log.mockRestore(); await service.close(); }
@@ -4491,22 +4554,26 @@ test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])
     await Bun.write(${JSON.stringify(marker)},path.dirname(out));
     console.log(JSON.stringify({type:'thread.started',thread_id:'thread_image'}));
     console.log(JSON.stringify({type:'item.completed',item:{type:'image_generation_call'}}));
-    await Bun.write(out,JSON.stringify({action:${JSON.stringify(mode==="ignore"?"ignore":"reply")},text:${JSON.stringify(mode==="media_only_refused"?"":"Picture")},reply_to:'m1',format:'plain',buttons:[],attachments:[{path:${mode==="outside"?JSON.stringify(path.join(root,"outside.png")):"file"},kind:'photo',caption:'Picture'}]}));`);
+    await Bun.write(out,JSON.stringify({action:${JSON.stringify(mode==="ignore"?"ignore":"reply")},text:${JSON.stringify(mode==="media_only_refused"?"":"Picture")},reply_to:'m1',format:'plain',buttons:[],attachments:[{path:${mode==="outside"?JSON.stringify(path.join(root,"outside.png")):"file"},kind:'photo',caption:''}]}));`);
   const paired=relay(`${server.origin}/v1`);
   try {
-    const result=await runClaimedRequest(paired,request,undefined,{command});
+    const result=await runClaimedRequestWithLeaseWorker(paired,request,undefined,{command,leaseWorker:mode==="ok"});
     seenRunDir=fs.readFileSync(marker,"utf8");
     if(mode==="lease_lost") {expect(result).toBeNull();expect(sent).toEqual([]);}
     else if(mode==="media_only_refused") expect(result).toMatchObject({outcome:"failed",reason:"invalid_answer"});
     else if(mode==="ignore") expect(result).toMatchObject({outcome:"answered",answer:{action:"ignore",text:"",format:"plain",buttons:[]}});
     else if(mode==="refused") expect(result).toMatchObject({outcome:"failed",reason:"invalid_answer"});
     else if(mode==="outside") {expect(result).toMatchObject({outcome:"answered"});expect(result && "answer" in result ? result.answer.attachments??[]:[]).toEqual([]);}
-    else {expect(result).toMatchObject({outcome:"answered",answer:{attachments:[{kind:"photo",caption:"Picture"}]}});}
+    else {expect(result).toMatchObject({outcome:"answered",answer:{attachments:[{kind:"photo",caption:""}]}});}
     expect(puts).toBe(mode==="outside" || mode==="ignore"?0:1);
     expect(fs.existsSync(seenRunDir)).toBe(false);
     const record=readAnswerRecord(paired.id,request.target_id,request.request_id);
     expect(record).toHaveProperty("features",request.features);
     expect(JSON.stringify(record)).not.toContain(seenRunDir);
+    if(mode==="ok") {
+      expect(sent).toEqual([result]);
+      expect(record).toMatchObject({delivery:"accepted",drops:[],answer:{attachments:[{kind:"photo",caption:""}]}});
+    }
     if(mode==="outside") expect(record).toHaveProperty("drops",[{part:"attachment",index:0,reason:"outside_run"}]);
     if(mode.includes("refused")) expect(record).toHaveProperty("drops",[{part:"attachment",reason:"unsupported_media_type"},...(mode==="refused"?[{part:"answer",reason:"attachment_not_ready"}]:[])]);
   } finally {await server.close();}
@@ -4517,7 +4584,8 @@ test.each([["claude",false,false],["codex",false,false],["codex",true,false],["c
   const { richRequest }=await import("./rich.fixture");
   const { viewerMcpBindings, productionDomainDependencies }=await import("@/lib/mcp/bindings");
   const ownerHome=fs.mkdtempSync(path.join("/tmp","relay-rich-owner-"));
-  fs.mkdirSync(path.join(ownerHome,"handoff")); const file=path.join(ownerHome,"handoff","report.md");fs.writeFileSync(file,"# Report");
+  const handoff=path.join(ownerHome,"handoff");
+  fs.mkdirSync(handoff); let file=path.join(handoff,"report.md");fs.writeFileSync(file,"# Report");
   const oldHome=process.env.HOME, oldState=process.env.LLV_STATE_DIR; process.env.HOME=ownerHome; process.env.LLV_STATE_DIR=path.join(ownerHome,"state");
   const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}_${leaseLost}_${composed}`;
   request.input.requester={key:"u1",is_owner:true,is_admin:true,is_anonymous_admin:false,can_delete_messages:true,can_restrict_members:true};
@@ -4539,7 +4607,18 @@ test.each([["claude",false,false],["codex",false,false],["codex",true,false],["c
   const lastMessage=composed ? "Answered in the chat.\n\nSources:\n- [Source](https://example.com/source)" : text;
   try {
     const result=await runClaimedRequest(paired,request,undefined,{timeoutMs:10000,ownerPorts:{
-      launch:async body=>{expect(body.prompt).toContain("<format>");expect(body.prompt).toContain("relay_answer");return {status:202,body:{conversationId}};},
+      launch:async body=>{
+        expect(body.prompt).toContain("<format>");
+        expect(body.prompt).toContain(JSON.stringify(handoff));
+        const runDir=readRunLedger().runs.find(row=>row.requestId===request.request_id)!.runDir;
+        const outputDir=path.join(runDir,"outbox");
+        expect(body.prompt).toContain(JSON.stringify(outputDir));
+        if(composed) {
+          file=path.join(outputDir,"report.md");
+          fs.writeFileSync(file,"# Report");
+        }
+        return {status:202,body:{conversationId}};
+      },
       observe:async()=>{
         try{
           await expect(binding({deputy:"seat"}).relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
@@ -4581,7 +4660,7 @@ test("negotiated tool rounds reject plain over the cap and preserve their rich a
   expect(refused.completion).toMatchObject({outcome:"failed",reason:"invalid_answer"});
 });
 test.each([false, true])("owner reply chains reuse one conversation, learn bot answers and bind only the current authority (rich %s)", async rich => {
-  const { liveOwnerRelayConversation, ownerRelayPayload } = await import("./ownerAuthority");
+  const { liveOwnerRelayConversation, ownerRelayHandoff } = await import("./ownerAuthority");
   const { relayServiceToolsOp } = await import("./ownerServiceTools");
   const { relayAnswerOp } = await import("./ownerAnswer");
   const { formatGuide } = await import("./rich.fixture");
@@ -4612,7 +4691,7 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
       const held = registry.holdDelivery("conversation_chain_fixture", prompt, turn.clientAttemptId, "text", [], null, { operationId: turn.clientAttemptId });
       registry.recordDeliveryOutcome(held.id, "delivered");
       expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(true);
-      expect(ownerRelayPayload("context", "conversation_chain_fixture")?.text).toContain(current.endsWith("2") ? "Fixture turn turn-2" : "Fixture turn turn-3");
+      expect(ownerRelayHandoff("context", "conversation_chain_fixture").payload?.text).toContain(current.endsWith("2") ? "Fixture turn turn-2" : "Fixture turn turn-3");
       return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId };
     },
     observe: async () => {
@@ -4634,13 +4713,15 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
       }
       expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(false);
       expect(await relayServiceToolsOp("conversation_chain_fixture", { op: "list" })).toBeNull();
-      expect(ownerRelayPayload("context", "conversation_chain_fixture")).toBeNull();
+      expect(ownerRelayHandoff("context", "conversation_chain_fixture").payload).toBeNull();
       expect(await relayAnswerOp("conversation_chain_fixture", { format: "plain" })).toBeNull();
     }
     expect(launches).toBe(1); expect(readConversations()).toHaveLength(1);
     expect(prompts[1]).not.toContain("<service_instructions>");
-    expect(prompts[1]).not.toContain('"id":"turn-1"');
-    expect(Buffer.byteLength(prompts[1]!)).toBeLessThan(Buffer.byteLength(prompts[0]!) / 10);
+    const rows = JSON.parse(prompts[1]!.match(/<conversation>\n([^]*?)\n<\/conversation>/)![1]!) as { id: string }[];
+    expect(rows.map(row => row.id)).toEqual(["turn-1", "bot-1", "turn-2"]);
+    expect(prompts[1]).toContain("<short_term_memory>");
+    expect(Buffer.byteLength(prompts[1]!)).toBeLessThan(Buffer.byteLength(prompts[0]!) / 4);
     expect(readAnswerRecord(paired.id, "target_1", current)?.chain).toMatchObject({ continued: true, promptBytes: Buffer.byteLength(prompts[2]!) });
   } finally { await server.close(); }
 });
@@ -4689,7 +4770,9 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
   const trigger = fixture.input.conversation.find(m => m.id === fixture.input.respond_to)!;
   const samples: { mode: string; promptBytes: number; deliveredMs: number; answerMs: number }[] = [];
   let promptBytes = 0, deliveredAt = 0, launches = 0, sends = 0;
+  let deliveredPrompt = "";
   const engine = (prompt: string) => {
+    deliveredPrompt = prompt;
     promptBytes = Buffer.byteLength(prompt);
     // Same CPU work per prompt byte on both paths; no network/model or sleep.
     for (let i = 0; i < passes; i++) createHash("sha256").update(prompt).digest();
@@ -4714,6 +4797,12 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
         const completion = await runClaimedRequest(paired, { ...first, request_id: `latency-${pair}-${mode}`, input }, undefined, { ownerPorts: ports });
         const answerMs = performance.now() - started;
         expect(completion?.outcome).toBe("answered");
+        if (mode === "continued") {
+          const rows = JSON.parse(deliveredPrompt.match(/<conversation>\n([^]*?)\n<\/conversation>/)![1]!) as { id: string }[];
+          expect(rows.slice(-11).map(row => row.id)).toEqual(input.conversation.slice(-11).map(row => row.id));
+          expect(deliveredPrompt).toContain("<short_term_memory>");
+          expect(deliveredPrompt).not.toContain("<service_instructions>");
+        }
         samples.push({ mode, promptBytes, deliveredMs: deliveredAt - started, answerMs });
       }
     }
@@ -4722,7 +4811,7 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
     const variability = (values: number[]) => ({ rangeMs: Math.max(...values) - Math.min(...values),
       medianAbsoluteDeviationMs: median(values.map(value => Math.abs(value - median(values)))) });
     const fresh = samples.filter(s => s.mode === "fresh"), continued = samples.filter(s => s.mode === "continued");
-    expect(median(continued.map(s => s.promptBytes))).toBeLessThan(median(fresh.map(s => s.promptBytes)) / 10);
+    expect(median(continued.map(s => s.promptBytes))).toBeLessThan(median(fresh.map(s => s.promptBytes)));
     const measurement = { engine: `SHA256 ${passes} passes per prompt; alternating pair order`, load: os.loadavg(), samples,
       medians: { freshMs: median(fresh.map(s => s.answerMs)), continuedMs: median(continued.map(s => s.answerMs)) },
       variability: { fresh: variability(fresh.map(s => s.answerMs)), continued: variability(continued.map(s => s.answerMs)) } };

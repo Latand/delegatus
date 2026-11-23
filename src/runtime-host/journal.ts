@@ -86,6 +86,19 @@ function nativeQueueReceipt(entry: NativeQueueRecord): NonNullable<RuntimeOperat
     dispatchedRevision: entry.dispatchedRevision, profilePolicy: entry.profilePolicy };
 }
 
+const STARTUP_EFFECT_REVISION = "startup_effect_revision";
+const startupEffectWriteTriggers = [
+  ["outbox_insert", "AFTER INSERT ON outbox WHEN NEW.state = 'pending'"],
+  ["outbox_update", "AFTER UPDATE ON outbox WHEN OLD.state = 'pending' OR NEW.state = 'pending'"],
+  ["outbox_delete", "AFTER DELETE ON outbox WHEN OLD.state = 'pending'"],
+  ["operation_insert", `AFTER INSERT ON operations WHEN EXISTS (
+    SELECT 1 FROM outbox WHERE id = 'effect:' || NEW.operation_id AND state = 'pending')`],
+  ["operation_update", `AFTER UPDATE OF receipt_json, operation_id ON operations WHEN EXISTS (
+    SELECT 1 FROM outbox WHERE id IN ('effect:' || OLD.operation_id, 'effect:' || NEW.operation_id) AND state = 'pending')`],
+  ["operation_delete", `AFTER DELETE ON operations WHEN EXISTS (
+    SELECT 1 FROM outbox WHERE id = 'effect:' || OLD.operation_id AND state = 'pending')`],
+] as const;
+
 export class RuntimeJournalFault extends RuntimeDataCorruptionError {}
 
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
@@ -631,6 +644,7 @@ export class RuntimeJournal {
     yield* this.verify();
     if (!this.fault) {
       sessionArtifactIndexes.install(this.db, dirname(this.db.filename));
+      if (this.structuredHosts) this.installStartupEffectRevision();
       this.sessionHostMetadata.start();
       this.liveTurnCompaction.start();
     }
@@ -814,6 +828,8 @@ export class RuntimeJournal {
        lawfully differ between a call and its replay), so it must never turn a
        legitimate idempotent replay into a request-hash conflict. */
     delete requestValue.origin;
+    // The first admission owns this Viewer snapshot, including on replay.
+    if (command.kind === "kill") delete requestValue.pendingSendIds;
     if (command.kind === "answer") requestValue.resolution = { sha256: createHash("sha256").update(stableJson(command.resolution)).digest("hex") };
     const requestJson = stableJson(requestValue);
     const requestHash = createHash("sha256").update(requestJson).digest("hex");
@@ -2251,11 +2267,11 @@ export class RuntimeJournal {
     return cursor;
   }
 
-  /** Settle only old spawn/kill work whose two liveness authorities agree it
-      has no owner: the journal has no hosted/recovering session and the durable
-      agent registry is absent, marks the host dead, or marks the conversation
-      superseded. Pending sends and interrupts retain their existing unknown-
-      fate rules. */
+  /** Settle pending spawn/kill work after a continuous absence horizon. A
+      current registry record always fences settlement. A dead or superseded
+      registry record allows settlement even with a hosted or recovering journal
+      session. With no registry record, either of those journal states fences
+      settlement. Sends and interrupts retain their unknown-fate rules. */
   settleStalePendingEffects(
     registryConversations: Pick<ReadonlyMap<string, RuntimeRegistryConversationRetentionState>, "get">,
     horizonMs = RUNTIME_PENDING_EFFECT_STALE_MS,
@@ -2284,7 +2300,8 @@ export class RuntimeJournal {
         const receipt = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
         const session = this.entity<RuntimeSession>("session", row.conversation_id);
         const registryState = registryConversations.get(row.conversation_id);
-        if (session?.host === "hosted" || session?.host === "recovering" || registryState === "current") {
+        if (registryState === "current" || (registryState !== "dead" && registryState !== "superseded"
+          && (session?.host === "hosted" || session?.host === "recovering"))) {
           if (row.orphaned_since !== null) {
             this.db.query("UPDATE operations SET orphaned_since = NULL WHERE operation_id = ?")
               .run(row.operation_id);
@@ -2300,9 +2317,9 @@ export class RuntimeJournal {
         const ageMinutes = Math.ceil(horizon / 60_000);
         let reason = `stale: ${receipt.kind} target has no runtime host and no agent registry record after ${ageMinutes} minutes`;
         if (registryState === "superseded") {
-          reason = `stale: ${receipt.kind} target has no runtime host and its registry conversation is superseded after ${ageMinutes} minutes`;
+          reason = `stale: ${receipt.kind} target's registry conversation is superseded after ${ageMinutes} minutes`;
         } else if (registryState === "dead") {
-          reason = `stale: ${receipt.kind} target has no runtime host and its registry host is dead after ${ageMinutes} minutes`;
+          reason = `stale: ${receipt.kind} target's registry host is dead after ${ageMinutes} minutes`;
         }
         this.transitionOperation(row.operation_id, "failed", { reason });
         settled += 1;
@@ -2320,6 +2337,45 @@ export class RuntimeJournal {
   effectPageVersion(): string {
     const peer = this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
     return `${this.effectReaderGeneration}:${this.totalChanges()}:${peer}`;
+  }
+
+  /** Every writer of a pending effect participates, including a predecessor
+      connection and operation receipts that change effect visibility. Live
+      session writes leave this witness alone, so they do not rewind paging. */
+  private installStartupEffectRevision(): void {
+    const exists = this.db.query<{ name: string }, [string]>("SELECT name FROM sqlite_master WHERE type='trigger' AND name=?");
+    const missing = startupEffectWriteTriggers.filter(([name]) => !exists.get(`startup_effect_${name}`));
+    if (!missing.length && this.metaOr(STARTUP_EFFECT_REVISION, "")) return;
+    assertStateStartupMutation(dirname(this.db.filename), "runtime journal startup effect tracking");
+    this.db.transaction(() => {
+      this.metaSetDefault(STARTUP_EFFECT_REVISION, "0");
+      for (const [name, definition] of missing) {
+        this.db.exec(`CREATE TRIGGER IF NOT EXISTS startup_effect_${name} ${definition}
+          BEGIN UPDATE journal_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = '${STARTUP_EFFECT_REVISION}'; END`);
+      }
+    }).immediate();
+  }
+
+  startupSessionEvidence(conversationIds: readonly string[], includeEvidence = false) {
+    this.assertHealthy();
+    // Existing rows with no write tick predate the tracking schema.
+    const read = this.db.query<{ stamp: number }, [string]>(`
+      SELECT COALESCE(t.tick, 0) AS stamp FROM entities AS e
+      LEFT JOIN entity_write_ticks AS t ON t.kind=e.kind AND t.id=e.id
+      WHERE e.kind='session' AND e.id=?`);
+    return this.db.transaction(() => {
+      const effectsVersion = `${this.effectReaderGeneration}:${this.meta(STARTUP_EFFECT_REVISION)}`;
+      const version = this.effectPageVersion();
+      const sessions = conversationIds.map(id => read.get(id)?.stamp ?? null);
+      const result = { generation: this.effectReaderGeneration, version, effectsVersion, sessions };
+      if (!includeEvidence) return result;
+      const session = this.entity<RuntimeSession>("session", conversationIds[0]!, false);
+      const evidence = session && {
+        conversationId: session.conversationId, host: session.host, turn: session.turn,
+        recentReceipts: visibleReceipts(session.recentReceipts).map(runtimePresentationReceipt).map(receipt => this.presentReceipt(receipt)),
+      };
+      return { ...result, evidence };
+    })();
   }
 
   effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0, conversationId?: string): Array<RuntimeEffect & { eventSeq: number }> {
@@ -2936,6 +2992,7 @@ export class RuntimeJournal {
       idempotencyKey: command.idempotencyKey,
       conversationId: command.conversationId,
       kind: command.kind,
+      ...(command.kind === "kill" && command.pendingSendIds !== undefined ? { pendingSendIds: command.pendingSendIds } : {}),
       ...(command.kind === "kill" ? { origin: command.onlyIfIdle || command.origin?.kind === "agent" ? "system" as const : "operator" as const } : {}),
       ...(command.kind === "interrupt" ? { origin: command.origin?.kind === "agent" ? "system" as const : "operator" as const } : {}),
       ...((command.kind === "kill" || command.kind === "interrupt") && (command.origin || command.kind === "kill" && command.onlyIfIdle)

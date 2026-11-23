@@ -8613,15 +8613,16 @@ async function spawnCorrelatedRunStage(
     const assertSetupCurrent = () => {
       const current = findPipelineRecord(pipeline.id);
       if (attempt.activation) {
-        const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
+        const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.at(-1);
         if (!current || activationFence(current) !== attempt.activation.fence
           || current.repoDir !== pipeline.repoDir || current.worktreeDir !== pipeline.worktreeDir || current.branch !== pipeline.branch
-          || currentAttempt?.activation?.id !== attempt.activation.id) throw new ActivationSuperseded();
+          || currentAttempt?.n !== attempt.n || currentAttempt.activation?.id !== attempt.activation.id
+          || currentAttempt.activation.cancelRequested) throw new ActivationSuperseded();
       }
       assertProactivePipelineExecution(current ?? pipeline);
     };
     const setupWatch = attempt.activation ? setInterval(() => {
-      try { assertSetupCurrent(); } catch { setupAbort.abort(); }
+      try { assertSetupCurrent(); } catch (error) { setupAbort.abort(error); }
     }, 100) : null;
     try {
       if (!ports.worktreePresent(pipeline.worktreeDir)) {
@@ -8631,9 +8632,16 @@ async function spawnCorrelatedRunStage(
       // Validate Delegatus's shared graph even on a resumed stage. Other
       // repositories release old source links before package code can run.
       lockedDependencies = await performanceSpans.wait("pipeline.shared",
-        () => prepareLockedDependencies(pipeline.worktreeDir, { exec: ports.exec }));
+        () => prepareLockedDependencies(pipeline.worktreeDir, {
+          exec: ports.exec, signal: setupAbort.signal, assertCurrent: assertSetupCurrent, repository: pipeline.repoDir,
+        }));
+      assertSetupCurrent();
       if (!lockedDependencies) isolateWorktreeDependencies(pipeline);
       await preparePipelineSetup(pipeline, stage, attempt, ports.now, persist, ports.executeProjectSetup, setupAbort.signal, assertSetupCurrent);
+    } catch (error) {
+      setupAbort.signal.throwIfAborted();
+      assertSetupCurrent();
+      throw error;
     } finally { if (setupWatch) clearInterval(setupWatch); }
     if (!lockedDependencies && fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {
       const ignored = await ports.exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);

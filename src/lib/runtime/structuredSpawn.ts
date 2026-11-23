@@ -46,6 +46,7 @@ import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
 import { readHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import { rememberHandoffChild, persistHandoffLineage } from "@/lib/handoffLineage";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
@@ -81,6 +82,7 @@ import { roleMemoryDeferralReason, RoleMemoryChanged, RoleMemoryPreparationDefer
 import { AttemptTempStore, type AttemptTempOwner } from "./attemptTempRetention";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE } from "@/lib/memory/roleStore";
+import { cleanerAttemptMayStart } from "@/lib/cleaner/store";
 
 export type SpawnedStructuredHost = EngineHost & {
   /** Effective MCP transport when account config constrained the preference. */
@@ -156,14 +158,16 @@ export type StructuredHostAccessPolicy = boolean | {
       repository policy is enforced by pipeline settlement. */
   readOnly: boolean;
   sandbox: "full" | "restricted";
+  ownerRelayHandoffOnly?: boolean;
 };
 
-type DurableStructuredHostAccess = Pick<LaunchProfile, "readOnly" | "sandbox"> | null | undefined;
+type DurableStructuredHostAccess = Pick<LaunchProfile, "readOnly" | "sandbox" | "ownerRelayHandoffOnly"> | null | undefined;
 
 /** New pipeline profiles persist both axes. Profiles created before that split
     retain their legacy readOnly-to-sandbox behavior on adoption. */
 export function structuredHostAccessPolicy(profile: DurableStructuredHostAccess): StructuredHostAccessPolicy {
   const sandbox = explicitLaunchProfileSandbox(profile);
+  if (profile?.ownerRelayHandoffOnly === true) return { readOnly: true, sandbox: "restricted", ownerRelayHandoffOnly: true };
   return sandbox
     ? { readOnly: profile?.readOnly === true, sandbox }
     : profile?.readOnly === true;
@@ -202,6 +206,13 @@ export function materializeStructuredHostAccess(
   };
   const explicitAxes = typeof policy !== "boolean";
   const restricted = explicitAxes ? policy.sandbox === "restricted" : policy;
+  const ownerRelayHandoffOnly = explicitAxes && policy.ownerRelayHandoffOnly === true;
+  if (ownerRelayHandoffOnly) {
+    delete baseEnv.GH_CONFIG_DIR;
+    delete baseEnv.GH_TOKEN;
+    delete baseEnv.GITHUB_TOKEN;
+    delete baseEnv.GH_ENTERPRISE_TOKEN;
+  }
 
   const resolvedScratchParent = scratchParent ?? statePath("scratch");
   fs.mkdirSync(resolvedScratchParent, { recursive: true, mode: 0o700 });
@@ -254,7 +265,10 @@ export function materializeStructuredHostAccess(
         cleanup,
       };
     }
-    const codex = explicitAxes
+    const codex = ownerRelayHandoffOnly
+      ? { permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
+          permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
+      : explicitAxes
       ? { sandbox: "workspace-write", permissionProfile: "llv-stage",
           permissionProfileConfig: `permissions.llv-stage={extends=":workspace",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
       : {
@@ -265,11 +279,11 @@ export function materializeStructuredHostAccess(
       env: {
         ...baseEnv,
         TMPDIR: temporaryDirectory,
-        GH_CONFIG_DIR: githubConfigDirectory(sourceEnv),
+        ...(!ownerRelayHandoffOnly ? { GH_CONFIG_DIR: githubConfigDirectory(sourceEnv) } : {}),
       },
       codex,
       host: {
-        forwardGitHubConfig: true,
+        forwardGitHubConfig: !ownerRelayHandoffOnly,
         releaseCleanup: cleanup,
       },
       scratchDirectory,
@@ -1101,16 +1115,29 @@ async function actuateQueuedPinnedSpawn(
   options: StructuredSpawnRecoveryOptions,
 ): Promise<SpawnReceipt> {
   const queued = queuedPinnedSpawnForReceipt(receipt);
+  const diskCleaner = receipt.agentRole === "cleaner" && receipt.launchProfile.agentMemoryRoleParams?.mode === "disk";
+  const scheduledCleaner = diskCleaner && typeof receipt.scheduledCleanerRunId === "string";
+  const cleanerAttemptActive = () => scheduledCleaner && typeof receipt.clientAttemptId === "string"
+    && receipt.scheduledCleanerRunId === receipt.clientAttemptId
+    && cleanerAttemptMayStart(receipt.clientAttemptId, (options.now ?? Date.now)());
   const admittedAuthority = readHotStateAuthority(path.dirname(registry.filename));
   const assertActive = () => {
     options.signal?.throwIfAborted();
     options.assertActive?.();
+    if (scheduledCleaner && activeDrain()) throw new Error("disk cleaner launch held by update drain");
+    if (scheduledCleaner && !cleanerAttemptActive()) {
+      throw new Error("disk cleaner run expired before queued host actuation");
+    }
     const authority = readHotStateAuthority(path.dirname(registry.filename));
     if (!viewerReleaseOwnsTraffic() || authority?.mode === "fencing"
       || authority?.epoch !== admittedAuthority?.epoch || authority?.releaseRevision !== admittedAuthority?.releaseRevision) {
       throw new Error("queued launch lost Viewer release authority");
     }
   };
+  if (scheduledCleaner && !cleanerAttemptActive()) {
+    return failQueuedPinnedSpawn(registry, receipt, "disk cleaner run expired before queued host actuation");
+  }
+  if (scheduledCleaner && activeDrain()) return receipt;
   assertActive();
   const currentTime = (options.now ?? Date.now)();
   if (!queued || Date.parse(queued.retryAt) > currentTime) return receipt;
@@ -2284,6 +2311,7 @@ export async function claudeStructuredHostOptions(
     appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry ? { engine: "claude", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.account.claudeProvider) } : undefined),
     mcpServers: profile.mcpServers,
     validateTelegramGrant,
+    ...(profile.ownerRelayHandoffOnly ? { tools: ["Read"] } : {}),
     readOnly: launchProfileEngineReadOnly(profile),
     restricted: profile.sandbox === "restricted",
     model: input.account.claudeProvider
@@ -2376,6 +2404,7 @@ export async function defaultStartHost(
       operatorDecisionForms: operatorDecisionFormsRequired(input.receipt.agentRole, input.receipt.artifactPath ?? input.spec.transcript),
       cleanMemory: profile.cleanMemory === true,
       nativeMemoryEnabled,
+      ...(profile.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
       omitSkillsInstructions: profile.omitSkillsInstructions === true || sessionOriginFor(input.receipt) === "delegated",
       developerInstructions: await learnedRulesForLaunchProfile(profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env, nativeMemoryEnabled }),
       mcpServers: profile.mcpServers,
@@ -3495,6 +3524,7 @@ export async function spawnStructuredConversation(
     };
   } catch (error) {
     caughtFailure = error;
+    if (error instanceof Error && error.name === "CleanerDrainHold" && !host && !hostStartRequested) throw error;
     try { return await withoutOperationLease(async () => {
         clearDurableSetupTimeout();
         const pending = input.registry.spawnReceipt(operationId) ?? undefined;

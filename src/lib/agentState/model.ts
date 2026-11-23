@@ -126,6 +126,8 @@ export interface AgentProjection {
   verdict: AgentVerdict;
   revision: number;
   pendingPublication: boolean;
+  /** Cleared with the publication acknowledgement. Older pending rows owe a refresh. */
+  pendingFilesRevision?: boolean;
   publishable?: boolean;
   divergence: string | null;
   divergenceKey?: string | null;

@@ -571,6 +571,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const reading = seatTickReading(read, now, t);
   const record = read.record;
   const { draft, setDraft } = state;
+  const releaseMismatch = record?.release?.status.observation?.reason === "release-version-mismatch";
   const maintenance = record?.maintenance;
   const maintenanceView = maintenanceReading(maintenance, now, locale, t, state.maintainer.config?.engine === "claude" ? "claude" : "codex");
 
@@ -672,6 +673,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         {read.answer?.journalError ? (
           <p role="status" data-seat-tick-journal-unreadable className="pl-3 text-caption leading-4 text-warning">{t("seatTick.journalUnreadable")}</p>
         ) : null}
+        {releaseMismatch ? <p data-seat-tick-release-reason data-seat-tick-release-reason-top role="status" className="text-caption leading-4 text-warning">{t("seatTick.release.wait.versionMismatch")}</p> : null}
         {state.storedAutonomy.state !== "off" ? <AutonomyStatus stored={state.storedAutonomy} now={now} locale={locale} /> : null}
         <TurboStatus control={turbo} now={now} locale={locale} />
         {maintenanceView ? (
@@ -947,9 +949,10 @@ function SeatTickRelease({ value, state, control, row, phone, now, locale, tickE
   const { t } = useLocale();
   const draft = state.release;
   const observation = value.status.observation;
-  const reasons: Record<string, MessageKey> = { "releases-off": "seatTick.release.wait.off", "tick-off": "seatTick.release.wait.tick", "merge-off": "seatTick.release.wait.merge", "release-in-flight": "seatTick.release.wait.flight", "checks-red": "seatTick.release.wait.checks", "checks-pending": "seatTick.release.wait.checks", rollback: "seatTick.release.wait.rollback", hold: "seatTick.release.wait.hold", "no-cut": "seatTick.release.wait.cut", draining: "seatTick.release.wait.deploy", deploying: "seatTick.release.wait.deploy", gap: "seatTick.release.wait.gap", changes: "seatTick.release.wait.changes", "declined-cut": "seatTick.release.wait.declined" };
+  const reasons: Record<string, MessageKey> = { "releases-off": "seatTick.release.wait.off", "tick-off": "seatTick.release.wait.tick", "merge-off": "seatTick.release.wait.merge", "release-in-flight": "seatTick.release.wait.flight", "release-version-mismatch": "seatTick.release.wait.versionMismatch", "checks-red": "seatTick.release.wait.checks", "checks-pending": "seatTick.release.wait.checks", rollback: "seatTick.release.wait.rollback", hold: "seatTick.release.wait.hold", "no-cut": "seatTick.release.wait.cut", draining: "seatTick.release.wait.deploy", deploying: "seatTick.release.wait.deploy", gap: "seatTick.release.wait.gap", changes: "seatTick.release.wait.changes", "declined-cut": "seatTick.release.wait.declined" };
   const reason = !value.enabled && !value.status.request && !value.status.live ? "seatTick.release.wait.off" : !tickEnabled ? "seatTick.release.wait.tick" : observation?.reason.startsWith("capture-tools:") ? "seatTick.release.wait.tools" : observation?.reason ? reasons[observation.reason] : null;
   return <div data-seat-tick-release className="flex min-w-0 flex-col gap-2 border-t border-border pt-2.5">
+    {reason && reason !== "seatTick.release.wait.versionMismatch" ? <p data-seat-tick-release-reason role="status" className="text-caption leading-4 text-warning">{t(reason)}</p> : null}
     <div className={`flex items-center gap-2 ${row}`}>
       <p className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.release.head")}</p>
       <Toggle on={draft.enabled} label={t("seatTick.release.head")} disabled={state.saving}
@@ -967,7 +970,6 @@ function SeatTickRelease({ value, state, control, row, phone, now, locale, tickE
           className={`${control} w-20 shrink-0 rounded border border-border bg-input px-2 text-ui text-primary`}
           onChange={event => state.setRelease({ ...draft, [field]: event.target.value })} /></label>)}
     {observation ? <p className="text-caption leading-4 text-secondary">{t("seatTick.release.count", { count: observation.count, target: value.minChanges })}</p> : null}
-    {reason ? <p data-seat-tick-release-reason role="status" className="text-caption leading-4 text-muted">{t(reason)}</p> : null}
     {observation ? <p className="text-caption text-muted">{t("seatTick.release.last", { version: observation.lastTag })}</p> : null}
     {observation?.reason === "gap" ? <p className="text-caption text-muted">{t("seatTick.release.next", { time: seatTickLocalTime(new Date(observation.nextEligibleAt).toISOString(), now, locale) ?? t("seatTick.unknown") })}</p> : null}
     {value.status.hold && !draft.clearHold ? <div className={`flex items-center gap-2 ${row}`}>
