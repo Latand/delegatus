@@ -446,7 +446,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                     the id is read from the live transcript path so a migrated
                     conversation reflects its current account. OpenClaw skips it
                     for the same reason: the Viewer owns no OpenClaw account. */}
-                {readOnly || file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" ? null : (
+                {readOnly || file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" || file.engine === "antigravity" ? null : (
                   <AccountBadge
                     engine={file.engine}
                     accountId={runtime?.session.accountId ?? file.spawn?.accountId ?? accountIdFromPath(file.path)}

@@ -59,7 +59,7 @@ export function startupHostSnapshot(registry: AgentRegistry, key: SessionKey, in
 export async function startupStructuredHostEntries(snapshot: RegistryFile, assertActive: () => void = () => {}): Promise<AgentRegistryEntry[]> {
   const rows: AgentRegistryEntry[] = [];
   const selected = (function* () {
-    for (const key of registryKeysMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp"])) {
+    for (const key of registryKeysMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"])) {
       yield performanceSpans.sync("runtime.startup.select", () => {
         const entry = snapshot.entries[key];
         return entry ? JSON.parse(JSON.stringify(entry)) as AgentRegistryEntry : null;

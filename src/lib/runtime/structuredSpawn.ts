@@ -33,7 +33,7 @@ import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
-import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
+import { effectiveClaudePermissionMode, resolveAntigravityBinary, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns, type StructuredHostClaimDecision } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
@@ -67,7 +67,8 @@ import { StructuredHostAdoptionCleanupError, StructuredSessionMaterializationErr
 import type { MessageOrigin } from "./messageOrigin";
 import { agentMessageOrigin, delegatusMessageOrigin } from "./agentMessageAuthor";
 import { isStructuredHostKind, runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeOperationResult, type RuntimeSession, type RuntimeSnapshot } from "./contracts";
-import { bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPersistence, stopTerminalStructuredOrphan, type StructuredOrphanStopDependencies } from "./registry";
+import { bindAntigravityHostPersistence, bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPersistence, stopTerminalStructuredOrphan, type StructuredOrphanStopDependencies } from "./registry";
+import { AntigravityAcpHost, type AntigravityAcpHostOptions } from "./antigravityAcpHost";
 import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
 import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
@@ -120,14 +121,14 @@ export function queuedPinnedSpawnTitle(locale: "en" | "uk", retryAt: string): st
 }
 
 export async function resolvePinnedSpawnAdmission(
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   account: AccountContext,
   /** The model the pinned launch names, so a tier weekly it does not draw on
       never refuses it (issues #1796, #1431). */
   model?: string | null,
 ): Promise<SpawnAccountAdmission> {
-  /* Neither Codex nor Copilot exposes a pre-launch limit read here. */
-  if (engine === "codex" || engine === "copilot") {
+  /* Codex, Copilot, and Antigravity do not expose a pre-launch limit read here. */
+  if (engine === "codex" || engine === "copilot" || engine === "antigravity") {
     return { kind: "admissible", basis: "current", stale: false, retryAt: null };
   }
   return claudeValidityFromLimitRead(await fetchClaudeLimits(
@@ -466,18 +467,25 @@ async function waitForStructuredSessionMaterialization(
     now: () => number;
     sleep: (ms: number) => Promise<void>;
     timeoutMs: number;
+    requireDeliveryEvidence?: boolean;
   },
 ): Promise<void> {
+  const requireDeliveryEvidence = options.requireDeliveryEvidence === true;
   const deadline = options.now() + options.timeoutMs;
   let lastEvidence: SessionMaterializationEvidence | null = null;
   for (;;) {
     const evidence = host.sessionMaterializationEvidence
       ? await host.sessionMaterializationEvidence(clientMessageId)
-      : { state: "materialized" as const };
+      : requireDeliveryEvidence
+        ? { state: "unavailable" as const, reason: "structured host provides no delivery materialization evidence" }
+        : { state: "materialized" as const };
     if (evidence.state === "failed") throw new StructuredSessionMaterializationError(evidence.reason);
+    if (requireDeliveryEvidence && evidence.state === "unavailable") {
+      throw new StructuredSessionMaterializationError(evidence.reason);
+    }
     lastEvidence = evidence;
     if (evidence.state === "materialized" && structuredTranscriptIsReadable(artifactPath)) return;
-    if (evidence.state === "unavailable" && structuredTranscriptIsReadable(artifactPath)) return;
+    if (!requireDeliveryEvidence && evidence.state === "unavailable" && structuredTranscriptIsReadable(artifactPath)) return;
     const remaining = deadline - options.now();
     if (remaining <= 0) {
       if (lastEvidence.state === "absent") {
@@ -1064,8 +1072,8 @@ export interface StructuredSpawnRecoveryOptions {
   now?: () => number;
   timeoutMs?: number;
   actuationCap?: number;
-  resolveSpawnAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null) => AccountContext;
-  resolvePinnedSpawnAdmission?: (engine: "claude" | "codex" | "copilot", account: AccountContext) => Promise<SpawnAccountAdmission>;
+  resolveSpawnAccount?: (engine: "claude" | "codex" | "copilot" | "antigravity", accountId: string | null) => AccountContext;
+  resolvePinnedSpawnAdmission?: (engine: "claude" | "codex" | "copilot" | "antigravity", account: AccountContext) => Promise<SpawnAccountAdmission>;
   spawnStructuredConversation?: typeof spawnStructuredConversation;
   publishFilesRevision?: typeof publishFilesRevision;
   /** Recovery-only override for isolated admission fixtures. */
@@ -2112,6 +2120,12 @@ function hostIdentity(engine: AgentEngine, host: SpawnedStructuredHost, input: S
     if (!key || !identity.path) throw new Error("structured Copilot spawn returned no session identity");
     return { key, path: identity.path };
   }
+  if (engine === "antigravity") {
+    const identity = host.identity as { sessionId?: string; path?: string };
+    const key = identity.sessionId ? sessionKey("antigravity", identity.sessionId) : null;
+    if (!key || !identity.path) throw new Error("structured Antigravity spawn returned no session identity");
+    return { key, path: identity.path };
+  }
   const identity = host.identity as { sessionId?: string };
   if (!identity.sessionId) throw new Error("structured Claude spawn returned no session identity");
   const key = sessionKey("claude", identity.sessionId);
@@ -2229,6 +2243,53 @@ export async function startCopilotStructuredHost(
     : await CopilotAcpHost.start(options);
 }
 
+/** Antigravity host options for one launch (docs/design/antigravity-engine.md §3.3). */
+export async function antigravityHostOptions(
+  input: Pick<StructuredSpawnInput, "spec" | "account"> & Partial<Pick<StructuredSpawnInput, "receipt" | "registry">>,
+  access: Pick<StructuredHostAccessMaterialization, "env" | "host">,
+  initialEventCursor?: number,
+): Promise<AntigravityAcpHostOptions> {
+  const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  return {
+    binary: resolveAntigravityBinary(process.env),
+    cwd: input.spec.cwd,
+    antigravityHome: input.account.home,
+    accountId: input.account.accountId,
+    model: profile.model ?? undefined,
+    effort: profile.effort ?? undefined,
+    allowAll: !launchProfileEngineReadOnly(profile) && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
+    appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry
+      ? { engine: "antigravity", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env }
+      : undefined),
+    mcpServers: profile.mcpServers,
+    ...(access.host.releaseCleanup ? { releaseCleanup: access.host.releaseCleanup } : {}),
+    initialEventCursor,
+    env: access.env,
+  };
+}
+
+/** Starts (or, for a resume successor, adopts via `session/resume`) an Antigravity ACP host. */
+export async function startAntigravityStructuredHost(
+  input: StructuredSpawnInput,
+  capability: string,
+  overrides: Partial<AntigravityAcpHostOptions> = {},
+): Promise<AntigravityAcpHost> {
+  const resumeSessionId = structuredResumeSessionId(input);
+  const initialEventCursor = resumeSessionId
+    ? startupHostSnapshot(input.registry, { engine: "antigravity", sessionId: resumeSessionId }).entries[sessionKeyId({ engine: "antigravity", sessionId: resumeSessionId })]?.structuredHost?.eventCursor
+    : undefined;
+  const access = await materializeAttemptAccess(input, capability);
+  const options = {
+    ...(await antigravityHostOptions(input, access, initialEventCursor)),
+    ...overrides,
+    assertCurrent: () => assertMemoryPreparedStartCurrent(input),
+  };
+  await input.authorize?.();
+  return resumeSessionId
+    ? await AntigravityAcpHost.adopt(resumeSessionId, options)
+    : await AntigravityAcpHost.start(options);
+}
+
 /** Production option builder shared by fresh and resumed Claude hosts. */
 export async function claudeStructuredHostOptions(
   input: Pick<StructuredSpawnInput, "spec" | "account"> & Partial<Pick<StructuredSpawnInput, "receipt" | "registry">>,
@@ -2282,7 +2343,7 @@ export function structuredHostCell(registry: AgentRegistry, engine: AgentEngine,
   const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu, memoryScopes: scopes });
   // Reconnecting the same native process keeps its original cgroup. A fresh
   // launch cannot replace this row until that scope has been retired.
-  if (plan && !receipt && (engine === "codex" || engine === "claude" || engine === "copilot")) {
+  if (plan && !receipt && (engine === "codex" || engine === "claude" || engine === "copilot" || engine === "antigravity")) {
     const key: SessionKey = { engine, sessionId: sessionKey.startsWith(`${engine}:`) ? sessionKey.slice(engine.length + 1) : sessionKey };
     const retained = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
     if (retained) {
@@ -2301,6 +2362,7 @@ export async function defaultStartHost(
     claude?: Partial<Pick<ClaudeStreamBrokerHostOptions, "spawnProcess" | "readAuthStatus">>;
     codex?: Partial<Pick<CodexAppServerHostOptions, "spawnProcess" | "readProtocolVersion">>;
     copilot?: Partial<Pick<CopilotAcpHostOptions, "spawnProcess">>;
+    antigravity?: Partial<Pick<AntigravityAcpHostOptions, "spawnProcess">>;
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
@@ -2309,6 +2371,10 @@ export async function defaultStartHost(
   input = admittedStructuredLaunchInput(input);
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability, {
     ...engineProcess.copilot,
+    ...(memoryCell ? { memoryCell } : {}),
+  });
+  if (input.engine === "antigravity") return await startAntigravityStructuredHost(input, capability, {
+    ...engineProcess.antigravity,
     ...(memoryCell ? { memoryCell } : {}),
   });
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
@@ -2395,6 +2461,9 @@ async function defaultBindHost(
 ): Promise<() => void> {
   if (key.engine === "copilot") {
     return await bindCopilotHostPersistence(registry, key, host as CopilotAcpHost, claimOwner, claimEpoch, releasedStatus);
+  }
+  if (key.engine === "antigravity") {
+    return await bindAntigravityHostPersistence(registry, key, host as AntigravityAcpHost, claimOwner, claimEpoch, releasedStatus);
   }
   return key.engine === "codex"
     ? await bindCodexHostPersistence(registry, key, host as CodexAppServerHost, claimOwner, claimEpoch, releasedStatus)
@@ -3421,6 +3490,7 @@ export async function spawnStructuredConversation(
             now,
             sleep,
             timeoutMs: Math.max(0, durableSetupDeadline - now()),
+            requireDeliveryEvidence: input.receipt.engine === "antigravity",
           },
         ));
       } finally {

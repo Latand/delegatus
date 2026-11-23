@@ -13,15 +13,15 @@ export type RootKey =
   | "openclaw-sessions"
   | "copilot-sessions";
 
-export type Engine = "codex" | "claude" | "shell" | "openclaw" | "copilot";
+export type Engine = "codex" | "claude" | "shell" | "openclaw" | "copilot" | "antigravity";
 export type Activity = "live" | "recent" | "stalled" | "idle";
-export type Fmt = "codex" | "claude" | "plain" | "openclaw" | "copilot";
+export type Fmt = "codex" | "claude" | "plain" | "openclaw" | "copilot" | "antigravity";
 
 /** The engines that write a structured transcript the Viewer parses — every
     `Engine` except `"shell"`, whose background tasks are plain output logs.
     Named once so the readers that must switch on the dialect (title and search
     text, turn state, model, effort, the feed) all agree on the same set. */
-export type TranscriptEngine = Extract<Engine, "codex" | "claude" | "openclaw" | "copilot">;
+export type TranscriptEngine = Extract<Engine, "codex" | "claude" | "openclaw" | "copilot" | "antigravity">;
 
 declare const epochSecondsBrand: unique symbol;
 /**
@@ -829,7 +829,7 @@ export interface ResourceSession {
       structured hosts were listed, which only ever held tmux panes. */
   kind?: "tmux" | "structured";
   path: string | null;
-  engine: "claude" | "codex" | "copilot" | null;
+  engine: "claude" | "codex" | "copilot" | "antigravity" | null;
   /** Several live panes claim the same stable conversation identity. */
   hostConflict?: boolean;
   title: string | null;
