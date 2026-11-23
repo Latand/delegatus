@@ -4213,7 +4213,7 @@ const S7_STATES: S7State[] = [
 /** Reads one frame: every violation the variant's gates name, as short strings. */
 const measureS7 = (page: Page, args: { phone: boolean; scopes: Record<string, { active: string[]; left: string[] }>; total: number; topicIds?: string[]; endScroll: boolean; cold: boolean; expectCurrent: boolean }) => page.evaluate((args) => {
   const out: string[] = [];
-  const checked = { texts: 0, scrollers: 0, rules: 0, removes: 0, rows: 0 };
+  const checked = { texts: 0, scrollers: 0, rules: 0, removes: 0, rows: 0, levelGaps: 0 };
   const win = document.querySelector<HTMLElement>("[data-rules-window]")!;
   const box = win.getBoundingClientRect();
   const clips = (element: Element) => { const found: HTMLElement[] = []; for (let node = element.parentElement; node; node = node.parentElement) if (getComputedStyle(node).overflowX !== "visible") found.push(node); return found; };
@@ -4266,6 +4266,34 @@ const measureS7 = (page: Page, args: { phone: boolean; scopes: Record<string, { 
       const lines = Math.round(text.getBoundingClientRect().height / lineHeight);
       if (text.getBoundingClientRect().height > lineHeight * 2 + 1) out.push(`clamp:${row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule")}:${lines}`);
     }
+  }
+  /* The header's sentence shows whole: no ellipsis, and its text range stays inside the line and clear of the × beside it. */
+  const starts = win.querySelector<HTMLElement>("[data-rules-starts]"), closeBox = win.querySelector<HTMLElement>("[data-rules-window-close]")?.getBoundingClientRect();
+  if (starts) {
+    const range = document.createRange(); range.selectNodeContents(starts);
+    if (getComputedStyle(starts).textOverflow === "ellipsis" || starts.scrollWidth > starts.clientWidth + 1) out.push("starts-cut");
+    for (const line of range.getClientRects()) if (closeBox && line.right > closeBox.left + 0.5 && line.bottom > closeBox.top && line.top < closeBox.bottom) out.push("starts-under-close");
+  }
+  /* A heading that wraps keeps its count on the line of its last word. */
+  for (const heading of win.querySelectorAll<HTMLElement>("[data-rules-section] h3")) {
+    const count = heading.parentElement?.querySelector<HTMLElement>("[data-rules-count]");
+    if (!count) continue;
+    const range = document.createRange(); range.selectNodeContents(heading);
+    const lines = [...range.getClientRects()], last = lines[lines.length - 1]!, at = count.getBoundingClientRect();
+    if (Math.abs(at.left - last.right) > 12 || at.top < last.top - 2 || at.bottom > last.bottom + 2) out.push("count-detached");
+  }
+  /* On the phone, every level row without a summary leaves the same room under its last line as above its label. */
+  if (args.phone) {
+    const plain = [...win.querySelectorAll<HTMLElement>("[data-profile-level]:not([data-profile-ready])")];
+    const gaps: number[] = [];
+    for (const row of plain) {
+      const label = row.querySelector<HTMLElement>("span > span"), next = row.parentElement?.nextElementSibling?.querySelector<HTMLElement>("[data-profile-level] span > span");
+      if (!label || !next) continue;
+      const a = document.createRange(), b = document.createRange(); a.selectNodeContents(label); b.selectNodeContents(next);
+      const rects = [...a.getClientRects()]; gaps.push(b.getClientRects()[0]!.top - rects[rects.length - 1]!.bottom);
+    }
+    checked.levelGaps = gaps.length;
+    if (gaps.length > 1 && Math.max(...gaps) - Math.min(...gaps) > 2) out.push(`level-gaps:${gaps.map(gap => Math.round(gap)).join(",")}`);
   }
   if (document.documentElement.scrollWidth > innerWidth) out.push("page-overflow");
   const title = document.getElementById("rules-window-title")!, titleBox = title.getBoundingClientRect();

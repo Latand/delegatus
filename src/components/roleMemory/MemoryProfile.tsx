@@ -126,14 +126,16 @@ export function MemoryProfile({ rules, profile, levels, selected, mobile, onSele
         {levels.map(level => {
           /* A level's own topic keeps its level chosen. */
           const current = !!selected && selected.scope === level.scope && (selected.kind === "level" || selected.index === undefined);
+          /* A row with no summary line has the same padding on both sides of its label, so a wrapped label leaves the gap a one-line label does. */
+          const plain = !level.summary && !running && !reading;
           return <li key={level.scope}>
-            <button type="button" data-profile-level={level.scope} data-profile-ready={level.summary ? "" : undefined} disabled={!rules} aria-current={current ? "true" : undefined} onClick={() => onSelect({ kind: "level", scope: level.scope })} className={`${ROW} items-start ${current ? "bg-accent-soft" : "enabled:hover:bg-sunken"}`}>
+            <button type="button" data-profile-level={level.scope} data-profile-ready={level.summary ? "" : undefined} disabled={!rules} aria-current={current ? "true" : undefined} onClick={() => onSelect({ kind: "level", scope: level.scope })} className={`${plain && mobile ? ROW.replace("py-1.5", "py-3") : ROW} ${plain && mobile ? "items-center" : "items-start"} ${current ? "bg-accent-soft" : "enabled:hover:bg-sunken"}`}>
               <span className="min-w-0 flex-1">
                 <span className={`block text-[12.5px] font-semibold [overflow-wrap:anywhere] ${current ? "text-accent" : "text-primary"}`}>{levelLabel(t, level)}</span>
                 {level.summary ? <span className="block text-[11.5px] leading-4 text-muted [overflow-wrap:anywhere]">{level.summary.answer.headline}</span> : running || reading ? <Placeholder lines={1} className="mt-1.5" /> : null}
               </span>
-              <span className="shrink-0 pt-0.5 text-[11.5px] tabular-nums text-muted">{level.count}</span>
-              {mobile ? <ChevronRight className="mt-px h-4 w-4 shrink-0 text-muted" aria-hidden /> : null}
+              <span className={`shrink-0 text-[11.5px] tabular-nums text-muted ${plain && mobile ? "" : "pt-0.5"}`}>{level.count}</span>
+              {mobile ? <ChevronRight className={`${plain ? "" : "mt-px "}h-4 w-4 shrink-0 text-muted`} aria-hidden /> : null}
             </button>
           </li>;
         })}

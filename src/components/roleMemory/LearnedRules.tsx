@@ -341,9 +341,11 @@ export function RuleSection({ kind, title, subtitle, below, scope, focusRule, re
     <section data-rules-section={kind} data-rules-scope-page={scope?.scope ?? ""} className="flex min-w-0 flex-col">
       <header className="flex flex-col gap-1 px-3 pb-1.5 pt-3">
         <div className="flex items-baseline gap-2">
-          <h3 className="m-0 min-w-0 text-[14px] font-semibold text-primary [overflow-wrap:anywhere]">{title}</h3>
-          {count ? <span data-rules-count="" className="text-[11.5px] tabular-nums text-muted">{count}</span> : null}
-          {chars >= bound * NEAR_BOUND ? <span className="ml-auto text-[10.5px] tabular-nums text-warning" data-rules-size="">{t("roleMemory.size", { chars: number(chars, locale), bound: number(bound, locale) })}</span> : null}
+          <div className="min-w-0 flex-1">
+            <h3 className="m-0 inline text-[14px] font-semibold text-primary [overflow-wrap:anywhere]">{title}</h3>
+            {count ? <span data-rules-count="" className="ml-2 text-[11.5px] tabular-nums text-muted">{count}</span> : null}
+          </div>
+          {chars >= bound * NEAR_BOUND ? <span className="shrink-0 text-[10.5px] tabular-nums text-warning" data-rules-size="">{t("roleMemory.size", { chars: number(chars, locale), bound: number(bound, locale) })}</span> : null}
         </div>
         {subtitle ? <span className="text-[12px] leading-[17px] text-secondary [overflow-wrap:anywhere]">{subtitle}</span> : null}
         {kind === "swarm" ? <span className="text-[11px] leading-4 text-muted">{t("roleMemory.swarmPublic")}</span> : null}
@@ -486,7 +488,7 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
           <SparkGlyph />
           <div className="flex min-w-0 flex-1 flex-col">
             <h2 id="rules-window-title" className="m-0 truncate text-[15px] font-semibold">{t("memoryProfile.title", { project: view?.project ?? project })}</h2>
-            <p data-rules-starts="" className="m-0 truncate text-[11.5px] leading-4 text-muted">{t(scopes.some(scope => scope.kind === "swarm") ? "roleMemory.startsWithSwarm" : "roleMemory.startsWith")}</p>
+            <p data-rules-starts="" className="m-0 text-[11.5px] leading-4 text-muted [overflow-wrap:anywhere]">{t(scopes.some(scope => scope.kind === "swarm") ? "roleMemory.startsWithSwarm" : "roleMemory.startsWith")}</p>
           </div>
           <button type="button" data-rules-window-close="" autoFocus aria-label={t("roleMemory.window.close")} onClick={onClose}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[8px] text-[20px] text-muted hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">×</button>
