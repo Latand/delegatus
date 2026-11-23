@@ -65,6 +65,26 @@ async function registryHasRelease(packageName: string, version: string): Promise
   if (!response.ok && response.status !== 404) throw new Error("release registry status is unreadable");
   return response.ok && (await response.json() as { version?: string }).version === version;
 }
+export async function mergedReleasePullRequest(repo: string, version: string, main: string, git: (...args: string[]) => Promise<string>, run: typeof command = command): Promise<{ commit: string; pr: number } | null> {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) return null;
+  try {
+    const rows = JSON.parse(await run("gh", ["pr", "list", "--repo", repo, "--state", "merged", "--base", "main", "--search", `Release ${version}`, "--limit", "100", "--json", "title,number,baseRefName,mergedAt,mergeCommit"])) as {
+      title?: string; number?: number; baseRefName?: string; mergedAt?: string | null; mergeCommit?: { oid?: string } | null;
+    }[];
+    const candidates: { commit: string; pr: number }[] = [];
+    for (const row of rows) {
+      const commit = row.mergeCommit?.oid;
+      if (row.title !== `Release ${version}` || row.baseRefName !== "main" || !row.mergedAt
+        || !Number.isSafeInteger(row.number) || !/^[a-f0-9]{40}$/.test(commit ?? "")) continue;
+      try {
+        await git("merge-base", "--is-ancestor", commit!, main);
+        const pkg = await releasePackage(commit!, git);
+        if (pkg?.version === version) candidates.push({ commit: commit!, pr: row.number! });
+      } catch { /* A stale or unreadable PR is not recovery evidence. */ }
+    }
+    return candidates.length === 1 ? candidates[0]! : null;
+  } catch { return null; }
+}
 /** A tag alone cannot prove publication, and an unrelated cut cannot supersede this run. */
 export async function supersedingReleaseTag(repoDir: string, saved: { cut: string; lastTag: string }, run: typeof command = command,
   published: typeof registryHasRelease = registryHasRelease): Promise<string | null> {
@@ -204,8 +224,9 @@ export function releaseControllerForSources(sources: SeatTickSources) {
     let owners: ReturnType<typeof indexMergeSuccessors> | undefined;
     const retained = () => all ??= [...current, ...sources.archivedPipelines()];
     const resolve = (lane: Pipeline): Pipeline => {
-      if (lane.state !== "completed" || !lane.delivery || lane.delivery.active) return lane;
-      const successor = mergeSuccessor(lane, owners ??= indexMergeSuccessors(retained()));
+      if ((lane.state !== "completed" && lane.state !== "closed") || !lane.delivery || lane.delivery.active) return lane;
+      const successor = mergeSuccessor(lane.state === "closed" ? { ...lane, state: "completed" } : lane,
+        owners ??= indexMergeSuccessors(retained()));
       return successor && canonicalOrchestratorProject(successor.project) === canonicalOrchestratorProject(lane.project)
         ? successor : lane;
     };
@@ -240,6 +261,7 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const changes = cut ? await changesSinceRelease(repoDir, name, cut.revision, command, tag.boundary) : [];
       const registryHasTag = await registryHasRelease(pkg.name, version);
       const repo = await command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], repoDir);
+      const recovery = pkg.version !== version ? await mergedReleasePullRequest(repo, pkg.version, main, (...args) => git(...args), command) : null;
       const snapshot = lanes();
       return { repoDir, src, policy: { now: sources.now(), enabled: setting.enabled, requested: false,
         tickEnabled: effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled,
@@ -247,6 +269,8 @@ export function releaseControllerForSources(sources: SeatTickSources) {
         live: snapshot.current.some(p => {
           if (canonicalOrchestratorProject(p.project) !== project || p.state === "closed"
             || !/^(Release\s+(Delegatus|\d)|Реліз\s)/i.test(p.task)) return false;
+          const releaseLane = p.stages.some(stage => stage.id === "prepare" || isReleasePublishStage(stage));
+          if (!releaseLane) return false;
           const publishOnly = !p.stages.some(stage => stage.id === "prepare")
             && p.stages.some(stage => isReleasePublishStage(stage));
           // A completed publisher is terminal; consulting the merge-successor
@@ -258,9 +282,10 @@ export function releaseControllerForSources(sources: SeatTickSources) {
           const lane = snapshot.resolve(p);
           const published = !lane.stages.some(stage => stage.id === "prepare")
             && lane.stages.some(stage => isReleasePublishStage(stage));
+          if (lane.state === "completed" && !published && lane.merge?.state === "cancelled" && !lane.delivery?.active) return false;
           return !(lane.state === "completed" && (lane.merge?.state === "merged" || published));
         }),
-        mainVersion: pkg.version, lastTag: { name, version, at }, registryHasTag,
+        mainVersion: pkg.version, lastTag: { name, version, at, boundary: tag.boundary }, registryHasTag, recovery,
         checks: await requiredReleaseChecks(repo, [main, ...(cut ? [cut.revision] : [])]), hold: null,
         draining: !!activeDrain(), deploying: ledger?.state === "ok" && !!ledger.value[0] && !ledger.value[0].terminal,
         tools: (await captureTools(repoDir)).missing, minChanges: setting.minChanges, minGapHours: setting.minGapHours, changes, deployments, isAncestor } };
@@ -292,6 +317,8 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const saved = snapshot.find(id);
       const lane = saved ? snapshot.resolve(saved) : null;
       return lane ? { state: lane.state, merged: lane.merge?.state === "merged",
+        mergeActive: !!lane.delivery?.active || !!lane.merge && (["queued", "checking", "waiting-checks", "updating", "merging", "refreshing"].includes(lane.merge.state)),
+        mergeCancelled: lane.merge?.state === "cancelled",
         mergeCommit: lane.merge?.mergeCommit, pr: lane.merge?.prNumber,
         declined: !!lane.decisionAnswers?.some(a => a.stageId === "publish" && /не випускати|decline|do not release/i.test(a.answer)) } : null;
     },

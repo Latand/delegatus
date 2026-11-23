@@ -7,7 +7,7 @@ import os from "node:os";
 import * as runModule from "./run";
 import { ready } from "./policy.fixture";
 import { releaseState } from "./policy";
-import { releaseControllerForSources } from "./production";
+import { mergedReleasePullRequest, releaseControllerForSources } from "./production";
 import { releaseStages, releasePublishStages } from "./stages";
 import { mutateReleaseProject, readReleaseProject } from "./store";
 import { normalizeStages } from "@/lib/pipelines/engine";
@@ -90,6 +90,14 @@ test("a release follows its merged refresh delivery owner", async () => {
   expect(h.requests[0].baseRef).toBe(head);
 });
 
+test("a closed preparation follows a merged successor delivery owner", async () => {
+  const h = fixture();
+  h.parent.state = "closed";
+  await h.controller.reconcile(project);
+  expect(readReleaseProject(project).live).toMatchObject({ phase: "publish", pipelineId: "publisher" });
+  expect(h.requests[0].baseRef).toBe(head);
+});
+
 test.each(["open", "different-pr", "different-target", "different-project", "comparison", "wrong-owner", "same-epoch", "closed", "no-merge", "missing-commit"])(
   "%s successor cannot authorize publication", async barrier => {
     const h = fixture();
@@ -109,13 +117,14 @@ test.each(["open", "different-pr", "different-target", "different-project", "com
   });
 
 // Retain the reviewer's real adapter observation, with local CLI/registry fixtures.
-async function observe(rows: Pipeline[], archived: Pipeline[] = [], versionAhead = false) {
+async function observe(rows: Pipeline[], archived: Pipeline[] = [], versionAhead = false, pullRequests: unknown[] = [], boundary: string | null = null, frozenCut?: string) {
   const bin = path.join(directory, "bin"); fs.mkdirSync(bin, { recursive: true });
+  const gitLogFile = path.join(directory, "git-log.jsonl");
   const priorPath = process.env.PATH, priorFetch = globalThis.fetch;
   let archiveReads = 0;
   const script = `#!${process.execPath}\nconst tool=process.argv[1].split('/').at(-1),a=process.argv.slice(2);let out='';
-if(tool==='git'){if(a[0]==='ls-remote')out='${"a".repeat(40)}\\trefs/tags/v1.0.0';else if(a[0]==='for-each-ref')out='1793318400';else if(a[0]==='rev-parse'&&a[1]==='refs/tags/v1.0.0')out='${"a".repeat(40)}';else if(a[0]==='rev-parse')out='${head}';else if(a[0]==='cat-file')out='object ${head}\\ntype commit\\ntag v1.0.0\\n\\nDelegatus 1.0.0';else if(a[0]==='ls-tree')out='package.json';else if(a[0]==='show')out=JSON.stringify({name:'package-example',version:'${versionAhead ? "1.1.0" : "1.0.0"}'});}
-if(tool==='gh'){if(a[0]==='repo')out='example/release';else if(a[1]?.includes('/branches/'))out=JSON.stringify({protection:{required_status_checks:{contexts:[]}}});else if(a[1]?.includes('/check-runs'))out=JSON.stringify({check_runs:[]});else out=JSON.stringify({statuses:[]});}
+if(tool==='git'){if(a[0]==='ls-remote')out='${"a".repeat(40)}\\trefs/tags/v1.0.0';else if(a[0]==='for-each-ref')out='1793318400';else if(a[0]==='rev-parse'&&a[1]==='refs/tags/v1.0.0')out='${"a".repeat(40)}';else if(a[0]==='rev-parse')out='${head}';else if(a[0]==='cat-file')out='object ${head}\\ntype commit\\ntag v1.0.0\\n\\nDelegatus 1.0.0${boundary ? `\\n\\nRelease-Cut: ${boundary}` : ""}';else if(a[0]==='ls-tree')out='package.json';else if(a[0]==='show')out=JSON.stringify({name:'package-example',version:'${versionAhead ? "1.1.0" : "1.0.0"}'});else if(a[0]==='log'){require('fs').appendFileSync(${JSON.stringify(gitLogFile)},JSON.stringify(a)+'\\n');out='${"f".repeat(40)} eligible change (#41)';}else if(a[0]==='diff')out='src/eligible.ts';}
+if(tool==='gh'){if(a[0]==='repo')out='example/release';else if(a[0]==='pr'&&a[1]==='list')out=${JSON.stringify(JSON.stringify(pullRequests))};else if(a[1]?.includes('/branches/'))out=JSON.stringify({protection:{required_status_checks:{contexts:[]}}});else if(a[1]?.includes('/check-runs'))out=JSON.stringify({check_runs:[]});else out=JSON.stringify({statuses:[]});}
 if(tool==='bun')out=JSON.stringify({missing:[],chrome:'/fixture/chrome'});console.log(out);`;
   try {
     for (const name of ["git", "gh", "bun"]) fs.writeFileSync(path.join(bin, name), script, { mode: 0o700 });
@@ -125,9 +134,9 @@ if(tool==='bun')out=JSON.stringify({missing:[],chrome:'/fixture/chrome'});consol
       settings: () => defaultSeatTickSettings(project), seatFor: () => ({ active: { conversationId: "seat" } }),
       registry: () => ({ conversation: () => ({ generations: [{ path: "fixture-seat" }] }) }),
     } as unknown as Partial<SeatTickSources>);
-    const observed = await ports.observe(project);
+    const observed = await ports.observe(project, frozenCut);
     if (!observed) throw new Error("fixture release is inapplicable");
-    return { ...observed, archiveReads };
+    return { ...observed, archiveReads, gitLogs: fs.existsSync(gitLogFile) ? fs.readFileSync(gitLogFile, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) : [] };
   } finally { process.env.PATH = priorPath; globalThis.fetch = priorFetch; }
 }
 test("a successful publish lane ceases to block future releases", async () => {
@@ -144,6 +153,43 @@ test("production observation reports a version mismatch when only a local tag re
   expect(policy).toMatchObject({ lastTag: { name: "v1.0.0", version: "1.0.0" }, mainVersion: "1.1.0" });
   expect(await releaseState({ ...ready(), mainVersion: policy.mainVersion, lastTag: policy.lastTag,
     registryHasTag: policy.registryHasTag })).toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
+});
+test("a cancelled completed preparation reports the version mismatch without reading cold lanes", async () => {
+  const preparation = lane("cancelled-preparation");
+  preparation.merge = merge("cancelled");
+  preparation.delivery = { target: { repository: project, remote: "fixture", branch: "refs/heads/release", pr: 7 },
+    disposition: "owner", publish: "enabled", active: false, ownerId: preparation.id, epoch: 1, journal: [] };
+  const { policy } = await observe([preparation], Array.from({ length: 256 }, (_, i) => lane("cold-cancelled-" + i)), true);
+  expect(policy.live).toBe(false);
+  expect(await releaseState({ ...ready(), live: policy.live, mainVersion: policy.mainVersion, lastTag: policy.lastTag }))
+    .toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
+});
+test("production observation carries the prior Release-Cut into the generated changelog Git range", async () => {
+  const repository = lane("boundary-observation-repository"); repository.task = "Maintenance lane"; repository.stages = [];
+  const boundary = "d".repeat(40), cut = "e".repeat(40);
+  const result = await observe([repository], [], false, [], boundary, cut);
+  expect(result.policy.lastTag.boundary).toBe(boundary);
+  expect(result.policy.changes).toEqual([{ subject: "eligible change (#41)", files: ["src/eligible.ts"] }]);
+  expect(result.gitLogs[0]).toContain(`${boundary}..${cut}`);
+});
+test("a completed release-titled lane without release stages does not hold the in-flight guard", async () => {
+  const manual = lane("manual-release-successor");
+  manual.task = "Реліз 2.3.0: changelog correction";
+  manual.stages = [];
+  const { policy } = await observe([manual], [], true);
+  expect(policy.live).toBe(false);
+  expect(await releaseState({ ...ready(), live: policy.live, mainVersion: policy.mainVersion, lastTag: policy.lastTag }))
+    .toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
+});
+test("production recovery accepts only one exact merged Release version PR on main", async () => {
+  const commit = "c".repeat(40);
+  const valid = { title: "Release 1.1.0", number: 23, baseRefName: "main", mergedAt: at, mergeCommit: { oid: commit } };
+  const read = async (rows: unknown[]) => mergedReleasePullRequest("example/release", "1.1.0", head,
+    async (...args) => args[0] === "show" ? JSON.stringify({ name: "package-example", version: "1.1.0" }) : "package.json",
+    async () => JSON.stringify(rows));
+  expect(await read([valid])).toEqual({ commit, pr: 23 });
+  expect(await read([{ ...valid, title: "Release 1.1.1" }])).toBeNull();
+  expect(await read([valid, { ...valid, number: 24 }])).toBeNull();
 });
 test("a completed merged preparation needs no archived successor lookup", async () => {
   const preparation = lane("completed-merged-preparation");

@@ -48,13 +48,15 @@ export function releaseCutFromTag(content: string): string | null {
   const match = /^Delegatus \d+\.\d+\.\d+\n\nRelease-Cut: ([a-f0-9]{40})$/.exec(message);
   return match?.[1] ?? null;
 }
-export function readmeProvenance(root: string): boolean {
+export function readmeProvenance(root: string, captureInputs?: { generatorSha256: string; seedSha256: string }): boolean {
   try {
     const base = path.join(root, "docs/media/readme");
     const p = JSON.parse(fs.readFileSync(path.join(base, "provenance.json"), "utf8"));
     const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
     if (p.schemaVersion !== 1 || p.classification !== "synthetic" || p.generator !== "scripts/capture-readme-media.ts" || p.seed !== "scripts/readme-demo-state.ts"
-      || hash(path.join(root, p.generator)) !== p.generatorSha256 || hash(path.join(root, p.seed)) !== p.seedSha256) return false;
+      || (captureInputs
+        ? p.generatorSha256 !== captureInputs.generatorSha256 || p.seedSha256 !== captureInputs.seedSha256
+        : hash(path.join(root, p.generator)) !== p.generatorSha256 || hash(path.join(root, p.seed)) !== p.seedSha256)) return false;
     const files = fs.readdirSync(base).filter(f => f.endsWith(".svg")).sort();
     if (!Array.isArray(p.assets) || files.length !== 8 || p.assets.length !== 8 || new Set(p.assets.map((a: { path: string }) => a.path)).size !== 8) return false;
     return p.assets.every((a: { path: string; sha256: string }) => files.includes(a.path) && hash(path.join(base, a.path)) === a.sha256);
@@ -62,8 +64,9 @@ export function readmeProvenance(root: string): boolean {
 }
 export interface VerifyPorts {
   command: (file: string, args: string[]) => Promise<string>;
+  readFileAt?: (revision: string, file: string) => Promise<Uint8Array>;
   registry: (url: string) => Promise<Record<string, unknown> | null>;
-  provenance: () => boolean;
+  provenance: (captureInputs?: { generatorSha256: string; seedSha256: string }) => boolean;
   now: () => number; wait: () => Promise<void>;
 }
 export interface VerifyResult { errors: string[]; nextStep?: PreflightAction; tagCommit?: string }
@@ -77,7 +80,9 @@ async function readRegistry(url: string, timeout = 30_000): Promise<Record<strin
 }
 const productionPorts: VerifyPorts = {
   command: async (file, args) => (await promisify(execFile)(file, args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 })).stdout.trim(),
-  registry: readRegistry, provenance: () => readmeProvenance(process.cwd()), now: Date.now, wait: () => new Promise(resolve => setTimeout(resolve, 30_000)),
+  readFileAt: async (revision, file) => (await promisify(execFile)("git", ["--no-replace-objects", "show", `${revision}:${file}`],
+    { encoding: "buffer", timeout: 60_000, maxBuffer: 8 * 1024 * 1024 })).stdout as Buffer,
+  registry: readRegistry, provenance: captureInputs => readmeProvenance(process.cwd(), captureInputs), now: Date.now, wait: () => new Promise(resolve => setTimeout(resolve, 30_000)),
 };
 /** Read only exact-version manifests and the dedicated dist-tags endpoint. */
 async function registryView(spec: string, field: string, timeout: number): Promise<unknown> {
@@ -146,6 +151,12 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
       await git("--no-replace-objects", "merge-base", "--is-ancestor", tagCommit, "refs/remotes/origin/main");
     } catch { return { errors: ["release tag commit is not on origin/main; merge the reviewed release PR first, then rerun preflight on its merged commit"] }; }
     await git("--no-replace-objects", "merge-base", "--is-ancestor", cut, tagCommit);
+    const captureInputs = {
+      generatorSha256: createHash("sha256").update(await (ports.readFileAt?.(cut, "scripts/capture-readme-media.ts")
+        ?? git("--no-replace-objects", "show", `${cut}:scripts/capture-readme-media.ts`))).digest("hex"),
+      seedSha256: createHash("sha256").update(await (ports.readFileAt?.(cut, "scripts/readme-demo-state.ts")
+        ?? git("--no-replace-objects", "show", `${cut}:scripts/readme-demo-state.ts`))).digest("hex"),
+    };
     const pkg = JSON.parse(await git("--no-replace-objects", "show", `${tagCommit}:package.json`));
     const registryURL = `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}`;
     const local = await git("for-each-ref", "--format=%(refname)", `refs/tags/${tag}`);
@@ -172,7 +183,7 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
       npmVersion: !!await ports.registry(`${registryURL}/${version}`),
       // Compare the release PR's own files with its integrated first parent.
       files: (await git("--no-replace-objects", "diff", "--no-renames", "--name-only", `${tagCommit}^1`, tagCommit)).split("\n").filter(Boolean),
-      clean: !(await git("status", "--porcelain")), provenance: ports.provenance() });
+      clean: !(await git("status", "--porcelain")), provenance: ports.provenance(captureInputs) });
     if (await git("rev-parse", "HEAD") !== head) return { errors: ["release checkout head moved during preflight; review the new head before tagging"] };
     const nextStep: PreflightAction | undefined = errors.length ? undefined : remoteTag === "matching" ? "verify-remote"
       : localTag === "matching" ? "push-existing" : "create-and-push";

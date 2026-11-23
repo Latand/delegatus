@@ -146,6 +146,8 @@ test("preflight distinguishes a matching local-only tag, a confirmed remote tag,
       args = args.filter(arg => arg !== "--no-replace-objects");
       if (args[0] === "fetch") return "";
       if (args[0] === "show" && args[1] === `${head}:package.json`) return JSON.stringify({ name: "package-example", version: "1.2.0" });
+      if (args[0] === "show" && args[1]?.endsWith(":scripts/capture-readme-media.ts")) return "fixture generator at cut";
+      if (args[0] === "show" && args[1]?.endsWith(":scripts/readme-demo-state.ts")) return "fixture seed at cut";
       if (args[0] === "show" && args[1] === "v1.2.0:package.json") return JSON.stringify({ version: "1.2.0" });
       if (args[0] === "for-each-ref") return local ? "refs/tags/v1.2.0" : "";
       if (args[0] === "rev-parse" && args[1] === "HEAD") return head;
@@ -299,6 +301,9 @@ test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "
     git("init", "--bare", "--initial-branch=main", remote);
     git("init", "--initial-branch=main");
     fs.writeFileSync(path.join(lane, "package.json"), JSON.stringify({ name: "package-example", version: "1.1.0" }));
+    fs.mkdirSync(path.join(lane, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(lane, "scripts/capture-readme-media.ts"), "export const generator = 'fixture';\n");
+    fs.writeFileSync(path.join(lane, "scripts/readme-demo-state.ts"), "export const seed = 'fixture';\n");
     fs.writeFileSync(path.join(lane, "feature.ts"), "export const feature = true;\n");
     git("add", "."); git("commit", "-m", "base");
     const cut = git("rev-parse", "HEAD");
@@ -310,7 +315,6 @@ test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "
     git("checkout", "-b", "release", cut);
     fs.writeFileSync(path.join(lane, "package.json"), JSON.stringify({ name: "package-example", version: "1.2.0" }));
     if (scenario === "renamed product path") {
-      fs.mkdirSync(path.join(lane, "scripts"));
       git("mv", "feature.ts", "scripts/feature.ts");
     }
     git("add", "."); git("commit", "-m", "release");

@@ -648,6 +648,81 @@ test("a closed publisher with an untagged version leaves an actionable blocker o
   expect(readReleaseProject(h.project).blocked).toBeNull();
 });
 
+test("a cancelled preparation claim settles before two ticks record the actionable version blocker", async () => {
+  const h = publishFixture();
+  h.policy.live = false;
+  h.lanes.release = { state: "completed", merged: false, declined: false, mergeCancelled: true };
+  const input = { project: h.project, seat: { conversationId: "seat", seatEpoch: 1 },
+    settings: effectiveSeatTickSettings(defaultSeatTickSettings(h.project), 0, 60_000) } as SeatTickCheckInput;
+  const controller = productionReleaseController(h.ports);
+  expect(await controller.launchIfDue(input)).toBe("release: release-version-mismatch");
+  expect(readReleaseProject(h.project)).toMatchObject({
+    live: null,
+    history: [{ outcome: "failed", reason: "release-merge-cancelled" }],
+    observation: { state: "blocked", reason: "release-version-mismatch" },
+    blocked: { kind: 11 },
+  });
+  h.policy.now += 60_000;
+  expect(await controller.launchIfDue(input)).toBe("release: release-version-mismatch");
+  expect(readReleaseProject(h.project).history).toHaveLength(1);
+  expect(h.requests).toEqual([]);
+});
+
+test("a merged matching release PR recovers an untagged main version through publish-only stages", async () => {
+  const project = "release-pr-recovery";
+  const commit = "c".repeat(40), pr = 23;
+  const policy = { ...ready(), mainVersion: "1.1.0", registryHasTag: false };
+  let creates = 0;
+  const setting = { enabled: true, askBeforePublish: true, minChanges: 30, minGapHours: 12,
+    updatedAt: "2026-10-12T00:00:00Z", setBy: { kind: "gateway" as const, project, conversationId: null, seatEpoch: null }, why: null };
+  const ports: ReleasePorts = { now: () => policy.now, settings: () => setting, taskDone: () => false, supersedingTag: async () => null,
+    observe: async () => ({ policy, repoDir: "repo", src: "seat", recovery: { commit, pr } }),
+    task: (_project, run) => { expect(run.trigger).toBe("recovery"); return "recovery-task"; }, pipeline: () => null,
+    create: async request => { creates++; expect(request.baseRef).toBe(commit); expect(request.finishesTask).toBe(true);
+      expect(request.stages.map(stage => stage.id)).toEqual(["review", "publish"]);
+      expect(request.stages[0]?.prompt).toContain(`PR ${pr}`); return "recovery-publisher"; } };
+  const input = { project, seat: { conversationId: "seat", seatEpoch: 1 },
+    settings: effectiveSeatTickSettings(defaultSeatTickSettings(project), 0, 60_000) } as SeatTickCheckInput;
+  expect(await productionReleaseController(ports).launchIfDue(input)).toBe("release: launched");
+  expect(creates).toBe(1);
+  expect(readReleaseProject(project).live).toMatchObject({ trigger: "recovery", phase: "publish", pipelineId: "recovery-publisher", cut: "one" });
+});
+
+test("an untagged version without merged release PR evidence stays a named blocker", async () => {
+  const project = "release-recovery-without-pr";
+  const policy = { ...ready(), mainVersion: "1.1.0", registryHasTag: false };
+  let creates = 0;
+  const ports: ReleasePorts = { now: () => policy.now,
+    settings: () => ({ enabled: true, askBeforePublish: true, minChanges: 30, minGapHours: 12, updatedAt: "2026-10-12T00:00:00Z",
+      setBy: { kind: "gateway", project, conversationId: null, seatEpoch: null }, why: null }),
+    observe: async () => ({ policy, repoDir: "repo", src: "seat", recovery: null }), taskDone: () => false, supersedingTag: async () => null,
+    task: () => "unused", pipeline: () => null, create: async () => { creates++; return "unexpected"; } };
+  const input = { project, seat: { conversationId: "seat", seatEpoch: 1 },
+    settings: effectiveSeatTickSettings(defaultSeatTickSettings(project), 0, 60_000) } as SeatTickCheckInput;
+  expect(await productionReleaseController(ports).launchIfDue(input)).toBe("release: release-version-mismatch");
+  expect(readReleaseProject(project)).toMatchObject({ live: null, blocked: { kind: 11 }, observation: { reason: "release-version-mismatch" } });
+  expect(creates).toBe(0);
+});
+
+test("a recovery claim retires when merged PR evidence changes during admission", async () => {
+  const project = "release-recovery-evidence-race", commit = "d".repeat(40), pr = 24;
+  const policy = { ...ready(), mainVersion: "1.1.0", registryHasTag: false };
+  let observations = 0, creates = 0;
+  const ports: ReleasePorts = { now: () => policy.now,
+    settings: () => ({ enabled: true, askBeforePublish: true, minChanges: 30, minGapHours: 12, updatedAt: "2026-10-12T00:00:00Z",
+      setBy: { kind: "gateway", project, conversationId: null, seatEpoch: null }, why: null }),
+    observe: async () => ({ policy, repoDir: "repo", src: "seat", recovery: ++observations === 1 ? { commit, pr } : null }),
+    taskDone: () => false, supersedingTag: async () => null, task: () => "recovery-task", pipeline: () => null,
+    create: async () => { creates++; return "unexpected"; } };
+  const input = { project, seat: { conversationId: "seat", seatEpoch: 1 },
+    settings: effectiveSeatTickSettings(defaultSeatTickSettings(project), 0, 60_000) } as SeatTickCheckInput;
+  expect(await productionReleaseController(ports).launchIfDue(input)).toBe("release: recovery-candidate-changed");
+  expect(readReleaseProject(project)).toMatchObject({ live: null, history: [{ outcome: "failed", reason: "release-recovery-evidence-changed" }] });
+  expect(creates).toBe(0);
+  expect(await productionReleaseController(ports).launchIfDue(input)).toBe("release: release-version-mismatch");
+  expect(readReleaseProject(project).blocked).toMatchObject({ kind: 11 });
+});
+
 test.each(["open", "running", "incomplete", "hold", "late-hold", "ancestry-hold", "disabled", "tick", "merge", "gap", "changes", "other", "red", "pending", "drain", "deploy", "rollback"])("publish admission retains %s barrier", async barrier => {
   const h = publishFixture();
   if (barrier === "open") h.lanes.release!.merged = false;
@@ -721,7 +796,10 @@ test("a refreshed release is blocked when product changes arrive after its cut a
   fs.mkdirSync(path.join(root, ".git/info"), { recursive: true });
   fs.writeFileSync(path.join(root, ".git/info/exclude"), "/origin.git/\n");
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "package-example", version: "1.0.0" }));
-  git("add", "package.json"); git("commit", "-m", "production cut");
+  fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(root, "scripts/capture-readme-media.ts"), "export const generator = 'cut';\n");
+  fs.writeFileSync(path.join(root, "scripts/readme-demo-state.ts"), "export const seed = 'cut';\n");
+  git("add", "package.json", "scripts/capture-readme-media.ts", "scripts/readme-demo-state.ts"); git("commit", "-m", "production cut");
   const cut = git("rev-parse", "HEAD");
   git("remote", "add", "origin", remote); git("push", "origin", "main");
   git("tag", "-a", "v1.0.0", cut, "-m", "Delegatus 1.0.0"); git("push", "origin", "refs/tags/v1.0.0");
@@ -731,12 +809,29 @@ test("a refreshed release is blocked when product changes arrive after its cut a
   git("checkout", "--detach", cut);
   git("checkout", "-b", "release");
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "package-example", version: "1.1.0" }));
-  git("add", "package.json"); git("commit", "-m", "release version");
+  fs.mkdirSync(path.join(root, "docs/media/readme"), { recursive: true });
+  const { createHash } = await import("node:crypto");
+  const assets = Array.from({ length: 8 }, (_, index) => {
+    const asset = "frame-" + index + ".svg";
+    const body = "<svg xmlns=\"http://www.w3.org/2000/svg\"><text>" + index + "</text></svg>\n";
+    fs.writeFileSync(path.join(root, "docs/media/readme", asset), body);
+    return { path: asset, sha256: createHash("sha256").update(body).digest("hex") };
+  });
+  fs.writeFileSync(path.join(root, "docs/media/readme/provenance.json"), JSON.stringify({
+    schemaVersion: 1, classification: "synthetic", generator: "scripts/capture-readme-media.ts",
+    generatorSha256: createHash("sha256").update(fs.readFileSync(path.join(root, "scripts/capture-readme-media.ts"))).digest("hex"),
+    seed: "scripts/readme-demo-state.ts",
+    seedSha256: createHash("sha256").update(fs.readFileSync(path.join(root, "scripts/readme-demo-state.ts"))).digest("hex"),
+    assets,
+  }));
+  git("add", "package.json", "docs/media/readme"); git("commit", "-m", "release version");
   const reviewed = git("rev-parse", "HEAD");
   git("push", "origin", "release");
   const treeFile = path.join(root, "feature.ts");
   git("checkout", "main"); fs.writeFileSync(treeFile, "export const feature = true;\n");
-  git("add", "feature.ts"); git("commit", "-m", "main advances after review (#82)");
+  fs.writeFileSync(path.join(root, "scripts/capture-readme-media.ts"), "export const generator = 'main drift';\n");
+  fs.writeFileSync(path.join(root, "scripts/readme-demo-state.ts"), "export const seed = 'main drift';\n");
+  git("add", "feature.ts", "scripts/capture-readme-media.ts", "scripts/readme-demo-state.ts"); git("commit", "-m", "main advances after review (#82)");
   const main = git("rev-parse", "HEAD"); git("push", "origin", "main"); git("checkout", "release");
   const now = Date.parse("2026-10-22T00:00:00Z"); let clock = now;
   const normalized = normalizeStages(releaseStages({ cut, lastTag: "v1.0.0", changes: [], askBeforePublish: true }), pipelineRoleLookup);
@@ -793,8 +888,15 @@ test("a refreshed release is blocked when product changes arrive after its cut a
   expect(h.requests[0].request.baseRef).toBe(merged!);
   // The publish checkout is the integrated main commit, reviewed separately.
   git("checkout", "--detach", merged!);
-  expect(git("diff", "--name-only", cut, "HEAD").split("\n")).toEqual(["existing.ts", "feature.ts", "package.json"]);
-  const ports = { now: () => 0, wait: async () => {}, registry: async () => null, provenance: () => true,
+  expect(git("diff", "--name-only", cut, "HEAD").split("\n")).toEqual([
+    ...Array.from({ length: 8 }, (_, index) => `docs/media/readme/frame-${index}.svg`),
+    "docs/media/readme/provenance.json", "existing.ts", "feature.ts", "package.json",
+    "scripts/capture-readme-media.ts", "scripts/readme-demo-state.ts",
+  ]);
+  const { readmeProvenance } = await import("../../../scripts/release-verify");
+  const ports = { now: () => 0, wait: async () => {}, registry: async () => null,
+    readFileAt: async (revision: string, file: string) => execFileSync("git", ["show", `${revision}:${file}`], { cwd: root, env }),
+    provenance: (inputs?: { generatorSha256: string; seedSha256: string }) => readmeProvenance(root, inputs),
     command: async (file: string, args: string[]) => {
       if (file === "git") return git(...args);
       expect(args.slice(0, 3)).toEqual(["pr", "view", "7"]);

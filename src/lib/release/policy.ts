@@ -50,7 +50,7 @@ export async function releaseState(input: ReleaseInput): Promise<ReleaseDecision
   if (!input.mergeEnabled) return answer("blocked", 3, "merge-off");
   if (input.live) return answer("in-flight", 4, "release-in-flight");
   if (!input.publishing && input.mainVersion !== input.lastTag.version) return answer("blocked", 11, "release-version-mismatch");
-  if (!input.registryHasTag) return answer("in-flight", 4, "release-in-flight");
+  if (!input.registryHasTag && !input.publishing) return answer("in-flight", 4, "release-in-flight");
   if (input.checks !== "green") return answer("blocked", 5, input.checks === "red" ? "checks-red" : "checks-pending");
   const serving = [...input.deployments].sort((a, b) => b.at - a.at)[0];
   for (const d of input.deployments) {
