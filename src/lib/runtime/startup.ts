@@ -1882,10 +1882,10 @@ async function interruptedCodexContinuations(
 
 function persistedTurnState(
   records: Record<string, unknown>[],
-  engine: "codex" | "claude" | "copilot",
+  engine: "codex" | "claude" | "copilot" | "antigravity",
   prefixTruncated: boolean,
 ) {
-  if (engine === "claude" || engine === "copilot") return turnStateFromRecords(records, engine);
+  if (engine === "claude" || engine === "copilot" || engine === "antigravity") return turnStateFromRecords(records, engine);
   if (!prefixTruncated) return turnStateFromRecords(records, "codex", true);
 
   const turnStartIndex = records.findLastIndex((record) => {
@@ -2611,7 +2611,7 @@ function* pipelineStartupMembershipSteps(
     }
     return examined;
   };
-  const hostKeys = host ? [sessionKeyId(host.key)] : registryKeysMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp"]);
+  const hostKeys = host ? [sessionKeyId(host.key)] : registryKeysMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"]);
   // Pending structured spawns need the same unreadable-pipeline fence.
   const receiptKeys = host ? [] : registryKeysMatching(snapshot, "receipts", "state", ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"]);
   onCount?.(hostKeys.length + receiptKeys.length);

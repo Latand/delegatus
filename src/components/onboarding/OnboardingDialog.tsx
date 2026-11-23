@@ -90,7 +90,7 @@ const DEFAULT_CHECK_MINUTES = 5;
 /** `/api/accounts` also says whether each engine's command resolves; the
     engine stores parse the accounts, so the step reads that one fact itself. */
 function useCliPresence(): { cli: Record<RoleEngine, CliPresence>; recheck: () => void } {
-  const [cli, setCli] = useState<Record<RoleEngine, CliPresence>>({ claude: null, codex: null });
+  const [cli, setCli] = useState<Record<RoleEngine, CliPresence>>({ claude: null, codex: null, antigravity: null });
   const read = useCallback((fresh: boolean) => {
     const presence = (value: unknown): CliPresence => value === "found" || value === "missing" ? value : null;
     void fetch(fresh ? "/api/accounts/cli" : "/api/accounts")
@@ -103,7 +103,7 @@ function useCliPresence(): { cli: Record<RoleEngine, CliPresence>; recheck: () =
           const value = body[engine];
           return presence(value && typeof value === "object" ? (value as { cli?: unknown }).cli : value);
         };
-        setCli({ claude: read("claude"), codex: read("codex") });
+        setCli({ claude: read("claude"), codex: read("codex"), antigravity: read("antigravity") });
       });
   }, []);
   useEffect(() => read(false), [read]);
@@ -270,6 +270,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const statuses: Record<RoleEngine, EngineStatus> = {
     claude: { connected: engineReady(claude, cli.claude), missing: cli.claude === "missing", account: engineAccount(claude) },
     codex: { connected: engineReady(codex, cli.codex), missing: cli.codex === "missing", account: engineAccount(codex) },
+    antigravity: { connected: cli.antigravity !== "missing", missing: cli.antigravity === "missing", account: null },
   };
   /* A visited Engines step earns its check only when an engine can run; with
      none it carries the warning its own screen shows. */

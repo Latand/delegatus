@@ -2,10 +2,11 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+import { listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
-import { resolveBinary } from "@/lib/agent/cli";
+import { resolveAntigravityBinary, resolveBinary } from "@/lib/agent/cli";
 
 /**
  * Whether an engine can run a launch here (#1876, design §4.5): its command
@@ -19,7 +20,7 @@ import { resolveBinary } from "@/lib/agent/cli";
  * see: an engine with nobody signed in at all. A Claude credential store that
  * could not be read cannot prove absence, so it counts as present.
  */
-export type EngineName = "claude" | "codex";
+export type EngineName = "claude" | "codex" | "antigravity";
 
 export type ConnectionAccount = { id: string; authPresent: boolean; credentialState?: string };
 
@@ -32,12 +33,24 @@ export function engineConnectedFrom(accounts: readonly ConnectionAccount[], allo
 /** Why an engine can or cannot run a launch; `connected` is the only one that can. */
 export type EngineReadiness = "connected" | "signed-out" | "cli-missing";
 
+function binaryForEngine(engine: EngineName): string {
+  return engine === "antigravity" ? resolveAntigravityBinary() : resolveBinary(engine);
+}
+
 export function engineReadiness(engine: EngineName, project: string | null): EngineReadiness {
-  if (!cliResolvable(resolveBinary(engine))) return "cli-missing";
+  if (!cliResolvable(binaryForEngine(engine))) return "cli-missing";
   return engineSignedIn(engine, project) ? "connected" : "signed-out";
 }
 
 function engineSignedIn(engine: EngineName, project: string | null): boolean {
+  if (engine === "antigravity") {
+    const accounts: ConnectionAccount[] = listAntigravityAccounts().map((account) => ({
+      id: account.id,
+      authPresent: account.auth !== "signed_out",
+      credentialState: account.auth === "unknown" ? "unknown" : undefined,
+    }));
+    return engineConnectedFrom(accounts, null);
+  }
   const accounts: ConnectionAccount[] = engine === "claude" ? listClaudeAccounts() : listCodexAccounts();
   let allowed: string[] | null = null;
   try {
@@ -52,7 +65,7 @@ function engineSignedIn(engine: EngineName, project: string | null): boolean {
 
 export const ENGINE_NOT_CONNECTED = "ENGINE_NOT_CONNECTED";
 
-const ENGINE_LABEL: Record<EngineName, string> = { claude: "Claude", codex: "Codex" };
+const ENGINE_LABEL: Record<EngineName, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity" };
 
 /** The refusal's details, for an agent that relays the choice to its operator. */
 export type EngineNotConnectedDetails = {
@@ -126,7 +139,7 @@ export function probeCli(binary: string, timeoutMs = CLI_PROBE_TIMEOUT_MS): Prom
 export function engineCliPresence(engine: EngineName, { fresh = false }: { fresh?: boolean } = {}): Promise<CliPresence> {
   const cached = cliCache.get(engine);
   if (!fresh && cached && Date.now() - cached.at < CLI_PROBE_TTL_MS) return cached.value;
-  const value = probeCli(resolveBinary(engine));
+  const value = probeCli(binaryForEngine(engine));
   cliCache.set(engine, { at: Date.now(), value });
   return value;
 }

@@ -982,10 +982,13 @@ export async function advanceConversationMigration(
 ): Promise<RegistryConversation> {
   let conversation = registry.conversation(conversationId);
   if (!conversation?.migration) throw new Error("conversation has no migration");
-  /* The registry never opens a migration for a Copilot conversation; the
-     engine is narrowed here so every step below keeps the migration types. */
+  /* The registry never opens a migration for a Copilot or Antigravity
+     conversation; the engine is narrowed here so every step below keeps the
+     migration types. */
   const engine = conversation.engine;
-  if (engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
+  if (engine === "copilot" || engine === "antigravity") {
+    throw new Error(`account migration does not cover ${engine === "copilot" ? "Copilot" : "Antigravity"} conversations`);
+  }
   if (reconfigureOwnsMigration(conversation, options.reconfigureOperationId)) return conversation;
   let migration = conversation.migration;
   let assertSourceAuthority = () => {};
