@@ -143,14 +143,49 @@ test("pre-commit lint admits only selections larger than forty files", () => {
   }
 });
 
-test("local runtime scope is Dockerfile, runtime host and bin, including deleted inputs", () => {
-  for (const file of ["Dockerfile", "src/runtime-host/example.ts", "bin/example.mjs"]) {
-    const env = discover(root, "HEAD", [file]);
-    expect(env.runtime).toBeTrue(); expect(env.native).toBeTrue();
+test("Dockerfile selects the local runtime and native checks together", () => {
+  const files = ["Dockerfile"];
+  const env = discover(root, "HEAD", files);
+  const steps = plan("pre-push", files, env);
+  expect(steps.filter(step => step.pinned).map(step => step.name)).toEqual([
+    "runtime verdict tests", "Viewer build", "MCP size budgets", "Viewer runtime",
+    "runtime host", "runtime negative controls",
+    ...env.codexVersions.map(version => `native Codex ${version}`), "native Codex shared contracts",
+  ]);
+  expect(steps.map(step => step.name)).toContain("privacy");
+  expect(steps.map(step => step.name)).not.toContain("types");
+});
+
+test("bin and runtime host changes keep their ordinary local checks and touched tests", () => {
+  for (const [file, affectedTest] of [
+    ["bin/envAlias.mjs", "bin/envAlias.test.ts"],
+    ["src/runtime-host/candidatePort.ts", "src/runtime-host/candidatePort.test.ts"],
+  ] as const) {
+    const files = [file];
+    const steps = plan("pre-push", files, discover(root, "HEAD", files));
+    expect(steps.filter(step => step.pinned)).toEqual([]);
+    expect(steps.map(step => step.name)).toEqual(expect.arrayContaining(["privacy", "types", "eslint", "touched tests"]));
+    expect(steps.find(step => step.name === "touched tests")!.command).toContain(`./${affectedTest}`);
   }
-  for (const file of ["src/lib/pipelines/engine.ts", "package.json", "next.config.ts"]) {
-    const env = discover(root, "HEAD", [file]);
-    expect(env.runtime).toBeFalse(); expect(env.native).toBeFalse();
+});
+
+test("mixing bin and runtime host changes with dependency files keeps supply-chain and Linux scope", () => {
+  const files = ["bin/envAlias.mjs", "src/runtime-host/candidatePort.ts", "package.json"];
+  const steps = plan("pre-push", files, discover(root, "HEAD", files));
+  expect(steps.map(step => step.name)).toEqual([
+    "privacy", "frozen install", "types", "eslint", "touched tests",
+    ...(process.platform === "linux" ? ["Linux backend", "Linux tests"] : []),
+    "audit retry tests", "supply chain",
+  ]);
+});
+
+test("ordinary and deleted inputs leave runtime and native checks to hosted CI", () => {
+  for (const file of [
+    "src/lib/pipelines/engine.ts", "package.json", "next.config.ts",
+    "src/runtime-host/deleted.ts", "bin/deleted.mjs", "docs/Dockerfile",
+  ]) {
+    const { runtime, native } = discover(root, "HEAD", [file]);
+    expect({ runtime, native }).toEqual({ runtime: false, native: false });
   }
 });
 

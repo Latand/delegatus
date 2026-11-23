@@ -127,18 +127,18 @@ test("state isolation replaces inherited roots and removes the live owner claim"
 test("scope uses executed import closure and the workflow test lists", () => {
   const doc = discover(root, "HEAD", ["CONTRIBUTING.md"]);
   expect([doc.linux, doc.runtime, doc.native]).toEqual([false, false, false]);
-  const host = discover(root, "HEAD", ["src/runtime-host/main.ts"]);
-  expect(host.runtime).toBeTrue();
-  expect(host.codexVersions).toEqual(SUPPORTED_CODEX_VERSIONS);
-  expect(host.codexVersions).toHaveLength(3);
-  expect(plan("pre-push", ["src/runtime-host/main.ts"], host).filter(step => step.codex).map(step => step.codex))
-    .toEqual([...host.codexVersions]);
+  const docker = discover(root, "HEAD", ["Dockerfile"]);
+  expect(docker.runtime).toBeTrue();
+  expect(docker.codexVersions).toEqual(SUPPORTED_CODEX_VERSIONS);
+  expect(docker.codexVersions).toHaveLength(3);
+  expect(plan("pre-push", ["Dockerfile"], docker).filter(step => step.codex).map(step => step.codex))
+    .toEqual([...docker.codexVersions]);
   const native = discover(root, "HEAD", ["src/lib/runtime/nativeCodexQueue.ts"]);
   expect(native.native).toBeFalse();
   const linux = discover(root, "HEAD", ["src/lib/proc/index.ts"]);
   expect(linux.linux).toBe(process.platform === "linux");
   expect(linux.linuxTests).toContain("src/runtime-host/runtimeHostFence.test.ts");
-  expect(host.runtimeTests).toContain("src/runtime-host/hostRehearsalRun.test.ts");
+  expect(docker.runtimeTests).toContain("src/runtime-host/hostRehearsalRun.test.ts");
   expect(pinnedBunVersion("RUN npm install -g bun@1.4.0\nRUN npm install -g bun@1.4.0")).toBe("1.4.0");
   expect(() => pinnedBunVersion("bun@1.4.0")).toThrow();
   expect(() => pinnedBunVersion("npm install -g bun@1.4.0\nnpm install -g bun@1.3.3")).toThrow();

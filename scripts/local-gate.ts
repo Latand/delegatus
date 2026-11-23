@@ -188,7 +188,7 @@ export function discover(root: string, base: string, files: readonly string[], m
   const platform = workflow(root, "platform-tests.yml");
   const bun = workflow(root, "bun-runtime.yml");
   const runtimeEntries = workflowEntries(jobSource(bun.jobs["bun-runtime"]!));
-  const runtimeChanged = files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
+  const runtimeChanged = files.includes("Dockerfile");
   return {
     base, existing, tests, privacySelfTests,
     // An empty diff is "run" to the CI scope, where skipping must be proven.

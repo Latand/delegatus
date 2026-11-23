@@ -8,9 +8,9 @@ name: Bun runtime pin
 # Three review rounds then asked for evidence that a moved pin actually loads
 # this build, serves it, and holds that listener — and the only evidence anyone
 # could offer was a local run nobody else could reproduce. This job is where it
-# runs on every PR and by dispatch. Local pre-push runs them when Dockerfile,
-# the runtime host or bin/ changes, under the pin the Dockerfile carries. It is the same answer #1256 got
-# for macOS, where nobody had the hardware either.
+# runs on every PR and by dispatch. Local pre-push runs the runtime and native
+# checks only when Dockerfile changes, under the pin it carries.
+# This is the same answer #1256 got for macOS, where nobody had the hardware either.
 #
 # The build is a step, not the evidence: `next build` produces the same
 # artifact under either interpreter, and a green build is exactly what shipped

@@ -279,9 +279,9 @@ read from the Dockerfile. CI dispatch also runs both unless
 for `bun-runtime` and native Codex on the newest reviewed pin for ordinary PRs.
 For `batch/*` PRs into main, nightly runs, main pushes and dispatches without
 that campaign, it waits for `bun-runtime` and the full three-version native
-Codex window. Locally they run
-when `Dockerfile`, `src/runtime-host/**` or `bin/**` changes. After this workflow lands, the seat
-adds `runtime-gate` to main branch protection; older PRs need a new push or reopen.
+Codex window. Local pre-push runs the runtime and native checks only when
+`Dockerfile` changes. The required hosted `runtime-gate` covers pull requests
+into main, including changes under `src/runtime-host/` and `bin/`.
 `scripts/verify-viewer-runtime.ts` loads every compiled
 server runtime, then serves the build and requires `GET /` to answer 200.
 `scripts/verify-runtime-host.ts` drives two runtime-host generations through
