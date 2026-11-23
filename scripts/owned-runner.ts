@@ -27,11 +27,25 @@ import { serviceSurvivors } from "./owned-runner.cleanup";
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
  * runs the command inside the owner's namespaces. */
-type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; deadlineFile?: string; namespace?: true };
+type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; gateParent?: ProcessIdentity; unit: string; timeoutMs: number; deadlineFile?: string; namespace?: true };
 const args = process.argv.slice(2);
 const deadlineFile = process.env.LLV_OWNED_RUN_DEADLINE_FILE;
 delete process.env.LLV_OWNED_RUN_DEADLINE_FILE;
 const deadlineRequested = (file = deadlineFile) => !!file && fs.existsSync(file);
+const gateParentPid = process.env.LLV_OWNED_RUN_GATE_PARENT_PID;
+delete process.env.LLV_OWNED_RUN_GATE_PARENT_PID;
+function alive(identity: ProcessIdentity) {
+  return processIdentityStatus(identity) === "alive" && !procBackend.processExited(identity.pid);
+}
+let gateParent: ProcessIdentity | undefined;
+if (gateParentPid !== undefined && process.platform === "linux") {
+  // The slot holder launches this process directly. Capture its identity
+  // before awaiting any setup and refuse a dispatch after reparenting.
+  const pid = Number(gateParentPid);
+  if (pid <= 1 || pid !== process.ppid) throw new Error("owned runner's gate wrapper ended before admission");
+  gateParent = captureProcessIdentity(pid);
+  if (!alive(gateParent)) throw new Error("owned runner has no live gate wrapper identity");
+}
 function writeCompletionReceipt() {
   const filename = process.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
   const token = process.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
@@ -161,7 +175,7 @@ if (args[0] === "--namespace-guardian") {
   if (deadlineRequested()) { await broker.close(); process.exit(124); }
   const parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY
     ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
-  const parentAlive = () => !parent || (processIdentityStatus(parent) === "alive" && !procBackend.processExited(parent.pid));
+  const parentAlive = () => (!parent || alive(parent)) && (!gateParent || alive(gateParent));
   if (!parentAlive()) process.exit(137);
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));
   fs.chmodSync(directory, 0o700);
@@ -304,11 +318,13 @@ if (args[0] === "--namespace-guardian") {
     budget.close(); process.exit(69);
   }
   const serviceEvidence = { unit: launch.unit, invocation: process.env.INVOCATION_ID ?? "", cgroup };
+  const ownersAlive = () => alive(launch.owner) && (!launch.parent || alive(launch.parent)) && (!launch.gateParent || alive(launch.gateParent));
   const refused = recordedSupervisorRefusal(recorded);
-  if (refused || (launch.deadlineFile && deadlineRequested(launch.deadlineFile))) {
+  const deadlineAlreadyRequested = !!launch.deadlineFile && deadlineRequested(launch.deadlineFile);
+  if (refused || deadlineAlreadyRequested || !ownersAlive()) {
     producerReport("service", null, { service: serviceEvidence, phase: "close", cleanup: "pending" });
     try { await broker.close(); } finally { budget.close(); }
-    process.exit(refused && refused !== "deadline" ? 137 : 124);
+    process.exit(refused === "deadline" || (!refused && deadlineAlreadyRequested) ? 124 : 137);
   }
   const members = () => {
     const visit = (directory: string): number[] => fs.readFileSync(path.join(directory, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number)
@@ -367,10 +383,9 @@ if (args[0] === "--namespace-guardian") {
     catch (error) { console.error(`GATE_TASK_OBSERVATION_FAILED: ${launch.unit}: ${(error as Error).message}`); void finish(1); }
   }, 50);
   setInterval(() => {
-    const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
     const refusal = recordedSupervisorRefusal(recorded);
     if (refusal) cancellation ??= supervisorCancellation(refusal);
-    if (refusal || !alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(refusal === "deadline" ? 124 : 137, refusal === "deadline");
+    if (refusal || !ownersAlive()) void finish(refusal === "deadline" ? 124 : 137, refusal === "deadline");
     else if (launch.deadlineFile && deadlineRequested(launch.deadlineFile)) void finish(124, true);
   }, 100);
   stopExecutionTimer = cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124, true); });
@@ -441,7 +456,8 @@ if (args[0] === "--namespace-guardian") {
     try { parent = hostProcessIdentity(parent); }
     catch (error) { throw new Error(`owned runner cannot verify its supervising process from the gate service: ${(error as Error).message}`); }
   }
-  fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, deadlineFile, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
+  const hostGateParent = gateParent && (sandbox ? hostProcessIdentity(gateParent) : gateParent);
+  fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, gateParent: hostGateParent, unit, timeoutMs, deadlineFile, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
   const cpu = [...gateServiceProperties(), ...gateTaskProperties()];
   const recorded = process.env.LLV_RECORDED_CHECK_ID ? [`--setenv=LLV_RECORDED_CHECK_ID=${process.env.LLV_RECORDED_CHECK_ID}`] : [];
   const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, ...recorded, "--service-type=exec", "-p", "Delegate=yes", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
