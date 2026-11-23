@@ -38,18 +38,20 @@ export async function completeRelayRequest(
   let refusalCode: string | undefined;
   const refused = () => ({ ...result(unresolved ? "unconfirmed" : "refused"),
     ...(refusalCode ? { refusalCode } : {}) });
+  const authorizedBody = () => {
+    if ((body.outcome === "answered" || body.outcome === "declined" && body.reason === "handoff")
+      && allowOwnerReply && !allowOwnerReply()) body = { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null };
+    return body;
+  };
   while (true) {
     if (attempted && Date.now() >= until()) return result("unconfirmed");
     attempted = true;
-    if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null };
+    authorizedBody();
     let responseStatus = 0;
     try {
       await relayCall(relay.api_base, `/requests/${encodeURIComponent(requestId)}/complete`, "POST", body, relay.credential,
         { timeoutMs: 5000, onResponseStatus: status => { responseStatus = status; }, maxBytes: relay.limits.max_response_bytes, onHttpRefusal,
-          ...(allowOwnerReply ? { prepareBody: () => {
-            if (body.outcome === "answered" && !allowOwnerReply()) body = { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null };
-            return body;
-          } } : {}) });
+          ...(allowOwnerReply ? { prepareBody: authorizedBody } : {}) });
       return result("accepted");
     } catch (error) {
       const observedRefusal = responseStatus >= 300
