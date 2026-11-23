@@ -1,5 +1,5 @@
 import { validAgentStateDisplay, agentStateActivity } from "@/lib/agentState/model";
-import { validAgentStateMetrics } from "@/lib/agentState/store";
+import { normalizeAgentStateMetrics } from "@/lib/agentState/store";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { procBackend } from "@/lib/proc";
 import type { ProcBackend } from "@/lib/proc";
@@ -1104,10 +1104,13 @@ function validResourceSession(value: unknown): boolean {
     && (value.hostConflict === undefined || typeof value.hostConflict === "boolean");
 }
 
-function validResourcesPayload(value: unknown): value is ResourcesPayload {
-  if (!record(value) || !exactKeys(value, ["system", "sessions"], ["agentState"]) || !validResourceSystem(value.system) || !Array.isArray(value.sessions)) return false;
-  if (value.agentState !== undefined && !validAgentStateMetrics(value.agentState)) return false;
-  return value.sessions.length <= RESOURCE_OBSERVATION_MAX_SESSIONS && value.sessions.every(validResourceSession);
+function normalizeResourcesPayload(value: unknown): ResourcesPayload | null {
+  if (!record(value) || !exactKeys(value, ["system", "sessions"], ["agentState"]) || !validResourceSystem(value.system) || !Array.isArray(value.sessions)
+    || value.sessions.length > RESOURCE_OBSERVATION_MAX_SESSIONS || !value.sessions.every(validResourceSession)) return null;
+  const payload = { system: value.system as ResourcesPayload["system"], sessions: value.sessions };
+  if (value.agentState === undefined) return payload;
+  const agentState = normalizeAgentStateMetrics(value.agentState);
+  return agentState ? { ...payload, agentState } : null;
 }
 
 function validResourceDiagnostic(value: unknown): value is ResourceBuildDiagnostic {
@@ -1186,20 +1189,21 @@ function resourceTargetsMatchPayload(
   });
 }
 
-function validCollectedResources(value: unknown): value is CollectedResources {
+function normalizeCollectedResources(value: unknown): CollectedResources | null {
   if (!record(value) || !exactKeys(value, ["payload", "diagnostic", "hostCount", "treeCount", "targets"], ["targetEpoch"])
-    || !validResourcesPayload(value.payload)
     || !validResourceDiagnostic(value.diagnostic)
     || !Number.isSafeInteger(value.hostCount) || (value.hostCount as number) < 0
     || !Number.isSafeInteger(value.treeCount) || (value.treeCount as number) < 0
     || (value.targetEpoch !== undefined && (!Number.isSafeInteger(value.targetEpoch) || (value.targetEpoch as number) < 0))
     || !Array.isArray(value.targets)
     || value.targets.length > RESOURCE_OBSERVATION_MAX_TARGETS
-    || !value.targets.every(validResourceTarget)) return false;
-  return value.diagnostic.status === "complete"
-    && resourceTargetsMatchPayload(value.payload, value.targets)
-    && value.hostCount === value.payload.sessions.length
-    && value.treeCount === value.payload.sessions.reduce((total, session) => total + session.procCount, 0);
+    || !value.targets.every(validResourceTarget)) return null;
+  const payload = normalizeResourcesPayload(value.payload);
+  if (!payload || value.diagnostic.status !== "complete"
+    || !resourceTargetsMatchPayload(payload, value.targets)
+    || value.hostCount !== payload.sessions.length
+    || value.treeCount !== payload.sessions.reduce((total, session) => total + session.procCount, 0)) return null;
+  return { ...value, payload } as CollectedResources;
 }
 
 function resourceWorkerMessage(value: unknown): ResourceWorkerMessage | null {
@@ -1213,13 +1217,13 @@ function resourceWorkerMessage(value: unknown): ResourceWorkerMessage | null {
       : null;
   }
   if (candidate.type !== "observation" || !exactKeys(candidate, ["type", "payload", "diagnostic", "targets"])
-    || !validResourcesPayload(candidate.payload)
     || !validResourceDiagnostic(candidate.diagnostic)
     || !Array.isArray(candidate.targets)
     || candidate.targets.length > RESOURCE_OBSERVATION_MAX_TARGETS
     || !candidate.targets.every(validResourceTarget)) return null;
-  if (candidate.diagnostic.status !== "complete" || !resourceTargetsMatchPayload(candidate.payload, candidate.targets)) return null;
-  return candidate as ResourceWorkerMessage;
+  const payload = normalizeResourcesPayload(candidate.payload);
+  if (!payload || candidate.diagnostic.status !== "complete" || !resourceTargetsMatchPayload(payload, candidate.targets)) return null;
+  return { type: "observation", payload, diagnostic: candidate.diagnostic, targets: candidate.targets };
 }
 
 export function parsePersistedResourceObservation(raw: string): ResourceObservation<CollectedResources> | null {
@@ -1238,9 +1242,9 @@ export function parsePersistedResourceObservation(raw: string): ResourceObservat
       || (observation.degradedReason !== undefined
         && observation.degradedReason !== "collector-busy"
         && observation.degradedReason !== "timeout"
-        && observation.degradedReason !== "collector-crash")
-      || !validCollectedResources(observation.value)) return null;
-    return observation as ResourceObservation<CollectedResources>;
+        && observation.degradedReason !== "collector-crash")) return null;
+    const value = normalizeCollectedResources(observation.value);
+    return value ? { ...observation, value } as ResourceObservation<CollectedResources> : null;
   } catch {
     return null;
   }

@@ -17,6 +17,11 @@ export function artifactRevision(entry: AgentRegistryEntry): string {
   return hash([entry.key, entry.artifactPath, entry.structuredHost?.process, entry.structuredHost?.agentStateNativePromptAnchor]);
 }
 
+type StoredAgentStateMetrics = Omit<AgentStateMetrics, "stuckByEngine"> & {
+  stuckByEngine: Partial<AgentStateMetrics["stuckByEngine"]>;
+};
+const metricsDefaults = emptyAgentStateMetrics();
+
 export function normalizeAgentStateRows(value: unknown, kind: "projection"): Record<string, AgentProjection>;
 export function normalizeAgentStateRows(value: unknown, kind: "journal"): Record<string, AgentStateJournal>;
 export function normalizeAgentStateRows(value: unknown, kind: "metrics"): Record<string, AgentStateMetrics>;
@@ -27,27 +32,37 @@ export function normalizeAgentStateRows(value: unknown, kind: "projection" | "jo
   for (const [key, row] of Object.entries(value)) {
     if (!row || row.version !== 1 || key.length > 128 || Buffer.byteLength(JSON.stringify(row)) > 8192
       || (kind === "projection" && (!validAgentFacts(row.facts) || row.subject !== row.facts.subject || !row.verdict || !Number.isSafeInteger(row.revision)))
-      || (kind === "journal" && (row.id !== key || typeof row.at !== "number" || !Array.isArray(row.evidence) || row.evidence.length > 16 || !row.evidence.every(validAgentEvidence)))
-      || (kind === "metrics" && !validAgentStateMetrics(row))) throw new Error("invalid agent-state row");
-    rows[key] = row;
+      || (kind === "journal" && (row.id !== key || typeof row.at !== "number" || !Array.isArray(row.evidence) || row.evidence.length > 16 || !row.evidence.every(validAgentEvidence)))) throw new Error("invalid agent-state row");
+    if (kind === "metrics") {
+      const metrics = normalizeAgentStateMetrics(row);
+      if (!metrics) throw new Error("invalid agent-state row");
+      rows[key] = metrics;
+    } else rows[key] = row;
   }
   return rows;
 }
-export function validAgentStateMetrics(v: unknown): v is AgentStateMetrics {
+export function validAgentStateMetrics(v: unknown): v is StoredAgentStateMetrics {
   if (!v || typeof v !== "object" || Array.isArray(v)) return false;
   const row = v as Record<string, unknown>;
-  return Object.entries(emptyAgentStateMetrics()).every(([key, sample]) => {
+  return Object.entries(metricsDefaults).every(([key, sample]) => {
     const value = row[key];
     if (key === "version") return value === 1;
-    if (key === "stuckByEngine" || key === "stuckByReason") return Boolean(value && typeof value === "object" && !Array.isArray(value)
-      && Object.keys(value).length === Object.keys(sample!).length
-      && Object.keys(sample!).every(bucket => typeof (value as Record<string, unknown>)[bucket] === "number"
-        && Number.isSafeInteger((value as Record<string, number>)[bucket]) && (value as Record<string, number>)[bucket]! >= 0));
+    if (key === "stuckByEngine" || key === "stuckByReason") {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const buckets = Object.entries(value);
+      return (key === "stuckByEngine" || buckets.length === Object.keys(sample!).length)
+        && buckets.every(([bucket, count]) => Object.hasOwn(sample!, bucket)
+          && typeof count === "number" && Number.isSafeInteger(count) && count >= 0);
+    }
     if (key === "afterKey") return value === null || typeof value === "string" && value.length <= 128;
     if (sample === null) return value === null || typeof value === "number" && Number.isFinite(value) && value >= 0;
     return typeof value === "number" && Number.isFinite(value) && value >= 0;
   }) && (row.physicalSubjects === undefined || Array.isArray(row.physicalSubjects) && row.physicalSubjects.length <= 16 && row.physicalSubjects.every(id => typeof id === "string" && /^[a-f0-9]{48}$/.test(id)))
-    && Object.keys(row).length === Object.keys(emptyAgentStateMetrics()).length + Number(row.physicalSubjects !== undefined);
+    && Object.keys(row).length === Object.keys(metricsDefaults).length + Number(row.physicalSubjects !== undefined);
+}
+export function normalizeAgentStateMetrics(value: unknown): AgentStateMetrics | null {
+  if (!validAgentStateMetrics(value)) return null;
+  return { ...value, stuckByEngine: { ...metricsDefaults.stuckByEngine, ...value.stuckByEngine } };
 }
 
 export interface StateObservation {

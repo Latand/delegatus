@@ -9,7 +9,8 @@ import { AgentStateService } from "./service";
 import { publishAgentProjection } from "./publication";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeEventInput } from "@/lib/runtime/contracts";
-import { readAgentProjection, readAgentStateMetrics, readAgentStatePage, subjectId } from "./store";
+import { emptyAgentStateMetrics } from "./model";
+import { normalizeAgentStateRows, readAgentProjection, readAgentStateMetrics, readAgentStatePage, subjectId, validAgentStateMetrics } from "./store";
 import { cachedAgentObservation } from "./projectionCache";
 import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords } from "./testFixture";
 
@@ -147,4 +148,57 @@ test("legacy snapshots start without a fabricated idle projection", () => {
   expect(legacy.agentStates).toEqual({});
   expect(legacy.agentStateJournal).toEqual({});
   expect(legacy.agentStateMetrics).toEqual({});
+});
+
+const preAntigravityMetrics = {
+  ...emptyAgentStateMetrics(), at: FIXTURE_NOW, stuckTurns: 3,
+  stuckByEngine: { codex: 2, claude: 0, copilot: 1 },
+};
+
+test("pre-Antigravity metrics validate and normalize every missing engine bucket", () => {
+  const rows = JSON.parse(JSON.stringify({
+    current: preAntigravityMetrics,
+    "series:fixture": { ...preAntigravityMetrics, stuckTurns: 0, stuckByEngine: {} },
+  }));
+  const before = JSON.stringify(rows);
+  const expected = {
+    current: { ...preAntigravityMetrics, stuckByEngine: { ...preAntigravityMetrics.stuckByEngine, antigravity: 0 } },
+    "series:fixture": { ...preAntigravityMetrics, stuckTurns: 0, stuckByEngine: emptyAgentStateMetrics().stuckByEngine },
+  };
+  expect(validAgentStateMetrics(rows.current)).toBe(true);
+  expect(normalizeAgentStateRows(rows, "metrics")).toEqual(expected);
+  expect(normalizeRegistry({ version: 2, entries: {}, receipts: {}, agentStateMetrics: rows }).agentStateMetrics).toEqual(expected);
+  expect(JSON.stringify(rows)).toBe(before);
+});
+
+test("metrics reject malformed engine buckets and keep reason buckets required", () => {
+  for (const stuckByEngine of [null, [], { codex: null }, { codex: undefined },
+    { antigravity: "0" }, { copilot: -1 }, { claude: 0.5 }, { obsolete: 0 }]) {
+    const row = { ...preAntigravityMetrics, stuckByEngine };
+    expect(validAgentStateMetrics(row)).toBe(false);
+    expect(() => normalizeAgentStateRows({ current: row }, "metrics")).toThrow("invalid agent-state row");
+  }
+  expect(validAgentStateMetrics({ ...preAntigravityMetrics, stuckByEngine: {}, stuckByReason: { silent: 0 } })).toBe(false);
+});
+
+test("SQLite reads pre-Antigravity metrics without rewriting history and writes complete current metrics", async () => {
+  const f = fixture("sqlite"), registry = f.open();
+  registry.readOnlySnapshot();
+  const db = new Database(f.sqliteFilename);
+  try {
+    const legacy = JSON.stringify(preAntigravityMetrics);
+    const insert = db.query("INSERT INTO registry_rows (collection, row_key, value_json, row_order) VALUES ('agentStateMetrics', ?, ?, ?)");
+    insert.run("current", legacy, 1);
+    insert.run("series:fixture", legacy, 2);
+    const raw = db.query<{ value_json: string }, [string]>("SELECT value_json FROM registry_rows WHERE collection='agentStateMetrics' AND row_key=?");
+    const expected = { ...preAntigravityMetrics, stuckByEngine: { ...preAntigravityMetrics.stuckByEngine, antigravity: 0 } };
+    expect(readAgentStateMetrics(registry)).toEqual(expected);
+    expect(readAgentStatePage(registry, "agentStateMetrics", "current").rows).toEqual([expected]);
+    expect(raw.get("current")?.value_json).toBe(legacy);
+    expect(raw.get("series:fixture")?.value_json).toBe(legacy);
+
+    await f.service(registry).request();
+    expect(JSON.parse(raw.get("current")!.value_json).stuckByEngine).toEqual(expected.stuckByEngine);
+    expect(raw.get("series:fixture")?.value_json).toBe(legacy);
+  } finally { db.close(); }
 });
