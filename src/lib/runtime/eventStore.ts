@@ -393,6 +393,7 @@ export async function readCodexRetirementTurnLedger(threadId: string, turnId: st
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let status: "completed" | "interrupted" | "error" | null = null;
     let idleCheckpoint = false;
+    let newestStatus = true;
     let expected = cursor;
     let anchored = false;
     for (let end = bytes.length - 1; end >= first;) {
@@ -410,9 +411,18 @@ export async function readCodexRetirementTurnLedger(threadId: string, turnId: st
       if (event.kind === "session-status") {
         // Codex can publish idle before turn completion, with the registry
         // cursor landing on turn-ended. The matching idle checkpoint may
-        // therefore be on either side of the terminal in sequence order.
-        if (event.status !== "idle") return null;
-        idleCheckpoint = true;
+        // therefore be on either side of the terminal in sequence order. An
+        // active status older than the newest idle status belongs to the
+        // settled turn; only the newest status can indicate current activity.
+        if (newestStatus) {
+          if (event.status !== "idle") return null;
+          newestStatus = false;
+          idleCheckpoint = true;
+        } else if (status && (event.status === "active" || event.status === "idle")) {
+          continue;
+        } else {
+          return null;
+        }
         continue;
       }
       if (status) continue;

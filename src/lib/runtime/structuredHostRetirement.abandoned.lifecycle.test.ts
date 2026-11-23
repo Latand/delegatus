@@ -161,7 +161,7 @@ const reconcile = `
   service.stop(); registry.close();
 `;
 
-for (const scenario of ["settled", "late-native-flush", "idle-before-terminal", "idle-checkpoint", "ledger-limit", "mismatched-checkpoint", "open", "pending-delivery", "changed-ledger", "changed-after-capture", "retry"] as const) {
+for (const scenario of ["settled", "late-native-flush", "idle-before-terminal", "idle-checkpoint", "historical-active", "newer-active", "ledger-limit", "mismatched-checkpoint", "open", "pending-delivery", "changed-ledger", "changed-after-capture", "retry"] as const) {
   test.skipIf(process.platform !== "linux")(`retirement of oversized Codex rollout with host ledger: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-ledger-fixture-")); roots.push(root);
     process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -172,8 +172,8 @@ for (const scenario of ["settled", "late-native-flush", "idle-before-terminal", 
     const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
     entry.status = "idle";
     entry.structuredHost!.activeTurnRef = null;
-    const largeLedger = scenario === "idle-checkpoint" || scenario === "ledger-limit" || scenario === "idle-before-terminal";
-    entry.structuredHost!.eventCursor = scenario === "idle-checkpoint" || scenario === "idle-before-terminal" ? 4 : 3;
+    const largeLedger = scenario === "idle-checkpoint" || scenario === "ledger-limit" || scenario === "idle-before-terminal" || scenario === "newer-active";
+    entry.structuredHost!.eventCursor = scenario === "idle-checkpoint" || scenario === "idle-before-terminal" || scenario === "historical-active" ? 4 : scenario === "newer-active" ? 5 : 3;
     const records = fixtureRecords("codex");
     const open = scenario === "open";
     const text = [...records.open, ...(open ? [{ type: "event_msg", payload: { type: "task_started", turn_id: "newer-turn" } }] : []),
@@ -193,12 +193,17 @@ for (const scenario of ["settled", "late-native-flush", "idle-before-terminal", 
       else if (scenario === "settled" || scenario === "late-native-flush") {
         ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: 2 });
         ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 3 });
-      } else if (!largeLedger) ledger.append(FIXTURE_SESSION, { kind: "session-status", status: scenario === "mismatched-checkpoint" ? "active" : "idle", seq: 2 });
+      } else if (!largeLedger) ledger.append(FIXTURE_SESSION, { kind: "session-status", status: scenario === "mismatched-checkpoint" || scenario === "historical-active" ? "active" : "idle", seq: 2 });
       if (scenario === "idle-before-terminal") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 3 });
       if (scenario !== "settled" && scenario !== "late-native-flush") {
         ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: scenario === "idle-before-terminal" ? 4 : 3 });
       }
       if (scenario === "idle-checkpoint") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+      if (scenario === "historical-active") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+      if (scenario === "newer-active") {
+        ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+        ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "active", seq: 5 });
+      }
       const stamp = new Date(FIXTURE_NOW + (scenario === "late-native-flush" ? 1000 : 2000));
       fs.utimesSync(ledgerPath, stamp, stamp);
       if (scenario === "late-native-flush") {
@@ -217,6 +222,7 @@ for (const scenario of ["settled", "late-native-flush", "idle-before-terminal", 
       expect(Number(stdout.trim())).toBeLessThanOrEqual(4 * 1024 * 1024 + 64);
     };
     await reconcileOnce();
+    if (scenario === "historical-active") await reconcileOnce();
     const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined,
       { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
     registries.push(registry); setAgentRegistryForTests(registry);
@@ -259,7 +265,7 @@ for (const scenario of ["settled", "late-native-flush", "idle-before-terminal", 
         return;
       }
       expect(result.failed).toEqual([]);
-      if (["settled", "late-native-flush", "idle-before-terminal", "idle-checkpoint", "retry"].includes(scenario)) {
+      if (["settled", "late-native-flush", "idle-before-terminal", "idle-checkpoint", "historical-active", "retry"].includes(scenario)) {
         expect(result.refused).toEqual([]);
         expect(result.retired).toHaveLength(1);
         expect(result.retired[0]!.reason).toBeUndefined();
