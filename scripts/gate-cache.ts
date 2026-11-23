@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { systemBootEpoch } from "../src/lib/processIdentity";
+import { withoutGateAdmissionLauncher } from "../src/lib/runtime/gateAdmissionLauncher";
 import { gateToolingFiles } from "./gate-tooling";
 
 export const fingerprint = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -137,7 +138,9 @@ export function checkEnvironment(env: Partial<NodeJS.ProcessEnv>): NodeJS.Proces
 
 /** Portable check inputs, including declared absences. Placement and private
  * roots are supplied by each executor; PATH selects that executor's tools. */
-export function checkInputEnvironment(env: Partial<NodeJS.ProcessEnv>): Record<string, string | null> {
+export function checkInputEnvironment(source: Partial<NodeJS.ProcessEnv>): Record<string, string | null> {
+  // The installed admission launcher stands for the interpreter it recorded.
+  const env = withoutGateAdmissionLauncher(source);
   const declared = declaredInputs(env);
   const names = new Set([...Object.keys(env).filter(name => KEYED.test(name) && name !== "PATH"), ...declared]);
   return Object.fromEntries([...names].sort().map(name => [name, Object.hasOwn(env, name) ? env[name] ?? null : null]));
@@ -162,7 +165,9 @@ export function hostEpoch(env: Partial<NodeJS.ProcessEnv>): string {
  * signal boundary and the bytes of explicit Git configuration files. An
  * explicit declaration also binds inputs that normally serve as transport.
  */
-export function environmentFingerprint(env: Partial<NodeJS.ProcessEnv>): string {
+export function environmentFingerprint(source: Partial<NodeJS.ProcessEnv>): string {
+  // A routed LLV_GATE_BUN names a per-release launcher. Key what it runs.
+  const env = withoutGateAdmissionLauncher(source);
   const declared = declaredInputs(env);
   const inputs = Object.entries(env).filter(([name, value]) => {
     if (value === undefined || ROOTS.has(name) || name === "LLV_SIGNAL_SANDBOX" || name.startsWith("LLV_GATE_PUBLICATION_")
