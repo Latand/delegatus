@@ -60,7 +60,21 @@ export async function removeTreeWithinAttemptBudget(directory: string, mutationS
       throw new AttemptTempBudgetDeferred("tick deadline exhausted during recursive removal");
     }
     const code = /DELEGATUS_RM_CODE:([A-Z0-9_]+)/.exec(String((error as { stderr?: unknown }).stderr ?? ""))?.[1];
-    if (code) Object.assign(error as object, { code, claimedDirectory: tombstone });
+    if (code) Object.assign(error as object, { code, claimedDirectory: tombstone, claimedIdentity: identity });
     throw error;
   }
+}
+
+/** Restore a failed native-removal claim before namespace fallback. Both names
+ * are checked against the inode admitted by the native claim. */
+export function restoreAttemptTempClaim(claimedDirectory: string, directory: string, expectedIdentity: string): void {
+  const original = fs.lstatSync(directory, { throwIfNoEntry: false });
+  if (original) throw new Error("attempt removal original path reappeared before claim restoration");
+  const claim = fs.lstatSync(claimedDirectory, { throwIfNoEntry: false });
+  if (!claim?.isDirectory() || claim.isSymbolicLink() || `${claim.dev}:${claim.ino}` !== expectedIdentity)
+    throw new Error("attempt removal claim identity changed before restoration; payload retained");
+  fs.renameSync(claimedDirectory, directory);
+  const restored = fs.lstatSync(directory, { throwIfNoEntry: false });
+  if (!restored?.isDirectory() || restored.isSymbolicLink() || `${restored.dev}:${restored.ino}` !== expectedIdentity)
+    throw new Error("attempt removal identity changed during claim restoration; payload retained");
 }

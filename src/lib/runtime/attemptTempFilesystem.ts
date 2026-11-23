@@ -1,5 +1,5 @@
 import { attemptTempRemaining, checkAttemptTempDeadline, sweepMonotonicNow } from "./attemptTempDeadline";
-import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
+import { removeTreeWithinAttemptBudget, restoreAttemptTempClaim } from "./attemptTempRemoval";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -1256,10 +1256,16 @@ export async function removeAttemptTree(directory: string, original = directory,
       if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
       try {
         const claimedDirectory = typeof (error as { claimedDirectory?: unknown }).claimedDirectory === "string"
-          ? (error as { claimedDirectory: string }).claimedDirectory : directory;
-        const { identity } = await containerCommand(claimedDirectory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection,
+          ? (error as { claimedDirectory: string }).claimedDirectory : undefined;
+        if (claimedDirectory) {
+          const claimedIdentity = (error as { claimedIdentity?: unknown }).claimedIdentity;
+          if (typeof claimedIdentity !== "string" || settings.expectedIdentity && claimedIdentity !== settings.expectedIdentity)
+            throw new Error("attempt removal claim identity unavailable; payload retained");
+          restoreAttemptTempClaim(claimedDirectory, directory, claimedIdentity);
+        }
+        const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection,
           () => { mutationStarted = true; settings.mutationStarted?.(); });
-        removeEmptyNamespaceRoot(claimedDirectory, identity, postDeleteGuard);
+        removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
       } catch (fallbackError) {
         if (fallbackError instanceof AttemptTempBudgetDeferred) throw fallbackError;
         throw new Error(`${attemptTempFailureDetail(error)}; cleanup fallback: ${attemptTempFailureDetail(fallbackError)}`, { cause: fallbackError });

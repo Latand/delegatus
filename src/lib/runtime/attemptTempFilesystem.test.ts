@@ -327,7 +327,7 @@ esac
   }
 });
 
-test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("native permission failure falls back against the inode claim", async () => {
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("native permission failure restores the inode claim before namespace fallback", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-native-fallback"), bin = path.join(parent, "bin");
   fs.mkdirSync(directory); fs.mkdirSync(bin);
   const locked = path.join(directory, "locked"); fs.mkdirSync(locked); fs.writeFileSync(path.join(locked, "payload"), "remove me"); fs.chmodSync(locked, 0o500);
@@ -357,8 +357,8 @@ esac
   try {
     await removeAttemptTree(directory, directory, async () => true, false, () => true, () => true);
     expect(fs.existsSync(directory)).toBeFalse();
-    expect(fs.readFileSync(sourceFile, "utf8").trim()).toMatch(/\.delegatus-trash-claim-/);
-    expect(fs.readFileSync(sourceFile, "utf8").trim()).not.toBe(directory);
+    expect(fs.readFileSync(sourceFile, "utf8").trim()).toBe(directory);
+    expect(fs.readdirSync(parent).filter(name => name.startsWith(".delegatus-trash-claim-"))).toEqual([]);
   } finally {
     if (previous.PATH === undefined) delete process.env.PATH; else process.env.PATH = previous.PATH;
     if (previous.image === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previous.image;

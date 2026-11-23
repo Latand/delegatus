@@ -906,8 +906,10 @@ if (script.includes("-delete")) {
 }
 `, { mode: 0o700 });
   const previousPath = process.env.PATH, previousImage = process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+  const previousRmCode = process.env.DELEGATUS_RM_CODE;
   process.env.PATH = bin + path.delimiter + (previousPath ?? "");
   process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  if (kind === "permission-fallback") process.env.DELEGATUS_RM_CODE = "EACCES";
   const nativeOpendir = fs.promises.opendir.bind(fs.promises);
   const opendir = spyOn(fs.promises, "opendir").mockImplementation(async (target, options) => {
     if (kind === "namespace-only" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)) === "private")
@@ -917,7 +919,10 @@ if (script.includes("-delete")) {
   const nativeRm = removal.removeTreeWithinAttemptBudget;
   const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
     if (kind === "permission-fallback" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)).startsWith(".delegatus-trash-"))
-      throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
+      return nativeRm(target, started, async () => {
+        const error = Object.assign(new Error("fixture denied"), { stderr: `DELEGATUS_RM_CODE:${process.env.DELEGATUS_RM_CODE ?? "unknown"}` });
+        throw error;
+      });
     return nativeRm(target, started);
   });
   try {
@@ -969,6 +974,7 @@ if (script.includes("-delete")) {
     try { fs.chmodSync(locked, 0o700); } catch { /* Removed or never made. */ }
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
     if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
+    if (previousRmCode === undefined) delete process.env.DELEGATUS_RM_CODE; else process.env.DELEGATUS_RM_CODE = previousRmCode;
   }
 }
 
