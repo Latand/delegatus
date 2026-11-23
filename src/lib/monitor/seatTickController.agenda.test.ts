@@ -1676,7 +1676,7 @@ test("a wake nobody can account for is kept under its key past the deadline and 
   fixture.seed({ outstandingWake: wake });
   const first = childRig(fixture, { realWakeState: true });
   expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "wake", delivery: { outcome: "deferred-outstanding" } });
-  expect(fixture.row().outstandingWake).toEqual({ ...wake, preparedAt: new Date(fixture.now).toISOString() });
+  expect(fixture.row().outstandingWake).toEqual({ ...wake, preparedAt: new Date(fixture.now).toISOString(), preparationTimeUnknown: true });
   expect(first.cards).toEqual([]);
   expect(first.sent).toEqual([]);
   const within = childRig(fixture, { realWakeState: true, now: fixture.now + 15 * MINUTE - 1 });

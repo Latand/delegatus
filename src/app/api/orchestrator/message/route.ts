@@ -40,6 +40,8 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse> {
   if (body.voiceDelegatus !== undefined && (!voice || typeof voice.sessionId !== "string" || typeof voice.proposalId !== "string"))
     return NextResponse.json({ code: "voice_admission_refused" }, { status: 400 });
   if (body.machine !== undefined) {
+    if (body.requesterRequestId !== undefined)
+      return NextResponse.json({ error: "a trusted requester relay may only use its local project", code: "orchestrator_relay_refused", admission: "refused" }, { status: 403 });
     if (typeof body.machine !== "string" || !body.machine.trim() || typeof body.clientMessageId !== "string" || !body.clientMessageId.trim() || body.clientMessageId.length > 128) {
       return NextResponse.json({ error: "machine and clientMessageId are required for a linked relay", code: "malformed", admission: "refused" }, { status: 400 });
     }
@@ -64,7 +66,8 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse> {
   const admitted = admitOrchestratorRelay(req, project,
     typeof body.conversationId === "string" ? body.conversationId : undefined,
     body.text, typeof body.clientMessageId === "string" ? body.clientMessageId : undefined,
-    voice ? { sessionId: voice.sessionId as string, proposalId: voice.proposalId as string } : undefined);
+    voice ? { sessionId: voice.sessionId as string, proposalId: voice.proposalId as string } : undefined,
+    false, body.requesterRequestId);
   if (!admitted.ok) return NextResponse.json({ error: admitted.error, code: admitted.code, ...(admitted.reason ? { reason: admitted.reason } : {}), admission: "refused" }, { status: admitted.status });
   const forwarded = new NextRequest(req.url, {
     method: "POST", headers: req.headers,
@@ -73,6 +76,7 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse> {
       conversationId: admitted.recipient,
       clientMessageId: body.clientMessageId,
       text: body.text,
+      ...(admitted.requesterRequestId ? { requesterRequestId: admitted.requesterRequestId } : {}),
       ...(voice ? { voiceDelegatus: voice } : {}),
       policy: "steer-or-queue",
       images: [],

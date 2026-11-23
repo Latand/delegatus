@@ -2707,11 +2707,15 @@ describe("waits routed to the seat", () => {
     expect(reasonsOf(first.verdict)).toEqual(["worker-ask"]);
     if (first.verdict.kind !== "wake") throw new Error("expected a task wake");
     expect(first.verdict.items).toEqual([expect.objectContaining({ kind: "ask", id: row.id, label: expect.stringContaining("Verify the wait now") })]);
-    expect(first.verdict.taskPage?.rows.map(page => page.item.id)).toEqual([operatorTask.id]);
+    expect(first.verdict.taskPage).toBeUndefined();
     const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
     const moved = tasks.map(task => task.id === row.id ? { ...task, status: "assigned" as const } : task);
     const same = seatTickDecision(input({ now: NOW + MINUTE, tasks: moved, workerAsks, state: landed }));
     expect(reasonsOf(same.verdict)).toEqual([]);
+    const dueAt = Date.parse(lastWakeAt) + SEAT_TICK_WAKE_INTERVAL_MS;
+    const due = seatTickDecision(input({ now: dueAt, tasks: moved, workerAsks, state: landed }));
+    if (due.verdict.kind !== "wake") throw new Error("expected a task page at the configured interval");
+    expect(due.verdict.taskPage?.rows.map(page => page.item.id)).toEqual([operatorTask.id]);
   });
 
   test("a due pause reminder carries its Waiting card id and the resume action", () => {
