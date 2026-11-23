@@ -2280,6 +2280,7 @@ if (SCENARIO === "hold-kinds") {
     task("hold-slot-note", "blocked", L("Start the docs lane", "Запустити лінію документації"), "", 20 * MIN, [], { hold: { kind: "worker", note: L("Three of three workers busy", "Зайняті всі три агенти"), since: iso(20 * MIN), by: "agent" } }),
     task("hold-resource-note", "blocked", L("Run the full build", "Запустити повну збірку"), "", 15 * MIN, [], { hold: { kind: "resource", note: L("4 GB of memory available, 8 GB needed", "Доступно 4 ГБ памʼяті, потрібно 8 ГБ"), since: iso(15 * MIN), by: "agent" } }),
     task("hold-resource", "blocked", L("Older resource hold", "Давніша причина про ресурси"), "", 60 * MIN, [], { hold: { kind: "resource", note: "", since: iso(60 * MIN), by: "agent" } }),
+    task("hold-editor-entry", "assigned", L("Set the release access", "Налаштувати доступ до випуску"), "", 5 * MIN),
   );
 }
 
@@ -3167,6 +3168,7 @@ const evidence = {
   publishDelayedLaunch() { feedRecoveryEcho = true; },
   delayedLaunchRetired() { return Boolean(readOutbox(searchVer2.conversationId!).find(entry => entry.id === "delayed-launch")?.retiredEchoId); },
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
+  taskPatchGate: null as Promise<void> | null,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
   pipelineStageRuntime: "local" as "local" | "codex-cloud",
@@ -4321,7 +4323,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     || ["/api/files", "/api/team", "/api/tasks", "/api/tasks/accepted-control-task"].includes(url.pathname))) return serverFetch(input, init);
   // The driver supplies the real server projection for the liveness case, and the task summary case's records.
   if (["stale-working", "finished-work", "task-summary", "board-timeline"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
-    && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
+    && ["/api/files", "/api/tasks", "/api/board/work-time"].includes(url.pathname)) return serverFetch(input, init);
 
   if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
   if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings)/.test(url.pathname)) return serverFetch(input, init);
@@ -4835,6 +4837,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.taskPatches.push({ id, body });
     const write = { id, startedAt: performance.now(), answeredAt: 0 };
     evidence.taskWrites.push(write);
+    if (evidence.taskPatchGate) await evidence.taskPatchGate;
     await new Promise((resolve) => setTimeout(resolve, evidence.taskAnswerDelayMs));
     write.answeredAt = performance.now();
     if (evidence.refuseNextTaskPatch) {
@@ -4851,6 +4854,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (Object.hasOwn(body, "hold")) {
       next.hold = readTaskHold(body.hold, new Date().toISOString(), "operator", current.hold);
       if (next.hold) next.status = "blocked";
+      if (SCENARIO === "hold-kinds" && next.hold?.kind === "resource") next.status = "inbox";
     }
     if (Object.hasOwn(body, "restoreHold")) next.hold = storedTaskHold(body.restoreHold);
     if (body.board) next.board = body.board as BoardTask["board"];
@@ -5781,7 +5785,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "account-row" ?
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" focusRule={new URLSearchParams(location.search).get("focus") ?? undefined} onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

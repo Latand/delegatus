@@ -27,10 +27,22 @@ test("the default rich reply retains the existing bounded fallback for unsupport
   expect(ownerAnswer(text, request, owner)).toMatchObject({ format: "plain", text: text.slice(0, 3999) + "…" });
 });
 
+test("a verbose rich reply after a project handoff keeps only its short outcome", () => {
+  const request = richRequest();
+  const owner = { messageId: request.input.respond_to!, text: "Please forward this.", requestText: null };
+  const answer = ownerAnswer("Queued for the Celestia orchestrator.\n\nHere is a long analysis.\nAnother paragraph.", request, owner, [], true);
+  expect(answer).toMatchObject({ action: "reply", format: "rich_markdown", text: "Queued for the Celestia orchestrator.", reply_to: owner.messageId });
+});
+
 const request = requestSchema.parse({ ...contextRequest, answer: { ...contextRequest.answer, max_chars: 4000 },
   input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } },
 });
 const owner = ownerTierFor({ ownerTier: true }, request)!;
+
+test("ordinary plain owner replies keep multiple lines before a handoff", () => {
+  const text = "The first result.\nThe second result.";
+  expect(ownerAnswer(text, request, owner)).toMatchObject({ action: "reply", text, reply_to: owner.messageId });
+});
 
 test("owner run delivers the refusal outcome and queued board destination to the chat", async () => {
   const reply = "Передачу відхилено. Задача «Виконати зміну» чекає на дошці project-b. Увімкніть перевірки місця оркестратора, щоб він її отримав.";

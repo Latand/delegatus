@@ -2,6 +2,7 @@ import { cacheAgentObservation, clearAgentObservations } from "./projectionCache
 import { listenForAgentStateInvalidation } from "./invalidation";
 import { statePath } from "@/lib/configDir";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
+import { hostTurnRecordIdentity, readCodexRetirementTurnLedger } from "@/lib/runtime/eventStore";
 import { blockingHostActivityFlags } from "@/lib/runtime/hostActivityFlags";
 import { observeAgentProcess } from "./process";
 import fs from "node:fs";
@@ -16,7 +17,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { AGENT_STATE_POLICY, evaluateAgentState, fact, unknown, type AgentFacts, type AgentProjection, type Evidence, type NativeTurn } from "./model";
-import { AgentTranscriptCache, fileSignature } from "./transcript";
+import { AgentTranscriptCache, fileSignature, transcriptVersionMatches } from "./transcript";
 import { acknowledgeAgentProjection, artifactRevision, commitAgentObservation, conversationRevision, entryRevision,
   readAgentProjection, readAgentStateMetrics, subjectId, copyAgentStateRow, recordAgentProcessEnded, pruneTerminalAgentProjection } from "./store";
 
@@ -249,6 +250,14 @@ export class AgentStateService {
     const native = await this.cache.acquire({ engine: entry.key.engine, path: entry.artifactPath ?? "", revision: artifactRevision(entry),
       localRef: entry.structuredHost!.activeTurnRef, observedAt: now(), anchor: entry.structuredHost!.agentStateNativePromptAnchor });
     if (!allowed()) return null;
+    const tailTerminal = native.tailTerminal;
+    const codexLedger = entry.key.engine === "codex" && entry.status === "idle" && entry.structuredHost!.activeTurnRef === null
+      && source.conversationCurrent && source.artifactBound && tailTerminal?.id
+      ? await readCodexRetirementTurnLedger(entry.key.sessionId, tailTerminal.id, entry.structuredHost!.eventCursor) : null;
+    if (!allowed()) return null;
+    const codexTranscriptCurrent = Boolean(codexLedger && native.transcript.determined
+      && await transcriptVersionMatches(entry.artifactPath!, native.transcript.value.signature));
+    if (!allowed()) return null;
     const background = entry.key.engine === "claude" && native.transcript.determined && source.artifactBound
       ? await (this.ports.backgroundWork ?? verifiedBackgroundWork)(entry.artifactPath!, now()) : null;
     if (!allowed()) return null;
@@ -285,6 +294,11 @@ export class AgentStateService {
     }
     let turn = native.turn;
     if (!source.artifactBound) turn = unknown("artifact-generation binding unverified", ev("registry-cache", "binding"));
+    if (owner.determined && owner.value === "absent" && codexLedger && tailTerminal && codexTranscriptCurrent) {
+      turn = fact({ state: "closed", nativeId: tailTerminal.id, localRef: null, opening: null,
+        closing: tailTerminal.type, at: tailTerminal.at, tools: 0, outcome: codexLedger.status },
+      { ...ev("operation-ledger", codexLedger.identity), ...(tailTerminal.at === null ? {} : { eventAt: tailTerminal.at }) });
+    }
     if (memory) {
       // Host memory wins over a delayed native page. Incompatible current
       // memory remains an explicit divergence and cannot grant an effect.
@@ -351,12 +365,13 @@ export class AgentStateService {
       ? previous.facts.obligations.value.filter(value => value.startsWith("background:")) : null;
     const backgroundKnown = entry.key.engine !== "claude" || background?.state === "read" || cachedBackground !== null;
     const backgroundObligations = background?.state === "read" ? background.names.map(name => `background:${name}`) : cachedBackground ?? [];
+    const activityTurn = turn.evidence.source === "operation-ledger" ? turn : native.turn;
     const facts: AgentFacts = { subject: subjectId(entry), engine: entry.key.engine, revision, process: processFact, owner, turn,
       attention: attentionUnverified || entry.structuredHost!.attentionVerified === false || attention.length > 16 || attention.some(ref => ref.length > 128) ? unknown("attention evidence missing", ev("registry-cache", "attention"))
         : fact(attention.slice(0, 32), ev(memory ? "host-memory" : "registry-cache", "attention", Boolean(memory))),
-      activity: native.turn.determined ? fact({ tools: native.turn.value.tools,
+      activity: activityTurn.determined ? fact({ tools: activityTurn.value.tools,
         flags: blockingHostActivityFlags(entry.structuredHost!.activeFlags).slice(0, 16).map(flag => flag.slice(0, 64)),
-        providerRetry: native.turn.value.state === "open" && Boolean(entry.structuredHost!.providerRetry) }, ev(memory ? "host-memory" : "registry-cache", "activity"))
+        providerRetry: activityTurn.value.state === "open" && Boolean(entry.structuredHost!.providerRetry) }, ev(memory ? "host-memory" : "registry-cache", "activity"))
       : unknown("native activity boundary unavailable", ev("native-transcript", "activity")), transcript: native.transcript, obligations: !backgroundKnown
         ? unknown("background work coverage unavailable", ev("operation-ledger", "background-work"))
         : !source.obligationsComplete || source.obligations.length + backgroundObligations.length > 32 ? unknown("obligation coverage truncated", ev("operation-ledger", "obligations"))
@@ -388,6 +403,7 @@ export class AgentStateService {
         try { if (fileSignature(fs.statSync(ledgerPath, { bigint: true })) !== ledger.transcript.value.signature) return false; }
         catch { return false; }
       }
+      if (turn.evidence.source === "operation-ledger" && hostTurnRecordIdentity(entry.key.sessionId) !== turn.evidence.ref) return false;
       if (native.transcript.determined) {
         try { if (fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) !== native.transcript.value.signature) return false; }
         catch { return false; }
@@ -446,6 +462,8 @@ export class AgentStateService {
         const held = this.ports.memory(row, committed.conversationId);
         if (digest(held) !== publicationMemory) return false;
         if (held && committed.facts.turn.determined && held.activeTurnRef !== committed.facts.turn.value.localRef) return false;
+        const turnEvidence = committed.facts.turn.evidence;
+        if (turnEvidence.source === "operation-ledger" && hostTurnRecordIdentity(row.key.sessionId) !== turnEvidence.ref) return false;
         if (committed.facts.transcript.determined) {
           try { return fileSignature(fs.statSync(row.artifactPath!, { bigint: true })) === committed.facts.transcript.value.signature; }
           catch { return false; }

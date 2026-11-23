@@ -1,4 +1,23 @@
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+
+export function ownerIntentFixture(root: string, seatHandoff: boolean, capture?: string): string {
+  const command = path.join(root, seatHandoff ? "route-seat-handoff" : "route-ordinary-answer");
+  fs.writeFileSync(command, `#!${process.execPath}
+const fs = require('fs'), args = process.argv.slice(2);
+const prompt = await Bun.stdin.text();
+${capture ? `fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ cwd: process.cwd(), prompt }));` : ""}
+const output = { seat_handoff: ${seatHandoff} };
+const outputFile = args[args.indexOf('--output-last-message') + 1];
+if (args.includes('--output-last-message')) fs.writeFileSync(outputFile, JSON.stringify(output));
+else {
+  console.log(JSON.stringify({ type: 'system', subtype: 'init', tools: ['StructuredOutput'], mcp_servers: [] }));
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', structured_output: output }));
+}
+`, { mode: 0o700 });
+  return command;
+}
 export async function startTestRelay(
   handler: (
     req: http.IncomingMessage,

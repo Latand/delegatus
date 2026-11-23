@@ -41,7 +41,6 @@ import {
 import { filesResponseWorkerPoolDiagnostics, setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { createFilesProjectionQueue, type FilesProjectionQueue } from "./projectionQueue";
-import { gunzipSync } from "node:zlib";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import { writeSummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
@@ -3983,12 +3982,11 @@ test.each([1, 4, 8])("board v2 shares a changed poll across %s tabs with exact f
   for (const answer of answers) {
     expect(answer.headers.get("x-llv-files-delta-base")).toBe(base);
     expect(answer.headers.get("etag")).toBe(tag);
-    expect(answer.headers.get("content-encoding")).toBe("gzip");
+    expect(answer.headers.get("content-encoding")).toBeNull();
     const bytes = new Uint8Array(await answer.arrayBuffer());
     if (compressed) expect(bytes).toEqual(compressed);
     compressed = bytes;
-    const { gunzipSync } = await import("node:zlib");
-    const envelope = JSON.parse(gunzipSync(bytes).toString());
+    const envelope = JSON.parse(Buffer.from(bytes).toString());
     let state = raw;
     for (const delta of envelope.deltas) state = applyBoardDelta(state, delta);
     expect(state).toEqual(expected);
@@ -4002,14 +4000,17 @@ test.each([1, 4, 8])("board v2 shares a changed poll across %s tabs with exact f
   expect(await reset.json()).toEqual(expected);
 });
 
-test("#1994: board bodies are gzip-encoded for a caller that accepts gzip", async () => {
+/* Next drops a route response's own `content-encoding` and encodes the answer
+   itself (its compression layer, which skips a response that already names an
+   encoding). A route that gzips its body is therefore encoded twice behind one
+   label, and the browser reads gzip bytes where it expects JSON. Every board
+   answer leaves the route unencoded, whatever the caller accepts. */
+test("board bodies leave the route unencoded for a caller that accepts gzip", async () => {
   scannedFiles = retainedHistory(500);
   const plain = await (await GET(new Request("http://127.0.0.1/api/files?view=summary"))).text();
   const response = await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "accept-encoding": "gzip, deflate, br" } }));
-  expect(response.headers.get("content-encoding")).toBe("gzip");
-  const compressed = new Uint8Array(await response.arrayBuffer());
-  expect(compressed.length).toBeLessThan(plain.length / 5);
-  expect(Buffer.from(Bun.gunzipSync(compressed)).toString("utf8")).toBe(plain);
+  expect(response.headers.get("content-encoding")).toBeNull();
+  expect(await response.text()).toBe(plain);
 });
 
 test("#1994: deltas are negotiated only within the exact summary scope that certified the base", async () => {
@@ -4552,7 +4553,7 @@ test("passive preparation reads saved bytes without starting a scan or a project
   expect(scans).toBe(priorScans);
 });
 
-test("bootstrap gzip is the same full representation even with an old conditional base", async () => {
+test("bootstrap is the same full representation even with an old conditional base", async () => {
   const saved = await seedSummaryBootstrap();
   let release!: () => void;
   scanGates = [new Promise<void>(resolve => { release = resolve; })];
@@ -4561,8 +4562,8 @@ test("bootstrap gzip is the same full representation even with an old conditiona
       "accept-encoding": "gzip", "if-none-match": '"old"', "x-llv-files-delta": "1",
     } }));
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-encoding")).toBe("gzip");
-    expect(gunzipSync(await response.arrayBuffer()).toString()).toBe(saved);
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(await response.text()).toBe(saved);
   } finally { release(); }
   await GET(new Request("http://127.0.0.1/api/files?view=summary", { headers: { "x-llv-files-generation": "1" } }));
 });

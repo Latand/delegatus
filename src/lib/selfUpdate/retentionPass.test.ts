@@ -23,7 +23,7 @@ function fixture(count = 12) {
     launcher: {}, web: {}, runtimeHost: {} } as LauncherRecord;
   fs.writeFileSync(record.releasePointer, JSON.stringify({ dir: dirs[0] }));
   const inputs: RetentionInputs = {};
-  const options = { reportFile: path.join(root, "retention.json"), env: { LLV_SELF_UPDATE_KEEP_RELEASES: "1" }, now,
+  const options = { reportFile: path.join(root, "retention.json"), env: { LLV_SELF_UPDATE_KEEP_RELEASES: "1", LLV_RETENTION_RUN_ID: undefined as string | undefined }, now,
     current: () => ({ record, inputs }), fence: () => true, launch: { executable: process.execPath, entry: path.join(import.meta.dir, "retentionPass.fixture.ts"), args: [root] } };
   const ended = () => expect(() => process.kill(Number(fs.readFileSync(path.join(root, "helper-pid"), "utf8")), 0)).toThrow();
   return { root, dirs, record, inputs, options, ended };
@@ -52,6 +52,29 @@ test.skipIf(process.platform !== "linux")("fresh pass processes resume a bounded
     for (const dir of h.dirs.slice(1, 5)) expect(fs.existsSync(dir)).toBeTrue();
   } finally { read.mockRestore(); }
 }, 60_000);
+
+test.skipIf(process.platform !== "linux")("the retention pass withholds terminal completion until inspection.close settles", async () => {
+  const h = fixture(0);
+  const runId = "retention-run-fixture";
+  h.options.env.LLV_RETENTION_RUN_ID = runId;
+  const running = runRetentionPass(h.record, h.inputs, { ...h.options,
+    launch: { ...h.options.launch, args: [h.root, "close-pending"] } });
+  let settled = false;
+  void running.then(() => { settled = true; }, () => { settled = true; });
+  const deadline = Date.now() + 5_000;
+  while (!fs.existsSync(path.join(h.root, "inspection-close-started")) && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 10));
+  try {
+    expect(fs.existsSync(path.join(h.root, "inspection-close-started"))).toBeTrue();
+    expect(fs.existsSync(h.options.reportFile)).toBeTrue();
+    expect(JSON.parse(fs.readFileSync(h.options.reportFile, "utf8")).runId).toBe(runId);
+    expect(settled).toBeFalse();
+  } finally { fs.writeFileSync(path.join(h.root, "allow-inspection-close"), "yes"); }
+  const report = await running;
+  expect(report.runId).toBe(runId);
+  expect(report.errors).toEqual([]);
+  h.ended();
+}, 30_000);
 
 test.skipIf(process.platform !== "linux")("a pass reads fresh owner inputs across its IPC wait and closes its helper", async () => {
   const h = fixture(4); let entered!: () => void; let release!: () => void;

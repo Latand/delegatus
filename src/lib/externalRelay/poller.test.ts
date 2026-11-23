@@ -1124,6 +1124,15 @@ test("claim advertises on-demand tools only when the stored descriptor offers th
   expect(relayClaimCapabilities().features).not.toContain("relay_tools_on_demand");
 });
 
+test("claim keeps isolated guest requester routing off until the paired release", () => {
+  const legacy = relayClaimCapabilities({ features: [] }).features;
+  expect(legacy).toContain("relay_guest_answers");
+  expect(legacy).toContain("requester_context");
+  expect(legacy).not.toContain("relay_isolated_requesters");
+  expect(relayClaimCapabilities().features).toEqual(legacy);
+  expect(relayClaimCapabilities({ features: [] }).features).toEqual(legacy);
+});
+
 test("inbound media is advertised only when the descriptor offers it and includes requester context", () => {
   expect(relayClaimCapabilities({ features: ["relay_media_in"] }).features).toEqual(expect.arrayContaining(["relay_media_in", "requester_context"]));
   expect(relayClaimCapabilities({ features: [] }).features).not.toContain("relay_media_in");

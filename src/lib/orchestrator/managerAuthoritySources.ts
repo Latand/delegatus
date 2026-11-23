@@ -26,11 +26,11 @@ export function productionManagerAuthoritySources(registry: AgentRegistry = agen
           : null,
       };
     },
+    withAliases: read => registry.withConversationAliases(read),
     resolveAlias: (conversationId) => registry.canonicalConversationId(conversationId as `conversation_${string}`),
   };
 }
 
 export function isCurrentOperatorSeat(conversationId: string, registry: AgentRegistry): boolean {
-  return authorizedManagerSeats(productionManagerAuthoritySources(registry))
-    .some((seat) => seat.conversationId === conversationId);
+  return authorizedManagerSeats(productionManagerAuthoritySources(registry), conversationId).length > 0;
 }
