@@ -3279,6 +3279,50 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
     } finally { fs.rmSync(switchFile, { force: true }); await server.close(); }
   });
 
+test("owner tier run keeps an enrolment code in chat history out of its run ledger and answer record, and recovery replays", async () => {
+  const { ownerRecoveryRequest } = await import("./ownerLateDelivery");
+  const code = "DLG-0123456789AB";
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const id = "owner_history_code";
+  const history = { ...contextRequest.input.conversation[0], id: "earlier", author: { key: "u2", name: "Person", self: false },
+    text: `@clone please add me ${code}` };
+  const request = { ...contextRequest, request_id: id, chat: { key: "owner-group" },
+    input: { ...contextRequest.input, conversation: [history, ...contextRequest.input.conversation],
+      requester: { ...contextRequest.input.requester, is_owner: true } } };
+  let observed = false;
+  try {
+    const completion = await runClaimedRequest(paired, request, undefined, {
+      command: "/missing-owner-must-never-run-cli", timeoutMs: 4000,
+      ownerPorts: {
+        launch: async body => {
+          expect(JSON.stringify(body).includes(code)).toBe(false);
+          return { status: 202, body: { conversationId: "conversation_owner_history" } };
+        },
+        observe: async () => {
+          const ledger = fs.readFileSync(externalRelayFile("runs"), "utf8");
+          expect(ledger.includes("DLG-")).toBe(false);
+          expect(ledger.includes("[enrolment code]")).toBe(true);
+          const run = readRunLedger().runs.find(run => run.requestId === id)!;
+          const replay = ownerRecoveryRequest(run, paired);
+          expect(replay).toMatchObject({ request_id: id, input: { conversation: [{ text: "@clone please add me [enrolment code]" }, { text: "Hello" }] } });
+          expect(requestSchema.safeParse(replay).success).toBe(true);
+          observed = true;
+          return { state: "ended", finalText: "Owner reply" };
+        },
+        stop: async () => {}, pollMs: 5,
+      },
+    });
+    expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Owner reply" } });
+    expect(observed).toBe(true);
+    const record = readAnswerRecord(paired.id, "target_1", id);
+    expect(record).not.toBeNull();
+    expect(JSON.stringify(record).includes("DLG-")).toBe(false);
+  } finally { await server.close(); }
+});
+
 
 for (const phase of ["running", "pending"] as const) test(`owner cutoff through PATCH stops ${phase} host work and withholds late reply`, async () => {
   const { NextRequest } = await import("next/server");

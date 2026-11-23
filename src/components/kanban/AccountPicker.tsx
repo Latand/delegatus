@@ -409,10 +409,12 @@ function Chip({ current, to, when, pending, trigger, aria, onOpen }: {
 export function StageAccountChip({ pipeline, stage }: { pipeline: Pipeline; stage: PipelineStage }) {
   const { t } = useLocale();
   const choice = useContext(AccountChoiceContext);
-  const accounts = useEngineAccounts(stage.effectiveRole.engine);
+  const stageEngine = stage.effectiveRole.engine;
+  const accounts = useEngineAccounts(stageEngine === "codex" ? "codex" : "claude");
   const labelOf = labelIn(accounts.accounts);
   const key = stageAccountKey(pipeline.id, stage.id);
   const write = useStageWrite(choice?.stages ?? null, key);
+  if (stageEngine === "antigravity") return null;
   const pin = stagePin(stage);
   const current = pin ? labelOf(pin) : t("kanban.account.projectChoice");
   const to = write ? (write.account ? labelOf(write.account) : t("kanban.account.projectChoice")) : null;
@@ -550,18 +552,21 @@ export function StageAccountPopover({ anchor, onClose, pipeline, stage, name }: 
 }) {
   const { t } = useLocale();
   const choice = useContext(AccountChoiceContext)!;
-  const engine = stage.effectiveRole.engine;
+  const rawEngine = stage.effectiveRole.engine;
+  const engine: AccountEngine = rawEngine === "codex" ? "codex" : "claude";
   const accounts = useEngineAccounts(engine);
   const labelOf = labelIn(accounts.accounts);
   const { refresh } = accounts;
   const { loadPolicy } = choice;
   useEffect(() => {
+    if (rawEngine === "antigravity") return;
     void refresh();
     loadPolicy(pipeline.project, true);
-  }, [refresh, loadPolicy, pipeline.project]);
+  }, [rawEngine, refresh, loadPolicy, pipeline.project]);
   const policy = choice.policy(pipeline.project);
   const key = stageAccountKey(pipeline.id, stage.id);
   const write = useStageWrite(choice.stages, key);
+  if (rawEngine === "antigravity") return null;
   const pin = stagePin(stage);
   const editable = stageDraftable(pipeline, stage.id);
   const saving = write?.phase === "saving";

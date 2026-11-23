@@ -835,11 +835,11 @@ test("an explicit spawn account is durably pinned while an omitted account uses 
     const dependencies = {
       ...structuredRouteDependencies(cwd),
       registry: () => store,
-      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", id: string | null) => ({
+      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot" | "antigravity", id: string | null) => ({
         engine: "claude" as const, accountId: id ?? "selected", kind: "managed" as const,
         home: path.join(cwd, id ?? "selected"), transcriptRoot: path.join(cwd, "projects"), env: { NODE_ENV: "test" as const },
       }),
-      resolveHealthySpawnAccount: async (_engine: "claude" | "codex" | "copilot", requested?: string | null) => ({
+      resolveHealthySpawnAccount: async (_engine: "claude" | "codex" | "copilot" | "antigravity", requested?: string | null) => ({
         engine: "claude" as const,
         accountId: requested ?? "selected",
         kind: "managed" as const,
@@ -1251,7 +1251,7 @@ test("a queued pinned account survives restart and launches exactly once on the 
       resolveHealthySpawnAccount: async () => {
         throw new NoHealthyClaudeAccountError(["account-a"]);
       },
-      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot", accountId: string | null) => account(accountId ?? "account-b"),
+      resolveSpawnAccount: (_engine: "claude" | "codex" | "copilot" | "antigravity", accountId: string | null) => account(accountId ?? "account-b"),
       resolvePinnedSpawnAdmission: async () => pinAdmissible
         ? {
             kind: "admissible" as const,

@@ -625,7 +625,7 @@ function reconfigureEffect(effect: StructuredDeliveryEffect): StructuredReconfig
   const accountId = typeof effect.payload.accountId === "string" ? effect.payload.accountId : undefined;
   const key = effect.payload.sessionKey;
   const sessionKey = key && typeof key === "object" && !Array.isArray(key)
-    && ((key as Record<string, unknown>).engine === "codex" || (key as Record<string, unknown>).engine === "claude" || (key as Record<string, unknown>).engine === "copilot")
+    && ((key as Record<string, unknown>).engine === "codex" || (key as Record<string, unknown>).engine === "claude" || (key as Record<string, unknown>).engine === "copilot" || (key as Record<string, unknown>).engine === "antigravity")
     && typeof (key as Record<string, unknown>).sessionId === "string"
     ? key as StructuredReconfigureEffect["sessionKey"]
     : undefined;

@@ -258,12 +258,17 @@ export function updateRelayStore(
   }, waitMs);
 }
 export async function updateRelayStoreAsync(change: (store: RelayStore) => RelayStore | Promise<RelayStore>): Promise<RelayStore> {
-  const file = externalRelayFile("relays");
-  return withFileLockAsync(file, async () => {
-    const next = withoutExpired(await change(withoutExpired(readStoredRelays())));
-    writeRelayFile(file, next);
+  return withRelayStoreLock(async (store, replace) => {
+    const next = withoutExpired(await change(store));
+    replace(next);
     return next;
-  }, Date.now() + 5_000);
+  });
+}
+
+export async function withRelayStoreLock<T>(action: (store: RelayStore, replace: (next: RelayStore) => void) => T | Promise<T>,
+  until = Date.now() + 5_000): Promise<T> {
+  const file = externalRelayFile("relays");
+  return withFileLockAsync(file, () => action(withoutExpired(readStoredRelays()), next => writeRelayFile(file, next)), until);
 }
 export function readRunLedger(): RunLedger {
   const ledger = read(externalRelayFile("runs"), () => ({

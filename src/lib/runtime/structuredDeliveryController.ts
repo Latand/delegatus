@@ -157,6 +157,7 @@ const DELIVERY_DRAIN_MAX_BACKOFF_MS = 1_000;
 /** How often the delivery watchdog looks for stalls, overdue wakes and lanes
     to reconcile. */
 const DELIVERY_WATCHDOG_MS = 1_000;
+const GUARD_RETRY_LOG_INTERVAL_MS = 60_000;
 /** How often accepted sends past their settlement deadline are ended with no
     reader asking (incident 2026-10-06). */
 const DELIVERY_SETTLEMENT_SWEEP_MS = 15_000;
@@ -1641,6 +1642,9 @@ export async function bindStructuredDeliveryQueue(
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
   let guarding: Promise<void> | null = null;
+  let diagnosedGuard: Promise<void> | null = null;
+  let nextGuardLogAt = 0;
+  let suppressedGuardFailures = 0;
   const guardHosts = () => {
     if (!registry.quotaObservations("codex").some(row => accountCreditGuardBlock("codex", row.accountId, row.limits))) {
       guardHostPage.reset();
@@ -1668,11 +1672,32 @@ export async function bindStructuredDeliveryQueue(
       guarding = null;
       if (guardHostPage.pending && !stopped && state.activeQueue === queue) scheduleDrain();
     });
+  const enforceGuardWithDiagnostic = (onlyIfChanged = false): Promise<void> => {
+    if (diagnosedGuard) return diagnosedGuard;
+    const run = Promise.resolve().then(() => enforceGuard(onlyIfChanged)).then(undefined, error => {
+      if (!stopped && state.activeQueue === queue) {
+        const now = performance.now();
+        if (nextGuardLogAt === 0 || now >= nextGuardLogAt) {
+          controllerDiagnosticError("[structured delivery] paid-credit guard retry pending",
+            nextGuardLogAt === 0 ? error : { suppressedFailures: suppressedGuardFailures });
+          nextGuardLogAt = now + GUARD_RETRY_LOG_INTERVAL_MS;
+          suppressedGuardFailures = 0;
+        } else suppressedGuardFailures++;
+      }
+      throw error;
+    }).finally(() => { if (diagnosedGuard === run) diagnosedGuard = null; });
+    diagnosedGuard = run;
+    return run;
+  };
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
   const drainWithRetry = async (afterAdmission = false, freshAdmission = false, conversationId?: string): Promise<void> => {
     if (stopped) return;
+    let guardFailed = false;
     try {
-      if (!startupPending) await enforceGuard();
+      if (!startupPending) {
+        try { await enforceGuardWithDiagnostic(); }
+        catch (error) { guardFailed = true; throw error; }
+      }
       if (freshAdmission && conversationId) await queue.drainFreshAdmission(conversationId);
       else if (afterAdmission) await queue.drainAfterAdmission(freshAdmission);
       else await queue.drain();
@@ -1688,12 +1713,12 @@ export async function bindStructuredDeliveryQueue(
       if (retryScheduled && (!freshAdmission || !conversationId)) {
         drainBackoffMs = Math.min(retryMs * 2, DELIVERY_DRAIN_MAX_BACKOFF_MS);
       }
-      controllerDiagnosticError(
-        retryScheduled
-          ? "[structured delivery] queue drain failed; retry scheduled"
-          : "[structured delivery] queue drain failed; retry already pending",
-        error,
-      );
+      if (!guardFailed) controllerDiagnosticError(
+          retryScheduled
+            ? "[structured delivery] queue drain failed; retry scheduled"
+            : "[structured delivery] queue drain failed; retry already pending",
+          error,
+        );
     }
   };
   requestDrain = () => {
@@ -2326,9 +2351,9 @@ export async function bindStructuredDeliveryQueue(
     return freshAdmission && conversationId ? drainWithRetry(true, true, conversationId) : generalDrain(true, freshAdmission);
   }, async () => {
     if (stopped) return;
-    if (!startupPending) await enforceGuard();
+    if (!startupPending) await enforceGuardWithDiagnostic();
     // A shared guard may have begun before this cycle's quota observation.
-    if (!startupPending && !stopped) await enforceGuard(true);
+    if (!startupPending && !stopped) await enforceGuardWithDiagnostic(true);
     if (!stopped && state.activeQueue === queue) scheduleDrain();
   });
   state.stopActive = () => {
@@ -2404,7 +2429,7 @@ export async function bindStructuredDeliveryQueue(
         ? prepared.snapshot : await registry.prepareReadOnlySnapshot();
       assertActive();
       const markerKeys = registryKeysMatching(markerSnapshot, "entries", "structuredHost.kind",
-        ["codex-app-server", "claude-broker", "copilot-acp"]);
+        ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"]);
       await forEachStartupBatch(markerKeys, async key => {
         const selected = performanceSpans.sync("runtime.startup.select", () => markerSnapshot.entries[key]);
         const entry = selected && startupHostSnapshot(registry, selected.key).entries[key];
@@ -2521,12 +2546,25 @@ export async function bindStructuredDeliveryQueue(
      its deadline is ended, all with the browser closed. */
   const watchdogMs = dependencies.watchdogIntervalMs ?? DELIVERY_WATCHDOG_MS;
   if (watchdogMs > 0) {
+    let watchingGuard = false;
+    const watchGuard = async () => {
+      // Several ticks can share one in-flight guard pass. Report its result once.
+      if (watchingGuard) return;
+      watchingGuard = true;
+      try {
+        await enforceGuardWithDiagnostic(true);
+      } catch {
+        // Guard failures remain pending for the next watchdog or drain attempt.
+      } finally {
+        watchingGuard = false;
+      }
+    };
     watchdogTimer = setInterval(() => {
       /* A7: it runs while startup still seats hosts. Marking stalls and lost
          wakes only writes records; an unregistered host's target stays
          deferred by the drain, which notes `startup` on its records. */
       if (stopped || state.activeQueue !== queue) return;
-      void enforceGuard(true).catch(error => controllerDiagnosticError("[structured delivery] paid-credit guard retry pending", error));
+      void watchGuard();
       void queue.tick().catch((error) => {
         controllerDiagnosticError("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
       });
@@ -2876,8 +2914,8 @@ export async function recordDemotionInterruption(
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
   if (!entry || !conversation || conversation.supersededBy) return true;
   /* Interruption obligations re-drive Claude and Codex turns a release cut;
-     a Copilot turn cut the same way is resumed by the operator (slice 1). */
-  if (conversation.engine === "copilot") return true;
+     Copilot and Antigravity turns cut the same way are resumed by the operator. */
+  if (conversation.engine === "copilot" || conversation.engine === "antigravity") return true;
   const engine = conversation.engine;
   const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
   if (turnRef === null && conversation.turn.state !== "busy" && backgroundTasks.length === 0 && !selfStartedWork) return true;

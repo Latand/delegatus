@@ -23,7 +23,7 @@ export const PIPELINE_ROLE_IDS: readonly PipelineRoleId[] = [
 ];
 
 export type PipelineRoleDefaults = {
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "antigravity";
   model: string | null;
   effort: string | null;
   serviceTier?: string;
@@ -132,8 +132,8 @@ export function resolvePipelineRole(
     return { error: `role ${rawRoleId} is not allowed in a pipeline (it requires interactive deploy confirmation)` };
   }
   const roleParams = ref && ref.params && typeof ref.params === "object" && !Array.isArray(ref.params) ? ref.params : undefined;
-  if (stage.engine !== undefined && stage.engine !== "claude" && stage.engine !== "codex") {
-    return { error: "stage engine must be claude or codex" };
+  if (stage.engine !== undefined && stage.engine !== "claude" && stage.engine !== "codex" && stage.engine !== "antigravity") {
+    return { error: "stage engine must be claude, codex or antigravity" };
   }
   if (stage.access !== undefined && stage.access !== "read-only" && stage.access !== "read-write") {
     return { error: "stage has an invalid access value" };

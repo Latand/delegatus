@@ -96,7 +96,7 @@ the Deployer's `mode=release` stage can publish. A moved checkout requires revie
 
 Run `bun scripts/release-verify.ts --preflight --cut <cut-sha> --tag vX.Y.Z --pr <number>`.
 An open PR stops publication. Preflight refreshes `origin/main` and requires the
-merged commit to be an ancestor of main with the reviewed checkout's tree. It
+reviewed checkout to be at the PR's exact integrated commit on main. It
 checks release-only changes against the merge's first parent so inherited main
 changes do not block an older cut. Create the annotated tag on its explicit
 `tagCommit`, then use `git push origin refs/tags/vX.Y.Z`. The native stage guard

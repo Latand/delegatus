@@ -43,7 +43,7 @@ export { ENGINE_EFFORTS, isEngineEffort } from "./efforts";
  * else.
  */
 
-export type AgentEngine = "claude" | "codex" | "copilot";
+export type AgentEngine = "claude" | "codex" | "copilot" | "antigravity";
 
 /**
  * Candidate absolute paths for an agent CLI on Windows, in probe order.
@@ -79,7 +79,7 @@ export function resolveBinary(name: string): string {
     return name;
   }
   const home = os.homedir();
-  if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1" && (name === "claude" || name === "codex" || name === "copilot")) {
+  if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1" && (name === "claude" || name === "codex" || name === "copilot" || name === "agy")) {
     const shim = "/usr/local/bin/" + name;
     try {
       fs.accessSync(shim, fs.constants.X_OK);
@@ -138,6 +138,27 @@ export function copilotBinaryGap(env: NodeJS.ProcessEnv = process.env): string |
     return null;
   } catch {
     return `the GitHub Copilot CLI at ${binary} is not executable`;
+  }
+}
+
+/** The Antigravity CLI a structured host launches: `LLV_ANTIGRAVITY_BIN` when
+    set (tests and pinned installs), otherwise the same probe for `agy`. */
+export function resolveAntigravityBinary(env: NodeJS.ProcessEnv = process.env): string {
+  return env.LLV_ANTIGRAVITY_BIN?.trim() || resolveBinary("agy");
+}
+
+/** Why an Antigravity launch cannot start on this machine, or null when `agy`
+    resolves to an executable file. */
+export function antigravityBinaryGap(env: NodeJS.ProcessEnv = process.env): string | null {
+  const binary = resolveAntigravityBinary(env);
+  if (!path.isAbsolute(binary)) {
+    return "the Antigravity CLI (`agy`) is not installed; install `agy` under $HOME/.local/bin or set LLV_ANTIGRAVITY_BIN";
+  }
+  try {
+    fs.accessSync(binary, fs.constants.X_OK);
+    return null;
+  } catch {
+    return `the Antigravity CLI at ${binary} is not executable`;
   }
 }
 
@@ -528,6 +549,37 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       cwd,
       windowName: "copilot-new",
       engine: "copilot",
+      launchProfile: {
+        ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}),
+        cwd,
+        model: options.model ?? null,
+        effort: options.effort ?? null,
+        fast: null,
+        permissionMode,
+        readOnly: options.readOnly ?? false,
+        allowSubagents: options.allowSubagents ?? false,
+        mcpServers,
+        plugins: [],
+        title: options.title?.trim() || null,
+        project: null,
+        parentConversationId: null,
+        role: "worker",
+        goal: null,
+        plan: null,
+      },
+    };
+  }
+  if (engine === "antigravity") {
+    /* Antigravity runs on the structured transport over ACP (`agy acp`); the
+       host builds its own argv and applies model/effort via `session/set_config_option`. */
+    const permissionMode = options.readOnly ? "default" : options.permissionMode ?? "bypassPermissions";
+    const args = [resolveAntigravityBinary(), "acp", "--disable-telemetry"];
+    if (permissionMode === "bypassPermissions") args.push("--dangerously-skip-permissions");
+    return {
+      command: args.map(shellQuote).join(" "),
+      cwd,
+      windowName: "antigravity-new",
+      engine: "antigravity",
       launchProfile: {
         ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}),
         cwd,
