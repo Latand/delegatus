@@ -15,15 +15,18 @@ import { createPublicationFixtures } from "./publicationHook.fixture";
 const systemctl = process.platform === "linux" ? Bun.which("systemctl") : null;
 const hasUserManager = systemctl !== null && Bun.spawnSync([systemctl, "--user", "show-environment"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
 
-test.each(["bun", "bun-1.4.0"]) ("installed admission routing keeps %s as its native interpreter", name => {
+test.skipIf(process.platform !== "linux").each(["bun", "bun-1.4.0"])("installed admission routing keeps %s as its native interpreter", name => {
   const f = fixture(), bin = path.join(f.dir, name);
   try {
     fs.symlinkSync(process.execPath, bin);
     const routed = installedGateAdmissionEnv({ ...f.env, LLV_GATE_BUN: bin });
     expect(routed.LLV_GATE_BUN).not.toBe(bin);
-    const result = Bun.spawnSync([routed.LLV_GATE_BUN!, "--version"], { env: { ...process.env, ...routed } });
+    expect(routed).not.toHaveProperty("PATH");
+    expect(installedGateAdmissionEnv({ ...f.env, ...routed })).toEqual(routed);
+    const result = Bun.spawnSync([routed.LLV_GATE_BUN!, "-e", 'console.log(require("node:fs").readFileSync("/proc/self/cmdline", "utf8").split("\\0")[0])'],
+      { env: { ...process.env, ...routed } });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
-    expect(result.stdout.toString()).toMatch(/^\d+\.\d+/);
+    expect(result.stdout.toString().trim()).toBe(bin);
   } finally { f.close(); }
 });
 
@@ -35,7 +38,9 @@ test.skipIf(!hasUserManager).each(["bun", "bun-1.4.0"])("a pre-commit service an
     const hook = createHookFixture(process.cwd(), roots);
     const hookEnv: NodeJS.ProcessEnv = hook.env;
     const nativeBun = path.join(f.dir, name);
-    fs.symlinkSync(process.execPath, nativeBun);
+    // Bun resolves process.execPath through /proc/self/exe. A symlink would
+    // make the cleanup client relaunch with the installed binary's basename.
+    fs.copyFileSync(process.execPath, nativeBun, fs.constants.COPYFILE_FICLONE);
     hookEnv.HOOK_BUN = nativeBun;
     fs.mkdirSync(path.join(hook.dir, "scripts/gate-runner"));
     for (let i = 0; i < 41; i++) fs.writeFileSync(path.join(hook.dir, `input-${i}.ts`), "export {};\n");
@@ -69,6 +74,7 @@ test.skipIf(!hasUserManager).each(["bun", "bun-1.4.0"])("a pre-commit service an
     expect(unit).toBeDefined();
     const service = execFileSync(systemctl!, ["--user", "show", "-p", "MainPID", "--value", unit!], { encoding: "utf8" }).trim();
     const argv = fs.readFileSync(`/proc/${service}/cmdline`, "utf8").split("\0");
+    expect(argv[0]).toBe(nativeBun);
     expect(argv[2]).toBe("--service");
     expect(fs.existsSync(argv[3]!)).toBe(false);
     const children = (pid: string) => fs.readdirSync(`/proc/${pid}/task`).flatMap(thread =>
@@ -76,6 +82,7 @@ test.skipIf(!hasUserManager).each(["bun", "bun-1.4.0"])("a pre-commit service an
     const original = fs.readFileSync(env.FIXTURE_HOOK_PID!, "utf8").trim();
     const clients = children(original).filter(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("owned-runner.ts"));
     expect(clients).toHaveLength(1);
+    expect(fs.readFileSync(`/proc/${clients[0]}/cmdline`, "utf8").split("\0")[0]).toBe(nativeBun);
     expect(children(clients[0]!).map(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8"))
       .some(command => command.includes("systemd-run\0") && command.includes(`--unit=${unit}\0`) && command.includes(argv[3]!))).toBe(true);
     expect(fs.readFileSync(`/proc/${waiter}/cmdline`, "utf8")).toContain("scripts/eslint-changes.ts");
@@ -160,6 +167,94 @@ while [[ ! -f "$FIXTURE_RELEASE" ]]; do sleep 0.02; done
     expect(f.count()).toBe(0);
   } finally {
     fs.writeFileSync(release, "release"); fs.writeFileSync(finish, "finish"); control.abort();
+    await Promise.allSettled(pending);
+    f.close();
+  }
+}, 45_000);
+
+test.skipIf(!hasUserManager)("a same-command pre-commit that consumed a legacy ticket keeps the only slot until it drains", async () => {
+  const f = fixture(), control = new AbortController(), pending: ReturnType<typeof realExec>[] = [];
+  const entered = path.join(f.dir, "entered"), release = path.join(f.dir, "release");
+  const log = path.join(f.dir, "entrant.stderr"), slot = path.join(f.dir, "llv-heavy-gate.slot1.lock");
+  const grants = () => f.db.query("SELECT at FROM grants ORDER BY rowid").all();
+  const stat = (pid: string) => fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1)!.split(" ");
+  try {
+    const legacy = legacyGateTree(f.dir), bin = pathWithoutFlock(f.dir);
+    for (const name of ["sh", "cat", "id", "ps", "awk", "sed", "chmod", "python3", "basename", "nproc", "env", "readlink", "cut"]) {
+      const executable = Bun.which(name);
+      if (executable) fs.symlinkSync(executable, path.join(bin, name));
+    }
+    const hook = path.join(f.dir, "hook"), entry = path.join(hook, "scripts/local-gate.ts");
+    fs.mkdirSync(path.join(hook, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(hook, "scripts/gate-runner"), { recursive: true });
+    // Drive the old gate with the same argv and launch proof as the cleanup
+    // handoff. The inner hook holds the native service open at a file barrier.
+    fs.writeFileSync(entry, `import fs from "node:fs";
+import { captureProcessIdentity } from ${JSON.stringify(path.resolve("src/lib/processIdentity.ts"))};
+if (process.env.FIXTURE_HOOK_CHILD === "1") {
+  fs.writeFileSync(process.env.FIXTURE_ENTERED!, String(process.pid));
+  while (!fs.existsSync(process.env.FIXTURE_RELEASE!)) await Bun.sleep(20);
+} else {
+  const parent = captureProcessIdentity(process.pid);
+  const child = Bun.spawn(["/bin/bash", process.env.FIXTURE_LEGACY_GATE!, process.execPath, import.meta.path, "pre-commit"], {
+    env: { ...process.env, FIXTURE_HOOK_CHILD: "1", LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(parent),
+      LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP: JSON.stringify({ parent, mode: "pre-commit", entry: import.meta.path }) },
+    stdout: "inherit", stderr: "inherit",
+  });
+  fs.writeFileSync(process.env.FIXTURE_CLIENT!, String(child.pid));
+  process.exit(await child.exited);
+}
+`);
+    const clientFile = path.join(f.dir, "client.pid");
+    const env = withoutInheritedGate({ ...f.env, LLV_GATE_SLOTS: "1", LLV_GATE_RUNNER: "off", LLV_GATE_BUN: process.execPath,
+      DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_PUSH_DEADLINE: undefined, LLV_GATE_SANDBOX_RECORD: undefined });
+    f.db.exec("CREATE TABLE grants (at INTEGER); CREATE TRIGGER count_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO grants VALUES (NEW.last); END");
+    pending.push(realExec("/bin/bash", ["-c", '"$@"; exit $?', "hook-fixture", process.execPath, entry, "pre-commit"], hook,
+      { ...env, PATH: bin, FIXTURE_ENTERED: entered, FIXTURE_RELEASE: release, FIXTURE_CLIENT: clientFile,
+        FIXTURE_LEGACY_GATE: path.join(legacy, "scripts/gate-slot.sh") }, { timeoutMs: 30_000, signal: control.signal }));
+    await until(() => fs.existsSync(entered), 10_000);
+    const hookPid = fs.readFileSync(entered, "utf8"), client = fs.readFileSync(clientFile, "utf8");
+    const clientArgv = fs.readFileSync(`/proc/${client}/cmdline`, "utf8").split("\0");
+    expect(clientArgv.slice(1, 5)).toEqual([path.join(legacy, "scripts/owned-runner.ts"), process.execPath, entry, "pre-commit"]);
+    const original = stat(client)[1]!;
+    expect(fs.readFileSync(`/proc/${original}/cmdline`, "utf8").split("\0").slice(1, 3)).toEqual([entry, "pre-commit"]);
+    const unit = /\/(delegatus-gate-[\da-f-]+\.service)(?:\/|\n)/.exec(fs.readFileSync(`/proc/${hookPid}/cgroup`, "utf8"))?.[1];
+    expect(unit).toBeDefined();
+    const supervisor = execFileSync(systemctl!, ["--user", "show", "-p", "MainPID", "--value", unit!], { encoding: "utf8" }).trim();
+    const service = fs.readFileSync(`/proc/${supervisor}/cmdline`, "utf8").split("\0");
+    expect(service.slice(1, 3)).toEqual([clientArgv[1], "--service"]);
+    expect(fs.existsSync(service[3]!)).toBe(false);
+    expect(f.db.query<{ owner: string }, []>("SELECT owner FROM legacy_gate_retirements").all()
+      .map(row => JSON.parse(row.owner).startIdentity)).toContain(`${client}:${stat(client)[19]}`);
+    const held = f.db.query<{ last: number }, []>("SELECT last FROM admission").get()!.last;
+    expect(grants()).toEqual([{ at: held }]);
+    expect(f.count()).toBe(0);
+    expect(fs.existsSync(slot)).toBe(false);
+
+    pending.push(realExec("bash", ["-c", 'exec "$@" 2>"$FIXTURE_ENTRANT_LOG"', "entrant", ...f.command("entrant")],
+      process.cwd(), { ...env, FIXTURE_ENTRANT_LOG: log }, { timeoutMs: 25_000, signal: control.signal }));
+    const stderr = () => fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "";
+    const polls = new Set<number>();
+    await until(() => {
+      const polled = f.db.query<{ polled: number }, []>(`SELECT polled ${queuedTickets}`).get()?.polled;
+      if (polled && polled > held + CPU_QUEUE_SPACING_MS) polls.add(polled);
+      return grants().length > 1 || polls.size >= 3 && stderr().includes("Waiting for legacy heavy commands to drain");
+    }, 10_000, () => new Error(stderr()));
+    expect(grants()).toEqual([{ at: held }]);
+    expect(stat(hookPid)[0]).not.toBe("Z");
+    expect(f.count()).toBe(1);
+    expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
+
+    fs.writeFileSync(release, "release");
+    const outcomes = await Promise.all(pending);
+    expect(outcomes.map(result => result.code), redactBounded(outcomes[0]!.stderr + stderr(), 2_000)).toEqual([0, 0]);
+    expect(grants()).toHaveLength(2);
+    expect(fs.existsSync(`/proc/${hookPid}`)).toBe(false);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("entrant\n");
+    expect(f.count()).toBe(0);
+  } finally {
+    fs.writeFileSync(release, "release");
+    control.abort();
     await Promise.allSettled(pending);
     f.close();
   }
@@ -256,7 +351,7 @@ for (const mode of ["portable hooks first-open", "service hooks first-open", "po
         LLV_GATE_PSI_RELEASE_SECONDS: "0", DELEGATUS_CPU_PRESSURE: "on", DELEGATUS_AGENT_CPU: "off", CPU_SLOT_STDERR: log(name),
         LLV_GATE_PUBLICATION_ID: name, LLV_OWNED_RUN_TIMEOUT_MS: "25000", LLV_GATE_SANDBOX_RECORD: undefined, LLV_GATE_PUSH_DEADLINE: undefined };
       if (olderHead) {
-        // Route through the same host-only PATH binding supplied by the
+        // Route through the same host-only interpreter binding supplied by the
         // launcher. The fixture's Bun shim still stands in for the check.
         const bun = path.join(publication.dir, "shims", "bun");
         fs.writeFileSync(bun, fs.readFileSync(bun, "utf8").replace("#!/bin/bash\n", `#!/bin/bash

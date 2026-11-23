@@ -391,7 +391,13 @@ export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.Proces
   try {
     const helper = path.join(path.dirname(resolveSignalTooling().gate), "cpu-admission.ts");
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-    const nativeBun = source.LLV_GATE_BUN || process.execPath;
+    const parent = path.join(os.homedir(), ".cache/delegatus/gate-admission");
+    let nativeBun = source.LLV_GATE_BUN || process.execPath;
+    // Launch and publication can both apply this binding. Rebind the helper
+    // while retaining the caller's original interpreter.
+    if (path.dirname(path.dirname(nativeBun)) === parent && path.basename(nativeBun) === "bun") {
+      nativeBun = fs.readFileSync(path.join(path.dirname(nativeBun), "interpreter"), "utf8");
+    }
     const body = Buffer.from(`#!/bin/bash
 set -eu
 if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
@@ -399,22 +405,10 @@ if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
     --wait|--claim) shift; set -- ${quote(helper)} "$@" ;;
   esac
 fi
-# Find the interpreter behind the installed admission shims. Leave PATH
-# available to later gate invocations spawned by the native interpreter.
-native_bun=$(IFS=: read -ra entries <<< "$PATH:"
-for entry in "\${entries[@]}"; do
-  case "$entry" in */delegatus/gate-admission/*) continue ;; esac
-  entry=\${entry:-.}
-  if [[ -x "$entry/bun" && ! -d "$entry/bun" ]]; then printf '%s' "$entry/bun"; break; fi
-done)
-[[ -n "$native_bun" ]] || { echo 'gate-slot: Bun is unavailable' >&2; exit 127; }
-    exec ${quote(nativeBun)} "$@"
+exec ${quote(nativeBun)} "$@"
 `);
-    const parent = path.join(os.homedir(), ".cache/delegatus/gate-admission");
-    const directory = cacheSignalTooling(parent, new Map([["bun", body]]));
-    const entries = (source.PATH ?? process.env.PATH ?? "").split(path.delimiter)
-      .filter(entry => !entry.startsWith(parent + path.sep));
-    return { LLV_GATE_BUN: path.join(directory, "bun"), PATH: [directory, ...entries].join(path.delimiter) };
+    const directory = cacheSignalTooling(parent, new Map([["bun", body], ["interpreter", Buffer.from(nativeBun)]]));
+    return { LLV_GATE_BUN: path.join(directory, "bun") };
   } catch { return {}; }
 }
 

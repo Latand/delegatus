@@ -158,7 +158,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     if (entry) return { mode: argv[2], entry: fs.realpathSync(entry) };
   };
   const isHookBootstrap = (command: string[], cwd: () => string, readParent: () => string | undefined,
-    readEnv: () => ((key: string) => string | undefined) | undefined) => {
+    readEnv: () => ((key: string) => string | undefined) | undefined, clientIdentity: string | undefined) => {
     // The hook starts a second copy under an owned runner before it queues
     // ESLint or the publication checks. An identical command alone can also
     // be run under a legacy grant, so require its original hook process.
@@ -174,7 +174,8 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     // admission, so it cannot be treated as an unadmitted cleanup bootstrap.
     if (!epoch) return false;
     const prior = history ??= queue.legacyGateHistory(epoch);
-    if (typeof proof.parent.startIdentity !== "string" || prior.retirements.has(proof.parent.startIdentity)) return false;
+    if (!clientIdentity || prior.retirements.has(clientIdentity) ||
+      !proof.parent.startIdentity || prior.retirements.has(proof.parent.startIdentity)) return false;
     const original = parent && hookBootstrap(readArgv(parent), readCwd(parent));
     if (!original || original.mode !== hook.mode || original.entry !== hook.entry) return false;
     // A same-command process launched under an older gate has already crossed
@@ -325,8 +326,10 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
   const isHookRunner = (argv: string[], base: string, parentPid: string | undefined) => {
     const command = argv.slice(argv[2] === "--portable" || argv[2] === "--namespace" ? 3 : 2);
     const cwd = readCwd(base);
-    const bootstrap = isHookBootstrap(command, cwd, () => parentPid ? path.join(proc, parentPid) : undefined, () => readEnvironment(base));
-    if (!bootstrap && !isHookParent(command, cwd)) return false;
+    const clientIdentity = `${path.basename(base)}:${readStat(base)[19]}`;
+    const bootstrap = isHookBootstrap(command, cwd, () => parentPid ? path.join(proc, parentPid) : undefined, () => readEnvironment(base), clientIdentity);
+    const ordinary = isHookParent(command, cwd);
+    if (!bootstrap && !ordinary && !hookBootstrap(command, cwd)) return false;
     const runner = fs.realpathSync(path.resolve(cwd(), argv[1]!));
     const children = childrenOf(base);
     for (const pid of children) {
@@ -346,7 +349,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
           // relationship before treating an unrecorded pre-cutover ticket as
           // a cleanup child. The cutover grant distinguishes a hook already
           // holding admission from one launched afterwards.
-          return bootstrap || waitingGateInService(unit) && (skippedAdmission(base) || unobservedUnretired(base) && bornAfterPriorGrant(base));
+          return bootstrap || ordinary && waitingGateInService(unit) && (skippedAdmission(base) || unobservedUnretired(base) && bornAfterPriorGrant(base));
         }
       }
       if (!bootstrap && args[1] === path.join(path.dirname(runner), "test-child-guardian.ts")) {
@@ -411,8 +414,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
         return !invocation || !/^[0-9a-f]{32}$/.test(invocation) || invocation !== readEnvironment(base)("INVOCATION_ID") ||
           !hookHasQueuedGate(member, base, membership);
       }
-      const parent = env("LLV_OWNED_RUN_PARENT_IDENTITY");
-      return !(parent && isHookBootstrap(command, cwd, () => recordedParent(JSON.parse(parent)), () => env));
+      return !(linked && client.bootstrap && hookBootstrap(command, cwd));
     });
   };
   const readCandidate = (entry: string, services: string[], inspectService = false) => {
@@ -435,7 +437,8 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
         try {
           const launch = JSON.parse(fs.readFileSync(path.join(base, "root", argv[3]!), "utf8"));
           if (isHookBootstrap(serviceCommand(launch.command, argv[1]!), () => launch.cwd,
-            () => recordedParent(launch.parent), () => key => launch.env?.[key])) return false;
+            () => recordedParent(launch.parent), () => key => launch.env?.[key],
+            recordedParent(launch.owner) ? launch.owner.startIdentity : undefined)) return false;
           if (isHookParent(serviceCommand(launch.command, argv[1]!), () => launch.cwd) &&
             !serviceCouldUsePool(base, argv[1]!, argv[3]!)) return false;
           return samePool(launch.env.LLV_GATE_LOCK_DIR, launch.cwd);

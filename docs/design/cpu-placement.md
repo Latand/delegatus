@@ -736,13 +736,12 @@ The same final claim transaction rejects a drain observation if another caller
 admitted work during the check.
 
 Managed Linux stages supply the installed gate helper through a host-local Bun
-launcher in both `PATH` and `LLV_GATE_BUN`, including when a caller already
-selects an explicit interpreter. Wrappers using the drained-ticket protocol
-send both readiness and final claim to that helper, including from older
-checkouts. Each new engine launch receives this routing automatically; a
-waiter's already-running process keeps its launch environment and completes
-under the helper it started with. Slotless wrappers continue to use their
-original protocol.
+launcher in `LLV_GATE_BUN`. The launcher retains an explicit interpreter and
+ordinary hook commands resolve Bun through their own `PATH`. Wrappers send
+both readiness and final claim through the installed helper, including from
+older checkouts. Each new engine launch receives this routing automatically.
+An already-running waiter keeps its launch environment and completes under the
+helper it started with. Slotless wrappers retain their original claim format.
 
 Older installed and checkout wrappers can keep polling during the transition.
 After reaching the wait bound, a current ticket can pass older pressure-only
