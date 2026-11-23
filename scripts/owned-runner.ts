@@ -319,7 +319,7 @@ if (args[0] === "--namespace-guardian") {
   // token to this command's PID. A nested test cannot reuse its parent's token.
   const shell = timedCommand(launch.command, 'export LLV_OWNED_TEST_RUNNER_PID=$$; ');
   const argv = launch.namespace ? sandboxGateEntryCommand(launch.owner, launch.cwd, shell) : shell;
-  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: ["inherit", "inherit", "inherit", "pipe"] });
+  const child = ownFixtureTree(spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: ["inherit", "inherit", "inherit", "pipe"] }));
   const execution = observeCommandExecution(child);
   // Capture before any await; systemd owns every fork in the cgroup from birth.
   const identity = producerCommandIdentity(child.pid);
@@ -336,6 +336,16 @@ if (args[0] === "--namespace-guardian") {
     await stopNotify();
     try { if (saveTasks().denied > 0) code = GATE_TASK_LIMIT_EXIT; }
     catch (error) { console.error(`GATE_TASK_OBSERVATION_FAILED: ${launch.unit}: ${(error as Error).message}`); code = 1; }
+    if (timedOut) {
+      // A test's entry supervisor treats broker EOF as an admission refusal.
+      // Deliver cancellation and wait for that supervisor before closing its
+      // tickets. Systemd still drains the cgroup if descendants remain.
+      try { await stopFixtureProcess(child); }
+      catch (error) {
+        console.error(`owned runner: budget cleanup failed: ${(error as Error).message}`);
+        code = 1;
+      }
+    }
     const survivors = await serviceSurvivors(members, async () => {
       try { await broker.close(); } finally { budget.close(); }
     });

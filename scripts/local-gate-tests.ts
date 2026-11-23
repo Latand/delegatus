@@ -401,7 +401,9 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       const task = gateTaskDiagnostics(output);
       taskPeak = task.peak;
       const cleanupFailure = lines.find(line => line.startsWith("owned runner: budget cleanup failed:"));
-      const refusal = task.failure ?? cleanupFailure;
+      const entryFailure = lines.includes("worker entry refused: worker entry owned children survived cleanup")
+        ? "owned runner: budget cleanup failed: worker entry owned children survived cleanup" : null;
+      const refusal = task.failure ?? cleanupFailure ?? entryFailure;
       if (exitCode !== 0 && refusal) throw new Error(refusal);
       if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, filtered);
