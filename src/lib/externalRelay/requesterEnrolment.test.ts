@@ -11,7 +11,7 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { runAsMcpHttpCaller } from "@/lib/mcp/callerContext";
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
-import { createMcpToolService, MemoryMcpReceiptStore } from "@/lib/mcp/server";
+import { createMcpToolService, MemoryMcpReceiptStore, type McpToolResult } from "@/lib/mcp/server";
 import { appendTeamEvent, recordMessageAuthor } from "@/lib/team/events";
 import { MEMBER_COOKIE, mintSession } from "@/lib/team/sessions";
 import { resetTeamStoreForTests, teamStore, teamStoreFile } from "@/lib/team/store";
@@ -21,7 +21,7 @@ import * as client from "./client";
 import { knownRelay } from "./knownRelays";
 import { elevatedRequesterFor } from "./profile";
 import { requesterCodeMatch, redactRequesterCodes } from "./requesterEnrolment";
-import type { RequesterView } from "./requesterEnrolmentContract";
+import { requesterProposalId, type RequesterView } from "./requesterEnrolmentContract";
 import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
 import { runClaimedRequest } from "./runner";
@@ -56,10 +56,10 @@ function fixture(id: string) {
   const owner = browser("owner");
   const scope = { relay: id, target: target.id };
   const start = { ...scope, action: "start_enrolment", label: "Build reviewer" };
-  function command(operation: object, revision = 0, headers = owner, projectOverride: string | null = project) {
+  function command(operation: object, revision = 0, headers: Record<string, string> = owner, projectOverride: string | null = project) {
     return POST(req({ operation, revision, project: projectOverride, confirmed: true }, headers));
   }
-  const view = (headers = owner) => GET(req(undefined, headers, `?relay=${id}&target=${target.id}`));
+  const view = (headers: Record<string, string> = owner) => GET(req(undefined, headers, `?relay=${id}&target=${target.id}`));
   return { relay, target, owner, scope, start, view, command, browser };
 }
 
@@ -67,6 +67,16 @@ function req(body?: object, headers: Record<string, string> = {}, query = "") {
   return new NextRequest(`${base}/api/external-relay/trusted-requesters${query}`, {
     method: body ? "POST" : "GET", headers: { host: "localhost", ...headers }, ...(body ? { body: JSON.stringify(body) } : {}),
   });
+}
+
+function confirmationId(result: McpToolResult): string {
+  const prefix = "/#relay-requester=";
+  if (!result.ok || typeof result.confirmationPath !== "string" || !result.confirmationPath.startsWith(prefix)) {
+    throw new Error("Expected an MCP requester confirmation link");
+  }
+  const id = requesterProposalId.safeParse(result.confirmationPath.slice(prefix.length));
+  if (!id.success) throw new Error("Invalid MCP requester confirmation ID");
+  return id.data;
 }
 
 function claim(text: string, id: string, target = "clone", author = "u1", replyTo = "other_message") {
@@ -275,7 +285,7 @@ test("MCP checks the registry origin and proposes single-use browser approval wi
   expect(await call(owner.token, list)).toMatchObject({ ok: true, pending: null, entries: [] });
   const started = await call(owner.token, f.start);
   expect(started).toMatchObject({ ok: true, expiresAt: new Date(epoch + 600_000).toISOString() });
-  const proposalId = String(started.confirmationPath).split("=").at(-1);
+  const proposalId = confirmationId(started);
   expect(await (await f.view()).json()).toMatchObject({ pending: null });
   expect((await POST(req({ proposalId, confirmed: true }, tagging))).status).toBe(403);
   const preview = await GET(req(undefined, f.owner, `?proposal=${proposalId}`));
@@ -293,13 +303,13 @@ test("MCP checks the registry origin and proposes single-use browser approval wi
   const confirm = await call(owner.token, { ...args, action: "confirm" });
   expect(confirm).toMatchObject({ ok: true });
   expect(await call(owner.token, { ...args, action: "decline" })).toMatchObject({ ok: true });
-  const approve = String(confirm.confirmationPath).split("=").at(-1);
+  const approve = confirmationId(confirm);
   expect((await POST(req({ proposalId: approve, confirmed: true }, f.browser("owner")))).status).toBe(403);
   expect((await f.command({ ...args, action: "confirm" })).status).toBe(200);
   expect((await POST(req({ proposalId: approve, confirmed: true }, f.owner))).status).toBe(409);
   const remove = await call(owner.token, { ...args, action: "remove" });
   expect(remove).toMatchObject({ ok: true });
-  const removeId = String(remove.confirmationPath).split("=").at(-1);
+  const removeId = confirmationId(remove);
   setSystemTime(epoch + 600_000);
   expect((await POST(req({ proposalId: removeId, confirmed: true }, f.owner))).status).toBe(410);
   expect((await f.view()).status).toBe(200);
