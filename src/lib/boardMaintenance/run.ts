@@ -21,8 +21,9 @@ import type { SeatTickCheckInput } from "@/lib/monitor/types";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { spawnNoticeFinalMessage } from "@/lib/spawnNotice/production";
 import type { ReportSpawnResult } from "@/lib/telegram/reportSpawn";
-import { claimMaintenanceRun, readMaintenanceProject, readMaintenanceRun, maintenanceRuns, previousMaintenanceRun, patchMaintenanceRun } from "./store";
-import { maintenanceRunIsLive, MAINTENANCE_LAUNCH_TIMEOUT_MS, MAINTENANCE_LAUNCH_GRACE_MS, MAINTENANCE_RUN_TIMEOUT_MS, type MaintenanceRun } from "./types";
+import { claimMaintenanceRun, readMaintenanceProject, readMaintenanceRun, maintenanceRuns, previousMaintenanceRun, patchMaintenanceRun, saveMaintenanceAuditLaunch, settleMaintenanceAudit, reconcileLostMaintenanceAuditClaim } from "./store";
+import { buildMaintenanceAuditInput, maintenanceAuditAuthority, auditOperatorCurrent, auditAudienceCurrent } from "./audit";
+import { maintenanceRunIsLive, MAINTENANCE_LAUNCH_TIMEOUT_MS, MAINTENANCE_LAUNCH_GRACE_MS, MAINTENANCE_RUN_TIMEOUT_MS, type MaintenanceRun, type MaintenanceAuditInput, type MaintenanceAuditState } from "./types";
 import { maintenanceBrief, maintenanceCardText, maintenanceCardDetails, parseMaintenanceReport } from "./text";
 import { newestWorkAt, taskWorkEvidence, type TaskWorkEvidence, type WorkerEvidence } from "./evidence";
 
@@ -41,7 +42,8 @@ export interface MaintenanceObservation {
 }
 export interface BoardMaintenancePorts {
   sources: SeatTickSources;
-  launch?: (body: Record<string, unknown>) => Promise<ReportSpawnResult>;
+  launch?: (body: Record<string, unknown>, authorize?: () => void) => Promise<ReportSpawnResult>;
+  auditInput?: (run: MaintenanceRun, sources: SeatTickSources, state?: MaintenanceAuditState) => Promise<MaintenanceAuditInput | undefined>;
   observe?: (run: MaintenanceRun) => Promise<MaintenanceObservation>;
   evidence?: (project: string, now: number, repoDir: string | null) => Promise<TaskWorkEvidence[]>;
   archive?: (run: MaintenanceRun) => void;
@@ -111,9 +113,10 @@ function archiveRun(run: MaintenanceRun, sources: SeatTickSources): void {
   archiveConversationPaths(run.project, "archive", paths, snapshot, { boardFor, applyBoardCommand: (input, record) => applyBoardCommand(input, { registrySnapshot: () => record }) });
 }
 function settle(run: MaintenanceRun, patch: Partial<MaintenanceRun>, ports: BoardMaintenancePorts): void {
+  if (!maintenanceClaimCurrent(run, ports)) return;
   const fresh = readMaintenanceRun(run.runId);
   if (!fresh || !maintenanceRunIsLive(fresh)) return;
-  const next = { ...fresh, ...patch, ...(patch.log ? { log: { ...fresh.log, attention: patch.log.attention, leftAlone: patch.log.leftAlone, verdict: patch.log.verdict } } : {}), endedAt: new Date(ports.sources.now()).toISOString() };
+  const next = { ...fresh, ...patch, ...(patch.log ? { log: { ...fresh.log, attention: patch.log.attention, leftAlone: patch.log.leftAlone, verdict: patch.log.verdict, audit: patch.log.audit } } : {}), endedAt: new Date(ports.sources.now()).toISOString() };
   if (next.failure) next.failure = { ...next.failure, detail: redactMonitorText(next.failure.detail).replace(/\s+/g, " ").slice(0, 300) };
   if (next.taskId) patchCard(next.taskId, { text: maintenanceCardText((ports.locale ?? (() => operatorLocale() ?? "uk"))(), next, ports.timeZone?.() ?? operatorTimeZone() ?? undefined), status: next.state === "succeeded" ? "done" : "blocked", board: next.state === "succeeded" ? "hidden" : "shown", appendLine: `Result: ${next.state} ${next.endedAt}; ${next.failure ? `${next.failure.kind}: ${next.failure.detail}` : `${next.counts.writes} writes on ${next.counts.tasks} tasks${next.log.verdict ? "" : "; no verdict line"}`}.` });
   if (next.state === "succeeded") (ports.archive ?? (r => archiveRun(r, ports.sources)))(next);
@@ -125,7 +128,21 @@ function settle(run: MaintenanceRun, patch: Partial<MaintenanceRun>, ports: Boar
     patchCard(old.taskId, { status: "done", board: "hidden", appendLine: `Superseded by maintenance run ${run.runId} (card ${run.taskId}).` });
     superseded.push(old.taskId);
   }
-  patchMaintenanceRun(run.runId, { ...next, supersededTaskIds: superseded });
+  if (run.audit) settleMaintenanceAudit(run, { ...next, supersededTaskIds: superseded }, () => maintenanceClaimCurrent(run, ports));
+  else patchMaintenanceRun(run.runId, { ...next, supersededTaskIds: superseded });
+}
+/** Re-read after every await; no stale controller may dispatch or publish a prefix. */
+function maintenanceClaimCurrent(run: MaintenanceRun, ports: BoardMaintenancePorts): boolean {
+  const current = readMaintenanceRun(run.runId);
+  const project = readMaintenanceProject(run.project);
+  if (!current || !maintenanceRunIsLive(current) || project?.currentRunId !== run.runId || JSON.stringify(current.seat) !== JSON.stringify(run.seat) || current.conversationId !== run.conversationId || current.launchId !== run.launchId) return false;
+  if (run.audit) {
+    if (run.audit.operator && !auditOperatorCurrent(run.audit) || run.audit.authority && !auditAudienceCurrent(run.audit, ports.sources)) return false;
+    if (project.audit?.revision !== run.audit.revision || run.audit.authority !== undefined && run.audit.authority !== maintenanceAuditAuthority(run, ports.sources)) return false;
+    const seat = ports.sources.seatFor(run.project).active;
+    if (!seat || seat.conversationId !== run.seat.conversationId || seat.seatEpoch !== run.seat.seatEpoch) return false;
+  }
+  return true;
 }
 /** The engine the maintainer row launches on: what a refused launch ran on. */
 function maintainerEngine(): { engine?: "claude" | "codex" } {
@@ -160,9 +177,25 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
   }
   if (!run.repoDir) { settle(run, { state: "failed", failure: { kind: "no-repository", detail: "project repository could not be found" } }, ports); return "maintenance: failed, no repository"; }
   if (!run.launchBody) {
+    const originalRun = run;
+    const authority = maintenanceAuditAuthority(run, ports.sources);
+    const preparationCurrent = () => maintenanceClaimCurrent(run, ports) && authority === maintenanceAuditAuthority(run, ports.sources);
     const tasks = ports.sources.tasks();
     const previous = previousMaintenanceRun(run.project, run.runId);
     const evidence = await (ports.evidence ?? ((project, now, cwd) => maintenanceWorkEvidence(project, now, ports.sources, cwd)))(run.project, ports.sources.now(), run.repoDir);
+    if (!preparationCurrent()) { reconcileLostMaintenanceAuditClaim(run, "claim replaced during preparation", undefined, ports.sources.now()); return "maintenance: claim replaced"; }
+    const audit = await (ports.auditInput ?? buildMaintenanceAuditInput)(run, ports.sources, readMaintenanceProject(run.project)?.audit);
+    const candidateAudit = audit;
+    if (!preparationCurrent()) { reconcileLostMaintenanceAuditClaim(run, "claim replaced during audit preparation", candidateAudit, ports.sources.now()); return "maintenance: claim replaced"; }
+    if (audit) {
+      audit.revision++;
+      run = { ...run, audit };
+      const seat = ports.sources.seatFor(run.project).active;
+      if (!seat || seat.conversationId !== run.seat.conversationId || seat.seatEpoch !== run.seat.seatEpoch) {
+        reconcileLostMaintenanceAuditClaim(originalRun, "seat replaced during audit preparation", candidateAudit, ports.sources.now());
+        return "maintenance: seat replaced";
+      }
+    }
     if (deferMaintenanceAdmission(run, ports)) return "maintenance: held for the automatic update";
     const holding = taskSeatHoldingSnapshot();
     let deployment: ReturnType<SeatTickSources["latestDeployment"]> = { state: "ok", value: null };
@@ -171,7 +204,14 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
     const brief = maintenanceBrief({ run, previous, previousCardText: tasks.find(t => t.id === previous?.taskId)?.text ?? null, seatTaskIds: tasks.filter(t => t.project === run.project && holding(t) === "holds").map(t => t.id), productionLine, mergeOnReview: mergeOnReviewEnabled(run.project), evidence, openCount: tasks.filter(t => t.project === run.project && t.status !== "done").length, now: ports.sources.now() });
     const body = { role: "maintainer", roleParams: {}, cwd: run.repoDir, project: run.project, "prompt": brief, title: tasks.find(t => t.id === run.taskId)?.text.split("\n")[0], taskId: run.taskId, clientAttemptId: run.runId, mcpServers: ["viewer"], notifyLauncher: false };
     // Persist the exact spawn payload before dispatch; restart replays the same digest.
-    run = patchMaintenanceRun(run.runId, { state: "launching", launchBody: body })!;
+    const saved = run.audit ? saveMaintenanceAuditLaunch(run.runId, run.audit, body, () => {
+      const seat = ports.sources.seatFor(originalRun.project).active;
+      return maintenanceClaimCurrent(originalRun, ports) && authority === maintenanceAuditAuthority(originalRun, ports.sources)
+        && (!run.audit?.authority || auditAudienceCurrent(run.audit, ports.sources))
+        && seat?.conversationId === originalRun.seat.conversationId && seat.seatEpoch === originalRun.seat.seatEpoch;
+    }) : patchMaintenanceRun(run.runId, { state: "launching", launchBody: body });
+    if (!saved) { reconcileLostMaintenanceAuditClaim(run, "claim replaced before dispatch", audit, ports.sources.now()); return "maintenance: claim replaced"; }
+    run = saved;
   }
   if (!maintenanceRunIsLive(run)) return "maintenance: already settled";
   if (!wakesEnabled()) return "maintenance: paused while wakes are off";
@@ -182,10 +222,19 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
     run = patchMaintenanceRun(run.runId, { launchedAt: new Date(ports.sources.now()).toISOString(), admissionDeferred: false })!;
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const response = await Promise.race([
-    (ports.launch ?? launchMaintenanceConversation)(run.launchBody!),
-    new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ports.launchTimeoutMs ?? MAINTENANCE_LAUNCH_TIMEOUT_MS); }),
-  ]).finally(() => { if (timer) clearTimeout(timer); });
+  const authorize = () => { if (!maintenanceClaimCurrent(run, ports) || !wakesEnabled() || maintenanceScheduleHold(run, ports)) throw Error("maintenance authority changed"); };
+  authorize();
+  let response: ReportSpawnResult | null;
+  try {
+    response = await Promise.race([
+      (ports.launch ?? launchMaintenanceConversation)(run.launchBody!, authorize),
+      new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ports.launchTimeoutMs ?? MAINTENANCE_LAUNCH_TIMEOUT_MS); }),
+    ]).finally(() => { if (timer) clearTimeout(timer); });
+  } catch (error) {
+    if (!maintenanceClaimCurrent(run, ports)) reconcileLostMaintenanceAuditClaim(run, "claim replaced during dispatch", undefined, ports.sources.now());
+    throw error;
+  }
+  if (!maintenanceClaimCurrent(run, ports)) { reconcileLostMaintenanceAuditClaim(run, "claim replaced after worker observation", undefined, ports.sources.now()); return "maintenance: claim replaced"; }
   if (!response) return "maintenance: launch pending";
   if (response.body.code === "AUTO_UPDATE_DRAIN") {
     patchMaintenanceRun(run.runId, { admissionDeferred: true });
@@ -211,13 +260,14 @@ export async function reconcileBoardMaintenance(project: string, ports: BoardMai
   }
   if (run.state === "launching" && (!run.launchedAt || run.admissionDeferred)) return launchRun(run, ports);
   const observed = await (ports.observe ?? (r => observeMaintenanceRun(r, ports.sources)))(run);
+  if (!maintenanceClaimCurrent(run, ports)) { reconcileLostMaintenanceAuditClaim(run, "claim replaced after worker observation", undefined, ports.sources.now()); return "maintenance: claim replaced"; }
   if (observed.conversationId) run = patchMaintenanceRun(run.runId, { conversationId: observed.conversationId, launchId: observed.launchId ?? run.launchId, transcriptPath: observed.path ?? run.transcriptPath })!;
   if (observed.state === "failed") settle(run, { state: "failed", failure: observed.failure ?? { kind: "launch-failed", detail: "launch failed" } }, ports);
   else if (observed.state === "ended") {
     if (observed.turnError) settle(run, { state: "failed", failure: { kind: "turn-error", detail: observed.turnError } }, ports);
     else {
-      const parsed = parseMaintenanceReport(observed.finalText ?? "");
-      const failureKind = parsed.verdict === "fail" ? "agent-fail" : parsed.verdict === "needs_decision" ? "needs-decision" : null;
+      const parsed = parseMaintenanceReport(observed.finalText ?? "", run.audit, ports.sources.tasks());
+      const failureKind = parsed.verdict === "fail" || run.audit && (parsed.audit?.error || parsed.verdict === null) ? "agent-fail" : parsed.verdict === "needs_decision" ? "needs-decision" : null;
       settle(run, { state: failureKind ? "failed" : "succeeded", log: { ...run.log, ...parsed }, failure: failureKind ? { kind: failureKind, detail: (observed.finalText ?? "").slice(-300) || "The run cannot continue without an operator decision." } : null }, ports);
     }
   } else if (ports.sources.now() - Date.parse(run.launchedAt ?? run.claimedAt) > MAINTENANCE_RUN_TIMEOUT_MS) settle(run, { state: "failed", failure: { kind: "timed-out", detail: "maintenance turn exceeded 90 minutes" } }, ports);
