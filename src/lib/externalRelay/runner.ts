@@ -815,9 +815,9 @@ export async function runClaimedRequest(
     if (owner && request.delivery === "guest") retainOwnerReplyChain(request, owner.messageId);
     // The local runner binds Viewer calls for owner chat turns and handoffs.
     // Legacy claims without chat scope can still use a bound Cloud repository.
-    let repositoryBoundOwner = cloud && !!owner && !handoffOnly;
-    let usingCloud = cloud && (!owner || repositoryBoundOwner && !!cloudEnvironment(configuredTarget!, true));
-    if (!intentOwner && repositoryBoundOwner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
+    let repositoryBoundOwner = !intentOwner && cloud && !!owner && !handoffOnly;
+    let usingCloud = !intentOwner && cloud && (!owner || repositoryBoundOwner && !!cloudEnvironment(configuredTarget!, true));
+    if (repositoryBoundOwner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
     const authority = conversationAuthority(request.input.requester, !!owner);
     const canUseConversation = () => request.delivery !== "guest" && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let usesConversation = !intentOwner && canUseConversation();

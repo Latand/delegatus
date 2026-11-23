@@ -384,6 +384,8 @@ for (const cloudTarget of [false, true]) for (const pairedProject of ["project-b
       ...(["project-a", null].includes(pairedProject) ? { project: "project-b" } : {}) };
     const accepted = "Queued for the Example recipient orchestrator.";
     const question = "Which project should receive this?";
+    const previousBindings = process.env.LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS;
+    if (cloudTarget && delivery === "owner" && pairedProject === "project-b") process.env.LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS = "{";
     try {
       const result = await runClaimedRequest(paired, wire, undefined, { timeoutMs: 10000, ownerIntentCommand: ownerIntentFixture(root, true), ownerPorts: {
         launch: async input => {
@@ -442,7 +444,11 @@ for (const cloudTarget of [false, true]) for (const pairedProject of ["project-b
         expect(delivered[0].text).toContain(linkedIssueText);
         expect(delivered[0].text).toContain(screenshotDescription);
       }
-    } finally { select.mockRestore(); await server.close(); }
+    } finally {
+      if (previousBindings === undefined) delete process.env.LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS;
+      else process.env.LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS = previousBindings;
+      select.mockRestore(); await server.close();
+    }
   }, 20000);
 }
 
