@@ -186,6 +186,67 @@ process.on("SIGTERM", () => process.exit(0));
   } finally { rmSync(fixture, { recursive: true, force: true }); }
 });
 
+test("the home Codex bundle is present only for the desktop launch", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "newcomer-bundle-"));
+  try {
+    const preload = join(fixture, "fixture.cjs");
+    // Run the CI entry point with a local installer fixture and record the
+    // filesystem and PATH at each attempted launcher start.
+    writeFileSync(preload, `
+const child = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const { syncBuiltinESMExports } = require("node:module");
+const { mkdtempSync } = fs;
+const { spawnSync } = child;
+Object.defineProperty(process, "platform", { value: "darwin" });
+fs.mkdtempSync = () => mkdtempSync(path.join(process.env.TMPDIR, "rehearsal-"));
+child.spawnSync = (file, args, options) => {
+  const command = args[1];
+  const install = options.env.BUN_INSTALL;
+  if (command.startsWith("curl -fsSL https://bun.com/install")) {
+    const bin = path.join(install, "bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, "bun"), "", { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "delegatus-mcp"), "", { mode: 0o755 });
+    return { status: 0, stdout: "" };
+  }
+  if (command === "bun --version") return { status: 0, stdout: "1.4.0" };
+  if (command.startsWith("bun add -g ")) {
+    const pkg = path.join(install, "install/global/node_modules/delegatus-cli");
+    fs.mkdirSync(pkg, { recursive: true });
+    fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"delegatus-cli","version":"2.2.0"}');
+    return { status: 0, stdout: "" };
+  }
+  if (command === "bun pm bin -g") return { status: 0, stdout: path.join(install, "bin") };
+  if (/^(claude|codex) (--version|mcp add viewer )/.test(command)) return spawnSync(file, args, options);
+  throw new Error("Unexpected fixture command");
+};
+child.spawn = (_file, _args, { env }) => {
+  const bundle = path.join(env.HOME, "Applications/Codex.app/Contents/Resources/codex");
+  const firstOnPath = path.basename(env.PATH.split(path.delimiter)[0]);
+  console.log(JSON.stringify({ firstOnPath, bundlePresent: fs.existsSync(bundle) }));
+  throw new Error("Fixture launch recorded");
+};
+syncBuiltinESMExports();
+`);
+    const driver = join(import.meta.dir, "newcomer-install.mjs");
+    const result = Bun.spawnSync(["node", "--require", preload, driver, "fixture.tgz", join(fixture, "report")], {
+      env: { ...process.env, TMPDIR: fixture }, timeout: 4_000,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("Fixture launch recorded");
+    expect(result.stdout.toString().trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+      { firstOnPath: "bin", bundlePresent: false },
+      { firstOnPath: "path-claude", bundlePresent: false },
+      { firstOnPath: "path-codex", bundlePresent: false },
+      { firstOnPath: "bin", bundlePresent: true },
+    ]);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test("package identity comes from the installed manifest and omits an unrecognized revision", () => {
   const fixture = mkdtempSync(join(tmpdir(), "newcomer-package-"));
   try {
