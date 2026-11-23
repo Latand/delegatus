@@ -403,8 +403,8 @@ test("multibyte titles and paths obey service byte budgets and paginate without 
 });
 
 
-// Persisting the 10000-row fixture shares the capped publication runner with
-// other checks. Assert read counts and replay scope with room for that setup.
+// Seeding both 10,000-row stores shares CPU with publication checks. The
+// assertions below measure keyed reads and replay work directly.
 test("real service uses keyed reads and replays only changed selection rows on a 10000-card board", async () => {
   const { taskSelectionSource } = await import("@/lib/tasks/store");
   const { pipelineSelectionSource, buildPipeline, pipelineIdentity, withDeliveryMutation } = await import("@/lib/pipelines/store");
@@ -498,4 +498,4 @@ test("real service uses keyed reads and replays only changed selection rows on a
   expect(pipelineIndex.work.metadataRows - beforePipelines).toBe(2);
   console.log(`Indexed 10000-card service: changed-ID reads=1, single task update metadata=1, single pipeline update metadata=1`);
   } finally { process.env.LLV_STATE_DIR = previousState; }
-}, 240_000);
+}, 90_000);

@@ -1,18 +1,25 @@
 import { redactMonitorText } from "@/lib/monitor/redact";
 import { detectedVerdict } from "@/lib/spawnNotice/sweep";
-import type { MaintenanceRun, MaintenanceRunLog, MaintenanceAttention, MaintenanceLeftAlone, MaintenanceFailureKind } from "./types";
+import type { MaintenanceRun, MaintenanceRunLog, MaintenanceAttention, MaintenanceLeftAlone, MaintenanceSeatHandoff, MaintenanceFailureKind } from "./types";
 import { workEvidenceLines, type TaskWorkEvidence } from "./evidence";
 import { maintenanceDecision } from "./decision";
 export { maintenanceDecision } from "./decision";
 
-export function parseMaintenanceReport(text: string): Pick<MaintenanceRunLog, "attention" | "leftAlone" | "verdict"> {
+export function parseMaintenanceReport(text: string): Pick<MaintenanceRunLog, "attention" | "leftAlone" | "seat" | "verdict"> {
   const attention: MaintenanceAttention[] = [];
   const leftAlone: MaintenanceLeftAlone[] = [];
+  const seat: MaintenanceSeatHandoff[] = [];
   for (const line of text.split(/\r?\n/)) {
-    const match = /^\s*(attention|left):\s*(.+)$/i.exec(line);
+    const match = /^\s*(attention|left|seat):\s*(.+)$/i.exec(line);
     if (!match) continue;
     const [id, body, ...options] = match[2].split(" | ").map(s => redactMonitorText(s.trim()).slice(0, 300));
     if (!/^(?:[a-f0-9]{8,32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i.test(id) || !body) continue;
+    if (match[1].toLowerCase() === "seat") {
+      if (seat.length < 200 && options.length === 1 && options[0]) {
+        seat.push({ taskId: id, reason: body, action: options[0] });
+      }
+      continue;
+    }
     const last = options.at(-1);
     const nextStep = last?.startsWith("waits:") ? last.slice(6).trim() : undefined;
     const choices = (nextStep ? options.slice(0, -1) : options).filter(Boolean).slice(0, 3);
@@ -20,7 +27,7 @@ export function parseMaintenanceReport(text: string): Pick<MaintenanceRunLog, "a
       if (attention.length < 40) attention.push({ taskId: id, text: body, options: choices, nextStep });
     } else if (leftAlone.length < 200) leftAlone.push({ taskId: id, reason: body });
   }
-  return { attention, leftAlone, verdict: detectedVerdict(text) as MaintenanceRunLog["verdict"] };
+  return { attention, leftAlone, seat, verdict: detectedVerdict(text) as MaintenanceRunLog["verdict"] };
 }
 export function maintenanceCardDetails(run: MaintenanceRun): string {
   return `Delegatus board maintenance run ${run.runId}.\nStarted by the seat tick of ${run.project} at ${run.claimedAt}; interval ${run.intervalHours} h. Delegatus manages this card: closed and hidden on success, blocked on failure. Run log: seat_tick_settings verbose, maintenance.lastRunLog.`;
@@ -54,12 +61,12 @@ export function maintenanceCardText(locale: "uk" | "en", run: MaintenanceRun, ti
   return locale === "uk" ? `${title}\nDelegatus запустив агента, який перевіряє відкриті задачі проєкту: пайплайни, агентів, PR і те, чи робота справді йде. Він виправляє статуси, дописує новини для людини та створює продовження частково виконаних задач. Після роботи тут з’явиться підсумок і картка зникне з дошки.`
     : `${title}\nDelegatus started an agent that checks this project's open tasks, pipelines, agents and pull requests. It corrects statuses, writes news for the operator and creates continuations of partly shipped tasks. When it finishes, a summary appears here and the card leaves the board.`;
 }
-export function maintenanceBrief(input: { run: MaintenanceRun; previous: MaintenanceRun | null; previousCardText: string | null; seatTaskIds: string[]; productionLine: string; mergeOnReview: boolean; evidence: TaskWorkEvidence[]; openCount: number; now: number }): string {
+export function maintenanceBrief(input: { run: MaintenanceRun; previous: MaintenanceRun | null; previousCardText: string | null; seatTaskIds: string[]; productionLine: string; mergeOnReview: boolean; evidence: TaskWorkEvidence[]; openCount: number; now: number; waiting?: { operator: number; lines: string[] } }): string {
   const { run, previous } = input;
-  const boundedList = (heading: string, lines: string[], bound: number) => {
+  const boundedList = (heading: string, lines: string[], bound: number, overflow = "seat_tick_settings verbose reads the full record") => {
     let result = heading + "\n";
     for (let i = 0; i < lines.length; i++) {
-      if (result.length + lines[i].length > bound - 100) { result += `and ${lines.length - i} more (seat_tick_settings verbose reads the full record)\n`; break; }
+      if (result.length + lines[i].length > bound - 100) { result += `and ${lines.length - i} more (${overflow})\n`; break; }
       result += lines[i] + "\n";
     }
     return result;
@@ -69,21 +76,28 @@ export function maintenanceBrief(input: { run: MaintenanceRun; previous: Mainten
     `Card summary: ${(input.previousCardText ?? "unread").slice(0, 600)}`,
     boundedList(`Changed (${previous.counts.writes}; ${previous.log.omittedChanges} omitted; ${previous.log.logGaps} log gaps):`, previous.log.changes.map(c => `- ${c.taskId} ${c.tool}: ${c.fields.join(", ")}${c.statusFrom ? ` ${c.statusFrom} → ${c.statusTo}` : ""}${c.titleTo ? ` title ${c.titleFrom ?? "new"} → ${c.titleTo}` : ""}`), 2600),
     boundedList(`Asked (${previous.log.attention.filter(maintenanceDecision).length}):`, previous.log.attention.filter(maintenanceDecision).map(a => `- ${a.taskId} | ${a.text} | ${a.options.join(" | ")}`), 1400),
+    boundedList(`Handed to the seat (${previous.log.seat.length}):`, previous.log.seat.map(a => `- ${a.taskId} | ${a.reason} | ${a.action}`), 1400),
     boundedList(`Left alone (${previous.log.leftAlone.length}):`, previous.log.leftAlone.map(a => `- ${a.taskId} | ${a.reason}`), 1000),
   ].join("\n") : "No earlier run for this project.";
   const completion = `Project mergeOnReview: ${input.mergeOnReview ? "on" : "off"}; confirm the current setting with get_orchestrator. ${input.mergeOnReview ? "When on, all pull requests merged means Done, provided nothing promised remains open and no pipeline or live agent remains." : "When off, an open task in a project that ships by deploy stays open until its merged work is deployed, unless no deploy is needed."} Never reopen an existing Done task only because deployment is pending or unread. Deployment progress belongs in its note: "Змерджено #N. Чекає деплою." while pending; "Розгорнуто <sha>" after a successful deploy containing the merge (localize to the operator's interface language). Reopening requires new evidence such as a reverted PR or a promised part still open.`;
-  return `Board maintenance run ${run.runId} for project ${run.project}.\nRepository: ${run.repoDir}\nYour run's card: ${run.taskId}. Delegatus manages it.\nThe orchestrator seat's card: ${input.seatTaskIds.join(", ") || "none found; confirm with get_orchestrator"}.\nProduction: ${input.productionLine} ${completion}\nThis run started ${run.claimedAt}. The previous run started ${previous?.claimedAt ?? "never"}; use it as updatedSince for the done-task check.\n\n${section}\nThe record is history. Confirm every decision from current state.\nWork evidence Delegatus measured at ${new Date(input.now).toISOString()}, for ${input.evidence.length} of ${input.openCount} open tasks. Confirm before you act:\n${workEvidenceLines(input.evidence, input.now).map(l => `- ${l}`).join("\n")}`;
+  const waiting = input.waiting ? "\n" + boundedList(
+    `Waiting routing Delegatus measured (${input.waiting.operator} need the operator, ${input.waiting.lines.length} routed to the seat or agents):`,
+    input.waiting.lines, 10_000, "continue the Waiting inventory with list_tasks and get_task",
+  ) : "";
+  return `Board maintenance run ${run.runId} for project ${run.project}.\nRepository: ${run.repoDir}\nYour run's card: ${run.taskId}. Delegatus manages it.\nThe orchestrator seat's card: ${input.seatTaskIds.join(", ") || "none found; confirm with get_orchestrator"}.\nProduction: ${input.productionLine} ${completion}\nThis run started ${run.claimedAt}. The previous run started ${previous?.claimedAt ?? "never"}; use it as updatedSince for the done-task check.\n\n${section}\nThe record is history. Confirm every decision from current state.\nWork evidence Delegatus measured at ${new Date(input.now).toISOString()}, for ${input.evidence.length} of ${input.openCount} open tasks. Confirm before you act:\n${workEvidenceLines(input.evidence, input.now).map(l => `- ${l}`).join("\n")}${waiting}`;
 }
-export function maintenanceItemLabel(run: Pick<MaintenanceRun, "state" | "endedAt" | "failure" | "counts" | "log" | "claimedAt" | "launchedAt" | "intervalHours">): string {
+export function maintenanceItemLabel(run: Pick<MaintenanceRun, "state" | "endedAt" | "failure" | "counts" | "log" | "claimedAt" | "launchedAt" | "intervalHours">, seatEntries = run.log.seat ?? []): string {
   const c = run.counts;
   const decisions = run.log.attention.filter(maintenanceDecision);
+  const seat = run.log.seat ?? [];
+  const handoffs = seatEntries.length ? ` For the seat (${seat.length} total): ${seatEntries.map(a => `${a.taskId}: ${a.reason.slice(0, 100)} — ${a.action.slice(0, 300)}`).join(". ")}.` : "";
   if (run.state === "failed") {
     const prefix = `board maintenance failed ${run.endedAt}: ${run.failure?.kind}: ${run.failure?.detail}. ${c.tasks} task(s) changed in ${c.writes} write(s) (status ${c.status}, closed ${c.closed}, created ${c.created}, text ${c.text}, details ${c.details}, looks ${c.looks}); for the operator (${decisions.length}): `;
     const attention = decisions.slice(0, 5).map(a => `${a.taskId}: ${a.text}${a.options.length ? ` [${a.options.join(" / ")}]` : ""}`).join("; ");
     const tail = ` The card stays blocked; next run after ${new Date(Date.parse(run.launchedAt ?? run.claimedAt) + run.intervalHours * 3_600_000).toISOString()}. Full list: seat_tick_settings verbose.`;
-    return (prefix + attention + tail).slice(0, 1200);
+    return prefix + attention.slice(0, Math.max(0, 1200 - prefix.length - handoffs.length - tail.length)) + handoffs + tail;
   }
   const prefix = `board maintenance finished ${run.endedAt}; ${c.tasks} task(s) changed in ${c.writes} write(s) (status ${c.status}, closed ${c.closed}, created ${c.created}, text ${c.text}, details ${c.details}, looks ${c.looks}); for the operator (${decisions.length}): `;
   const tail = " File routine outcomes as completed reports. Ask the operator only for an unresolved choice that blocks the next step; apply the seat's mandate first. seat_tick_settings verbose holds the full list.";
-  return prefix + decisions.slice(0, 5).map(a => `${a.taskId}: ${a.text}${a.options.length ? ` [${a.options.join(" / ")}]` : ""}`).join("; ").slice(0, Math.max(0, 1200 - prefix.length - tail.length)) + tail;
+  return prefix + decisions.slice(0, 5).map(a => `${a.taskId}: ${a.text}${a.options.length ? ` [${a.options.join(" / ")}]` : ""}`).join("; ").slice(0, Math.max(0, 1200 - prefix.length - handoffs.length - tail.length)) + handoffs + tail;
 }

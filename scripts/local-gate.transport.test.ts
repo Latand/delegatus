@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +15,12 @@ const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
 const nativeTest = test.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arch));
 afterEach(() => { for (const dir of roots.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+// The publisher under test routes admission from its own environment, as the
+// Viewer does. Give it the fixture's gate interpreter: the `bun` on the
+// fixture's PATH only stands in for checks.
+const inheritedGateBun = process.env.LLV_GATE_BUN;
+beforeAll(() => { process.env.LLV_GATE_BUN = process.execPath; });
+afterAll(() => { if (inheritedGateBun === undefined) delete process.env.LLV_GATE_BUN; else process.env.LLV_GATE_BUN = inheritedGateBun; });
 const { fixture, nativeFixture, touchedChecks, commitFixtureInputs, httpFixture } = createPublicationFixtures(root, roots);
 
 nativeTest("a first cold native publication completes one check phase before one gated push", async () => {

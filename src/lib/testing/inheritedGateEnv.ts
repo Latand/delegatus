@@ -1,3 +1,5 @@
+import { gateAdmissionInterpreter } from "../runtime/gateAdmissionLauncher";
+
 /** What a run under gate-slot, or inside a stage agent, hands to its test
  * process: the held slot lease, the owned runner's context, the CPU wait
  * ledgers and slice, and the stage task's CPU priority binding (which names
@@ -20,10 +22,15 @@ export const INHERITED_GATE_ENV = [
  * signal-domain marker unless `keepSandbox`. Keys are set to `undefined`, never
  * deleted: helpers such as realExec spread `process.env` under the fixture's
  * environment, so a deleted key comes back from the test process, and spawn
- * omits an undefined one. */
+ * omits an undefined one. A managed stage's LLV_GATE_BUN can be the installed
+ * admission launcher, which sends `--wait` and `--claim` to the installed
+ * helper; the fixture's gates get the interpreter it recorded, so they run
+ * the checkout's own cpu-admission.ts. */
 export function withoutInheritedGate<T extends NodeJS.ProcessEnv>(env: T, options: { keepSandbox?: boolean } = {}): T {
   const keys: string[] = [...INHERITED_GATE_ENV];
   if (!options.keepSandbox) keys.push("LLV_SIGNAL_SANDBOX");
   for (const key of keys) (env as NodeJS.ProcessEnv)[key] = undefined;
+  const interpreter = gateAdmissionInterpreter(env.LLV_GATE_BUN);
+  if (interpreter !== undefined) (env as NodeJS.ProcessEnv).LLV_GATE_BUN = interpreter ?? undefined;
   return env;
 }

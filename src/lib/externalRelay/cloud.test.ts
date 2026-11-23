@@ -289,7 +289,7 @@ test.each([false, true])(`Cloud WebSocket sends the selected model ${model ?? "d
 for (const failCloud of [false, true]) test(`owner relay routes through repo Cloud environment${failCloud ? " and falls back locally once on confirmed failure" : ""}`, async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const relay: PairedRelay = { id: "owner_cloud", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
-    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
       project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
@@ -301,13 +301,16 @@ for (const failCloud of [false, true]) test(`owner relay routes through repo Clo
   const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
     engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env },
   } });
-  const raw = { ...contextRequest, request_id: `owner_cloud_${failCloud}`, input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const words = "Summarize the project discussion.";
+  const raw = { ...contextRequest, request_id: `owner_cloud_${failCloud}`, chat: { key: "owner_cloud_chat_fixture" }, input: { ...contextRequest.input, tools: [],
+    conversation: contextRequest.input.conversation.map(message => message.id === contextRequest.input.respond_to ? { ...message, text: words } : message),
+    request_text: words, requester: { ...contextRequest.input.requester, is_owner: true } } };
   try {
     const result = await runClaimedRequest(relay, raw, undefined, { leaseWorker: false,
       cloudTransport: async input => {
         cloudCalls++;
         expect(input).toMatchObject({ environmentId: "repo-env", fullAccess: true });
-        expect(input.prompt).toContain("<owner_request>");
+        expect(input.prompt).toContain(words);
         if (failCloud) throw new CloudFailure(true);
         return JSON.stringify({ action: "reply", text: "Cloud owner answer", reply_to: "m1" });
       },
@@ -316,7 +319,7 @@ for (const failCloud of [false, true]) test(`owner relay routes through repo Clo
     });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: failCloud ? "Local owner answer" : "Cloud owner answer" } });
     expect(cloudCalls).toBe(1); expect(localCalls).toBe(failCloud ? 1 : 0);
-    expect(select).toHaveBeenCalledTimes(failCloud ? 1 : 0);
+    expect(select).toHaveBeenCalledTimes(failCloud ? 2 : 1);
   } finally { select.mockRestore(); repository.close(); await server.close(); }
 });
 
@@ -343,7 +346,7 @@ test("owner Cloud execution completes after heartbeat lease loss and delivers on
     return { body: { status: "ok" } };
   });
   const relay: PairedRelay = { id: "owner_cloud_lease_lost", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
-    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
       project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
@@ -383,7 +386,7 @@ test("owner Cloud trims duplicated optional history and sends one bounded turn",
     return { body: { status: "ok" } };
   });
   const relay: PairedRelay = { id: "owner_cloud_large_prompt", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
-    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
       project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
@@ -414,7 +417,7 @@ test("owner Cloud trims duplicated optional history and sends one bounded turn",
         observe: async () => ({ state: "ended", finalText: "duplicate" }), stop: async () => {} },
     });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud answer" } });
-    expect(cloudCalls).toBe(1); expect(completions).toHaveLength(1); expect(select).not.toHaveBeenCalled();
+    expect(cloudCalls).toBe(1); expect(completions).toHaveLength(1); expect(select).toHaveBeenCalledTimes(1);
   } finally { select.mockRestore(); repository.close(); await server.close(); }
 });
 
@@ -497,7 +500,7 @@ for (const credentialSource of ["relay", "cloud"] as const) for (const rich of [
     });
     const relayCredential = credentialSource === "relay" ? secret : "fixture";
     const relay: PairedRelay = { id: "cloud_scrub", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "", credential: relayCredential,
-      owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+      owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
       limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 32000 },
       targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true,
         engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
@@ -537,7 +540,7 @@ for (const state of ["unresolved", "deleted", "reassigned", "switch-before-launc
   test(`Cloud local owner repository admission: ${state}`, async () => {
     const repository = seedRepository();
     const paired: PairedRelay = { id: "local_cloud", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1", name: "Relay", description: "", credential: "fixture",
-      owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+      owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
       limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
       targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true,
         engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: state === "unresolved" ? "unknown" : repository.project,
@@ -570,7 +573,7 @@ for (const state of ["unresolved", "deleted", "reassigned", "switch-before-launc
         observe: async () => ({ state: "ended", finalText: "Done" }), stop: async () => {}, noExecution: async () => true, pollMs: 1,
       } });
       expect(launches).toBe(state === "valid" ? 1 : 0);
-      if (state !== "valid" && state !== "switch-before-launch") expect(selection).not.toHaveBeenCalled();
+      if (state !== "valid" && state !== "switch-before-launch") expect(selection).toHaveBeenCalledTimes(1);
       if (state === "valid") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
       else if (state === "switch-before-launch") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Your request could not be completed. Please try again." } });
       else expect(result).toMatchObject({ outcome: "failed", reason: "configuration_error", detail: expect.stringContaining("configured project directory") });
@@ -590,7 +593,7 @@ for (const prior of ["none", "action", "unknown", "reassigned", "rich"] as const
     const tool = priorAction ? "write_note" : "lookup_notes";
     const effect = priorAction ? "action" : "read";
     const relay: PairedRelay = { id: "cloud_tools", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1", name: "Relay", description: "", credential: "fixture",
-      owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-10-20T12:00:00Z", paused: false,
+      owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: "2026-10-20T12:00:00Z", paused: false,
       limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
       targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true,
         engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: repository.project, cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
@@ -641,9 +644,17 @@ for (const prior of ["none", "action", "unknown", "reassigned", "rich"] as const
           if (prior === "rich") parts = await relayAnswerOp("conversation_fallback_tools", {
             format: "rich_markdown", buttons: [[{ text: "Open docs", url: "https://example.test/docs" }]],
           });
-          return { state: "ended", finalText: prior === "unknown" ? "[ignore]" : "Done" };
+          return { state: "ended", finalText: "Done" };
         }, stop: async () => {}, pollMs: 1,
       } });
+      if (prior === "unknown") {
+        expect({ launches, cloud }).toEqual({ launches: 0, cloud: 1 });
+        const callIds = calls.map(body => (body as { call_id: string }).call_id);
+        expect([...new Set(callIds)]).toEqual([expect.any(String)]);
+        expect(result).toMatchObject({ outcome: "answered", answer: { text: "The outcome of write_note remains unknown." } });
+        expect(readRunLedger().runs.some(row => row.requestId === "cloud_fallback_tools_unknown")).toBe(false);
+        return;
+      }
       expect(launches).toBe(1);
       expect(cloud).toBe(priorCall ? 2 : 1);
       if (prior === "reassigned") {
@@ -654,8 +665,7 @@ for (const prior of ["none", "action", "unknown", "reassigned", "rich"] as const
         expect(called).toMatchObject({ status: "completed", ...(prior === "none" ? { results: [{ status: "ok" }] } : {}) });
         expect(repeated).toEqual(called);
         expect(calls).toHaveLength(1);
-        expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", ...(prior === "unknown" ? {} : { text: "Done" }) } });
-        if (prior === "unknown") expect(called).toMatchObject({ callsLeft: 0, actionSent: true });
+        expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Done" } });
         if (prior === "rich") {
           expect(parts).toMatchObject({ format: "rich_markdown", buttons: [[{ text: "Open docs" }]] });
           expect(result).toMatchObject({ answer: { format: "rich_markdown", buttons: [[{ text: "Open docs" }]] } });
@@ -793,10 +803,10 @@ test("a Cloud target continues its local Codex owner conversation with the local
       continuation: { conversationId: "conversation_cloud_local", prompt: "Next task" }, onConversation() {},
       ports: {
         launch: async () => { throw new Error("existing conversation must continue"); },
-        continue: async (_turn, _text, target, authorize, repositoryBound) => {
+        continue: async (turn, _text, target, authorize, repositoryBound) => {
           expect(repositoryBound).toBe(true);
           authorize(); sends++; expect(target.engine).toBe("codex"); expect(target.project).toBe(repository.project);
-          return { ok: true, structured: true, target: "conversation_cloud_local", outcome: "held", operationId: "cloud_local_continue" };
+          return { ok: true, structured: true, target: "conversation_cloud_local", outcome: "held", operationId: turn.continuation!.operationId };
         },
         observe: async () => ({ state: "ended", finalText: "Done", firstMessagePending: false }),
         stop: async () => { throw new Error("completed continuation must settle"); }, pollMs: 1,

@@ -890,7 +890,7 @@ test.each(["child", "deploy", "maintenance", "stall"] as const)("legacy retained
     label: "Settlement ".padEnd(500, "s"),
     ...(kind === "child" ? { outcomeId: id, stateTokens: [`${id}@one`] } : {}),
     ...(kind === "deploy" ? { deploy: { deploymentId: id, phase: "succeeded", sha: "a".repeat(40), error: null } } : {}),
-    ...(kind === "maintenance" ? { maintenance: { runId: id } } : {}),
+    ...(kind === "maintenance" ? { maintenance: { runId: id, page: 0, pages: 1 } } : {}),
     ...(kind === "stall" ? { stallToken: `${id}@one` } : {}),
   }));
   const verdict: Extract<import("./types").SeatTickVerdict, { kind: "wake" }> = {
@@ -907,6 +907,7 @@ test.each(["child", "deploy", "maintenance", "stall"] as const)("legacy retained
   delete commit.acknowledgmentLines;
   delete commit.itemLines;
   delete commit.itemsShown;
+  if (kind === "maintenance") commit.announcedMaintenance = ids;
   const outstandingWake = {
     clientMessageId: `legacy-${kind}-wake`, conversationId: CONVERSATION, seatEpoch: 7, operationId: null,
     preparedAt: new Date(NOW - MINUTE).toISOString(), text, commit,
@@ -970,7 +971,7 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
     expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed.map(entry => ({ ...entry, requestedBy: [requestKey] })));
     expect(rig.sent.at(-1)!.text).toContain(`key ${requestKey} and coversOwed: true`);
   }
-  const bullet = `- [maintenance] ${run.taskId} — ${maintenanceItemLabel(run)}`;
+  const bullet = `- [maintenance] ${run.taskId}:1 — ${maintenanceItemLabel(run)}`;
   expect(bullet.length).toBeGreaterThan(1_200);
   /* Both ledgers leave room for the whole item within the two wakes; the
      short labels fit it into the first. */

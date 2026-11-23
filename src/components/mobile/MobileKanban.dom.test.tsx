@@ -1,8 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { ComponentProps } from "react";
-import { flushSync } from "react-dom";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 
 import { setLocale, translate } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -11,7 +10,6 @@ import type { FileEntry } from "@/lib/types";
 import type { SchemeLayout } from "@/components/scheme/layout";
 import type { PatchBody, PatchResult, TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 
-import { MobileKanban } from "./MobileKanban";
 import { createMobileNav, MobileNavContext, type MobileNav } from "./mobileNav";
 import { fakeHistory } from "./mobileNavTestHistory";
 import { receipts, useReceipt } from "./MobileReceipt";
@@ -43,9 +41,11 @@ import { timelineStorageKey } from "@/components/kanban/boardTimelineStore";
 
 const NOW = 1_800_000_000;
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
+Object.defineProperty(dom.HTMLElement.prototype, "scrollIntoView", { configurable: true, writable: true, value: () => {} });
 const G = globalThis as Record<string, unknown>;
 const OVERRIDES: Record<string, unknown> = {
   window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node, HTMLElement: dom.HTMLElement, Element: dom.Element,
+  HTMLInputElement: dom.HTMLInputElement, HTMLSelectElement: dom.HTMLSelectElement,
   Event: dom.Event, KeyboardEvent: dom.KeyboardEvent, MouseEvent: dom.MouseEvent, PointerEvent: dom.PointerEvent,
   sessionStorage: dom.sessionStorage, localStorage: dom.localStorage,
   requestAnimationFrame: (cb: (t: number) => void) => setTimeout(() => cb(0), 0) as unknown as number,
@@ -53,8 +53,11 @@ const OVERRIDES: Record<string, unknown> = {
 };
 const HAS: Record<string, boolean> = {};
 const SAVED: Record<string, unknown> = {};
+for (const key of Object.keys(OVERRIDES)) { HAS[key] = key in G; SAVED[key] = G[key]; G[key] = OVERRIDES[key]; }
+const { flushSync } = await import("react-dom");
+const { createRoot } = await import("react-dom/client");
+const { MobileKanban } = await import("./MobileKanban");
 beforeAll(() => {
-  for (const key of Object.keys(OVERRIDES)) { HAS[key] = key in G; SAVED[key] = G[key]; G[key] = OVERRIDES[key]; }
   setLocale("en");
 });
 afterAll(async () => {
@@ -379,11 +382,21 @@ test("a long-press opens the card's sheet; Move to moves the card at once with U
 
   click(q(sheet, '[data-phone-card-action="move-blocked"]'));
   expect(nav.getState().sheet).toBeNull();
+  expect(cardsIn(host, "blocked")).toEqual([]);
+  expect(cardsIn(host, "assigned")).toEqual(["task:a1", "task:a2"]);
+  const editor = q(host, '[data-phone-hold-editor="a2"] [data-hold-editor]')!;
+  expect(editor).toBeTruthy();
+  const select = q(editor, "select") as HTMLSelectElement;
+  flushSync(() => { select.value = "operator"; select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+  const note = q(editor, "input") as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+  flushSync(() => { setter.call(note, "Grant deployment access"); note.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+  click(q(editor, 'button[type="submit"]'));
   expect(cardsIn(host, "blocked")).toEqual(["task:a2"]);
-  expect(cardsIn(host, "assigned")).toEqual(["task:a1"]);
+  await sleep(20);
   expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Waiting" }));
   await sleep(20);
-  expect(patches.map((entry) => [entry.id, (entry.body as { status?: string }).status])).toEqual([["a2", "blocked"]]);
+  expect(patches.map((entry) => [entry.id, (entry.body as { status?: string; hold?: { note: string } }).status, (entry.body as { hold?: { note: string } }).hold?.note])).toEqual([["a2", "blocked", "Grant deployment access"]]);
 
   /* Undo moves it back through the same guarded queue. */
   click(q(host, "[data-test-undo]"));
@@ -724,11 +737,11 @@ test("released in place, a lifted card opens today's menu, and its click opens n
   expect(ghostOf()).toBeNull();
 });
 
-test("released over a column, a lifted card moves there with the usual receipt; the dock and the ghost go", async () => {
+test("released over Waiting, a lifted card opens the hold editor; saving the reason moves it and clears the dock and ghost", async () => {
   const { files, tasks } = board();
-  const patches: Array<{ id: string; status?: string }> = [];
+  const patches: Array<{ id: string; status?: string; note?: string }> = [];
   const ports: TaskMutationPorts = {
-    patch: async (id, patch) => { patches.push({ id, status: (patch as { status?: string }).status }); return { ok: true, task: task(id, (patch as { status: TaskStatus }).status, [], "Task a2") } as PatchResult; },
+    patch: async (id, patch) => { patches.push({ id, status: (patch as { status?: string }).status, note: (patch as { hold?: { note?: string } }).hold?.note }); return { ok: true, task: { ...task(id, (patch as { status: TaskStatus }).status, [], "Task a2"), hold: (patch as { hold?: BoardTask["hold"] }).hold } } as PatchResult; },
     read: async () => null, changed: () => {},
   };
   const { host } = mount({ files, tasks, ports });
@@ -741,10 +754,19 @@ test("released over a column, a lifted card moves there with the usual receipt; 
     expect(q(dock()!, '[data-phone-dock-tile="blocked"]')!.hasAttribute("data-over")).toBe(true);
     expect(q(dock()!, '[data-phone-dock-tile="inbox"]')!.hasAttribute("data-over")).toBe(false);
     fireOn(card, finger("pointerup", ...tileCenter("blocked")));
+    expect(cardsIn(host, "blocked")).toEqual([]);
+    const editor = q(host, '[data-phone-hold-editor="a2"] [data-hold-editor]')!;
+    expect(editor).toBeTruthy();
+    const select = q(editor, "select") as HTMLSelectElement;
+    flushSync(() => { select.value = "operator"; select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+    const note = q(editor, "input") as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+    flushSync(() => { setter.call(note, "Grant deployment access"); note.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+    click(q(editor, 'button[type="submit"]'));
     expect(cardsIn(host, "blocked")).toEqual(["task:a2"]);
-    expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Waiting" }));
     await sleep(20);
-    expect(patches).toEqual([{ id: "a2", status: "blocked" }]);
+    expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Waiting" }));
+    expect(patches).toEqual([{ id: "a2", status: "blocked", note: "Grant deployment access" }]);
     expect(dock()).toBeNull();
     expect(ghostOf()).toBeNull();
   } finally { restore(); }
