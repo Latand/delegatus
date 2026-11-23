@@ -293,12 +293,12 @@ test("summarizing a quoted project discussion on guest delivery never launches t
         expect(input.prompt).toContain(request.input.instructions!);
         return JSON.stringify({ action: "reply", text: "Here is the summary.", reply_to: null });
       },
-      ownerPorts: { launch: async () => { localLaunches++; throw new Error("ordinary guest chat must use its guest route"); },
+      ownerPorts: { launch: async () => { localLaunches++; return { status: 202, body: { conversationId: "conversation_unexpected_owner" } }; },
         observe: async () => ({ state: "ended", finalText: "Unexpected owner handoff" }), stop: async () => {}, pollMs: 1 },
     });
-    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Here is the summary.", reply_to: null } });
-    expect(cloudCalls).toBe(1);
     expect(localLaunches).toBe(0);
+    expect(cloudCalls).toBe(1);
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Here is the summary.", reply_to: null } });
     const { prompt: intent } = JSON.parse(fs.readFileSync(intentCapture, "utf8"));
     expect(intent).toContain(trigger.text);
     expect(intent).toContain("Please fix the moderation rules in the next release.");
