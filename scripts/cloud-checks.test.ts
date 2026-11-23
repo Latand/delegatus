@@ -145,8 +145,9 @@ test("hosted launch uses the required Cloud profile and exact tree command", asy
     environments: [{ environmentConfigId: config.environmentId, cwd: cwd }],
   });
   expect(fake.calls.find(call => call.method === "turn/start")?.params).toMatchObject({ threadId: "thread-fixture", sandboxPolicy: { type: "dangerFullAccess" } });
-  expect(cloudCommand(job)).toContain("scripts/local-gate.ts pre-push --admitted");
+  expect(cloudCommand(job)).toContain('bun "$setup_source/scripts/local-gate.ts" pre-push --admitted');
   expect(cloudCommand(job)).toContain("LLV_GATE_RUNNER=off");
+  expect(cloudCommand(job)).toContain('LLV_GATE_CANONICAL_TOOLS=1');
 });
 test("model prose cannot supply a Cloud verdict", async () => {
   const fake = fakeRpc("All checks passed");
@@ -310,6 +311,7 @@ test("Cloud maps tracked file inputs and refuses unavailable host paths and exec
     expect(cloudCheckInputs(fixture.dir, { LLV_GATE_CHECK_ENV: "PROBE_FILE,ABSENT", PROBE_FILE: input, LLV_TOKEN: "private", LANG: "uk_UA.UTF-8" })).toEqual({
       ABSENT: null, LANG: "uk_UA.UTF-8", LLV_GATE_CHECK_ENV: "PROBE_FILE,ABSENT", PROBE_FILE: { file: "example.ts" },
     });
+    expect(cloudCheckInputs(fixture.dir, { LLV_GATE_CANONICAL_TOOLS: "1" })).toEqual({});
     for (const name of ["HOME", "PATH", "LLV_STATE_DIR", "LLV_GATE_EXECUTION", "GIT_DIR", "GIT_CONFIG_COUNT", "LLV_SKIP_HOOKS", "XDG_CONFIG_HOME", "BAD-NAME"]) {
       expect(() => cloudCheckInputs(fixture.dir, { LLV_GATE_CHECK_ENV: name, [name]: "1" })).toThrow("input name");
     }
@@ -337,7 +339,7 @@ for (const stale of [false, true]) test(`the bundled command gates the exact can
     const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
     const bundle = path.join(root, "source.bundle"); git("bundle", "create", bundle, "HEAD", `^${base}`);
     const bin = path.join(root, "bin"); mkdirSync(bin);
-    writeFileSync(path.join(bin, "bun"), '#!/bin/sh\nif [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi\ntest "$1 $2 $3" = "scripts/local-gate.ts pre-push --admitted" || exit 99\ntest "$(cat source)" = candidate || exit 98\ntest "$LLV_SKIP_HOOKS" = 0 || exit 97\ntest "$LLV_GATE_PUSH_HEAD" = "$(git rev-parse HEAD)" || exit 96\nif [ "$BUNDLE_MUTATION" = tracked ]; then echo repaired > source; fi\nif [ "$BUNDLE_MUTATION" = untracked ]; then echo repaired > extra.ts; fi\nexit 0\n', { mode: 0o755 });
+    writeFileSync(path.join(bin, "bun"), '#!/bin/sh\nif [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi\ncase "$1" in */scripts/local-gate.ts) ;; *) exit 99;; esac\ntest "$2 $3" = "pre-push --admitted" || exit 99\ntest "$(cat source)" = candidate || exit 98\ntest "$LLV_SKIP_HOOKS" = 0 || exit 97\ntest "$LLV_GATE_CANONICAL_TOOLS" = 1 || exit 95\ntest "$LLV_GATE_PUSH_HEAD" = "$(git rev-parse HEAD)" || exit 96\nif [ "$BUNDLE_MUTATION" = tracked ]; then echo repaired > source; fi\nif [ "$BUNDLE_MUTATION" = untracked ]; then echo repaired > extra.ts; fi\nexit 0\n', { mode: 0o755 });
     for (const mutation of ["none", "tracked", "untracked"]) {
       const upload = path.join(root, "upload"); mkdirSync(upload);
       writeFileSync(path.join(upload, "bundle"), readFileSync(bundle).toString("base64"));

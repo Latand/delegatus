@@ -164,8 +164,8 @@ COPY --from=build /app/bin ./bin
 COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/tsconfig.json ./tsconfig.json
 COPY --from=build /app/src ./src
-COPY --from=build /app/scripts/privacy-known-value-fingerprints.json ./scripts/privacy-known-value-fingerprints.json
-COPY --from=build /app/scripts/whisper_transcribe.py ./scripts/whisper_transcribe.py
+COPY --from=build /app/scripts ./scripts
+COPY --from=build /app/.githooks/pre-push ./.githooks/pre-push
 # The pinned Telegram connector (#1059) is resolved at runtime from
 # /app/vendor — without this line the image ships without it and sign-in
 # dies with start_failed (#1081).

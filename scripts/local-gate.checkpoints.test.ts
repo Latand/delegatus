@@ -410,6 +410,20 @@ test("portable file samples remain fresh even when their assertions pass", () =>
   expect(f.samples()).toEqual({ a: 2, b: 2 });
 }, 60_000);
 
+test("Cloud portable cleanup receipt preserves green files across an incomplete retry", () => {
+  const f = fixture();
+  const noManager = { LLV_GATE_CHECKPOINT_CLEANUP: "cloud-owned-runner", XDG_RUNTIME_DIR: path.join(f.root, "no-manager"),
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(f.root, "no-manager", "bus")}` };
+  const first = f.run(noManager);
+  expect(first.status, first.output).toBe(1);
+  expect(first.output).not.toContain("reused complete green head file a.test.ts");
+  const retry = f.run(noManager);
+  expect(retry.status, retry.output).toBe(1);
+  expect(retry.output).toContain("reused complete green head file a.test.ts");
+  expect(retry.output).not.toContain("reused complete green head file b.test.ts");
+  expect(f.samples()).toEqual({ a: 1, b: 2 });
+}, 60_000);
+
 serviceTest.each(["CHECKPOINT_TEST_MODE", "GIT_AUTHOR_NAME", "LLV_PRIVACY_TEST_MODE", "HTTPS_PROXY"])(
   "a consumed caller environment value invalidates warm checkpoints: %s", name => {
     const f = fixture();

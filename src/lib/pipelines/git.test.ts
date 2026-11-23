@@ -2369,11 +2369,11 @@ test.each([false, true])("a historical candidate gate uses the current checkpoin
     const scripts = path.join(box.subject.worktreeDir, "scripts"); fs.mkdirSync(scripts);
     fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// historical publication gate\n");
     fs.writeFileSync(path.join(scripts, "local-gate-tests.ts"), "// historical deferred-write comparator\n");
-    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), '{"publicationPrepare":0}\n');
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), '{"publicationPrepare":0,"publicationCheckpoints":0}\n');
     const head = await box.commit("change.txt", "accepted work\n");
     let prepared = 0, pushed = 0, observed: Partial<NodeJS.ProcessEnv> | undefined;
     const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
-    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\n[ "$LLV_SKIP_HOOKS" = 1 ] || exit 91\n', { mode: 0o700 });
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\n[ "$LLV_GATE_CANONICAL_TOOLS" = 1 ] || exit 91\n[ "$LLV_SKIP_HOOKS" != 1 ] || exit 92\n', { mode: 0o700 });
     await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (command === "bun" && args[0]?.endsWith("/scripts/local-gate.ts") && args[1] === "pre-push" && args[2] === "--publication-prepare") {
@@ -2385,7 +2385,10 @@ test.each([false, true])("a historical candidate gate uses the current checkpoin
         writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, binding, crypto.createHash("sha256").update("fixture inputs").digest("hex"));
         return { code: 0, stdout: "canonical gate passed", stderr: "" };
       }
-      if (command === "git" && args[0] === "push") { pushed++; observed = env; }
+      if (command === "git" && args[0] === "push") {
+        pushed++; observed = env;
+        return realExec("git", args, cwd, { ...env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: hooks }, options);
+      }
       return realExec(command, args, cwd, env, options);
     };
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
@@ -2396,7 +2399,7 @@ test.each([false, true])("a historical candidate gate uses the current checkpoin
       expect(JSON.stringify(result)).toContain("named assertion");
       expect(await box.originHead()).toBe("");
     } else {
-      expect(observed?.LLV_SKIP_HOOKS).toBe("1");
+      expect(observed?.LLV_SKIP_HOOKS).toBeUndefined();
       expect(await box.originHead()).toBe(head);
     }
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -2408,12 +2411,12 @@ test("an unchanged historical candidate retries through the canonical checkpoint
     const scripts = path.join(box.subject.worktreeDir, "scripts"); fs.mkdirSync(scripts);
     fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// historical publication gate\n");
     fs.writeFileSync(path.join(scripts, "local-gate-tests.ts"), "// historical deferred-write comparator\n");
-    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), '{"publicationPrepare":0}\n');
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), '{"publicationPrepare":0,"publicationCheckpoints":0}\n');
     const head = await box.commit("change.txt", "accepted work\n");
     const tree = await git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
     const checkpoint = path.join(box.root, "completed-file.checkpoint");
     const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
-    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\n[ "$LLV_SKIP_HOOKS" = 1 ] || exit 91\n', { mode: 0o700 });
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\n[ "$LLV_GATE_CANONICAL_TOOLS" = 1 ] || exit 91\n[ "$LLV_SKIP_HOOKS" != 1 ] || exit 92\n', { mode: 0o700 });
     await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
     let preparations = 0, pushes = 0, reused = false;
     const exec: ExecPort = async (command, args, cwd, env, options) => {
@@ -2434,7 +2437,10 @@ test("an unchanged historical candidate retries through the canonical checkpoint
         writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, binding, crypto.createHash("sha256").update("same canonical checks").digest("hex"));
         return { code: 0, stdout: "touched-tests: reused complete green head file a.test.ts\n", stderr: "" };
       }
-      if (command === "git" && args[0] === "push") pushes++;
+      if (command === "git" && args[0] === "push") {
+        pushes++;
+        return realExec("git", args, cwd, { ...env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: hooks }, options);
+      }
       return realExec(command, args, cwd, env, options);
     };
     const first = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });

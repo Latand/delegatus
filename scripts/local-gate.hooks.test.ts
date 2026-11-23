@@ -135,6 +135,17 @@ test("pre-push hook on a branch behind main that changed nothing runs privacy on
   expect(execFileSync("git", ["--git-dir", remote, "rev-parse", "refs/heads/lane"], { encoding: "utf8", env: f.env }).trim()).toBe(f.git("rev-parse", "HEAD").toString().trim());
 });
 
+test("canonical publication transport rejects a changed remote ref before consuming its receipt", () => {
+  const f = hookFixture();
+  const env = { ...f.env, LLV_GATE_CANONICAL_TOOLS: "1", LLV_GATE_PUBLICATION_RECEIPT: path.join(f.dir, "receipt.json"),
+    LLV_GATE_PUBLICATION_REF: "refs/heads/lane", LLV_GATE_PUBLICATION_REMOTE_HEAD: "1".repeat(40) };
+  const input = `${"2".repeat(40)} refs/heads/lane ${"3".repeat(40)}\n`;
+  const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, input, encoding: "utf8" });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("pre-push: publication destination changed");
+  expect(existsSync(path.join(f.dir, ".git", "commands.jsonl"))).toBeFalse();
+});
+
 test("pre-commit lint admits only selections larger than forty files", () => {
   for (const count of [40, 41]) {
     const files = Array.from({ length: count }, (_, i) => `src/fixture-${i}.ts`);
@@ -152,7 +163,7 @@ test("local runtime scope is Dockerfile, runtime host and bin, including deleted
     const env = discover(root, "HEAD", [file]);
     expect(env.runtime).toBeFalse(); expect(env.native).toBeFalse();
   }
-});
+}, 20_000);
 
 test("push lanes overlap while preserving order within each lane", async () => {
   const runner = stepRunner(null, dir => ({

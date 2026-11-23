@@ -1,7 +1,7 @@
 import { hasActiveGateSandbox, recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 import { gateTaskDiagnostics } from "./gate-tasks";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
@@ -335,6 +335,13 @@ interface FileRunOptions {
   onFailure?: () => void;
   onFile?: (run: TestRun, cleanupConfirmed: boolean) => void;
 }
+export function confirmedFileCleanup(input: { platform: string; exitCode: number; survivors?: string; taskPeak?: string | null;
+  output: string; cloudCleanup: boolean; receipt?: string; token: string }): boolean {
+  if (input.platform !== "linux" || input.exitCode !== 0 || input.survivors) return false;
+  if (input.cloudCleanup) return input.receipt === input.token;
+  return !!input.taskPeak && !input.output.includes("portable cleanup")
+    && !input.output.includes("no reachable systemd user manager");
+}
 const fileRunnerPath = (env: NodeJS.ProcessEnv) => `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
 const sharesPortableRunner = () => process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0;
 async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: FileRunOptions): Promise<TestRun> {
@@ -369,6 +376,9 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     env.PATH = fileRunnerPath(env);
     env.NO_COLOR = "1"; env.FORCE_COLOR = "0";
     const report = path.join(privateRoot, "junit.xml"), log = path.join(privateRoot, "output.log");
+    const cleanupReceipt = path.join(privateRoot, "owned-cleanup.complete"), cleanupToken = randomUUID();
+    env.LLV_OWNED_RUN_COMPLETION_RECEIPT = cleanupReceipt;
+    env.LLV_OWNED_RUN_COMPLETION_TOKEN = cleanupToken;
     const fd = openSync(log, "w");
     let result: Bun.Subprocess;
     let exitCode: number;
@@ -412,8 +422,9 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       }
       // Portable cleanup is best effort and can miss detached descendants.
       // Its result remains observable but cannot certify later file reuse.
-      cleanupConfirmed = process.platform === "linux" && exitCode === 0 && !!task.peak && !survivors
-        && !output.includes("portable cleanup") && !output.includes("no reachable systemd user manager");
+      cleanupConfirmed = confirmedFileCleanup({ platform: process.platform, exitCode, survivors, taskPeak: task.peak, output,
+        cloudCleanup: env.LLV_GATE_CHECKPOINT_CLEANUP === "cloud-owned-runner",
+        receipt: existsSync(cleanupReceipt) ? readFileSync(cleanupReceipt, "utf8") : undefined, token: cleanupToken });
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {

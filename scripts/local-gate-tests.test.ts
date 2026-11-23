@@ -1,7 +1,7 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, comparisonPhaseBudgetMs } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, comparisonPhaseBudgetMs, confirmedFileCleanup } from "./local-gate-tests";
 
 test("comparison phase allowance scales from 15 minutes up to 40", () => {
   expect([1, 30, 31, 51, 102, 130, 1_000].map(comparisonPhaseBudgetMs))
@@ -18,6 +18,16 @@ test("only an exhausted comparator budget returns no verdict", () => {
       line: `touched-tests: ${error instanceof Error ? error.message : error}; gate error (blocking)`, code: 1,
     });
   }
+});
+
+test("Cloud file checkpoints require the owned runner's matching cleanup receipt", () => {
+  const cloud = { platform: "linux", exitCode: 0, output: "portable cleanup", cloudCleanup: true, token: "run-token" };
+  expect(confirmedFileCleanup({ ...cloud, receipt: "run-token" })).toBeTrue();
+  expect(confirmedFileCleanup({ ...cloud, receipt: "other-run" })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, receipt: undefined })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, receipt: "run-token", survivors: "owned child" })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, platform: "darwin", receipt: "run-token" })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, exitCode: 1, receipt: "run-token" })).toBeFalse();
 });
 
 

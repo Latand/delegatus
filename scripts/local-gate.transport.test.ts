@@ -97,7 +97,7 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
     if (capability === "absent") fs.rmSync(marker);
     else fs.writeFileSync(marker, capability === "unsupported" ? '{"publicationPrepare":2}' : '{');
     // Historical candidates are checked by the current canonical gate. The
-    // prepared receipt then lets native transport skip the stale candidate hook.
+    // prepared receipt drives the current native hook and trusted transport gate.
     f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json", "scripts/local-gate.ts");
     f.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "legacy gate capability");
     const http = await httpFixture(f, false), previous = loadPipelines();
@@ -117,7 +117,8 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
         if (command === "git" && args[0] === "push") {
           pushes++;
           expect(env?.LLV_GATE_PUBLICATION_RECEIPT).toBeDefined();
-          expect(env?.LLV_SKIP_HOOKS).toBe("1");
+          expect(env?.LLV_SKIP_HOOKS).toBeUndefined();
+          expect(env?.GIT_CONFIG_VALUE_0).toBe(path.join(root, ".githooks"));
         }
         return realExec(command, args, cwd, { ...f.env, ...env }, options);
       };
