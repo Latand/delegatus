@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { formatGuide } from "@/lib/externalRelay/rich.fixture";
+import { ownerIntentFixture, startTestRelay } from "@/lib/externalRelay/testRelay";
 
 // Isolate before importing the route's state-resolving module graph.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-owner-seat-relay-"));
@@ -19,7 +21,7 @@ const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await im
 const { POST } = await import("@/app/api/conversation-host/route");
 const { POST: orchestratorPOST } = await import("@/app/api/orchestrator/message/route");
 const { setConversationHostDependenciesForTests } = await import("@/app/api/conversation-host/dependencies");
-const { viewerMcpBindings, viewerMcpRecoverableTools } = await import("@/lib/mcp/bindings");
+const { viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } = await import("@/lib/mcp/bindings");
 const { createMcpToolService, MemoryMcpReceiptStore, McpDispatchUncertainError } = await import("@/lib/mcp/server");
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { ViewerControlDependencies, ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
@@ -56,9 +58,10 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function actor(project?: string, role = "builder", engine: "claude" | "codex" = "codex") {
+function actor(project?: string, role = "builder", engine: "claude" | "codex" = "codex", handoffOnly = false) {
   const spawn = registry.beginSpawnRequest({ engine, cwd: root, explicitProject: project,
-    launchProfile: { cwd: root, title: "Relay fixture conversation", role: role === "root" ? "root" : "worker" } });
+    launchProfile: { cwd: root, title: "Relay fixture conversation", role: role === "root" ? "root" : "worker",
+      ...(handoffOnly ? { ownerRelayHandoffOnly: true } : {}) } });
   if (spawn.kind !== "created") throw new Error("fixture spawn was not created");
   const receipt = spawn.receipt;
   registry.completeSpawn(receipt.launchId, {
@@ -83,7 +86,7 @@ function request(capability?: string, body: Record<string, unknown> = {}, header
     body: JSON.stringify(body),
   });
 }
-function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerControlDependencies) {
+function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerControlDependencies, onAttribution?: () => void) {
   if (sender) process.env.LLV_SPAWN_CAPABILITY = sender.capability;
   else delete process.env.LLV_SPAWN_CAPABILITY;
   const domain: Partial<ViewerMcpDomainDependencies> = {
@@ -96,9 +99,11 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
     } }),
     attentionAuthority: () => sender ? { kind: "worker", conversationId: sender.id, role: null } : { kind: "unidentified" },
     recoveryPredecessors: () => [],
-    callerAttribution: () => sender
-      ? { kind: "agent", conversationId: sender.id, role: "orchestrator" }
-      : { kind: "unidentified", conversationId: null, role: null },
+    callerAttribution: () => {
+      onAttribution?.();
+      return sender ? { kind: "agent", conversationId: sender.id, role: "orchestrator" }
+        : { kind: "unidentified", conversationId: null, role: null };
+    },
   };
   const posts: string[] = [];
   const transport: ViewerControlDependencies = control ?? {
@@ -111,16 +116,18 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
     },
   };
   const bindings = viewerMcpBindings(undefined, transport, domain as ViewerMcpDomainDependencies);
-  return { bindings, posts, service: createMcpToolService(bindings, new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain as ViewerMcpDomainDependencies) }) };
+  const policy = viewerMcpToolPolicy(domain as ViewerMcpDomainDependencies);
+  return { bindings, policy, posts, service: createMcpToolService(bindings, new MemoryMcpReceiptStore(), policy, { recovery: viewerMcpRecoverableTools(domain as ViewerMcpDomainDependencies) }) };
 }
 
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
 const { procBackend } = await import("@/lib/proc");
-const { reserveRun, changeRun, dropRun, updateRelayStore } = await import("@/lib/externalRelay/store");
+const { reserveRun, changeRun, dropRun, readRunLedger, updateRelayStore } = await import("@/lib/externalRelay/store");
 const { liveOwnerRelayConversation } = await import("@/lib/externalRelay/ownerAuthority");
 const { endRequesterLease, openRequesterLease, requesterLeaseWriter } = await import("@/lib/externalRelay/requesterLease");
 const { ownerTierFor } = await import("@/lib/externalRelay/profile");
 const { runOwnerAgent } = await import("@/lib/externalRelay/ownerRun");
+const { structuredHostAccessPolicy } = await import("@/lib/runtime/structuredSpawn");
 const { requestSchema } = await import("@/lib/externalRelay/protocol");
 const { contextRequest } = await import("@/lib/externalRelay/request.fixture");
 const { loadTasks } = await import("@/lib/tasks/store");
@@ -151,6 +158,143 @@ function ownerRun(sender: ReturnType<typeof actor>, isOwner = true, switchOn = t
 
 function relayArgs(key = "owner-seat-send") {
   return { clientRequestId: key, project: "project-b", text: "Please implement this work.", origin: { kind: "operator" } };
+}
+
+test("ordinary Viewer read policy skips seat and deputy attribution", () => {
+  const sender = actor();
+  let resolutions = 0;
+  const { policy } = toolsFor(sender, undefined, () => { resolutions++; });
+  // The board read binding has its own project-seat scope checks.
+  expect(policy.permit("list_tasks", { project: "project-b" })).toEqual({ allowed: true });
+  expect(resolutions).toBe(0);
+});
+
+test("guest owner Viewer permissions require durable intent and survive pause and settlement", async () => {
+  const sender = actor(undefined, "builder", "codex", true);
+  actor("project-b");
+  ownerRun(sender);
+  const service = toolsFor(sender).service;
+  const handoff = (key: string) => service.callTool("send_message_to_orchestrator", {
+    clientRequestId: key, project: "project-b", text: "Please send the quoted owner request to this seat.",
+  });
+  const assertOrdinaryDenied = async () => {
+    expect(await service.callTool("list_tasks", { project: "project-b" })).toMatchObject({
+      ok: false, code: "tool_not_permitted",
+    });
+  };
+  changeRun("owner-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, rawRequest: { delivery: "guest" } } }));
+  await assertOrdinaryDenied();
+  expect(await handoff("guest-handoff-without-proof")).toMatchObject({ ok: false });
+  expect(delivered).toEqual([]);
+  changeRun("owner-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, seatHandoff: true,
+    rawRequest: { delivery: "guest", input: { requester: { is_owner: true, is_anonymous_admin: false } } },
+    entry: { id: "earlier-switch-target", kind: "paired-owner", tier: "owner", project: null, label: "Paired owner" } } }));
+  for (const requester of [{ is_owner: false, is_anonymous_admin: false }, { is_owner: true, is_anonymous_admin: true }]) {
+    changeRun("owner-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, rawRequest: { delivery: "guest", input: { requester } } } }));
+    expect(await handoff(`invalid-guest-${requester.is_owner}`)).toMatchObject({ ok: false });
+    expect(delivered).toEqual([]);
+  }
+  changeRun("owner-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, rawRequest: {
+    delivery: "guest", input: { requester: { is_owner: true, is_anonymous_admin: false } },
+  } } }));
+  expect(await handoff("live-owner-handoff")).toMatchObject({ ok: true, project: "project-b" });
+  await assertOrdinaryDenied();
+  updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, paused: true })) }));
+  await assertOrdinaryDenied();
+  expect(await handoff("paused-owner-handoff")).toMatchObject({ ok: false });
+  dropRun("owner-request");
+  await assertOrdinaryDenied();
+  expect(await handoff("settled-owner-handoff")).toMatchObject({ ok: false });
+});
+
+test("a native guest handoff reads its ready attachment and delivers its description to the seat", async () => {
+  const { runClaimedRequest, externalRelayTempRoot } = await import("@/lib/externalRelay/runner");
+  const { ownerRunRoot } = await import("@/lib/externalRelay/runDirectory");
+  const { readRelayStore } = await import("@/lib/externalRelay/store");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const attachment = Buffer.from("Moderation issue details\n");
+  const sender = actor(undefined, "builder", "codex", true);
+  const seat = actor("project-b");
+  ownerRun(sender);
+  dropRun("owner-request");
+  const source = contextRequest.input.conversation[0]!;
+  const ref = "ready_project_attachment";
+  const description = "The moderation panel still shows the matching post.";
+  const words = "Could you have them look into this?";
+  const request = requestSchema.parse({ ...contextRequest, target_id: "target", request_id: "ready_attachment_handoff", delivery: "guest",
+    features: ["requester_context", "relay_media_in"], answer: { max_chars: 1000, progress: "none" },
+    input: { ...contextRequest.input, respond_to: "owner-message", request_text: words,
+      requester: { ...contextRequest.input.requester, is_owner: true },
+      tools: contextRequest.input.tools.filter(tool => tool.mode === "handoff"),
+      conversation: [
+        { ...source, id: "linked-issue", text: "The example project has a moderation regression.", reply_to: null,
+          media: [{ ref, kind: "document", availability: "ready", mime_type: "text/plain", filename: "report.txt",
+            byte_size: attachment.length, expires_at: "2099-01-01T00:00:00Z" }] },
+        { ...source, id: "owner-message", text: words, reply_to: "linked-issue" },
+      ],
+      documents: [{ title: "Report", text: description, message_id: "linked-issue", media_ref: ref, extraction: "complete" }],
+    },
+  });
+  let downloads = 0;
+  const server = await startTestRelay(req => {
+    if (!req.url?.endsWith(`/media/${ref}`)) return { body: { status: "ok" } };
+    downloads++;
+    return { headers: { "content-type": "text/plain", "content-length": String(attachment.length) }, raw: attachment };
+  });
+  updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({
+    ...relay, origin: server.origin, api_base: `${server.origin}/v1`,
+    targets: relay.targets.map(target => ({ ...target, engine: "claude", model: "fixture", project: "project-b" })),
+  })) }));
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "claude", accountId: "fixture", kind: "managed", home: root, transcriptRoot: root, env: { ...process.env },
+  } });
+  const service = toolsFor(sender).service;
+  let handoffPrompt = "";
+  try {
+    const result = await runClaimedRequest(readRelayStore().relays[0]!, request, undefined, {
+      leaseWorker: false, ownerIntentCommand: ownerIntentFixture(root, true),
+      ownerPorts: {
+        launch: async input => {
+          handoffPrompt = String(input.prompt);
+          const cwd = String(input.cwd);
+          const dir = fs.realpathSync(ownerRunRoot());
+          expect(path.dirname(cwd)).toBe(dir);
+          expect(dir).not.toBe(externalRelayTempRoot());
+          const [media] = promptSection<Array<{ ref: string; local_path: string }>>(handoffPrompt, "inbound_media");
+          expect(media?.ref).toBe(ref);
+          const relative = path.relative(cwd, media!.local_path);
+          expect(relative).toMatch(/^media-/);
+          // A separate native process reads the path using the worker's launch cwd.
+          const native = Bun.spawn([process.execPath, "-e", "process.stdout.write(require('fs').readFileSync(process.argv[1]))", relative],
+            { cwd, stdout: "pipe", stderr: "pipe" });
+          expect(Buffer.from(await new Response(native.stdout).arrayBuffer())).toEqual(attachment);
+          expect(await native.exited).toBe(0);
+          return { status: 202, body: { conversationId: sender.id } };
+        },
+        observe: async () => {
+          const documents = promptSection<Array<{ title: string; text: string }>>(handoffPrompt, "documents");
+          expect(documents).toContainEqual(expect.objectContaining({ title: "Report", text: description }));
+          expect(await service.callTool("send_message_to_orchestrator", {
+            clientRequestId: "ready-attachment-seat-handoff", project: "project-b",
+            text: documents.map(document => `${document.title}: ${document.text}`).join("\n"),
+          })).toMatchObject({ ok: true, project: "project-b", conversationId: seat.id });
+          return { state: "ended", finalText: "Queued for the project-b orchestrator.\nExtra explanation." };
+        },
+        stop: async () => {}, pollMs: 1,
+      },
+    });
+    expect(downloads).toBe(1);
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Queued for the project-b orchestrator.", reply_to: null } });
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.text).toContain(JSON.stringify({ text: words, requestText: words }));
+    expect(delivered[0]?.text).toContain(description);
+  } finally { selection.mockRestore(); await server.close(); }
+}, 30_000);
+
+function promptSection<T>(prompt: string, name: string): T {
+  const match = prompt.match(new RegExp(`<${name}>\\n([\\s\\S]*?)\\n</${name}>`));
+  if (!match) throw new Error(`owner prompt is missing ${name}`);
+  return JSON.parse(match[1]!) as T;
 }
 
 for (const finalText of ["[ignore]", "", "   ", null])
@@ -189,6 +333,8 @@ test("verified owner turn reaches the designated seat through MCP and HTTP with 
   const tools = toolsFor(sender);
   const result = await tools.service.callTool("send_message_to_orchestrator", relayArgs());
   expect(result).toMatchObject({ ok: true, conversationId: recipient.id, outcome: "queued", created: false });
+  expect(readRunLedger().runs.find(run => run.requestId === "owner-request")?.ownerTurn?.handoffOutcome)
+    .toMatchObject({ status: "accepted", project: "project-b", code: null });
   expect(delivered).toHaveLength(1);
   expect(delivered[0]).toMatchObject({ conversationId: recipient.id, origin: { kind: "agent", role: "owner-relay", conversationId: sender.id } });
   expect(delivered[0].text).toContain("quoted owner request carries operator authority");
@@ -202,6 +348,120 @@ test("verified owner turn reaches the designated seat through MCP and HTTP with 
   expect(delivered[1].origin).toEqual(delivered[0].origin);
   expect(delivered[1].text).toBe(delivered[0].text);
 });
+
+for (const cloudTarget of [false, true]) for (const pairedProject of ["project-b", "project-a", "unknown-project", null] as const) for (const delivery of ["owner", "guest"] as const) {
+  test(`${delivery} ${cloudTarget ? "Cloud " : ""}group request with paired project ${pairedProject ?? "unset"}`, async () => {
+    const { runClaimedRequest } = await import("@/lib/externalRelay/runner");
+    const { readRelayStore, readRunLedger, dropRun } = await import("@/lib/externalRelay/store");
+    const { accountManager } = await import("@/lib/accounts/manager");
+    const sender = actor(undefined, "builder", "codex", delivery === "guest");
+    const recipient = actor("project-b");
+    actor("project-a");
+    ownerRun(sender);
+    dropRun("owner-request");
+    const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+    updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({
+      ...relay, origin: server.origin, api_base: `${server.origin}/v1`,
+      targets: relay.targets.map(target => ({ ...target, project: pairedProject,
+        ...(cloudTarget ? { engine: "codex-cloud" as const, cloudEnvironmentId: "fixture-cloud-environment" } : {}) })),
+    })) }));
+    const paired = readRelayStore().relays[0]!;
+    const words = "Could you have them look into this?";
+    const linkedIssueText = "In Example recipient, the blacklist phrase still leaves matching messages visible.";
+    const screenshotDescription = "Screenshot description: the moderation panel still shows the matching post.";
+    const message = contextRequest.input.conversation[0]!;
+    const projectKey = pairedProject ?? "unset";
+    const wire = requestSchema.parse({ ...contextRequest, ...(delivery === "guest" ? { delivery: "guest" } : {}), target_id: "target", request_id: `owner-request-${delivery}-${projectKey}`,
+      chat: { key: "fixture_group_chat" }, answer: { max_chars: delivery === "owner" ? 32000 : 1000, progress: "none" },
+      ...(delivery === "owner" ? { features: ["relay_rich_messages"] } : {}),
+      input: { ...contextRequest.input, ...(delivery === "owner" ? { format: formatGuide } : {}),
+        ...(delivery === "guest" ? { tools: contextRequest.input.tools.filter(tool => tool.mode === "handoff") } : {}),
+        requester: { ...contextRequest.input.requester, is_owner: true },
+        respond_to: "owner-message", conversation: [
+          { ...message, id: "linked-issue", text: linkedIssueText, reply_to: null },
+          { ...message, id: "owner-message", text: words, reply_to: "linked-issue" },
+        ],
+        documents: [{ title: "Screenshot", text: screenshotDescription, message_id: "linked-issue", extraction: "complete" }],
+      },
+    });
+    const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+      engine: "codex", accountId: "fixture", kind: "managed", home: root, transcriptRoot: root, env: { ...process.env },
+    } });
+    fs.writeFileSync(path.join(root, "auth.json"), "{}");
+    fs.writeFileSync(path.join(root, "models_cache.json"), JSON.stringify({ models: [{ slug: "auto" }] }));
+    const tools = toolsFor(sender);
+    let launchPrompt = "", cloudCalls = 0;
+    const send = { clientRequestId: `group-owner-handoff-${delivery}-${projectKey}`, text: "",
+      ...(["project-a", null].includes(pairedProject) ? { project: "project-b" } : {}) };
+    const accepted = "Queued for the Example recipient orchestrator.";
+    const question = "Which project should receive this?";
+    const previousBindings = process.env.LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS;
+    if (cloudTarget && delivery === "owner" && pairedProject === "project-b") process.env.LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS = "{";
+    try {
+      const result = await runClaimedRequest(paired, wire, undefined, { timeoutMs: 10000, ownerIntentCommand: ownerIntentFixture(root, true), ownerPorts: {
+        launch: async input => {
+          launchPrompt = String(input.prompt);
+          expect(input.mcpServers).toEqual(["viewer"]);
+          if (delivery === "guest") {
+            expect(input).toMatchObject({ ownerRelayHandoffOnly: true, plugins: [] });
+            expect(structuredHostAccessPolicy({ readOnly: true, sandbox: "restricted", ownerRelayHandoffOnly: true }))
+              .toEqual({ readOnly: true, sandbox: "restricted", ownerRelayHandoffOnly: true });
+          }
+          return { status: 202, body: { conversationId: sender.id } };
+        },
+        observe: async () => {
+          const replyContext = promptSection<{ message_id: string }>(launchPrompt, "owner_reply_context");
+          const conversation = promptSection<Array<{ id: string; text?: string }>>(launchPrompt, "conversation");
+          const documents = promptSection<Array<{ title: string; text: string }>>(launchPrompt, "documents");
+          const linkedIssue = conversation.find(row => row.id === replyContext.message_id);
+          expect(linkedIssue?.text).toBe(linkedIssueText);
+          expect(documents).toContainEqual(expect.objectContaining({ title: "Screenshot", text: screenshotDescription }));
+          send.text = `${linkedIssue!.text}\n\n${documents.map(document => `${document.title}: ${document.text}`).join("\n")}`;
+          if (delivery === "guest") {
+            expect(await tools.service.callTool("list_tasks", { project: "project-b" })).toMatchObject({
+              ok: false, code: "tool_not_permitted",
+            });
+          }
+          const handoff = await tools.service.callTool("send_message_to_orchestrator", send);
+          if (pairedProject === "project-b" || pairedProject === "project-a" || pairedProject === null) {
+            expect(handoff).toMatchObject({ ok: true, project: "project-b", conversationId: recipient.id, outcome: "queued" });
+            // The admitted operation keeps its project when the target setting changes.
+            updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({
+              ...relay, targets: relay.targets.map(target => ({ ...target, project: "project-a" })),
+            })) }));
+            expect(await tools.service.callTool("send_message_to_orchestrator", send))
+              .toMatchObject({ ok: true, project: "project-b", replayed: true });
+          } else {
+            expect(handoff).toMatchObject({ ok: false, code: pairedProject ? "unknown_project" : "project_required" });
+          }
+          expect(readRunLedger().runs.find(run => run.requestId === wire.request_id)?.ownerTurn?.handoffOutcome)
+            .toMatchObject({ status: handoff.ok ? "accepted" : "refused", project: handoff.ok ? "project-b" : pairedProject, code: handoff.ok ? null : expect.any(String) });
+          const outcome = handoff.ok ? accepted : question;
+          return { state: "ended", finalText: `${outcome}\n\nThis extra analysis must never be published.\nA third verbose line.` };
+        }, stop: async () => {}, pollMs: 1,
+      }, cloudTransport: async () => { cloudCalls++; return JSON.stringify({ action: "reply", text: "Cloud answer", reply_to: "owner-message" }); } });
+      expect(cloudCalls).toBe(0);
+      expect(result).toMatchObject({ outcome: "answered", answer: {
+        action: "reply", reply_to: delivery === "guest" ? null : "owner-message", text: pairedProject === "unknown-project" ? question : accepted,
+        ...(delivery === "owner" ? { format: "rich_markdown" } : {}),
+      } });
+      if (pairedProject === "unknown-project") {
+        expect(delivered).toEqual([]);
+        expect(tools.posts).toEqual([]);
+      } else {
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]).toMatchObject({ conversationId: recipient.id, origin: { kind: "agent", role: "owner-relay", conversationId: sender.id } });
+        expect(delivered[0].text).toContain(JSON.stringify({ text: words, requestText: null }));
+        expect(delivered[0].text).toContain(linkedIssueText);
+        expect(delivered[0].text).toContain(screenshotDescription);
+      }
+    } finally {
+      if (previousBindings === undefined) delete process.env.LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS;
+      else process.env.LLV_CODEX_CLOUD_PROJECT_ENVIRONMENTS = previousBindings;
+      select.mockRestore(); await server.close();
+    }
+  }, 20000);
+}
 
 async function requesterRun(sender: ReturnType<typeof actor>) {
   ownerRun(sender);
@@ -232,6 +492,10 @@ test("trusted requester handoffs are delivered to the granted project on the MCP
   const sender = actor(); const own = actor("project-b"); const other = actor("project-a");
   await requesterRun(sender);
   const tools = toolsFor(sender);
+  expect(await tools.service.callTool("send_message_to_orchestrator", {
+    clientRequestId: "requester-missing-project", text: "Please investigate this issue.",
+  })).toMatchObject({ ok: false });
+  expect(delivered).toHaveLength(0);
   expect(await tools.service.callTool("send_message_to_orchestrator", { ...relayArgs("cross-project"), project: "project-a" }))
     .toMatchObject({ ok: false, code: "trusted_requester_project_refused" });
   const rejected = await orchestratorPOST(request(sender.capability, {
@@ -313,13 +577,12 @@ test("an owner report reply carries verbatim approval and stored report only to 
 });
 
 for (const approval of [false, true])
-  test(`runner routes ${approval ? "an adjacent approval to its report seat" : "an independent instruction past an unrelated report"} through MCP and HTTP`, async () => {
+  test(`runner routes ${approval ? "an explicit approval reply to its report seat" : "an independent instruction past an unrelated report"} through MCP and HTTP`, async () => {
     const { Database } = await import("bun:sqlite");
     const { appendBridgeReports, recordBridgeReportTelegram } = await import("@/lib/bridge/store");
     const { recordPublishedRelayReference } = await import("@/lib/externalRelay/publishedReferences");
     const { readRelayStore, readRunLedger, dropRun } = await import("@/lib/externalRelay/store");
     const { runClaimedRequest } = await import("@/lib/externalRelay/runner");
-    const { startTestRelay } = await import("@/lib/externalRelay/testRelay");
     const { accountManager } = await import("@/lib/accounts/manager");
     const sender = actor(); const recipient = actor("project-a"); const source = actor("project-b");
     ownerRun(sender);
@@ -347,7 +610,7 @@ for (const approval of [false, true])
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true }, request_text: words, respond_to: "owner-message",
         conversation: [
           { ...contextRequest.input.conversation[0], id: "preceding-report", text: reportText, author: { ...contextRequest.input.conversation[0]!.author, self: true } },
-          { ...contextRequest.input.conversation[0], id: "owner-message", text: `/ai ${words}`, reply_to: null },
+          { ...contextRequest.input.conversation[0], id: "owner-message", text: `/ai ${words}`, reply_to: approval ? "preceding-report" : null },
         ],
       },
     });
@@ -441,10 +704,12 @@ test("owner board fallback creates an assigned task that the seat tick owes as u
     changeFingerprint: "owner-board", state: emptySeatTickState(), policy: DEFAULT_SEAT_TICK_POLICY,
     settings: effectiveSeatTickSettings(defaultSeatTickSettings("project-b"), now, SEAT_TICK_WAKE_INTERVAL_MS),
   });
-  expect(decision.verdict).toMatchObject({ kind: "wake", reasons: [expect.objectContaining({ kind: "unstarted-task" })], items: [expect.objectContaining({ id: task.id })] });
+  expect(decision.verdict).toMatchObject({ kind: "wake", reasons: [expect.objectContaining({ kind: "unstarted-task" })],
+    taskPage: { rows: [expect.objectContaining({ item: expect.objectContaining({ id: task.id }) })] } });
 });
 
 test("ordinary worker board creation keeps its inbox default", async () => {
+  actor("project-b");
   const sender = actor();
   expect(await toolsFor(sender).service.callTool("create_task", withTaskDue({ clientRequestId: "worker-board", project: "project-b", text: "Виконати зміну" }))).toMatchObject({ ok: true });
   expect(loadTasks().find(task => task.text === "Виконати зміну")!.status).toBe("inbox");

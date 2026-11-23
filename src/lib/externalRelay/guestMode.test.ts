@@ -8,7 +8,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { requestSchema, checkedAnswer, guestAnswerSchema, INVALID_REQUESTER_DETAIL, offersHandoff, type ExternalRelayRequest } from "./protocol";
 import { relayClaimBody } from "./poller";
 import { relayCall } from "./client";
-import { ownerTierFor } from "./profile";
+import { ownerTierFor, ownerHandoffFor, elevatedRequesterFor } from "./profile";
 import { ownerAnswer } from "./ownerRun";
 import { answerCapabilities } from "./answerV2";
 import { runClaimedRequest } from "./runner";
@@ -17,10 +17,11 @@ import { validateMediaInput } from "./mediaInputValidation";
 import { prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
 import { newTargetSettings, updateRelayStore, readRunLedger, type PairedRelay } from "./store";
 import { readAnswerRecord } from "./answers";
-import { startTestRelay } from "./testRelay";
+import { ownerIntentFixture, startTestRelay } from "./testRelay";
 import { readConversations } from "./conversations";
 import { CloudFailure } from "./cloud";
 import { richRequest } from "./rich.fixture";
+import { ownerRunRoot } from "./runDirectory";
 
 const dir = path.join(import.meta.dir, "fixtures/relay_v1");
 const source = fs.readFileSync(path.join(dir, "claimed_guest_owner.json"));
@@ -35,6 +36,9 @@ function setGuestRequester(request: ExternalRelayRequest, isOwner: boolean) {
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-guest-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 const home = path.join(root, "account"); fs.mkdirSync(home);
+fs.writeFileSync(path.join(home, "auth.json"), "{}");
+const readyIntent = () => fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "fixture" }, { slug: "gpt-6.1-sol" }] }));
+const ordinaryIntent = () => ownerIntentFixture(root, false);
 const account: AccountContext = { engine: "claude", accountId: "fixture", kind: "managed", home, transcriptRoot: home, env: { ...process.env } };
 const original = accountManager.resolveHeadlessSpawn;
 accountManager.resolveHeadlessSpawn = (() => ({ kind: "available", account })) as typeof original;
@@ -42,7 +46,7 @@ beforeEach(() => fs.rmSync(path.join(root, "state"), { recursive: true, force: t
 afterAll(() => { accountManager.resolveHeadlessSpawn = original; fs.rmSync(root, { recursive: true, force: true }); });
 function paired(origin: string, ownerTier = true): PairedRelay {
   return { id: "guest_fixture", origin, api_base: `${origin}/v1`, name: "Fixture", description: "", credential: "x".repeat(43),
-    owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-10-06T12:00:00Z", paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: "2026-10-06T12:00:00Z", paused: false,
     features: ["progress_steps"], limits: { max_wait_s: 25, max_response_bytes: 1048576, max_answer_chars: 4000 },
     targets: [{ ...newTargetSettings({ target_id: guest().target_id, name: "Fixture", answered_by: "install", fallback: "service" }),
       engine: "claude", model: "fixture", ownerTier, memberLimitPerHour: null }] };
@@ -62,6 +66,38 @@ test("service guest bytes preserve delivery and use the restricted authority sel
     expect(requestSchema.safeParse(hostile).success).toBe(false);
   }
   expect(relayClaimBody(paired("http://127.0.0.1:1")).features).toContain("relay_guest_answers");
+});
+
+for (const principal of ["owner", "trusted", "untrusted", "anonymous"] as const) {
+  test(`guest handoff selector admits only the paired owner (${principal})`, () => {
+    const request = guest();
+    if (principal !== "owner") setGuestRequester(request, false);
+    const relay = paired("http://127.0.0.1:1");
+    const target = relay.targets[0]!;
+    target.project = "project-b";
+    target.requesters = { revision: 1, entries: [
+      { id: "paired", kind: "paired-owner", project: target.project, label: "Paired owner", source: "board", addedAt: relay.pairedAt },
+      { id: "trusted", kind: "requester", key: request.input.requester!.key, project: target.project,
+        label: "Trusted requester", source: "board", addedAt: relay.pairedAt },
+    ] };
+    if (principal === "untrusted") target.requesters.entries = target.requesters.entries.filter(entry => entry.kind !== "requester");
+    if (principal === "anonymous") request.input.requester!.is_anonymous_admin = true;
+    expect(elevatedRequesterFor(relay, target, request, [relay])).toBeNull();
+    const instruction = ownerHandoffFor(relay, target, request, [relay]);
+    if (principal === "owner") expect(instruction?.entry).toMatchObject({ kind: "paired-owner", tier: "owner" });
+    else expect(instruction).toBeNull();
+    expect(requestSchema.safeParse(request).success).toBe(principal !== "anonymous");
+    expect(readRunLedger().runs).toEqual([]);
+    relay.paused = true;
+    expect(ownerHandoffFor(relay, target, request, [relay])).toBeNull();
+  });
+}
+
+test("a paired owner of a different install cannot use guest owner handoff", () => {
+  const request = guest();
+  const relay = paired("http://127.0.0.1:1");
+  const other = { ...relay, id: "other", owner: { ...relay.owner, id: "102" } };
+  expect(ownerHandoffFor(relay, relay.targets[0]!, request, [relay, other])).toBeNull();
 });
 
 test("guest contract refuses direct service tools, progress, destinations and rich output", () => {
@@ -154,7 +190,7 @@ for (const populated of [false, true]) test(`guest handoff and final text valida
   const max = "😀".repeat(request.answer.max_chars);
   expect(checkedAnswer({ action: "reply", text: max, reply_to: null }, request)?.text).toBe(max);
   expect(checkedAnswer({ action: "reply", text: max + "x", reply_to: null }, request)).toBeNull();
-  expect([...ownerAnswer(max + "x", request, owner)!.text]).toHaveLength(request.answer.max_chars);
+  expect([...ownerAnswer(max + "x", request, owner)!.text]).toHaveLength(240);
   expect(ownerAnswer("Done.", request, owner)?.reply_to).toBeNull();
   const server = await startTestRelay(() => { throw Error("handoff tools must stay local"); });
   try {
@@ -164,7 +200,7 @@ for (const populated of [false, true]) test(`guest handoff and final text valida
   } finally { await server.close(); }
 }, 30_000);
 
-for (const ownerTier of [true, false]) for (const populated of [true, false]) for (const handoff of (ownerTier ? [false, true, "late", "timeout"] as const : [false, true] as const))
+for (const ownerTier of [false, true]) for (const populated of [true, false]) for (const handoff of [false, true] as const)
   test(`real guest runner ownerTier=${ownerTier} tools=${populated} handoff=${handoff}`, async () => {
     const request = guest(); if (!populated) request.input.tools = [];
     const beats: unknown[] = [], completions: unknown[] = [], unexpected: string[] = [];
@@ -176,8 +212,10 @@ for (const ownerTier of [true, false]) for (const populated of [true, false]) fo
       else unexpected.push(req.url!);
       return { body: { status: "ok" } };
     });
-    const relay = paired(server.origin, ownerTier); updateRelayStore(s => ({ ...s, relays: [relay] }));
-    let launches = 0, stopped = false;
+    const relay = paired(server.origin, ownerTier);
+    relay.targets[0]!.project = "project-b";
+    updateRelayStore(s => ({ ...s, relays: [relay] }));
+    let launches = 0;
     const stub = path.join(root, "restricted-agent");
     const schemaFile = path.join(root, "schema.json");
     fs.writeFileSync(stub, `#!/usr/bin/env bun
@@ -185,13 +223,13 @@ const a=process.argv.slice(2);await Bun.stdin.text();require('fs').writeFileSync
     fs.chmodSync(stub, 0o700);
     try {
       const claim = await relayCall<{ request: unknown }>(relay.api_base, "/requests/claim", "POST", relayClaimBody(relay), relay.credential);
-      let now = Date.parse("2026-10-06T12:00:01Z");
+      const now = Date.parse("2026-10-06T12:00:01Z");
       const clock = spyOn(Date, "now").mockImplementation(() => now);
       let result;
       let record: ReturnType<typeof readAnswerRecord> = null;
-      try { result = await runClaimedRequest(relay, claim.body!.request, undefined, { leaseWorker: false, command: stub,
+      try { result = await runClaimedRequest(relay, claim.body!.request, undefined, { leaseWorker: false, command: stub, ownerIntentCommand: ordinaryIntent(),
         ownerPorts: { launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_guest_fixture" } }; },
-          observe: async () => { if (handoff === "timeout" && !stopped) return { state: "running" }; if (handoff === "late") now += 601_000; return { state: "ended", finalText: "Unexpected owner launch" }; }, stop: async () => { stopped = true; }, pollMs: 1 } });
+          observe: async () => ({ state: "ended", finalText: "Unexpected owner launch" }), stop: async () => {}, pollMs: 1 } });
         record = readAnswerRecord(relay.id, request.target_id, request.request_id);
       }
       finally { clock.mockRestore(); }
@@ -202,7 +240,7 @@ const a=process.argv.slice(2);await Bun.stdin.text();require('fs').writeFileSync
       expect(beats.length).toBeGreaterThan(0); expect(beats.every(body => !(body as { progress?: unknown }).progress)).toBe(true);
       expect(JSON.parse(fs.readFileSync(schemaFile, "utf8"))).toEqual(guestAnswerSchema);
       expect(record?.profile?.owner ?? false).toBe(false);
-      if (ownerTier && populated && handoff === false) {
+      if (populated && handoff === false) {
         wire.source = { revision: "f27ca4e08746f685f54ea19084c82b5f64403848", file: "claimed_guest_owner.json", bytes: source.length,
           sha256: createHash("sha256").update(source).digest("hex") };
         wire.runner = "ephemeral"; wire.profile = record!.profile; wire.completion = completions[0];
@@ -212,6 +250,148 @@ const a=process.argv.slice(2);await Bun.stdin.text();require('fs').writeFileSync
       }
     } finally { await server.close(); }
   }, 30_000);
+
+test("service-verified owner on guest delivery gets a request-local seat handoff", async () => {
+  const request = guest();
+  const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
+  trigger.reply_to = "linked_issue";
+  request.input.request_text = "Could you have them look into this?";
+  const quotedText = "The blacklist phrase still leaves matching messages visible.";
+  request.input.conversation = [{ ...trigger, text: quotedText }, { ...trigger, id: "linked_issue", reply_to: null,
+    author: { key: "project_owner", name: "Owner", self: false }, text: "The example project has a moderation regression." }];
+  request.input.documents = [{ title: "Screenshot description", text: "The moderation panel still shows the matching post.",
+    message_id: "linked_issue", extraction: "complete" }];
+  expect(requestSchema.safeParse(request).error).toBeUndefined();
+  request.input.conversation.unshift({ ...trigger, id: "guest_history", reply_to: null, text: "PRIVATE_GUEST_HISTORY" });
+  request.input.short_term_memory = "PRIVATE_GUEST_MEMORY";
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const relay = paired(server.origin, true);
+  relay.targets[0]!.project = "project-b";
+  updateRelayStore(state => ({ ...state, relays: [relay] }));
+  let launches = 0;
+  let launchPrompt = "";
+  let launchProfile: Record<string, unknown> = {};
+  const sentRequest: { current: { text: string; requestText: string | null } | null } = { current: null };
+  const intentCapture = path.join(root, "handoff-intent.json");
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerIntentCommand: ownerIntentFixture(root, true, intentCapture), ownerPorts: {
+      launch: async input => {
+        launches++;
+        launchPrompt = String(input.prompt);
+        launchProfile = input;
+        const turn = readRunLedger().runs.find(run => run.requestId === request.request_id)?.ownerTurn;
+        sentRequest.current = turn?.request ?? null;
+        expect(turn).toMatchObject({ seatHandoff: true, entry: { kind: "paired-owner", tier: "owner" } });
+        expect(turn?.leaseDeadlineAt).toBeUndefined();
+        expect(input.mcpServers).toContain("viewer");
+        return { status: 202, body: { conversationId: "conversation_verified_guest_owner" } };
+      },
+      observe: async () => ({ state: "ended", finalText: "Sent to the project-b orchestrator." }),
+      stop: async () => {}, pollMs: 1,
+    } });
+    expect(launches).toBe(1);
+    const { cwd, prompt: intentPrompt } = JSON.parse(fs.readFileSync(intentCapture, "utf8"));
+    expect(path.dirname(path.dirname(path.dirname(cwd)))).toBe(fs.realpathSync(ownerRunRoot()));
+    expect(intentPrompt).toContain("The example project has a moderation regression.");
+    expect(intentPrompt).toContain(request.input.request_text!);
+    expect(intentPrompt).not.toContain("PRIVATE_GUEST_HISTORY");
+    expect(intentPrompt).not.toContain("PRIVATE_GUEST_MEMORY");
+    expect(launchProfile).toMatchObject({ ownerRelayHandoffOnly: true, mcpServers: ["viewer"], plugins: [] });
+    expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner).toBe(true);
+    expect(sentRequest.current).toEqual({ text: quotedText, requestText: request.input.request_text });
+    expect(launchPrompt).toContain(quotedText);
+    expect(launchPrompt).toContain(request.input.request_text!);
+    expect(launchPrompt).toContain("linked_issue");
+    expect(launchPrompt).toContain("Screenshot description");
+    expect(launchPrompt).toContain("moderation panel still shows the matching post");
+    expect(launchPrompt).not.toContain("PRIVATE_GUEST_HISTORY");
+    expect(launchPrompt).not.toContain("PRIVATE_GUEST_MEMORY");
+    expect(readConversations()).toEqual([]);
+    expect(result).toMatchObject({ outcome: "answered", answer: {
+      action: "reply", text: "Sent to the project-b orchestrator.", reply_to: null,
+    } });
+  } finally { await server.close(); }
+}, 30_000);
+
+test("summarizing a quoted project discussion on guest delivery never launches the owner worker", async () => {
+  const request = guest();
+  const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
+  trigger.text = "Summarize the project discussion.";
+  trigger.reply_to = "project_discussion";
+  request.input.request_text = trigger.text;
+  request.input.conversation.unshift({ ...trigger, id: "project_discussion", reply_to: null,
+    author: { key: "participant", name: "Participant", self: false }, text: "Please fix the moderation rules in the next release." });
+  const relay = paired("http://127.0.0.1:1", true);
+  relay.targets[0] = { ...relay.targets[0]!, engine: "codex-cloud", project: "fixture-project", cloudEnvironmentId: "fixture-environment" };
+  readyIntent();
+  const server = await startTestRelay((req, body) => req.url?.endsWith("/claim")
+    ? { body: { request } } : { body: { status: "ok" } });
+  relay.origin = server.origin; relay.api_base = `${server.origin}/v1`;
+  updateRelayStore(state => ({ ...state, relays: [relay] }));
+  let cloudCalls = 0, localLaunches = 0;
+  const intentCapture = path.join(root, "summary-intent.json");
+  try {
+    const claimed = await relayCall<{ request: unknown }>(relay.api_base, "/requests/claim", "POST", relayClaimBody(relay), relay.credential);
+    const result = await runClaimedRequest(relay, claimed.body!.request, undefined, { leaseWorker: false, ownerIntentCommand: ownerIntentFixture(root, false, intentCapture),
+      cloudTransport: async input => {
+        cloudCalls++;
+        expect(input.prompt).toContain(trigger.text);
+        expect(input.prompt).toContain(request.input.instructions!);
+        return JSON.stringify({ action: "reply", text: "Here is the summary.", reply_to: null });
+      },
+      ownerPorts: { launch: async () => { localLaunches++; return { status: 202, body: { conversationId: "conversation_unexpected_owner" } }; },
+        observe: async () => ({ state: "ended", finalText: "Unexpected owner handoff" }), stop: async () => {}, pollMs: 1 },
+    });
+    expect(localLaunches).toBe(0);
+    expect(cloudCalls).toBe(1);
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Here is the summary.", reply_to: null } });
+    const { prompt: intent } = JSON.parse(fs.readFileSync(intentCapture, "utf8"));
+    expect(intent).toContain(trigger.text);
+    expect(intent).toContain("Please fix the moderation rules in the next release.");
+  } finally { await server.close(); }
+}, 30_000);
+
+test("guest delivery cannot enter owner tier when the triggering author mismatches the verified requester", async () => {
+  const request = guest();
+  request.input.conversation.find(message => message.id === request.input.respond_to)!.author.key = "unrelated_member";
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const relay = paired(server.origin, true);
+  updateRelayStore(state => ({ ...state, relays: [relay] }));
+  let launches = 0;
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts: {
+      launch: async () => { launches++; throw new Error("mismatched trigger must not launch owner execution"); },
+      observe: async () => ({ state: "ended", finalText: "Unexpected owner execution." }), stop: async () => {}, pollMs: 1,
+    } });
+    expect(launches).toBe(0);
+    expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner ?? false).toBe(false);
+    expect(result).not.toBeNull();
+  } finally { await server.close(); }
+}, 30_000);
+
+test("an ordinary guest requester receives no owner-tier handoff", async () => {
+  const request = guest();
+  setGuestRequester(request, false);
+  const command = path.join(root, "non-owner-guest-agent");
+  fs.writeFileSync(command, `#!${process.execPath}
+await Bun.stdin.text();
+console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));
+console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{action:'reply',text:'Restricted reply',reply_to:null}}));`);
+  fs.chmodSync(command, 0o700);
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const relay = paired(server.origin, true);
+  updateRelayStore(state => ({ ...state, relays: [relay] }));
+  let ownerLaunches = 0;
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command, ownerPorts: {
+      launch: async () => { ownerLaunches++; throw new Error("a guest requester cannot launch owner execution"); },
+      observe: async () => ({ state: "ended", finalText: "Unexpected owner execution." }), stop: async () => {}, pollMs: 1,
+    } });
+    expect(ownerLaunches).toBe(0);
+    expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner ?? false).toBe(false);
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Restricted reply", reply_to: null } });
+  } finally { await server.close(); }
+}, 30_000);
 
 test("ordinary non-owner claims use the existing restricted member path", () => {
   const request = guest();
@@ -272,7 +452,7 @@ console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{a
     expect(claims).toHaveLength(1);
     expect((claims[0] as { features: string[] }).features).toContain("relay_guest_answers");
     expect((claims[0] as { features: string[] }).features).not.toContain("relay_isolated_requesters");
-    const result = await runClaimedRequest(relay, claimed.body!.request, undefined, { leaseWorker: false, command });
+    const result = await runClaimedRequest(relay, claimed.body!.request, undefined, { leaseWorker: false, command, ownerIntentCommand: ordinaryIntent() });
     expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Done.", reply_to: null } });
     expect(completions).toEqual([result]);
     expect(mediaLeases).toEqual([request.lease_id]);
@@ -350,7 +530,7 @@ ${fails ? "process.exit(1);" : engine === "claude" ? `console.log(JSON.stringify
       // Prime an ordinary owner pin through the production runner, then interleave guest work.
       expect((await runClaimedRequest(relay, clean("owner_prime"), undefined, { leaseWorker: false, ownerPorts }))?.outcome).toBe("answered");
       const pins = readConversations();
-      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command: stub, ownerPorts });
+      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command: stub, ownerIntentCommand: ordinaryIntent(), ownerPorts });
       expect(launches).toBe(1);
       expect(result?.outcome).toBe(fails ? "failed" : "answered");
       const first = JSON.parse(fs.readFileSync(capture, "utf8"));
@@ -370,7 +550,7 @@ ${fails ? "process.exit(1);" : engine === "claude" ? `console.log(JSON.stringify
       expect(launches).toBe(1);
       for (const chat of [request.chat, { key: "other_chat_key_000000" }]) {
         await runClaimedRequest(relay, { ...clean(chat === request.chat ? "guest_follow" : "guest_other", "guest"), chat }, undefined,
-          { leaseWorker: false, command: stub, ownerPorts });
+          { leaseWorker: false, command: stub, ownerIntentCommand: ordinaryIntent(), ownerPorts });
         const next = JSON.parse(fs.readFileSync(capture, "utf8"));
         expect(next.config).not.toBe(first.config);
         for (const marker of markers) expect(next.prompt).not.toContain(marker);
@@ -432,7 +612,7 @@ for (const failure of ["invalid-answer", "fallback-error"] as const)
       const pins = readConversations();
       relay.targets[0]!.engine = "codex-cloud";
       updateRelayStore(s => ({ ...s, relays: [relay] }));
-      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts,
+      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerIntentCommand: ordinaryIntent(), ownerPorts,
         cloudTransport: async input => {
           expect(input.privateContext).toBe(true); expect(input.fullAccess).toBe(false);
           for (const marker of markers) expect(input.prompt).toContain(marker);
@@ -457,7 +637,7 @@ for (const failure of ["invalid-answer", "fallback-error"] as const)
       for (const sameChat of [true, false]) {
         const next = clean(sameChat ? "error_guest_follow" : "error_guest_other", "guest");
         if (!sameChat) next.chat = { key: "error_other_chat_key_000000" };
-        expect((await runClaimedRequest(relay, next, undefined, { leaseWorker: false, ownerPorts,
+        expect((await runClaimedRequest(relay, next, undefined, { leaseWorker: false, ownerIntentCommand: ordinaryIntent(), ownerPorts,
           cloudTransport: async input => {
             for (const marker of markers) expect(input.prompt).not.toContain(marker);
             return JSON.stringify({ action: "reply", text: "Done.", reply_to: null });
@@ -497,7 +677,7 @@ fs.writeFileSync(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:
     for (const first of [true, false]) {
       const request = guest(); request.request_id = first ? "cloud_guest_first" : "cloud_guest_follow";
       request.input.short_term_memory = first ? "PRIVATE_CLOUD_BUSINESS_CANARY" : null;
-      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command,
+      const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command, ownerIntentCommand: ordinaryIntent(),
         cloudTransport: async input => {
           expect(input.privateContext).toBe(true); expect(input.fullAccess).toBe(false);
           contexts.push(input.prompt);
@@ -538,15 +718,19 @@ test(`Codex Cloud hands guest history photos back with ownerTier=${ownerTier}, i
   });
   relay.origin = server.origin; relay.api_base = `${server.origin}/v1`;
   updateRelayStore(s => ({ ...s, relays: [relay] }));
-  let cloudCalls = 0;
+  let cloudCalls = 0, localLaunches = 0;
+  readyIntent();
   try {
     const claimed = await relayCall<{ request: unknown }>(relay.api_base, "/requests/claim", "POST", relayClaimBody(relay), relay.credential);
-    const result = await runClaimedRequest(relay, claimed.body!.request, undefined, { leaseWorker: false,
-      cloudTransport: async () => { cloudCalls++; return JSON.stringify({ action: "reply", text: "Done.", reply_to: null }); } });
+    const result = await runClaimedRequest(relay, claimed.body!.request, undefined, { leaseWorker: false, ownerIntentCommand: ordinaryIntent(),
+      cloudTransport: async () => { cloudCalls++; return JSON.stringify({ action: "reply", text: "Done.", reply_to: null }); },
+      ownerPorts: { launch: async () => { localLaunches++; return { status: 202, body: { conversationId: "conversation_cloud_guest_handoff" } }; },
+        observe: async () => ({ state: "ended", finalText: "Sent to the fixture project seat.\nExtra analysis." }), stop: async () => {}, pollMs: 1 } });
     expect(result).toMatchObject({ outcome: "declined", reason: "handoff",
       detail: "This install cannot inspect guest history photos; the service's own assistant will answer." });
     expect(completions).toEqual([result]);
     expect(cloudCalls).toBe(0);
+    expect(localLaunches).toBe(0);
     expect(urls.some(url => url.includes("/media/"))).toBe(false);
   } finally { await server.close(); }
 }, 30_000);
