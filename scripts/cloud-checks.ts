@@ -175,7 +175,9 @@ export function cloudCommand(job: CloudJob, upload?: { directory: string; source
   const deadlineAt = job.deadlineAt ?? Date.now() + job.timeoutMs;
   return `set -eu
 setup_source=${upload ? quote(upload.source) : '"$PWD"'}
-root="$PWD/.delegatus-cloud-checks"
+git_common=$(git rev-parse --git-common-dir)
+case "$git_common" in /*) ;; *) git_common="$PWD/$git_common" ;; esac
+root="$git_common/delegatus-cloud-checks"
 umask 077
 mkdir -p "$root"
 chmod 700 "$root"

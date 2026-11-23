@@ -37,7 +37,7 @@ test("a receipt for different check inputs cannot authorize publication", async 
 
 test("Cloud commands keep the checkout and its verified file cache while binding the caller deadline", () => {
   const command = cloudCommand({ ...job, deadlineAt: 1_900_000_000_000 });
-  expect(command).toContain('root="$PWD/.delegatus-cloud-checks"');
+  expect(command).toContain('root="$git_common/delegatus-cloud-checks"');
   expect(command).toContain("LLV_GATE_PUSH_DEADLINE='1900000000000'");
   expect(command).toContain('git clean -fdq');
   expect(command).not.toContain('trap .*"$root"');
@@ -45,14 +45,15 @@ test("Cloud commands keep the checkout and its verified file cache while binding
 
 test("a second Cloud command reuses the same bounded per-file cache for its unchanged tree", () => {
   const root = mkdtempSync(path.join(tmpdir(), "cloud-checkpoint-retry-"));
+  const source = path.join(root, "source"); mkdirSync(source);
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid",
     GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.invalid" };
-  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, env, encoding: "utf8", stdio: "pipe" }).trim();
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: source, env, encoding: "utf8", stdio: "pipe" }).trim();
   try {
-    git("init", "-q"); writeFileSync(path.join(root, "source"), "same tree\n");
+    git("init", "-q"); writeFileSync(path.join(source, "source"), "same tree\n");
     git("add", "."); git("commit", "-qm", "Fixture");
     const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
-    const bundle = path.join(root, "fixture.bundle"); git("bundle", "create", bundle, "HEAD");
+    const bundle = path.join(root, "fixture.bundle"); execFileSync("git", ["bundle", "create", bundle, "HEAD"], { cwd: source, env, stdio: "pipe" });
     const bin = path.join(root, "bin"); mkdirSync(bin);
     writeFileSync(path.join(bin, "bun"), `#!/bin/sh
 if [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi
@@ -63,7 +64,7 @@ if [ -e "$cache/completed" ]; then echo reused-complete-file; else touch "$cache
 exit 0
 `, { mode: 0o700 });
     const candidate = { ...job, head, tree, base: head, bundle: readFileSync(bundle).toString("base64"), deadlineAt: 1_900_000_000_000 };
-    const run = () => spawnSync("bash", ["-c", cloudCommand(candidate)], { cwd: root,
+    const run = () => spawnSync("bash", ["-c", cloudCommand(candidate)], { cwd: source,
       env: { ...env, PATH: `${bin}:${env.PATH}` }, encoding: "utf8" });
     const first = run(), second = run();
     expect(first.status, first.stderr).toBe(0);
@@ -71,6 +72,7 @@ exit 0
     expect(second.status, second.stderr).toBe(0);
     expect(second.stdout).toContain("reused-complete-file");
     expect(second.stdout).toContain(`DELEGATUS_GATE ${head} ${tree} ${head}`);
+    expect(git("status", "--porcelain", "--untracked-files=normal")).toBe("");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 test("a receipt missing its input binding cannot authorize publication", async () => {
@@ -85,7 +87,7 @@ test("Cloud time limits are confirmed before fallback", async () => {
   expect([calls, local]).toEqual([2, 1]);
 });
 
-import { AppServerCloudTransport, CloudRpcError, cloudCheckInputs, cloudInputDigest, cloudCommand, connectCloud, rpcFailure, type CloudRpc } from "./cloud-checks";
+import { AppServerCloudTransport, CloudRpcError, cloudCheckInputs, cloudInputDigest, connectCloud, rpcFailure, type CloudRpc } from "./cloud-checks";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import WebSocket, { WebSocketServer } from "ws";
@@ -279,7 +281,7 @@ for (const value of ["1", "0", null]) test(`declared check input has the same lo
     const local = spawnSync(process.execPath, ["scripts/local-gate.ts"], { cwd: root, env: isolatedEnvironment(path.join(root, "local"), checkEnvironment(inherited)) });
     const candidate = { ...job, head, tree, base: head, bundle: readFileSync(bundle).toString("base64"),
       inputs: cloudCheckInputs(root, inputs) };
-    const result = spawnSync("bash", ["-c", cloudCommand(candidate)], {
+    const result = spawnSync("bash", ["-c", cloudCommand(candidate)], { cwd: root,
       env: { ...env, PATH: `${bin}:${env.PATH}`, CHECK_PROBE_FAIL: value === "1" ? "0" : "1" }, encoding: "utf8",
     });
     expect(result.status, result.stderr).toBe(local.status);
@@ -329,7 +331,7 @@ for (const stale of [false, true]) test(`the bundled command gates the exact can
       const upload = path.join(root, "upload"); mkdirSync(upload);
       writeFileSync(path.join(upload, "bundle"), readFileSync(bundle).toString("base64"));
       const candidate = { head, tree, base, inputs: { BUNDLE_MUTATION: mutation, LLV_GATE_CHECK_ENV: "BUNDLE_MUTATION" }, bundle: "", timeoutMs: 1000 };
-      const result = spawnSync("bash", ["-c", cloudCommand(candidate, { directory: upload, source })], { env: { ...env, PATH: `${bin}:${env.PATH}`, BUNDLE_MUTATION: mutation, LLV_SKIP_HOOKS: "1", LLV_GATE_PUSH_HEAD: "wrong-head" }, encoding: "utf8" });
+      const result = spawnSync("bash", ["-c", cloudCommand(candidate, { directory: upload, source })], { cwd: root, env: { ...env, PATH: `${bin}:${env.PATH}`, BUNDLE_MUTATION: mutation, LLV_SKIP_HOOKS: "1", LLV_GATE_PUSH_HEAD: "wrong-head" }, encoding: "utf8" });
       if (mutation === "none") {
         expect(result.status).toBe(0);
         expect(result.stdout).toContain(`DELEGATUS_GATE ${head} ${tree} ${base} ${cloudInputDigest(candidate.inputs)} 0`);

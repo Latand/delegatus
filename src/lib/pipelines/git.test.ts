@@ -2347,7 +2347,7 @@ test.each([false, true])("a historical candidate gate uses the current checkpoin
     fs.writeFileSync(path.join(scripts, "local-gate-tests.ts"), "// historical deferred-write comparator\n");
     fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), '{"publicationPrepare":0}\n');
     const head = await box.commit("change.txt", "accepted work\n");
-    let prepared = 0, pushed = 0, observed: NodeJS.ProcessEnv | undefined;
+    let prepared = 0, pushed = 0, observed: Partial<NodeJS.ProcessEnv> | undefined;
     const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
     fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\n[ "$LLV_SKIP_HOOKS" = 1 ] || exit 91\n', { mode: 0o700 });
     await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
