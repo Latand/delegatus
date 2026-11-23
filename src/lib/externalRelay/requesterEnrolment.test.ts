@@ -25,8 +25,11 @@ import { requesterProposalId, type RequesterView } from "./requesterEnrolmentCon
 import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
 import { runClaimedRequest } from "./runner";
-import { readRelayStore, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
+import { procBackend } from "@/lib/proc";
+import { hasRequesterRelayCustody, liveOwnerRelayConversation } from "./ownerAuthority";
+import { externalRelayFile, readRelayStore, updateRelayStore, updateRunLedger, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
 import { trustedRequesterAuditFile } from "./trustedRequesterStore";
+import type { RelayRunEntry } from "./trustedRequesters";
 
 const epoch = Date.parse("2026-10-01T08:00:00Z");
 const at = new Date(epoch).toISOString();
@@ -107,7 +110,7 @@ function matchRequesterCode(relay: PairedRelay, request: ReturnType<typeof claim
 afterEach(() => {
   setSystemTime();
   resetTeamStoreForTests();
-  for (const file of [teamStoreFile(), teamStoreFile() + "-wal", teamStoreFile() + "-shm", trustedRequesterAuditFile()])
+  for (const file of [teamStoreFile(), teamStoreFile() + "-wal", teamStoreFile() + "-shm", trustedRequesterAuditFile(), externalRelayFile("runs")])
     fs.rmSync(file, { force: true });
 });
 
@@ -316,4 +319,92 @@ test("MCP checks the registry origin and proposes single-use browser approval wi
   recordMessageAuthor({ actor: { kind: "member", memberId: "member" }, conversationId: owner.conversation,
     clientMessageId: "member-turn", text: "Fixture member input" });
   expect(await call(owner.token, list)).toMatchObject({ ok: false });
+});
+
+test("an unreadable audit line never blocks removal, and the view keeps the readable history", async () => {
+  const f = fixture("damaged-audit");
+  const code = (await (await f.command(f.start)).json()).issued.code;
+  await matchRequesterCode(f.relay, claim(code, "candidate"), epoch + 1000);
+  const entryId = (await (await f.view()).json()).pending.id;
+  expect((await f.command({ ...f.scope, action: "confirm", entryId })).status).toBe(200);
+  const file = trustedRequesterAuditFile();
+  const [started, confirmed] = fs.readFileSync(file, "utf8").trim().split("\n");
+  fs.writeFileSync(file, `${started}\n{"time": truncated\nnull\n[1]\n{"action":"unknown","relay":"x"}\n${confirmed}\n`);
+  const listed: RequesterView = await (await f.view()).json();
+  expect(listed.entries.map(entry => entry.id)).toEqual([entryId]);
+  expect(listed.history.map(row => row.action)).toEqual(["confirm", "start_enrolment"]);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect((await f.command({ ...f.scope, action: "remove", entryId }, 1)).status).toBe(200);
+  } finally { warn.mockRestore(); }
+  expect(readRelayStore().relays[0]!.targets[0]!.requesters).toEqual({ revision: 2, entries: [] });
+  const lines = fs.readFileSync(file, "utf8").trim().split("\n");
+  expect(lines).toHaveLength(7);
+  expect(JSON.parse(lines.at(-1)!)).toMatchObject({ action: "remove", entryId, revisionBefore: 1, revisionAfter: 2 });
+  const after: RequesterView = await (await f.view()).json();
+  expect(after).toMatchObject({ entries: [], revision: 2 });
+  expect(after.history.map(row => row.action)).toEqual(["remove", "confirm", "start_enrolment"]);
+});
+
+test("another owner session sees that an enrolment is pending, without its id, label or candidate", async () => {
+  const f = fixture("other-session");
+  const code = (await (await f.command(f.start)).json()).issued.code;
+  await matchRequesterCode(f.relay, claim(code, "candidate"), epoch + 1000);
+  const own: RequesterView = await (await f.view()).json();
+  expect(own).toMatchObject({ pending: { status: "candidate" }, otherSession: null });
+  const second = f.browser("owner");
+  const response = await f.view(second);
+  const text = await response.clone().text();
+  const other: RequesterView = await response.json();
+  expect(other).toMatchObject({ pending: null, otherSession: { expiresAt: new Date(epoch + 600_000).toISOString() }, canStart: true });
+  for (const secret of [own.pending!.id, "Same Display Name", "Fixture group", code]) expect(text.includes(secret)).toBe(false);
+  // The owner's own audit history still names the label; the pending state itself carries only its expiry.
+  expect(Object.keys(other.otherSession!)).toEqual(["expiresAt"]);
+  expect((await f.command(f.start, 0, second)).status).toBe(409);
+  expect((await f.command({ ...f.scope, action: "decline", entryId: own.pending!.id }, 0, second)).status).toBe(403);
+  setSystemTime(epoch + 600_000);
+  expect(await (await f.view(second)).json()).toMatchObject({ pending: { id: own.pending!.id, status: "expired" }, otherSession: null });
+});
+
+test("MCP refuses a root conversation that holds an owner relay run or trusted requester custody", async () => {
+  const f = fixture("relay-run");
+  updateRelayStore(store => ({ ...store, relays: [{ ...f.relay, targets: f.relay.targets.map(target =>
+    target.id === "other" ? { ...target, ownerTier: true } : target) }] }));
+  const root = rootCapability("relay-run-owner");
+  appendTeamEvent(teamStore(), { actor: { kind: "member", memberId: "owner" },
+    action: "agent.started", subject: { kind: "conversation", id: root.conversation, title: null } });
+  const post = async (_path: string, body: Record<string, unknown>, headers?: Record<string, string>) => {
+    const result = await proposal(req(body, headers));
+    if (!result.ok) throw new Error(`request refused ${result.status}`);
+    return result.json();
+  };
+  const service = createMcpToolService(viewerMcpBindings(undefined, { post }), new MemoryMcpReceiptStore());
+  const call = (body: Record<string, unknown>) => runAsMcpHttpCaller({ capability: root.token }, () => service.callTool("relay_trusted_requesters", body));
+  const direct = (body: Record<string, unknown>) => proposal(req(body, { ...internalServiceHeaders("mcp"), [VIEWER_SPAWN_CAPABILITY_HEADER]: root.token }));
+  const list = { ...f.scope, action: "list" };
+  const run = (requestId: string, entry?: RelayRunEntry): RunRecord => ({
+    requestId, leaseId: `${requestId}-lease`, relayId: f.relay.id, targetId: "other", childPid: null, childIdentity: null,
+    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), runDir: "", startedAt: at,
+    conversationId: root.conversation, ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, ...(entry ? { entry } : {}) },
+  });
+  expect(await call(list)).toMatchObject({ ok: true });
+  const cases: [string, RunRecord, () => boolean][] = [
+    ["owner run", run("live_owner_run"), () => liveOwnerRelayConversation(root.conversation)],
+    ["requester custody", run("requester_custody", { id: "custody-entry", kind: "requester", tier: "requester", project, label: "Fixture requester" }),
+      () => hasRequesterRelayCustody(root.conversation)],
+  ];
+  for (const [name, row, holds] of cases) {
+    updateRunLedger(ledger => ({ ...ledger, runs: [row] }));
+    expect([name, holds()]).toEqual([name, true]);
+    for (const body of [list, f.start]) {
+      const refused = await direct(body);
+      expect([name, body.action, refused.status]).toEqual([name, body.action, 403]);
+      expect(JSON.stringify(await refused.json()).includes("relay-requester=")).toBe(false);
+      expect(await call(body)).toMatchObject({ ok: false });
+    }
+    updateRunLedger(ledger => ({ ...ledger, runs: [] }));
+    expect(await call(list)).toMatchObject({ ok: true });
+  }
+  expect(fs.existsSync(trustedRequesterAuditFile())).toBe(false);
+  expect(await (await f.view()).json()).toMatchObject({ pending: null, otherSession: null });
 });

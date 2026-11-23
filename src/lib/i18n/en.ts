@@ -583,6 +583,7 @@ export const en = {
   "externalRelay.requesters.noProject": "Set a project to add a person.",
   "externalRelay.requesters.unassigned": "No project",
   "externalRelay.requesters.share": "Share this code with the person. Ask them to reply to the clone in the group, using @ to mention the clone.",
+  "externalRelay.requesters.otherSession": "An enrolment is already waiting in another owner session. Finish it there; after {time} it can be closed here.",
   "externalRelay.requesters.expires": "Expires at {time}",
   "externalRelay.requesters.verify": "Ask the person to check that “Code received. The owner will confirm.” appeared under their message.",
   "externalRelay.requesters.reach": "Until isolated workspaces exist, this person’s runs can read and change everything this computer’s account can access, including every project, its credentials and its hosts.",

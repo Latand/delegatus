@@ -47088,7 +47088,7 @@ describe("Relay targets answered by another install", () => {
 });
 
 describe("relay requester enrolment on the board", () => {
-  browserTest("renders the five enrolment states at desktop and phone widths", async () => {
+  browserTest("renders the enrolment states at desktop and phone widths", async () => {
     const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "relay-requester-enrolment");
     fs.mkdirSync(out, { recursive: true });
     const build = fs.mkdtempSync(path.join(os.tmpdir(), "requester-board-"));
@@ -47096,7 +47096,7 @@ describe("relay requester enrolment on the board", () => {
     const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
     const sockets = ownedBrowserSocketEnvironment();
     const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
-    const readings: { frame: string; width: number; overflow: boolean; shortControls: number }[] = [];
+    const readings: { frame: string; width: number; overflow: boolean; shortControls: number; splitTimes: number }[] = [];
     try {
       for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         const phone = width === 390;
@@ -47127,7 +47127,7 @@ describe("relay requester enrolment on the board", () => {
             owner: { namespace: "telegram", id: "owner", display_name: "Owner", handle: null }, paused: false, targets: [target] };
           const at = "2026-10-01T08:00:00Z";
           const expiresAt = "2030-10-01T08:10:00Z";
-          let status: "empty" | "waiting" | "candidate" | "entries" = "empty";
+          let status: "empty" | "waiting" | "candidate" | "entries" | "other-session" = "empty";
           await context.route("**/api/external-relay**", async route => {
             const req = route.request();
             const url = new URL(req.url());
@@ -47151,6 +47151,7 @@ describe("relay requester enrolment on the board", () => {
               entries: status === "entries" ? [{ id: "fixture-entry", label, kind: "requester", tier: "requester", project, active: true, addedAt: at }] : [],
               pending: status === "waiting" || status === "candidate" ? { id: "fixture-entry", label, status, expiresAt,
                 candidate: status === "candidate" ? { name: "Demo participant", chatTitle: "Workshop group", at } : null } : null,
+              otherSession: status === "other-session" ? { expiresAt } : null,
               history: [],
             });
           });
@@ -47167,8 +47168,11 @@ describe("relay requester enrolment on the board", () => {
               overflow: element.scrollWidth > element.clientWidth + 1,
               shortControls: phone ? [...element.querySelectorAll("button, input")]
                 .filter(control => control.getBoundingClientRect().height < 44).length : 0,
+              // A date and time renders as one line box, never split across lines.
+              splitTimes: [...element.querySelectorAll("[data-requester-time]")]
+                .filter(time => time.getClientRects().length !== 1).length,
             }), phone);
-            expect(measurement).toEqual({ overflow: false, shortControls: 0 });
+            expect(measurement).toEqual({ overflow: false, shortControls: 0, splitTimes: 0 });
             await panel.screenshot({ path: path.join(out, filename) });
             readings.push({ frame: filename, width, ...measurement });
           };
@@ -47194,10 +47198,16 @@ describe("relay requester enrolment on the board", () => {
           await frame("5-remove-confirmation");
           await panel.getByRole("alertdialog").getByRole("button", { name: action("remove") }).click();
           await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+          status = "other-session";
+          await row.locator("[data-external-relay-target-fold]").click();
+          await row.locator("[data-external-relay-target-fold]").click();
+          await panel.locator('[data-requester-pending="other-session"]').waitFor();
+          expect(await panel.getByRole("textbox").count()).toBe(0);
+          await frame("6-other-session");
         } finally { await context.close(); }
       }
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
-      expect(readings).toHaveLength(40);
+      expect(readings).toHaveLength(48);
     } finally {
       await browser.close();
       server.stop();

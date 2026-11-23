@@ -62,17 +62,22 @@ export async function trustedRequesterView(scope: Location, authorize: Authorize
   const approval = authorize(fresh);
   const { relay, target, project, revision } = current(fresh, scope);
   const item = pendingFor(scope, relay);
+  const now = Date.now();
+  const visible = !!item && (!management || item.session === approval.session || now >= item.expires);
   return {
     relay: scope.relay, target: scope.target, targetName: target.name, project, revision, canStart: approval.canStart,
     entries: requesterEntries(relay, target).map(entry => {
       const binding = bindRequesterEntry(relay, entry, fresh.relays);
       return { ...binding, addedAt: entry.addedAt, active: canonicalRelayProject(entry.project) === project };
     }),
-    pending: item && (!management || item.session === approval.session || Date.now() >= item.expires) ? {
+    pending: item && visible ? {
       id: item.id, label: item.label, expiresAt: new Date(item.expires).toISOString(),
-      status: pendingStatus(item, Date.now(), project, revision),
+      status: pendingStatus(item, now, project, revision),
       candidate: item.candidate ? { name: item.candidate.name, at: item.candidate.at, chatTitle: item.candidate.chatTitle } : null,
     } : null,
+    // Another owner session holds the one enrolment for this target: say so
+    // without its id, label or candidate, so the form is not offered.
+    otherSession: item && !visible ? { expiresAt: new Date(item.expires).toISOString() } : null,
     history: history.map(({ time, action, label, approvedBy, surface }) => ({ time, action, label, approvedBy, surface })),
   };
 }

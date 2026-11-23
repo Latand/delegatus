@@ -31,9 +31,24 @@ async function auditContents(): Promise<Buffer> {
   }
 }
 
+const auditActions = new Set<string>(["start_enrolment", "confirm", "decline", "remove", "expired", "earlier-switch"]);
+
+function auditRow(line: string): RequesterAuditRow | null {
+  let row: unknown;
+  try { row = JSON.parse(line); } catch { return null; }
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  const saved = row as Record<string, unknown>;
+  return typeof saved.time === "string" && typeof saved.action === "string" && auditActions.has(saved.action)
+    && typeof saved.relay === "string" && typeof saved.target === "string" && typeof saved.label === "string"
+    && (saved.surface === "board" || saved.surface === "mcp") ? row as RequesterAuditRow : null;
+}
+
+/** An unreadable line (hand edit, damage) never blocks a later write, above all a removal. */
 function auditRows(contents: Buffer) {
-  return contents.subarray(0, contents.lastIndexOf(10) + 1).toString("utf8").split("\n").filter(Boolean)
-    .map(line => JSON.parse(line) as RequesterAuditRow);
+  const lines = contents.subarray(0, contents.lastIndexOf(10) + 1).toString("utf8").split("\n").filter(Boolean);
+  const rows = lines.flatMap(line => auditRow(line) ?? []);
+  if (rows.length !== lines.length) console.warn("Relay requester audit: skipped unreadable rows", { count: lines.length - rows.length });
+  return rows;
 }
 
 export async function requesterHistory(relay: string, target: string) {

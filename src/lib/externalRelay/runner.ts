@@ -893,7 +893,9 @@ export async function runClaimedRequest(
       startedAt: new Date().toISOString(),
       ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}${recovery ? "-retry" : ""}`,
         ...(recovery ? { restartRetries: 1 as const } : {}),
-        rawRequest: raw, context: owner, ...(ownerExecution ? { delivery: request.owner_delivery } : {}),
+        // Chat history can still carry a reserved enrolment code; recovery
+        // re-derives the same redacted request the run used.
+        rawRequest: redactRequesterCodes(raw), context: owner, ...(ownerExecution ? { delivery: request.owner_delivery } : {}),
         ...(owner.entry ? { entry: owner.entry } : {}),
         ...(requesterTier ? { leaseDeadlineAt: serviceDeadline.at } : {}),
         request: { text: owner.text, requestText: owner.requestText },

@@ -33,5 +33,7 @@ export type RequesterView = {
     id: string; label: string; expiresAt: string; status: "waiting" | "candidate" | "contested" | "expired" | "stale";
     candidate: { name: string; chatTitle: string | null; at: string } | null;
   } | null;
+  /** An enrolment started in another owner session; nothing about it beyond its expiry. */
+  otherSession: { expiresAt: string } | null;
   history: { time: string; action: string; label: string; approvedBy: string; surface: "board" | "mcp" }[];
 };

@@ -582,6 +582,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.requesters.noProject": "Виберіть проєкт, щоб додати людину.",
   "externalRelay.requesters.unassigned": "Без проєкту",
   "externalRelay.requesters.share": "Передайте людині цей код. Попросіть відповісти клону в групі й додати до коду згадку клона через @.",
+  "externalRelay.requesters.otherSession": "Додавання вже очікує в іншому сеансі власника. Завершіть його там; після {time} його можна закрити тут.",
   "externalRelay.requesters.expires": "Дійсний до {time}",
   "externalRelay.requesters.verify": "Попросіть людину перевірити, чи під її повідомленням з’явилася відповідь «Code received. The owner will confirm.».",
   "externalRelay.requesters.reach": "До появи ізольованих просторів запуски цієї людини можуть читати й змінювати все, до чого має доступ обліковий запис на цьому комп’ютері, зокрема всі проєкти, їхні облікові дані та хости.",
