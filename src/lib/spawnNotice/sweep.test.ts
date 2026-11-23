@@ -17,12 +17,14 @@ const {
   SPAWN_NOTICE_COALESCE_MS, SPAWN_NOTICE_FINAL_MESSAGE_BYTES, SPAWN_NOTICE_MAX_ATTEMPTS,
 } = await import("./sweep");
 const { recordSpawnTurnEnded } = await import("@/lib/runtime/serverConsumers");
-const { spawnLossRelevant, spawnNoticeRecipient, transcriptErrorFromRecords } = await import("./production");
+const { spawnLossRelevant, spawnNoticeFinalMessage, spawnNoticeRecipient, transcriptErrorFromRecords } = await import("./production");
+const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
 type Ports = import("./sweep").SpawnNoticeSweepPorts;
 type Request = import("./sweep").SpawnNoticeDeliveryRequest;
 type Answer = import("./sweep").SpawnNoticeDeliveryAnswer;
 
 afterAll(() => {
+  setAgentRegistryForTests(null);
   fs.rmSync(SANDBOX, { recursive: true, force: true });
   if (RESTORE.LLV_STATE_DIR === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = RESTORE.LLV_STATE_DIR;
@@ -34,6 +36,18 @@ const DECISION_REPLY_HINT = "If this worker still owns the assignment, send the 
 const DECISION_VERDICT = "Verdict: needs_decision";
 let sequence = 0;
 const nextChild = () => `conversation_child_${++sequence}`;
+
+function installCodexTranscript(child: string, entries: readonly Record<string, unknown>[]): string {
+  const transcript = path.join(SANDBOX, `${child}.jsonl`);
+  fs.writeFileSync(transcript, entries.map(entry => JSON.stringify(entry)).join("\n") + "\n");
+  setAgentRegistryForTests({
+    conversation: (id: string) => id === child ? ({
+      engine: "codex",
+      generations: [{ path: transcript, launchProfile: { title: `Reviewer ${child.slice(-1)}`, cwd: "/repo" } }],
+    }) : null,
+  } as never);
+  return transcript;
+}
 
 function obligation(child: string, turnId: string, overrides: Partial<import("./store").SpawnNoticeObligation> = {}) {
   return store.recordSpawnNoticeObligation({
@@ -254,6 +268,52 @@ test.each([
   expect(second.sent[0]).toMatchObject({ clientMessageId: attempt!.clientMessageId, text: attempt!.text });
   expect(store.readSpawnNoticeTurn(child, "turn-replay")?.state).toBe("sent");
   expect(store.readSpawnNoticeTurn(child, "turn-later")?.state).toBe("pending");
+});
+
+test.each([
+  { newestMessage: null, expectedHints: 0 },
+  { newestMessage: `Decision needed.\n${DECISION_VERDICT}`, expectedHints: 1 },
+])("a folded Codex notice uses only the newest task_complete verdict ($expectedHints hints)", async ({ newestMessage, expectedHints }) => {
+  const child = nextChild();
+  installCodexTranscript(child, [
+    { type: "event_msg", timestamp: "2026-09-29T11:00:00.000Z", payload: { type: "task_started", turn_id: "turn-a" } },
+    { type: "event_msg", timestamp: "2026-09-29T11:01:00.000Z", payload: { type: "task_complete", turn_id: "turn-a", last_agent_message: `Earlier decision.\n${DECISION_VERDICT}` } },
+    { type: "event_msg", timestamp: "2026-09-29T11:02:00.000Z", payload: { type: "task_started", turn_id: "turn-b" } },
+    { type: "event_msg", timestamp: "2026-09-29T11:03:00.000Z", payload: { type: "task_complete", turn_id: "turn-b", last_agent_message: newestMessage } },
+  ]);
+  obligation(child, "turn-a", { endedAt: "2026-09-29T11:01:00.000Z" });
+  obligation(child, "turn-b", { endedAt: "2026-09-29T11:03:00.000Z" });
+  const { ports, sent } = harness([child], {
+    finalMessage: (id, turnId) => spawnNoticeFinalMessage(id, text => text, { turnId }),
+  });
+
+  await sweepSpawnNotices(ports);
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.clientMessageId).toBe(spawnNoticeMessageId(child, "turn-b"));
+  expect(sent[0]!.text.split("\n").filter(line => line === DECISION_REPLY_HINT)).toHaveLength(expectedHints);
+  expect(sent[0]!.text).toContain(" · 2 turns since the last notice");
+});
+
+test("the production reader finds a verdict in a final Codex record larger than its former tail while the notice quote stays capped", async () => {
+  const child = nextChild();
+  const finalText = `${"x".repeat(131_096 - DECISION_VERDICT.length - 1)}\n${DECISION_VERDICT}`;
+  const transcript = installCodexTranscript(child, [
+    { type: "event_msg", timestamp: "2026-09-29T11:02:00.000Z", payload: { type: "task_started", turn_id: "turn-large" } },
+    { type: "event_msg", timestamp: "2026-09-29T11:03:00.000Z", payload: { type: "task_complete", turn_id: "turn-large", last_agent_message: finalText } },
+  ]);
+  expect(fs.statSync(transcript).size).toBeGreaterThan(131_072);
+  obligation(child, "turn-large", { endedAt: "2026-09-29T11:03:00.000Z" });
+  const { ports, sent } = harness([child], {
+    finalMessage: (id, turnId) => spawnNoticeFinalMessage(id, text => text, { turnId }),
+  });
+
+  await sweepSpawnNotices(ports);
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.text.split("\n").slice(1, 3)).toEqual([DECISION_VERDICT, DECISION_REPLY_HINT]);
+  expect(sent[0]!.text).toContain(`[… cut: ${Buffer.byteLength(finalText) - SPAWN_NOTICE_FINAL_MESSAGE_BYTES} bytes more — conversation_messages conversationId=${child}]`);
+  expect(Buffer.byteLength(sent[0]!.text.split("\n").at(-2)!)).toBe(SPAWN_NOTICE_FINAL_MESSAGE_BYTES);
 });
 
 test("an uncertain answer retries under the same key and fails only after the bound", async () => {

@@ -18,7 +18,7 @@ export function lastAssistantMessageFromRecords(
   source: Record<string, unknown>[],
   root: FileEntry["root"],
   fallbackTs: number,
-  options: { preserveWhitespace?: boolean } = {},
+  options: { preserveWhitespace?: boolean; turnId?: string } = {},
 ): { text: string; ts: number } | null {
   for (const obj of [...source].reverse()) {
     const ts = Date.parse(String(obj.timestamp ?? "")) || fallbackTs;
@@ -26,9 +26,14 @@ export function lastAssistantMessageFromRecords(
       const payload = recordValue(obj.payload) ?? {};
       const type = stringValue(payload.type);
       if (type === "task_complete") {
+        /* A settled Codex task_complete is a hard turn boundary, even when
+           the engine omitted last_agent_message. Never borrow an earlier
+           turn's final answer for a newer obligation. */
+        if (options.turnId && stringValue(payload.turn_id) !== options.turnId) return null;
         const source = stringValue(payload.last_agent_message);
         const text = options.preserveWhitespace ? source : source?.trim();
         if (text?.trim()) return { text, ts };
+        return null;
       }
       if (type === "agent_message") return { text: stringValue(payload.message) ?? "", ts };
       if (type === "message" && payload.role === "assistant") {

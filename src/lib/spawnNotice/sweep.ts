@@ -74,7 +74,7 @@ export interface SpawnNoticeSweepPorts {
   child(child: string): Promise<SpawnNoticeChildView | null>;
   recipient(launcher: string): SpawnNoticeRecipient;
   lossRelevant?(row: SpawnNoticeTurn): boolean;
-  finalMessage(child: string): SpawnNoticeFinalMessage;
+  finalMessage(child: string, turnId: string): SpawnNoticeFinalMessage;
   origin(child: string): MessageOrigin;
   recordAttempt(child: string, attempt: SpawnNoticeAttempt): void;
   settle(child: string, turnIds: readonly string[], settlement: SpawnNoticeSettlement, at: string): void;
@@ -280,7 +280,7 @@ async function sweepChild(child: string, rows: SpawnNoticeTurn[], ports: SpawnNo
     clientMessageId: spawnNoticeMessageId(child, newest.turnId),
     recipientConversationId: recipient.conversationId,
     recipientPath: recipient.path,
-    text: composeSpawnNotice({ child, title: newest.lost?.title ?? view?.title ?? "spawned agent", turns, final: lost ? { text: null, error: null } : ports.finalMessage(child) }),
+    text: composeSpawnNotice({ child, title: newest.lost?.title ?? view?.title ?? "spawned agent", turns, final: lost ? { text: null, error: null } : ports.finalMessage(child, newest.turnId) }),
     turnIds,
     attempts: 1,
     firstAttemptAt: iso(now),

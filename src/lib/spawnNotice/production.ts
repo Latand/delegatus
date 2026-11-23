@@ -34,6 +34,9 @@ import {
 
 const TITLE_LIMIT = 200;
 const ERROR_LIMIT = 500;
+/** Final transcript records can contain a full answer; keep the lookup bounded
+    while leaving room beyond the scanner's default 128 KiB tail. */
+const SPAWN_NOTICE_TRANSCRIPT_TAIL_BYTES = 1_048_576;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
 
@@ -142,14 +145,14 @@ export function transcriptErrorFromRecords(records: readonly Record<string, unkn
 
 /** The child's final assistant message and any error text, from one bounded
     tail read. A caller's egress redactor sees raw text before any shaping. */
-export function spawnNoticeFinalMessage(child: string, redact: (text: string) => string = hardenedRedact, options: { preserveWhitespace?: boolean } = {}): SpawnNoticeFinalMessage {
+export function spawnNoticeFinalMessage(child: string, redact: (text: string) => string = hardenedRedact, options: { preserveWhitespace?: boolean; turnId?: string } = {}): SpawnNoticeFinalMessage {
   try {
     const conversation = agentRegistry().conversation(child as ViewerConversationId);
     const generation = conversation?.generations.at(-1);
     if (!conversation || !generation) return { text: null, error: null };
     const stat = fs.statSync(generation.path);
     if (!stat.isFile()) return { text: null, error: null };
-    const records = tailRecords(generation.path, stat.size, stat.mtimeMs);
+    const records = tailRecords(generation.path, stat.size, stat.mtimeMs, SPAWN_NOTICE_TRANSCRIPT_TAIL_BYTES);
     const root = conversation.engine === "codex" ? "codex-sessions" : "claude-projects";
     const message = lastAssistantMessageFromRecords(records, root, stat.mtimeMs, options);
     const text = message?.text.trim() ? redact(options.preserveWhitespace ? message.text : message.text.trim()) : null;
@@ -184,7 +187,7 @@ function productionPorts(): SpawnNoticeSweepPorts {
     },
     recipient: (launcher) => spawnNoticeRecipient(launcher),
     lossRelevant: row => spawnLossRelevant(row),
-    finalMessage: spawnNoticeFinalMessage,
+    finalMessage: (child, turnId) => spawnNoticeFinalMessage(child, hardenedRedact, { turnId }),
     origin: (child) => agentMessageOrigin(agentRegistry().conversationDeliverySnapshot({ conversationId: child }), child),
     recordAttempt: recordSpawnNoticeAttempt,
     settle: settleSpawnNotices,
