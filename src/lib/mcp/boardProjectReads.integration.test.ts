@@ -206,14 +206,22 @@ test("sparse filters advance across tied timestamps and skip terminal and foreig
   } finally { db.close(); }
   const args = { openOnly: true, query: "голка", limit: 2 };
   const first = await h.call("list_tasks", args);
-  expect(first).toMatchObject({ ok: true, tasks: [], hasMore: true, nextCursor: expect.any(String) });
-  const second = await h.call("list_tasks", { ...args, cursor: first.nextCursor });
-  expect(second).toMatchObject({ ok: true, tasks: [], hasMore: true, nextCursor: expect.any(String) });
-  expect(second.nextCursor).not.toBe(first.nextCursor);
-  const third = await h.call("list_tasks", { ...args, cursor: second.nextCursor });
+  if (!first.ok) throw Error(first.error);
+  const firstCursor = first.nextCursor;
+  expect(typeof firstCursor).toBe("string");
+  expect(first).toMatchObject({ ok: true, tasks: [], hasMore: true, cursorReset: false });
+  const second = await h.call("list_tasks", { ...args, cursor: firstCursor });
+  if (!second.ok) throw Error(second.error);
+  const secondCursor = second.nextCursor;
+  expect(typeof secondCursor).toBe("string");
+  expect(secondCursor).not.toBe(firstCursor);
+  expect(second).toMatchObject({ ok: true, tasks: [], hasMore: true, cursorReset: false });
+  const third = await h.call("list_tasks", { ...args, cursor: secondCursor });
+  if (!third.ok) throw Error(third.error);
+  const thirdCursor = third.nextCursor;
   expect(third).toMatchObject({ ok: true, tasks: [{ id: "task_0005" }, { id: "task_0003" }], hasMore: true, remainingCount: 1,
-    partial: true, omissions: ["total", "omittedCount"] });
-  const fourth = await h.call("list_tasks", { ...args, cursor: third.nextCursor });
+    cursorReset: false, partial: true, omissions: ["total", "omittedCount"] });
+  const fourth = await h.call("list_tasks", { ...args, cursor: thirdCursor });
   expect(fourth).toMatchObject({ ok: true, tasks: [{ id: "task_0001" }], hasMore: false, nextCursor: null, remainingCount: 0 });
   expect(fourth).not.toHaveProperty("total");
 });

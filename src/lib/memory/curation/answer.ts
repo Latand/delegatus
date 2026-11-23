@@ -59,11 +59,6 @@ export async function readCurationPanel(project: string, initial: SeatTickSettin
   const timer = new AbortController();
   const request = options.signal ? AbortSignal.any([options.signal, timer.signal]) : timer.signal;
   const cancel = setTimeout(() => timer.abort(Error("curation panel read timed out")), Math.max(0, deadline - performance.now()));
-  let onAbort!: () => void;
-  const interrupted = new Promise<never>((_, reject) => {
-    onAbort = () => reject(request.reason);
-    request.addEventListener("abort", onAbort, { once: true });
-  });
   const now = options.now ?? Date.now;
   const describe = (settings: SeatTickSettings) => {
     const at = now();
@@ -74,7 +69,7 @@ export async function readCurationPanel(project: string, initial: SeatTickSettin
   try {
     for (let attempt = 0; attempt < 3 && !expired() && !("error" in base); attempt++) {
       let curation: CurationAnswer | undefined;
-      try { curation = await Promise.race([curationAnswerCooperatively(project, controls.effective, controls.now, request), interrupted]); }
+      try { curation = await curationAnswerCooperatively(project, controls.effective, controls.now, request); }
       catch (failure) { if (!expired()) error = failure; }
       options.signal?.throwIfAborted();
       const settings = readSettings(project);
@@ -88,10 +83,10 @@ export async function readCurationPanel(project: string, initial: SeatTickSettin
     return { ...controls, curation: answer(project, controls.effective, () => {
       if (expired()) throw Error("curation panel read timed out");
       if (error) throw error;
+      return undefined;
     },
       () => { if ("error" in base) throw base.error; return base.runs; }, true) };
   } finally {
-    request.removeEventListener("abort", onAbort);
     clearTimeout(cancel);
     timer.abort();
   }

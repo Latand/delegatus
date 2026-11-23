@@ -87,12 +87,15 @@ test("a cold large task page and keyed read share one healthy worker generation"
     call(executor, "list_tasks", { project: "fixture", limit: 5 }),
     call(executor, "get_task", { taskId: seedTaskId }),
   ]);
-  expect(page).toMatchObject({ ok: true, count: 5, hasMore: true, nextCursor: expect.any(String),
-    partial: true, omissions: ["total", "remainingCount", "omittedCount"] });
+  if (!page.ok) throw Error(page.error);
+  const cursor = page.nextCursor;
+  expect(typeof cursor).toBe("string");
+  expect(page).toMatchObject({ ok: true, count: 5, hasMore: true, partial: true, omissions: ["total", "remainingCount", "omittedCount"] });
   expect(keyed.ok).toBe(true);
   expect(performance.now() - started).toBeLessThan(30_000);
-  const next = await call(executor, "list_tasks", { project: "fixture", limit: 5, cursor: page.nextCursor });
-  expect(next).toMatchObject({ ok: true, count: 5 });
+  const next = await call(executor, "list_tasks", { project: "fixture", limit: 5, cursor });
+  expect(next).toMatchObject({ ok: true, count: 5, cursorReset: false });
+  if (!next.ok) throw Error(next.error);
   expect(next.tasks).not.toEqual(page.tasks);
 });
 
