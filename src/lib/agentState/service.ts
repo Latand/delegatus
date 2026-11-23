@@ -17,7 +17,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { AGENT_STATE_POLICY, evaluateAgentState, fact, unknown, type AgentFacts, type AgentProjection, type Evidence, type NativeTurn } from "./model";
-import { AgentTranscriptCache, fileSignature } from "./transcript";
+import { AgentTranscriptCache, fileSignature, transcriptVersionMatches } from "./transcript";
 import { acknowledgeAgentProjection, artifactRevision, commitAgentObservation, conversationRevision, entryRevision,
   readAgentProjection, readAgentStateMetrics, subjectId, copyAgentStateRow, recordAgentProcessEnded, pruneTerminalAgentProjection } from "./store";
 
@@ -255,6 +255,9 @@ export class AgentStateService {
       && source.conversationCurrent && source.artifactBound && tailTerminal?.id
       ? await readCodexRetirementTurnLedger(entry.key.sessionId, tailTerminal.id, entry.structuredHost!.eventCursor) : null;
     if (!allowed()) return null;
+    const codexTranscriptCurrent = Boolean(codexLedger && native.transcript.determined
+      && await transcriptVersionMatches(entry.artifactPath!, native.transcript.value.signature));
+    if (!allowed()) return null;
     const background = entry.key.engine === "claude" && native.transcript.determined && source.artifactBound
       ? await (this.ports.backgroundWork ?? verifiedBackgroundWork)(entry.artifactPath!, now()) : null;
     if (!allowed()) return null;
@@ -291,8 +294,7 @@ export class AgentStateService {
     }
     let turn = native.turn;
     if (!source.artifactBound) turn = unknown("artifact-generation binding unverified", ev("registry-cache", "binding"));
-    if (owner.determined && owner.value === "absent" && codexLedger && tailTerminal && native.transcript.determined
-      && codexLedger.mtimeMs >= native.transcript.value.mtimeMs) {
+    if (owner.determined && owner.value === "absent" && codexLedger && tailTerminal && codexTranscriptCurrent) {
       turn = fact({ state: "closed", nativeId: tailTerminal.id, localRef: null, opening: null,
         closing: tailTerminal.type, at: tailTerminal.at, tools: 0, outcome: codexLedger.status },
       { ...ev("operation-ledger", codexLedger.identity), ...(tailTerminal.at === null ? {} : { eventAt: tailTerminal.at }) });

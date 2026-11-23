@@ -161,7 +161,7 @@ const reconcile = `
   service.stop(); registry.close();
 `;
 
-for (const scenario of ["settled", "idle-checkpoint", "ledger-limit", "open", "pending-delivery", "changed-ledger", "changed-after-capture", "retry"] as const) {
+for (const scenario of ["settled", "late-native-flush", "idle-before-terminal", "idle-checkpoint", "ledger-limit", "mismatched-checkpoint", "open", "pending-delivery", "changed-ledger", "changed-after-capture", "retry"] as const) {
   test.skipIf(process.platform !== "linux")(`retirement of oversized Codex rollout with host ledger: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-ledger-fixture-")); roots.push(root);
     process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -172,8 +172,8 @@ for (const scenario of ["settled", "idle-checkpoint", "ledger-limit", "open", "p
     const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
     entry.status = "idle";
     entry.structuredHost!.activeTurnRef = null;
-    const largeLedger = scenario === "idle-checkpoint" || scenario === "ledger-limit";
-    entry.structuredHost!.eventCursor = scenario === "idle-checkpoint" ? 4 : 3;
+    const largeLedger = scenario === "idle-checkpoint" || scenario === "ledger-limit" || scenario === "idle-before-terminal";
+    entry.structuredHost!.eventCursor = scenario === "idle-checkpoint" || scenario === "idle-before-terminal" ? 4 : 3;
     const records = fixtureRecords("codex");
     const open = scenario === "open";
     const text = [...records.open, ...(open ? [{ type: "event_msg", payload: { type: "task_started", turn_id: "newer-turn" } }] : []),
@@ -190,14 +190,24 @@ for (const scenario of ["settled", "idle-checkpoint", "ledger-limit", "open", "p
       if (open) ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "newer-turn", seq: 2 });
       else if (largeLedger) ledger.append(FIXTURE_SESSION, { kind: "item", turnId: FIXTURE_TURN_ID, phase: "completed",
         item: { output: "x".repeat(256 * 1024) }, seq: 2 });
-      else ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 2 });
-      ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: 3 });
+      else if (scenario === "settled" || scenario === "late-native-flush") {
+        ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: 2 });
+        ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 3 });
+      } else if (!largeLedger) ledger.append(FIXTURE_SESSION, { kind: "session-status", status: scenario === "mismatched-checkpoint" ? "active" : "idle", seq: 2 });
+      if (scenario === "idle-before-terminal") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 3 });
+      if (scenario !== "settled" && scenario !== "late-native-flush") {
+        ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: scenario === "idle-before-terminal" ? 4 : 3 });
+      }
       if (scenario === "idle-checkpoint") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
-      const stamp = new Date(FIXTURE_NOW + 2000);
+      const stamp = new Date(FIXTURE_NOW + (scenario === "late-native-flush" ? 1000 : 2000));
       fs.utimesSync(ledgerPath, stamp, stamp);
+      if (scenario === "late-native-flush") {
+        const laterNativeFlush = new Date(FIXTURE_NOW + 2000);
+        fs.utimesSync(entry.artifactPath!, laterNativeFlush, laterNativeFlush);
+      }
     };
     if (scenario !== "retry") writeLedger();
-    const now = FIXTURE_NOW + (open || scenario === "ledger-limit" || scenario === "retry" ? 7 : 1) * 3_600_000;
+    const now = FIXTURE_NOW + (open || scenario === "late-native-flush" || scenario === "ledger-limit" || scenario === "retry" ? 7 : 1) * 3_600_000;
     const reconcileOnce = async () => {
       const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), ""], { stdout: "pipe", stderr: "pipe" });
       identities.push(captureProcessIdentity(successor.pid));
@@ -249,7 +259,7 @@ for (const scenario of ["settled", "idle-checkpoint", "ledger-limit", "open", "p
         return;
       }
       expect(result.failed).toEqual([]);
-      if (scenario === "settled" || scenario === "idle-checkpoint" || scenario === "retry") {
+      if (["settled", "late-native-flush", "idle-before-terminal", "idle-checkpoint", "retry"].includes(scenario)) {
         expect(result.refused).toEqual([]);
         expect(result.retired).toHaveLength(1);
         expect(result.retired[0]!.reason).toBeUndefined();
