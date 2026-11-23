@@ -19,7 +19,8 @@ test.each([256, 257])("attempt Git custody accepts every proved suffix commit (%
       "",
       "",
     ].join("\n")).join("\n"));
-    await f.run("am", "--empty=keep", "--quiet", mailbox);
+    const imported = await realExec("git", ["am", "--empty=keep", "--quiet", mailbox], f.detached, f.env, { timeoutMs: 105_000 });
+    expect(imported.code, imported.stderr).toBe(0);
     expect(await f.run("rev-list", "--count", `${f.base}..HEAD`)).toBe(String(count));
     const fixed = await f.run("rev-parse", "HEAD");
     const pushed = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
