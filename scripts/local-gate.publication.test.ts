@@ -19,7 +19,7 @@ test("publication scans keep the safely read privacy bytes when the source chang
   const scanDirectory = path.join(directory, "scan"); fs.mkdirSync(scanDirectory);
   const original = Buffer.from('{"fingerprints":["synthetic-private-marker"]}\n');
   fs.writeFileSync(source, original);
-  const captured = snapshotPublicationPrivacyFiles({ LLV_PRIVACY_KNOWN_VALUES_FILE: source }, scanDirectory);
+  const captured = snapshotPublicationPrivacyFiles({ ...process.env, LLV_PRIVACY_KNOWN_VALUES_FILE: source }, scanDirectory);
   fs.writeFileSync(source, '{"fingerprints":[]}\n');
   expect(fs.readFileSync(captured.env.LLV_PRIVACY_KNOWN_VALUES_FILE!, "utf8")).toBe(original.toString("utf8"));
   expect(captured.hashes.LLV_PRIVACY_KNOWN_VALUES_FILE).toBe(createHash("sha256").update(original).digest("hex"));

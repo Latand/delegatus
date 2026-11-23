@@ -46,7 +46,7 @@ test("external privacy catalog drift is eligible for a fresh preparation on the 
   const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 8,
     outputTail: "pre-push: privacy\npublication check inputs changed; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE)",
     retryablePrivacyDrift: true as const, changedFiles: 2 };
-  expect(recoverablePublication({ ok: false, error: "privacy inputs changed", failure })).toBe(true);
+  expect(recoverablePublication({ error: "privacy inputs changed", failure })).toBe(true);
 });
 
 test("the publication admission deadline retains the hook's reason", async () => {
