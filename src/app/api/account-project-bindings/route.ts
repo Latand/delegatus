@@ -37,11 +37,12 @@ function accountsFor(engine: BindingEngine): BoundAccount[] {
 }
 
 function projectView(project: string, bindings = accountProjectBindings()) {
-  const facts = agentRegistry().projectAccountBindingFacts();
-  const carrying = carrierConversations(facts.carriers, (transcript) => {
+  const carrying = carrierConversations(agentRegistry().busyAccountCarriers(), (transcript) => {
     const cwd = headCwd(transcript);
     return cwd ? projectForCwd(cwd) : null;
   });
+  // A peer may reroute or update quota while a transcript head is being read.
+  const facts = agentRegistry().projectAccountSelectionFacts();
   const now = Date.now();
   const displayNames = projectAliasSnapshot().displayNames;
   /* Deliberate choices of an account outside this project's pool. Read once for

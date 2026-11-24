@@ -229,6 +229,8 @@ test("project reads and mutation confirmations fetch only current hot carriers",
 test.each(["off", "sqlite"] as const)("the %s view follows routing and quota changes", async sqliteMode => {
   const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
   const codex = await import("@/lib/accounts/codex");
+  const transcript = await import("@/lib/agent/transcript");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
   const previous = agentRegistry();
   const filename = path.join(fs.mkdtempSync(path.join(STATE, "selection-")), "registry.json");
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
@@ -236,10 +238,19 @@ test.each(["off", "sqlite"] as const)("the %s view follows routing and quota cha
   const account = codex.listCodexAccounts()[0]!;
   const catalog = spyOn(codex, "listCodexAccounts").mockReturnValue(["first", "second"]
     .map(id => ({ ...account, id, label: id, authPresent: true })));
+  const head = spyOn(transcript, "headCwd");
   try {
     setAgentRegistryForTests(registry);
-    peer.setEngineRouting("codex", "second");
+    registry.reconcileConversations([{
+      engine: "claude", path: path.join(path.dirname(filename), "adopted.jsonl"), accountId: MAIN,
+      launchProfile: emptyLaunchProfile(), turn: { state: "busy", source: "assistant", terminalAt: null },
+      observedAt: new Date().toISOString(),
+    }], { snapshot: false });
+    peer.setEngineRouting("codex", "first");
+    // A transcript lookup can take long enough for another process to reroute.
+    head.mockImplementationOnce(() => { peer.setEngineRouting("codex", "second"); return null; });
     expect(await read(ATLAS)).toMatchObject({ engines: { codex: { nextChosenAccountId: "second" } } });
+    expect(head).toHaveBeenCalledTimes(1);
     const now = new Date();
     peer.recordQuotaObservation({
       engine: "codex", accountId: "second", authenticated: true, observedAt: now.toISOString(),
@@ -249,6 +260,7 @@ test.each(["off", "sqlite"] as const)("the %s view follows routing and quota cha
     });
     expect(await read(ATLAS)).toMatchObject({ engines: { codex: { nextChosenAccountId: "first" } } });
   } finally {
+    head.mockRestore();
     catalog.mockRestore();
     setAgentRegistryForTests(previous);
     peer.close();

@@ -2393,7 +2393,7 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  /** Called inside the keyed read that also supplies routing and quota metadata. */
+  /** Project inputs for busy conversations, in registry order. */
   busyAccountCarriers(): CarrierSource[] {
     // A legacy registry has only registry_rows. The archive view excludes cold
     // mappings even if their retained payload still describes a busy turn.

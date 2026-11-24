@@ -11343,25 +11343,32 @@ export class AgentRegistry {
     }));
   }
 
-  /** Read carrier inputs and both engines' selection metadata at one registry revision. */
-  projectAccountBindingFacts() {
+  busyAccountCarriers(): CarrierSource[] {
     return this.readKeyed(file => {
-      const carriers: CarrierSource[] = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-        ? this.sqliteStore.busyAccountCarriers()
-        : Object.values(file.conversations).flatMap((row): CarrierSource[] => {
-          const latest = row.generations.at(-1);
-          if (row.turn.state !== "busy" || !latest?.accountId || (row.engine !== "claude" && row.engine !== "codex")) return [];
-          return [{
-            engine: row.engine,
-            busy: true,
-            path: latest.path,
-            accountId: latest.accountId,
-            ownership: row.projectOwnership,
-            launchProfile: latest.launchProfile,
-          }];
-        });
-      return { carriers, engineRouting: file.engineRouting, quotaObservations: file.quotaObservations };
+      if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+        return this.sqliteStore.busyAccountCarriers();
+      }
+      return Object.values(file.conversations).flatMap((row): CarrierSource[] => {
+        const latest = row.generations.at(-1);
+        if (row.turn.state !== "busy" || !latest?.accountId || (row.engine !== "claude" && row.engine !== "codex")) return [];
+        return [{
+          engine: row.engine,
+          busy: true,
+          path: latest.path,
+          accountId: latest.accountId,
+          ownership: row.projectOwnership,
+          launchProfile: latest.launchProfile,
+        }];
+      });
     }, { skipColdKeyInitialization: true });
+  }
+
+  /** Both engines must choose from routing and quota at the same revision. */
+  projectAccountSelectionFacts() {
+    return this.readKeyed(file => ({
+      engineRouting: file.engineRouting,
+      quotaObservations: file.quotaObservations,
+    }), { skipColdKeyInitialization: true });
   }
 
   engineRouting(engine: AgentEngine): { activeAccountId: string | null; revision: number } {
