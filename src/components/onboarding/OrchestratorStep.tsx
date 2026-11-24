@@ -136,7 +136,7 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
   /* With one engine connected, the roles that default to the other move to it,
      once, when the orchestrator is created. Opening the step and the table
      behind "Change" write nothing. */
-  const move = roles ? oneEngineMove(roles.roles, { claude: { connected: connected.claude }, codex: { connected: connected.codex } }) : null;
+  const move = roles ? oneEngineMove(roles.roles, { claude: { connected: connected.claude }, codex: { connected: connected.codex }, antigravity: { connected: false } }) : null;
   const roleMove = move && move.count > 0 ? move : null;
   const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);

@@ -16,7 +16,7 @@ export const ROLE_IDS = [
 
 export type RoleId = typeof ROLE_IDS[number];
 
-export type RoleEngine = "claude" | "codex";
+export type RoleEngine = "claude" | "codex" | "antigravity";
 
 export type RoleConfig = {
   agentMemoryMaxBytes?: number | null;

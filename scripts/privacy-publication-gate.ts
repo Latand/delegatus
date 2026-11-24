@@ -1246,13 +1246,45 @@ function changedPaths(arguments_: string[], repository: string, resolvedBase?: s
   return { error: false, paths: [...paths] };
 }
 
-function commitInputGit(repository: string, args: string[], env: Record<string, string | undefined> = withoutUnsupportedApiCredentials(process.env), stdin?: Buffer): Buffer {
-  const result = Bun.spawnSync({
+function spawnCommitInputGit(repository: string, args: string[], env: Record<string, string | undefined> = withoutUnsupportedApiCredentials(process.env), stdin?: Buffer) {
+  return Bun.spawnSync({
     cmd: ["git", "--no-replace-objects", "--literal-pathspecs", "-C", repository, ...args],
     env, stdin, stdout: "pipe", stderr: "pipe",
   });
+}
+
+function commitInputGit(repository: string, args: string[], env?: Record<string, string | undefined>, stdin?: Buffer): Buffer {
+  const result = spawnCommitInputGit(repository, args, env, stdin);
   if (result.exitCode !== 0) throw new Error("commit input unreadable");
   return result.stdout;
+}
+
+function isolatedCommitGitEnvironment(): Record<string, string | undefined> {
+  const env = Object.fromEntries(Object.entries(withoutUnsupportedApiCredentials(process.env)).filter(([name]) => !name.startsWith("GIT_")));
+  return { ...env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+}
+
+function commitDiffAttributes(repository: string, commit: string, paths: Buffer, supportsSource: boolean): Buffer {
+  const args = ["-z", "diff", "--stdin"];
+  if (supportsSource) return commitInputGit(repository, ["check-attr", "--source", commit, ...args], undefined, paths);
+
+  // Git 2.39 reads historical attributes through --cached. Build the index
+  // in a scratch repository to keep index writes and hooks isolated.
+  const scratch = mkdtempSync(join(tmpdir(), "llv-privacy-index-"));
+  try {
+    const snapshot = join(scratch, "repository");
+    const index = join(scratch, "index");
+    const snapshotEnv = isolatedCommitGitEnvironment();
+    commitInputGit(scratch, ["clone", "--quiet", "--bare", "--shared", "--template=", "--", repository, snapshot], snapshotEnv);
+    commitInputGit(snapshot, ["read-tree", "--no-sparse-checkout", "--no-recurse-submodules", commit], { ...snapshotEnv, GIT_INDEX_FILE: index });
+    // Attribute precedence outside the tree remains that of the inspection repository.
+    const attributeEnv = { ...withoutUnsupportedApiCredentials(process.env), GIT_ATTR_SOURCE: undefined, GIT_INDEX_FILE: index };
+    // Git 2.39 can hide committed attributes outside a cone-mode sparse
+    // checkout even when the scratch index contains the complete tree.
+    return commitInputGit(repository, ["-c", "core.sparseCheckout=false", "check-attr", "--cached", ...args], attributeEnv, paths);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 /** New-side text from changed hunks, including three context lines, without removed text or diff syntax. */
@@ -1296,8 +1328,11 @@ type CommitInput = { commit: string; path: string; blob: string } & (
 /** Read immutable commit objects. Checkout, index and untracked bytes cannot enter this selection. */
 export function* commitInputs(repository: string, base: string): Generator<CommitInput> {
   const commits = commitInputGit(repository, ["rev-list", "--parents", `${base}..HEAD`]).toString().trim();
+  if (!commits) return;
+  const help = spawnCommitInputGit(repository, ["check-attr", "-h"]);
+  const supportsSource = /(?:^|\s)--source[ =]/m.test(help.stdout.toString() + help.stderr.toString());
   const binaryBlobs = new Set<string>();
-  for (const row of commits ? commits.split("\n") : []) {
+  for (const row of commits.split("\n")) {
     const [commit, ...parents] = row.split(" ");
     if (![commit, ...parents].every(hash => COMMIT_HASH.test(hash))) throw new Error("invalid commit input");
     const endpoints = parents.length ? [parents[0], commit] : [commit];
@@ -1317,9 +1352,10 @@ export function* commitInputs(repository: string, base: string): Generator<Commi
     }
     const raw = new TextDecoder("utf-8", { fatal: true }).decode(commitInputGit(repository, [...options, "--raw", ...endpoints])).split("\0");
     if (raw.pop() !== "") throw new Error("unframed commit paths");
-    const attributeOutput = commitInputGit(repository, ["check-attr", "--source", commit, "-z", "diff", "--stdin"], undefined,
-      Buffer.from(raw.filter((path, index) => index % 2 === 1 && (!mergePaths || mergePaths.has(path)))
-        .map(path => `${path}\0`).join(""))).toString().split("\0");
+    if (raw.length === 0) continue;
+    const paths = raw.filter((path, index) => index % 2 === 1 && (!mergePaths || mergePaths.has(path)));
+    const attributeOutput = commitDiffAttributes(repository, commit, Buffer.from(paths.map(path => `${path}\0`).join("")), supportsSource)
+      .toString().split("\0");
     if (attributeOutput.pop() !== "" || attributeOutput.length % 3 !== 0) throw new Error("invalid commit attributes");
     const diffAttributes = new Map<string, string>();
     for (let index = 0; index < attributeOutput.length; index += 3) {
@@ -2446,8 +2482,7 @@ function inspectCommitAdditions(repository: string, base: string, requireKnownVa
   // manifest and generator at its own path and commit. Kinds can depend on the
   // extension, so an opaque blob renamed to an image cannot inherit a text pass.
   const content = new Map<string, Set<FindingClass>>();
-  const snapshotEnv = Object.fromEntries(Object.entries(withoutUnsupportedApiCredentials(process.env)).filter(([name]) => !name.startsWith("GIT_")));
-  Object.assign(snapshotEnv, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+  const snapshotEnv = isolatedCommitGitEnvironment();
   const snapshotAt = (commit: string): string => {
     if (!scratch) {
       scratch = mkdtempSync(join(tmpdir(), "llv-privacy-commits-"));

@@ -383,9 +383,9 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
     if (conversation.supersededBy) {
       return { kind: "ineligible", code: "conversation_ineligible", error: "conversation is superseded" };
     }
-    /* Copilot as an orchestrator seat is design slice 4. */
-    if (conversation.engine === "copilot") {
-      return { kind: "ineligible", code: "conversation_ineligible", error: "a Copilot conversation cannot hold the orchestrator seat yet" };
+    /* Copilot and Antigravity as an orchestrator seat are not enabled yet. */
+    if (conversation.engine === "copilot" || conversation.engine === "antigravity") {
+      return { kind: "ineligible", code: "conversation_ineligible", error: `a ${conversation.engine === "copilot" ? "Copilot" : "Antigravity"} conversation cannot hold the orchestrator seat yet` };
     }
     const generation = conversation.generations.at(-1);
     const transcriptPath = generation?.path?.trim();

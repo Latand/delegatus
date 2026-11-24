@@ -66,7 +66,7 @@ export async function conversationAccountChoiceRefusal(
     const conversation = identity.startsWith("conversation_")
       ? registry.conversation(identity as `conversation_${string}`)
       : registry.conversationForPath(identity);
-    if (!conversation || conversation.engine === "copilot") return null;
+    if (!conversation || conversation.engine === "copilot" || conversation.engine === "antigravity") return null;
     const generation = conversation.generations.at(-1);
     /* Naming the account it already runs on is how a pending choice is withdrawn. */
     if (generation?.accountId === accountId) return null;

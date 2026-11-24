@@ -2088,7 +2088,7 @@ test("a real MCP client sees typed graph edits and forwards their JSON values", 
       maxRounds: { type: "integer" },
       onExhausted: { enum: ["advance", "stop-after-fix", "park"] },
       role: {},
-      engine: { enum: ["claude", "codex"] },
+      engine: { enum: ["claude", "codex", "antigravity"] },
       access: { enum: ["read-only", "read-write"] },
     });
     expect(JSON.stringify(schema.properties!.to)).toContain("null");
