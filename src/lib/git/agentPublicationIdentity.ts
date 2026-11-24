@@ -5,6 +5,7 @@ import { agentLessonPublicationEnv } from "@/lib/memory/roleStore";
 import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, type RepositoryCommitIdentity } from "./repositoryCommitIdentity";
 import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../runtime/gateCheckRecord";
 import type { GateCheckRoot } from "../runtime/gateCheckTool";
+import { installedGateAdmissionEnv } from "../runtime/agentSignalSandbox";
 
 /** Publication settings belong to the launching process, before child-env
     filtering. Git identity variables from that process never choose an agent's
@@ -21,10 +22,10 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
       throw new Error("Invalid repository Git identity (values withheld)");
     }
     const forge = agentForgeWriteEnv(source);
+    const guard = agentHistoryGuardEnv({ ...source, ...forge }, name, email, repository.coauthor);
     return { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
       [REPOSITORY_IDENTITY]: source[REPOSITORY_IDENTITY],
-      ...agentLessonPublicationEnv(), ...forge,
-      ...agentHistoryGuardEnv({ ...source, ...forge }, name, email, repository.coauthor) };
+      ...agentLessonPublicationEnv(), ...forge, ...guard, ...installedGateAdmissionEnv({ ...source, ...forge, ...guard }) };
   }
   const defaults = controllerCommitIdentityEnv();
   const configuredName = source.DELEGATUS_PUBLICATION_NAME ?? source.LLV_PUBLICATION_NAME ?? defaults.GIT_AUTHOR_NAME!;
@@ -40,6 +41,7 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
      come first: the history guard appends its own after them and has to stay
      the last one. */
   const forge = agentForgeWriteEnv(source);
+  const guard = agentHistoryGuardEnv({ ...source, ...forge }, name, email);
   return {
     GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email,
     GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
@@ -47,7 +49,8 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
        role-memory lesson (src/lib/memory/roleStore.ts). */
     ...agentLessonPublicationEnv(),
     ...forge,
-    ...agentHistoryGuardEnv({ ...source, ...forge }, name, email),
+    ...guard,
+    ...installedGateAdmissionEnv({ ...source, ...forge, ...guard }),
   };
 }
 

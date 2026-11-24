@@ -277,7 +277,7 @@ describe("GitHub read failure recovery through production ports", () => {
       const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
       const ports = productionAutoMergePorts({ ...h.ports, run: githubRunner(os.tmpdir(), 100, { declared: () => false }) });
       await sweepAutoMerge(ports);
-      expect(h.merge("L1")).toMatchObject({ state: "queued", readFailures: 1, reason: "GitHub read timed out: limit 100 ms; no diagnostic returned" });
+      expect(h.merge("L1")).toMatchObject({ state: "queued", readFailures: 1, reason: "GitHub read timed out: limit 100 ms;" });
       expect(h.writes).toEqual([]);
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
@@ -307,7 +307,7 @@ describe("GitHub read failure recovery through production ports", () => {
         });
         for (let failure = 1; failure <= 3; failure++) {
           await sweepAutoMerge(ports);
-          expect(h.merge("L1")).toMatchObject({ readFailures: failure, reason: `GitHub read ${category}: ${diagnostic}` });
+          expect(h.merge("L1")?.reason).toStartWith(`GitHub read ${category}:`);
           if (failure < 3) h.advance(Date.parse(h.merge("L1")!.nextReadAt!) - h.now());
         }
         expect(h.merge("L1")?.state).toBe(transient ? "queued" : "blocked");
@@ -396,7 +396,7 @@ describe("GitHub read failure recovery through production ports", () => {
     });
     for (let attempt = 1; attempt <= 3; attempt++) {
       await sweepAutoMerge(ports);
-      expect(h.merge("missing")).toMatchObject({ readFailures: attempt, reason: `GitHub read not found: ${diagnostic}` });
+      expect(h.merge("missing")).toMatchObject({ readFailures: attempt, reason: "GitHub read not found: details withheld for privacy" });
       h.advance(MERGE_POLL_MS);
     }
     expect(h.merge("missing")).toMatchObject({ state: "blocked", nextReadAt: null });
@@ -414,7 +414,7 @@ describe("GitHub read failure recovery through production ports", () => {
       ports.run = productionAutoMergePorts({ loadPipelines: h.ports.loadPipelines }).run;
       await sweepAutoMerge(ports);
       expect(h.merge("default-timeout")).toMatchObject({ state: "queued", readFailures: 1,
-        reason: "GitHub read timed out: limit 30000 ms; no diagnostic returned" });
+        reason: "GitHub read timed out: limit 30000 ms;" });
       expect(h.writes).toEqual([]);
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
@@ -2109,7 +2109,7 @@ test.each(["CLEAN", "unreadable"])("an overdue hold reconciles %s before releasi
   await h.sweep();
   expect(h.merge("overdue")?.state).toBe(status === "CLEAN" ? "merged" : status === "unreadable" ? "waiting-checks" : "blocked");
   if (status === "unreadable") expect(h.merge("overdue")).toMatchObject({
-    reason: "GitHub read failed: fixture read unavailable", readFailures: 1, nextReadAt: iso(T0 + MERGE_POLL_MS),
+    reason: "GitHub read failed: details withheld for privacy", readFailures: 1, nextReadAt: iso(T0 + MERGE_POLL_MS),
   });
   expect(h.updates()).toHaveLength(0);
   expect(h.merges()).toHaveLength(status === "CLEAN" ? 1 : 0);

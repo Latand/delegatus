@@ -70,6 +70,12 @@ export function installRegistryArchive(db: Database): void {
     `CREATE INDEX IF NOT EXISTS registry_archive_launch ON registry_archive(collection,json_extract(value_json,'$.evidence.launchId'),row_order)`,
     `CREATE INDEX IF NOT EXISTS registry_archive_session ON registry_archive(collection,json_extract(value_json,'$.key.sessionId'),row_order)`,
     `CREATE INDEX IF NOT EXISTS registry_archive_status ON registry_archive(collection,json_extract(value_json,'$.status'),row_order)`,
+    `CREATE INDEX IF NOT EXISTS registry_archive_retired_host_cut
+      ON registry_archive(json_extract(value_json,'$.updatedAt'),row_order)
+      WHERE collection='entries' AND json_extract(value_json,'$.hostExitProcess.pid') IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS registry_hot_retired_host_cut
+      ON registry_rows(json_extract(value_json,'$.updatedAt'),row_order)
+      WHERE collection='entries' AND json_extract(value_json,'$.hostExitProcess.pid') IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS registry_hot_operation ON registry_rows(collection,json_extract(value_json,'$.structuredHostOperationId'))`,
     `CREATE TRIGGER IF NOT EXISTS registry_archive_immutable_update BEFORE UPDATE ON registry_archive
       BEGIN SELECT RAISE(ABORT,'registry archive versions are immutable'); END`,

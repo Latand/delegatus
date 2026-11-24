@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { sessionValid } from "@/lib/voiceCompanion/sessionValidation";
+import { requesterSettingsSchema } from "@/lib/externalRelay/trustedRequesters";
 
 import { historyRowsByToken, ROLE_HISTORY_COLLECTION, scopeFromCollectedRows } from "@/lib/memory/roleHistoryRows";
 import type { RoleMemoryScopeRow } from "@/lib/memory/roleTypes";
@@ -295,10 +296,15 @@ export const PARTS: readonly Part[] = [
     collect: source => {
       const relays = at(parseJson(source.stateText(path.join("external-relay", "relays.json"))), ["relays"]);
       if (!Array.isArray(relays)) return [];
-      return relays.filter(isRecord).flatMap(relay => (Array.isArray(relay.targets) ? relay.targets : []).filter(isRecord).map(target => ({
-        key: `${String(relay.origin)}/${String(target.id)}`,
-        value: { origin: relay.origin, relay: relay.name, target: Object.fromEntries(RELAY_TARGET_FIELDS.flatMap(field => field in target ? [[field, target[field]]] : [])) },
-      })));
+      return relays.filter(isRecord).flatMap(relay => (Array.isArray(relay.targets) ? relay.targets : []).filter(isRecord).map(target => {
+        const settings = Object.fromEntries(RELAY_TARGET_FIELDS.flatMap(field => field in target ? [[field, target[field]]] : []));
+        const requesters = requesterSettingsSchema.safeParse(target.requesters);
+        if (requesters.success) {
+          const entries = requesters.data.entries.filter(entry => entry.kind === "paired-owner");
+          if (entries.length) settings.requesters = { revision: requesters.data.revision, entries };
+        }
+        return { key: `${String(relay.origin)}/${String(target.id)}`, value: { origin: relay.origin, relay: relay.name, target: settings } };
+      }));
     } },
   { kind: "map", id: "map:relay-switches", section: "settings.relay", root: "state", file: path.join("external-relay", "switches.json"), path: [],
     skeleton: () => ({ v: 1 }), merge: "default",

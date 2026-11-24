@@ -51,7 +51,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { resolveSendReceipt, SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
 import { FENCED_MESSAGE_RETRY_DELAYS_MS, fencedFirstMessageRetrySafe } from "./fencedFirstMessage";
 import { stageRepairDelivery } from "./repairDelivery";
-import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationDependencyValidationDeadline, publicationInterrupted, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
 import type { PipelineAccountHold, PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
@@ -77,6 +77,7 @@ import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
 import { tryConversationActuation, withConversationActuation } from "@/lib/deliveryActuation";
 import { codexServiceTierRefusal, hiddenAccountsTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { codexSessionRoots, listCodexAccounts } from "@/lib/accounts/codex";
+import { listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
 import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot";
 import { sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
@@ -171,7 +172,7 @@ import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus } from "./preflight";
 import { creationIssueLinks } from "@/lib/forge/issueDelivery";
 import { preparePipelineRepository, readRepositoryInitialization } from "./initializeRepository";
-import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
+import { classifyProviderCondition, CODEX_WORKSPACE_REQUIREMENTS_FAILURE, type ProviderCondition } from "./providerConditions";
 import { isStagePromptContext, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
 import { composeStageInput } from "./stageInput";
 import { composeCloudStageInput } from "./cloudStageInput";
@@ -835,10 +836,11 @@ async function spawnPipelineAgent(
        list is read again here, after every await, because it can be removed
        between the stage's creation, its start and its selection. */
     if (workspace && input.requestedAccountId && !input.accountChosenAutomatically
+      && input.role.engine !== "antigravity"
       && memberAccountChoice(input.project, input.role.engine, input.requestedAccountId).kind === "no_account_list") {
       throw new MemberAccountRefusedError({ kind: "no_account_list" }, input.role.engine, input.requestedAccountId, input.project);
     }
-    if (workspace && workspaceAccountId) {
+    if (workspace && workspaceAccountId && input.role.engine !== "antigravity") {
       const allowed = allowedAccountIdsForProject(input.project, input.role.engine);
       if (allowed && !allowed.includes(workspaceAccountId)) throw new Error("workspace account access denied");
     }
@@ -862,7 +864,7 @@ async function spawnPipelineAgent(
   const desiredTier = input.role.serviceTier ?? automaticTierPreference;
   let serviceTier = desiredTier ?? null;
   const accounts = input.role.engine === "codex" ? listCodexAccounts() : [];
-  const pool = allowedAccountIdsForProject(input.project, input.role.engine);
+  const pool = input.role.engine === "antigravity" ? null : allowedAccountIdsForProject(input.project, input.role.engine);
   const candidates = accounts.filter(account => (pool === null || pool.includes(account.id))
     && (!input.requestedAccountId || account.id === input.requestedAccountId));
   let offers = desiredTier ? tierOffers(candidates, input.role.model!, desiredTier) : null;
@@ -911,7 +913,7 @@ async function spawnPipelineAgent(
   if (resolution.kind !== "available") {
     /* A member's lane on a project with no account list chose among accounts
        they are not shown: the refusal names none of them, nor a limit window. */
-    const concealed = !!workspace && resolution.kind !== "not_allowed" && (pool === null || accountsHiddenFromMember(input.project, input.role.engine));
+    const concealed = !!workspace && resolution.kind !== "not_allowed" && (pool === null || (input.role.engine !== "antigravity" && accountsHiddenFromMember(input.project, input.role.engine)));
     throw new ProjectAccountRefusedError(resolution, input.role.engine, input.project,
       serviceTier ? `serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : undefined,
       concealed);
@@ -2068,20 +2070,24 @@ export function defaultPipelinePorts(
     claudeCloudClient: claudeCloudStageClient,
     preflightRepo: preparePipelineRepository,
     roleLookup: pipelineRoleLookup,
-    allowedAccountIds: (project, engine) => allowedAccountIdsForProject(project, engine),
+    allowedAccountIds: (project, engine) => engine === "antigravity" ? null : allowedAccountIdsForProject(project, engine),
     engineReadiness: (engine, project) => engineReadiness(engine, project),
     resolveProjectSpawn: (engine, request) => accountManager.resolveProjectSpawn(engine, request),
-    accountExhausted: (engine, accountId, model) => selectHeadlessAccount([{ id: accountId, authPresent: true }],
-      registry.quotaObservations(engine), accountId, [], Date.now(), model).kind === "exhausted",
-    accountQuota: (engine, accountId, model) => accountQuotaVerdict(registry.quotaObservations(engine), accountId, Date.now(), model),
+    accountExhausted: (engine, accountId, model) => engine === "antigravity"
+      ? false
+      : selectHeadlessAccount([{ id: accountId, authPresent: true }],
+          registry.quotaObservations(engine), accountId, [], Date.now(), model).kind === "exhausted",
+    accountQuota: (engine, accountId, model) => engine === "antigravity"
+      ? { capacity: "unknown", resetsAt: null, observedAt: null }
+      : accountQuotaVerdict(registry.quotaObservations(engine), accountId, Date.now(), model),
     accountForTranscript: (engine, transcriptPath) => {
       const owner = accountManager.resolveTranscriptOwner(engine, transcriptPath);
       if (!owner) return null;
-      const account = (engine === "claude" ? listClaudeAccounts() : listCodexAccounts())
+      const account = (engine === "claude" ? listClaudeAccounts() : engine === "antigravity" ? listAntigravityAccounts() : listCodexAccounts())
         .find((candidate) => candidate.id === owner.accountId);
       return { accountId: owner.accountId, label: account?.label ?? owner.accountId };
     },
-    accountLabel: (engine, accountId) => (engine === "claude" ? listClaudeAccounts() : listCodexAccounts())
+    accountLabel: (engine, accountId) => (engine === "claude" ? listClaudeAccounts() : engine === "antigravity" ? listAntigravityAccounts() : listCodexAccounts())
       .find((candidate) => candidate.id === accountId)?.label ?? accountId,
     spawnAgent: async (input, onReserved, preparePrompt, admissionPhase) => {
       /* Invalidated on BOTH paths (#1750): a spawn that throws is exactly when
@@ -3774,6 +3780,49 @@ function providerContinuationKey(pipeline: Pipeline, stage: PipelineStage, attem
   return `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}`;
 }
 
+/** A transport can deliver before the controller persists its acknowledgement.
+    Reconcile that durable receipt while the old wait still identifies its cut,
+    before a later provider error replaces the key-bearing wait. */
+async function reconcileDeliveredProviderContinuation(pipeline: Pipeline, stage: PipelineStage,
+  attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<ProviderContinuationReceipt> {
+  const wait = attempt.providerWait;
+  if (!wait?.continuationRequestedAt || wait.actionAt || !attempt.conversationId) return "none";
+  const key = providerContinuationKey(pipeline, stage, attempt);
+  if (ports.conversationDeliveryCompleted?.(attempt.conversationId, key) === true) {
+    const startedAt = providerBackoffStartedAt(attempt, wait.continuationRequestedAt);
+    wait.actionAt = wait.continuationRequestedAt;
+    wait.tries += 1;
+    delete wait.receiptWaitStartedAt;
+    attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: Math.max(attempt.providerRecoveryBudget?.tries ?? 0, wait.tries), startedAt };
+    recordProviderRecovery(attempt, "continue", wait.condition,
+      `continuing after ${wait.condition.label} (${wait.tries} of 3); last: ${wait.text}`, wait.continuationRequestedAt);
+    return "delivered";
+  }
+  if (await ports.conversationDeliveryRetryable?.(attempt.conversationId, key) === true) {
+    delete wait.receiptWaitStartedAt;
+    return "refused";
+  }
+  return "unknown";
+}
+
+type ProviderContinuationReceipt = "delivered" | "refused" | "unknown" | "none";
+
+const PROVIDER_RECEIPT_RECONCILIATION_MS = 10 * 60_000;
+
+async function deferProviderReceiptReconciliation(pipeline: Pipeline, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void | Promise<void>): Promise<void> {
+  const wait = attempt.providerWait!;
+  const now = ports.now();
+  wait.receiptWaitStartedAt ??= now;
+  if (unixMs(now) - unixMs(wait.receiptWaitStartedAt) >= PROVIDER_RECEIPT_RECONCILIATION_MS) {
+    await park(pipeline, `provider continuation receipt remained unresolved for 10 minutes after ${wait.condition.label}; waiting for operator decision`, attempt);
+  } else {
+    pipeline.stateDetail = `waiting for the prior ${wait.condition.label} continuation receipt before processing a newer cut`;
+    ports.scheduleTick?.(1_000);
+  }
+  await persist();
+}
+
 function providerCutNotice(engine: FlowEngine, message: NonNullable<StageTurnEvidence["terminalProviderMessage"]>, onlyOutput = false) {
   return { condition: classifyProviderCondition(engine, message.errorClass
       ?? (message.usageLimit ? (engine === "claude" ? "rate_limit" : "usage_limit") : null), message.text),
@@ -3846,6 +3895,16 @@ function modelCapacity(condition: ProviderCondition): boolean {
   return condition.kind === "transient" && condition.label === "model at capacity";
 }
 
+function workspaceRequirementsFailure(condition: ProviderCondition): boolean {
+  return condition.kind === "transient" && condition.label === CODEX_WORKSPACE_REQUIREMENTS_FAILURE;
+}
+
+function shouldOpenProviderWait(wait: PipelineStageAttempt["providerWait"], notice: { ts: number; condition: ProviderCondition }): boolean {
+  return !wait || notice.ts > wait.turnTs
+    // A previous Viewer can have saved the cut before parking it as unknown.
+    || notice.ts === wait.turnTs && wait.condition.kind === "other" && workspaceRequirementsFailure(notice.condition);
+}
+
 function providerBackoffMs(tries: number, condition: ProviderCondition, ports: PipelinePorts): number {
   if (!modelCapacity(condition)) return 60_000 * 2 ** tries;
   const exponential = 60_000 * 2 ** Math.min(tries, 4);
@@ -3904,7 +3963,8 @@ async function parkProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt
   const wait = attempt.providerWait!, condition = wait.condition;
   recordProviderRecovery(attempt, "park", condition, reason, ports.now());
   attempt.completedAt = ports.now();
-  const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient" && !modelCapacity(condition))
+  const sourceReset = (condition.kind === "auth_required"
+    || condition.kind === "transient" && !modelCapacity(condition) && !workspaceRequirementsFailure(condition))
     && providerRetryReset(pipeline, attempt, ports) !== null;
   if (sourceReset && wait.accountId) wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
   if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports, retryAt);
@@ -3926,7 +3986,12 @@ async function recoverProviderCut(
     await persist();
     return true;
   }
-  if (notice && (!wait || notice.ts > wait.turnTs)) {
+  if (notice && shouldOpenProviderWait(wait, notice)) {
+    const receipt = await reconcileDeliveredProviderContinuation(pipeline, stage, attempt, ports);
+    if (receipt === "unknown") {
+      await deferProviderReceiptReconciliation(pipeline, attempt, ports, persist);
+      return true;
+    }
     wait = openProviderWait(stage, attempt, notice, ports);
     await persist();
   }
@@ -3941,6 +4006,7 @@ async function recoverProviderCut(
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   }
   const condition = wait.condition;
+  const sameConversationOnly = workspaceRequirementsFailure(condition);
   if (stage.effectiveRole.engine !== attempt.effectiveRole.engine) {
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, null);
   }
@@ -3962,7 +4028,7 @@ async function recoverProviderCut(
   }
   const triedAccounts = providerSpentAccountsOn(pipeline, attempt, engine, ports);
   // A failed migration is evidence against this target for the current cut chain.
-  const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
+  const migration = !sameConversationOnly && attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
   let target: string | null = null;
   let exhaustedReset: number | null = null;
   if (!modelCapacity(condition) && migration?.retry && !wait.actionAt) {
@@ -4082,6 +4148,10 @@ async function recoverProviderCut(
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, target);
   }
   if (condition.kind === "host_death" || !attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn || attempt.paneId) {
+    if (sameConversationOnly) {
+      await waitForProviderTransport(pipeline, attempt, condition, "same-conversation continuation is unavailable", ports, persist);
+      return true;
+    }
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, target);
   }
   if (!target && wait.accountId) {
@@ -4097,15 +4167,20 @@ async function recoverProviderCut(
   const cutTs = wait.turnTs;
   const controlGeneration = pipeline.controlGeneration;
   let continuationRefusal: string | null = null;
+  let preflightRefusal = false;
+  let deliveryUncertain = false;
+  const refuseBeforeExecution = (reason: string) => {
+    continuationRefusal = reason;
+    preflightRefusal = true;
+    return false;
+  };
   const continuationAllowed = async () => {
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) {
-      continuationRefusal = "operator-stop authority holds provider recovery";
-      return false;
+      return refuseBeforeExecution("operator-stop authority holds provider recovery");
     }
     const latest = await ports.durableTurnEvidence(engine, attempt.agentPath!, undefined, attemptEvidenceFloor(attempt), undefined, cutTs);
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) {
-      continuationRefusal = "operator-stop authority holds provider recovery";
-      return false;
+      return refuseBeforeExecution("operator-stop authority holds provider recovery");
     }
     continuationRefusal = pipeline.state !== "running" ? "pipeline is no longer running"
       : pipeline.closedAt ? "pipeline was closed"
@@ -4121,7 +4196,11 @@ async function recoverProviderCut(
       : latest.turn !== "terminal" ? `stage turn is ${latest.turn}`
       : latest.terminalProviderMessage?.ts !== cutTs ? "terminal provider record no longer matches the cut"
       : stageAccountBlocked(pipeline, attempt, ports);
-    return continuationRefusal === null;
+    if (continuationRefusal !== null) {
+      preflightRefusal = true;
+      return false;
+    }
+    return true;
   };
   let delivered: boolean;
   try {
@@ -4130,6 +4209,7 @@ async function recoverProviderCut(
     delivered = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       clientMessageId: key, text: `This stage was cut by ${condition.label}. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.`,
       policy: "queue", continuationAllowed, onRefused: reason => { continuationRefusal ??= reason; },
+      onUncertain: () => { deliveryUncertain = true; },
       project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir, ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}) });
   } catch (error) {
     await waitForProviderTransport(pipeline, attempt, condition, `continuation transport failed: ${String(error)}`, ports, persist);
@@ -4141,10 +4221,17 @@ async function recoverProviderCut(
     wait.actionAt = now;
     wait.tries += 1;
     attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: wait.tries, startedAt };
-    recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries} of 3)`, now);
+    const detail = `continuing after ${condition.label} (${wait.tries} of 3)`;
+    recordProviderRecovery(attempt, "continue", condition, sameConversationOnly ? `${detail}; last: ${wait.text}` : detail, now);
     pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
     await persist();
-  } else if (!wait.retryCancelled) await waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
+  } else if (!wait.retryCancelled) {
+    if (preflightRefusal && !deliveryUncertain) {
+      delete wait.continuationRequestedAt;
+      delete wait.receiptWaitStartedAt;
+    }
+    await waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
+  }
   return true;
 }
 
@@ -5276,8 +5363,10 @@ function publicationNotLanded(published: RefusedPublication): boolean {
   return publicationInterrupted(published);
 }
 
-function publicationDeadlineCause(failure: import("./types").PipelinePublicationFailure): string {
-  return failure.admissionDeadline ? "the pre-push hook's CPU admission lock-wait budget expired before checks started"
+function publicationDeadlineCause(published: RefusedPublication): string | null {
+  if (publicationDependencyValidationDeadline(published)) return "validation of the existing dependency installation reached its deadline";
+  if (!published.failure?.retryableDeadline) return null;
+  return published.failure.admissionDeadline ? "the pre-push hook's CPU admission lock-wait budget expired before checks started"
     : "a check reached its execution deadline without a verdict";
 }
 
@@ -5289,8 +5378,9 @@ function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: R
   if (published.remote === "unreachable") {
     return `publishing the passed stage: checking the remote pipeline branch failed${retried}. Check remote access and connectivity, then use publish to try again.\n${published.error}`;
   }
-  if (failure?.retryableDeadline && attempt.publicationRetry?.exhausted) {
-    return `publishing the passed stage: ${publicationDeadlineCause(failure)} after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
+  const deadlineCause = publicationDeadlineCause(published);
+  if (deadlineCause && attempt.publicationRetry?.exhausted) {
+    return `publishing the passed stage: ${deadlineCause} after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
   }
   if (publicationNotLanded(published)) {
     return `publishing the passed stage: ${publicationInterruptionCause(failure)}${retried}. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.\n${published.error}`;
@@ -5335,14 +5425,14 @@ async function retryRefusedPublication(
   const operation = pipeline.delivery?.operation;
   const failure = published.failure;
   const notLanded = publicationNotLanded(published);
-  const deadlineOnly = failure?.retryableDeadline === true;
+  const deadlineCause = publicationDeadlineCause(published);
   const app403 = failure?.retryableApp403 === true;
   if (!operation || operation.state !== "settled") return false;
   const recoverable = published.remote === "unreachable" || recoverablePublication(published);
   const history = recordPublicationFailure(pipeline, attempt, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
-    cause: app403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
-    detail: (app403 ? APP_PUSH_WAIT_REASON : deadlineOnly ? publicationDeadlineCause(failure!)
-      : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : published.error).slice(0, 400),
+    cause: app403 ? "app-git-403" : deadlineCause ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
+    detail: (app403 ? APP_PUSH_WAIT_REASON : deadlineCause
+      ?? (notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : published.error)).slice(0, 400),
     recoverable }, notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
   if (!recoverable) return false;
   const recovery = pipeline.publicationRecovery![operation.sha]!;
@@ -5364,9 +5454,9 @@ async function retryRefusedPublication(
     ports.scheduleTick?.(0);
     return true;
   }
-  const schedule = app403 ? `${unixMs(record.retryAt) === appDeadline ? "automatic retry window ends" : "next automatic retry"} at ${record.retryAt}` : deadlineOnly ? `automatic capacity retry ${record!.failures} at ${record!.retryAt}`
+  const schedule = app403 ? `${unixMs(record.retryAt) === appDeadline ? "automatic retry window ends" : "next automatic retry"} at ${record.retryAt}` : deadlineCause ? `automatic capacity retry ${record!.failures} at ${record!.retryAt}`
     : `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
-  await keepPassedStageUnpublished(pipeline, attempt, app403 ? `${APP_PUSH_WAIT_REASON}; ${schedule}` : deadlineOnly ? `${publicationDeadlineCause(failure!)}; ${schedule}`
+  await keepPassedStageUnpublished(pipeline, attempt, app403 ? `${APP_PUSH_WAIT_REASON}; ${schedule}` : deadlineCause ? `${deadlineCause}; ${schedule}`
     : notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
     : published.remote === "unreachable" ? `${published.error}; ${schedule}`
     : `${publicationFailureCause(failure!)}. The stage changed no files; ${schedule}`);
@@ -5382,11 +5472,11 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
   if (!operation || !result) return;
   const failure = result.failure;
   const notLanded = publicationNotLanded(result);
-  const deadlineOnly = failure?.retryableDeadline === true;
+  const deadlineCause = publicationDeadlineCause(result);
   recordPublicationFailure(pipeline, attempt ?? undefined, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
-    cause: failure?.retryableApp403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
-    detail: (deadlineOnly ? publicationDeadlineCause(failure!)
-      : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error).slice(0, 400),
+    cause: failure?.retryableApp403 ? "app-git-403" : deadlineCause ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
+    detail: (deadlineCause
+      ?? (notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error)).slice(0, 400),
     recoverable: result.remote === "unreachable" || recoverablePublication(result) },
     notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
 }
@@ -12319,8 +12409,8 @@ async function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage,
   delete attempt.providerWait;
   delete attempt.providerRecoveryBudget;
   const wait = openProviderWait(stage, attempt, notice, ports);
-  if (modelCapacity(notice.condition)) {
-    await reopenCapacityRetry(pipeline, stage, attempt, ports);
+  if (modelCapacity(notice.condition) || workspaceRequirementsFailure(notice.condition)) {
+    await reopenSameConversationRetry(pipeline, stage, attempt, ports);
     return true;
   }
   const detail = `stage cut by ${notice.condition.label}; last: ${wait.text}`;
@@ -12330,8 +12420,8 @@ async function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage,
   return true;
 }
 
-/** Older quota timers cannot replenish or reselect a capacity retry. */
-async function reopenCapacityRetry(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<void> {
+/** Continue the existing attempt with its saved backoff and budget. */
+async function reopenSameConversationRetry(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<void> {
   const wait = attempt.providerWait!;
   delete wait.stageRetry;
   if (wait.tries >= 3) {
@@ -12680,7 +12770,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
       return true;
     }
     if (!await confirmUnchangedCut()) return true;
-    await reopenCapacityRetry(pipeline, stage, attempt, ports);
+    await reopenSameConversationRetry(pipeline, stage, attempt, ports);
     await persist();
     return true;
   }
@@ -14361,13 +14451,20 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
         delete attempt.controllerWait;
         if (durable.firstProviderCutAt) delete attempt.providerWait;
       }
+      const opensWait = notice && shouldOpenProviderWait(attempt.providerWait, notice);
       if (notice?.condition.kind === "transient" && !attempt.report && !attempt.providerWait?.retryCancelled
         && stage.effectiveRole.engine === attempt.effectiveRole.engine
-        && (!attempt.providerWait || notice.ts > attempt.providerWait.turnTs
-          || notice.ts === attempt.providerWait.turnTs && attempt.providerWait.condition.kind === "transient")
+        && (opensWait || notice.ts === attempt.providerWait?.turnTs && attempt.providerWait.condition.kind === "transient")
         && durable?.promptHistoryComplete !== false && !newerExternalProviderPrompt(attempt, durable)
         && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) <= (durable?.firstProviderCutAt ?? notice.ts)) {
-        if (!attempt.providerWait || notice.ts > attempt.providerWait.turnTs) openProviderWait(stage, attempt, notice, lanePorts);
+        if (opensWait) {
+          const receipt = await reconcileDeliveredProviderContinuation(pipeline, stage, attempt, lanePorts);
+          if (receipt === "unknown") {
+            await deferProviderReceiptReconciliation(pipeline, attempt, lanePorts, checkpoint);
+            return;
+          }
+          openProviderWait(stage, attempt, notice, lanePorts);
+        }
         const wait = attempt.providerWait!;
         if (!wait.actionAt) {
           pipeline.stateDetail = providerWaitDetail(attempt, lanePorts);
@@ -18613,7 +18710,7 @@ async function applyPipelinePatch(
          fallback, so a raw `model: 123` / `effort: false` would 200 with the old
          config instead of the required 400 (issue #118 Finding 3). */
       if (req.runtime !== undefined && req.runtime !== "local" && !isCloudRuntime(req.runtime)) return { error: "runtime must be local, codex-cloud or claude-cloud", status: 400 };
-      if (req.engine !== undefined && req.engine !== "claude" && req.engine !== "codex") return { error: "engine must be claude or codex", status: 400 };
+      if (req.engine !== undefined && req.engine !== "claude" && req.engine !== "codex" && req.engine !== "antigravity") return { error: "engine must be claude, codex or antigravity", status: 400 };
       if (req.model !== undefined && req.model !== null && typeof req.model !== "string") return { error: "model must be a string or null", status: 400 };
       if (req.effort !== undefined && req.effort !== null && typeof req.effort !== "string") return { error: "effort must be a string or null", status: 400 };
       if (!validAgentMemoryMax(req.agentMemoryMaxBytes)) return { error: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB", status: 400 };
@@ -18650,7 +18747,7 @@ async function applyPipelinePatch(
         /* A preferred or role-default Codex tier does not apply to Claude, so
            moving the stage to Claude drops it and the answer names it. An
            explicit tier, sent or stored, still needs serviceTier:null. */
-        const leavesCodex = req.engine === "claude" && target.effectiveRole.engine === "codex";
+        const leavesCodex = req.engine !== undefined && req.engine !== "codex" && target.effectiveRole.engine === "codex";
         droppedCodexTier = leavesCodex ? (target.preferredServiceTier
           ?? (target.effectiveRole.serviceTierSource === "role-default" ? target.effectiveRole.serviceTier : undefined)) ?? null : null;
         const resolved = resolvePipelineRole(

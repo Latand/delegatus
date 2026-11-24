@@ -119,6 +119,11 @@ import {
   type VoiceSessionPersona,
 } from "./voicePersona";
 
+const OWNER_HANDOFF_DISABLED_FEATURES = {
+  shell_tool: false, shell_snapshot: false, unified_exec: false, unified_exec_tty: false,
+  experimental_use_unified_exec_tool: false, image_generation: false, computer_use: false,
+};
+
 type JsonObject = Record<string, unknown>;
 type PendingRpc = {
   resolve(value: unknown): void;
@@ -243,6 +248,8 @@ export interface CodexAppServerHostOptions {
   /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
   cleanMemory?: boolean;
   omitSkillsInstructions?: boolean;
+  /** The verified owner guest worker can only relay to its project seat. */
+  ownerRelayHandoffOnly?: boolean;
   /** Effective native-memory decision shared with the delivery ledger. */
   nativeMemoryEnabled?: boolean;
   developerInstructions?: string;
@@ -1645,6 +1652,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
     catch (error) { options.releaseCleanup?.(); throw error; }
     const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
+    if (options.ownerRelayHandoffOnly) Object.assign(subagentFeatures, OWNER_HANDOFF_DISABLED_FEATURES);
     const granted = grantedPlugins(options.plugins);
     if (!options.allowSubagents) subagentFeatures.plugins = granted.length > 0;
     /* Clean launches and the installation's Delegatus choice disable native memory. */
@@ -1785,6 +1793,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;
       Object.assign(config.features as Record<string, unknown>, cleanup.features);
+      if (options.ownerRelayHandoffOnly) Object.assign(config.features as Record<string, unknown>, OWNER_HANDOFF_DISABLED_FEATURES);
       const memoryConfig = memoryHook ? codexMemoryHookConfig(memoryHook) : null;
       config.hooks = { ...cleanup.hooks, ...memoryConfig,
         state: { ...cleanup.hooks.state, ...memoryConfig?.state } };
@@ -3712,6 +3721,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       || !this.writerFenceAllowsActuation() || this.childProcessOwnership() !== "owned") return false;
     this.disconnectSocketConnection();
     return true;
+  }
+
+  /** A replacement can claim the same native listener. Relinquish this
+      connection locally because process termination belongs to its writer. */
+  detachAfterStartupCustodyLoss(): void {
+    if (!(this.child instanceof CodexSocketTransport) || this.releasing || this.released) return;
+    this.disconnectSocketConnection();
+    const cleanup = this.releaseCleanup;
+    this.releaseCleanup = null;
+    cleanup?.();
   }
 
   private disconnectSocketConnection(): void {

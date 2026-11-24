@@ -1,11 +1,15 @@
 import type { NextConfig } from "next";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
 
 /* DELEGATUS_STANDALONE and DELEGATUS_DEV_ORIGINS fold into the LLV_ names
    read below (docs/design/rename-delegatus.md §5). */
 import "./bin/envAlias.mjs";
+
+const DefinePlugin = createRequire(import.meta.url)("next/dist/compiled/webpack/webpack").webpack.DefinePlugin;
 
 const nextConfig: NextConfig = {
   // The first microphone press can install the audio processor from the
@@ -53,7 +57,26 @@ const nextConfig: NextConfig = {
       ".next/server/chunks/**",
     ],
   },
-  webpack(config, { isServer, nextRuntime }) {
+  webpack(config, { isServer, nextRuntime, dev }) {
+    if (isServer && nextRuntime === "nodejs" && !dev) {
+      // Embed provenance in the server bundle at build time. The launcher
+      // expectation is runtime input and must never define what build answers.
+      let revision: string | null = null;
+      try {
+        const value = execFileSync("git", ["rev-parse", "HEAD"], { cwd: __dirname, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+        if (/^[a-f0-9]{40}$/.test(value)) revision = value;
+      } catch { /* packaged source may not carry .git */ }
+      if (!revision) {
+        try {
+          const value = JSON.parse(readFileSync(join(__dirname, "package.json"), "utf8")).gitHead;
+          if (typeof value === "string" && /^[a-f0-9]{40}$/.test(value)) revision = value;
+        } catch { /* an unversioned build cannot prove checkout readiness */ }
+      }
+      config.plugins ??= [];
+      config.plugins.push(new DefinePlugin({
+        __DELEGATUS_BUILD_REVISION__: JSON.stringify(revision),
+      }));
+    }
     if (isServer && nextRuntime === "nodejs") {
       // Bundled, ws's optional `bufferutil` peer resolves to an empty module,
       // so every client frame of 48 bytes or more threw `b.mask is not a

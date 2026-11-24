@@ -30,7 +30,7 @@ import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/
 import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readRecipientPipelineEvidence, type PipelineRecipientSelection, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, StateSnapshotChangedError, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readPipelineRowsForTasks, readRecipientPipelineEvidence, type PipelineRecipientSelection, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, StateSnapshotChangedError, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 import { pipelineActivitySettled } from "./types";
 import type { Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelinePublication, PipelineStage } from "./types";
@@ -1537,20 +1537,31 @@ export function loadPipelinesForTask(taskId: string): Pipeline[] {
   });
 }
 
+export function loadPipelinesForSeatAgenda(taskIds: readonly string[], laneIds: readonly string[]): Pipeline[] {
+  const lanes = new Map<string, Pipeline>();
+  for (const row of readPipelineRowsForTasks(stateDatabaseFile(), taskIds, laneIds)) {
+    const lane = decodePipeline(row);
+    if (lane && !lanes.has(lane.id)) lanes.set(lane.id, lane);
+  }
+  return [...lanes.values()];
+}
+
 /** Bounded feed for consumers that need task membership changes without loading
  * the full pipeline registry. The cursor follows the active collection log. */
-export function pipelineTaskBindingSource() {
+export function pipelineChangeSource() {
   const collection = pipelineStore();
   return {
     revision: () => collection.revision(),
     changesAfter: (revision: number, key: string, limit: number) => collection.changesAfter(revision, key, limit),
     parse: (valueJson: string) => {
       const pipeline = decodePipeline(JSON.parse(valueJson));
-      if (!pipeline) throw new PipelineStoreError("invalid pipeline row in task-binding feed");
+      if (!pipeline) throw new PipelineStoreError("invalid pipeline row in change feed");
       return pipeline;
     },
   };
 }
+
+export const pipelineTaskBindingSource = pipelineChangeSource;
 
 /** Validates durable task membership at the pipeline store seam. */
 export function pipelineTaskLinkError(

@@ -519,6 +519,53 @@ describe("global merge admission", () => {
     } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
   });
 
+  test.each([
+    ["DNS lookup", "error connecting to api.github.com: lookup api.github.com: no such host", "DNS lookup failed"],
+    ["TLS hostname mismatch", "connection failed: tls: failed to verify certificate: x509: certificate is valid for example.invalid, not api.github.com", "certificate verification failed"],
+    ["missing pull request", "gh: pull request not found\nwarning: connection closed", "not found"],
+    ["unreachable network", "dial tcp: ENETUNREACH", "temporarily unavailable"],
+  ])("%s keeps the linked PR's ref and task open", async (_case, stderr, reason) => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-linked-read-refused");
+    const previousPath = process.env.PATH;
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.delivery!.target.pr = 17;
+      savePipelines([fixture.lane]);
+      const bin = fs.mkdtempSync(path.join(fixture.directory, "gh-"));
+      const calls = path.join(bin, "calls");
+      fs.writeFileSync(path.join(bin, "gh"), `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2, 4).join(" ") + "\\n");
+process.stderr.write(${JSON.stringify(stderr)});
+process.exit(1);
+`, { mode: 0o700 });
+      process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+      const { githubRunner } = await import("../monitor/githubEvidence");
+      let clock = T0;
+      const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
+        pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: githubRunner(fixture.work, 30_000, { declared: () => false }) });
+      for (let poll = 0; poll < 3; poll++) {
+        await sweepAutoMerge(ports);
+        await sweepTaskFinishes(ports);
+        clock += MERGE_POLL_MS;
+      }
+      expect({
+        ref: fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main"),
+        task: loadTasks().find(task => task.id === taskId)?.status,
+        calls: fs.readFileSync(calls, "utf8").trim().split("\n"),
+      }).toEqual({ ref: fixture.base, task: "inbox", calls: ["pr view", "pr view", "pr view"] });
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: expect.stringContaining(reason) });
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      fs.rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
   test.each(["red", "pending", "head", "draft", "closed", "review", "protection"] as const)(
     "F3: a %s PR observation survives a later endpoint outage and an unavailable retry", async condition => {
       resetAutoMergeForTests();
@@ -957,7 +1004,7 @@ test("retry-merge clears the persisted read failure and its counter", async () =
     write: async () => { throw new Error("forbidden write"); },
   });
   for (let n = 0; n < 3; n++, clock += MERGE_POLL_MS) await sweepAutoMerge(ports);
-  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", readFailures: 3, reason: "GitHub read authentication failed: HTTP 401: Bad credentials" });
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", readFailures: 3, reason: "GitHub read authentication failed: details withheld for privacy" });
   const retried = await patchPipeline(id, { action: "retry-merge" }, { now: () => iso(clock) } as never);
   expect(retried.error).toBeUndefined();
   expect(loadPipelines()[0]!.merge).toMatchObject({ state: "queued", readFailures: 0, reason: null, nextReadAt: null });

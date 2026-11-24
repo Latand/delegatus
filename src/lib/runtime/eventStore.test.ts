@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
 
 import type { RuntimeEvent } from "./engineHost";
-import { durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord, reconcileRuntimeEventCursor } from "./eventStore";
+import { durableRuntimeEventTailSeq, FileRuntimeEventStore, readCodexRetirementTurnLedger, readHostTurnRecord, reconcileRuntimeEventCursor } from "./eventStore";
 import { streamingVoiceDelivery } from "./voiceDelivery";
 
 test("runtime event store durably replays ordered events and ignores a partial tail", () => {
@@ -378,6 +378,37 @@ function turnLedger(events: Array<Record<string, unknown>>): { directory: string
 function frame(uuid: string, type: "user" | "assistant", turnId: string | null): Record<string, unknown> {
   return { kind: "item", turnId, phase: "completed", item: { type, uuid, timestamp: "2026-10-07T00:00:00.000Z", message: { content: "x" } } };
 }
+
+test.each(["idle-before-terminal", "idle-after-terminal"] as const)("Codex retirement correlates a large turn's %s checkpoint", async order => {
+  const events = [
+    { kind: "turn-started", turnId: "turn-one" },
+    { kind: "delta", turnId: "turn-one", text: "x".repeat(256 * 1024) },
+    ...(order === "idle-before-terminal" ? [{ kind: "session-status", status: "idle" }] : []),
+    { kind: "turn-ended", turnId: "turn-one", status: "completed" },
+    ...(order === "idle-after-terminal" ? [{ kind: "session-status", status: "idle" }] : []),
+  ];
+  const { directory } = turnLedger(events);
+  expect(await readCodexRetirementTurnLedger("session", "turn-one", events.length, directory)).toMatchObject({ status: "completed" });
+});
+
+test("Codex retirement rejects a mismatched idle checkpoint and newer work", async () => {
+  for (const events of [
+    [
+      { kind: "turn-started", turnId: "turn-one" },
+      { kind: "session-status", status: "active" },
+      { kind: "turn-ended", turnId: "turn-one", status: "completed" },
+    ],
+    [
+      { kind: "turn-started", turnId: "turn-one" },
+      { kind: "turn-ended", turnId: "turn-one", status: "completed" },
+      { kind: "session-status", status: "idle" },
+      { kind: "turn-started", turnId: "turn-two" },
+    ],
+  ]) {
+    const { directory } = turnLedger(events);
+    expect(await readCodexRetirementTurnLedger("session", "turn-one", events.length, directory)).toBeNull();
+  }
+});
 
 test("the host turn record of a session with no ledger is absent", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-turn-record-"));

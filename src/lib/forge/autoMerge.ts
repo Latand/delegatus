@@ -32,7 +32,7 @@ import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 import { readBatchLanding, readCarriedBranchLanding } from "./batchLanding";
 import { engineForgeWriteEnv, isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
-import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
+import { githubReadBackoff, githubReadFailure, isTransientMergeReadFailure } from "./githubReadFailure";
 import { issueDeliverySince, sweepIssueDelivery, type IssueDeliveryPorts } from "./issueDelivery";
 import { deliveryPullRequestRepository, githubRepositoryOfRemote } from "./workLinks";
 
@@ -1289,9 +1289,8 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     }
     if (decision.kind === "refresh") decision = { kind: "block", reason: refreshRefusal };
   } catch (error) {
-    const transientRead = githubReadFailure(error).transient;
     const gitReady = gitOnlyDeliveryReady(read);
-    if (transientRead && !read.merge!.rejectedLandingHead && read.delivery?.target.pr !== undefined && gitReady
+    if (isTransientMergeReadFailure(error) && !read.merge!.rejectedLandingHead && read.delivery?.target.pr !== undefined && gitReady
       && !read.proactiveTaskIds?.length) {
       if (view) {
         if (merge.effectUncertain) {
