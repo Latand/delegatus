@@ -535,7 +535,7 @@ async function curationReadCooperatively<T>(create: (fence: CurationReadFence) =
     return next;
   });
   const pause = async () => {
-    await yieldToRuntime();
+    await yieldToRuntime(signal);
     // Give Bun timers a turn as well as immediates.
     await new Promise<void>(resolve => setTimeout(resolve, 0));
     check();
@@ -687,40 +687,47 @@ export function curationView(project: string, now = Date.now(), scopeRows = cura
   return { lastAt, nextAt, newLessons, passes };
 }
 
-/** Panel polling reads two pass records, independent of retained history size. */
-function panelPasses(project: string, fence?: CurationReadFence) {
+/** Normally just the current and last pass of each physical project. */
+function* panelPassSteps(project: string, fence?: CurationReadFence, maxVisits = Infinity): Generator<null,
+  { live: CuratorPass | null; last: CuratorPass | null; lastDeferred?: true }> {
   const rows = projectRows(project, fence);
+  const live = rows.map(row => row.current ? observedPass(row.current, fence) : null).find(passIsLive) ?? null;
   let latestCompleted: CuratorPass | null = null;
+  let visits = 0;
+  yield null;
   for (const row of rows) {
     // Pass ids are appended in claim order. The newest entry can be the live
     // pass, so walk back only to this row's newest completed pass; never
     // materialize the retained history for a panel read.
     for (let index = row.passes.length - 1; index >= 0; index--) {
+      if (visits++ >= maxVisits) return { live, last: null, lastDeferred: true };
       const pass = observedPass(row.passes[index]!, fence);
+      yield null;
       if (!pass) continue;
       if (passIsLive(pass)) continue;
       if (!latestCompleted || pass.claimedAt > latestCompleted.claimedAt) latestCompleted = pass;
       break;
     }
   }
-  const current = rows.map(row => row.current ? observedPass(row.current, fence) : null).find(passIsLive) ?? null;
-  return { live: current, last: latestCompleted };
+  return { live, last: latestCompleted };
 }
 export function curationPanelRuns(project: string) {
-  const selected = panelPasses(project);
+  const selected = finishRead(panelPassSteps(project));
   return { live: selected.live ? readPass(selected.live.id) : null, last: selected.last ? readPass(selected.last.id) : null };
 }
 /** Run identities remain readable when history-derived counts or scheduling
  * exceed the panel deadline. The caller marks their counts unavailable. */
 export function curationPanelRunMetadata(project: string) {
-  return panelPasses(project);
+  // Save the live run first. Bound the search for the last run if a damaged
+  // history contains a long suffix of missing or unfinished pass rows.
+  return finishRead(panelPassSteps(project, undefined, 32));
 }
 /** One deadline and freshness fence cover both displayed pass counts and status. */
 export async function curationPanelDataCooperatively(project: string, now: number, setting: ReturnType<typeof effectiveCurationSetting>, signal?: AbortSignal) {
   return curationReadCooperatively(function* (fence) {
     let runs: ReturnType<typeof curationPanelRuns> = { live: null, last: null };
     try {
-      const selected = panelPasses(project, fence);
+      const selected = yield* panelPassSteps(project, fence);
       const live = selected.live ? yield* readPassSteps(selected.live.id, fence) : null;
       yield null;
       const last = selected.last ? yield* readPassSteps(selected.last.id, fence) : null;

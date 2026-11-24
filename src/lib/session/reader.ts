@@ -20,7 +20,7 @@ export interface SessionRecord {
 
 export interface SessionReadResult {
   path: string;
-  engine: Extract<Engine, "claude" | "codex" | "copilot">;
+  engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">;
   messages: SessionRecord[];
   reasoning: SessionRecord[];
   tools: SessionRecord[];
@@ -458,7 +458,7 @@ function normalizeCopilotLine(obj: Record<string, unknown>): NormalizedSessionLi
 
 /** Normalize one parsed JSONL object without reading or knowing its path. */
 export function normalizeSessionLine(
-  engine: Extract<Engine, "claude" | "codex" | "copilot">,
+  engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">,
   obj: Record<string, unknown>,
 ): NormalizedSessionLine[] {
   if (exceedsNormalizationDepth(obj)) {
@@ -468,14 +468,14 @@ export function normalizeSessionLine(
       text: `Record skipped: JSON nesting exceeds ${MAX_NORMALIZATION_DEPTH} levels`,
     } }];
   }
-  if (engine === "copilot") return normalizeCopilotLine(obj);
+  if (engine === "copilot" || engine === "antigravity") return normalizeCopilotLine(obj);
   return engine === "claude" ? normalizeClaudeLine(obj) : normalizeCodexLine(obj);
 }
 
-function readCopilot(pathname: string): SessionReadResult {
-  const out: SessionReadResult = { path: pathname, engine: "copilot", messages: [], reasoning: [], tools: [], traces: [] };
+function readCopilot(pathname: string, engine: "copilot" | "antigravity" = "copilot"): SessionReadResult {
+  const out: SessionReadResult = { path: pathname, engine, messages: [], reasoning: [], tools: [], traces: [] };
   for (const obj of readJsonl(pathname)) {
-    for (const normalized of normalizeSessionLine("copilot", obj)) push(out, normalized.record);
+    for (const normalized of normalizeSessionLine(engine, obj)) push(out, normalized.record);
   }
   return out;
 }
@@ -488,8 +488,8 @@ function readCodex(pathname: string): SessionReadResult {
   return out;
 }
 
-export function readSession(pathname: string, engine: Extract<Engine, "claude" | "codex" | "copilot">): SessionReadResult {
-  if (engine === "copilot") return readCopilot(pathname);
+export function readSession(pathname: string, engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">): SessionReadResult {
+  if (engine === "copilot" || engine === "antigravity") return readCopilot(pathname, engine);
   return engine === "claude" ? readClaude(pathname) : readCodex(pathname);
 }
 
@@ -497,8 +497,8 @@ const AUTHORSHIP_SCAN_CHUNK_BYTES = 64 * 1024;
 const AUTHORSHIP_SCAN_MAX_RECORD_BYTES = 8 * 1024 * 1024;
 const AUTHORSHIP_CHECKPOINT_HEAD_BYTES = 64 * 1024;
 
-function recordHasUserMessage(record: Record<string, unknown>, engine: Extract<Engine, "claude" | "codex" | "copilot">): boolean {
-  if (engine === "copilot") {
+function recordHasUserMessage(record: Record<string, unknown>, engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">): boolean {
+  if (engine === "copilot" || engine === "antigravity") {
     const content = rec(record.data).content;
     return record.type === "user.message" && typeof content === "string" && Boolean(content.trim());
   }
@@ -576,7 +576,7 @@ interface AuthorshipScannerState {
    Every complete line decodes independently — JSONL records never contain
    raw newlines, so per-line UTF-8 decoding matches streaming decoding. */
 function createAuthorshipScanner(
-  engine: Extract<Engine, "claude" | "codex" | "copilot">,
+  engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">,
   limit: number,
   initial?: AuthorshipScannerState,
 ) {
@@ -662,7 +662,7 @@ function createAuthorshipScanner(
 
 export function scanUserAuthoredMessages(
   pathname: string,
-  engine: Extract<Engine, "claude" | "codex" | "copilot">,
+  engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">,
   limit = Number.MAX_SAFE_INTEGER,
 ): AuthorshipScanResult {
   let fd: number | null = null;
@@ -696,7 +696,7 @@ function authorshipAllowance(options: AuthorshipScanOptions, charged: number): n
 
 export async function scanUserAuthoredMessagesCooperatively(
   pathname: string,
-  engine: Extract<Engine, "claude" | "codex" | "copilot">,
+  engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">,
   limit = Number.MAX_SAFE_INTEGER,
   options: AuthorshipScanOptions = {},
 ): Promise<AuthorshipScanResult> {
@@ -873,12 +873,12 @@ export async function scanUserAuthoredMessagesCooperatively(
 
 export function countUserAuthoredMessages(
   pathname: string,
-  engine: Extract<Engine, "claude" | "codex" | "copilot">,
+  engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">,
   limit = Number.MAX_SAFE_INTEGER,
 ): number {
   return scanUserAuthoredMessages(pathname, engine, limit).count;
 }
 
-export function hasUserAuthoredMessage(pathname: string, engine: Extract<Engine, "claude" | "codex" | "copilot">): boolean {
+export function hasUserAuthoredMessage(pathname: string, engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">): boolean {
   return countUserAuthoredMessages(pathname, engine, 1) > 0;
 }

@@ -1986,6 +1986,7 @@ export function structuredComposerSession(runtimeSession: RuntimeSessionView | n
   if (!runtimeSession?.structuredControlsEnabled) return null;
   return runtimeSession.session.hostKind === "codex-app-server" || runtimeSession.session.hostKind === "claude-broker"
     || runtimeSession.session.hostKind === "copilot-acp"
+    || runtimeSession.session.hostKind === "antigravity-acp"
     ? runtimeSession
     : null;
 }

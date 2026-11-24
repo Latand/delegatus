@@ -39,7 +39,7 @@ export function ReasoningControls({
   ultra = null,
   inheritSpeed = false,
 }: {
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   model: string;
   effort: string;
   speed: SpeedChoice;

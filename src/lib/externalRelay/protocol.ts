@@ -1,4 +1,4 @@
-import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, normalizeInputMediaDescriptor, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
+import { hasHistoryMedia, hasInboundMedia, MAX_INPUT_MEDIA_REFS, normalizeInputMediaDescriptor, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
 import { z } from "zod";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
@@ -232,7 +232,7 @@ const answerRequestSchema = z.object({
   liveness: livenessSchema,
   // The chat key of §A.8, kept for the member limit and the records. A
   // malformed one is dropped, as an unknown field would be.
-  chat: z.object({ key: chatKey }).optional().catch(undefined),
+  chat: z.object({ key: chatKey, title: boundedString(200).optional().catch(undefined) }).optional().catch(undefined),
   input: inputSchema,
   answer: z.object({
     attachments: relayAttachmentLimitsSchema.optional().catch(undefined),
@@ -241,10 +241,18 @@ const answerRequestSchema = z.object({
   }),
 });
 /** Normalize item policy refusals on anchors; malformed anchors stay fail-closed. */
-export const requestSchema = z.preprocess(raw => {
+export const requestSchema = z.preprocess((raw, context) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   let value = raw as Record<string, unknown>;
-  const inbound = Array.isArray(value.features) && value.features.includes("relay_media_in");
+  const mediaPolicy = {
+    delivery: value.delivery === "guest" ? "guest" as const : undefined,
+    features: Array.isArray(value.features) ? value.features : undefined,
+  };
+  // The ordinary schema tolerates a malformed destination extension. Guest
+  // delivery cannot carry an owner destination, including a malformed one.
+  if (mediaPolicy.delivery === "guest" && value.owner_delivery !== undefined)
+    context.addIssue({ code: "custom", path: ["owner_delivery"], message: INVALID_REQUESTER_DETAIL });
+  const inbound = hasInboundMedia(mediaPolicy);
   if (!value.input || typeof value.input !== "object" || Array.isArray(value.input)) return raw;
   let input = value.input as Record<string, unknown>;
   const trigger = Array.isArray(input.conversation) ? input.conversation.find(message =>
@@ -256,13 +264,13 @@ export const requestSchema = z.preprocess(raw => {
       return { ...message, media: message.media.map((rawMedia: unknown) => {
         const parsed = claimMediaSchema.safeParse(rawMedia);
         if (!parsed.success) return rawMedia;
-        try { return normalizeInputMediaDescriptor(parsed.data, value.features as string[]); }
+        try { return normalizeInputMediaDescriptor(parsed.data, mediaPolicy.features); }
         catch { return rawMedia; }
       }) };
     }) };
     value = { ...value, input };
   }
-  const history = inbound && (value.delivery === "guest" || (value.features as string[]).includes(RELAY_HISTORY_MEDIA));
+  const history = hasHistoryMedia(mediaPolicy);
   // Anchor descriptors take precedence over conflicting historical copies.
   const refs = new Map<string, InputMedia>();
   if (Array.isArray(input.conversation)) for (const message of input.conversation) {
@@ -283,7 +291,7 @@ export const requestSchema = z.preprocess(raw => {
           const parsed = history ? inputMediaSchema.safeParse(rawMedia) : null;
           let media = parsed?.success && parsed.data.kind === "photo" ? parsed.data : null;
           if (media) {
-            try { validateInputMediaDescriptor(media, value.features as string[]); }
+            try { validateInputMediaDescriptor(media, mediaPolicy.features); }
             catch { media = null; }
           }
           const previous = media && refs.get(media.ref);
@@ -305,10 +313,12 @@ export const requestSchema = z.preprocess(raw => {
   } };
 }, answerRequestSchema.superRefine((request, context) => {
   const { input } = request;
-  const invalidRequester = request.delivery === "guest" ? !ownerRequesterTrigger(input)
-    : input.requester && (!requesterTrigger(input) ||
-        input.requester.is_owner && input.requester.is_anonymous_admin ||
-        request.owner_delivery && !input.requester.is_owner);
+  const { requester } = input;
+  const invalidRequester = request.delivery === "guest"
+    ? !requester || !requesterTrigger(input) || requester.is_anonymous_admin
+      || !requester.is_owner && (requester.is_admin || requester.can_restrict_members || requester.can_delete_messages)
+    : requester && (!requesterTrigger(input) || requester.is_owner && requester.is_anonymous_admin
+        || request.owner_delivery && !requester.is_owner);
   if (invalidRequester)
     context.addIssue({ code: "custom", path: ["input", "requester"], message: INVALID_REQUESTER_DETAIL });
   if (request.delivery === "guest") {
