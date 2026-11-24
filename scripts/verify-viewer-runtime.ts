@@ -31,7 +31,7 @@
  * Exit status is the verdict; the evidence is printed as JSON.
  */
 
-import { verifyProvisioningRelease, verifyProvisioningTrace } from "./verify-provisioning-release.mjs";
+import { removeProvisioningFixture, verifyProvisioningRelease, verifyProvisioningTrace } from "./verify-provisioning-release.mjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -549,7 +549,7 @@ export async function verifyViewerRuntime(root: string): Promise<ViewerRuntimeEv
     }
     return verdict(modules.length, [], evidence, null);
   } finally {
-    fs.rmSync(sandbox, { recursive: true, force: true });
+    await removeProvisioningFixture(sandbox);
   }
 }
 

@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { createServer as serveHttp } from "node:http";
 import { tmpdir } from "node:os";
@@ -9,6 +9,23 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 const workerPath = ".next/server/provision-toolchain-worker.js";
+
+/** The fixture itself owns this tree, including immutable cache directories. */
+export async function removeProvisioningFixture(root) {
+  const unseal = async directory => {
+    const info = await lstat(directory).catch(error => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!info?.isDirectory()) return;
+    await chmod(directory, info.mode | 0o700);
+    for (const child of await readdir(directory, { withFileTypes: true })) {
+      if (child.isDirectory()) await unseal(path.join(directory, child.name));
+    }
+  };
+  await unseal(root);
+  await rm(root, { recursive: true, force: true });
+}
 
 export async function seedProvisioningPackage(checkout, sandbox, env, bun) {
   const directory = await mkdtemp(path.join(sandbox, "provision-package-"));
@@ -164,7 +181,7 @@ export async function serveProvisioningFixture({ root, bun, standalone = false, 
       const stop = setTimeout(() => child.kill("SIGKILL"), 5_000);
       try { await exited; } finally { clearTimeout(stop); }
     }
-    await rm(sandbox, { recursive: true, force: true });
+    await removeProvisioningFixture(sandbox);
   }
 }
 

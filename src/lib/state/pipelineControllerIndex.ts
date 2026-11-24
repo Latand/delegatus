@@ -55,7 +55,10 @@ export function installProvisioningWaitIndex(db: Database, directory: string): b
     row_key TEXT PRIMARY KEY, resource TEXT NOT NULL, sequence INTEGER NOT NULL, row_order INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS pipeline_provision_wait_head ON pipeline_provision_wait(resource,sequence,row_order,row_key)`);
-  const resource = "json_extract(NEW.value_json,'$.provisioningJob.resource')";
+  const eligibleResource = (row: string) => `CASE WHEN json_valid(${row}) THEN CASE
+    WHEN json_extract(${row},'$.state')='provisioning' AND json_extract(${row},'$.hiddenAt') IS NULL
+      AND json_extract(${row},'$.closedAt') IS NULL THEN json_extract(${row},'$.provisioningJob.resource') END END`;
+  const resource = eligibleResource("NEW.value_json");
   const put = `INSERT INTO pipeline_provision_wait(row_key,resource,sequence,row_order)
     SELECT NEW.row_key,${resource},NEW.row_revision,NEW.row_order
     WHERE NEW.collection='pipelines' AND json_valid(NEW.value_json) AND ${resource} IS NOT NULL
@@ -72,8 +75,8 @@ export function installProvisioningWaitIndex(db: Database, directory: string): b
     CREATE TRIGGER pipeline_provision_wait_delete AFTER DELETE ON state_rows WHEN OLD.collection='pipelines'
       BEGIN DELETE FROM pipeline_provision_wait WHERE row_key=OLD.row_key; END`);
   db.exec(`INSERT OR IGNORE INTO pipeline_provision_wait(row_key,resource,sequence,row_order)
-    SELECT row_key,json_extract(value_json,'$.provisioningJob.resource'),row_revision,row_order FROM state_rows
-    WHERE collection='pipelines' AND json_valid(value_json) AND json_extract(value_json,'$.provisioningJob.resource') IS NOT NULL`);
+    SELECT row_key,${eligibleResource("value_json")},row_revision,row_order FROM state_rows
+    WHERE collection='pipelines' AND ${eligibleResource("value_json")} IS NOT NULL`);
   return true;
 }
 

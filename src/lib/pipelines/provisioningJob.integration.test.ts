@@ -5,7 +5,7 @@ import { settlePipelineStopReadLanes } from "./controllerStopRead";
 import { BUILD_ONLY, createPipelineFromRequest, expect, fs, path, realWorktreeLane, test } from "./engine.fixture";
 import { latch, until, withControllerAuditState } from "./fixtures/ownedStageControl";
 import { findControllerPipeline } from "./store";
-import { seedProvisioningPackage } from "../../../scripts/verify-provisioning-release.mjs";
+import { removeProvisioningFixture, seedProvisioningPackage } from "../../../scripts/verify-provisioning-release.mjs";
 
 test("a held dependency reply expires and the controller adopts the original checkout", () => withControllerAuditState(async () => {
   const fixture = await realWorktreeLane("held-dependency-reply", BUILD_ONLY as never);
@@ -124,7 +124,7 @@ test("a held dependency reply expires and the controller adopts the original che
     await job?.settleProvisioningJobsForTests();
     await settlePipelineControllerJobs();
     await settlePipelineStopReadLanes();
-    fs.rmSync(root, { recursive: true, force: true });
+    await removeProvisioningFixture(root);
   }
 }), 20_000);
 
@@ -162,6 +162,6 @@ test("the checkout release starts a leased worker and consumes a cold shared gra
     await closeSupply?.();
     await settlePipelineControllerJobs();
     await settlePipelineStopReadLanes();
-    fs.rmSync(root, { recursive: true, force: true });
+    await removeProvisioningFixture(root);
   }
 }), 18_000);
