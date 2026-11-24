@@ -245,24 +245,47 @@ function boundedRecord(
   return record;
 }
 
+export interface MessageAuthorContextResult {
+  records: ConversationMessage[] | null;
+  scannedBytes: number;
+}
+
 /** A complete, bounded author join domain. Partial transcript scans cannot
  * safely assign an occurrence to one of several identical messages. */
 export function readMessageAuthorContext(
   source: MessagesPageSource,
   focus: ReadonlyArray<{ seq: number; role: string; ts: string | null }> = [],
 ): ConversationMessage[] | null {
-  if (source.size > MAX_SCAN_BYTES) return readMessageAuthorNeighborhood(source, focus);
+  return readMessageAuthorContextWithStats(source, focus).records;
+}
+
+/** Bounded author join domain with exact scanned byte accounting. When focused
+ * rows are provided on a transcript larger than one chunk (256 KiB), reads only
+ * the ±20-minute neighborhood around the page instead of scanning the full file. */
+export function readMessageAuthorContextWithStats(
+  source: MessagesPageSource,
+  focus: ReadonlyArray<{ seq: number; role: string; ts: string | null }> = [],
+): MessageAuthorContextResult {
+  if (focus.length > 0 && source.size > CHUNK_BYTES) {
+    return readMessageAuthorNeighborhoodWithStats(source, focus);
+  }
+  if (source.size > MAX_SCAN_BYTES) return readMessageAuthorNeighborhoodWithStats(source, focus);
   const records: ConversationMessage[] = [];
   let cursor: MessagesPageCursor | null = null;
+  let scannedBytes = 0;
   do {
     const page = readMessagesPage(source, {
       kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor,
     });
+    scannedBytes += page.scanned.bytes;
     records.push(...page.records);
-    if (records.length > 10_000 || page.scanned.capped) return readMessageAuthorNeighborhood(source, focus);
+    if (records.length > 10_000 || page.scanned.capped) {
+      const neighborhood = readMessageAuthorNeighborhoodWithStats(source, focus);
+      return { records: neighborhood.records, scannedBytes: scannedBytes + neighborhood.scannedBytes };
+    }
     cursor = page.cursor;
   } while (cursor);
-  return records;
+  return { records, scannedBytes };
 }
 
 /** Find the first later user row outside the time neighborhood, starting at
@@ -309,23 +332,23 @@ function upperAuthorBoundary(
   return { offset: source.size, bytes, atEnd: true };
 }
 
-/** Read the time neighborhood of a requested page when the complete transcript
- * is too large. The extra ten minutes on either side includes every row that
- * could compete for an occurrence matching a focused row. If the byte budget
- * cannot prove both time boundaries, leave occurrence authors unassigned. */
-function readMessageAuthorNeighborhood(
+/** Read the time neighborhood of a requested page. The extra twenty minutes on
+ * either side includes every row that could compete for an occurrence matching
+ * a focused row. If the byte budget cannot prove both time boundaries, leave
+ * occurrence authors unassigned. */
+function readMessageAuthorNeighborhoodWithStats(
   source: MessagesPageSource,
   focus: ReadonlyArray<{ seq: number; role: string; ts: string | null }>,
-): ConversationMessage[] | null {
+): MessageAuthorContextResult {
   const users = focus.filter((record) => record.role === "user" && record.ts && Number.isFinite(Date.parse(record.ts)));
-  if (!users.length) return null;
+  if (!users.length) return { records: null, scannedBytes: 0 };
   const times = users.map((record) => Date.parse(record.ts!));
   const window = 20 * 60_000;
   const lower = Math.min(...times) - window;
   const upper = Math.max(...times) + window;
   const newestOffset = Math.max(...users.map((record) => record.seq));
   const boundary = upperAuthorBoundary(source, newestOffset, upper);
-  if (!boundary) return null;
+  if (!boundary) return { records: null, scannedBytes: MAX_SCAN_BYTES };
   const records: ConversationMessage[] = [];
   let cursor: MessagesPageCursor | null = { o: boundary.offset, p: 0, r: [] };
   let spent = boundary.bytes;
@@ -335,7 +358,7 @@ function readMessageAuthorNeighborhood(
       kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor,
     });
     spent += page.scanned.bytes;
-    if (page.scanned.capped || spent > MAX_SCAN_BYTES) return null;
+    if (page.scanned.capped || spent > MAX_SCAN_BYTES) return { records: null, scannedBytes: spent };
     for (const record of page.records) {
       const at = record.ts ? Date.parse(record.ts) : Number.NaN;
       if (!Number.isFinite(at)) continue;
@@ -343,13 +366,13 @@ function readMessageAuthorNeighborhood(
         sawUpperBoundary = true;
         continue;
       }
-      if (!sawUpperBoundary) return null;
-      if (at < lower) return records;
+      if (!sawUpperBoundary) return { records: null, scannedBytes: spent };
+      if (at < lower) return { records, scannedBytes: spent };
       records.push(record);
     }
     cursor = page.cursor;
   } while (cursor);
-  return sawUpperBoundary ? records : null;
+  return { records: sawUpperBoundary ? records : null, scannedBytes: spent };
 }
 
 function boundedPageInteger(value: number, fallback: number, maximum: number): number {

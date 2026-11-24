@@ -1542,6 +1542,45 @@ test("deleted worktree still groups under its parent repo after SQLite import", 
 });
 
 
+test("deleted Codex worktree keeps its parent repository project via recorded worktree memory", () => {
+  useStateDirectory("deleted-codex-worktree-parent");
+  const base = path.join(SANDBOX, "codex-deleted-parent");
+  const repo = path.join(base, "main-repo");
+  const sessions = path.join(base, "sessions");
+  fs.mkdirSync(repo, { recursive: true });
+  const git = (args: string[]) => {
+    const res = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "-C", repo, ...args], { encoding: "utf8" });
+    if (res.status !== 0) throw new Error(res.stderr);
+  };
+  git(["init", "-q", "-b", "main"]);
+  git(["commit", "--allow-empty", "-qm", "initial"]);
+  git(["remote", "add", "origin", "https://example.invalid/team/native-fixture.git"]);
+  const codexCheckout = path.join(base, ".codex", "worktrees", "f1a2", "main-repo");
+  fs.mkdirSync(path.dirname(codexCheckout), { recursive: true });
+  git(["worktree", "add", "-q", "-b", "fixture-codex", codexCheckout, "main"]);
+
+  const parent = projectInfoFromCwd(repo)!;
+  const transcript = path.join(sessions, "ag-codex-wt-1", "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, `${JSON.stringify({ type: "session.start", data: { cwd: codexCheckout } })}\n${JSON.stringify({ type: "user.message", data: { content: "hi" } })}\n`);
+
+  const liveEntry = describe("antigravity-sessions", sessions, transcript, fs.statSync(transcript));
+  expect(liveEntry.project).toBe(parent.project);
+  expect(liveEntry.projectName).toBe(parent.displayName);
+  persistWorktreeMap();
+
+  git(["worktree", "remove", "--force", codexCheckout]);
+  expect(fs.existsSync(codexCheckout)).toBe(false);
+  globalCache("project-info-cwd-v2").clear();
+  globalCache("worktree-git").clear();
+  globalCache("project-overlay-v1").clear();
+
+  const deletedEntry = describe("antigravity-sessions", sessions, transcript, fs.statSync(transcript));
+  expect(deletedEntry.project).toBe(parent.project);
+  expect(deletedEntry.projectName).toBe(parent.displayName);
+  expect(projectRootForCwd(codexCheckout)).toBe(repo);
+});
+
 test("relay media refs are excluded from catalog titles and search prompts", async () => {
   const { conversationSearchText } = await import("./describe");
   const ref = `media_${"a".repeat(32)}`;

@@ -1710,3 +1710,150 @@ test("search indexing removes private media refs while preserving native context
   expect(result.items).toHaveLength(1); expect(JSON.stringify(result)).not.toContain(ref);
   expect(fs.readFileSync(filename, "utf8")).toBe(original);
 });
+
+test("v5 to v6 migration re-checks user_version inside BEGIN IMMEDIATE, preserves checkpoints & FK cascade, and runs off-thread on feed", async () => {
+  const legacyPaths = (["claude", "codex", "copilot"] as const).map((eng) => {
+    const file = path.join(sandbox, `v5-keep-${eng}.jsonl`);
+    const row = eng === "claude"
+      ? { type: "user", timestamp: "2026-11-23T10:00:00Z", message: { content: `legacykeep${eng}` } }
+      : eng === "codex"
+        ? { type: "event_msg", timestamp: "2026-11-23T10:00:00Z", payload: { type: "user_message", message: `legacykeep${eng}` } }
+        : { type: "user.message", timestamp: "2026-11-23T10:00:00Z", data: { content: `legacykeep${eng}` } };
+    fs.writeFileSync(file, `${JSON.stringify(row)}\n`);
+    return source(file, eng, "v5-keep");
+  });
+
+  // 1. Seed a real v5 database with valid checkpoints.
+  const firstRun = await indexTranscriptSources(legacyPaths, { complete: false });
+  expect(firstRun.failures).toEqual([]);
+  const dbPath = statePath("transcript-search.sqlite");
+  {
+    const db = new Database(dbPath);
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      PRAGMA legacy_alter_table = ON;
+      BEGIN IMMEDIATE;
+      ALTER TABLE transcript_files RENAME TO transcript_files_v6;
+      CREATE TABLE transcript_files (
+        path TEXT PRIMARY KEY,
+        size INTEGER NOT NULL,
+        mtime_ms REAL NOT NULL,
+        project TEXT NOT NULL,
+        engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+        messages_count INTEGER NOT NULL,
+        indexed_at INTEGER NOT NULL
+      );
+      INSERT INTO transcript_files SELECT * FROM transcript_files_v6;
+      DROP TABLE transcript_files_v6;
+      PRAGMA user_version = 5;
+      COMMIT;
+      PRAGMA legacy_alter_table = OFF;
+      PRAGMA foreign_keys = ON;
+    `);
+    db.close();
+  }
+
+  // 2. Staggered two-process race: child migrates v5 -> v6 and writes a fresh Antigravity
+  //    checkpoint between parent reading v5 and parent entering BEGIN IMMEDIATE.
+  const agyPath = path.join(sandbox, "staggered-agy.jsonl");
+  fs.writeFileSync(agyPath, `${JSON.stringify({ type: "user.message", timestamp: "2026-11-23T11:00:00Z", data: { content: "staggeredagyproof" } })}\n`);
+  const origExec = Database.prototype.exec;
+  let armed = false;
+  let injected = false;
+  let rebuildCount = 0;
+  Database.prototype.exec = function patchedExec(sql: string) {
+    if (String(sql).includes("PRAGMA foreign_keys = OFF")) armed = true;
+    if (armed && !injected && String(sql).trim() === "BEGIN IMMEDIATE") {
+      injected = true;
+      const code = `const fs = await import("node:fs");
+        const { indexTranscriptSources } = await import("./src/lib/search/transcriptSearch.ts");
+        const p = process.env.TEST_AGY_SOURCE;
+        const st = fs.statSync(p);
+        const res = await indexTranscriptSources([{ path: p, size: st.size, mtimeMs: st.mtimeMs, project: "v5-keep", engine: "antigravity" }], { complete: false });
+        if (res.failures.length) throw new Error(JSON.stringify(res.failures));`;
+      const child = Bun.spawnSync([process.execPath, "-e", code], {
+        cwd: process.cwd(),
+        env: { ...process.env, LLV_STATE_DIR: process.env.LLV_STATE_DIR!, TEST_AGY_SOURCE: agyPath },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (child.exitCode !== 0) throw new Error(`staggered child failed: ${child.stderr.toString()}`);
+    }
+    if (String(sql).includes("DROP TABLE transcript_files_previous")) rebuildCount += 1;
+    return origExec.call(this, sql);
+  };
+  try {
+    await indexTranscriptSources([], { complete: false });
+  } finally {
+    Database.prototype.exec = origExec;
+  }
+  expect(injected).toBe(true);
+  expect(rebuildCount).toBe(0);
+
+  // 3. All 3 legacy checkpoints AND the concurrent child's Antigravity checkpoint survived!
+  const recheck = await indexTranscriptSources(legacyPaths, { complete: false });
+  expect(recheck.filesRead).toBe(0);
+  expect(recheck.filesSkipped).toBe(3);
+
+  const probe = new Database(dbPath);
+  try {
+    expect(probe.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(6);
+    expect(probe.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM transcript_checkpoints WHERE path = ?").get(agyPath)?.n).toBe(1);
+    expect(probe.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    // ON DELETE CASCADE from transcript_files -> transcript_messages & transcript_checkpoints remains intact!
+    probe.exec("PRAGMA foreign_keys = ON");
+    probe.query("DELETE FROM transcript_files WHERE path = ?").run(agyPath);
+    expect(probe.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM transcript_messages WHERE transcript_path = ?").get(agyPath)?.n).toBe(0);
+    expect(probe.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM transcript_checkpoints WHERE path = ?").get(agyPath)?.n).toBe(0);
+
+    // 4. Downgrade back to v5 and run production feed (`scheduleTranscriptIndex`):
+    //    off-thread worker upgrades v5 -> v6 and preserves checkpoints without blocking the loop.
+    probe.exec(`
+      PRAGMA foreign_keys = OFF;
+      PRAGMA legacy_alter_table = ON;
+      BEGIN IMMEDIATE;
+      ALTER TABLE transcript_files RENAME TO transcript_files_v6;
+      CREATE TABLE transcript_files (
+        path TEXT PRIMARY KEY,
+        size INTEGER NOT NULL,
+        mtime_ms REAL NOT NULL,
+        project TEXT NOT NULL,
+        engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+        messages_count INTEGER NOT NULL,
+        indexed_at INTEGER NOT NULL
+      );
+      INSERT INTO transcript_files SELECT * FROM transcript_files_v6;
+      DROP TABLE transcript_files_v6;
+      PRAGMA user_version = 5;
+      COMMIT;
+      PRAGMA legacy_alter_table = OFF;
+      PRAGMA foreign_keys = ON;
+    `);
+  } finally {
+    probe.close();
+  }
+
+  let maxGapMs = 0;
+  let lastTick = performance.now();
+  const interval = setInterval(() => {
+    const now = performance.now();
+    maxGapMs = Math.max(maxGapMs, now - lastTick);
+    lastTick = now;
+  }, 5);
+  try {
+    scheduleTranscriptIndex({ sources: legacyPaths, complete: false }, { force: true });
+    await waitForTranscriptIndexIdleForTests();
+  } finally {
+    clearInterval(interval);
+  }
+
+  const afterFeed = new Database(dbPath, { readonly: true });
+  try {
+    expect(afterFeed.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(6);
+    expect(afterFeed.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM transcript_checkpoints").get()?.n).toBe(3);
+    expect(afterFeed.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally {
+    afterFeed.close();
+  }
+  expect(maxGapMs).toBeLessThan(500);
+});

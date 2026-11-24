@@ -884,20 +884,27 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
   let worktree =
     worktreeFromPath(cwd) ??
     worktreeFromNested(cwd) ??
-    (codexWorktree ? liveWorktree ?? codexWorktree : liveWorktree);
+    liveWorktree;
   if (!worktree && !hasGitMarker(cwd)) {
-    /* An arbitrary-path worktree that has since been deleted: no live
-       recognizer matched and its `.git` is gone, but a resolution we recorded
-       while it was alive still names the parent repo. */
+    /* An arbitrary-path or deleted Codex worktree whose `.git` is gone:
+       no live recognizer matched, so consult a resolution recorded while it
+       was alive before falling back to a bare Codex path hint. */
     worktree = worktreeFromMemory(cwd, liveRepositoryRoot);
     if (!worktree && !liveRepositoryRoot) {
       const persisted = persistedProjects(resolutionState).byCwd.get(cwd);
       if (persisted) {
-        const resolved = aliasedProjectInfo(persisted.project, persisted.worktree, persisted.repo);
+        const resolved = aliasedProjectInfo(
+          persisted.project,
+          persisted.worktree ?? codexWorktree?.worktree,
+          persisted.repo,
+        );
         projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, resolved]);
         return resolved;
       }
     }
+  }
+  if (!worktree && codexWorktree) {
+    worktree = codexWorktree;
   }
   /* No repository claims the cwd: the directory itself is the project
      (operator decision, 2026-08-04). "Unresolved project" remains only for
@@ -956,9 +963,9 @@ export function projectRootForCwd(cwd: string): string | undefined {
   const worktree =
     worktreeFromPath(cwd) ??
     worktreeFromNested(cwd) ??
-    (worktreeFromCodexPath(cwd) ? worktreeFromGitFile(cwd) ?? worktreeFromCodexPath(cwd) : null) ??
     worktreeFromGitFile(cwd) ??
-    worktreeFromMemory(cwd, liveRepositoryRoot);
+    worktreeFromMemory(cwd, liveRepositoryRoot) ??
+    worktreeFromCodexPath(cwd);
   return worktree?.repo || liveRepositoryRoot || undefined;
 }
 

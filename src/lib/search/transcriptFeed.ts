@@ -1,4 +1,5 @@
 import {
+  ensureTranscriptSearchSchemaReadyOffThread,
   indexTranscriptSources,
   type TranscriptIndexSource,
 } from "./transcriptSearch";
@@ -47,7 +48,10 @@ async function productionRun(
 ): Promise<void> {
   const generation = state().generation;
   const indexed = await withViewerOperation("transcript.index", () =>
-    performanceSpans.wait("transcript.index", () => indexTranscriptSources(sources, { complete })));
+    performanceSpans.wait("transcript.index", async () => {
+      await ensureTranscriptSearchSchemaReadyOffThread();
+      return indexTranscriptSources(sources, { complete });
+    }));
   try {
     const { refreshMemoryIndex } = await import("@/lib/memory/service");
     await refreshMemoryIndex();

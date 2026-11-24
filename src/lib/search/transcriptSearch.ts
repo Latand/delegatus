@@ -157,7 +157,7 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
 
 const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 6;
 const TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE = 256;
-const scheduledSearchIndexes = new Set<string>();
+const scheduledSearchIndexes = new Map<string, { promise: Promise<void>; ref: () => void }>();
 const readySearchDatabases = new WeakSet<Database>();
 // Readiness is schema metadata. Invalidate on either replacement of the file
 // or a schema change; ordinary appends keep the same readiness. Bound the cache
@@ -180,25 +180,41 @@ function hasBodyHashColumn(db: Database): boolean {
 }
 
 function migrateSearchSchema(db: Database): void {
-  const currentVersion = schemaVersion(db);
-  if (currentVersion >= TRANSCRIPT_SEARCH_SCHEMA_VERSION && hasBodyHashColumn(db)) return;
-  const needsTableRebuild = currentVersion < 6;
-  if (needsTableRebuild) db.exec("PRAGMA foreign_keys = OFF");
-  db.exec("BEGIN IMMEDIATE");
+  const initialVersion = schemaVersion(db);
+  if (initialVersion >= TRANSCRIPT_SEARCH_SCHEMA_VERSION && hasBodyHashColumn(db)) return;
+  const mayRebuildFiles = initialVersion < 6;
+  if (mayRebuildFiles) {
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.exec("PRAGMA legacy_alter_table = ON");
+  }
+  let inTransaction = false;
   try {
-    if (!hasBodyHashColumn(db)) db.exec("ALTER TABLE transcript_messages ADD COLUMN body_hash TEXT");
-    const pendingMessages = db.query<{ id: number; body: string }, [number, number]>(`
-      SELECT id, body FROM transcript_messages WHERE body_hash IS NULL AND id > ?
-      ORDER BY id
-      LIMIT ?
-    `);
-    const update = db.query("UPDATE transcript_messages SET body_hash = ? WHERE id = ?");
-    let lastId = 0;
-    while (true) {
-      const messages = pendingMessages.all(lastId, TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE);
-      for (const message of messages) update.run(normalizedBodyHash(message.body), message.id);
-      if (messages.length < TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE) break;
-      lastId = messages.at(-1)!.id;
+    db.exec("BEGIN IMMEDIATE");
+    inTransaction = true;
+    // Re-read the schema version inside the write lock so a second migrator
+    // racing a completed upgrade does not rebuild again or drop fresh state.
+    const lockedVersion = schemaVersion(db);
+    const hadBodyHash = hasBodyHashColumn(db);
+    if (lockedVersion >= TRANSCRIPT_SEARCH_SCHEMA_VERSION && hadBodyHash) {
+      db.exec("COMMIT");
+      inTransaction = false;
+      return;
+    }
+    if (!hadBodyHash) db.exec("ALTER TABLE transcript_messages ADD COLUMN body_hash TEXT");
+    if (!hadBodyHash || lockedVersion < 3) {
+      const pendingMessages = db.query<{ id: number; body: string }, [number, number]>(`
+        SELECT id, body FROM transcript_messages WHERE body_hash IS NULL AND id > ?
+        ORDER BY id
+        LIMIT ?
+      `);
+      const update = db.query("UPDATE transcript_messages SET body_hash = ? WHERE id = ?");
+      let lastId = 0;
+      while (true) {
+        const messages = pendingMessages.all(lastId, TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE);
+        for (const message of messages) update.run(normalizedBodyHash(message.body), message.id);
+        if (messages.length < TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE) break;
+        lastId = messages.at(-1)!.id;
+      }
     }
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(transcript_messages)").all();
     if (!columns.some((column) => column.name === "sort_timestamp")) {
@@ -206,11 +222,14 @@ function migrateSearchSchema(db: Database): void {
       // belongs to background work; readers use timestamp/file time meanwhile.
       db.exec("ALTER TABLE transcript_messages ADD COLUMN sort_timestamp REAL");
     }
-    if (needsTableRebuild) {
-      // Table replacement invalidates its old descriptor checkpoint as well.
-      db.exec("DROP TABLE IF EXISTS transcript_checkpoints");
+    if (lockedVersion < 6) {
+      // Only `transcript_files.engine` widens its CHECK constraint in v6.
+      // With `legacy_alter_table = ON` + `foreign_keys = OFF` (SQLite 3.26+,
+      // including macOS 3.39.4), renaming `transcript_files` leaves both
+      // `transcript_messages` and `transcript_checkpoints` untouched with
+      // their `REFERENCES transcript_files(path) ON DELETE CASCADE` intact,
+      // avoiding multi-GB message copies and preserving valid checkpoints.
       db.exec(`
-        ALTER TABLE transcript_messages RENAME TO transcript_messages_previous;
         ALTER TABLE transcript_files RENAME TO transcript_files_previous;
         CREATE TABLE transcript_files (
           path TEXT PRIMARY KEY,
@@ -223,28 +242,7 @@ function migrateSearchSchema(db: Database): void {
         );
         INSERT INTO transcript_files (path, size, mtime_ms, project, engine, messages_count, indexed_at)
         SELECT path, size, mtime_ms, project, engine, messages_count, indexed_at FROM transcript_files_previous;
-        CREATE TABLE transcript_messages (
-          id INTEGER PRIMARY KEY,
-          transcript_path TEXT NOT NULL,
-          message_index INTEGER NOT NULL,
-          speaker TEXT NOT NULL CHECK(speaker IN ('user', 'assistant')),
-          timestamp INTEGER,
-          byte_offset INTEGER NOT NULL,
-          line_number INTEGER NOT NULL,
-          body TEXT NOT NULL,
-          body_hash TEXT NOT NULL,
-          sort_timestamp REAL,
-          UNIQUE(transcript_path, message_index),
-          FOREIGN KEY(transcript_path) REFERENCES transcript_files(path) ON DELETE CASCADE
-        );
-        INSERT INTO transcript_messages (id, transcript_path, message_index, speaker, timestamp, byte_offset, line_number, body, body_hash, sort_timestamp)
-        SELECT id, transcript_path, message_index, speaker, timestamp, byte_offset, line_number, body, body_hash, sort_timestamp FROM transcript_messages_previous;
-        DROP TABLE transcript_messages_previous;
         DROP TABLE transcript_files_previous;
-        UPDATE transcript_messages
-          SET sort_timestamp = COALESCE(timestamp,
-            (SELECT mtime_ms / 1000.0 FROM transcript_files WHERE path = transcript_path))
-          WHERE sort_timestamp IS NULL;
       `);
     }
     db.exec(`
@@ -253,14 +251,20 @@ function migrateSearchSchema(db: Database): void {
       );
       INSERT OR IGNORE INTO transcript_search_sequence VALUES
         (1, (SELECT COALESCE(MAX(id), 0) FROM transcript_messages));
-      PRAGMA user_version = ${Math.max(currentVersion, TRANSCRIPT_SEARCH_SCHEMA_VERSION)};
+      PRAGMA user_version = ${Math.max(lockedVersion, TRANSCRIPT_SEARCH_SCHEMA_VERSION)};
       COMMIT;
     `);
-    if (needsTableRebuild) db.exec("PRAGMA foreign_keys = ON");
+    inTransaction = false;
   } catch (error) {
-    try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ }
-    if (needsTableRebuild) db.exec("PRAGMA foreign_keys = ON");
+    if (inTransaction) {
+      try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ }
+    }
     throw error;
+  } finally {
+    if (mayRebuildFiles) {
+      try { db.exec("PRAGMA legacy_alter_table = OFF"); } catch { /* ignore */ }
+      try { db.exec("PRAGMA foreign_keys = ON"); } catch { /* ignore */ }
+    }
   }
 }
 
@@ -336,7 +340,7 @@ function openWriterDatabase(): Database {
       cursor TEXT NOT NULL
     )`);
     transcriptPathIndex.install(db, path.dirname(filename));
-    if (db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM transcript_messages").get()!.n === 0) {
+    if (db.query<{ found: number }, []>("SELECT 1 AS found FROM transcript_messages LIMIT 1").get() === null) {
       /* Empty fresh indexes are cheap to create before the first indexing pass. */
       db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS transcript_messages_vocab
@@ -409,7 +413,7 @@ function openQueryDatabase(): Database {
       return openQueryDatabase();
     }
     if (metadata.hit && metadata.vocabulary) readySearchDatabases.add(db);
-    if (currentVersion < TRANSCRIPT_SEARCH_SCHEMA_VERSION || !metadata.hit || !metadata.vocabulary) scheduleSearchIndexBuild(filename);
+    if (currentVersion < TRANSCRIPT_SEARCH_SCHEMA_VERSION || !metadata.hit || !metadata.vocabulary) void scheduleSearchIndexBuild(filename);
     return db;
   } catch (error) {
     db.close();
@@ -417,9 +421,17 @@ function openQueryDatabase(): Database {
   }
 }
 
-function scheduleSearchIndexBuild(filename: string): void {
-  if (scheduledSearchIndexes.has(filename)) return;
-  scheduledSearchIndexes.add(filename);
+function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<void> {
+  const existing = scheduledSearchIndexes.get(filename);
+  if (existing) {
+    if (keepAlive) existing.ref();
+    return existing.promise;
+  }
+  let resolveBuild!: () => void;
+  const promise = new Promise<void>((resolve) => { resolveBuild = resolve; });
+  let ref = () => {};
+  const entry = { promise, ref: () => ref() };
+  scheduledSearchIndexes.set(filename, entry);
   try {
     /* Under a lease: it ends with this Viewer instead of holding the service
        cgroup after it (src/lib/helperLease.ts). */
@@ -429,20 +441,53 @@ function scheduleSearchIndexBuild(filename: string): void {
       cwd: process.cwd(),
       env: { ...process.env, LLV_STATE_DIR: path.dirname(filename) },
     }, path.dirname(filename));
+    ref = () => {
+      proc.ref();
+      for (const stream of proc.stdio) (stream as unknown as { ref?: () => void } | null)?.ref?.();
+    };
     let settled = false;
     const settle = (failure: string | null) => {
       if (settled) return;
       settled = true;
       if (failure) console.error(`[transcript-search] ${failure}; migration will retry on the next search`);
-      scheduledSearchIndexes.delete(filename);
+      if (scheduledSearchIndexes.get(filename) === entry) scheduledSearchIndexes.delete(filename);
+      resolveBuild();
     };
     proc.once("error", () => settle("index worker failed"));
     proc.once("exit", (code, signal) => settle(code === 0 ? null : `index worker exited with status ${code ?? signal}`));
-    unrefLeasedHelper(proc);
+    if (!keepAlive) unrefLeasedHelper(proc);
   } catch {
-    scheduledSearchIndexes.delete(filename);
+    if (scheduledSearchIndexes.get(filename) === entry) scheduledSearchIndexes.delete(filename);
     console.error("[transcript-search] could not start index worker; migration will retry on the next search");
+    resolveBuild();
   }
+  return promise;
+}
+
+/** Ensures an existing legacy transcript-search DB finishes schema upgrade
+    inside the leased background worker before the Viewer opens the writer
+    connection, keeping DDL/copy work off the Viewer's main event loop. */
+export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<void> {
+  const filename = statePath("transcript-search.sqlite");
+  try {
+    fs.statSync(filename);
+  } catch {
+    return;
+  }
+  let needsUpgrade = false;
+  const Database = sqliteDatabase();
+  let probe: Database | null = null;
+  try {
+    probe = observeSqlite(new Database(filename, { readonly: true, strict: true }), "transcript-search");
+    probe.exec("PRAGMA busy_timeout = 250; PRAGMA query_only = ON;");
+    needsUpgrade = schemaVersion(probe) < TRANSCRIPT_SEARCH_SCHEMA_VERSION;
+  } catch {
+    return;
+  } finally {
+    try { probe?.close(); } catch { /* ignore */ }
+  }
+  if (!needsUpgrade) return;
+  await scheduleSearchIndexBuild(filename, true);
 }
 
 /** Background index builds this process started that have not exited yet. */

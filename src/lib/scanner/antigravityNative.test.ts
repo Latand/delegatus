@@ -37,11 +37,36 @@ test("only a session directory's own events.jsonl is an Antigravity transcript",
   const root = path.join(sandbox, "sessions");
   const session = crypto.randomUUID();
   expect(isAntigravityTranscriptPath(root, path.join(root, session, "events.jsonl"))).toBe(true);
+  expect(isAntigravityTranscriptPath(root, path.join(root, "ag-review-session.1", "events.jsonl"))).toBe(true);
   expect(isAntigravityTranscriptPath(root, path.join(root, session, "delivery-acceptance.sqlite"))).toBe(false);
   expect(isAntigravityTranscriptPath(root, path.join(root, session, "nested", "events.jsonl"))).toBe(false);
-  expect(isAntigravityTranscriptPath(root, path.join(root, "not-a-uuid", "events.jsonl"))).toBe(false);
+  expect(isAntigravityTranscriptPath(root, path.join(root, ".hidden", "events.jsonl"))).toBe(false);
+  expect(isAntigravityTranscriptPath(root, path.join(root, "bad..session", "events.jsonl"))).toBe(false);
+  expect(isAntigravityTranscriptPath(root, path.join(root, "has space", "events.jsonl"))).toBe(false);
+  expect(isAntigravityTranscriptPath(root, path.join(root, "a".repeat(129), "events.jsonl"))).toBe(false);
   expect(antigravitySessionIdFromPath(path.join(root, session.toUpperCase(), "events.jsonl"))).toBe(session);
+  expect(antigravitySessionIdFromPath(path.join(root, "ag-review-session.1", "events.jsonl"))).toBe("ag-review-session.1");
+  expect(antigravitySessionIdFromPath(path.join(root, "bad..session", "events.jsonl"))).toBeNull();
   expect(antigravitySessionIdFromPath(path.join(root, session, "delivery-acceptance.sqlite"))).toBeNull();
+});
+
+test("discoverFilesWithProjectCatalog discovers both UUID and host-valid non-UUID Antigravity session ids", async () => {
+  const { discoverFilesWithProjectCatalog } = await import("./discover");
+  const sessionsRoot = path.join(sandbox, "discover-sessions");
+  const validIds = [crypto.randomUUID(), "ag-review-session.1"];
+  for (const id of validIds) {
+    const file = path.join(sessionsRoot, id, "events.jsonl");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify(rec("session.start", { sessionId: id, cwd: sandbox }))}\n${JSON.stringify(rec("user.message", { content: "hi" }))}\n`);
+  }
+  const hidden = path.join(sessionsRoot, ".hidden", "events.jsonl");
+  fs.mkdirSync(path.dirname(hidden), { recursive: true });
+  fs.writeFileSync(hidden, `${JSON.stringify(rec("session.start", { sessionId: ".hidden", cwd: sandbox }))}\n`);
+
+  const snap = await discoverFilesWithProjectCatalog([["antigravity-sessions", sessionsRoot]], undefined, { persist: false });
+  expect(snap.complete).toBe(true);
+  expect(validIds.map((id) => snap.files.some((f) => f.path === path.join(sessionsRoot, id, "events.jsonl")))).toEqual([true, true]);
+  expect(snap.files.some((f) => f.path === hidden)).toBe(false);
 });
 
 test("antigravityTurnState tracks busy tool/message records and terminal stop events", () => {

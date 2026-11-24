@@ -259,13 +259,14 @@ import {
   type SessionRecord,
   type SessionRecordKind,
 } from "@/lib/session/reader";
+import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import {
   decodeMessagesCursor,
   encodeMessagesCursor,
   InvalidMessagesCursorError,
   messagesCursorScope,
   readMessagesPage,
-  readMessageAuthorContext,
+  readMessageAuthorContextWithStats,
   StaleMessagesCursorError,
 } from "@/lib/session/messagesPage";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
@@ -273,7 +274,7 @@ import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
 import { applyAssignmentPatches, createTask, patchTask, taskDuePatch, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
-import { agentBrowserAccess, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
+import { agentBrowserAccess, hasConversationMessageAuthors, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { normalizedBoardQuery, pullRequestQuery, titleHasPullRequest } from "./pullRequestQuery";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, pipelineStageRuntimeSetting, setPipelineStageRuntime, validPipelineStageRuntime, type EffectiveReportTelegram } from "@/lib/projects/settings";
@@ -3934,16 +3935,20 @@ async function conversationMessages(
         code: "conversation_messages_transcript_changed",
       });
     }
+    /* sign-in-and-team §7.1: a human message names its member. */
+    const authored = withRecordAuthors(conversationId, transcriptPath, page.records, {
+      descriptor: pinned.descriptor, size: pinned.stat.size, engine, redactText: context.redactText,
+    });
+    const scanned = authored.scannedBytes > 0
+      ? { ...page.scanned, bytes: page.scanned.bytes + authored.scannedBytes }
+      : page.scanned;
     return redactPayload({
       conversationId,
       ...(args.full === true || args.includeMetadata === true ? { transcriptPath, engine, lastRecordAt: page.lastRecordAt } : {}),
-      /* sign-in-and-team §7.1: a human message names its member. */
-      records: withRecordAuthors(conversationId, transcriptPath, page.records, {
-        descriptor: pinned.descriptor, size: pinned.stat.size, engine, redactText: context.redactText,
-      }),
+      records: authored.records,
       hasMore: page.hasMore,
       cursor: page.cursor ? encodeMessagesCursor(page.cursor, scope) : null,
-      ...(args.full === true || args.includeMetadata === true || page.scanned.capped ? { scanned: page.scanned } : {}),
+      ...(args.full === true || args.includeMetadata === true || scanned.capped ? { scanned } : {}),
       ...selectedContextEcho(selected.target),
     });
   } finally {
@@ -3956,9 +3961,14 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   transcriptPath: string,
   records: T[],
   source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot" | "antigravity"; redactText?: (text: string) => string },
-): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
-  if (!records.some((record) => record.role === "user")) return records;
-  const context = readMessageAuthorContext(source, records);
+): { records: Array<T & { author?: RecordAuthor | AgentRecordAuthor }>; scannedBytes: number } {
+  if (!records.some((record) => record.role === "user")) return { records, scannedBytes: 0 };
+  const needsOccurrenceContext = hasConversationMessageAuthors(conversationId)
+    || deliveredMessageOccurrences(transcriptPath).length > 0;
+  const authorContext = needsOccurrenceContext
+    ? readMessageAuthorContextWithStats(source, records)
+    : { records: null, scannedBytes: 0 };
+  const context = authorContext.records;
   const authorRecords = context ?? records;
   const claudeOrigins = source.engine === "claude" ? claudeMessageProvenance(transcriptPath) : undefined;
   const agentAuthors = agentRecordAuthors(transcriptPath, source.engine, authorRecords, context, claudeOrigins);
@@ -3980,9 +3990,12 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
     if (human) authors.set(index, human);
     else if (agent) authors.set(index, agent);
   });
-  return records.map((record, index) => partAuthors.has(index)
-    ? { ...record, parts: partAuthors.get(index)! }
-    : authors.has(index) ? { ...record, author: authors.get(index)! } : record);
+  return {
+    records: records.map((record, index) => partAuthors.has(index)
+      ? { ...record, parts: partAuthors.get(index)! }
+      : authors.has(index) ? { ...record, author: authors.get(index)! } : record),
+    scannedBytes: authorContext.scannedBytes,
+  };
 }
 
 type ViewerSeatRefusal = "deputy" | "not-designated" | "no-seat" | "cross-project" | "foreign-project";

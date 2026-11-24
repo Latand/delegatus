@@ -14,21 +14,31 @@ import { recordValue, stringValue } from "./json";
 
 export const ANTIGRAVITY_TRANSCRIPT_BASENAME = "events.jsonl";
 
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Canonical session id shape shared by `AntigravityAcpHost` and the scanner. */
+export const ANTIGRAVITY_SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+const UUID_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isValidAntigravitySessionId(sessionId: string): boolean {
+  return typeof sessionId === "string"
+    && ANTIGRAVITY_SESSION_ID_PATTERN.test(sessionId)
+    && !sessionId.includes("..");
+}
 
 /** Whether a path inside an Antigravity `sessions` root is a transcript:
     the session directory's own `events.jsonl`, nothing nested deeper. */
 export function isAntigravityTranscriptPath(root: string, pathname: string): boolean {
   if (path.basename(pathname) !== ANTIGRAVITY_TRANSCRIPT_BASENAME) return false;
   const relative = path.relative(root, pathname).split(path.sep);
-  return relative.length === 2 && SESSION_ID.test(relative[0]!);
+  return relative.length === 2 && isValidAntigravitySessionId(relative[0]!);
 }
 
 /** The session id an Antigravity transcript belongs to: its directory name. */
 export function antigravitySessionIdFromPath(pathname: string): string | null {
   if (path.basename(pathname) !== ANTIGRAVITY_TRANSCRIPT_BASENAME) return null;
   const id = path.basename(path.dirname(pathname));
-  return SESSION_ID.test(id) ? id.toLowerCase() : null;
+  if (!isValidAntigravitySessionId(id)) return null;
+  return UUID_SESSION_ID.test(id) ? id.toLowerCase() : id;
 }
 
 export function antigravityData(record: Record<string, unknown>): Record<string, unknown> {
