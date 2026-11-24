@@ -24,8 +24,8 @@ const metricsDefaults = emptyAgentStateMetrics();
 
 export function normalizeAgentStateRows(value: unknown, kind: "projection"): Record<string, AgentProjection>;
 export function normalizeAgentStateRows(value: unknown, kind: "journal"): Record<string, AgentStateJournal>;
-export function normalizeAgentStateRows(value: unknown, kind: "metrics"): Record<string, AgentStateMetrics>;
-export function normalizeAgentStateRows(value: unknown, kind: "projection" | "journal" | "metrics"): Record<string, AgentProjection | AgentStateJournal | AgentStateMetrics> {
+export function normalizeAgentStateRows(value: unknown, kind: "metrics", preserveStoredShape?: boolean): Record<string, AgentStateMetrics>;
+export function normalizeAgentStateRows(value: unknown, kind: "projection" | "journal" | "metrics", preserveStoredShape = false): Record<string, AgentProjection | AgentStateJournal | AgentStateMetrics> {
   if (value === undefined) return {};
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid agent-state collection");
   const rows: Record<string, AgentProjection | AgentStateJournal | AgentStateMetrics> = {};
@@ -36,7 +36,9 @@ export function normalizeAgentStateRows(value: unknown, kind: "projection" | "jo
     if (kind === "metrics") {
       const metrics = normalizeAgentStateMetrics(row);
       if (!metrics) throw new Error("invalid agent-state row");
-      rows[key] = metrics;
+      // Registry snapshots are written as whole files. Keep the original
+      // sparse representation there so an unrelated write cannot migrate history.
+      rows[key] = preserveStoredShape ? row as AgentStateMetrics : metrics;
     } else rows[key] = row;
   }
   return rows;
@@ -192,7 +194,7 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
       next.divergence = null;
     }
     if (old && !observation.repair && !observation.repairConversation && semantic(old) === semantic(next)) return copyAgentStateRow(old);
-    const metrics = file.agentStateMetrics.current ?? emptyAgentStateMetrics();
+    const metrics = normalizeAgentStateMetrics(file.agentStateMetrics.current) ?? emptyAgentStateMetrics();
     metrics.revision++;
     metrics.at = observation.journal.at;
     next.revision = metrics.revision;
@@ -227,15 +229,18 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
 }
 
 export function readAgentStateMetrics(registry: AgentRegistry): AgentStateMetrics {
-  return registry.agentStateRead(file => copyAgentStateRow(file.agentStateMetrics.current ?? emptyAgentStateMetrics()));
+  return registry.agentStateMetricsRead();
 }
 export function readAgentProjection(registry: AgentRegistry, subject: string): AgentProjection | null {
   return registry.agentStateRead(file => copyAgentStateRow(file.agentStates[subject] ?? null));
 }
 export function readAgentStatePage(registry: AgentRegistry, collection: "agentStateJournal" | "agentStateMetrics", after = "", limit = 32) {
+  const currentMetrics = collection === "agentStateMetrics" ? registry.agentStateMetricsRead() : null;
   return registry.agentStateRead(file => {
     const keys = registryCollectionPage(file, collection, after, limit);
-    return { rows: keys.map(key => copyAgentStateRow(file[collection][key])), nextCursor: keys.length === limit ? keys.at(-1) : null };
+    return { rows: keys.map(key => collection === "agentStateMetrics"
+      ? key === "current" && currentMetrics ? currentMetrics : normalizeAgentStateMetrics(file.agentStateMetrics[key])
+      : copyAgentStateRow(file.agentStateJournal[key])), nextCursor: keys.length === limit ? keys.at(-1) : null };
   });
 }
 /** A status transition noticed at the runtime owner must survive a failed files publication. */
@@ -265,7 +270,7 @@ export function recordAgentProcessEnded(registry: AgentRegistry, observed: Agent
   return registry.agentStateWrite(file => {
     const row = file.agentStates[observed.subject];
     if (!row || row.revision !== observed.revision || row.verdict.state === "dead" || !row.facts.process.determined || !guard()) return false;
-    const metrics = file.agentStateMetrics.current ?? emptyAgentStateMetrics();
+    const metrics = normalizeAgentStateMetrics(file.agentStateMetrics.current) ?? emptyAgentStateMetrics();
     const before = copyAgentStateRow(row);
     row.facts.process = fact({ ...row.facts.process.value, status: "dead" }, {
       ...row.facts.process.evidence, observedAt: journal.at, validUntil: undefined,
@@ -291,7 +296,7 @@ export function pruneTerminalAgentProjection(registry: AgentRegistry, subject: s
     if (entry?.structuredHost?.process || entry?.structuredHost?.scope || entry?.structuredHost?.memory?.unit
       || entry?.structuredTerminationSurvivors?.length || entry?.pendingHostExits?.length
       || entry?.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true) return;
-    const metrics = file.agentStateMetrics.current ?? emptyAgentStateMetrics();
+    const metrics = normalizeAgentStateMetrics(file.agentStateMetrics.current) ?? emptyAgentStateMetrics();
     if (row.terminalAt === undefined) { row.terminalAt = at; metrics.terminalSubjects++; }
     if (at - row.terminalAt >= 86400_000 || metrics.terminalSubjects > 4096) {
       const old = contribution(row);

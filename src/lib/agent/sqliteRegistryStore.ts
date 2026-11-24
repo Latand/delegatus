@@ -22,6 +22,7 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, DatabaseReplacedError, openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { agentStateMetricsForStorage, type AgentStateMetrics } from "@/lib/agentState/model";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -6475,7 +6476,10 @@ export class SqliteAgentRegistryStore {
       const cache = this.rowCache.get(collection);
       const rows = file[collection] as Record<string, unknown>;
       for (const key of keys) {
-        const valueJson = Object.hasOwn(rows,key) ? JSON.stringify(rows[key]) : null;
+        const value = rows[key];
+        const persisted = collection === "agentStateMetrics" && value !== undefined
+          ? agentStateMetricsForStorage(value as AgentStateMetrics) : value;
+        const valueJson = Object.hasOwn(rows,key) ? JSON.stringify(persisted) : null;
         this.localRows.delete(grantDecisionKey(collection,key));
         this.localRows.set(grantDecisionKey(collection,key),{ dataVersion: stamps.after.split(":")[0]!,valueJson });
         while (this.localRows.size > 128) this.localRows.delete(this.localRows.keys().next().value!);
@@ -6687,11 +6691,13 @@ export class SqliteAgentRegistryStore {
   }
 
   private upsertRow(collection: RowCollection, key: string, value: unknown, order?: number): void {
+    const persisted = collection === "agentStateMetrics"
+      ? agentStateMetricsForStorage(value as AgentStateMetrics) : value;
     if (order !== undefined) {
       this.db.query(`
         INSERT INTO registry_rows(collection, row_key, value_json, row_order) VALUES (?, ?, ?, ?)
         ON CONFLICT(collection, row_key) DO UPDATE SET value_json = excluded.value_json, row_order = excluded.row_order
-      `).run(collection, key, JSON.stringify(value), order);
+      `).run(collection, key, JSON.stringify(persisted), order);
       return;
     }
     /* The next position comes from the two order indexes. Aggregating over
@@ -6704,7 +6710,7 @@ export class SqliteAgentRegistryStore {
       SELECT ?1, ?2, ?3, COALESCE((SELECT row_order FROM ${this.recordsSource} WHERE collection=?4 AND row_key=?5),
         MAX(COALESCE((SELECT MAX(row_order) FROM registry_rows WHERE collection=?6),-1), COALESCE(${archived},-1)) + 1) WHERE true
       ON CONFLICT(collection, row_key) DO UPDATE SET value_json = excluded.value_json
-    `).run(collection, key, JSON.stringify(value), collection, key, collection);
+    `).run(collection, key, JSON.stringify(persisted), collection, key, collection);
   }
 
   private persistRowOrder(collection: RowCollection, keys: string[]): void {

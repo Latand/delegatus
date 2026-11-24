@@ -1,4 +1,4 @@
-import { validAgentStateDisplay, agentStateActivity } from "@/lib/agentState/model";
+import { agentStateMetricsForStorage, validAgentStateDisplay, agentStateActivity } from "@/lib/agentState/model";
 import { normalizeAgentStateMetrics } from "@/lib/agentState/store";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { procBackend } from "@/lib/proc";
@@ -1270,13 +1270,21 @@ export function readCachedResourceSessions(): { sessions: ResourceSession[]; sta
       || observation.value.payload.sessionsStale === true || observation.degradedReason !== undefined };
 }
 
+export function serializeResourceObservationForStorage(observation: ResourceObservation<CollectedResources>): string {
+  const payload = observation.value.payload;
+  const storedObservation = payload.agentState
+    ? { ...observation, value: { ...observation.value, payload: { ...payload, agentState: agentStateMetricsForStorage(payload.agentState) } } }
+    : observation;
+  return JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation: storedObservation }) + "\n";
+}
+
 function persistObservation(observation: ResourceObservation<CollectedResources>): boolean {
   const filename = statePath(RESOURCE_OBSERVATION_FILE);
   let temporary: string | undefined;
   try {
     mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-    const serialized = JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation }) + "\n";
+    const serialized = serializeResourceObservationForStorage(observation);
     if (Buffer.byteLength(serialized) > RESOURCE_OBSERVATION_MAX_BYTES) throw new Error("resource observation exceeded durable size limit");
     writeFileSync(temporary, serialized, { mode: 0o600 });
     fsyncPath(temporary);
@@ -1294,7 +1302,7 @@ function persistObservation(observation: ResourceObservation<CollectedResources>
 }
 
 function validateDurableResourceObservation(observation: ResourceObservation<CollectedResources>): void {
-  const serialized = JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation }) + "\n";
+  const serialized = serializeResourceObservationForStorage(observation);
   if (Buffer.byteLength(serialized) > RESOURCE_OBSERVATION_MAX_BYTES) {
     throw new ResourceCollectorFailureError(
       "collector-crash",

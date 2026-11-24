@@ -2,8 +2,8 @@ import { measureRegistryRead } from "./registryReadPerformance";
 import { incomingDeliveryOutcome, normalizeIncomingDeliveryHealth, type IncomingDeliveryHealth } from "@/lib/runtime/incomingDeliveryHealth";
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
 import type { AgentProjection, AgentStateJournal, AgentStateMetrics } from "@/lib/agentState/model";
-import { validNativePromptAnchor } from "@/lib/agentState/model";
-import { normalizeAgentStateRows } from "@/lib/agentState/store";
+import { agentStateMetricsForStorage, emptyAgentStateMetrics, validNativePromptAnchor } from "@/lib/agentState/model";
+import { normalizeAgentStateMetrics, normalizeAgentStateRows } from "@/lib/agentState/store";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
@@ -5124,7 +5124,7 @@ export function normalizeRegistry(
         ? parsed._jsonStoreId : null,
       agentStates: normalizeAgentStateRows(parsed.agentStates, "projection"),
       agentStateJournal: normalizeAgentStateRows(parsed.agentStateJournal, "journal"),
-      agentStateMetrics: normalizeAgentStateRows(parsed.agentStateMetrics, "metrics"),
+      agentStateMetrics: normalizeAgentStateRows(parsed.agentStateMetrics, "metrics", true),
       entries: Object.fromEntries(Object.entries(parsed.entries).map(([id, entry]) => [id, normalizeEntry(entry, policy)])),
       receipts: Object.fromEntries(Object.entries(parsed.receipts).map(([id, receipt]) => [id, normalizeReceipt(receipt, policy)])),
       lineageEdges: parsed.lineageEdges && typeof parsed.lineageEdges === "object"
@@ -5276,6 +5276,7 @@ function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string
       ...receipt,
       launchProfile: compactLaunchProfile(receipt.launchProfile),
     }])),
+    agentStateMetrics: Object.fromEntries(Object.entries(value.agentStateMetrics).map(([key, metrics]) => [key, agentStateMetricsForStorage(metrics)])),
     conversations: Object.fromEntries(Object.entries(value.conversations).map(([id, conversation]) => [id, {
       ...conversation,
       generations: conversation.generations.map((generation) => ({
@@ -5530,6 +5531,7 @@ export class AgentRegistry {
   private writerAdmissionTail: Promise<void> = Promise.resolve();
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
+  private antigravityStuckCount: number | undefined;
   private lastDeliveryCompactionChangeId: number | null = null;
   private nextDeliveryCompactionAt: number | null = null;
   /** Synchronous writer admission lends its JSON claim to the mutation. */
@@ -7487,8 +7489,27 @@ export class AgentRegistry {
     return this.readKeyed(read);
   }
 
+  agentStateMetricsRead(): AgentStateMetrics {
+    const metrics = this.readKeyed(file => normalizeAgentStateMetrics(file.agentStateMetrics.current) ?? emptyAgentStateMetrics());
+    if (this.antigravityStuckCount !== undefined) metrics.stuckByEngine.antigravity = this.antigravityStuckCount;
+    return metrics;
+  }
+
   agentStateWrite<T>(write: (file: RegistryFile) => T): T {
-    return this.mutate(write, { deliveryOnly: true });
+    let nextAntigravityCount: number | undefined;
+    const result = this.mutate(file => {
+      const current = normalizeAgentStateMetrics(file.agentStateMetrics.current);
+      if (current && this.antigravityStuckCount !== undefined) {
+        current.stuckByEngine.antigravity = this.antigravityStuckCount;
+        file.agentStateMetrics.current = current;
+      }
+      const result = write(file);
+      const next = normalizeAgentStateMetrics(file.agentStateMetrics.current);
+      if (next) nextAntigravityCount = next.stuckByEngine.antigravity;
+      return result;
+    }, { deliveryOnly: true });
+    if (nextAntigravityCount !== undefined) this.antigravityStuckCount = nextAntigravityCount;
+    return result;
   }
 
   /** Revocation inspects current hosted rows without loading cold history. */

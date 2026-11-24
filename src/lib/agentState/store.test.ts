@@ -10,6 +10,7 @@ import { publishAgentProjection } from "./publication";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeEventInput } from "@/lib/runtime/contracts";
 import { emptyAgentStateMetrics } from "./model";
+import { validAgentStateMetricsBeforeAntigravity } from "./legacyMetricsFixture";
 import { normalizeAgentStateRows, readAgentProjection, readAgentStateMetrics, readAgentStatePage, subjectId, validAgentStateMetrics } from "./store";
 import { cachedAgentObservation } from "./projectionCache";
 import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords } from "./testFixture";
@@ -38,6 +39,15 @@ for (const mode of ["off", "sqlite"] as const) {
     expect(Object.values(stored.agentStateJournal)).toHaveLength(1);
     expect(stored.agentStateMetrics.current!.registryTranscriptDivergencesTotal).toBe(1);
     expect(stored.agentStateMetrics.current!.pendingProjectionPublications).toBe(1);
+    const persistedRows = mode === "sqlite"
+      ? (() => {
+        const db = new Database(f.sqliteFilename, { readonly: true });
+        try { return db.query<{ value_json: string }, []>("SELECT value_json FROM registry_rows WHERE collection='agentStateMetrics'").all().map(row => JSON.parse(row.value_json)); }
+        finally { db.close(); }
+      })()
+      : Object.values(JSON.parse(fs.readFileSync(path.join(f.root, "registry.json"), "utf8")).agentStateMetrics);
+    expect(persistedRows.length).toBeGreaterThan(0);
+    expect(persistedRows.every(validAgentStateMetricsBeforeAntigravity)).toBe(true);
     registry.close();
     const successor = f.open();
     await f.service(successor, true).request();
@@ -51,7 +61,7 @@ for (const mode of ["off", "sqlite"] as const) {
       observed.push(...next.rows);
       cursor = next.nextCursor;
     }
-    const journalRows = observed.filter(row => "id" in row);
+    const journalRows = observed.filter(row => row !== null && "id" in row);
     expect(new Set(journalRows.map(row => row.id)).size).toBe(journalRows.length);
     expect(journalRows.filter(row => row.divergence !== null)).toHaveLength(1);
   });
@@ -167,8 +177,52 @@ test("pre-Antigravity metrics validate and normalize every missing engine bucket
   };
   expect(validAgentStateMetrics(rows.current)).toBe(true);
   expect(normalizeAgentStateRows(rows, "metrics")).toEqual(expected);
-  expect(normalizeRegistry({ version: 2, entries: {}, receipts: {}, agentStateMetrics: rows }).agentStateMetrics).toEqual(expected);
+  expect(normalizeRegistry({ version: 2, entries: {}, receipts: {}, agentStateMetrics: rows }).agentStateMetrics).toEqual(rows);
   expect(JSON.stringify(rows)).toBe(before);
+});
+
+test("JSON registry startup and unrelated transactions preserve sparse historical metrics", () => {
+  const f = fixture("off");
+  const source = { ...f.source, agentStateMetrics: {
+    current: preAntigravityMetrics,
+    "series:fixture": { ...preAntigravityMetrics, at: FIXTURE_NOW - 1 },
+  } };
+  fs.writeFileSync(path.join(f.root, "registry.json"), JSON.stringify(source));
+  const storedRows = () => JSON.parse(fs.readFileSync(path.join(f.root, "registry.json"), "utf8")).agentStateMetrics;
+  const before = JSON.stringify(source.agentStateMetrics);
+  const first = f.open();
+  expect(readAgentStateMetrics(first).stuckByEngine.antigravity).toBe(0);
+  expect(JSON.stringify(storedRows())).toBe(before);
+  first.close();
+  registries.splice(registries.indexOf(first), 1);
+  const reopened = f.open();
+  expect(reopened.agentStateWrite(() => false)).toBe(false);
+  expect(JSON.stringify(storedRows())).toBe(before);
+});
+
+test("registry writes keep Antigravity counts in memory and persist rollback-compatible rows", () => {
+  for (const mode of ["off", "sqlite"] as const) {
+    const f = fixture(mode), registry = f.open();
+    registry.agentStateWrite(file => {
+      const metrics = emptyAgentStateMetrics();
+      metrics.stuckByEngine.antigravity = 7;
+      file.agentStateMetrics.current = metrics;
+      return true;
+    });
+    expect(readAgentStateMetrics(registry).stuckByEngine.antigravity).toBe(7);
+    expect(readAgentStatePage(registry, "agentStateMetrics", "", 32).rows.some(row => row !== null && "stuckByEngine" in row && row.stuckByEngine.antigravity === 7)).toBe(true);
+    const persisted = mode === "sqlite"
+      ? (() => {
+        const db = new Database(f.sqliteFilename, { readonly: true });
+        try { return JSON.parse(db.query<{ value_json: string }, [string]>("SELECT value_json FROM registry_rows WHERE collection='agentStateMetrics' AND row_key=?").get("current")!.value_json); }
+        finally { db.close(); }
+      })()
+      : JSON.parse(fs.readFileSync(path.join(f.root, "registry.json"), "utf8")).agentStateMetrics.current;
+    expect(validAgentStateMetricsBeforeAntigravity(persisted)).toBe(true);
+    expect(persisted.stuckByEngine).toEqual({ codex: 0, claude: 0, copilot: 0 });
+    expect(Object.keys(persisted)).toHaveLength(Object.keys(emptyAgentStateMetrics()).length);
+    registry.close();
+  }
 });
 
 test("metrics reject malformed engine buckets and keep reason buckets required", () => {
@@ -181,7 +235,7 @@ test("metrics reject malformed engine buckets and keep reason buckets required",
   expect(validAgentStateMetrics({ ...preAntigravityMetrics, stuckByEngine: {}, stuckByReason: { silent: 0 } })).toBe(false);
 });
 
-test("SQLite reads pre-Antigravity metrics without rewriting history and writes complete current metrics", async () => {
+test("SQLite reads pre-Antigravity metrics without rewriting history and persists rollback-compatible metrics", async () => {
   const f = fixture("sqlite"), registry = f.open();
   registry.readOnlySnapshot();
   const db = new Database(f.sqliteFilename);
@@ -198,7 +252,9 @@ test("SQLite reads pre-Antigravity metrics without rewriting history and writes 
     expect(raw.get("series:fixture")?.value_json).toBe(legacy);
 
     await f.service(registry).request();
-    expect(JSON.parse(raw.get("current")!.value_json).stuckByEngine).toEqual(expected.stuckByEngine);
+    const persistedCurrent = JSON.parse(raw.get("current")!.value_json);
+    expect(validAgentStateMetricsBeforeAntigravity(persistedCurrent)).toBe(true);
+    expect(persistedCurrent.stuckByEngine).toEqual({ codex: 2, claude: 0, copilot: 1 });
     expect(raw.get("series:fixture")?.value_json).toBe(legacy);
   } finally { db.close(); }
 });
