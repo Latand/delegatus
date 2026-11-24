@@ -9,7 +9,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
-import { withProvisioningTurn } from "./provisioningTurn";
+import { provisioningStripe, tryProvisioningLock, type ProvisioningGrant } from "./provisionCheckoutCustody";
 import { readWorktreeProvenance } from "./worktreeProvenance";
 import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
@@ -220,7 +220,6 @@ test("another lane checks out the same repository while the first prepares its h
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-peer-"));
   const repo = path.join(root, "repo");
   const entered = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
-  const waited = Promise.withResolvers<void>();
   const runs: Promise<unknown>[] = [];
   try {
     fs.mkdirSync(repo);
@@ -229,24 +228,28 @@ test("another lane checks out the same repository while the first prepares its h
     await git(repo, "add", "package.json");
     expect((await realExec("git", ["commit", "-m", "Seed fixture"], repo, controllerCommitIdentityEnv())).code).toBe(0);
     const baseRef = await git(repo, "rev-parse", "HEAD");
-    const run = (id: string, stall: boolean) => {
+    const run = async (id: string, stall: boolean) => {
       const lane = { ...pipeline(), id, delivery: undefined, publication: "internal" as const,
         repoDir: repo, worktreeDir: path.join(root, id), baseBranch: "main", branch: "pipeline/" + id, baseRef };
-      return withProvisioningTurn(repo, lane.worktreeDir, previous => {
-        if (!stall) waited.resolve();
-        return previous;
-      }, ready => provisionPipelineWorktreeAsync(lane, async (command, args, cwd, signal, options) => {
-        if (stall && command === "git" && args[0] === "check-ignore" && cwd === lane.worktreeDir) {
-          entered.resolve();
-          await finish.promise;
-        }
-        return realProvisionExec(command, args, cwd, signal, options);
-      }, undefined, ready));
+      const grants: ProvisioningGrant[] = [];
+      const signal = new AbortController().signal;
+      try {
+        const checkout = await tryProvisioningLock(root, "checkout", provisioningStripe(lane.worktreeDir), false, signal, grant => grants.push(grant));
+        const repository = await tryProvisioningLock(root, "repo", provisioningStripe(repo), false, signal, grant => grants.push(grant));
+        if (!checkout || !repository) throw new Error("second checkout could not take its turns");
+        return await provisionPipelineWorktreeAsync(lane, async (command, args, cwd, signal, options) => {
+          if (stall && command === "git" && args[0] === "check-ignore" && cwd === lane.worktreeDir) {
+            entered.resolve();
+            await finish.promise;
+          }
+          return realProvisionExec(command, args, cwd, signal, options);
+        }, signal, repository.close);
+      } finally { for (const grant of grants) grant.close(); }
     };
     const first = run("aabbcc01", true); runs.push(first);
     await Promise.race([entered.promise, first.then(() => { throw new Error("first lane missed dependency setup"); })]);
     const second = run("aabbcc02", false); runs.push(second);
-    const outcome = await Promise.race([second, waited.promise.then(() => "waiting for the first toolchain")]);
+    const outcome = await second;
     expect(outcome).toMatchObject({ ok: true, sha: baseRef });
     expect(await git(path.join(root, "aabbcc02"), "rev-parse", "HEAD")).toBe(baseRef);
     finish.resolve();

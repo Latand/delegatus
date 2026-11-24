@@ -10,6 +10,7 @@ type ProvisioningGitStep = "common-directory" | "fetch" | "worktree-add";
 type ProvisioningPhase =
   | { phase: "accepted"; admission: "direct" | "queued" }
   | { phase: "scheduler-selected" | "state-validated" | "first-attempt" }
+  | { phase: "toolchain-ready" }
   | { phase: "git-started"; step: ProvisioningGitStep }
   | { phase: "git-finished"; step: ProvisioningGitStep; status: "ok" | "failed" | "cancelled" };
 

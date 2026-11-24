@@ -10,6 +10,7 @@ import { tickPipelines, defaultPipelinePorts, type PipelinePorts } from "./engin
 import { pipelineControllerJobLanes, reportProvisioningPhase, takePipelineControllerJobChanges } from "./controllerJobs";
 import { withControllerPipelineScope } from "./controllerScope";
 import { requestPipelineTick } from "./controllerSignal";
+import { advanceProvisioningJob, provisioningDueAt } from "./provisioningJob";
 import { pipelineStopReadLanes, runControllerStopReadLane } from "./controllerStopRead";
 import { controllerAttemptWindow, controllerPipelineVersion, deferPipelineControllerWork, acknowledgePipelineControllerWork, findControllerPipeline, recordPipelineControllerSelection, selectPipelineControllerWork, pipelineControllerReady, PipelineStoreError } from "./store";
 
@@ -27,7 +28,7 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
     // Capture changes, deadlines and ownership only after this checkpoint.
     await yieldToRuntime();
     const jobChanged = takePipelineControllerJobChanges();
-    const now = suppliedPorts ? Date.parse(suppliedPorts.now()) : Date.now();
+    const now = suppliedPorts?.provisionClock?.wallMs() ?? (suppliedPorts ? Date.parse(suppliedPorts.now()) : Date.now());
     const admitted = await awaitLeasedOperation("admitQueuedPipelineCreations", () => admitQueuedPipelineCreations());
     const work = await awaitLeasedOperation("selectPipelineControllerWork", () => selectPipelineControllerWork(now, pendingLanes()));
     if (!work.length) return { changed: jobChanged || admitted.length > 0, pendingWork: pendingLanes().length, readyWork: false };
@@ -45,6 +46,9 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
           const selectedAt = Date.now();
           const version = await awaitLeasedOperation("controllerPipelineVersion", () => controllerPipelineVersion(item.row_key));
           const lane = await awaitLeasedOperation("findControllerPipeline", () => findControllerPipeline(item.row_key));
+          if (lane?.provisioningJob && (lane.state === "closed" || lane.state === "completed" || lane.hiddenAt)) {
+            advanceProvisioningJob(lane, lanePorts, { parked: () => {} });
+          }
           if (lane?.state === "provisioning") reportProvisioningPhase(item.row_key, { phase: "scheduler-selected" }, new Date(selectedAt).toISOString());
           const { window, current } = await awaitLeasedOperation("controllerAttemptWindow", () => controllerAttemptWindow(item.row_key, item.attempt_cursor, lane?.cursor?.stageId ?? ""));
           if (await awaitLeasedOperation("controllerPipelineVersion", () => controllerPipelineVersion(item.row_key)) !== version) throw new StateSnapshotChangedError();
@@ -73,6 +77,8 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
             && isCpuPressureDetail(fresh.stateDetail, "stage start") ? CPU_STAGE_POLL_MS : 30_000);
           const provisionRetry = Date.parse(fresh?.provisioningWait?.retryAfter ?? "");
           if (provisionRetry > now) due = Math.min(due, provisionRetry);
+          const jobDue = fresh && provisioningDueAt(fresh);
+          if (jobDue !== undefined) due = Math.min(due, jobDue);
           for (const ref of refs) {
             const run = fresh?.runs[ref.run], attempt = run?.attempts[ref.attempt];
             if (run?.stageId !== ref.stageId || !attempt || attempt.n !== ref.n) continue;

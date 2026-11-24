@@ -1294,6 +1294,7 @@ export async function registerViewerRuntime(): Promise<void> {
     },
     resumeWorktreeRecovery: worktreeRecovery.start,
     onDemoted: async ({ fenced }) => {
+      (await import("@/lib/pipelines/provisioningJob")).stopProvisioningJobsForDemotion();
       (await import("@/lib/projects/cloudEnvironmentController")).stopCloudEnvironmentController();
       try {
         const relays = await import("@/lib/externalRelay/poller");

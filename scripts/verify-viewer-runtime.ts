@@ -31,6 +31,7 @@
  * Exit status is the verdict; the evidence is printed as JSON.
  */
 
+import { verifyProvisioningRelease, verifyProvisioningTrace } from "./verify-provisioning-release.mjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -416,7 +417,7 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
       ...(contained ? {
         XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
         DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
-        LLV_OWNED_RUN_TIMEOUT_MS: String(START_BUDGET_MS + 10_000),
+        LLV_OWNED_RUN_TIMEOUT_MS: String(START_BUDGET_MS + 75_000),
         LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)),
       } : {}),
     },
@@ -453,6 +454,13 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
     try {
       const response = await fetch(origin, { headers: { accept: "text/html" }, signal: AbortSignal.timeout(5_000) });
       const body = await response.text();
+      if (response.status === 200 && body.length > 0) {
+        await verifyProvisioningTrace(root);
+        const evidence = await verifyProvisioningRelease(origin, sandbox, sandboxEnvironment(sandbox));
+        if (!log().some(line => line.includes(`"pipelineId":"${evidence.lane}"`) && line.includes('"phase":"toolchain-ready"'))) {
+          throw new Error("provisioning fixture did not report a ready frame");
+        }
+      }
       return { status: response.status, bytes: body.length, readyMs, log: log() };
     } catch (error) {
       /* It answered the readiness probe and then did not answer this. Whatever

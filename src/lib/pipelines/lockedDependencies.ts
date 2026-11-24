@@ -78,37 +78,42 @@ export function dependencyInstallFailure(result: ExecResult): string {
 
 // Bootstrap hooks must run with no installed packages and no application store.
 // Keep this executor on built-ins; its type-only import loads no module graph.
-export const worktreeDependencyExec: ExecPort = (command, args, cwd, env, options = {}) => new Promise(resolve => {
-  if (options.signal?.aborted) { resolve({ code: null, stdout: "", stderr: "cancelled" }); return; }
-  const child = spawn(command, args, { cwd, env: { ...process.env, ...env }, detached: process.platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd]), ...options.additionalInheritedFds ?? []] });
-  let stdout = "", stderr = "", bytes = 0;
-  let stopped: string | null = null;
-  const stop = (reason: string) => {
-    if (stopped) return;
-    stopped = reason;
-    if (!child.pid) return;
-    try { if (process.platform === "win32") child.kill("SIGKILL"); else process.kill(-child.pid, "SIGKILL"); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") child.kill("SIGKILL"); }
-  };
-  const abort = () => stop("dependency command cancelled");
-  const timer = setTimeout(() => stop("dependency command timed out"), options.timeoutMs ?? BUDGET_MS);
-  options.signal?.addEventListener("abort", abort, { once: true });
-  if (options.signal?.aborted) abort();
-  const append = (chunk: string, output: boolean) => {
-    bytes += Buffer.byteLength(chunk);
-    if (bytes > 1024 * 1024) { stop("dependency command output exceeded its byte limit"); return; }
-    if (output) stdout += chunk; else stderr += chunk;
-  };
-  child.stdout?.setEncoding("utf8").on("data", chunk => append(chunk, true));
-  child.stderr?.setEncoding("utf8").on("data", chunk => append(chunk, false));
-  child.on("error", () => { stopped ??= "dependency command could not start"; });
-  child.on("close", (code, signal) => {
-    clearTimeout(timer);
-    options.signal?.removeEventListener("abort", abort);
-    resolve({ code: stopped ? null : code, signal, stdout, stderr: stopped ? `${stopped}${stderr ? `: ${stderr}` : ""}` : stderr });
+function dependencyExec(detached: boolean): ExecPort {
+  return (command, args, cwd, env, options = {}) => new Promise(resolve => {
+    if (options.signal?.aborted) { resolve({ code: null, stdout: "", stderr: "cancelled" }); return; }
+    const child = spawn(command, args, { cwd, env: { ...process.env, ...env }, detached: detached && process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd]), ...options.additionalInheritedFds ?? []] });
+    let stdout = "", stderr = "", bytes = 0;
+    let stopped: string | null = null;
+    const stop = (reason: string) => {
+      if (stopped) return;
+      stopped = reason;
+      if (!child.pid) return;
+      try { if (process.platform === "win32" || !detached) child.kill("SIGKILL"); else process.kill(-child.pid, "SIGKILL"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") child.kill("SIGKILL"); }
+    };
+    const abort = () => stop("dependency command cancelled");
+    const timer = setTimeout(() => stop("dependency command timed out"), options.timeoutMs ?? BUDGET_MS);
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    const append = (chunk: string, output: boolean) => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 1024 * 1024) { stop("dependency command output exceeded its byte limit"); return; }
+      if (output) stdout += chunk; else stderr += chunk;
+    };
+    child.stdout?.setEncoding("utf8").on("data", chunk => append(chunk, true));
+    child.stderr?.setEncoding("utf8").on("data", chunk => append(chunk, false));
+    child.on("error", () => { stopped ??= "dependency command could not start"; });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      resolve({ code: stopped ? null : code, signal, stdout, stderr: stopped ? `${stopped}${stderr ? `: ${stderr}` : ""}` : stderr });
+    });
   });
-});
+}
+
+export const worktreeDependencyExec = dependencyExec(true);
+export const containedDependencyExec = dependencyExec(false);
 
 async function stat(file: string) {
   try { return await fs.lstat(file); }
@@ -327,7 +332,19 @@ export async function lockedDependencyInputs(cwd: string) {
   return { key: hash.digest("hex"), files, required, reads, manifestName: manifest.name };
 }
 
-type PreparationOptions = { exec?: ExecPort; signal?: AbortSignal; assertCurrent?: () => void; repository?: string; budgetMs?: number; onWriterWait?: () => void };
+export type DependencyPreparationStep = "checkingDependencies" | "validatingSealedGraph" | "preparingToolchain";
+export type DependencyPreparationEffect = "open-cache" | "prune-cache" | "prepare-cache" | "install-cache" | "publish-cache" | "link-cache";
+type PreparationOptions = {
+  exec?: ExecPort;
+  payloadExec?: ExecPort;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+  repository?: string;
+  budgetMs?: number;
+  onWriterWait?: () => void | Promise<void>;
+  onStep?: (step: DependencyPreparationStep) => Promise<void>;
+  beforeEffect?: (effect: DependencyPreparationEffect) => Promise<void>;
+};
 type DependencyPlan = Awaited<ReturnType<typeof lockedDependencyInputs>>;
 
 function graphPaths(cache: string, key: string) {
@@ -581,7 +598,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
     return result.stdout.trim();
   };
   const scan: ScanPayload = async (modules, content) => {
-    const result = await worktreeDependencyExec(process.execPath, ["--no-env-file", "-e", dependencyPayloadScan, modules, content ? "content" : "metadata"],
+    const result = await (options.payloadExec ?? worktreeDependencyExec)(process.execPath, ["--no-env-file", "-e", dependencyPayloadScan, modules, content ? "content" : "metadata"],
       path.dirname(process.execPath), {}, { signal: options.signal, timeoutMs: remaining() });
     remaining();
     if (result.code !== 0) throw new Error("dependency graph changed during validation or could not be scanned");
@@ -596,6 +613,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
   try {
     if (!await usesLockedDependencies(cwd)) return false;
     if (!(await stat(path.join(cwd, ".git")))?.isFile()) return false;
+    await options.onStep?.("checkingDependencies");
     cwd = await fs.realpath(cwd);
     const common = await fs.realpath(await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
     if (options.repository) {
@@ -635,6 +653,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
     enter("validation", "existing link and seal");
     const before = entryNow(local);
     if (before?.isSymbolicLink() && entryNow(cache)) {
+      await options.onStep?.("validatingSealedGraph");
       const assertCache = captureCache();
       const plan = await capturePlan();
       const graph = graphPaths(cache, plan.key);
@@ -657,6 +676,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
     remaining();
     enter("wait", "repository writer fence");
     // Create the namespace one component at a time and refuse symlink aliases.
+    await options.beforeEffect?.("open-cache");
     assertCurrent();
     await fs.mkdir(cacheParent, { mode: 0o700 }).catch(error => { if (error.code !== "EEXIST") throw error; });
     if (!entryNow(cacheParent)?.isDirectory()) throw new Error("invalid shared dependency cache namespace");
@@ -685,10 +705,11 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
         assertWriter();
         held = tryLockFenceExclusive({ fd: fd.fd, filename });
         if (held) break;
-        options.onWriterWait?.();
+        await options.onWriterWait?.();
         await delay(Math.min(50, remaining()), undefined, { signal: options.signal });
       }
 
+      await options.onStep?.("preparingToolchain");
       enter("commit", "interrupted install cleanup");
       const marker = entryNow(activeBuild);
       if (marker) {
@@ -700,6 +721,8 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
         if (process.platform === "win32") throw new Error("interrupted dependency build requires inspection before retry");
         const interruptedBuild = path.join(cache, `building-${interrupted.key}`);
         if (entryNow(interruptedBuild)?.isSymbolicLink()) throw new Error("invalid interrupted dependency build directory");
+        await options.beforeEffect?.("prune-cache");
+        assertWriter();
         await dependencyPermissions(path.join(interruptedBuild, "node_modules"), true, assertWriter);
         assertWriter();
         await fs.rm(interruptedBuild, { recursive: true, force: true });
@@ -739,6 +762,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
         }
         unused.sort((a, b) => b.used - a.used || a.directory.localeCompare(b.directory));
         for (const old of unused.slice(3)) {
+          await options.beforeEffect?.("prune-cache");
           assertWriter();
           await fs.unlink(path.join(old.directory, "installed.json"));
           // The receipt is invalidated first. Complete this owned cleanup
@@ -753,6 +777,8 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
         if (await stat(build)) throw new Error("unowned dependency build directory; preserve it for inspection");
         assertWriter();
         await assertInputs(plan);
+        await options.beforeEffect?.("prepare-cache");
+        assertWriter();
         await fs.writeFile(activeBuild, JSON.stringify({ key: plan.key }), { flag: "wx" });
         try {
           assertWriter();
@@ -766,6 +792,8 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
           assertWriter();
           await fs.writeFile(path.join(build, "stage-install.toml"), stageInstallConfig(plan.files.get("bunfig.toml")));
           assertWriter();
+          await options.beforeEffect?.("install-cache");
+          assertWriter();
           await run("bun", ["install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile", "--config=stage-install.toml"], build, fd.fd);
           const buildingModules = path.join(build, "node_modules");
           if (!(await stat(buildingModules))?.isDirectory()) await fs.mkdir(buildingModules);
@@ -778,6 +806,8 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
             key: plan.key, executables: executablePaths.map(file => path.relative(buildingModules, file)),
             cliLinks: links.map(link => ({ ...link, file: path.relative(buildingModules, link.file) })),
           }));
+          assertWriter();
+          await options.beforeEffect?.("publish-cache");
           assertWriter();
           filesystem.renameSync(build, target);
         } finally {
@@ -795,6 +825,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
         if (!checked) throw new Error("incomplete shared dependency entry; preserve it for inspection");
         if (checked.reseal) {
           enter("commit", "permission repair");
+          await options.beforeEffect?.("prepare-cache");
           assertWriter();
           checked.assertAnchors(false);
           // Invalidate before allowing any reader to see a repair in progress.
@@ -810,6 +841,8 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
         if (checked.reusable) return () => assertAnchors(true);
 
         enter("validation", "confirm graph inventory");
+        await options.beforeEffect?.("prepare-cache");
+        assertWriter();
         let saveStamp = true;
         if (entryNow(graph.validation)?.isDirectory()) {
           try { await fs.rmdir(graph.validation); }
@@ -865,6 +898,8 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
 
       enter("commit", "worktree link");
       assertWriter();
+      await options.beforeEffect?.("link-cache");
+      assertWriter();
       const linkRoot = await fs.mkdtemp(path.join(cwd, ".delegatus-dependencies-"));
       const link = path.join(linkRoot, "node_modules");
       let preserved: string | undefined;
@@ -882,6 +917,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
         assertWriter();
         const assertAnchors = await validateForLink();
         enter("commit", "worktree link");
+        await options.beforeEffect?.("link-cache");
         assertWriter();
         assertInputsNow(plan);
         if (!sameVersion(previous, entryNow(local)) || !sameVersion(staged, entryNow(link))) {

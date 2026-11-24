@@ -333,8 +333,16 @@ export function screenCurrentStageId(summary: KanbanPipeline): string | null {
  * a stop on a review says why in one sentence (§3.4), any other decision
  * "Implement failed · 1 finding". The caller adds the age.
  */
-export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage: PipelineStage) => string): string | null {
+export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage: PipelineStage) => string, nowMs?: number): string | null {
   if (pipeline.state === "provisioning" && pipeline.stateDetail?.startsWith("waiting for disk space:")) return pipeline.stateDetail;
+  const step = pipeline.provisioningStep;
+  if (step && nowMs !== undefined && (pipeline.state === "provisioning" || pipeline.state === "needs_decision")) {
+    const label = t(`pipelineBlock.provision.${step.step}`);
+    const seconds = Math.max(0, Math.floor((nowMs - step.since) / 1_000));
+    const waiting = step.status === "waiting" && step.reason?.includes("timeout");
+    const detail = t(waiting ? "pipelineBlock.provision.retry" : "pipelineBlock.provision.age", { step: label, seconds });
+    return step.status === "parked" && pipeline.stateDetail ? `${detail} · ${pipeline.stateDetail}` : detail;
+  }
   const wait = currentProviderWait(pipeline);
   if (wait?.condition.kind === "transient") {
     const reason = t(wait.condition.label === "model at capacity" ? "pipelineBlock.provider.capacity"

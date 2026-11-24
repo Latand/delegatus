@@ -832,6 +832,22 @@ export function candidateRehearsalVerdict(
   return performance.ok ? { ok: true } : { ok: false, detail: candidatePerformanceDetail(performance) };
 }
 
+async function rehearseCandidateProvisioning(candidate: ViewerReleaseIdentity): Promise<NonNullable<ViewerHealthEvidence["provisioning"]>> {
+  const { code, stdout } = await commandResult(["docker", "run", "--rm", "--network", "none",
+    "--entrypoint", "/usr/local/bin/bun-container", candidate.image, "--no-env-file", "scripts/verify-provisioning-release.mjs"],
+  { timeoutMs: 100_000 });
+  if (code !== 0) return { ok: false };
+  const prefix = "provisioning-release ";
+  const line = stdout.split("\n").findLast(line => line.startsWith(prefix));
+  if (!line) return { ok: false };
+  try {
+    const { workerEntry, runtime, readyFrame, graph } = JSON.parse(line.slice(prefix.length));
+    if (workerEntry !== ".next/server/provision-toolchain-worker.js" || runtime !== "bun-container"
+      || readyFrame !== true || typeof graph !== "string" || !/^[a-f0-9]{64}$/.test(graph)) return { ok: false };
+    return { ok: true, workerEntry, runtime, readyFrame };
+  } catch { return { ok: false }; }
+}
+
 async function verify(
   candidate: ViewerReleaseIdentity,
   endpoint: string,
@@ -874,12 +890,17 @@ async function verify(
      rehearsal belongs to the candidate, before anything is switched. */
   if (promoted) return { ...viewer, mcpRuntime, ok: true };
   const runtimeHost = await rehearseCandidateRuntimeHost(candidate, options.reportPhase);
+  if (runtimeHost.ok) options.reportPhase?.("rehearsing candidate pipeline provisioning");
+  const provisioning = runtimeHost.ok ? await rehearseCandidateProvisioning(candidate).catch(() => ({ ok: false })) : null;
+  if (provisioning?.ok === false) return { ...viewer, mcpRuntime, runtimeHost, provisioning, ok: false,
+    detail: "candidate provisioning rehearsal did not verify a cold dependency receipt" };
   const performance = runtimeHost.ok ? await measureCandidatePerformance(candidate, options.reportPhase) : null;
   const verdict = candidateRehearsalVerdict(runtimeHost, performance);
   return {
     ...viewer,
     mcpRuntime,
     runtimeHost,
+    ...(provisioning ? { provisioning } : {}),
     ...(performance ? { performance } : {}),
     ok: verdict.ok,
     ...(verdict.detail ? { detail: verdict.detail } : {}),

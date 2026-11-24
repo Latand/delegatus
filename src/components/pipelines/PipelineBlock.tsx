@@ -654,7 +654,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const moved = pipelineMovedAtMs(pipeline);
   const selected = props.selected ?? NO_STAGES;
   const title = pipelineTitle(t, pipeline);
-  const providerReason = currentProviderWait(pipeline)?.condition.kind === "transient" ? pipelineReason(t, pipeline, nameOf) : null;
+  const providerReason = currentProviderWait(pipeline)?.condition.kind === "transient" ? pipelineReason(t, pipeline, nameOf, nowMs) : null;
   const progress = providerReason ?? pipelineProgress(t, summary, nameOf);
   const cpuWaiting = !!parseCpuQueueDetail(pipeline.stateDetail);
   const answers = props.managedOn ? null : pipelineAnswers(pipeline, nameOf);
@@ -686,12 +686,12 @@ export function PipelineBlock(props: PipelineBlockProps) {
         </span>
       );
     }
-    const reason = props.managedOn ? props.managedOn.reason : props.reasonLine === false ? null : pipelineReason(t, pipeline, nameOf);
+    const reason = props.managedOn ? props.managedOn.reason : props.reasonLine === false ? null : pipelineReason(t, pipeline, nameOf, nowMs);
     /* Running says itself in the live pill; any other state that is not the
        operator's to answer says its word beside the age. */
     const word = needs || seatStop || pipeline.state === "running" ? null : pipelineStateLabel(t, pipeline.state);
     const ageNode = reason ? null : <span className="pb-age">{[word, age].filter(Boolean).join(" · ")}</span>;
-    const reasonLine = reason ? <span className="pb-reason" data-pipeline-reason={pipeline.id}>{[reason, age].filter(Boolean).join(" · ")}</span> : null;
+    const reasonLine = reason ? <span className="pb-reason" data-pipeline-reason={pipeline.id}>{pipeline.provisioningStep ? reason : [reason, age].filter(Boolean).join(" · ")}</span> : null;
     const aside = props.aside ? <span className="pb-aside" data-pipeline-aside={pipeline.id}>{props.aside}</span> : null;
     return (
       <span className="pblock" {...root} data-managed={props.managedOn ? "" : undefined}>
@@ -786,7 +786,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
      menu of its own keeps its head row; at 390 px the chain, the age and a
      44 px ⋯ do not fit one line. */
   const chainHead = !showTitle && !props.onMenu;
-  const laneReason = !managed && !answers ? providerReason ?? (pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null) : null;
+  const laneReason = !managed && !answers ? providerReason ?? (pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf, nowMs) : null) : null;
   return (
     <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root} data-managed={managed ? "" : undefined}>
       {chainHead ? null : (
@@ -954,7 +954,7 @@ function ScreenBlock(props: PipelineBlockProps & {
     if (report && (!attempt || report.attempt === attempt.n)) return <StageReportLine pipeline={pipeline} entry={report} names={names} shown={ANSWER_FINDINGS} />;
     if (!attempt) return null;
     if (pipeline.cursor?.stageId === chip.stage.id && currentProviderWait(pipeline)?.condition.kind === "transient") {
-      return <p className="stage-report" data-stage-now={chip.stage.id}>{pipelineReason(t, pipeline, nameOf)}</p>;
+      return <p className="stage-report" data-stage-now={chip.stage.id}>{pipelineReason(t, pipeline, nameOf, nowMs)}</p>;
     }
     const live = ATTEMPT_LIVE.has(attempt.state);
     const at = Date.parse((live ? attempt.startedAt : attempt.completedAt ?? attempt.startedAt) ?? "");
@@ -1106,12 +1106,13 @@ function ScreenBlock(props: PipelineBlockProps & {
      hand is rare, so it is a row of its own after the stages (#2148). */
   const hasLinks = Boolean(links?.links.length || links?.noPr);
   const hasFlag = finishFlagShown(pipeline, props.taskId);
-  const diskWait = pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null;
+  const provisioning = pipeline.state === "provisioning" || pipeline.provisioningStep?.status === "parked"
+    ? pipelineReason(t, pipeline, nameOf, nowMs) : null;
   const cpuWaiting = !!parseCpuQueueDetail(pipeline.stateDetail);
   return (
     <section className="pblock" aria-label={t("kanban.pipelineAria", { title: pipelineTitle(t, pipeline), progress: pipelineProgress(t, summary, nameOf) })} {...props.root}>
       {props.embedded ? null : <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>}
-      {diskWait ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{diskWait}</p> : null}
+      {provisioning ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{provisioning}</p> : null}
       {cpuWaiting ? <p className="pb-reason" data-cpu-queue>{pipelineProgress(t, summary, nameOf)}</p> : null}
       {hasLinks || hasFlag ? (
         <div className="pb-links-row">

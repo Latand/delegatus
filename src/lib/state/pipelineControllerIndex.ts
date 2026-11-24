@@ -38,6 +38,7 @@ export function pipelineControllerObligationSql(value: string): string {
   return `CASE WHEN NOT json_valid(${value}) THEN 1 ELSE (
     json_extract(${value},'$.state') NOT IN ('closed','completed')
     OR json_array_length(${value},'$.unconfirmedHosts')>0
+    OR json_extract(${value},'$.provisioningJob') IS NOT NULL
     OR (json_extract(${value},'$.state') IN ('completed','closed') AND json_extract(${value},'$.closeTeardown') IS NULL
       AND json_extract(${value},'$.terminalReap.settledAt') IS NULL
       AND (json_extract(${value},'$.state')='completed' OR ${hasHost}))
@@ -45,6 +46,36 @@ export function pipelineControllerObligationSql(value: string): string {
   ) END`;
 }
 export type PipelineControllerSelection = keyof ReturnType<typeof predicates>;
+
+/** Provisioning resources are ordered by their first durable enqueue. */
+export function installProvisioningWaitIndex(db: Database, directory: string): boolean {
+  if (db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_provision_wait_update'").get()) return false;
+  if (!mayRunStateStartupMutation(directory)) return false;
+  db.exec(`CREATE TABLE IF NOT EXISTS pipeline_provision_wait (
+    row_key TEXT PRIMARY KEY, resource TEXT NOT NULL, sequence INTEGER NOT NULL, row_order INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS pipeline_provision_wait_head ON pipeline_provision_wait(resource,sequence,row_order,row_key)`);
+  const resource = "json_extract(NEW.value_json,'$.provisioningJob.resource')";
+  const put = `INSERT INTO pipeline_provision_wait(row_key,resource,sequence,row_order)
+    SELECT NEW.row_key,${resource},NEW.row_revision,NEW.row_order
+    WHERE NEW.collection='pipelines' AND json_valid(NEW.value_json) AND ${resource} IS NOT NULL
+    ON CONFLICT(row_key) DO UPDATE SET sequence=CASE WHEN resource=excluded.resource THEN sequence ELSE excluded.sequence END,
+      resource=excluded.resource,row_order=excluded.row_order;`;
+  db.exec(`CREATE TRIGGER pipeline_provision_wait_insert AFTER INSERT ON state_rows WHEN NEW.collection='pipelines'
+      BEGIN ${put} END;
+    CREATE TRIGGER pipeline_provision_wait_update AFTER UPDATE ON state_rows WHEN OLD.collection='pipelines' OR NEW.collection='pipelines'
+      BEGIN
+        DELETE FROM pipeline_provision_wait WHERE row_key=OLD.row_key AND OLD.collection='pipelines'
+          AND (NEW.collection!='pipelines' OR NEW.row_key!=OLD.row_key OR CASE WHEN json_valid(NEW.value_json) THEN ${resource} IS NULL ELSE 1 END);
+        ${put}
+      END;
+    CREATE TRIGGER pipeline_provision_wait_delete AFTER DELETE ON state_rows WHEN OLD.collection='pipelines'
+      BEGIN DELETE FROM pipeline_provision_wait WHERE row_key=OLD.row_key; END`);
+  db.exec(`INSERT OR IGNORE INTO pipeline_provision_wait(row_key,resource,sequence,row_order)
+    SELECT row_key,json_extract(value_json,'$.provisioningJob.resource'),row_revision,row_order FROM state_rows
+    WHERE collection='pipelines' AND json_valid(value_json) AND json_extract(value_json,'$.provisioningJob.resource') IS NOT NULL`);
+  return true;
+}
 
 /** Install and backfill under the caller's initialization transaction. Row
     triggers also cover older peers, keyed patches, moves and replacements;

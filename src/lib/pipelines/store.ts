@@ -181,6 +181,10 @@ export async function selectControllerPipelines(kind: import("@/lib/state/pipeli
   return pipelineStore().pipelineControllerSelection(kind, throughOrder, controllerPipelineKeys());
 }
 
+export async function selectProvisioningSlice(throughOrder: number, now: number): Promise<Pipeline[]> {
+  return pipelineStore().pipelineControllerSelection("provisioning", throughOrder, controllerPipelineKeys(), { now, limit: 4 });
+}
+
 /** Indexed row + scheduling generation, including writers that bypass the
  * collection revision. This read never decodes history or waits on a lease. */
 export function controllerPipelineVersionNow(id: string): string {
@@ -1153,6 +1157,10 @@ export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedT
   }, remaining()));
 }
 
+export function withProvisioningCheckpoint<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, waitMs: number): Promise<R> {
+  return withDeliveryMutationAsync(operation, 4, performance.now() + Math.max(0, Math.min(500, waitMs)));
+}
+
 /** A short state admission publishes the durable fence. The sweep owns its
  * lifetime outside this lease and re-reads authority before removing data. */
 export async function claimAttemptRetirement(pipelineId: string, directory: string, waitMs?: number) {
@@ -1394,6 +1402,7 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  if (pipeline.provisioningJob) return false;
   const taskLinks = loadTasksByIds(new Set(pipeline.taskIds)).flatMap(task => task.workLinks ?? []);
   if (issueDeliveryHoldsArchive(pipeline, nowMs, taskLinks)) return false;
   // The receipt sweep reads the hot collection, even after closure or hiding.
