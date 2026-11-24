@@ -47,6 +47,7 @@ export interface ManagerAuthoritySources {
   conversationFacts(conversationId: string): ManagerConversationFacts | null;
   /** Canonical id after migration aliasing; identity must survive migration. */
   resolveAlias(conversationId: string): string;
+  /** Resolves every alias in the callback against one stable registry snapshot. */
   withAliases?<T>(read: (resolve: (id: string) => string) => T): T;
 }
 
@@ -89,16 +90,7 @@ export function authorizedManagerSeats(sources: ManagerAuthoritySources, callerI
   const seats = sources.activeSeats().filter(seat => seat.state === "active" && seat.conversationId);
   if (!seats.length) return [];
 
-  const currentClaims = (rawResolve: (id: string) => string) => {
-    // Aliases can change between decisions, including through another connection.
-    const resolved = new Map<string, string>();
-    const resolve = (id: string) => {
-      const cached = resolved.get(id);
-      if (cached !== undefined) return cached;
-      const canonical = rawResolve(id);
-      resolved.set(id, canonical);
-      return canonical;
-    };
+  const currentClaims = (resolve: (id: string) => string) => {
     const claims = new Map<string, OrchestratorSeat[]>();
     for (const seat of seats) {
       const id = resolve(seat.conversationId!);
@@ -129,7 +121,16 @@ export function authorizedManagerSeats(sources: ManagerAuthoritySources, callerI
     return current;
   };
 
-  const candidates = sources.withAliases ? sources.withAliases(currentClaims) : currentClaims(id => sources.resolveAlias(id));
+  const candidates = sources.withAliases ? sources.withAliases(resolve => {
+    const resolved = new Map<string, string>();
+    return currentClaims(id => {
+      const cached = resolved.get(id);
+      if (cached !== undefined) return cached;
+      const canonical = resolve(id);
+      resolved.set(id, canonical);
+      return canonical;
+    });
+  }) : currentClaims(id => sources.resolveAlias(id));
   return candidates.filter(seat => factsPermit(sources.conversationFacts(seat.conversationId), seat.project));
 }
 

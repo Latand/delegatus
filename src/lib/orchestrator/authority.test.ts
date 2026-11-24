@@ -97,7 +97,7 @@ test("identity survives migration: seats and revocations compare by canonical al
   }))).toEqual([{ conversationId: "conversation_new", path: null, project: "proj-a" }]);
 });
 
-test("revocations resolve once per decision, skip older epochs, and a later decision reads a new revocation", () => {
+test("a snapshot resolves each relevant alias once and a later decision reads a new revocation", () => {
   let resolutions = 0;
   const revocations: OrchestratorRevocation[] = [
     ...Array.from({ length: 100 }, (_, index) => ({
@@ -113,7 +113,7 @@ test("revocations resolve once per decision, skip older epochs, and a later deci
     activeSeats: () => [seat({ conversationId: "conversation_a", project: "project-a", seatEpoch: 2 }),
       seat({ conversationId: "conversation_b", project: "project-b", seatEpoch: 2 })],
     revocations: () => revocations,
-    resolveAlias: id => { resolutions++; return id === "conversation_old" ? "conversation_a" : id; },
+    withAliases: read => read(id => { resolutions++; return id === "conversation_old" ? "conversation_a" : id; }),
   });
   expect(ids(value)).toEqual(["conversation_a", "conversation_b"]);
   // 2 active seats + 5 unique peer revocations at epoch >= 2; all 100 epoch-1 rows skipped.
