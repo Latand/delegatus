@@ -8,6 +8,25 @@ const signatureQuery = `query($owner: String!, $name: String!, $oid: GitObjectID
   } } }
 }`;
 
+/* GitHub composes a squash's Co-authored-by trailers from the identities of the
+   pull request's commits, so those identities are the only addresses a landed
+   trailer may carry. Both the author and the committer address are read. */
+const identitiesQuery = `query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String) {
+  repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit {
+    oid
+    associatedPullRequests(first: 1) {
+      pageInfo { hasNextPage }
+      nodes {
+        id merged baseRefName baseRepository { nameWithOwner } headRefOid mergeCommit { oid }
+        commits(first: 100, after: $after) {
+          nodes { commit { author { email } committer { email } } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  } } }
+}`;
+
 type Lookup = (url: string, init: RequestInit) => Promise<Response>;
 
 /** Only the trusted default-branch push entry point obtains this evidence. */
@@ -39,10 +58,42 @@ export async function landedPushEvidence(env: NodeJS.ProcessEnv, gitIdentity: st
     return undefined;
   }
 
-  // A signature proves GitHub signed these bytes, not that GitHub generated
-  // any particular trailer. The squash message can be edited before signing,
-  // and the API exposes no trailer-level provenance. Keep the tip evidence
-  // for the separately scoped committer exemption; trailers remain attributable.
+  /* A signature proves GitHub signed these bytes; the squash message can still
+     be edited before signing. So a trailer is exempt only when its address is
+     one GitHub recorded on a commit of the exact pull request this squash
+     landed. A matching handwritten line discloses nothing GitHub's own
+     composition would not. Rebase-and-merge leaves unsigned commits and a
+     merge commit has two parents, so both stop here. */
+  if (signed.parents?.totalCount !== 1) return { tip };
+  try {
+    const addresses = new Set<string>();
+    const cursors = new Set<string>();
+    let after: string | null = null;
+    let pullId: string | undefined;
+    while (!signal.aborted) {
+      const commit = await request(identitiesQuery, { after });
+      const associated = commit?.associatedPullRequests;
+      if (associated?.pageInfo?.hasNextPage !== false || !Array.isArray(associated.nodes) || associated.nodes.length !== 1) break;
+      const pull = associated.nodes[0];
+      if (typeof pull?.id !== "string" || (pullId !== undefined && pullId !== pull.id) ||
+          pull.merged !== true || pull.baseRefName !== env.PRIVACY_DEFAULT_BRANCH ||
+          pull.baseRepository?.nameWithOwner !== repository || pull.mergeCommit?.oid !== tip ||
+          typeof pull.headRefOid !== "string" || !/^[0-9a-f]{40}$/.test(pull.headRefOid) || pull.headRefOid === tip) break;
+      pullId = pull.id;
+      if (!Array.isArray(pull.commits?.nodes)) break;
+      for (const node of pull.commits.nodes) {
+        for (const person of [node?.commit?.author, node?.commit?.committer]) {
+          if (typeof person?.email === "string" && person.email) addresses.add(person.email);
+        }
+      }
+      const page = pull.commits.pageInfo;
+      if (page?.hasNextPage === false) return { tip, squashAddresses: [...addresses] };
+      if (page?.hasNextPage !== true || typeof page.endCursor !== "string" ||
+          !page.endCursor || cursors.has(page.endCursor)) break;
+      after = page.endCursor;
+      cursors.add(page.endCursor);
+    }
+  } catch { /* Unavailable pull request evidence leaves every trailer attributable. */ }
   return { tip };
 }
 
