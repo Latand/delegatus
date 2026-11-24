@@ -13,24 +13,26 @@ import type { StageChipState } from "@/components/pipelines/pipelineModel";
  * surface keeps the stage dot it always drew.
  */
 
-export type ModelGlyphKind = "opus" | "fable" | "sonnet" | "haiku" | "sol" | "astra" | "terra" | "luna";
+export type ModelGlyphKind = "opus" | "fable" | "sonnet" | "haiku" | "sol" | "astra" | "terra" | "luna" | "neon";
 
-export const MODEL_GLYPH_KINDS: readonly ModelGlyphKind[] = ["opus", "fable", "sonnet", "haiku", "sol", "astra", "terra", "luna"];
+export const MODEL_GLYPH_KINDS: readonly ModelGlyphKind[] = ["opus", "fable", "sonnet", "haiku", "sol", "astra", "terra", "luna", "neon"];
 
 const CODEX_FAMILY = /^gpt-\d+(?:\.\d+)?-(sol|astra|terra|luna)$/;
+const ANTIGRAVITY_NEON = /^gemini-[a-z0-9._-]+-neon(?:-[a-z0-9._-]+)?$/;
 
 export function modelGlyphKind(engine: string, model: string | null | undefined): ModelGlyphKind | null {
   const id = (model ?? "").trim().toLowerCase();
   if (!id) return null;
   if (engine === "claude") return normalizeClaudeLaunchModel(id);
   if (engine === "codex") return (CODEX_FAMILY.exec(id)?.[1] as ModelGlyphKind | undefined) ?? null;
+  if (engine === "antigravity") return ANTIGRAVITY_NEON.test(id) ? "neon" : null;
   return null;
 }
 
 /** The model's full name for the glyph's accessible name: the catalogue's
     label ("GPT-6-Astra", not the pill's "6-Astra"), else the display name. */
 export function modelGlyphName(engine: string, model: string): string {
-  const catalogue = engine === "claude" || engine === "codex" ? ENGINE_MODELS[engine] : [];
+  const catalogue = engine === "claude" || engine === "codex" || engine === "antigravity" ? ENGINE_MODELS[engine] : [];
   return catalogue.find((option) => option.id === model)?.label ?? modelDisplayName(engine, model);
 }
 

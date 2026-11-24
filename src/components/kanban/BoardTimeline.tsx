@@ -441,7 +441,7 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
           onClick={open ? event => { if (!(event.target as Element).closest("button")) open(); } : undefined}>
           <div className="bt-label" {...(open ? { role: "button", tabIndex: 0, "data-timeline-open": "", "aria-label": t("timeline.openAttempt", { stage: name(attempt) }),
             onKeyDown: (event: KeyboardEvent<HTMLElement>) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open(); } } } : {})}>
-            <div className="bt-stage-name text-body font-semibold text-primary"><StageGlyph state={chipState(attempt)} model={model} fallback="mark" badge={false} live={attempt.live} /><span>{name(attempt)}</span>{open ? <ArrowUpRight size={13} className="bt-open-cue" data-timeline-open-cue="" aria-hidden /> : null}</div>
+            <div className="bt-stage-name text-body font-semibold text-primary"><StageGlyph state={chipState(attempt)} model={model} fallback="mark" badge={false} live={attempt.live} motion={attempt.live ? "ordinary" : "still"} /><span>{name(attempt)}</span>{open ? <ArrowUpRight size={13} className="bt-open-cue" data-timeline-open-cue="" aria-hidden /> : null}</div>
             <div className="bt-meta text-label text-secondary"><span>{stateWord(attempt)}</span><span data-timeline-work-time={found.work.kind === "known" ? "known" : found.pending ? "loading" : "unknown"}>{workText(attempt)}</span><span data-timeline-wall="">{elapsed(attempt.startedAtMs, attempt.endAtMs)}</span></div>
             <div className="bt-runtime text-caption text-secondary">{[attempt.engine, attempt.model].filter(Boolean).join(" · ")}</div>
           </div>
