@@ -5,12 +5,15 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { viewBus } from "@/hooks/viewPresenceBus";
 import { stableDeviceId } from "@/hooks/useViewPresence";
 import { playCue } from "@/lib/audio/app";
+import { requestCrossesProject } from "@/lib/attention/projectBoundary";
 import { focusTargetAnchorKeys } from "@/lib/attention/targets";
+import { canonicalClientProject } from "@/lib/projects/clientAliases";
 import type { AttentionRequestV1, FocusResolutionKind, ReturnPoint } from "@/lib/attention/types";
 import { useLocale } from "@/lib/i18n";
 import { useAttentionOffers, type PostOutcome, type ViewportCapture } from "@/components/overlay/useAttentionOffers";
 
 import { cancelArrivalPulse, startArrivalPulse } from "./arrivalPulse";
+import { ringCrossProjectNotice } from "./crossProjectNotice";
 import { FocusReturnChip, LaneWithdrawnNote } from "./FocusReturnChip";
 import { focusHandoffBus, type FocusHandoffBus } from "./focusHandoffBus";
 import { claimHandoff, clearHandoffClaim, readHandoffClaim } from "./handoffClaim";
@@ -51,6 +54,9 @@ import { cleanTitle } from "@/lib/title";
 
 export interface AttentionHostProps {
   mobile: boolean;
+  /** The project alias table the board already polls, so a key that moved
+      still names the project the operator is in. */
+  projectAliases?: Readonly<Record<string, string>>;
   /** Test seams. Production passes none of these. */
   bus?: FocusHandoffBus;
   deviceId?: string | null;
@@ -139,7 +145,9 @@ function observeLiveView(): FocusObservation {
 
 const subscribeIdentity = (listener: () => void) => viewBus.subscribe(listener);
 
-export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedDeviceId, viewSessionId: forcedViewSessionId, claimStorage, fetchFn, pollMs, timing, observe, pulseMs }: AttentionHostProps) {
+const NO_ALIASES: Readonly<Record<string, string>> = {};
+
+export function AttentionHost({ mobile, projectAliases = NO_ALIASES, bus = focusHandoffBus, deviceId: forcedDeviceId, viewSessionId: forcedViewSessionId, claimStorage, fetchFn, pollMs, timing, observe, pulseMs }: AttentionHostProps) {
   const { t } = useLocale();
   const [resolvedDeviceId, setResolvedDeviceId] = useState<string | null>(forcedDeviceId ?? null);
   useEffect(() => {
@@ -214,8 +222,19 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
      and there is nothing to reconcile with a decision. */
   const unconfirmedArrivals = useRef(new Map<string, FocusResolutionKind>());
 
+  /* The project boundary, asked where the move would take effect: the project
+     open on this bus at that moment, never the one the request was raised
+     against. The alias table is read through a ref so the answer is the latest
+     one without restarting anything. */
+  const aliasesRef = useRef(projectAliases);
+  useEffect(() => { aliasesRef.current = projectAliases; }, [projectAliases]);
+  const crossesProject = useCallback((request: AttentionRequestV1): boolean => (
+    requestCrossesProject(request, viewBus.getContext().project, (project) => canonicalClientProject(project, aliasesRef.current))
+  ), []);
+
   const offers = useAttentionOffers({
     deviceId,
+    holdsBack: crossesProject,
     /* The phone still draws the board, so it still gets a lane the moment the
        server admits it (#1836) — the rows alone, never an offer. */
     recordsOnly: mobile,
@@ -307,6 +326,13 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
   }, [offers, bus, deviceId, timing, claimStore, observeView, pulseMs]);
 
   const onAccept = useCallback(async (request: AttentionRequestV1) => {
+    /* The operator may have changed project since this was offered. Nothing is
+       accepted, so nothing moves and the record stays as it is; the
+       notification carries them there if they choose. */
+    if (crossesProject(request)) {
+      ringCrossProjectNotice(request);
+      return;
+    }
     const before = currentViewport();
     leaving.current.set(request.id, before);
     /* `auto-follow`, because that is what this is: nothing was put in front of
@@ -324,7 +350,7 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
     rememberReturnProject(browserStorage(), deviceId, request.id, before.project);
     claimHandoff(claimStore, request.id, () => before);
     await completeHandoff(request);
-  }, [offers, deviceId, completeHandoff, claimStore]);
+  }, [offers, deviceId, completeHandoff, claimStore, crossesProject]);
 
   /**
    * A DIRECTED request (#873): the server already resolved this device as the
@@ -334,6 +360,16 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
    * the pre-move viewport captured before anything happens.
    */
   const onDirected = useCallback(async (request: AttentionRequestV1) => {
+    /* The server chose this view while the operator was in the target's
+       project. If they have left it since, nothing moves: the request becomes
+       the notification and the agent is told so. Before the claim and before
+       anything is captured, because no move starts. */
+    if (crossesProject(request)) {
+      ringCrossProjectNotice(request);
+      clearHandoffClaim(claimStore, request.id);
+      await offers.standDown(request);
+      return;
+    }
     /* The same cue the offer path rings when a request first reaches a screen —
        a directed request never passes through `pending`, so this is its one
        chance to be heard. The request id keys the dedupe, so however many polls
@@ -351,7 +387,7 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
        does once the server confirms. */
     rememberReturnProject(browserStorage(), deviceId, request.id, claim.viewport.project);
     await completeHandoff(request, !claim.first);
-  }, [deviceId, completeHandoff, claimStore]);
+  }, [deviceId, completeHandoff, claimStore, crossesProject, offers]);
 
   const onReturn = useCallback(async (request: AttentionRequestV1) => {
     /* Going back is not an arrival: whatever is still lit was marking the
