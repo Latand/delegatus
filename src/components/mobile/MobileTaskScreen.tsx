@@ -345,7 +345,7 @@ function AskCard({ file, now, onOpen }: { file: FileEntry; now: number; onOpen: 
         {state.badge ? (
           <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-warning-soft px-[7px] text-caption font-semibold leading-none text-warning">{t(BADGE_LABEL[state.badge])}</span>
         ) : null}
-        <span className="inline-flex shrink-0"><EngineMark engine={file.engine} size={16} /></span>
+        <span className="inline-flex shrink-0"><EngineMark engine={file.engine} size={16} working={state.key === "working"} /></span>
         {model ? <span className="min-w-0 truncate">{model}</span> : null}
         {state.seconds !== null ? <><Sep /><span className="shrink-0">{humanizeDuration(blockAgeSeconds(state.seconds))}</span></> : null}
       </span>
