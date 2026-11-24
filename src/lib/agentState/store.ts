@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { AgentRegistry, AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { registryCollectionPage, registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
-import { AGENT_STATE_POLICY, emptyAgentStateMetrics, evaluateAgentState, fact, validAgentFacts, validAgentEvidence, type AgentFacts, type AgentProjection, type AgentStateJournal, type AgentStateMetrics } from "./model";
+import { AGENT_STATE_POLICY, emptyAgentStateMetrics, evaluateAgentState, fact, validAgentFacts, validAgentEvidence, type AgentFacts, type AgentProjection, type AgentStateJournal, type AgentStateMetrics, type AgentStateMetricsRow } from "./model";
 
 export function copyAgentStateRow<T>(row: T): T { return JSON.parse(JSON.stringify(row)) as T; }
 const hash = (v: unknown) => crypto.createHash("sha256").update(JSON.stringify(v)).digest("hex");
@@ -17,18 +17,16 @@ export function artifactRevision(entry: AgentRegistryEntry): string {
   return hash([entry.key, entry.artifactPath, entry.structuredHost?.process, entry.structuredHost?.agentStateNativePromptAnchor]);
 }
 
-type StoredAgentStateMetrics = Omit<AgentStateMetrics, "stuckByEngine"> & {
-  stuckByEngine: Partial<AgentStateMetrics["stuckByEngine"]>;
-};
 const metricsDefaults = emptyAgentStateMetrics();
 
 export function normalizeAgentStateRows(value: unknown, kind: "projection"): Record<string, AgentProjection>;
 export function normalizeAgentStateRows(value: unknown, kind: "journal"): Record<string, AgentStateJournal>;
-export function normalizeAgentStateRows(value: unknown, kind: "metrics", preserveStoredShape?: boolean): Record<string, AgentStateMetrics>;
-export function normalizeAgentStateRows(value: unknown, kind: "projection" | "journal" | "metrics", preserveStoredShape = false): Record<string, AgentProjection | AgentStateJournal | AgentStateMetrics> {
+export function normalizeAgentStateRows(value: unknown, kind: "metrics", preserveStoredShape: true): Record<string, AgentStateMetricsRow>;
+export function normalizeAgentStateRows(value: unknown, kind: "metrics"): Record<string, AgentStateMetrics>;
+export function normalizeAgentStateRows(value: unknown, kind: "projection" | "journal" | "metrics", preserveStoredShape = false): Record<string, AgentProjection | AgentStateJournal | AgentStateMetricsRow> {
   if (value === undefined) return {};
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid agent-state collection");
-  const rows: Record<string, AgentProjection | AgentStateJournal | AgentStateMetrics> = {};
+  const rows: Record<string, AgentProjection | AgentStateJournal | AgentStateMetricsRow> = {};
   for (const [key, row] of Object.entries(value)) {
     if (!row || row.version !== 1 || key.length > 128 || Buffer.byteLength(JSON.stringify(row)) > 8192
       || (kind === "projection" && (!validAgentFacts(row.facts) || row.subject !== row.facts.subject || !row.verdict || !Number.isSafeInteger(row.revision)))
@@ -38,12 +36,12 @@ export function normalizeAgentStateRows(value: unknown, kind: "projection" | "jo
       if (!metrics) throw new Error("invalid agent-state row");
       // Registry snapshots are written as whole files. Keep the original
       // sparse representation there so an unrelated write cannot migrate history.
-      rows[key] = preserveStoredShape ? row as AgentStateMetrics : metrics;
+      rows[key] = preserveStoredShape ? row as AgentStateMetricsRow : metrics;
     } else rows[key] = row;
   }
   return rows;
 }
-export function validAgentStateMetrics(v: unknown): v is StoredAgentStateMetrics {
+export function validAgentStateMetrics(v: unknown): v is AgentStateMetricsRow {
   if (!v || typeof v !== "object" || Array.isArray(v)) return false;
   const row = v as Record<string, unknown>;
   return Object.entries(metricsDefaults).every(([key, sample]) => {
@@ -162,7 +160,7 @@ function boardFacts(row: AgentProjection): string {
 
 /** The repair, conversation axis, journal and totals have one commit boundary. */
 export function commitAgentObservation(registry: AgentRegistry, observation: StateObservation, guard: () => boolean): AgentProjection | null {
-  return registry.agentStateWrite(file => {
+  return registry.agentStateWrite((file, readMetrics) => {
     const key = sessionKeyId(observation.entry.key);
     const current = file.entries[key];
     if (!current || entryRevision(current) !== entryRevision(observation.entry)
@@ -194,7 +192,7 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
       next.divergence = null;
     }
     if (old && !observation.repair && !observation.repairConversation && semantic(old) === semantic(next)) return copyAgentStateRow(old);
-    const metrics = normalizeAgentStateMetrics(file.agentStateMetrics.current) ?? emptyAgentStateMetrics();
+    const metrics = readMetrics();
     metrics.revision++;
     metrics.at = observation.journal.at;
     next.revision = metrics.revision;
@@ -267,10 +265,10 @@ export function acknowledgeAgentProjection(registry: AgentRegistry, subject: str
 
 /** Ending one physical identity never mutates a replacement's registry row. */
 export function recordAgentProcessEnded(registry: AgentRegistry, observed: AgentProjection, journal: AgentStateJournal, guard: () => boolean): boolean {
-  return registry.agentStateWrite(file => {
+  return registry.agentStateWrite((file, readMetrics) => {
     const row = file.agentStates[observed.subject];
     if (!row || row.revision !== observed.revision || row.verdict.state === "dead" || !row.facts.process.determined || !guard()) return false;
-    const metrics = normalizeAgentStateMetrics(file.agentStateMetrics.current) ?? emptyAgentStateMetrics();
+    const metrics = readMetrics();
     const before = copyAgentStateRow(row);
     row.facts.process = fact({ ...row.facts.process.value, status: "dead" }, {
       ...row.facts.process.evidence, observedAt: journal.at, validUntil: undefined,
@@ -289,14 +287,14 @@ export function recordAgentProcessEnded(registry: AgentRegistry, observed: Agent
 
 /** Terminal diagnostics are disposable only after registry custody settled. */
 export function pruneTerminalAgentProjection(registry: AgentRegistry, subject: string, at: number, guard: () => boolean): void {
-  registry.agentStateWrite(file => {
+  registry.agentStateWrite((file, readMetrics) => {
     const row = file.agentStates[subject];
     if (!row || row.verdict.state !== "dead" || row.pendingPublication || !guard()) return;
     const entry = file.entries[row.entryKey];
     if (entry?.structuredHost?.process || entry?.structuredHost?.scope || entry?.structuredHost?.memory?.unit
       || entry?.structuredTerminationSurvivors?.length || entry?.pendingHostExits?.length
       || entry?.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true) return;
-    const metrics = normalizeAgentStateMetrics(file.agentStateMetrics.current) ?? emptyAgentStateMetrics();
+    const metrics = readMetrics();
     if (row.terminalAt === undefined) { row.terminalAt = at; metrics.terminalSubjects++; }
     if (at - row.terminalAt >= 86400_000 || metrics.terminalSubjects > 4096) {
       const old = contribution(row);

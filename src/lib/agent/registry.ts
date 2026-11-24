@@ -1,7 +1,7 @@
 import { measureRegistryRead } from "./registryReadPerformance";
 import { incomingDeliveryOutcome, normalizeIncomingDeliveryHealth, type IncomingDeliveryHealth } from "@/lib/runtime/incomingDeliveryHealth";
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
-import type { AgentProjection, AgentStateJournal, AgentStateMetrics } from "@/lib/agentState/model";
+import type { AgentProjection, AgentStateJournal, AgentStateMetrics, AgentStateMetricsRow } from "@/lib/agentState/model";
 import { agentStateMetricsForStorage, emptyAgentStateMetrics, validNativePromptAnchor } from "@/lib/agentState/model";
 import { normalizeAgentStateMetrics, normalizeAgentStateRows } from "@/lib/agentState/store";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
@@ -1027,7 +1027,7 @@ export interface RegistryFile {
   _jsonStoreId?: string | null;
   agentStates: Record<string, AgentProjection>;
   agentStateJournal: Record<string, AgentStateJournal>;
-  agentStateMetrics: Record<string, AgentStateMetrics>;
+  agentStateMetrics: Record<string, AgentStateMetricsRow>;
   entries: Record<string, AgentRegistryEntry>;
   receipts: Record<string, SpawnReceipt>;
   lineageEdges: Record<string, SpawnLineageEdge>;
@@ -5276,7 +5276,6 @@ function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string
       ...receipt,
       launchProfile: compactLaunchProfile(receipt.launchProfile),
     }])),
-    agentStateMetrics: Object.fromEntries(Object.entries(value.agentStateMetrics).map(([key, metrics]) => [key, agentStateMetricsForStorage(metrics)])),
     conversations: Object.fromEntries(Object.entries(value.conversations).map(([id, conversation]) => [id, {
       ...conversation,
       generations: conversation.generations.map((generation) => ({
@@ -7490,22 +7489,34 @@ export class AgentRegistry {
   }
 
   agentStateMetricsRead(): AgentStateMetrics {
-    const metrics = this.readKeyed(file => normalizeAgentStateMetrics(file.agentStateMetrics.current) ?? emptyAgentStateMetrics());
+    return this.readKeyed(file => this.currentAgentStateMetrics(file));
+  }
+
+  private currentAgentStateMetrics(file: RegistryFile): AgentStateMetrics {
+    const metrics = normalizeAgentStateMetrics(file.agentStateMetrics.current) ?? emptyAgentStateMetrics();
     if (this.antigravityStuckCount !== undefined) metrics.stuckByEngine.antigravity = this.antigravityStuckCount;
     return metrics;
   }
 
-  agentStateWrite<T>(write: (file: RegistryFile) => T): T {
+  agentStateWrite<T>(write: (file: RegistryFile, readMetrics: () => AgentStateMetrics) => T): T {
     let nextAntigravityCount: number | undefined;
     const result = this.mutate(file => {
-      const current = normalizeAgentStateMetrics(file.agentStateMetrics.current);
-      if (current && this.antigravityStuckCount !== undefined) {
-        current.stuckByEngine.antigravity = this.antigravityStuckCount;
-        file.agentStateMetrics.current = current;
+      // SQLite tracks changed rows lazily. For a whole-file write, compare to
+      // the input here so compaction and mirrors can serialize history as-is.
+      const previous = this.sqliteMode === "off" || this.sqliteMode === "dual-write"
+        ? clone(file.agentStateMetrics) : null;
+      const storedCount = file.agentStateMetrics.current?.stuckByEngine.antigravity;
+      const result = write(file, () => this.currentAgentStateMetrics(file));
+      const count = file.agentStateMetrics.current?.stuckByEngine.antigravity;
+      nextAntigravityCount = count === storedCount ? this.antigravityStuckCount ?? count : count;
+      if (previous) {
+        for (const [key, metrics] of Object.entries(file.agentStateMetrics)) {
+          const before = previous[key];
+          if (isDeepStrictEqual(before, metrics)) continue;
+          const stored = agentStateMetricsForStorage(metrics);
+          file.agentStateMetrics[key] = before && isDeepStrictEqual(stored, agentStateMetricsForStorage(before)) ? before : stored;
+        }
       }
-      const result = write(file);
-      const next = normalizeAgentStateMetrics(file.agentStateMetrics.current);
-      if (next) nextAntigravityCount = next.stuckByEngine.antigravity;
       return result;
     }, { deliveryOnly: true });
     if (nextAntigravityCount !== undefined) this.antigravityStuckCount = nextAntigravityCount;

@@ -188,6 +188,10 @@ export type StoredAgentStateMetrics = Omit<AgentStateMetrics, "stuckByEngine"> &
   stuckByEngine: { codex: number; claude: number; copilot: number };
 };
 
+export type AgentStateMetricsRow = Omit<AgentStateMetrics, "stuckByEngine"> & {
+  stuckByEngine: Partial<AgentStateMetrics["stuckByEngine"]>;
+};
+
 const legacyAgentStateMetricKeys = new Set([
   "version", "revision", "at", "registryTranscriptDivergencesTotal", "registryTranscriptDivergencesCurrent",
   "unownedHosts", "unownedRssBytes", "unownedRssMeasured", "unownedRssUnknown", "stuckTurns", "stuckByEngine",
@@ -197,12 +201,16 @@ const legacyAgentStateMetricKeys = new Set([
 ]);
 
 /** Keep persisted metrics readable by releases before Antigravity was added. */
-export function agentStateMetricsForStorage(metrics: AgentStateMetrics): StoredAgentStateMetrics {
+export function agentStateMetricsForStorage(metrics: AgentStateMetricsRow): StoredAgentStateMetrics {
   const stored: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(metrics)) {
     if (!legacyAgentStateMetricKeys.has(key)) continue;
     stored[key] = key === "stuckByEngine"
-      ? { codex: metrics.stuckByEngine.codex, claude: metrics.stuckByEngine.claude, copilot: metrics.stuckByEngine.copilot }
+      ? {
+        codex: metrics.stuckByEngine.codex ?? 0,
+        claude: metrics.stuckByEngine.claude ?? 0,
+        copilot: metrics.stuckByEngine.copilot ?? 0,
+      }
       : value;
   }
   return stored as StoredAgentStateMetrics;
