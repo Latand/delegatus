@@ -168,6 +168,13 @@ test("a part offering more alternative namespaces than can be inspected throws",
   expect(() => officeXmlText("word/document.xml", Buffer.from(word(branches(7), declarations)))).toThrow();
 });
 
+test("large displayed-text parts refuse before alternative readings can block the Viewer", () => {
+  const runs = Array.from({ length: 30_001 }, () => "<w:r><w:t>x</w:t></w:r>").join("");
+  const started = performance.now();
+  expect(() => officeXmlText("word/document.xml", Buffer.from(word(runs, 'mc:Ignorable="x"')))).toThrow(/synchronous work bound/);
+  expect(performance.now() - started).toBeLessThan(3000);
+});
+
 test("an archive comment cannot hide a second archive from inspection", () => {
   const entries = { "[Content_Types].xml": "<Types/>", "docProps/custom.xml": "<property>Neutral</property>" };
   const clean = officeZip(entries);

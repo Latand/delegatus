@@ -236,6 +236,7 @@ function parseOfficeXml(bytes: Buffer, handlers: XmlHandlers): number {
 /** Which Word styles hide their text (`w:vanish`), from a package's styles part. */
 export type WordStyles = {
   defaults?: boolean;
+  possiblyHidden?: boolean;
   byId: Map<string, { basedOn?: string; vanish?: boolean }>;
   defaultOf: Map<string, string>;
 };
@@ -259,8 +260,11 @@ export function wordStyles(bytes: Buffer): WordStyles | undefined {
           if (/^(?:1|true|on)$/i.test(wordValue(tag, "default") ?? "") && !styles.defaultOf.has(type)) styles.defaultOf.set(type, id);
         }
       } else if (local === "basedOn" && parent === "style" && entry) entry.basedOn = wordValue(tag, "val");
-      else if (local === "vanish" && parent === "rPr" && grand === "style" && entry) entry.vanish = wordOn(tag);
-      else if (local === "vanish" && parent === "rPr" && grand === "rPrDefault" && great === "docDefaults") styles.defaults = wordOn(tag);
+      else if (local === "vanish") {
+        if (wordOn(tag)) styles.possiblyHidden = true;
+        if (parent === "rPr" && grand === "style" && entry) entry.vanish = wordOn(tag);
+        else if (parent === "rPr" && grand === "rPrDefault" && great === "docDefaults") styles.defaults = wordOn(tag);
+      }
       path.push(local);
     },
     text() {},
@@ -323,20 +327,34 @@ function packageWordStyles(members: Map<string, Buffer>): WordStyles | undefined
   return part && wordStyles(part);
 }
 
+function rejectWordImports(members: Array<[string, Buffer, string]>): void {
+  for (const [name, bytes] of members) {
+    if (name.toLowerCase().endsWith(".rels") && relationships(bytes).some(item => /\/aFChunk$/i.test(item.type))) {
+      throw new Error("Word imported content is unsupported");
+    }
+    if (!/\.xml$/i.test(name)) continue;
+    let imported = false;
+    parseOfficeXml(bytes, { open(tag) { if (WORD.has(tag.uri) && tag.local === "altChunk") imported = true; }, text() {}, close() {} });
+    if (imported) throw new Error("Word imported content is unsupported");
+  }
+}
+
 /** Inspect a package with {@link inspectOfficeZip} and hand every member, with
  * the text {@link officeXmlText} reads from it, to `visit`. Text is read once
  * the whole package has been checked, so the Word styles of each package
  * (the file itself or an embedded one) apply to all of its parts. */
-export function inspectOfficePackage(bytes: Buffer, maxBytes: number, visit: (name: string, bytes: Buffer, text: string | null) => void): Set<string> {
+export function inspectOfficePackage(bytes: Buffer, maxBytes: number, visit: (name: string, bytes: Buffer, text: string | null, requiresConsent: boolean) => void): Set<string> {
   const members: Array<[string, Buffer, string]> = [];
   const names = inspectOfficeZip(bytes, maxBytes, (name, content, prefix) => { members.push([name, content, prefix]); });
+  rejectWordImports(members);
   const styles = new Map<string, WordStyles | undefined>();
   for (const [name, content, prefix] of members) {
     if (!styles.has(prefix)) {
       const own = members.filter(member => member[2] === prefix).map(([member, data]) => [member.slice(prefix.length).toLowerCase(), data] as const);
       styles.set(prefix, packageWordStyles(new Map(own)));
     }
-    visit(name, content, officeXmlText(name, content, styles.get(prefix)));
+    const inspection = officeXmlTextInspection(name, content, styles.get(prefix));
+    visit(name, content, inspection.text, inspection.requiresConsent);
   }
   return names;
 }
@@ -351,8 +369,8 @@ export function inspectOfficePackage(bytes: Buffer, maxBytes: number, visit: (na
 type Alternate = { branches: Array<{ requires: string[] | null }> };
 type Need = { ns: string } | { alternate: Alternate; branch: number } | { never: true };
 type WordParagraph = { style?: string; vanish?: boolean; special?: boolean; markStyle?: string; web?: boolean; deleted?: boolean; inserted?: boolean };
-type WordRun = { paragraph?: WordParagraph; vanish?: boolean; style?: string; web?: boolean };
-type Kind = "p" | "pPr" | "mark" | "r" | "rPr" | undefined;
+type WordRun = { paragraph?: WordParagraph; vanish?: boolean; originalVanish?: boolean; style?: string; web?: boolean };
+type Kind = "p" | "pPr" | "mark" | "r" | "rPr" | "rPrChange" | "oldRPr" | undefined;
 type Frame = {
   tag?: SaxesTagNS; kind: Kind; needs: Need[]; own: Need[]; story: number; runs: WordRun[]; flags: number;
   ignorable: ReadonlySet<string>; process: ReadonlySet<string>; alternate?: Alternate; paragraph?: WordParagraph; run?: WordRun;
@@ -364,10 +382,15 @@ const SHEET_RUN_CONTAINERS = new Set(["si", "is", "text", "r", "rPr", "rPh"]);
 type View = "final" | "original" | "web";
 /** Distinct namespaces a part may make a consumer choose between; 2^6 readings at most. */
 const MAX_ALTERNATIVE_NAMESPACES = 6;
+const MAX_DISPLAY_PIECES = 30_000;
 
 function displayedText(styles: WordStyles | undefined) {
   const frames: Frame[] = [{ kind: undefined, needs: [], own: [], story: 0, runs: [], flags: 0, ignorable: new Set(), process: new Set() }];
   const pieces: Piece[] = [];
+  const addPiece = (piece: Piece) => {
+    if (pieces.length >= MAX_DISPLAY_PIECES) throw new Error("Office XML has too many text pieces to inspect within the synchronous work bound");
+    pieces.push(piece);
+  };
   let stories = 0;
 
   const runVanish = (run: WordRun) => run.vanish
@@ -381,7 +404,7 @@ function displayedText(styles: WordStyles | undefined) {
   const hidden = (piece: Piece, view: View) => {
     if (piece.flags & FIELD) return true;
     if (piece.flags & (view === "original" ? INSERTED : DELETED)) return true;
-    if (piece.runs.some(run => runVanish(run) || (view === "web" && run.web))) return true;
+    if (piece.runs.some(run => (view === "original" ? run.originalVanish ?? runVanish(run) : runVanish(run)) || (view === "web" && run.web))) return true;
     const mark = piece.mark;
     return !!mark && (markVanish(mark) || !!(view === "original" ? mark.inserted : mark.deleted) || (view === "web" && !!mark.web));
   };
@@ -427,8 +450,11 @@ function displayedText(styles: WordStyles | undefined) {
           else if (local === "webHidden") paragraph!.web = wordOn(tag);
           else if (local === "del" || local === "moveFrom") paragraph!.deleted = true;
           else if (local === "ins" || local === "moveTo") paragraph!.inserted = true;
-        } else if (parent.kind === "rPr") {
-          if (local === "vanish") run!.vanish = wordOn(tag);
+        } else if (parent.kind === "rPr" && local === "rPrChange") frame.kind = "rPrChange";
+        else if (parent.kind === "rPrChange" && local === "rPr") frame.kind = "oldRPr";
+        else if (parent.kind === "rPr" || parent.kind === "oldRPr") {
+          if (local === "vanish" && parent.kind === "oldRPr") run!.originalVanish = wordOn(tag);
+          else if (local === "vanish") run!.vanish = wordOn(tag);
           else if (local === "rStyle") run!.style = wordValue(tag, "val");
           else if (local === "webHidden") run!.web = wordOn(tag);
         } else if (local === "p") {
@@ -454,14 +480,14 @@ function displayedText(styles: WordStyles | undefined) {
       // straight into a run, a paragraph or an alternative container are not shown.
       if (!text || frame.alternate || (tag && ((WORD.has(tag.uri) && !WORD_TEXT.has(tag.local))
         || ((DRAWING.has(tag.uri) || MATH.has(tag.uri)) && tag.local !== "t") || (SHEET.has(tag.uri) && SHEET_RUN_CONTAINERS.has(tag.local))))) return;
-      pieces.push({ text, needs: frame.own, story: frame.story, runs: frame.runs, flags: frame.flags });
+      addPiece({ text, needs: frame.own, story: frame.story, runs: frame.runs, flags: frame.flags });
     },
     close(tag: SaxesTagNS) {
       const frame = frames.pop()!;
       const parent = frames.at(-1)?.tag;
       const boundary = SHEET.has(tag.uri) && (tag.local === "phoneticPr" || tag.local === "rPh") ? "" : officeBoundary(tag, parent).text;
       if (boundary) {
-        pieces.push({ text: boundary, needs: frame.own, story: frame.story, runs: frame.runs, flags: frame.flags,
+        addPiece({ text: boundary, needs: frame.own, story: frame.story, runs: frame.runs, flags: frame.flags,
           ...(frame.kind === "p" ? { mark: frame.paragraph } : {}) });
       }
     },
@@ -473,10 +499,13 @@ function displayedText(styles: WordStyles | undefined) {
           if ("ns" in need) namespaces.add(need.ns);
           else if ("alternate" in need) alternates.add(need.alternate);
         }
-        if (piece.flags & (DELETED | INSERTED) || piece.mark?.deleted || piece.mark?.inserted) views.add("original");
+        if (piece.flags & (DELETED | INSERTED) || piece.mark?.deleted || piece.mark?.inserted
+          || piece.runs.some(run => run.originalVanish !== undefined)) views.add("original");
         if (piece.runs.some(run => run.web) || piece.mark?.web) views.add("web");
       }
       for (const alternate of alternates) for (const branch of alternate.branches) for (const uri of branch.requires ?? []) namespaces.add(uri);
+      const conservativeStyleView = !!styles?.possiblyHidden;
+      if (conservativeStyleView) views.add("original");
       const variable = [...namespaces];
       if (variable.length > MAX_ALTERNATIVE_NAMESPACES) throw new Error("Office XML offers too many markup-compatibility alternatives to inspect");
       const found = new Set<string>();
@@ -492,7 +521,8 @@ function displayedText(styles: WordStyles | undefined) {
         for (const view of views) {
           const reading = new Map<number, string[]>();
           for (const piece of pieces) {
-            if (!piece.needs.every(shows) || hidden(piece, view)) continue;
+            if (!piece.needs.every(shows) || hidden(piece, view)
+              || (conservativeStyleView && view === "original" && piece.runs.some(run => run.vanish === undefined))) continue;
             const story = reading.get(piece.story);
             if (story) story.push(piece.text);
             else reading.set(piece.story, [piece.text]);
@@ -525,12 +555,16 @@ function displayedText(styles: WordStyles | undefined) {
  * display cannot split a token it does. Those trim only a leaf that does not
  * itself preserve its spaces. Fatal decoding and parsing apply to XML parts
  * even after a secret is found. */
-export function officeXmlText(name: string, bytes: Buffer, styles?: WordStyles): string | null {
-  if (!/\.(?:xml|rels|vml|svg)$/i.test(name) && !startsWithXml(bytes, xmlEncoding(bytes))) return null;
+function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyles): { text: string | null; requiresConsent: boolean } {
+  if (!/\.(?:xml|rels|vml|svg)$/i.test(name) && !startsWithXml(bytes, xmlEncoding(bytes))) return { text: null, requiresConsent: false };
   const pieces: string[] = [];
   const compact: string[] = [];
   const separated: string[] = [];
   const attributes: string[] = [];
+  const formulaLiterals: string[] = [];
+  let formulaDepth = 0;
+  let formulaText = "";
+  let requiresConsent = false;
   const open: SaxesTagNS[] = [];
   const hasChild: boolean[] = [];
   const preserve: boolean[] = [];
@@ -565,14 +599,33 @@ export function officeXmlText(name: string, bytes: Buffer, styles?: WordStyles):
       preserve.push(preserved);
       ownPreserve.push(own);
       shown.open(tag, resolve);
+      if (SHEET.has(tag.uri) && tag.local === "calcPr"
+        && /^(?:1|true|on)$/i.test(plainValue(tag, "fullCalcOnLoad") ?? "")) requiresConsent = true;
+      if (SHEET.has(tag.uri) && tag.local === "f") { formulaDepth++; formulaText = ""; }
+      if (tag.local === "numFmt") {
+        const format = Object.values(tag.attributes).find(value => value.uri === "" && value.local === "formatCode")?.value;
+        if (format) {
+          const literals = format.split(";").map(section => section.replace(/\\(.)/g, "$1").replace(/"([^"]*)"/g, "$1"));
+          formulaLiterals.push(...literals.filter(Boolean));
+        }
+      }
       open.push(tag);
     },
-    text(text) { pending.push(text); },
+    text(text) {
+      pending.push(text);
+      if (formulaDepth) formulaText += text;
+    },
     close(tag) {
       flush(!hasChild.pop());
       preserve.pop();
       ownPreserve.pop();
       open.pop();
+      if (SHEET.has(tag.uri) && tag.local === "f" && formulaDepth) {
+        formulaDepth--;
+        const literal = [...formulaText.matchAll(/"((?:[^"]|"")*)"/g)].map(match => match[1]!.replace(/""/g, '"')).join("");
+        if (literal) formulaLiterals.push(literal);
+        formulaText = "";
+      }
       const { text, separated: apart } = officeBoundary(tag, open.at(-1));
       pieces.push(text);
       compact.push(text);
@@ -581,5 +634,9 @@ export function officeXmlText(name: string, bytes: Buffer, styles?: WordStyles):
     },
   });
   // Attribute values are separate from the displayed text and from each other.
-  return [pieces.join(""), compact.join(""), separated.join(""), ...shown.readings(4 * length + (1 << 20)), ...attributes].join("\n");
+  return { text: [pieces.join(""), compact.join(""), separated.join(""), ...shown.readings(4 * length + (1 << 20)), ...formulaLiterals, ...attributes].join("\n"), requiresConsent };
+}
+
+export function officeXmlText(name: string, bytes: Buffer, styles?: WordStyles): string | null {
+  return officeXmlTextInspection(name, bytes, styles).text;
 }

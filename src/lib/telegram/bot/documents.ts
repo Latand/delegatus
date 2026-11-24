@@ -562,7 +562,8 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
   if (kind === "xlsx" || kind === "docx" || kind === "pptx") {
     try {
       hit = documentBytesSecret(bytes);
-      const names = inspectOfficePackage(bytes, DOCUMENT_MAX_BYTES, (name, content, text) => {
+      const names = inspectOfficePackage(bytes, DOCUMENT_MAX_BYTES, (name, content, text, requiresConsent) => {
+        if (requiresConsent) hit ??= { secretClass: "computed_text", line: 1 };
         hit ??= documentSecret(name) ?? documentBytesSecret(content) ?? (text === null ? null : documentSecret(text));
       });
       if (!names.has("[Content_Types].xml") || !names.has("_rels/.rels") || !names.has(OFFICE_MAIN_PART[kind])) {
