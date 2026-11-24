@@ -8827,6 +8827,11 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
     const mobile = width < 500;
     const live = mobile ? phoneBoard : desktopBoard;
     console.log(`board startup safety: ${width} ${locale} ${colorScheme}`);
+    const language = await fetch(base + "/api/operator/settings", {
+      method: "PUT", headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({ locale, source: "chosen" }),
+    });
+    if (!language.ok) throw new Error(`fixture language write failed with ${language.status}`);
     const context = await browser.newContext({ viewport: { width, height: mobile ? 844 : 900 }, hasTouch: mobile, isMobile: mobile,
       colorScheme, locale, reducedMotion: "reduce" });
     try {
@@ -8836,6 +8841,8 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
       await page.goto(url, { waitUntil: "commit" });
       const scope = (await (await auth).json() as { scope: string }).scope;
       await page.waitForSelector(live, { timeout: 45_000 });
+      const skip = page.locator("[data-walk-skip]");
+      if (await skip.isVisible()) await skip.click();
       await page.waitForFunction(hasRecord, { layout: mobile ? "phone" : "desktop", scope }, { timeout: 10_000 });
       let releaseData!: () => void;
       const dataHeld = new Promise<void>(resolve => { releaseData = resolve; });
@@ -8861,6 +8868,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
         await page.locator(preview).first().click();
         if (!pendingData || mutations || await page.locator(live).count()) throw new Error("preview exposed mutation handlers or needed a network answer");
         await page.waitForSelector("[data-board-first-seat]", { timeout: 7_500 });
+        await page.waitForFunction(locale => document.documentElement.lang === locale, locale);
         const bounds = await page.locator(`${preview}, [data-board-first-seat]`).evaluateAll(nodes => nodes
           .filter(node => node.getClientRects().length > 0)
           .map(node => {
