@@ -1,4 +1,6 @@
 import { proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
+import { isPublicationPreparationInvocation } from "./publicationInvocation";
+export { isPublicationPreparationInvocation } from "./publicationInvocation";
 import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./publicationHistory";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDependencies";
@@ -1763,7 +1765,14 @@ async function publicationBudget(pipeline: Pipeline, acceptedSha: string, exec: 
 }
 
 const REMOTE_READ_TIMEOUT = "5s";
-
+export function appendGitConfigOverride(env: Record<string, string | undefined>, key: string, value: string): boolean {
+  const count = Number(env.GIT_CONFIG_COUNT ?? "0");
+  if (!Number.isInteger(count) || count < 0 || count > 64) return false;
+  env.GIT_CONFIG_COUNT = String(count + 1);
+  env[`GIT_CONFIG_KEY_${count}`] = key;
+  env[`GIT_CONFIG_VALUE_${count}`] = value;
+  return true;
+}
 /** A child can retain both inherited kernel fences after its Viewer exits.
     Probe the shared inode and the unique run fence without waiting. The
     executor's own command deadline still owns cancellation and cleanup. */
@@ -2111,10 +2120,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
-      const canonicalGateEntry = path.resolve(process.cwd(), "scripts/local-gate.ts");
-      const preparingChecks = command === "bun"
-        && (args[0] === "scripts/local-gate.ts" || args[0] === canonicalGateEntry)
-        && args.length === 3 && args[1] === "pre-push" && args[2] === "--publication-prepare";
+      const preparingChecks = isPublicationPreparationInvocation(command, args, process.cwd());
       // The push runs the repository's pre-push gates; both leave the
       // production service for a work scope. Its PID, group and the inherited
       // lock descriptor stay this command's.
@@ -2482,7 +2488,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      limit for git to send the pack, so it ends with its own verdict or with
      a named missing one instead of being killed (scripts/local-gate.ts). */
   const forgeEnv = engineForgeWriteEnv();
-  const pushEnv: ReturnType<typeof pipelinePublicationHookEnv> & { LLV_GATE_CANONICAL_TOOLS?: string; LLV_SKIP_HOOKS?: string } = { ...pipelinePublicationHookEnv(), ...lessons, ...forgeEnv, ...installedGateAdmissionEnv({ ...process.env, ...forgeEnv }),
+  const pushEnv: ReturnType<typeof pipelinePublicationHookEnv> & { LLV_GATE_CANONICAL_TOOLS?: string; LLV_GATE_IMAGE_BUN?: string; LLV_SKIP_HOOKS?: string } = { ...pipelinePublicationHookEnv(), ...lessons, ...forgeEnv, ...installedGateAdmissionEnv({ ...process.env, ...forgeEnv }),
     // Older branches run their own hook scripts, so supply the gate's current
     // memory defaults here as well. Explicit caller settings remain authoritative.
     NODE_OPTIONS: process.env.NODE_OPTIONS ?? "--max-old-space-size=11264",
@@ -2519,15 +2525,17 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
       });
       if (canonicalTools) {
         pushEnv.LLV_GATE_CANONICAL_TOOLS = "1";
+        if (process.env.LLV_GATE_IMAGE_BUN === "bun-container") pushEnv.LLV_GATE_IMAGE_BUN = "bun-container";
         // Keep the ExecPort contract (`git push` is argv[0]) while selecting
         // the trusted hook for this command only. The hook clears these Git
         // selectors before launching any child check.
-        pushEnv.GIT_CONFIG_COUNT = "1";
-        pushEnv.GIT_CONFIG_KEY_0 = "core.hooksPath";
-        pushEnv.GIT_CONFIG_VALUE_0 = path.join(canonicalRoot, ".githooks");
+        if (!appendGitConfigOverride(pushEnv, "core.hooksPath", path.join(canonicalRoot, ".githooks"))) {
+          return { ok: false, error: "Git credential configuration could not be preserved; nothing was published" };
+        }
       }
       const checkStarted = performance.now();
-      const checked = await exec("bun", [canonicalTools ? canonicalGate : "scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
+      const gateBun = canonicalTools && process.env.LLV_GATE_IMAGE_BUN === "bun-container" ? "bun-container" : "bun";
+      const checked = await exec(gateBun, [canonicalTools ? canonicalGate : "scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
       if (checked.code !== 0) return failure("checking the publication before transport", checked);
       // Preparation includes privacy: its elapsed time is a conservative
       // observation even with older hooks that report no per-step timings.

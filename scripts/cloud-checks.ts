@@ -135,6 +135,7 @@ export function cloudCheckInputs(root: string, env: Partial<NodeJS.ProcessEnv>):
   // Tool routing is selected by the trusted Cloud command below. It is not a
   // candidate-controlled portable input and must never cross input capture.
   delete canonical.LLV_GATE_CANONICAL_TOOLS;
+  delete canonical.LLV_GATE_CANONICAL_COMPARATOR;
   const result: CloudCheckInputs = {};
   const repository = realpathSync(root);
   for (const [name, value] of Object.entries(canonical)) {
@@ -177,17 +178,18 @@ export function cloudCommand(job: CloudJob, upload?: { directory: string; source
   }).filter(Boolean).join(" ");
   const files = Object.values(job.inputs).filter((value): value is { file: string } => value !== null && typeof value === "object")
     .map(value => `test -f "$PWD"/${quote(value.file)}`).join("\n");
-  const environment = `env -i PATH="$PATH" ${inputs} LLV_GATE_CANONICAL_TOOLS=1 LLV_GATE_CHECKPOINT_CLEANUP=cloud-owned-runner HOME="$root/home" XDG_CONFIG_HOME="$root/config" TMPDIR="$root/tmp" LLV_STATE_DIR="$root/state"`;
+  const environment = `env -i PATH="$PATH" ${inputs} LLV_GATE_CANONICAL_TOOLS=1 LLV_GATE_CANONICAL_COMPARATOR="$setup_source/scripts/local-gate-tests.ts" LLV_GATE_CHECKPOINT_CLEANUP=cloud-owned-runner HOME="$root/home" XDG_CONFIG_HOME="$root/config" TMPDIR="$root/tmp" LLV_STATE_DIR="$root/state"`;
   const deadlineAt = job.deadlineAt ?? Date.now() + job.timeoutMs;
   return `set -eu
 setup_source=${upload ? quote(upload.source) : '"$PWD"'}
 git_common=$(git rev-parse --git-common-dir)
 case "$git_common" in /*) ;; *) git_common="$PWD/$git_common" ;; esac
-root="$git_common/delegatus-cloud-checks"
+root="$git_common/delegatus-cloud-checks/${randomUUID()}"
 umask 077
 mkdir -p "$root"
 chmod 700 "$root"
-${upload ? `upload=${quote(upload.directory)}\ntrap 'rm -rf "$upload"' EXIT` : ""}
+upload=${upload ? quote(upload.directory) : ""}
+trap 'rm -rf "$root"; if [ -n "$upload" ]; then rm -rf "$upload"; fi' EXIT
 ${upload ? `base64 -d ${quote(`${upload.directory}/bundle`)} > "$root/source.bundle"
 if ! git -C "$root/repo" rev-parse --git-dir >/dev/null 2>&1; then git clone -q --no-hardlinks ${quote(upload.source)} "$root/repo"; fi
 if ! git -C "$root/repo" cat-file -e ${quote(`${job.base}^{commit}`)} 2>/dev/null; then
@@ -207,7 +209,7 @@ ${files}
 mkdir -p "$root/home" "$root/config" "$root/tmp" "$root/state"
 ${environment} bun scripts/cloud-check-dependencies.ts "$setup_source"
 set +e
-${environment} LLV_SKIP_HOOKS=0 LLV_GATE_PUSH_HEAD=${quote(job.head)} LLV_GATE_PUSH_DEADLINE=${quote(String(deadlineAt))} LLV_GATE_RUNNER=off LLV_GATE_EXECUTION=local DELEGATUS_AGENT_CPU=off bun "$setup_source/scripts/local-gate.ts" pre-push --admitted
+${environment} LLV_SKIP_HOOKS=0 LLV_GATE_PUSH_HEAD=${quote(job.head)} LLV_GATE_PUSH_DEADLINE=${quote(String(deadlineAt))} LLV_GATE_RUNNER=off LLV_GATE_EXECUTION=local DELEGATUS_AGENT_CPU=off bun scripts/local-gate.ts pre-push --admitted
 code=$?
 set -e
 test "$(git rev-parse HEAD^{tree})" = ${quote(job.tree)}

@@ -11,7 +11,7 @@ import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 import { withProvisioningTurn } from "./provisioningTurn";
 import { readWorktreeProvenance } from "./worktreeProvenance";
-import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { appendGitConfigOverride, commitPipelineStage, currentPipelineRemoteBranchHead, isPublicationPreparationInvocation, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
@@ -22,6 +22,31 @@ import { PUBLICATION_PACK_MARGIN_MS, publicationPushBudgetMs } from "./gateBudge
 import { recoverablePublication } from "./publicationHistory";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
 import { publicationCheckBinding, writePublicationCheckReceipt } from "../git/publicationCheckReceipt";
+
+test("compiled publication preparation recognizes only the resolved canonical entry invocation", () => {
+  const cwd = "/app";
+  const prepare = ["/app/scripts/local-gate.ts", "pre-push", "--publication-prepare"];
+  expect(isPublicationPreparationInvocation("bun", prepare, cwd)).toBe(true);
+  expect(isPublicationPreparationInvocation("bun-container", prepare, cwd)).toBe(true);
+  expect(isPublicationPreparationInvocation("bun", ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], cwd)).toBe(true);
+  expect(isPublicationPreparationInvocation("bun", ["install", "--frozen-lockfile"], cwd)).toBe(false);
+  expect(isPublicationPreparationInvocation("bun", ["/app/scripts/local-gate.ts", "pre-push"], cwd)).toBe(false);
+  expect(isPublicationPreparationInvocation("bun", [...prepare, "unexpected"], cwd)).toBe(false);
+});
+
+test("canonical hook selection appends after scoped App credential configuration", () => {
+  const env: Record<string, string | undefined> = { GIT_CONFIG_COUNT: "3",
+    GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "",
+    GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "!fixture-app-credential-helper",
+    GIT_CONFIG_KEY_2: "credential.useHttpPath", GIT_CONFIG_VALUE_2: "true" };
+  expect(appendGitConfigOverride(env, "core.hooksPath", "/app/.githooks")).toBe(true);
+  expect(env).toEqual({ GIT_CONFIG_COUNT: "4",
+    GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "",
+    GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "!fixture-app-credential-helper",
+    GIT_CONFIG_KEY_2: "credential.useHttpPath", GIT_CONFIG_VALUE_2: "true",
+    GIT_CONFIG_KEY_3: "core.hooksPath", GIT_CONFIG_VALUE_3: "/app/.githooks" });
+  expect(appendGitConfigOverride({ GIT_CONFIG_COUNT: "65" }, "core.hooksPath", "/app/.githooks")).toBe(false);
+});
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));

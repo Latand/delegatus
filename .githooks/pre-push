@@ -46,6 +46,8 @@ if [ ! -t 0 ]; then
 fi
 if [ "${LLV_GATE_CANONICAL_TOOLS:-0}" = "1" ]; then
   gate_root=$(cd "$(dirname "$0")/.." && pwd)
-  exec bun "$gate_root/scripts/local-gate.ts" pre-push
+  gate_bun=${LLV_GATE_IMAGE_BUN:-bun}
+  case "$gate_bun" in bun|bun-container) ;; *) echo "pre-push: invalid canonical Bun selection" >&2; exit 1 ;; esac
+  exec "$gate_bun" "$gate_root/scripts/local-gate.ts" pre-push
 fi
 exec bun scripts/local-gate.ts pre-push

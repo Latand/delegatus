@@ -68,7 +68,6 @@ esac
 exec "$LLV_GATE_BUN" "$@"
 `);
   writeFileSync(path.join(f.dir, "shims/bunx"), "#!/bin/sh\nexit 0\n");
-  symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
   for (const name of ["a", "b"]) writeFileSync(path.join(f.dir, `${name}.test.ts`), `
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { expect, test } from "bun:test";
@@ -206,7 +205,6 @@ case "$1" in scripts/privacy-publication-gate.ts|scripts/eslint-changes.ts) exit
 exec "$LLV_GATE_BUN" "$@"
 `);
   writeFileSync(path.join(f.dir, "shims/bunx"), "#!/bin/sh\nexit 0\n");
-  symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
   for (const name of ["a", "b"]) writeFileSync(path.join(f.dir, `${name}.test.ts`), `
 import { appendFileSync } from "node:fs";
 import { expect, test } from "bun:test";
@@ -275,7 +273,6 @@ serviceTest("local check-step invalidates warm and cold retries when BASH_ENV by
   env.LLV_GATE_CHECK_ENV = "BASH_ENV";
   writeFileSync(startup, "umask 022\n");
   writeFileSync(path.join(f.dir, "shims/bun"), '#!/bin/sh\nexec "$LLV_GATE_BUN" "$@"\n');
-  symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
   writeFileSync(path.join(f.dir, "a.test.ts"), `
 import { appendFileSync } from "node:fs";
 import { expect, test } from "bun:test";

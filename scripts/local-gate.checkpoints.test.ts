@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
 import { headFileCache } from "./local-gate-tests";
+import { createHookFixture } from "./local-gate.fixture";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -109,7 +110,6 @@ serviceTest("local check-step invalidates warm and cold retries when BASH_ENV by
   env.LLV_GATE_CHECK_ENV = "BASH_ENV";
   writeFileSync(startup, "umask 022\n");
   writeFileSync(path.join(f.dir, "shims/bun"), '#!/bin/sh\nexec "$LLV_GATE_BUN" "$@"\n');
-  symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
   writeFileSync(path.join(f.dir, "a.test.ts"), `
 import { appendFileSync } from "node:fs";
 import { expect, test } from "bun:test";

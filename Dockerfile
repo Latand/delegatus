@@ -157,6 +157,7 @@ chmod +x /usr/local/bin/docker
 EOF
 
 FROM runtime-system AS runtime
+ENV LLV_GATE_IMAGE_BUN=bun-container
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public

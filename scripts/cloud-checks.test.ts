@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { cloudCommand, runCloudChecks, type CloudJob, type CloudResult } from "./cloud-checks";
+import { plan, type PlanEnvironment } from "./local-gate";
 
 const job: CloudJob = { head: "a".repeat(40), tree: "b".repeat(40), base: "c".repeat(40), inputs: {}, bundle: "bundle", timeoutMs: 1000 };
 const verdict = (code: number): CloudResult => ({ kind: "verdict", head: job.head, tree: job.tree, base: job.base, inputs: cloudInputDigest(job.inputs), code });
@@ -40,49 +41,103 @@ test("a bound Cloud exit 75 is a deadline only with explicit no-verdict evidence
 test("a receipt for another tree cannot authorize publication", async () => {
   expect(await runCloudChecks(job, { run: async () => ({ ...verdict(0), tree: "d".repeat(40) }) }, async () => 0)).toBe(1);
 });
+test("a receipt for another merge base cannot authorize a hosted retry", async () => {
+  let calls = 0, local = 0;
+  expect(await runCloudChecks(job, { run: async () => { calls++; return { ...verdict(0), base: "d".repeat(40) }; } }, async () => { local++; return 0; })).toBe(1);
+  expect([calls, local]).toEqual([1, 0]);
+});
 test("a receipt for different check inputs cannot authorize publication", async () => {
   let local = 0;
   expect(await runCloudChecks({ ...job, inputs: { CHECK_PROBE_FAIL: "1" } }, { run: async () => verdict(0) }, async () => { local++; return 0; })).toBe(1);
   expect(local).toBe(0);
 });
 
-test("Cloud commands keep the checkout and its verified file cache while binding the caller deadline", () => {
+test("Cloud commands bind the caller deadline and start an isolated candidate with its own planner", () => {
   const command = cloudCommand({ ...job, deadlineAt: 1_900_000_000_000 });
-  expect(command).toContain('root="$git_common/delegatus-cloud-checks"');
+  expect(command).toMatch(/root="\$git_common\/delegatus-cloud-checks\/[0-9a-f-]{36}"/);
   expect(command).toContain("LLV_GATE_PUSH_DEADLINE='1900000000000'");
   expect(command).toContain('git clean -fdq');
-  expect(command).not.toContain('trap .*"$root"');
+  expect(command).toContain("trap 'rm -rf \"$root\"");
+  expect(command).toContain('LLV_GATE_CANONICAL_COMPARATOR="$setup_source/scripts/local-gate-tests.ts"');
+  expect(command).toContain('bun scripts/local-gate.ts pre-push --admitted');
+  expect(command).not.toContain('bun "$setup_source/scripts/local-gate.ts"');
 });
 
-test("a second Cloud command reuses the same bounded per-file cache for its unchanged tree", () => {
+test("an older setup planner cannot omit candidate transport checks from local or hosted selection", () => {
+  const checks = ["scripts/local-gate.transport.native.test.ts", "scripts/local-gate.transport.budget.test.ts", "scripts/local-gate.transport.custody.test.ts"];
+  const context: PlanEnvironment = { base: "origin/main", existing: new Set(["scripts/gate-cache.ts"]), tests: checks,
+    linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
+  const before = { tools: process.env.LLV_GATE_CANONICAL_TOOLS, comparator: process.env.LLV_GATE_CANONICAL_COMPARATOR };
+  try {
+    process.env.LLV_GATE_CANONICAL_TOOLS = "1";
+    process.env.LLV_GATE_CANONICAL_COMPARATOR = "/older/setup/scripts/local-gate-tests.ts";
+    const selected = plan("pre-push", ["scripts/gate-cache.ts"], context).find(step => step.name === "touched tests")!;
+    expect(selected.command).toEqual(["bun", "/older/setup/scripts/local-gate-tests.ts", "--base", "origin/main", ...checks.map(file => `./${file}`)]);
+    const hosted = cloudCommand(job);
+    expect(hosted).toContain('bun scripts/local-gate.ts pre-push --admitted');
+    expect(hosted).toContain('LLV_GATE_CANONICAL_COMPARATOR="$setup_source/scripts/local-gate-tests.ts"');
+    expect(hosted).not.toContain('bun "$setup_source/scripts/local-gate.ts"');
+  } finally {
+    if (before.tools === undefined) delete process.env.LLV_GATE_CANONICAL_TOOLS; else process.env.LLV_GATE_CANONICAL_TOOLS = before.tools;
+    if (before.comparator === undefined) delete process.env.LLV_GATE_CANONICAL_COMPARATOR; else process.env.LLV_GATE_CANONICAL_COMPARATOR = before.comparator;
+  }
+});
+
+test("a deadline retry in a new hosted workspace starts cold and binds changed trees and bases", () => {
   const root = mkdtempSync(path.join(tmpdir(), "cloud-checkpoint-retry-"));
   const source = path.join(root, "source"); mkdirSync(source);
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid",
     GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.invalid" };
   const git = (...args: string[]) => execFileSync("git", args, { cwd: source, env, encoding: "utf8", stdio: "pipe" }).trim();
   try {
-    git("init", "-q"); writeFileSync(path.join(source, "source"), "same tree\n");
-    git("add", "."); git("commit", "-qm", "Fixture");
-    const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
-    const bundle = path.join(root, "fixture.bundle"); execFileSync("git", ["bundle", "create", bundle, "HEAD"], { cwd: source, env, stdio: "pipe" });
+    git("init", "-q"); writeFileSync(path.join(source, "source"), "base\n");
+    git("add", "."); git("commit", "-qm", "Base one");
+    const firstBase = git("rev-parse", "HEAD");
+    writeFileSync(path.join(source, "base-marker"), "base two\n"); git("add", "."); git("commit", "-qm", "Base two");
+    const candidateBase = git("rev-parse", "HEAD");
+    writeFileSync(path.join(source, "source"), "same tree\n"); git("add", "."); git("commit", "-qm", "Candidate");
+    const firstHead = git("rev-parse", "HEAD"), firstTree = git("rev-parse", "HEAD^{tree}");
+    const firstBundle = path.join(root, "first.bundle"); execFileSync("git", ["bundle", "create", firstBundle, "HEAD"], { cwd: source, env, stdio: "pipe" });
     const bin = path.join(root, "bin"); mkdirSync(bin);
     writeFileSync(path.join(bin, "bun"), `#!/bin/sh
 if [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi
 test "$LLV_GATE_PUSH_DEADLINE" = 1900000000000 || exit 12
 cache="$(git rev-parse --git-common-dir)/delegatus-gate/head-files"
 mkdir -p "$cache"
+echo "cache-path:$cache"
 if [ -e "$cache/completed" ]; then echo reused-complete-file; else touch "$cache/completed"; echo completed-file; fi
+if [ ! -e ${JSON.stringify(path.join(root, "first-attempt"))} ]; then touch ${JSON.stringify(path.join(root, "first-attempt"))}; echo 'touched tests: execution deadline'; exit 75; fi
 exit 0
 `, { mode: 0o700 });
-    const candidate = { ...job, head, tree, base: head, bundle: readFileSync(bundle).toString("base64"), deadlineAt: 1_900_000_000_000 };
-    const run = () => spawnSync("bash", ["-c", cloudCommand(candidate)], { cwd: source,
+    const candidate = { ...job, head: firstHead, tree: firstTree, base: candidateBase, bundle: readFileSync(firstBundle).toString("base64"), deadlineAt: 1_900_000_000_000 };
+    const run = (selected = candidate) => spawnSync("bash", ["-c", cloudCommand(selected)], { cwd: source,
       env: { ...env, PATH: `${bin}:${env.PATH}` }, encoding: "utf8" });
-    const first = run(), second = run();
-    expect(first.status, first.stderr).toBe(0);
+    const first = run(), retry = run();
+    expect(first.status, first.stderr).toBe(75);
     expect(first.stdout).toContain("completed-file");
-    expect(second.status, second.stderr).toBe(0);
-    expect(second.stdout).toContain("reused-complete-file");
-    expect(second.stdout).toContain(`DELEGATUS_GATE ${head} ${tree} ${head}`);
+    expect(first.stdout).toContain("execution deadline");
+    expect(retry.status, retry.stderr).toBe(0);
+    expect(retry.stdout).toContain("completed-file");
+    expect(retry.stdout).not.toContain("reused-complete-file");
+    expect(retry.stdout).toContain(`DELEGATUS_GATE ${firstHead} ${firstTree} ${candidateBase}`);
+    const cacheNamespaces = [candidate, candidate].map(value => cloudCommand(value).match(/root="\$git_common\/delegatus-cloud-checks\/([0-9a-f-]{36})"/)?.[1]);
+    const sameTreeChangedBase = { ...candidate, base: firstBase };
+    const changedBase = run(sameTreeChangedBase);
+    expect(changedBase.status, changedBase.stderr).toBe(0);
+    expect(changedBase.stdout).toContain(`DELEGATUS_GATE ${firstHead} ${firstTree} ${firstBase}`);
+    expect(changedBase.stdout).not.toContain("reused-complete-file");
+    cacheNamespaces.push(cloudCommand(sameTreeChangedBase).match(/root="\$git_common\/delegatus-cloud-checks\/([0-9a-f-]{36})"/)?.[1]);
+    writeFileSync(path.join(source, "source"), "changed tree\n");
+    git("add", "source"); git("commit", "-qm", "Changed tree");
+    const changedHead = git("rev-parse", "HEAD"), changedTree = git("rev-parse", "HEAD^{tree}");
+    const changedBundle = path.join(root, "changed.bundle"); execFileSync("git", ["bundle", "create", changedBundle, "HEAD"], { cwd: source, env, stdio: "pipe" });
+    const changedTreeJob = { ...candidate, head: changedHead, tree: changedTree, bundle: readFileSync(changedBundle).toString("base64") };
+    const changedTreeResult = run(changedTreeJob);
+    expect(changedTreeResult.status, changedTreeResult.stderr).toBe(0);
+    expect(changedTreeResult.stdout).toContain(`DELEGATUS_GATE ${changedHead} ${changedTree} ${candidateBase}`);
+    expect(changedTreeResult.stdout).not.toContain("reused-complete-file");
+    cacheNamespaces.push(cloudCommand(changedTreeJob).match(/root="\$git_common\/delegatus-cloud-checks\/([0-9a-f-]{36})"/)?.[1]);
+    expect(new Set(cacheNamespaces).size).toBe(4);
     expect(git("status", "--porcelain", "--untracked-files=normal")).toBe("");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -145,7 +200,7 @@ test("hosted launch uses the required Cloud profile and exact tree command", asy
     environments: [{ environmentConfigId: config.environmentId, cwd: cwd }],
   });
   expect(fake.calls.find(call => call.method === "turn/start")?.params).toMatchObject({ threadId: "thread-fixture", sandboxPolicy: { type: "dangerFullAccess" } });
-  expect(cloudCommand(job)).toContain('bun "$setup_source/scripts/local-gate.ts" pre-push --admitted');
+  expect(cloudCommand(job)).toContain('bun scripts/local-gate.ts pre-push --admitted');
   expect(cloudCommand(job)).toContain("LLV_GATE_RUNNER=off");
   expect(cloudCommand(job)).toContain('LLV_GATE_CANONICAL_TOOLS=1');
 });
@@ -339,7 +394,7 @@ for (const stale of [false, true]) test(`the bundled command gates the exact can
     const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
     const bundle = path.join(root, "source.bundle"); git("bundle", "create", bundle, "HEAD", `^${base}`);
     const bin = path.join(root, "bin"); mkdirSync(bin);
-    writeFileSync(path.join(bin, "bun"), '#!/bin/sh\nif [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi\ncase "$1" in */scripts/local-gate.ts) ;; *) exit 99;; esac\ntest "$2 $3" = "pre-push --admitted" || exit 99\ntest "$(cat source)" = candidate || exit 98\ntest "$LLV_SKIP_HOOKS" = 0 || exit 97\ntest "$LLV_GATE_CANONICAL_TOOLS" = 1 || exit 95\ntest "$LLV_GATE_PUSH_HEAD" = "$(git rev-parse HEAD)" || exit 96\nif [ "$BUNDLE_MUTATION" = tracked ]; then echo repaired > source; fi\nif [ "$BUNDLE_MUTATION" = untracked ]; then echo repaired > extra.ts; fi\nexit 0\n', { mode: 0o755 });
+    writeFileSync(path.join(bin, "bun"), '#!/bin/sh\nif [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi\ncase "$1" in scripts/local-gate.ts|*/scripts/local-gate.ts) ;; *) exit 99;; esac\ntest "$2 $3" = "pre-push --admitted" || exit 99\ntest "$(cat source)" = candidate || exit 98\ntest "$LLV_SKIP_HOOKS" = 0 || exit 97\ntest "$LLV_GATE_CANONICAL_TOOLS" = 1 || exit 95\ntest "$LLV_GATE_PUSH_HEAD" = "$(git rev-parse HEAD)" || exit 96\nif [ "$BUNDLE_MUTATION" = tracked ]; then echo repaired > source; fi\nif [ "$BUNDLE_MUTATION" = untracked ]; then echo repaired > extra.ts; fi\nexit 0\n', { mode: 0o755 });
     for (const mutation of ["none", "tracked", "untracked"]) {
       const upload = path.join(root, "upload"); mkdirSync(upload);
       writeFileSync(path.join(upload, "bundle"), readFileSync(bundle).toString("base64"));

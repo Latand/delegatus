@@ -122,6 +122,13 @@ describe("SQLite registry Viewer runtime (#187)", () => {
     expect(compose).toContain("exec bun-container --bun node_modules/.bin/next start");
   });
 
+  test("the packaged canonical publication hook stays inside the image Bun namespace", () => {
+    expect(runtimeStage).toContain("ENV LLV_GATE_IMAGE_BUN=bun-container");
+    expect(runtimeStage).toContain("COPY --from=build /app/scripts ./scripts");
+    expect(runtimeStage).toContain("COPY --from=build /app/.githooks/pre-push ./.githooks/pre-push");
+    expect(readFileSync(join(import.meta.dir, "..", ".githooks", "pre-push"), "utf8")).toContain('exec "$gate_bun" "$gate_root/scripts/local-gate.ts" pre-push');
+  });
+
   test("every image stage uses the production-burned-in Bun runtime (#552)", () => {
     const runtimePins = [...dockerfile.matchAll(/npm install -g (\S+)/g)].map(([, specifier]) => specifier!.split("@"));
     expect(runtimePins).toEqual(Array.from({ length: 3 }, () => ["bun", "1.4.0"]));

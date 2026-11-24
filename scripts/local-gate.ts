@@ -67,8 +67,8 @@ export function viewerBuildEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEn
 export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvironment): Step[] {
   const files = changedFiles.filter(file => env.existing.has(file));
   const steps: Step[] = [];
-  const comparator = process.env.LLV_GATE_CANONICAL_TOOLS === "1"
-    ? path.join(import.meta.dir, "local-gate-tests.ts") : "scripts/local-gate-tests.ts";
+  const comparator = process.env.LLV_GATE_CANONICAL_COMPARATOR
+    ?? (process.env.LLV_GATE_CANONICAL_TOOLS === "1" ? path.join(import.meta.dir, "local-gate-tests.ts") : "scripts/local-gate-tests.ts");
   if (mode === "pre-commit") steps.push({ name: "staged whitespace", command: ["git", "diff", "--cached", "--check"] });
   if (mode === "pre-push") {
     steps.push({ name: "privacy", command: ["bun", "scripts/privacy-publication-gate.ts", "--base", env.base,
@@ -93,7 +93,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (mode === "pre-commit") return steps;
   const touched = new Set(env.privacySelfTests);
   if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints(?:\.[^.]+)?|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints(?:-retry)?(?:\.[^.]+)?|hooks|publication|transport(?:\.[^.]+)?|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
   }
   if (changedFiles.some(file => ["scripts/owned-runner.integration.fixture.ts", "scripts/owned-runner.cleanup.ts"].includes(file))) {
     for (const test of env.tests) if (/^scripts\/owned-runner(?:\.[^.]+)+\.test\.ts$/.test(test)) touched.add(test);
@@ -105,7 +105,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
     for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
   }
   if (changedFiles.includes("scripts/local-gate-tests.ts")) {
-    for (const test of env.tests) if (/^scripts\/local-gate\.checkpoints(?:\.[^.]+)?\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (/^scripts\/local-gate\.checkpoints(?:-retry)?(?:\.[^.]+)?\.test\.ts$/.test(test)) touched.add(test);
   }
   for (const file of files.filter(isTest)) touched.add(file);
   for (const file of files.filter(lintable)) {

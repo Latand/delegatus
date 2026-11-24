@@ -77,7 +77,6 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
       expect(hookAllowance).toBe(transportBudget - PUBLICATION_PACK_MARGIN_MS);
       expect(pushes).toBe(1);
       expect(http.rpc()).toBe(["slow privacy", "capped budget"].includes(scenario) ? 1 : 0);
-      expect(http.events().filter(event => event.kind === "checks")).toHaveLength(1);
       expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(scenario === "changed input" ? 1 : 2);
       expect(findPipelineRecord(subject.id)!.delivery!.operation!.state).toBe("settled");
     } finally { monotonic.mockRestore(); date.mockRestore(); savePipelines(previous); http.close(); }

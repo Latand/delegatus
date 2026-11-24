@@ -29,15 +29,15 @@ nativeTest("a first cold native publication completes one check phase before one
       if (command === "git" && args[0] === "push") {
         pushes++;
         expect(readPublicationCheckReceipt(overrides!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(overrides!)).inputs).toMatch(/^[a-f0-9]{64}$/);
-        expect(touchedChecks(f)).toHaveLength(1);
+        expect(http.events().filter(event => event.kind === "checks")).toHaveLength(1);
       }
-      return realExec(command, args, cwd, { ...f.env, ...overrides }, options);
+      return realExec(command, args, cwd, { ...f.env, ...overrides, PATH: f.env.PATH }, options);
     };
     expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, sha: f.head, remote: "published" });
     expect(pushes).toBe(1); expect(http.rpc()).toBe(1); expect(http.rejected()).toBe(0);
     expect(f.calls().filter(call => call.args[0] === "native-install").map(call => call.args[2]))
       .toEqual(SUPPORTED_CODEX_VERSIONS.map(version => `@openai/codex@${version}`));
-    expect(touchedChecks(f)).toHaveLength(1);
+    expect(http.events().filter(event => event.kind === "checks")).toHaveLength(1);
     expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
   } finally { savePipelines(previous); http.close(); }
 }, 120_000);
@@ -74,7 +74,7 @@ test.each(["active", "expired"] as const)("native Git expires its discovered pas
     const commands: string[] = [];
     const exec: ExecPort = (command, args, cwd, overrides, options) => {
       commands.push([command, ...args].join(" "));
-      return realExec(command, args, cwd, { ...f.env, ...overrides }, options);
+      return realExec(command, args, cwd, { ...f.env, ...overrides, PATH: f.env.PATH }, options);
     };
     const result = await publishPipelineBranch(subject, exec, { acceptedSha: f.head });
     expect(result).toMatchObject({ ok: true, sha: f.head, remote: "published" });
@@ -91,6 +91,8 @@ test.each(["active", "expired"] as const)("native Git expires its discovered pas
 for (const capability of ["absent", "unsupported", "malformed"] as const) {
   test(`a gate with ${capability} preparation capability uses the current canonical checks once`, async () => {
     const f = fixture();
+    const savedImageBun = process.env.LLV_GATE_IMAGE_BUN;
+    const savedCwd = process.cwd;
     delete f.env.LLV_GATE_PUBLICATION_RECEIPT;
     const marker = path.join(f.dir, "scripts/local-gate-capabilities.json");
     if (capability === "absent") fs.rmSync(marker);
@@ -100,6 +102,20 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
     f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json", "scripts/local-gate.ts");
     f.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "legacy gate capability");
     const http = await httpFixture(f, false), previous = loadPipelines();
+    let packagedRoot = root;
+    if (capability === "absent") {
+      packagedRoot = path.join(f.dir, ".git", "packaged-docker-app");
+      fs.mkdirSync(path.join(packagedRoot, ".githooks"), { recursive: true });
+      fs.mkdirSync(path.join(packagedRoot, "scripts"), { recursive: true });
+      fs.copyFileSync(path.join(root, "Dockerfile"), path.join(packagedRoot, "Dockerfile"));
+      fs.copyFileSync(path.join(root, ".githooks/pre-push"), path.join(packagedRoot, ".githooks/pre-push"));
+      fs.symlinkSync(path.join(root, "scripts/local-gate.ts"), path.join(packagedRoot, "scripts/local-gate.ts"));
+      fs.symlinkSync(path.join(root, "scripts/local-gate-tests.ts"), path.join(packagedRoot, "scripts/local-gate-tests.ts"));
+      fs.copyFileSync(path.join(root, "scripts/local-gate-capabilities.json"), path.join(packagedRoot, "scripts/local-gate-capabilities.json"));
+      expect(fs.readFileSync(path.join(packagedRoot, "Dockerfile"), "utf8")).toContain("COPY --from=build /app/scripts ./scripts");
+      process.cwd = () => packagedRoot;
+      process.env.LLV_GATE_IMAGE_BUN = "bun-container";
+    }
     try {
       const subject = pipelineCorpus(2, 1)[1]!;
       Object.assign(subject, { project: "fixture", repoDir: path.join(path.dirname(f.dir), "source"), worktreeDir: f.dir, lastPassedCommit: f.head });
@@ -108,8 +124,9 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
       savePipelines([subject]);
       let preparations = 0, pushes = 0;
       const exec: ExecPort = (command, args, cwd, env, options) => {
-        if (command === "bun" && args.includes("--publication-prepare")) {
+        if ((command === "bun" || command === "bun-container") && args.includes("--publication-prepare")) {
           preparations++;
+          if (capability === "absent") expect(command).toBe("bun-container");
           expect(args[0]).not.toBe("scripts/local-gate.ts");
           expect(env?.LLV_GATE_CANONICAL_TOOLS).toBe("1");
         }
@@ -117,14 +134,29 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
           pushes++;
           expect(env?.LLV_GATE_PUBLICATION_RECEIPT).toBeDefined();
           expect(env?.LLV_SKIP_HOOKS).toBeUndefined();
-          expect(env?.GIT_CONFIG_VALUE_0).toBe(path.join(root, ".githooks"));
+          const hookIndex = Number(env?.GIT_CONFIG_COUNT) - 2;
+          expect(Number(env?.GIT_CONFIG_COUNT)).toBeGreaterThanOrEqual(2);
+          if (capability === "absent") {
+            expect(env?.LLV_GATE_IMAGE_BUN).toBe("bun-container");
+          }
+          expect(env?.[`GIT_CONFIG_VALUE_${hookIndex}`]).toBe(path.join(packagedRoot, ".githooks"));
         }
-        return realExec(command, args, cwd, { ...f.env, ...env }, options);
+        return realExec(command, args, cwd, { ...f.env, ...env, PATH: f.env.PATH }, options);
       };
       expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, remote: "published" });
       expect(preparations).toBe(1); expect(pushes).toBe(1); expect(http.rpc()).toBe(1);
       expect(http.events().map(event => event.kind)).toEqual(["checks", "mint", "rpc"]);
+      if (capability === "absent") {
+        const selected = fs.readFileSync(`${f.env.HOOK_LOG}.bun-container`, "utf8").trim().split("\n");
+        expect(selected.some(line => line.includes("--publication-prepare"))).toBeTrue();
+        expect(selected.filter(line => line.includes("scripts/local-gate.ts pre-push")).length).toBeGreaterThanOrEqual(2);
+        expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts").length).toBeGreaterThanOrEqual(2);
+      }
       expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
-    } finally { savePipelines(previous); http.close(); }
+    } finally {
+      savePipelines(previous); http.close();
+      if (savedImageBun === undefined) delete process.env.LLV_GATE_IMAGE_BUN; else process.env.LLV_GATE_IMAGE_BUN = savedImageBun;
+      process.cwd = savedCwd;
+    }
   }, 90_000);
 }

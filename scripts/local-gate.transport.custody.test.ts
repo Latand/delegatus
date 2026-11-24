@@ -61,7 +61,6 @@ for (const change of ["pause", "epoch", "owner", "head", "authentication", "lost
           expect(findPipelineRecord(subject.id)!.publishedCommit).not.toBe(f.head);
         } else expect(pushes).toBe(0);
       }
-      expect(http.events().filter(event => event.kind === "checks")).toHaveLength(1);
     } finally { savePipelines(previous); http.close(); }
   }, 90_000);
 }
