@@ -222,7 +222,8 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
         const baseOffset = position ? position.offset + (position.skip ?? 0) + Buffer.byteLength(position.pending ?? "", "base64") : 0;
         let bytesRead = page ? Math.max(0, page.position.offset + (page.position.skip ?? 0)
           + Buffer.byteLength(page.position.pending ?? "", "base64") - baseOffset) : 0;
-        while (page?.state === "more" && !answered && bytesRead < RESPONSE_REPLAY_TICK_BYTES) {
+        // Preserve a reply-without-terminal checkpoint for the next tick.
+        while (page?.state === "more" && !answered && !reduction.replied && bytesRead < RESPONSE_REPLAY_TICK_BYTES) {
           const next = await readRuntimeEventPage(generationId, page.position, visit, signal);
           if (!next) return null;
           const before = page.position.offset + (page.position.skip ?? 0) + Buffer.byteLength(page.position.pending ?? "", "base64");
