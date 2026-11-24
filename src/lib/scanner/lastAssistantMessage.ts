@@ -18,33 +18,86 @@ export function lastAssistantMessageFromRecords(
   source: Record<string, unknown>[],
   root: FileEntry["root"],
   fallbackTs: number,
-  options: { preserveWhitespace?: boolean; turnId?: string } = {},
+  options: { preserveWhitespace?: boolean; turnId?: string; turnStartedAt?: string | null; turnEndedAt?: string | null } = {},
 ): { text: string; ts: number } | null {
-  for (const obj of [...source].reverse()) {
-    const ts = Date.parse(String(obj.timestamp ?? "")) || fallbackTs;
-    if (root === "codex-sessions") {
-      const payload = recordValue(obj.payload) ?? {};
-      const type = stringValue(payload.type);
-      if (type === "task_complete") {
-        /* A settled Codex task_complete is a hard turn boundary, even when
-           the engine omitted last_agent_message. Never borrow an earlier
-           turn's final answer for a newer obligation. */
-        if (options.turnId && stringValue(payload.turn_id) !== options.turnId) return null;
-        const source = stringValue(payload.last_agent_message);
-        const text = options.preserveWhitespace ? source : source?.trim();
-        if (text?.trim()) return { text, ts };
-        return null;
-      }
-      if (type === "agent_message") return { text: stringValue(payload.message) ?? "", ts };
-      if (type === "message" && payload.role === "assistant") {
-        const source = recordsValue(payload.content)
-          .map((part) => stringValue(part.text) ?? stringValue(part.input_text) ?? "")
-          .join("\n");
-        const text = options.preserveWhitespace ? source : source.trim();
-        if (text.trim()) return { text, ts };
+  if (root === "codex-sessions") {
+    const payloadAt = (index: number) => recordValue(source[index]?.payload) ?? {};
+    let terminalIndex = -1;
+    if (options.turnId) {
+      terminalIndex = source.findIndex((obj) => {
+        const payload = recordValue(obj.payload) ?? {};
+        return stringValue(payload.type) === "task_complete" && stringValue(payload.turn_id) === options.turnId;
+      });
+      if (terminalIndex < 0) return null;
+    } else {
+      for (let index = source.length - 1; index >= 0; index -= 1) {
+        if (stringValue(payloadAt(index).type) === "task_complete") {
+          terminalIndex = index;
+          break;
+        }
       }
     }
+
+    if (terminalIndex >= 0) {
+      const terminal = payloadAt(terminalIndex);
+      const direct = stringValue(terminal.last_agent_message);
+      const directText = options.preserveWhitespace ? direct : direct?.trim();
+      const terminalTs = Date.parse(String(source[terminalIndex]?.timestamp ?? "")) || fallbackTs;
+      if (directText?.trim()) return { text: directText, ts: terminalTs };
+
+      for (let index = terminalIndex - 1; index >= 0; index -= 1) {
+        const payload = payloadAt(index);
+        const type = stringValue(payload.type);
+        if (type === "task_complete") break;
+        if (type === "task_started") {
+          const startedTurn = stringValue(payload.turn_id);
+          if (options.turnId && startedTurn && startedTurn !== options.turnId) break;
+          if (!options.turnId) break;
+        }
+        if (type !== "agent_message") continue;
+        const messageTurn = stringValue(payload.turn_id);
+        if (options.turnId && messageTurn && messageTurn !== options.turnId) continue;
+        const sourceText = stringValue(payload.message);
+        const text = options.preserveWhitespace ? sourceText : sourceText?.trim();
+        if (text?.trim()) {
+          const ts = Date.parse(String(source[index]?.timestamp ?? "")) || fallbackTs;
+          return { text, ts };
+        }
+      }
+      return null;
+    }
+
+    /* Legacy transcripts can contain standalone agent messages without a
+       task_complete record. Preserve that generic scanner fallback. */
+    for (const obj of [...source].reverse()) {
+      const payload = recordValue(obj.payload) ?? {};
+      const type = stringValue(payload.type);
+      if (type !== "agent_message" && !(type === "message" && payload.role === "assistant")) continue;
+      const sourceText = type === "agent_message"
+        ? stringValue(payload.message)
+        : recordsValue(payload.content).map((part) => stringValue(part.text) ?? stringValue(part.input_text) ?? "").join("\n");
+      const text = options.preserveWhitespace ? sourceText : sourceText?.trim();
+      if (text?.trim()) return { text, ts: Date.parse(String(obj.timestamp ?? "")) || fallbackTs };
+    }
+    return null;
+  }
+
+  const startedAt = options.turnStartedAt ? Date.parse(options.turnStartedAt) : Number.NaN;
+  const endedAt = options.turnEndedAt ? Date.parse(options.turnEndedAt) : Number.NaN;
+  let claudeStart = startedAt;
+  if (root === "claude-projects" && !Number.isFinite(claudeStart) && Number.isFinite(endedAt)) {
+    /* Older notice rows may lack a start time. The last user record before
+       this turn's end is the best transcript-local boundary available. */
+    for (const obj of source) {
+      const ts = Date.parse(String(obj.timestamp ?? ""));
+      if (ts > endedAt) break;
+      if (obj.type === "user" && Number.isFinite(ts)) claudeStart = ts;
+    }
+  }
+  for (const obj of [...source].reverse()) {
+    const ts = Date.parse(String(obj.timestamp ?? "")) || fallbackTs;
     if (root === "claude-projects" && obj.type === "assistant") {
+      if (Number.isFinite(endedAt) && (ts > endedAt || (Number.isFinite(claudeStart) && ts < claudeStart))) continue;
       const source = recordsValue(recordValue(obj.message)?.content)
         .filter((part) => part.type === "text")
         .map((part) => stringValue(part.text) ?? "")

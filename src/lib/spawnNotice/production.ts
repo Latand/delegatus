@@ -34,9 +34,9 @@ import {
 
 const TITLE_LIMIT = 200;
 const ERROR_LIMIT = 500;
-/** Final transcript records can contain a full answer; keep the lookup bounded
-    while leaving room beyond the scanner's default 128 KiB tail. */
-const SPAWN_NOTICE_TRANSCRIPT_TAIL_BYTES = 1_048_576;
+/** Scanner-supported JSONL records can reach 8 MiB. Keep the lookup bounded
+    while leaving room for adjacent turn records and the default scanner tail. */
+const SPAWN_NOTICE_TRANSCRIPT_TAIL_BYTES = 8 * 1_048_576 + 128 * 1_024;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
 
@@ -145,7 +145,12 @@ export function transcriptErrorFromRecords(records: readonly Record<string, unkn
 
 /** The child's final assistant message and any error text, from one bounded
     tail read. A caller's egress redactor sees raw text before any shaping. */
-export function spawnNoticeFinalMessage(child: string, redact: (text: string) => string = hardenedRedact, options: { preserveWhitespace?: boolean; turnId?: string } = {}): SpawnNoticeFinalMessage {
+export function spawnNoticeFinalMessage(child: string, redact: (text: string) => string = hardenedRedact, options: {
+  preserveWhitespace?: boolean;
+  turnId?: string;
+  turnStartedAt?: string | null;
+  turnEndedAt?: string | null;
+} = {}): SpawnNoticeFinalMessage {
   try {
     const conversation = agentRegistry().conversation(child as ViewerConversationId);
     const generation = conversation?.generations.at(-1);
@@ -187,7 +192,11 @@ function productionPorts(): SpawnNoticeSweepPorts {
     },
     recipient: (launcher) => spawnNoticeRecipient(launcher),
     lossRelevant: row => spawnLossRelevant(row),
-    finalMessage: (child, turnId) => spawnNoticeFinalMessage(child, hardenedRedact, { turnId }),
+    finalMessage: (child, turnId, turn) => spawnNoticeFinalMessage(child, hardenedRedact, {
+      turnId,
+      turnStartedAt: turn?.startedAt,
+      turnEndedAt: turn?.endedAt,
+    }),
     origin: (child) => agentMessageOrigin(agentRegistry().conversationDeliverySnapshot({ conversationId: child }), child),
     recordAttempt: recordSpawnNoticeAttempt,
     settle: settleSpawnNotices,
