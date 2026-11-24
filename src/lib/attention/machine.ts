@@ -31,6 +31,10 @@ export type AttentionEvent =
   /** The device that agreed could not land: there was nowhere to go. Its own
       close for a handoff that never happened — see the `abandon` case. */
   | { kind: "abandon"; deviceId: string }
+  /** The device the server directed a handoff at found the operator in another
+      project by the time it would move, so it stood down: the view stays put
+      and the request becomes the notice a request raised across projects is. */
+  | { kind: "stand-down"; deviceId: string }
   | { kind: "decline"; deviceId: string }
   /** Looked, and stayed put. */
   | { kind: "dismiss"; deviceId: string }
@@ -249,6 +253,22 @@ export function applyAttentionEvent(
       if (request.state !== "accepted") return refuse(request, "invalid-transition");
       if (request.acknowledgedBy !== event.deviceId) return refuse(request, "not-acknowledger");
       return advance(request, "expired", now, { expiredCause: "lost" });
+    }
+
+    /* The directed device's own way out of a move the project boundary stopped
+       (docs/design/needs-attention.md §6). Nothing moved and nobody refused, so
+       the request goes back to what a request raised across projects is from
+       the start: a pending notice no device is directed at. The agent's wait
+       reads the notice and answers at once. */
+    case "stand-down": {
+      if (request.state !== "accepted") return refuse(request, "invalid-transition");
+      if (request.acknowledgedBy !== event.deviceId) return refuse(request, "not-acknowledger");
+      if (request.origin !== "root-agent" || request.returnPoints.length > 0) return refuse(request, "invalid-transition");
+      const undirected: AttentionRequestV1 = { ...request };
+      delete undirected.acknowledgedBy;
+      delete undirected.acceptedVia;
+      delete undirected.directedSessionId;
+      return advance(undirected, "pending", now, { delivery: "notice", offeredTo: [] });
     }
 
     case "decline": {

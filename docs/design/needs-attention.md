@@ -400,6 +400,32 @@ shows the Back chip. The phone gets a notice and never a move:
 
 The phone never posts to the request, so a desktop can still follow it.
 
+### A request never carries the operator out of their project
+
+`request_attention` moves the operator's view only inside the project the
+operator is in. An orchestrator's request for a card in another project would
+otherwise take the screen from someone typing or dictating there.
+
+- **Server.** `resolveDirectedAttentionView` also returns the project the chosen
+  tab has open. When it is set and its canonical key differs from the target's,
+  `request_attention` records the same `delivery: "notice"` request the phone
+  gets, directs it at no view and answers `delivered: "notice"` at once. A view
+  with no project open (the overview) keeps the move. No view at all stays
+  `NO_ACTIVE_VIEW`, or the phone notice when one is open.
+- **Browser, where the move takes effect.** `AttentionHost` asks
+  `requestCrossesProject` (`src/lib/attention/projectBoundary.ts`) with the
+  project open on the view bus at that moment and the alias table the board
+  polls. An agent's request for another project is neither accepted nor
+  followed; a notice no view was directed at is also held when no project is
+  open, so a view that opens later is never taken. A directed move the operator
+  has left behind in flight posts `stand-down`: the record returns to a pending
+  notice, the blocked call answers as the notice, and nothing moved. The
+  operator's own commands are never held.
+- **The notification** is the existing «An agent asks you to look» sound caption.
+  Its click opens the card the request named (a conversation, or a lane for a
+  pipeline or stage) and the project for any other target kind. It rings once per
+  request id, wherever it is raised from.
+
 ## 7. The slice
 
 1. Reason model: `attentionReason`, `pipelineAsks`, `mobileRowState` order,

@@ -282,6 +282,8 @@ function canonicalConversationTarget(target: FocusTarget, lookup?: ConversationL
 export interface DirectedAttentionView {
   deviceId: string;
   viewSessionId: string;
+  /** The project that tab has open, null in the overview. */
+  project: string | null;
 }
 
 /**
@@ -306,7 +308,7 @@ export interface DirectedAttentionView {
  */
 export function resolveDirectedAttentionView(now = new Date()): DirectedAttentionView | null {
   const session = followCapableSessions(now)[0];
-  return session ? { deviceId: session.deviceId, viewSessionId: session.viewSessionId } : null;
+  return session ? { deviceId: session.deviceId, viewSessionId: session.viewSessionId, project: session.project } : null;
 }
 
 /**
@@ -338,6 +340,9 @@ export type AttentionArrivalOutcome =
       when the operator arrived and went straight back), with the pre-move
       return point captured on it. */
   | { kind: "arrived"; request: AttentionRequestV1 }
+  /** The directed view stood down at the project boundary: the request is the
+      notice a request raised across projects is, and nothing moved. */
+  | { kind: "notice"; request: AttentionRequestV1 }
   /** The handoff finished as an explicit bounded failure; the record is
       terminal and nothing is left for a later poll to navigate. */
   | { kind: "failed"; code: "TARGET_LOST" | "HANDOFF_TIMEOUT" | "HANDOFF_ABORTED" | "REQUEST_LOST"; request: AttentionRequestV1 | null };
@@ -360,6 +365,7 @@ function arrivalOf(request: AttentionRequestV1): AttentionArrivalOutcome | null 
   if (request.state === "following" || (request.state === "returned" && request.returnPoints.length > 0)) {
     return { kind: "arrived", request };
   }
+  if (request.delivery === "notice" && !isTerminalAttentionState(request.state)) return { kind: "notice", request };
   if (isTerminalAttentionState(request.state)) {
     return { kind: "failed", code: request.expiredCause === "lost" ? "TARGET_LOST" : "HANDOFF_TIMEOUT", request };
   }
