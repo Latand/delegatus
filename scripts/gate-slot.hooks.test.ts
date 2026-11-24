@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { redactBounded } from "../src/lib/monitor/redact";
@@ -10,10 +11,46 @@ import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { realExec } from "../src/lib/workflows/provision";
 import { fixture, legacyGateTree, pathWithoutFlock, queuedTickets, until } from "./gate-slot.queue.fixture";
 import { createHookFixture, fixtureGitEnv } from "./local-gate.fixture";
-import { createPublicationFixtures } from "./publicationHook.fixture";
+import { createPublicationFixtures, stubOlderPublicationChecks } from "./publicationHook.fixture";
 
 const systemctl = process.platform === "linux" ? Bun.which("systemctl") : null;
 const hasUserManager = systemctl !== null && Bun.spawnSync([systemctl, "--user", "show-environment"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+
+test("older publication stubs preserve the tracked files of the checkout used as cwd", () => {
+  const cwd = process.cwd(), roots: string[] = [];
+  const scratch = fs.mkdtempSync(path.join(tmpdir(), "publication-write-"));
+  const checkout = path.join(scratch, "checkout");
+  const env = fixtureGitEnv();
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: checkout, env, stdio: "pipe" });
+  try {
+    execFileSync("git", ["clone", "--quiet", "--shared", "--no-checkout", cwd, checkout], { env, stdio: "pipe" });
+    git("checkout", "--quiet", "--detach", "HEAD");
+    process.chdir(checkout);
+    const { fixture: publicationFixture } = createPublicationFixtures(process.cwd(), roots);
+    const f = publicationFixture();
+    const script = "scripts/local-gate-tests.ts";
+    const tracked = path.join(checkout, script);
+    const original = fs.readFileSync(tracked);
+    stubOlderPublicationChecks(f);
+    const stub = f.writablePath(script);
+    expect(fs.readFileSync(stub, "utf8")).toContain("process.argv.slice(1)");
+    fs.unlinkSync(stub);
+    fs.symlinkSync(tracked, stub);
+    expect(() => stubOlderPublicationChecks(f)).toThrow(/Fixture write refused.*symbolic link/);
+    expect(fs.readFileSync(tracked).equals(original)).toBe(true);
+    expect(git("status", "--porcelain=v1").toString()).toBe("");
+    git("diff", "--no-ext-diff", "--exit-code", "HEAD");
+
+    expect(() => f.writablePath(tracked)).toThrow("target must be inside the fixture's temporary root");
+    fs.symlinkSync(path.dirname(tracked), f.writablePath("linked-scripts"), "dir");
+    expect(() => f.writablePath("linked-scripts/new.ts")).toThrow(/symbolic link/);
+    fs.linkSync(tracked, f.writablePath("linked-file.ts"));
+    expect(() => f.writablePath("linked-file.ts")).toThrow(/hard-linked file/);
+  } finally {
+    process.chdir(cwd);
+    for (const root of [...roots, scratch]) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test.skipIf(process.platform !== "linux").each(["bun", "bun-1.4.0"])("installed admission routing keeps %s as its native interpreter", name => {
   const f = fixture(), bin = path.join(f.dir, name);
@@ -374,7 +411,7 @@ for (const mode of ["portable hooks first-open", "service hooks first-open", "po
       if (olderHead) {
         // Route through the same host-only interpreter binding supplied by the
         // launcher. The fixture's Bun shim still stands in for the check.
-        const bun = path.join(publication.dir, "shims", "bun");
+        const bun = publication.writablePath("shims/bun");
         fs.writeFileSync(bun, fs.readFileSync(bun, "utf8").replace("#!/bin/bash\n", `#!/bin/bash
 case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
 `));
@@ -436,26 +473,17 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
         // The exact older admission implementation observed at the FIFO head.
         const historicalTree = legacyGateTree(f.dir, "36b68a986862c5391cadf0c8c162aeea73012447");
         for (const entry of ["cpu-admission.ts", "gate-slot.sh"]) {
-          const target = path.join(first.dir, "scripts", entry);
+          const target = path.join(first.writablePath("scripts"), entry);
           fs.unlinkSync(target);
           fs.symlinkSync(path.join(historicalTree, "scripts", entry), target);
         }
       }
       for (const publication of [first, peer]) {
-        if (!useService) fs.writeFileSync(path.join(publication.dir, "shims/systemctl"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-        fs.mkdirSync(path.join(publication.dir, "scripts/gate-runner"));
-        if (olderHead) {
-          fs.writeFileSync(path.join(publication.dir, "scripts/privacy-publication-gate.ts"),
-            'import fs from "node:fs"; fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n');
-          fs.writeFileSync(path.join(publication.dir, "scripts/local-gate-tests.ts"),
-            'import fs from "node:fs"; fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n');
-          fs.writeFileSync(path.join(publication.dir, "scripts/eslint-changes.ts"),
-            'import fs from "node:fs"; fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n');
-          fs.writeFileSync(path.join(publication.dir, "scripts/verify-platform-backend.ts"),
-            'import fs from "node:fs"; fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n');
-        }
+        if (!useService) fs.writeFileSync(publication.writablePath("shims/systemctl"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+        fs.mkdirSync(publication.writablePath("scripts/gate-runner"));
+        if (olderHead) stubOlderPublicationChecks(publication);
       }
-      fs.appendFileSync(path.join(first.dir, "record.ts"), `\nif (process.argv[2] === "tsc") {
+      fs.appendFileSync(first.writablePath("record.ts"), `\nif (process.argv[2] === "tsc") {
         const fs = require("node:fs");
         fs.writeFileSync(${JSON.stringify(started)}, "started");
         while (!fs.existsSync(${JSON.stringify(release)})) await Bun.sleep(20);

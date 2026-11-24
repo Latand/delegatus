@@ -100,7 +100,7 @@ for (const capability of ["absent", "historical", "unsupported", "malformed"] as
   test(`a gate with ${capability} preparation capability keeps one ordinary gated push`, async () => {
     const f = fixture();
     delete f.env.LLV_GATE_PUBLICATION_RECEIPT;
-    const marker = path.join(f.dir, "scripts/local-gate-capabilities.json");
+    const marker = f.writablePath("scripts/local-gate-capabilities.json");
     if (capability === "absent") fs.rmSync(marker);
     else fs.writeFileSync(marker, capability === "historical" ? '{"publicationPrepare":2}'
       : capability === "unsupported" ? '{"publicationPrepare":4}' : '{');
@@ -135,7 +135,7 @@ for (const capability of ["absent", "historical", "unsupported", "malformed"] as
 for (const [scenario, capability] of [["slow privacy", 1], ["changed input", 3], ["long preparation", 1], ["over cap", 3]] as const) {
   test(`measured publication transport handles ${scenario} with capability ${capability}`, async () => {
     const f = fixture();
-    fs.writeFileSync(path.join(f.dir, "scripts/local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: capability }));
+    fs.writeFileSync(f.writablePath("scripts/local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: capability }));
     // This path is embedded in tracked record.ts and scanned by the real
     // privacy gate, so keep it independent of the checkout's absolute path.
     const clock = ".git/privacy-elapsed";
