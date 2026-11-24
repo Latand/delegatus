@@ -990,10 +990,10 @@ describe("Antigravity agentState integration", () => {
         EXPLAIN QUERY PLAN
         SELECT row_key, value_json FROM registry_rows
         WHERE collection='agentStateJournal' AND json_extract(value_json,'$.subject')=?
-        ORDER BY json_extract(value_json,'$.at') DESC, row_key DESC
+        ORDER BY json_extract(value_json,'$.at') DESC, row_order DESC
         LIMIT 1
       `).all(targetSubject);
-      expect(plan.some((step) => step.detail.includes("registry_agent_state_journal_subject"))).toBe(true);
+      expect(plan.some((step) => step.detail.includes("registry_agent_state_journal_subject_order"))).toBe(true);
       expect(plan.some((step) => /TEMP B-TREE/i.test(step.detail))).toBe(false);
 
       const insert = db.query(
@@ -1150,6 +1150,166 @@ describe("Antigravity agentState integration", () => {
       });
     } finally {
       jsonReg.close();
+    }
+  });
+
+  it("preserves write order on equal-millisecond journal transitions in JSON downgrade recovery and SQLite row_order lookups", async () => {
+    const { Database } = await import("bun:sqlite");
+    const { registryLatestAgentStateJournalBySubject } = await import("@/lib/agent/sqliteRegistryStore");
+    const baseProc = captureProcessIdentity(process.pid);
+    let sawSmallerSecondId = false;
+
+    // 1. JSON `off` mode: 8 distinct subjects each record two transitions at the
+    //    EXACT same millisecond (alive/unowned -> unverified), then a prior release
+    //    rewrites JSON dropping `antigravityAgentStates` & entry mirrors. Re-observing
+    //    the same unverified state MUST recover 8/8 with observed=1, unverified=1,
+    //    and 2 journal rows (never selecting the first transition by lexicographical id).
+    for (let idx = 0; idx < 8; idx += 1) {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-ag-eqms-${idx}-`));
+      roots.push(root);
+      const fn = path.join(root, "agent-registry.json");
+      const proc = {
+        ...baseProc,
+        pid: baseProc.pid + 5000 + idx,
+        startIdentity: `${baseProc.startIdentity ?? "1"}-eq-${idx}`,
+      };
+      fs.writeFileSync(fn, JSON.stringify(fixtureRegistry(root, "antigravity", proc, null)));
+      const rows = fixtureRecords("antigravity");
+      fs.writeFileSync(path.join(root, "native.jsonl"), [...rows.open, ...rows.close].map((row) => JSON.stringify(row)).join("\n") + "\n");
+
+      const sameMs = FIXTURE_NOW + 5000;
+      const regSeed = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "off" });
+      let id = "";
+      try {
+        id = subjectId(regSeed.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })!);
+        // First transition at `sameMs`: confirmed alive (`to: "unowned"`).
+        await new AgentStateService({
+          registry: regSeed,
+          now: () => sameMs,
+          owns: () => true,
+          process: () => "alive",
+          memory: () => null,
+          release: "fixture",
+          publish: async () => true,
+        }).request();
+        // Second transition at the EXACT SAME millisecond `sameMs`: `unverified` (`to: null`).
+        await new AgentStateService({
+          registry: regSeed,
+          now: () => sameMs,
+          owns: () => true,
+          process: () => "unverified",
+          memory: () => null,
+          release: "fixture",
+          publish: async () => true,
+        }).request();
+        expect(readAgentStateMetrics(regSeed)).toMatchObject({ subjectsObserved: 1, subjectsUnverified: 1 });
+      } finally {
+        regSeed.close();
+      }
+
+      // Simulate `77b8c62e -> 9ff79a35` JSON rewrite (drops projections, preserves JSON key order).
+      const rewritten = JSON.parse(fs.readFileSync(fn, "utf8")) as {
+        antigravityAgentStates?: Record<string, unknown>;
+        entries?: Record<string, Record<string, unknown>>;
+        agentStateJournal: Record<string, { id: string; at: number; subject: string; to: string | null }>;
+      };
+      const seededIds = Object.keys(rewritten.agentStateJournal);
+      expect(seededIds).toHaveLength(2);
+      expect(rewritten.agentStateJournal[seededIds[0]!]!.at).toBe(sameMs);
+      expect(rewritten.agentStateJournal[seededIds[1]!]!.at).toBe(sameMs);
+      if (seededIds[1]! < seededIds[0]!) sawSmallerSecondId = true;
+      delete rewritten.antigravityAgentStates;
+      for (const entry of Object.values(rewritten.entries ?? {})) {
+        delete entry.antigravityProjection;
+        delete entry.antigravityProjections;
+      }
+      fs.writeFileSync(fn, `${JSON.stringify(rewritten)}\n`);
+
+      const regRecover = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "off" });
+      try {
+        await new AgentStateService({
+          registry: regRecover,
+          now: () => sameMs + 1000,
+          owns: () => true,
+          process: () => "unverified",
+          memory: () => null,
+          release: "fixture",
+          publish: async () => true,
+        }).request();
+
+        const metrics = readAgentStateMetrics(regRecover);
+        expect(metrics.subjectsObserved, `subject ${idx} observed`).toBe(1);
+        expect(metrics.subjectsUnverified, `subject ${idx} unverified`).toBe(1);
+        expect(readAgentStatePage(regRecover, "agentStateJournal", "", 16).rows, `subject ${idx} journal`).toHaveLength(2);
+        expect(readAgentProjection(regRecover, id)?.verdict.state).toBeNull();
+      } finally {
+        regRecover.close();
+      }
+    }
+    // Confirm our 8-subject sweep actually exercised the lexicographically inverted id case.
+    expect(sawSmallerSecondId).toBe(true);
+
+    // 2. SQLite mode: equal-`at` rows with `secondKey < firstKey` MUST resolve by
+    //    `row_order DESC` (persisted) and in-transaction write order (dirty beats persisted).
+    const sqRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ag-eqms-sqlite-"));
+    roots.push(sqRoot);
+    const sqFn = path.join(sqRoot, "agent-registry.json");
+    const sqPath = path.join(sqRoot, "agent-registry.sqlite");
+    fs.writeFileSync(sqFn, JSON.stringify(fixtureRegistry(sqRoot, "antigravity", baseProc, null)));
+    const sqReg = new AgentRegistry(sqFn, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: sqPath });
+    try {
+      const subj = "a".repeat(48);
+      const t = FIXTURE_NOW + 9000;
+      const keyFirstHigherLex = `${String(t).padStart(14, "0")}:ffff-first`;
+      const keySecondLowerLex = `${String(t).padStart(14, "0")}:0000-second`;
+      const keyThirdLowestLex = `${String(t).padStart(14, "0")}:0000-0-third-dirty`;
+      const makeRow = (id: string, to: "unowned" | null) => ({
+        version: 1 as const,
+        id,
+        subject: subj,
+        at: t,
+        from: null,
+        to,
+        reason: to === null ? "unverified process" : "confirmed",
+        divergence: null,
+        writer: baseProc,
+        release: "fixture",
+        evidence: [],
+      });
+
+      // Persist row 1 (`ffff-first`, row_order=0) then row 2 (`0000-second`, row_order=1).
+      sqReg.agentStateWrite((file) => {
+        file.agentStateJournal[keyFirstHigherLex] = makeRow(keyFirstHigherLex, "unowned");
+      });
+      sqReg.agentStateWrite((file) => {
+        file.agentStateJournal[keySecondLowerLex] = makeRow(keySecondLowerLex, null);
+      });
+
+      // Persisted SQLite lookup picks `row_order DESC` (`0000-second`, to: null).
+      const persisted = sqReg.agentStateRead((file) => registryLatestAgentStateJournalBySubject(file, subj));
+      expect(persisted?.id).toBe(keySecondLowerLex);
+      expect(persisted?.to).toBeNull();
+
+      // Within the same transaction, a newly appended equal-`at` dirty row with an
+      // even lower lexicographical key beats the persisted SQLite row.
+      const inTx = sqReg.agentStateWrite((file) => {
+        file.agentStateJournal[keyThirdLowestLex] = makeRow(keyThirdLowestLex, "unowned");
+        return registryLatestAgentStateJournalBySubject(file, subj);
+      });
+      expect(inTx?.id).toBe(keyThirdLowestLex);
+      expect(inTx?.to).toBe("unowned");
+
+      const inspectDb = new Database(sqPath, { readonly: true });
+      try {
+        const rows = inspectDb.query<{ row_key: string; row_order: number }, [string]>(
+          "SELECT row_key, row_order FROM registry_rows WHERE collection='agentStateJournal' AND json_extract(value_json,'$.subject')=? ORDER BY row_order ASC",
+        ).all(subj);
+        expect(rows.map((r) => r.row_key)).toEqual([keyFirstHigherLex, keySecondLowerLex, keyThirdLowestLex]);
+      } finally {
+        inspectDb.close();
+      }
+    } finally {
+      sqReg.close();
     }
   });
 });

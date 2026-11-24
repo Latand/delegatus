@@ -60,7 +60,7 @@ export function normalizeAgentStateRows(value: unknown, kind: "projection" | "jo
       if (journalSubjectIndex) {
         const journalRow = row as AgentStateJournal;
         const existing = journalSubjectIndex.get(journalRow.subject);
-        if (!existing || journalRow.at > existing.at || (journalRow.at === existing.at && journalRow.id >= existing.id)) {
+        if (!existing || journalRow.at >= existing.at) {
           journalSubjectIndex.set(journalRow.subject, journalRow);
         }
       }

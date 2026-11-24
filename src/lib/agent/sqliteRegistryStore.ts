@@ -475,7 +475,7 @@ const registryRowIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_phase ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),json_extract(value_json,'$.migration.phase'),row_order)",
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_custody ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END,row_order)",
   "CREATE INDEX IF NOT EXISTS registry_seat_children_order ON registry_rows(json_extract(value_json, '$.parentConversationId'), row_order) WHERE collection = 'lineageEdges' AND json_extract(value_json, '$.source') = 'viewer-spawn'",
-  "CREATE INDEX IF NOT EXISTS registry_agent_state_journal_subject ON registry_rows(json_extract(value_json,'$.subject'),json_extract(value_json,'$.at') DESC,row_key DESC) WHERE collection='agentStateJournal'",
+  "CREATE INDEX IF NOT EXISTS registry_agent_state_journal_subject_order ON registry_rows(json_extract(value_json,'$.subject'),json_extract(value_json,'$.at') DESC,row_order DESC) WHERE collection='agentStateJournal'",
 ]);
 const registryLivenessIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_liveness_receipts_order ON registry_liveness_receipts(row_order)",
@@ -626,8 +626,10 @@ const structuredProcessReaders = fileReaders.structuredProcess ??= new WeakMap()
 const latestAgentStateJournalReaders = fileReaders.latestAgentStateJournal ??= new WeakMap();
 const jsonAgentStateJournalIndexes = fileReaders.jsonAgentStateJournalBySubject ??= new WeakMap();
 
-function isNewerJournalRow(candidate: AgentStateJournal, current: AgentStateJournal | undefined): boolean {
-  return !current || candidate.at > current.at || (candidate.at === current.at && candidate.id >= current.id);
+function isLaterJournalRowInWriteOrder(candidate: AgentStateJournal, current: AgentStateJournal | undefined): boolean {
+  // Among equal-millisecond transitions, write order (JSON insertion position
+  // / SQLite `row_order`) decides — never lexicographical `id` hash suffix.
+  return !current || candidate.at >= current.at;
 }
 
 /** Attach a prebuilt per-subject latest-journal index for a JSON-loaded
@@ -647,7 +649,7 @@ export function noteAgentStateJournalRow(
 ): void {
   const index = jsonAgentStateJournalIndexes.get(journal);
   if (!index) return;
-  if (isNewerJournalRow(row, index.get(row.subject))) index.set(row.subject, row);
+  if (isLaterJournalRowInWriteOrder(row, index.get(row.subject))) index.set(row.subject, row);
 }
 
 /** Maintain the JSON per-subject latest-journal index in O(1) when pruning the
@@ -660,13 +662,16 @@ export function removeAgentStateJournalRowFromIndex(
   if (!index) return;
   const existing = journal[key];
   if (existing && index.get(existing.subject)?.id === key) {
-    index.delete(existing.subject);
+    // Rare case: the single oldest entry in a >16,384-row journal was also this
+    // subject's latest entry; invalidate so any remaining equal-timestamp entry
+    // for that subject is still discoverable on next lookup.
+    jsonAgentStateJournalIndexes.delete(journal);
   }
 }
 
 /** Point lookup of the newest `agentStateJournal` row for one exact `subject`.
- * Uses `registry_agent_state_journal_subject` (`LIMIT 1`) in SQLite mode and
- * a per-subject `Map` built once per collection in JSON mode. */
+ * Uses `registry_agent_state_journal_subject_order` (`ORDER BY at DESC, row_order DESC LIMIT 1`)
+ * in SQLite mode and a per-subject `Map` built once per collection in JSON mode. */
 export function registryLatestAgentStateJournalBySubject(
   file: RegistryFile,
   subject: string,
@@ -677,7 +682,7 @@ export function registryLatestAgentStateJournalBySubject(
   if (!index) {
     index = new Map<string, AgentStateJournal>();
     for (const row of Object.values(file.agentStateJournal)) {
-      if (isNewerJournalRow(row, index.get(row.subject))) index.set(row.subject, row);
+      if (isLaterJournalRowInWriteOrder(row, index.get(row.subject))) index.set(row.subject, row);
     }
     jsonAgentStateJournalIndexes.set(file.agentStateJournal, index);
   }
@@ -4528,7 +4533,7 @@ export class SqliteAgentRegistryStore {
       const row = this.db.query<{ value_json: string }, [string]>(`
         SELECT value_json FROM registry_rows
         WHERE collection='agentStateJournal' AND json_extract(value_json,'$.subject')=?
-        ORDER BY json_extract(value_json,'$.at') DESC, row_key DESC
+        ORDER BY json_extract(value_json,'$.at') DESC, row_order DESC
         LIMIT 1
       `).get(subject);
       return row ? parseSqliteJson(row.value_json, this.db) as AgentStateJournal : undefined;
@@ -6214,24 +6219,26 @@ export class SqliteAgentRegistryStore {
       let best: AgentStateJournal | undefined;
       for (const key of dirty ?? []) {
         const row = file.agentStateJournal[key];
-        if (row && row.subject === subject && isNewerJournalRow(row, best)) best = row;
+        if (row && row.subject === subject && isLaterJournalRowInWriteOrder(row, best)) best = row;
       }
       if (reorderedCollections.has("agentStateJournal")) {
         for (const row of Object.values(file.agentStateJournal)) {
-          if (row.subject === subject && isNewerJournalRow(row, best)) best = row;
+          if (row.subject === subject && isLaterJournalRowInWriteOrder(row, best)) best = row;
         }
         return best;
       }
       const rows = this.db.query<{ row_key: string; value_json: string }, [string, number]>(`
         SELECT row_key, value_json FROM registry_rows
         WHERE collection='agentStateJournal' AND json_extract(value_json,'$.subject')=?
-        ORDER BY json_extract(value_json,'$.at') DESC, row_key DESC
+        ORDER BY json_extract(value_json,'$.at') DESC, row_order DESC
         LIMIT ?
       `).all(subject, 1 + (dirty?.size ?? 0));
       for (const candidate of rows) {
         if (dirty?.has(candidate.row_key)) continue;
         const parsed = parseSqliteJson(candidate.value_json, this.db) as AgentStateJournal;
-        if (isNewerJournalRow(parsed, best)) best = parsed;
+        // A dirty row written in the current transaction is newer in write order
+        // than any previously persisted SQLite row with the same `at`.
+        if (!best || parsed.at > best.at) best = parsed;
         break;
       }
       return best;
