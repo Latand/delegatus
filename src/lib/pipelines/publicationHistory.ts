@@ -15,6 +15,13 @@ export function publicationEnvironmentFailure(result: { error: string; failure?:
   return result.error.startsWith("stage environment:") || failure?.step === "preparing publication dependencies";
 }
 
+/** The publisher can time out while reading the sealed graph, before it has
+ * a child failure to attach. The settled refusal retains the phase verbatim. */
+export function publicationDependencyValidationDeadline(result: { error: string; failure?: PipelinePublicationFailure }): boolean {
+  return (!result.failure || result.failure.step === "preparing publication dependencies")
+    && result.error.startsWith("stage environment: dependency preparation failed: dependency preparation deadline exceeded [validation: existing link and seal,");
+}
+
 export function publicationPrivacyRefusal(line: string): boolean {
   return /^PRIVACY GATE:[ \t]*FAIL$|^pre-push: privacy:.*(?:failed|refused)/.test(line.trim());
 }
@@ -69,7 +76,8 @@ export function publicationRemoteRefusal(failure: PipelinePublicationFailure | u
 
 export function recoverablePublication(result: { error: string; failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded" }): boolean {
   if (result.outcome === "superseded") return false;
-  return result.failure?.retryableApp403 === true || result.failure?.retryableDeadline === true || publicationInterrupted(result)
+  return result.failure?.retryableApp403 === true || result.failure?.retryableDeadline === true
+    || publicationDependencyValidationDeadline(result) || publicationInterrupted(result)
     || result.failure?.changedFiles === 0 && publicationFailurePhase(result.failure) !== "privacy" && !publicationRemoteRefusal(result.failure);
 }
 
@@ -98,7 +106,8 @@ export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<Pipel
   // Takeover's legacy writer passes the beginning of the push output. A long
   // successful hook log can fill it before the remote explains its refusal.
   const remoteLine = cause === "remote-refusal" && result?.failure && publicationRemoteRefusalLine(result.failure.outputTail);
-  const detail = remoteLine ? `remote publication was refused; underlying cause is unknown: ${remoteLine}`.slice(0, 400) : input.detail;
+  const detail = remoteLine ? `remote publication was refused; underlying cause is unknown: ${remoteLine}`.slice(0, 400)
+    : result?.ok === false && publicationDependencyValidationDeadline(result) ? result.error.slice(0, 400) : input.detail;
   if (!superseded && input.cause === "app-git-403") {
     const result = operation.result ?? operation.executor?.result;
     // Older receipts have no observation field. Their immutable refusal journal

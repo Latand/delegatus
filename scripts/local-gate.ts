@@ -51,6 +51,7 @@ export interface PlanEnvironment {
   codexVersions: readonly string[];
 }
 const isTest = (file: string) => /\.test\.[cm]?[jt]sx?$/.test(file) && !file.includes(".browser.test.");
+const checkpointTest = /^scripts\/local-gate\.checkpoints(?:\.[^.]+)?\.test\.ts$/;
 const lintable = (file: string) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file);
 /** Prose the compiler never reads. Anything else can change what it checks. */
 const proseOnly = (file: string) => /\.(?:md|mdx|txt)$/i.test(file);
@@ -91,7 +92,8 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (mode === "pre-commit") return steps;
   const touched = new Set(env.privacySelfTests);
   if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints(?:\.[^.]+)?|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (checkpointTest.test(test)
+      || /^scripts\/(?:local-gate(?:\.(?:receipts|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
   }
   if (changedFiles.some(file => ["scripts/owned-runner.integration.fixture.ts", "scripts/owned-runner.cleanup.ts"].includes(file))) {
     for (const test of env.tests) if (/^scripts\/owned-runner(?:\.[^.]+)+\.test\.ts$/.test(test)) touched.add(test);
@@ -103,7 +105,10 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
     for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
   }
   if (changedFiles.includes("scripts/local-gate-tests.ts")) {
-    for (const test of env.tests) if (/^scripts\/local-gate\.checkpoints(?:\.[^.]+)?\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (checkpointTest.test(test)) touched.add(test);
+  }
+  if (changedFiles.includes("src/lib/pipelines/engine.roleMemoryDispatch.fixture.ts")) {
+    for (const test of env.tests) if (test.startsWith("src/lib/pipelines/engine.roleMemoryDispatch.") && isTest(test)) touched.add(test);
   }
   for (const file of files.filter(isTest)) touched.add(file);
   for (const file of files.filter(lintable)) {
@@ -1094,12 +1099,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   // The outer hook also allocates logs and Cloud input. Acquire its cleanup
   // owner before allocation; admitted children inherit the same journal.
   if (import.meta.main && !process.env.LLV_GATE_SANDBOX_RECORD) {
-    const hookBootstrapParent = captureProcessIdentity(process.pid);
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(hookBootstrapParent),
-      LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP: JSON.stringify({ parent: hookBootstrapParent, mode, entry: realpathSync(import.meta.path) }),
-    };
+    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) };
     if (deadline) {
       const inherited = Number(env.LLV_OWNED_RUN_TIMEOUT_MS);
       const allowance = supervisorTimeoutMs(deadline.at, env);

@@ -4,22 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
+import { isolatedParkedPublicationTest } from "./parkedPublication.fixture";
 
 setDefaultTimeout(30_000);
 
-// Store modules bind some paths at import time. Run these real controller
-// regressions in a child so their state and module caches cannot affect the
-// pre-push hook's other selected suites in the parent Bun process. The child
-// needs room for owned-runner setup and cleanup as well as every assertion;
-// the bound stays inside the hook's five-minute budget per file.
-if (process.env.LLV_PARKED_PUBLICATION_CHILD !== "1") {
-  test("isolated parked publication regressions", () => {
-    const result = spawnSync(process.execPath, ["test", import.meta.path], {
-      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 240_000,
-    });
-    if (result.status !== 0) throw new Error(`${result.stdout}\n${result.stderr}`);
-    expect(result.status).toBe(0);
-  }, 245_000);
+const group = process.env.LLV_PARKED_PUBLICATION_GROUP;
+if (group !== "controls" && group !== "recovery") {
+  isolatedParkedPublicationTest(import.meta.path, "controls");
 } else {
 const previousState = process.env.LLV_STATE_DIR;
 const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-parked-publication-"));
@@ -119,6 +110,46 @@ function fixture() {
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
+function terminalReview(h: ReturnType<typeof fixture>) {
+  const builder = h.lane.stages[0]!;
+  builder.next = "review";
+  // Keep the shared corpus unchanged: publication exercises current run stages.
+  h.lane.stages.push({ ...pipelineCorpus(2, 1)[1]!.stages[1]!, kind: "run" });
+  const attempt = structuredClone(h.lane.runs[0]!.attempts[0]!);
+  attempt.effectiveRole = h.lane.stages[1]!.effectiveRole!;
+  attempt.flowId = null;
+  attempt.reviewHeadSha = null; attempt.expectedReviewHeadSha = null;
+  attempt.reviewedHead = h.passed;
+  h.lane.runs.push({ ...h.lane.runs[0]!, stageId: "review", attempts: [attempt] });
+  h.lane.cursor = { stageId: "review", state: "committing", input: null, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } };
+  savePipelines([h.lane]);
+}
+
+/** A lane cut from an older main whose stage left `files` behind (none for a
+    read-only stage), with main moved on by `behind` commits since. */
+function trailingLane(h: ReturnType<typeof fixture>, behind: number, files: Record<string, string> = {}): string {
+  const source = path.join(h.root, "source");
+  h.git("reset", "-q", "--hard", h.lane.baseRef!);
+  for (const [file, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(h.repo, file)), { recursive: true }); fs.writeFileSync(path.join(h.repo, file), text);
+  }
+  if (Object.keys(files).length) { h.git("add", "."); h.git("commit", "-q", "-m", "stage output"); }
+  for (let n = 1; n < behind; n++) h.git("-C", source, "commit", "--allow-empty", "-q", "-m", `later main ${n}`);
+  h.git("-C", source, "push", "-q", "origin", "main"); h.git("fetch", "-q", "origin", "main");
+  expect(h.git("rev-list", "--count", "HEAD..origin/main")).toBe(String(behind));
+  h.lane.lastPassedCommit = h.git("rev-parse", "HEAD"); h.lane.state = "running"; h.lane.stateDetail = null;
+  savePipelines([h.lane]);
+  return h.lane.lastPassedCommit;
+}
+
+function exhaustProducerRepairs(h: ReturnType<typeof fixture>): void {
+  // Exercise publication recovery after the separate fresh-producer budget
+  // has already been spent.
+  h.lane.publicationProducerRepairs = 2;
+  savePipelines([h.lane]);
+}
+
+if (group === "controls") {
 for (const recovery of ["automatic", "retry-stage", "publish"] as const) for (const shape of ["old-publication", "no-publication"] as const) test(`a passed unsettled committing stage settles (${shape}, ${recovery})`, async () => {
   const h = fixture();
   const saturated = recovery !== "automatic";
@@ -679,21 +710,6 @@ test("publication refuses stale and ambiguous short heads without changing accep
   } finally { h.cleanup(); }
 });
 
-function terminalReview(h: ReturnType<typeof fixture>) {
-  const builder = h.lane.stages[0]!;
-  builder.next = "review";
-  // Keep the shared corpus unchanged: publication exercises current run stages.
-  h.lane.stages.push({ ...pipelineCorpus(2, 1)[1]!.stages[1]!, kind: "run" });
-  const attempt = structuredClone(h.lane.runs[0]!.attempts[0]!);
-  attempt.effectiveRole = h.lane.stages[1]!.effectiveRole!;
-  attempt.flowId = null;
-  attempt.reviewHeadSha = null; attempt.expectedReviewHeadSha = null;
-  attempt.reviewedHead = h.passed;
-  h.lane.runs.push({ ...h.lane.runs[0]!, stageId: "review", attempts: [attempt] });
-  h.lane.cursor = { stageId: "review", state: "committing", input: null, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } };
-  savePipelines([h.lane]);
-}
-
 // An explicit budget stop controls recovery even when an earlier fix still
 // needs publication. Publishing that fix never supplies a review verdict,
 // and the fixed budget cannot be extended to leave the stop.
@@ -1032,9 +1048,9 @@ test("failed publication retains the hook tail, exit status and duration in lane
   try {
     h.lane.lastPassedCommit = h.head; h.lane.state = "running"; h.lane.stateDetail = null; savePipelines([h.lane]);
     const hook = h.hook;
-    fs.writeFileSync(hook, "#!/bin/sh\necho pre-push: types >&2\necho pre-push: eslint >&2\necho pre-push: touched-tests >&2\nexit 7\n", { mode: 0o700 });
+    fs.writeFileSync(hook, "#!/bin/sh\necho pre-push: types >&2\necho pre-push: eslint >&2\necho pre-push: metadata >&2\nexit 7\n", { mode: 0o700 });
     expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined(); await h.tick();
-    expect(h.current().stateDetail).toContain("pre-push: touched-tests");
+    expect(h.current().stateDetail).toContain("pre-push: metadata");
     expect(h.current().stateDetail).toContain("exit 1");
     expect(h.current().delivery!.operation!.result).toMatchObject({ failure: { code: 1, signal: null, durationMs: expect.any(Number) } });
     expect(h.current().stateDetail).not.toContain("interrupted publication");
@@ -1071,23 +1087,6 @@ test.each(["repaired", "unrepaired"])("skip-stage retries a settled publication 
     expect(h.pushes()).toBe(2);
   } finally { h.cleanup(); }
 });
-
-/** A lane cut from an older main whose stage left `files` behind (none for a
-    read-only stage), with main moved on by `behind` commits since. */
-function trailingLane(h: ReturnType<typeof fixture>, behind: number, files: Record<string, string> = {}): string {
-  const source = path.join(h.root, "source");
-  h.git("reset", "-q", "--hard", h.lane.baseRef!);
-  for (const [file, text] of Object.entries(files)) {
-    fs.mkdirSync(path.dirname(path.join(h.repo, file)), { recursive: true }); fs.writeFileSync(path.join(h.repo, file), text);
-  }
-  if (Object.keys(files).length) { h.git("add", "."); h.git("commit", "-q", "-m", "stage output"); }
-  for (let n = 1; n < behind; n++) h.git("-C", source, "commit", "--allow-empty", "-q", "-m", `later main ${n}`);
-  h.git("-C", source, "push", "-q", "origin", "main"); h.git("fetch", "-q", "origin", "main");
-  expect(h.git("rev-list", "--count", "HEAD..origin/main")).toBe(String(behind));
-  h.lane.lastPassedCommit = h.git("rev-parse", "HEAD"); h.lane.state = "running"; h.lane.stateDetail = null;
-  savePipelines([h.lane]);
-  return h.lane.lastPassedCommit;
-}
 
 /** The hook of a repository whose main carries a test that reads the pushing
     process's settings: green from a shell, red under the Viewer's own
@@ -1235,10 +1234,10 @@ test("an interrupted push that never landed is retried on the same bounded backo
   } finally { h.cleanup(); }
 });
 
-test("a refused publication of a head that changed code parks at once and is never retried on its own", async () => {
+test("a touched-test refusal keeps the passed head while a fresh producer is admitted", async () => {
   const h = fixture();
   try {
-    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    const head = trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
     const marker = path.join(h.root, "privacy-ran");
     fs.writeFileSync(h.hook, `#!/bin/sh\necho 'pre-push: privacy' >&2\ntouch '${marker}'\necho 'pre-push: touched tests' >&2\necho '(fail) the stage broke this [2.00ms]' >&2\nexit 1\n`, { mode: 0o700 });
     let clock = Date.parse("2026-10-04T10:00:00.000Z");
@@ -1247,9 +1246,14 @@ test("a refused publication of a head that changed code parks at once and is nev
     expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
     await tick();
     expect(fs.existsSync(marker)).toBe(true);
-    expect(h.current().state).toBe("needs_decision");
-    expect(h.current().stateDetail!.split("\n")[0]).toBe("publishing the passed stage: the repository's pre-push hook failed in its \"touched tests\" phase (exit 1, 1 failing test, first: the stage broke this). Fix it on this branch or on the base branch, then retry-stage.");
-    expect(h.current().delivery!.operation!.result).toMatchObject({ failure: { changedFiles: 1 } });
+    expect(h.current()).toMatchObject({ state: "running", lastPassedCommit: head, publishedCommit: null, publicationProducerRepairs: 1 });
+    expect(h.current().runs[0]!.attempts).toMatchObject([
+      { state: "passed", verdict: { status: "pass" } },
+      { publicationRepairFrom: { stageId: "build", attempt: 1, round: 1 } },
+    ]);
+    expect(h.current().publicationRecovery?.[head]?.history.at(-1)).toMatchObject({
+      cause: "check-failure", detail: expect.stringContaining('failed in its "touched tests" phase'),
+    });
     clock += 60 * 60_000; await tick();
     expect(h.pushes()).toBe(1);
     expect(h.current().publishedCommit).toBeNull();
@@ -1381,6 +1385,9 @@ test("an interrupted push is named by what ended it and the phase the hook had r
   expect(publicationInterruptionCause({ ...failure, code: 1, signal: null, hookBudgetMs: 840_000 })).toBe("the pre-push hook's 14-minute budget ran out while its \"Linux tests\" phase was still running; it stopped without a verdict and the push did not reach the remote");
 });
 
+}
+
+if (group === "recovery") {
 function missingDependencyFixture(h: ReturnType<typeof fixture>): string {
   h.lane.stages[0]!.role = { roleId: "verifier" };
   h.lane.stages[0]!.effectiveRole = { ...h.lane.stages[0]!.effectiveRole!, roleId: "verifier", access: "read-only" };
@@ -1524,7 +1531,7 @@ for (const action of ["publish", "retry-stage"] as const) for (const legacy of [
   try {
     terminalReview(h);
     const ports = { ...h.ports, remoteActionSupported: () => false };
-    fs.writeFileSync(h.hook, "#!/bin/sh\necho pre-push: types >&2\nexit 7\n", { mode: 0o700 });
+    fs.writeFileSync(h.hook, "#!/bin/sh\necho pre-push: metadata >&2\nexit 7\n", { mode: 0o700 });
     expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).error).toBeUndefined();
     await h.tick();
     expect(h.current().state).toBe("needs_decision"); expect(h.current().stateDetail).toContain("exit 1");
@@ -1575,13 +1582,26 @@ async function legacyPublication(h: ReturnType<typeof fixture>) {
   savePipelines([h.lane]);
 }
 
-async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false, crashLog?: string) {
+async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false, crashLog?: string, timedOutLink?: string) {
   const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
     const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
     const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
     registerPipelineTick(async () => {});
     const fs = await import("node:fs");
     const crashLog = ${JSON.stringify(crashLog ?? null)};
+    const timedOutLink = ${JSON.stringify(timedOutLink ?? null)};
+    if (timedOutLink) {
+      const realNow = Date.now;
+      let elapsed = 0;
+      Date.now = () => realNow() + elapsed;
+      const realpath = fs.promises.realpath;
+      fs.promises.realpath = async (filename, ...options) => {
+        const resolved = await realpath(filename, ...options);
+        // Let dependency preparation throw its own deadline after each link read.
+        if (filename === timedOutLink) elapsed += 180_001;
+        return resolved;
+      };
+    }
     const fixtureExec = ${publicationFixtureExec.toString()};
     const ports = { ...defaultPipelinePorts(), exec: async (...args) => {
       if (crashLog && args[0] === "git" && args[1][0] === "push") {
@@ -1600,7 +1620,64 @@ async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z"
     }`;
   const result = await realExec(process.execPath, ["-e", script], process.cwd(), process.env, { timeoutMs: 30_000 });
   expect(result.code, result.stderr).toBe(0);
+  if (timedOutLink) expect(result.stderr.match(/deadline exceeded \[validation: existing link and seal,[^\n]+retrying validation in 100 ms/g)).toHaveLength(1);
 }
+
+test.each(["recovers", "exhausts"] as const)("existing dependency validation timeout %s across controller restarts", async outcome => {
+  const h = fixture();
+  try {
+    const head = trailingLane(h, 2, {
+      ".gitignore": "/node_modules\n",
+      "package.json": JSON.stringify({ name: "delegatus-cli" }),
+      "bun.lock": JSON.stringify({ lockfileVersion: 1, workspaces: { "": { name: "delegatus-cli" } }, packages: {} }),
+    });
+    const { prepareLockedDependencies } = await import("./lockedDependencies");
+    // Bun discards empty lockfiles. Seed the sealed empty graph through the
+    // real preparation code without asking the installer to rewrite its inputs.
+    expect(await prepareLockedDependencies(h.repo, { exec: (command, ...args) => command === "bun" && args[0][0] === "install"
+      ? Promise.resolve({ code: 0, stdout: "", stderr: "" }) : realExec(command, ...args) })).toBe(true);
+    const link = path.join(fs.realpathSync(h.repo), "node_modules");
+    const installed = fs.readlinkSync(link);
+    const marker = path.join(h.root, "hook-runs");
+    fs.writeFileSync(h.hook, `#!/bin/sh\nset -eu\ntest -d node_modules\nprintf ran >> '${marker}'\n`, { mode: 0o700 });
+    let clock = Date.parse("2026-10-19T10:00:00.000Z");
+    const now = () => new Date(clock).toISOString();
+    const ports = { ...h.ports, now, scheduleTick: () => {} };
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, ports)).error).toBeUndefined();
+    const restart = (timeout: boolean) => restartedPublicationController(now(), false, undefined, timeout ? link : undefined);
+    for (const [index, wait] of [60_000, 300_000, 900_000].entries()) {
+      await restart(true);
+      expect(h.current()).toMatchObject({ state: "running", lastPassedCommit: head, publishedCommit: null,
+        delivery: { operation: { result: { ok: false, error: expect.stringContaining("[validation: existing link and seal,") } } } });
+      expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ sha: head, failures: index + 1 });
+      expect(h.current().publicationRecovery![head]!.history.at(-1)).toMatchObject({ cause: "environment",
+        detail: expect.stringContaining("dependency preparation deadline exceeded"), retryAt: new Date(clock + wait).toISOString() });
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(h.git("ls-remote", "--heads", "origin", `refs/heads/${h.lane.branch}`)).toBe("");
+      clock += wait - 1;
+      await restart(false);
+      expect(h.current().publicationRecovery![head]!.totalAttempts).toBe(index + 1);
+      expect(fs.existsSync(marker)).toBe(false);
+      clock++;
+      if (outcome === "recovers") break;
+    }
+    await restart(outcome === "exhausts");
+    if (outcome === "exhausts") {
+      expect(h.current().state).toBe("needs_decision");
+      expect(h.current().stateDetail!.split("\n")[0]).toContain("validation of the existing dependency installation reached its deadline after 3 automatic retries");
+      expect(h.current().publicationRecovery![head]).toMatchObject({ totalAttempts: 4 });
+      clock += 60 * 60_000;
+      await restart(false);
+      expect(h.current()).toMatchObject({ state: "needs_decision", publishedCommit: null });
+      expect(fs.existsSync(marker)).toBe(false);
+    } else {
+      expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: head, publishedCommit: head });
+      expect(fs.readFileSync(marker, "utf8")).toBe("ran");
+    }
+    expect(h.current().runs[0]!.attempts).toMatchObject([{ state: "passed", verdict: { status: "pass" } }]);
+    expect(fs.readlinkSync(link)).toBe(installed);
+  } finally { h.cleanup(); }
+}, 90_000);
 
 async function leaveDeadPublication(h: ReturnType<typeof fixture>) {
   h.git("reset", "--hard", h.passed);
@@ -1658,7 +1735,7 @@ test("bounded startup returns during publication recovery and labels its remote 
     await leaveDeadPublication(h);
     const ports = { ...h.ports, now: () => "2026-10-19T10:00:00.000Z", scheduleTick: () => {},
       exec: async (...args: Parameters<typeof realExec>) => {
-        if (args[0] === "timeout" && args[1].includes("ls-remote")) {
+        if (args[0] === "git" && args[1][0] === "ls-remote") {
           reads++;
           label = viewerLoopMonitor.current();
           enter();
@@ -2080,6 +2157,7 @@ for (const failsAfterWait of [false, true]) test(`${stop === "admission" ? "pre-
   const h = fixture();
   try {
     const head = trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    if (failsAfterWait) exhaustProducerRepairs(h);
     fs.writeFileSync(h.hook, await capacityRefusalHook(stop), { mode: 0o700 });
     let clock = Date.parse("2026-10-16T10:00:00.000Z");
     const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
@@ -2132,6 +2210,7 @@ test("owned-runner cleanup refusal parks despite a deadline marker", async () =>
   const h = fixture();
   try {
     trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    exhaustProducerRepairs(h);
     fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: touched tests: failed (1)' >&2\necho 'owned runner: execution guard expired' >&2\necho 'owned runner: budget cleanup failed: child tree could not be stopped' >&2\nexit 1\n", { mode: 0o700 });
     expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
     await h.tick();
@@ -2194,6 +2273,7 @@ test("a named touched assertion vetoes deadline recovery before log truncation",
   const h = fixture();
   try {
     trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    exhaustProducerRepairs(h);
     fs.writeFileSync(h.hook, `#!/bin/sh\necho 'pre-push: touched tests: failed (1)' >&2\necho 'NEW src/work.test.ts: publication assertion' >&2\n${"echo diagnostic >&2\n".repeat(500)}echo 'owned runner: deadline expired' >&2\nexit 1\n`, { mode: 0o700 });
     expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
     await h.tick();
@@ -2204,4 +2284,5 @@ test("a named touched assertion vetoes deadline recovery before log truncation",
   } finally { h.cleanup(); }
 });
 
+}
 }
