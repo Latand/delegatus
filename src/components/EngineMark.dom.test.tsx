@@ -39,6 +39,7 @@ const { EngineMark, EngineBadge } = await import("./EngineMark");
 const { SwitchCard } = await import("./SwitchCard");
 const { ChatEngineMark } = await import("./mobile/chatEngineMark");
 const { StageGlyph } = await import("./kanban/StageGlyph");
+const { effortTint, engineBadgeFor } = await import("./utils");
 
 const roots: Root[] = [];
 afterEach(() => {
@@ -180,12 +181,16 @@ test("shared CSS neon glow uses GLYPH_TURN_MS, respects prefers-reduced-motion, 
   /* Steady lit gas chamber and halo survive reduced motion for both StageGlyph and EngineMark. */
   expect(glyphCss).toContain(':is(.mglyph.g-neon, .emark-neon)[data-live="1"] .mg-neon-gas { opacity: 0.34; }');
   expect(glyphCss).toContain('.emark-neon[data-live="1"]::before { opacity: 1; }');
+  /* Halo and gas keep one shared period (`--mg-turn`, GLYPH_TURN_MS) with no 3.2 s drift. */
+  expect(glyphCss).toContain('--mg-period: var(--mg-turn);');
+  expect(glyphCss).not.toMatch(/\.emark-neon\s*\{[^}]*--mg-period:\s*3\.2s/);
 
   /* Animations exist strictly inside prefers-reduced-motion: no-preference. */
   const motionBlockMatch = /@media \(prefers-reduced-motion: no-preference\)\s*\{([\s\S]*?)\n\}/.exec(glyphCss);
   expect(motionBlockMatch).not.toBeNull();
   const motionBlock = motionBlockMatch![1];
-  expect(motionBlock).toContain('.emark-neon[data-live="1"]::before { animation: mg-halo var(--mg-period) ease-in-out infinite; }');
+  expect(motionBlock).toContain('.mglyph.g-neon[data-live="1"]::before,');
+  expect(motionBlock).toContain('.emark-neon[data-live="1"]::before { animation: mg-halo var(--mg-turn) ease-in-out infinite; }');
   expect(motionBlock).toContain('.emark-neon[data-live="1"] .mg-neon-gas { animation: mg-neon var(--mg-turn) ease-in-out infinite; }');
 
   const outsideMotion = glyphCss.replace(motionBlockMatch![0], "");
@@ -193,7 +198,7 @@ test("shared CSS neon glow uses GLYPH_TURN_MS, respects prefers-reduced-motion, 
   expect(glyphCss).not.toContain("drop-shadow");
 
   /* Keyframes animate opacity only (zero layout/reflow). */
-  const keyframeMatch = /@keyframes mg-neon\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/.exec(glyphCss);
+  const keyframeMatch = /@keyframes mg-neon\s*\{((?:[^{}]|\{[^}]*\})*)\}/.exec(glyphCss);
   expect(keyframeMatch).not.toBeNull();
   expect(keyframeMatch![1]).not.toMatch(/\b(width|height|margin|padding|top|left|border-width|font-size|transform)\s*:/);
 
@@ -202,4 +207,43 @@ test("shared CSS neon glow uses GLYPH_TURN_MS, respects prefers-reduced-motion, 
   expect(boardCss).toContain('.kb [data-layout-animating="content"] .emark-neon::before');
   expect(boardCss).toContain('[data-card-drag] .emark-neon[data-live="1"]::before');
   expect(boardCss.match(/\.mg-neon-gas/g)?.length).toBe(3);
+});
+
+test("Antigravity chips and EngineBadge use one neon cyan hue and paint the Ne tile with the engine mark token", () => {
+  const lowFile = makeAntigravityFile({ effort: "low" });
+  const lowTint = effortTint(lowFile);
+  const badgeTint = engineBadgeFor("antigravity");
+
+  /* Cyan neon hue (~194°), never the old purple #6f42c1 (hue 261°). */
+  expect(lowTint.color).toContain("hsl(194 ");
+  expect(badgeTint.style.color).toContain("hsl(194 ");
+  expect(lowTint.soft).toContain("hsl(194 ");
+  expect(badgeTint.style.backgroundColor).toContain("hsl(194 ");
+
+  const host = mount(
+    <>
+      <span data-case="badge"><EngineBadge engine="antigravity" size={12} working /></span>
+      <span data-case="card">
+        <SwitchCard
+          file={lowFile}
+          title="Neon low effort"
+          project="demo"
+          currentProject="demo"
+          descendants={0}
+          statusLine="Working"
+          size="large"
+          tone="working"
+          onOpen={() => {}}
+          onArchive={() => {}}
+        />
+      </span>
+    </>,
+  );
+
+  for (const key of ["badge", "card"]) {
+    const mark = host.querySelector<HTMLElement>(`[data-case="${key}"] [data-engine-mark="antigravity"]`);
+    expect(mark, `${key} renders Antigravity Ne tile`).not.toBeNull();
+    expect(mark!.style.color, `${key} paints Ne tile in --color-antigravity-mark`).toBe("var(--color-antigravity-mark)");
+    expect(mark!.dataset.live).toBe("1");
+  }
 });

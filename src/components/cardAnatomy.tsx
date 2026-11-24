@@ -142,7 +142,7 @@ export function CardIdentityChip({ file, fontClassName = "text-[9.5px]", working
         style={{ backgroundColor: effortTint(file).soft, color: effortTint(file).color }}
         title={[badge.label, effortTitle(file)].filter(Boolean).join(" · ")}
       >
-        {file.engine === "antigravity" ? <EngineMark engine="antigravity" size={12} tone="inherit" working={working} /> : null}
+        {file.engine === "antigravity" ? <EngineMark engine="antigravity" size={12} tone="engine" working={working} /> : null}
         <span className="min-w-0 truncate">{fileModelLabel(file)}</span>
       </span>
     );

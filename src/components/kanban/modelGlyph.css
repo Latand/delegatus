@@ -29,11 +29,12 @@
 .mglyph.g-luna { --glyph-ink: var(--glyph-luna); --glyph-glow: var(--glyph-luna-glow); --mg-period: 5s; }
 .mglyph.g-luna .mg-earthshine { fill: var(--glyph-luna); opacity: 0.1; }
 /* Neon shares one tile drawing (`NeonTileSvg`) and one glow/pulse rule between
-   the model glyph (`.mglyph.g-neon`) and Antigravity engine marks (`.emark-neon`). */
+   the model glyph (`.mglyph.g-neon`) and Antigravity engine marks (`.emark-neon`).
+   Both halo and gas chamber keep one period (`--mg-turn`, GLYPH_TURN_MS). */
 .mglyph.g-neon,
-.emark-neon { --glyph-ink: var(--glyph-neon); --glyph-glow: var(--glyph-neon-glow); --glyph-halo-peak: var(--glyph-halo-peak-strong); --mg-period: 3.2s; --mg-turn: 4s; }
+.emark-neon { --glyph-ink: var(--glyph-neon); --glyph-glow: var(--glyph-neon-glow); --glyph-halo-peak: var(--glyph-halo-peak-strong); --mg-period: var(--mg-turn); }
 .mglyph.g-neon { color: var(--glyph-ink); }
-.emark-neon { position: relative; }
+.emark-neon { position: relative; --mg-turn: 4s; }
 .emark-neon > svg { position: relative; overflow: visible; }
 :is(.mglyph.g-neon, .emark-neon) .mg-tile { fill: none; stroke: currentColor; stroke-width: 1.3; }
 :is(.mglyph.g-neon, .emark-neon) .mg-neon-gas { fill: var(--glyph-glow); opacity: 0.12; }
@@ -79,8 +80,9 @@
 .mglyph[data-tier="fast"] { --mg-turn: 2s; --mg-pace: 2; }
 .mglyph[data-tier="ultra"] { --mg-turn: 0.5s; --mg-pace: 8; }
 @media (prefers-reduced-motion: no-preference) {
-  .mglyph[data-live="1"]::before,
-  .emark-neon[data-live="1"]::before { animation: mg-halo var(--mg-period) ease-in-out infinite; }
+  .mglyph[data-live="1"]::before { animation: mg-halo var(--mg-period) ease-in-out infinite; }
+  .mglyph.g-neon[data-live="1"]::before,
+  .emark-neon[data-live="1"]::before { animation: mg-halo var(--mg-turn) ease-in-out infinite; }
   .mglyph[data-live="1"]:is(.g-sol, .g-astra, .g-opus) > svg { animation: mg-turn var(--mg-turn) linear infinite; }
   .mglyph[data-live="1"] .mg-write { animation: mg-write calc(var(--mg-period) / var(--mg-pace)) ease-in-out infinite; }
   .mglyph[data-live="1"] .mg-sway { animation: mg-sway calc(var(--mg-period) / var(--mg-pace)) ease-in-out infinite; }
@@ -108,7 +110,7 @@
 @keyframes mg-phase { 0%, 100% { transform: translate(-1.1px, 0.55px); } 50% { transform: translate(0.55px, -0.28px); } }
 /* Neon's gas chamber pulses and shimmers gently over one GLYPH_TURN_MS cycle
    while the periodic-table frame and Ne strokes stay at full ink. */
-@keyframes mg-neon { 0%, 100% { opacity: 0.16; } 38% { opacity: 0.44; } 44% { opacity: 0.30; } 52% { opacity: 0.48; } 78% { opacity: 0.24; } }
+@keyframes mg-neon { 0%, 100% { opacity: 0.16; } 38% { opacity: 0.40; } 44% { opacity: 0.28; } 52% { opacity: 0.44; } 78% { opacity: 0.22; } }
 
 /* A settled state rides the corner as a badge in the stage's tone, cut out of
    the glyph by a ring of the surface under it. It sits out past the corner so
@@ -118,5 +120,8 @@
   display: grid; place-items: center; background: var(--stage-tone);
   box-shadow: 0 0 0 1.5px var(--glyph-cut, var(--surface-card));
 }
+/* Neon's square periodic-table tile puts the "e" of Ne in the bottom-right
+   corner while top-right beside "10" is open; lift only Neon's badge there. */
+.mglyph.g-neon .mg-badge { top: -4px; bottom: auto; }
 .mglyph .mg-badge svg { width: 8px; height: 8px; fill: none; stroke: var(--surface-card); stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
 .mglyph .mg-badge circle { fill: var(--surface-card); stroke: none; }

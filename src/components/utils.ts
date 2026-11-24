@@ -47,8 +47,8 @@ export function activityDot(activity: FileEntry["activity"]): string {
 
 export type ModelTint = { color: string; soft: string };
 
-/* Engine base identity: Codex blue, Claude orange, OpenClaw magenta. Model families shift the
-   hue so sibling agents on different models are tellable apart at a glance.
+/* Engine base identity: Codex blue, Claude orange, OpenClaw magenta, Antigravity neon cyan.
+   Model families shift the hue so sibling agents on different models are tellable apart at a glance.
 
    Only the identity `color` is stored — a saturated hue that reads on any
    surface, so it feeds inline styles, SVG, and canvas unchanged. The pale chip
@@ -61,7 +61,7 @@ const ENGINE_COLORS: Record<string, string> = {
   claude: "#d97757",
   openclaw: "#b3407a",
   copilot: "#1a7f37",
-  antigravity: "#6f42c1",
+  antigravity: "#006482",
 };
 const NEUTRAL_COLOR = "#9a9aa4";
 const CLAUDE_MODEL_COLORS: [RegExp, string][] = [

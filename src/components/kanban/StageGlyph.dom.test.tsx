@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
 import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 
@@ -292,4 +294,40 @@ test("Neon glyph carries the catalogue label in en and uk, and StageIdentity omi
   );
   const mark = (name: string) => host.querySelector(`[data-case="${name}"] [data-engine-mark]`)?.getAttribute("data-engine-mark") ?? null;
   expect([mark("neon-glyph"), mark("argon-fallback"), mark("alone")]).toEqual([null, "antigravity", "antigravity"]);
+});
+
+test("Neon places its settled status badge top-right while other model glyphs keep theirs bottom-right", () => {
+  const style = document.createElement("style");
+  style.textContent = fs.readFileSync(path.join(import.meta.dir, "modelGlyph.css"), "utf8");
+  document.head.append(style);
+  try {
+    const neon = { engine: "antigravity", model: "gemini-4-neon" };
+    const host = mount(
+      <>
+        <span data-case="neon-passed"><StageGlyph state="passed" model={neon} fallback="mark" /></span>
+        <span data-case="neon-failed"><StageGlyph state="failed" model={neon} fallback="mark" /></span>
+        <span data-case="neon-needs"><StageGlyph state="needs_decision" model={neon} fallback="mark" /></span>
+        <span data-case="sol-passed"><StageGlyph state="passed" model={{ engine: "codex", model: "gpt-6-sol" }} fallback="mark" /></span>
+        <span data-case="terra-failed"><StageGlyph state="failed" model={{ engine: "codex", model: "gpt-5.6-terra" }} fallback="mark" /></span>
+        <span data-case="haiku-needs"><StageGlyph state="needs_decision" model={{ engine: "claude", model: "haiku" }} fallback="mark" /></span>
+      </>,
+    );
+
+    for (const key of ["neon-passed", "neon-failed", "neon-needs"]) {
+      const badge = host.querySelector<HTMLElement>(`[data-case="${key}"] .mglyph.g-neon .mg-badge`);
+      expect(badge, `${key} renders .mg-badge inside .mglyph.g-neon`).not.toBeNull();
+      const computed = window.getComputedStyle(badge!);
+      expect([computed.top, computed.right, computed.bottom], `${key} top-right badge`).toEqual(["-4px", "-4px", "auto"]);
+    }
+
+    for (const key of ["sol-passed", "terra-failed", "haiku-needs"]) {
+      const badge = host.querySelector<HTMLElement>(`[data-case="${key}"] .mglyph .mg-badge`);
+      expect(badge, `${key} renders .mg-badge`).not.toBeNull();
+      const computed = window.getComputedStyle(badge!);
+      expect([computed.right, computed.bottom], `${key} bottom-right badge`).toEqual(["-4px", "-4px"]);
+      expect(computed.top, `${key} does not lift badge to top-right`).not.toBe("-4px");
+    }
+  } finally {
+    style.remove();
+  }
 });

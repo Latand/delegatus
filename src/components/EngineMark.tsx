@@ -8,8 +8,8 @@ import { engineBadgeFor } from "@/components/utils";
  * The one engine mark the Viewer draws (#1743). Every surface that used to pick
  * its own glyph — a lucide `Sparkle`, a `Command`, a coloured dot, a filled
  * avatar — renders this instead, so Claude, Codex and Antigravity read the same
- * on a conversation card, a stage chip, a graph node, a pane header and an
- * account picker.
+ * on a conversation card, a stage chip, a graph node, a pane header and a
+ * limits footer.
  *
  * ## Where the marks come from
  *
@@ -162,7 +162,7 @@ export function EngineBadge({ engine, className = "", title, size = 12, working 
   const badge = engineBadgeFor(engine);
   return (
     <span className={`inline-flex shrink-0 items-center gap-1 rounded-full ${className}`} style={badge.style} title={title}>
-      <EngineMark engine={engine} size={size} tone="inherit" working={working} />
+      <EngineMark engine={engine} size={size} tone={engine === "antigravity" ? "engine" : "inherit"} working={working} />
       {badge.label}
     </span>
   );

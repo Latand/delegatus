@@ -406,7 +406,7 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                     style={{ backgroundColor: effortTint(file).soft, color: effortTint(file).color }}
                     title={[badge.label, effortTitle(file)].filter(Boolean).join(" · ")}
                   >
-                    {file.engine === "antigravity" ? <EngineMark engine="antigravity" size={12} tone="inherit" working={state === "live"} /> : null}
+                    {file.engine === "antigravity" ? <EngineMark engine="antigravity" size={12} tone="engine" working={state === "live"} /> : null}
                     <span>{conversationModelLabel(file)}</span>
                   </span>
                 ) : (
