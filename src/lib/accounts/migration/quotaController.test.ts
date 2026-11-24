@@ -467,6 +467,48 @@ test("Antigravity EIO isolation preserves auth & HTTP 200, keeps host exhaustion
       now: clock,
     });
     expect(mcpAfterReenter[0]?.session ?? null).toBeNull();
+
+    // 5c. A genuine newer exhaustion occurring AFTER the expired window (+120s)
+    //     but BEFORE an empty poll (+240s) and stale rejection (+250s) MUST NOT
+    //     be hidden by the empty poll's `observedAt` clock: `lastQuotaEventAt`
+    //     and `observedAt` stay separate clocks so +180s is accepted immediately.
+    const lateEventSec = newerObservedSec + 180;
+    const lateResetSec = newerObservedSec + 3700;
+    fs.writeFileSync(
+      oldSessionFile,
+      `${JSON.stringify({
+        type: "session.quota_exhausted",
+        timestamp: new Date(lateEventSec * 1000).toISOString(),
+        data: {
+          code: "RESOURCE_EXHAUSTED",
+          message: "Individual quota reached. Resets in 1h",
+          resetsAt: lateResetSec,
+          windowMinutes: 300,
+          usedPercent: 100,
+          observedAt: lateEventSec,
+        },
+      })}\n`,
+    );
+    fs.utimesSync(oldSessionFile, lateEventSec, lateEventSec);
+    clock = (newerResetSec + 400) * 1000;
+    setSystemTime(new Date(clock));
+
+    const httpBeforeLateTick = await (await GET()).json() as { antigravity?: { session?: { usedPercent?: number } } | null };
+    expect(httpBeforeLateTick.antigravity?.session?.usedPercent).toBe(100);
+
+    await controller.tick("antigravity");
+    const afterLateTick = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterLateTick?.limitReached).toBe(true);
+    expect(afterLateTick?.limits?.session?.usedPercent).toBe(100);
+    expect(afterLateTick?.lastQuotaEventAt).toBe(lateEventSec);
+    const mcpAfterLateTick = accountLimitRows({
+      engine: "antigravity",
+      accounts: { claude: [], codex: [], copilot: [], antigravity: [{ accountId: "default", authPresent: true }] },
+      active: { claude: null, codex: null, copilot: null, antigravity: "default" },
+      observations: { claude: {}, codex: {}, copilot: {}, antigravity: afterLateTick ? { default: afterLateTick } : {} },
+      now: clock,
+    });
+    expect(mcpAfterLateTick[0]?.session?.usedPercent).toBe(100);
   } finally {
     setSystemTime();
     setAgentRegistryForTests(null);

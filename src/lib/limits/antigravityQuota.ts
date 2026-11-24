@@ -189,9 +189,10 @@ export function isAntigravitySessionWindowActive(
 }
 
 /** Unix-second high-water mark of the newest actual Antigravity quota exhaustion
- * event recorded on an observation. Survives empty polls and expired-window
- * clearances independently of `provenance.reason` so older transcripts with a
- * later reset can never resurrect an already-reset account. */
+ * event recorded on an observation. Keeps the event clock (`lastQuotaEventAt` /
+ * `limits.capturedAt` / `limits.session.observedAt`) strictly separate from the
+ * poll clock (`observedAt`) so an empty poll or reset decision can never advance
+ * the event clock and hide a genuine exhaustion that occurred before that poll. */
 export function antigravityObservationEventSec(obs: {
   lastQuotaEventAt?: number;
   limits: { capturedAt?: number | null; session?: { observedAt?: number | null } | null } | null;
@@ -210,13 +211,15 @@ export function antigravityObservationEventSec(obs: {
     if (typeof obs.limits.session?.observedAt === "number" && Number.isFinite(obs.limits.session.observedAt) && obs.limits.session.observedAt > 0) {
       best = Math.max(best, Math.floor(obs.limits.session.observedAt));
     }
-    if (obs.observedAt !== undefined) {
+    // Legacy fallback only when neither `lastQuotaEventAt` nor `limits` event timestamps exist.
+    if (!Number.isFinite(best) && obs.observedAt !== undefined) {
       const ms = typeof obs.observedAt === "number" ? obs.observedAt : Date.parse(obs.observedAt);
-      if (Number.isFinite(ms) && ms > 0) best = Math.max(best, Math.floor(ms / 1000));
+      if (Number.isFinite(ms) && ms > 0) best = Math.floor(ms / 1000);
     }
-  } else if (obs.provenance?.reason === "antigravity quota reset window elapsed" && obs.observedAt !== undefined) {
+  } else if (!Number.isFinite(best) && obs.provenance?.reason === "antigravity quota reset window elapsed" && obs.observedAt !== undefined) {
+    // Legacy fallback only for pre-`lastQuotaEventAt` reset rows.
     const ms = typeof obs.observedAt === "number" ? obs.observedAt : Date.parse(obs.observedAt);
-    if (Number.isFinite(ms) && ms > 0) best = Math.max(best, Math.floor(ms / 1000));
+    if (Number.isFinite(ms) && ms > 0) best = Math.floor(ms / 1000);
   }
   return Number.isFinite(best) && best > 0 ? best : null;
 }

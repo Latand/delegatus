@@ -27,13 +27,21 @@ interface CachedExhaustionEntry {
   exhaustion: AntigravityQuotaExhaustion | null;
 }
 
+interface CachedTopFile {
+  file: string;
+  dev: bigint;
+  ino: bigint;
+  mtimeNs: bigint;
+  size: bigint;
+}
+
 interface CachedDirEntry {
   dirFingerprint: string;
   fullScanAtMonoMs: number;
   /** Session directory names observed at the last scan (null when seeded only via
    * `noteAntigravitySessionActivity` before any directory listing ran). */
   knownNames: Set<string> | null;
-  files: string[];
+  files: CachedTopFile[];
 }
 
 interface SessionFileCandidate {
@@ -65,10 +73,28 @@ function fileFingerprintOf(stat: fs.BigIntStats): string {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
 
+function toCachedTopFile(candidate: SessionFileCandidate): CachedTopFile {
+  return {
+    file: candidate.file,
+    dev: candidate.stat.dev,
+    ino: candidate.stat.ino,
+    mtimeNs: candidate.stat.mtimeNs,
+    size: candidate.stat.size,
+  };
+}
+
+function isCachedTopFileIntact(prev: CachedTopFile, stat: fs.BigIntStats): boolean {
+  return stat.isFile()
+    && stat.dev === prev.dev
+    && stat.ino === prev.ino
+    && stat.mtimeNs >= prev.mtimeNs
+    && stat.size >= prev.size;
+}
+
 function cacheDirTopFiles(
   sessionsDir: string,
   dirFingerprint: string,
-  files: string[],
+  files: CachedTopFile[],
   knownNames: Set<string> | null,
   fullScanAtMonoMs: number,
 ): void {
@@ -92,17 +118,36 @@ function cacheDirTopFiles(
 export function noteAntigravitySessionActivity(sessionsDir: string, transcriptFile: string): void {
   const dirFp = dirFingerprintOf(sessionsDir);
   if (!dirFp) return;
+  let stat: fs.BigIntStats;
+  try {
+    stat = fs.statSync(transcriptFile, { bigint: true });
+    if (!stat.isFile()) {
+      dirScanCache.delete(sessionsDir);
+      return;
+    }
+  } catch {
+    dirScanCache.delete(sessionsDir);
+    return;
+  }
   const cached = dirScanCache.get(sessionsDir);
-  const existing = cached ? cached.files.filter((item) => item !== transcriptFile) : [];
+  const previous = cached?.files.find((item) => item.file === transcriptFile);
+  if (previous && !isCachedTopFileIntact(previous, stat)) {
+    dirScanCache.delete(sessionsDir);
+    return;
+  }
+  const existing = cached ? cached.files.filter((item) => item.file !== transcriptFile) : [];
   const sessionName = path.basename(path.dirname(transcriptFile));
   const nextKnown = cached?.knownNames ? new Set(cached.knownNames) : null;
   if (nextKnown && isValidAntigravitySessionId(sessionName)) {
     nextKnown.add(sessionName);
   }
+  const updated = [toCachedTopFile({ file: transcriptFile, stat }), ...existing]
+    .sort((a, b) => (b.mtimeNs > a.mtimeNs ? 1 : b.mtimeNs < a.mtimeNs ? -1 : b.file.localeCompare(a.file)))
+    .slice(0, MAX_FILES);
   cacheDirTopFiles(
     sessionsDir,
     dirFp,
-    [transcriptFile, ...existing].slice(0, MAX_FILES),
+    updated,
     nextKnown,
     cached?.fullScanAtMonoMs ?? performance.now(),
   );
@@ -126,14 +171,25 @@ function newestSessionFiles(sessionsDir: string): SessionFileCandidate[] {
     dirScanCache.delete(sessionsDir);
     dirScanCache.set(sessionsDir, cached);
     const live: SessionFileCandidate[] = [];
-    for (const file of cached.files) {
+    let intact = true;
+    for (const prev of cached.files) {
       try {
-        const stat = fs.statSync(file, { bigint: true });
-        if (stat.isFile()) live.push({ file, stat });
-      } catch { /* session removed */ }
+        const stat = fs.statSync(prev.file, { bigint: true });
+        if (isCachedTopFileIntact(prev, stat)) {
+          live.push({ file: prev.file, stat });
+        } else {
+          intact = false;
+          break;
+        }
+      } catch {
+        intact = false;
+        break;
+      }
     }
-    if (live.length === cached.files.length) {
-      return live;
+    if (intact && live.length === cached.files.length) {
+      const top = sortTopSessionCandidates(live);
+      cached.files = top.map(toCachedTopFile);
+      return top;
     }
   }
 
@@ -144,11 +200,12 @@ function newestSessionFiles(sessionsDir: string): SessionFileCandidate[] {
     return [];
   }
 
-  // Incremental path: when we already scanned this directory and ONLY new
-  // sessions were added (no deletions), stat ONLY the newly appeared sessions
-  // plus the <= MAX_FILES cached top files. On ANY deletion, rebuild the top-N
-  // set from disk so a previously 6th-newest session promoted into the top 5
-  // (even alongside an older-mtime import) is never missed.
+  // Incremental path: when we already scanned this directory and ONLY genuinely
+  // new session names appeared (no deletions, no same-name directory replacement,
+  // and every cached top-N file kept its dev/ino with monotonic mtime/size),
+  // stat ONLY the newly appeared sessions plus the <= MAX_FILES cached top files.
+  // On ANY deletion, same-name replacement, or top-N inode/mtime/size regression,
+  // rebuild the top-N set from disk so a promoted 6th-newest session is never missed.
   if (cached?.knownNames && nowMono - cached.fullScanAtMonoMs < DIR_SCAN_CACHE_TTL_MS) {
     const currentNames = new Set<string>();
     const addedNames: string[] = [];
@@ -164,49 +221,51 @@ function newestSessionFiles(sessionsDir: string): SessionFileCandidate[] {
         break;
       }
     }
-    if (!anyDeleted && addedNames.length <= MAX_INCREMENTAL_NEW_DIRS) {
+    if (!anyDeleted && addedNames.length > 0 && addedNames.length <= MAX_INCREMENTAL_NEW_DIRS) {
       const seenFiles = new Set<string>();
       const candidates: SessionFileCandidate[] = [];
       let cachedTopIntact = true;
-      for (const file of cached.files) {
-        const name = path.basename(path.dirname(file));
+      for (const prev of cached.files) {
+        const name = path.basename(path.dirname(prev.file));
         if (!currentNames.has(name)) {
           cachedTopIntact = false;
-          continue;
+          break;
         }
         try {
-          const stat = fs.statSync(file, { bigint: true });
-          if (stat.isFile()) {
-            candidates.push({ file, stat });
-            seenFiles.add(file);
+          const stat = fs.statSync(prev.file, { bigint: true });
+          if (isCachedTopFileIntact(prev, stat)) {
+            candidates.push({ file: prev.file, stat });
+            seenFiles.add(prev.file);
           } else {
             cachedTopIntact = false;
+            break;
           }
         } catch {
           cachedTopIntact = false;
-        }
-      }
-      const confirmedNames = new Set(currentNames);
-      for (const name of addedNames) {
-        const file = path.join(sessionsDir, name, "events.jsonl");
-        if (seenFiles.has(file)) continue;
-        try {
-          const stat = fs.statSync(file, { bigint: true });
-          if (stat.isFile()) {
-            candidates.push({ file, stat });
-            seenFiles.add(file);
-          } else {
-            confirmedNames.delete(name);
-          }
-        } catch {
-          // Directory created before `events.jsonl` landed; leave it unknown so
-          // a subsequent scan picks it up once the file appears.
-          confirmedNames.delete(name);
+          break;
         }
       }
       if (cachedTopIntact) {
+        const confirmedNames = new Set(currentNames);
+        for (const name of addedNames) {
+          const file = path.join(sessionsDir, name, "events.jsonl");
+          if (seenFiles.has(file)) continue;
+          try {
+            const stat = fs.statSync(file, { bigint: true });
+            if (stat.isFile()) {
+              candidates.push({ file, stat });
+              seenFiles.add(file);
+            } else {
+              confirmedNames.delete(name);
+            }
+          } catch {
+            // Directory created before `events.jsonl` landed; leave it unknown so
+            // a subsequent scan picks it up once the file appears.
+            confirmedNames.delete(name);
+          }
+        }
         const top = sortTopSessionCandidates(candidates);
-        cacheDirTopFiles(sessionsDir, dirFp, top.map((entry) => entry.file), confirmedNames, cached.fullScanAtMonoMs);
+        cacheDirTopFiles(sessionsDir, dirFp, top.map(toCachedTopFile), confirmedNames, cached.fullScanAtMonoMs);
         return top;
       }
     }
@@ -226,7 +285,7 @@ function newestSessionFiles(sessionsDir: string): SessionFileCandidate[] {
     } catch { /* incomplete or removed session */ }
   }
   const top = sortTopSessionCandidates(entries);
-  cacheDirTopFiles(sessionsDir, dirFp, top.map((entry) => entry.file), knownNames, nowMono);
+  cacheDirTopFiles(sessionsDir, dirFp, top.map(toCachedTopFile), knownNames, nowMono);
   return top;
 }
 

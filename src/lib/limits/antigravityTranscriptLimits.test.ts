@@ -332,3 +332,47 @@ test("rebuilds top-N on session deletion even when an older-mtime session is imp
   expect(cold.data?.session?.usedPercent).toBe(100);
   expect(cold.data?.session?.resetsAt).toBe(resetAt);
 });
+
+test("rebuilds top-N on same-name session replacement, in-place mtime backdate, and off-top replacement", () => {
+  const t0 = "2026-11-24T06:00:00.000Z";
+  const resetAt = Math.floor(Date.parse(t0) / 1000) + 3600;
+  const nowMs = Date.parse(t0) + 10_000;
+  const empty = '{"type":"session.start","data":{}}\n';
+
+  // 1. Delete newest session (s6) and restore it under the EXACT same name with an older mtime (20):
+  //    s1 (mtime 100, quota exhausted) moves from #6 to #5. Warm MUST match cold (100%).
+  const sameNameWarm = path.join(root, "same-name-warm");
+  const sameNameCold = path.join(root, "same-name-cold");
+  for (const dir of [sameNameWarm, sameNameCold]) {
+    fs.mkdirSync(dir, { recursive: true });
+    writeSession(dir, "s1", exhaustionLine(t0, "Individual quota reached. Resets in 1h", resetAt), 100);
+    for (let i = 2; i <= 6; i += 1) writeSession(dir, `s${i}`, empty, i * 100);
+  }
+  expect(readAntigravityTranscriptLimits(sameNameWarm, nowMs).data).toBeNull();
+  for (const dir of [sameNameWarm, sameNameCold]) {
+    fs.rmSync(path.join(dir, "s6"), { recursive: true, force: true });
+    writeSession(dir, "s6", empty, 20);
+  }
+  expect(readAntigravityTranscriptLimits(sameNameWarm, nowMs).data?.session?.usedPercent).toBe(100);
+  expect(readAntigravityTranscriptLimits(sameNameCold, nowMs).data?.session?.usedPercent).toBe(100);
+
+  // 2. In-place atomic file replacement / mtime backdate on a cached top-5 file WITHOUT changing sessionsDir:
+  const inPlaceDir = path.join(root, "in-place-backdate");
+  fs.mkdirSync(inPlaceDir, { recursive: true });
+  writeSession(inPlaceDir, "s1", exhaustionLine(t0, "Individual quota reached. Resets in 1h", resetAt), 100);
+  for (let i = 2; i <= 6; i += 1) writeSession(inPlaceDir, `s${i}`, empty, i * 100);
+  expect(readAntigravityTranscriptLimits(inPlaceDir, nowMs).data).toBeNull();
+  const s6File = path.join(inPlaceDir, "s6", "events.jsonl");
+  fs.utimesSync(s6File, 20, 20);
+  expect(readAntigravityTranscriptLimits(inPlaceDir, nowMs).data?.session?.usedPercent).toBe(100);
+
+  // 3. Same-name delete + recreate of a #6 session (outside top 5) with a newer mtime (900):
+  const offTopDir = path.join(root, "off-top-same-name");
+  fs.mkdirSync(offTopDir, { recursive: true });
+  writeSession(offTopDir, "s1", empty, 100);
+  for (let i = 2; i <= 6; i += 1) writeSession(offTopDir, `s${i}`, empty, i * 100);
+  expect(readAntigravityTranscriptLimits(offTopDir, nowMs).data).toBeNull();
+  fs.rmSync(path.join(offTopDir, "s1"), { recursive: true, force: true });
+  writeSession(offTopDir, "s1", exhaustionLine(t0, "Individual quota reached. Resets in 1h", resetAt), 900);
+  expect(readAntigravityTranscriptLimits(offTopDir, nowMs).data?.session?.usedPercent).toBe(100);
+});
