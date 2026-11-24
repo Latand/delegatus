@@ -81,6 +81,8 @@ import { parseStructuredImageRefs, structuredContent } from "@/lib/runtime/struc
 import { runtimeImageCapability } from "@/lib/runtime/runtimeImageStore";
 import { normalizeCodexProtocolReceipt } from "@/lib/runtime/codexProtocolReceipt";
 
+import type { RuntimeStartupOperationCursor } from "@/lib/runtime/contracts";
+
 function nativeQueueReceipt(entry: NativeQueueRecord): NonNullable<RuntimeOperationReceipt["nativeQueue"]> {
   return { entryId: entry.entryId, nativeSubmissionId: entry.nativeSubmissionId, revision: entry.revision,
     dispatchedRevision: entry.dispatchedRevision, profilePolicy: entry.profilePolicy };
@@ -579,7 +581,7 @@ export class RuntimeJournal {
           receipt_json TEXT NOT NULL, event_seq INTEGER NOT NULL, orphaned_since INTEGER,
           UNIQUE(conversation_id, idempotency_key)
         )`,
-        `CREATE INDEX IF NOT EXISTS startup_active_operations ON operations(operation_id) WHERE ${activeStartupOperation()}`,
+        `CREATE INDEX IF NOT EXISTS startup_active_operations_by_event ON operations(event_seq) WHERE ${activeStartupOperation()}`,
         `CREATE TABLE IF NOT EXISTS delivery_operation_actions (
           operation_id TEXT PRIMARY KEY,
           winner TEXT NOT NULL CHECK(winner IN ('discard', 'retry')),
@@ -2361,7 +2363,7 @@ export class RuntimeJournal {
     }).immediate();
   }
 
-  startupSessionEvidence(conversationIds: readonly string[], includeEvidence = false, pendingOperationsAfter?: string) {
+  startupSessionEvidence(conversationIds: readonly string[], includeEvidence = false, pendingOperationsAfter?: RuntimeStartupOperationCursor) {
     this.assertHealthy();
     // Existing rows with no write tick predate the tracking schema.
     const read = this.db.query<{ stamp: number }, [string]>(`
@@ -2376,11 +2378,16 @@ export class RuntimeJournal {
       if (pendingOperationsAfter !== undefined) {
         // Native queue receipts can still be queued after their effect is
         // completed. Only the active receipt index can attest to these.
-        const pendingOperations = this.db.query<{ receipt_json: string }, [string]>(`
-          SELECT receipt_json FROM operations WHERE operation_id > ? AND ${activeStartupOperation()}
-          ORDER BY operation_id LIMIT 100`,
-        ).all(pendingOperationsAfter).map(row => runtimePresentationReceipt(JSON.parse(row.receipt_json) as RuntimeOperationReceipt));
-        return { ...result, pendingOperations };
+        const rows = this.db.query<{ receipt_json: string; event_seq: number; rowid: number }, [number, number]>(`
+          SELECT receipt_json,event_seq,rowid FROM operations WHERE (event_seq,rowid)>(?,?) AND ${activeStartupOperation()}
+          ORDER BY event_seq,rowid LIMIT 101`,
+        ).all(pendingOperationsAfter.eventSeq, pendingOperationsAfter.rowId);
+        const page = rows.slice(0, 100);
+        const pendingOperations = page.map(row => runtimePresentationReceipt(JSON.parse(row.receipt_json) as RuntimeOperationReceipt));
+        const last = rows.length > page.length ? page.at(-1) : undefined;
+        return { ...result, pendingOperations, ...(last ? {
+          pendingOperationsNext: { eventSeq: last.event_seq, rowId: last.rowid },
+        } : {}) };
       }
       if (!includeEvidence) return result;
       const session = this.entity<RuntimeSession>("session", conversationIds[0]!, false);

@@ -7,7 +7,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import { isNamedPipePath } from "./localEndpoint";
 import { parseViewerDeploymentListCursor, viewerDeploymentListLimit, viewerDeploymentPage,
-  type ViewerDeploymentList, type ViewerDeploymentListOptions, type RuntimeStartupSessionEvidence } from "./contracts";
+  type ViewerDeploymentList, type ViewerDeploymentListOptions, type RuntimeStartupSessionEvidence, type RuntimeStartupOperationCursor } from "./contracts";
 
 
 import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSession, RuntimeSessionRead, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionDetails, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
@@ -136,7 +136,7 @@ export function withRuntimeRecoveryReads(client: RuntimeHostClient, signal: Abor
       if (property === "readSession" && target.readSession) return (identity: RuntimeSessionRead, options?: RuntimeReadOptions) =>
         target.readSession!(identity, { ...options, signal });
       if (property === "startupSessionEvidence" && target.startupSessionEvidence) {
-        return (ids: readonly string[], options?: RuntimeReadOptions & { includeEvidence?: boolean; pendingOperationsAfter?: string }) =>
+        return (ids: readonly string[], options?: RuntimeReadOptions & { includeEvidence?: boolean; pendingOperationsAfter?: RuntimeStartupOperationCursor }) =>
           target.startupSessionEvidence!(ids, { ...options, signal });
       }
       if (property === "operationStatus") return (id: string, options?: { currentRetryLeaf?: boolean }) =>
@@ -162,7 +162,7 @@ export interface RuntimeHostClient {
       Answers the settled entry; there is no operation receipt to answer. */
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
   readSession?(identity: RuntimeSessionRead, options?: RuntimeReadOptions): Promise<RuntimeSession | null>;
-  startupSessionEvidence?(ids: readonly string[], options?: RuntimeReadOptions & { includeEvidence?: boolean; pendingOperationsAfter?: string }): Promise<RuntimeStartupSessionEvidence | null>;
+  startupSessionEvidence?(ids: readonly string[], options?: RuntimeReadOptions & { includeEvidence?: boolean; pendingOperationsAfter?: RuntimeStartupOperationCursor }): Promise<RuntimeStartupSessionEvidence | null>;
   filesRevision?(): Promise<number>;
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
   /** The same snapshot as the UTF-8 JSON the host encoded, for a caller that
@@ -238,7 +238,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     // or sending the caller's transport policy over the wire.
     return this.call("session-read", { ...identity }, options?.timeoutMs ?? this.timeoutMs, options?.signal) as Promise<RuntimeSession | null>;
   }
-  async startupSessionEvidence(conversationIds: readonly string[], options: RuntimeReadOptions & { includeEvidence?: boolean; pendingOperationsAfter?: string } = {}): Promise<RuntimeStartupSessionEvidence | null> {
+  async startupSessionEvidence(conversationIds: readonly string[], options: RuntimeReadOptions & { includeEvidence?: boolean; pendingOperationsAfter?: RuntimeStartupOperationCursor } = {}): Promise<RuntimeStartupSessionEvidence | null> {
     let result: Partial<RuntimeStartupSessionEvidence> | null;
     try {
       result = await this.call("startup-session-evidence", { conversationIds, includeEvidence: options.includeEvidence, pendingOperationsAfter: options.pendingOperationsAfter }, options.timeoutMs ?? this.timeoutMs,
@@ -252,15 +252,18 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       || result.sessions.some(seq => seq !== null && (!Number.isSafeInteger(seq) || seq < 0))
       || (result.pendingOperations !== undefined && (!Array.isArray(result.pendingOperations)
         || result.pendingOperations.length > 100
-        || result.pendingOperations.some((receipt, index, rows) => !receipt || typeof receipt.operationId !== "string"
-          || typeof receipt.conversationId !== "string"
-          || receipt.operationId <= (index ? rows[index - 1]!.operationId : options.pendingOperationsAfter ?? ""))))
+        || result.pendingOperations.some(receipt => !receipt || typeof receipt.operationId !== "string"
+          || typeof receipt.conversationId !== "string")))
+      || (result.pendingOperationsNext !== undefined && (!result.pendingOperationsNext
+        || !Number.isSafeInteger(result.pendingOperationsNext.eventSeq) || result.pendingOperationsNext.eventSeq < 0
+        || !Number.isSafeInteger(result.pendingOperationsNext.rowId) || result.pendingOperationsNext.rowId < 1))
       || (options.includeEvidence && (result.sessions[0] === null ? result.evidence !== null
         : !result.evidence || result.evidence.conversationId !== conversationIds[0] || !Array.isArray(result.evidence.recentReceipts)))) {
       throw new RuntimeHostUnavailableError("runtime host returned invalid startup session evidence");
     }
     return { generation: result.generation, version: result.version, effectsVersion: result.effectsVersion,
-      sessions: result.sessions, evidence: result.evidence, pendingOperations: result.pendingOperations };
+      sessions: result.sessions, evidence: result.evidence,
+      pendingOperations: result.pendingOperations, pendingOperationsNext: result.pendingOperationsNext };
   }
 
   async filesRevision(): Promise<number> {

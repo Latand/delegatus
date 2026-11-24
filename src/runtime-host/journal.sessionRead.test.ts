@@ -208,7 +208,7 @@ test("startup operation pages retain native work after acknowledgement removes i
   const host = new RuntimeHost(journal, undefined, undefined, true);
   const conversationId = "conversation_startup_native";
   const sessionKey = { engine: "codex" as const, sessionId: "startup-native-session" };
-  const page = async (pendingOperationsAfter: string) => {
+  const page = async (pendingOperationsAfter = { eventSeq: 0, rowId: 0 }) => {
     const response = await host.handle({ id: "startup-active-operations", method: "startup-session-evidence",
       params: { conversationIds: [], pendingOperationsAfter } });
     expect(response.ok).toBe(true);
@@ -219,7 +219,7 @@ test("startup operation pages retain native work after acknowledgement removes i
       conversationId, sessionKey, hostKind: "codex-app-server", host: "hosted", turn: "idle",
       writerClaim: "synthetic:1", capabilities: { nativeQueue: true, steer: true, structuredAttention: true },
     } });
-    const empty = await page("");
+    const empty = await page();
     const operationId = "startup-native-work";
     journal.executeOperation({ kind: "native-queue", conversationId, operationId, idempotencyKey: operationId,
       action: "add", binding: { threadId: sessionKey.sessionId, accountId: null }, text: "Synthetic native work" });
@@ -228,13 +228,24 @@ test("startup operation pages retain native work after acknowledgement removes i
       id: "synthetic-native", clientUserMessageId: operationId, input: [{ type: "text", text: "Synthetic native work" }],
     } });
     expect(journal.effectBatch(100, ["runtime.native-queue"])).toHaveLength(0);
-    const pending = await page("");
+    const pending = await page();
     expect(pending.effectsVersion).not.toBe(empty.effectsVersion);
     expect(pending.pendingOperations).toEqual([expect.objectContaining({ operationId, conversationId, status: "queued" })]);
-    expect((await page(operationId)).pendingOperations).toEqual([]);
+    expect((await page({ eventSeq: journal.publishedSeq(), rowId: Number.MAX_SAFE_INTEGER })).pendingOperations).toEqual([]);
     journal.transitionOperation(operationId, "failed");
-    const ended = await page("");
+    const ended = await page();
     expect(ended.effectsVersion).not.toBe(pending.effectsVersion);
     expect(ended.pendingOperations).toEqual([]);
+
+    const ids = Array.from({ length: 103 }, (_, index) => `startup-queued-work-${index}`);
+    for (const id of ids) journal.executeOperation({
+      kind: "send", conversationId, operationId: id, idempotencyKey: id, text: "Synthetic queued work",
+    });
+    const firstPage = await page();
+    expect(firstPage.pendingOperations).toHaveLength(100);
+    expect(firstPage.pendingOperationsNext).toBeDefined();
+    const lastPage = await page(firstPage.pendingOperationsNext);
+    expect(lastPage.pendingOperationsNext).toBeUndefined();
+    expect([...firstPage.pendingOperations!, ...lastPage.pendingOperations!].map(receipt => receipt.operationId)).toEqual(ids);
   } finally { journal.close(); }
 });

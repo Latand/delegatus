@@ -6,6 +6,7 @@ import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot, startupStructuredHostKeys } from "./startupSnapshot";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { FileTransactionAdmissionError } from "@/lib/state/fileTransaction";
 import { nextBuildPhase, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
 import { BACKUP_DIRECTORY, listBackups } from "@/lib/state/durability";
 import { databaseFileIdentity, databaseSwapInProgress } from "@/lib/state/currentDatabase";
@@ -50,7 +51,7 @@ import type { SpawnResponse } from "@/lib/agent/spawnResponse";
 import { prepareManagedClaudeSpawnHome, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
-import { readHotStateAuthority } from "@/lib/state/hotStateAuthority";
+import { readHotStateAuthority, withHotStateAuthorityAttempt } from "@/lib/state/hotStateAuthority";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { rememberHandoffChild, persistHandoffLineage } from "@/lib/handoffLineage";
@@ -1486,7 +1487,14 @@ export async function settleStaleSpawnMarkers(
           if (group === "M3" && (!closedMarkerPipelines(file, current) || markerTranscriptStamp(pathname) !== stamp)) return "staged-evidence-changed";
           return null;
         };
-        const apply = () => registry.settleStaleSpawnMarker(key, launchId, proof, outcome, write);
+        const apply = () => {
+          try {
+            return withHotStateAuthorityAttempt(directory, () => registry.settleStaleSpawnMarker(key, launchId, proof, outcome, write));
+          } catch (error) {
+            if (error instanceof FileTransactionAdmissionError) return "release-fence-busy";
+            throw error;
+          }
+        };
         if (pipes) return withPipelineStartupAdmission(async available => {
           if (!available) return "pipeline-unavailable";
           const admitted = registry.deliveryWriteNow({ label: "spawn.marker-settlement", operationId: launchId }, apply);

@@ -1294,6 +1294,7 @@ export interface RuntimeSessionRead {
 
 export const STARTUP_SESSION_VERSION_BATCH = 128;
 export type StartupRuntimeSession = Pick<RuntimeSession, "conversationId" | "host" | "turn" | "recentReceipts">;
+export type RuntimeStartupOperationCursor = { eventSeq: number; rowId: number };
 export interface RuntimeStartupSessionEvidence {
   generation: string;
   version: string;
@@ -1301,4 +1302,5 @@ export interface RuntimeStartupSessionEvidence {
   sessions: (number | null)[];
   evidence?: StartupRuntimeSession | null;
   pendingOperations?: RuntimeOperationReceipt[];
+  pendingOperationsNext?: RuntimeStartupOperationCursor;
 }

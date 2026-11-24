@@ -2327,14 +2327,16 @@ export async function structuredStartupSignals(
     const effects = await readStartupRuntimeEffects(client, witness, checkpoint);
     const pendingOperations: StartupRuntimeRead["recentOperations"] = [];
     if (client.startupSessionEvidence && witness?.generation) {
-      let after = "";
+      let after = { eventSeq: 0, rowId: 0 };
       for (;;) {
         const page = await client.startupSessionEvidence([], { ...startupRuntimeReadOptions(), pendingOperationsAfter: after });
         if (!page?.pendingOperations) break; // Predecessor protocol.
         pendingOperations.push(...page.pendingOperations);
-        if (page.pendingOperations.length < RUNTIME_EFFECT_PAGE_SIZE) break;
-        const next = page.pendingOperations.at(-1)!.operationId;
-        if (next <= after) throw new Error("structured startup operation cursor did not advance");
+        const next = page.pendingOperationsNext;
+        if (!next) break;
+        if (next.eventSeq < after.eventSeq || next.eventSeq === after.eventSeq && next.rowId <= after.rowId) {
+          throw new Error("structured startup operation cursor did not advance");
+        }
         after = next;
         assertStartupReadActive();
       }

@@ -2,7 +2,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { runtimeDataCorruptionCode } from "@/lib/runtime/dataCorruption";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
-import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, STARTUP_SESSION_VERSION_BATCH, RuntimeIdempotencyConflictError, DeploymentAdmissionClosedError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
+import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, STARTUP_SESSION_VERSION_BATCH, RuntimeIdempotencyConflictError, DeploymentAdmissionClosedError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeStartupOperationCursor, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { consumeRuntimeEvent, RuntimeConsumerDeferredError, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
@@ -168,8 +168,9 @@ export class RuntimeHost {
         if (includeEvidence !== undefined && (typeof includeEvidence !== "boolean" || (includeEvidence && ids.length !== 1))) {
           throw new Error("runtime startup session evidence requires one identity");
         }
-        const after = request.params?.pendingOperationsAfter;
-        if (after !== undefined && (typeof after !== "string" || after.length > 512 || ids.length !== 0)) {
+        const after = request.params?.pendingOperationsAfter as RuntimeStartupOperationCursor | undefined;
+        if (after !== undefined && (!after || ids.length !== 0 || !Number.isSafeInteger(after.eventSeq)
+          || after.eventSeq < 0 || !Number.isSafeInteger(after.rowId) || after.rowId < 0)) {
           throw new Error("runtime startup operation cursor is invalid");
         }
         result = this.journal.startupSessionEvidence(ids, includeEvidence === true, after);

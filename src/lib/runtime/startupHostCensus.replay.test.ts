@@ -100,7 +100,7 @@ test("replay a retained structured-host registry", async () => {
     startupGeneration: async () => "synthetic-runtime",
     startupSessionEvidence: (conversationIds, options) => rpc("startup-session-evidence", {
       conversationIds, includeEvidence: options?.includeEvidence,
-      pendingOperationsAfter: (options as { pendingOperationsAfter?: string } | undefined)?.pendingOperationsAfter,
+      pendingOperationsAfter: options?.pendingOperationsAfter,
     }),
     snapshot: async () => journal.snapshot(),
     readSession: identity => rpc("session-read", { ...identity }),
