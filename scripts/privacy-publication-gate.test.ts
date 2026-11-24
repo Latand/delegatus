@@ -5140,6 +5140,66 @@ describe("mergeBoundaryReview", () => {
     expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
   });
 
+  const squashAuthor = { name: "Fixture Contributor", email: ["77+fixture-contributor", forgeAccountDomain].join("@") };
+  const otherMailbox = [squashAuthor.email.split("@")[0], "fixture-publication.dev"].join("@");
+  const squashTrailer = `Co-authored-by: ${squashAuthor.name} <${squashAuthor.email}>`;
+  const squashMessage = `Squash subject\n\n* Original subject\n\n---\n\n${squashTrailer}`;
+
+  test("landed squash evidence exempts only the exact tip's recorded co-author", async () => {
+    const repo = await gitRepo();
+    await commit(repo, squashMessage, canonicalIdentity);
+    const evidence = { tip: await head(repo), authors: [squashAuthor] };
+    expect(commitMessageFindings(repo, "main", [], evidence)).toEqual(new Map());
+    expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
+    expect(commitMessageFindings(repo, "main", [], { ...evidence, tip: "1".repeat(40) }).get("email_address")).toBe(1);
+
+    writeFileSync(join(repo, "published.txt"), squashAuthor.email + "\n");
+    await commit(repo, squashMessage, canonicalIdentity);
+    const nextTip = { ...evidence, tip: await head(repo) };
+    expect(commitMessageFindings(repo, "main", [], nextTip).get("email_address")).toBe(1);
+    const ordinary = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(ordinary.exitCode).toBe(1);
+    expect(ordinary.stdout.toString()).toContain("email_address: 3");
+
+    const landed = await runPrivacyTestProcess({
+      cmd: [process.execPath, "-e", `
+        import { runPublicationGate } from "./scripts/privacy-publication-gate";
+        const [repository, evidence] = process.argv.slice(1);
+        runPublicationGate(["--repository", repository, "--base", "main", "--check-commits"], JSON.parse(evidence));
+      `, repo, JSON.stringify(nextTip)],
+      cwd: join(import.meta.dir, ".."), env: process.env, stderr: "pipe", stdout: "pipe",
+    });
+    expect(landed.exitCode).toBe(1);
+    expect(landed.stdout.toString()).toContain("email_address: 2");
+    expect(landed.stdout.toString()).toContain(`commit_message: ${evidence.tip.slice(0, 12)} message email_address`);
+    expect(landed.stdout.toString()).not.toContain(nextTip.tip.slice(0, 12));
+    expect(landed.stdout.toString()).not.toContain(squashAuthor.email);
+  });
+
+  test.each([
+    ["a handwritten lookalike with another mailbox", squashMessage.replace(squashAuthor.email, squashAuthor.email.replace("77", "78"))],
+    ["a handwritten lookalike with another name", squashMessage.replace(squashAuthor.name, "Another Contributor")],
+    ["the same mailbox in the body", `Squash subject\n\nMailbox: ${squashAuthor.email}\n\n${squashTrailer}`],
+    ["a matching embedded trailer", `Squash subject\n\n* Original subject\n\n${squashTrailer}\n\n---\n\nFinal prose`],
+    ["a different trailer token", squashMessage.replace("Co-authored-by", "Signed-off-by")],
+    ["an encoded separator", squashMessage.replace("@", "%40")],
+    ["a duplicate matching trailer", `${squashMessage}\n${squashTrailer}`],
+    ["a recorded author's private mailbox", `${squashMessage}\nCo-authored-by: ${squashAuthor.name} <${otherMailbox}>`],
+  ])("landed squash evidence leaves %s attributable", async (_case, message) => {
+    const repo = await gitRepo();
+    await commit(repo, message, canonicalIdentity);
+    const evidence = { tip: await head(repo), authors: [squashAuthor, { ...squashAuthor, email: otherMailbox }] };
+    const notices: string[] = [];
+    expect(commitMessageFindings(repo, "main", notices, evidence)).toEqual(new Map([["email_address", 1]]));
+    expect(notices).toEqual([`commit_message: ${evidence.tip.slice(0, 12)} message email_address`]);
+  });
+
+  test("a role-shaped local part on the forge account host still needs squash evidence", () => {
+    const email = ["noreply", forgeAccountDomain].join("@");
+    const message = `Squash subject\n\nCo-authored-by: Fixture Contributor <${email}>`;
+    expect(commitMessageAddressReview(message)).toEqual({ attributable: [email], exempt: [] });
+  });
+
   test("a vendor no-reply identity stays machine attribution", async () => {
     const repo = await gitRepo();
     const vendor = ["noreply", "vendor.example.com"].join("@");

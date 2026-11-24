@@ -2594,6 +2594,7 @@ function isMachineAttributionAddress(occurrence: EmailOccurrence): boolean {
      mailbox as the plain form would mean unquoting RFC 5322 inside a gate that
      has to fail closed, so a quoted role name stays attributable. */
   if (occurrence.localPart.startsWith('"')) return false;
+  if (isForgeAccountAddress(occurrence.address)) return false;
   const localPart = occurrence.localPart.toLowerCase();
   if (localPart === "noreply" || localPart === "no-reply") return true;
   return localPart === FORGE_ROLE_LOCAL_PART && occurrence.domain.toLowerCase() === FORGE_DOMAIN;
@@ -2692,18 +2693,47 @@ function* addressLines(
 }
 
 export type CommitAddressReview = { attributable: string[]; exempt: string[] };
+export type ForgeCommitAuthor = { name: string; email: string };
+export type LandedPushEvidence = { tip: string; authors?: readonly ForgeCommitAuthor[] };
+
+/** Record the raw location of each verified mailbox in the final paragraph.
+ * A projection can expose more addresses, but it cannot create a trailer. */
+function squashTrailerOffsets(message: string, authors: readonly ForgeCommitAuthor[]): Map<string, number> {
+  const offsets = new Map<string, number>();
+  const lines = message.split("\n");
+  const paragraphs = messageParagraphs(lines);
+  const last = paragraphs.at(-1);
+  if (!last || paragraphs.length < 2 || !lines.slice(last.start, last.end).every(isTrailerLine)) return offsets;
+
+  const trailers = new Set(authors.filter(({ email }) => isForgeAccountAddress(email))
+    .map(({ name, email }) => `${COMPOSED_ATTRIBUTION_TRAILER}: ${name} <${email}>`));
+  let offset = 0;
+  for (let line = 0; line < last.end; line += 1) {
+    const text = lines[line];
+    if (line >= last.start && trailers.has(text)) {
+      const email = /^Co-authored-by: [^<>\r]+ <([^<>\s]+)>$/.exec(text)?.[1];
+      if (email) {
+        // Repeated mailboxes are ambiguous, even with a recorded author.
+        offsets.set(email, offsets.has(email) ? -1 : offset + text.length - email.length - 1);
+      }
+    }
+    offset += text.length + 1;
+  }
+  return offsets;
+}
 
 /**
- * Every address detected in a commit message, split by the one exemption.
+ * Every address detected in a commit message, split by exemption.
  *
  * Detection reads the whole message, in the same views of it the gate reads
  * for any other publication surface, and the split happens afterwards on what
  * detection reported. An address the exemption does not name stays
  * attributable wherever it sits, including on the same line as an exempt one.
  */
-export function commitMessageAddressReview(message: string): CommitAddressReview {
+export function commitMessageAddressReview(message: string, squashAuthors?: readonly ForgeCommitAuthor[]): CommitAddressReview {
   const attributable = new Set<string>();
   const exempt = new Set<string>();
+  const squashOffsets = squashAuthors && squashTrailerOffsets(message, squashAuthors);
   for (const { text: view, source } of emailTextViews(message)) {
     const lines = view.split("\n");
     const block = trailerBlockLines(lines);
@@ -2711,7 +2741,10 @@ export function commitMessageAddressReview(message: string): CommitAddressReview
       const attributed = !block.has(line)
         || !MACHINE_ATTRIBUTION_TRAILER.test(lines[line])
         || !isMachineAttributionAddress(occurrence);
-      (attributed ? attributable : exempt).add(occurrence.address);
+      const rawOffset = source ? source.raw.offsets[occurrence.index] : occurrence.index;
+      const squashOffset = squashOffsets?.get(occurrence.address);
+      const verifiedSquashTrailer = squashOffset !== undefined && squashOffset === rawOffset;
+      (attributed && !verifiedSquashTrailer ? attributable : exempt).add(occurrence.address);
     }
   }
   return { attributable: [...attributable], exempt: [...exempt] };
@@ -2740,7 +2773,7 @@ function branchCommitHashes(repository: string, base: string): string[] | undefi
 function branchCommitMessages(repository: string, commits: string[]): Map<string, string> | undefined {
   if (commits.length === 0) return new Map();
   const result = Bun.spawnSync({
-    cmd: ["git", "-C", repository, "cat-file", "--batch"],
+    cmd: ["git", "--no-replace-objects", "-C", repository, "cat-file", "--batch"],
     stdin: Buffer.from(commits.join("\n") + "\n"),
     env: withoutUnsupportedApiCredentials(process.env), stderr: "pipe", stdout: "pipe",
   });
@@ -2796,6 +2829,7 @@ export function commitMessageFindings(
   repository: string,
   base: string,
   notices?: string[],
+  landed?: LandedPushEvidence,
 ): Map<FindingClass, number> {
   const findings = new Map<FindingClass, number>();
   const commits = branchCommitHashes(repository, base);
@@ -2814,7 +2848,7 @@ export function commitMessageFindings(
     const message = messages.get(commit)!;
     const messageFindings = sensitiveClasses(message);
     if (messageFindings.has("email_address")) {
-      const { attributable, exempt } = commitMessageAddressReview(message);
+      const { attributable, exempt } = commitMessageAddressReview(message, landed?.tip === commit ? landed.authors : undefined);
       if (exempt.length > 0 && attributable.length === 0) messageFindings.delete("email_address");
     }
     const reported: FindingClass[] = [];
@@ -3007,7 +3041,7 @@ export function reportPrivacyFindings(findings: Map<FindingClass, number>, notic
   process.exitCode = 1;
 }
 
-export function runPublicationGate(arguments_: string[], signedLandedTip?: string): void {
+export function runPublicationGate(arguments_: string[], landed?: LandedPushEvidence): void {
   if (arguments_.includes("--require-known-values") && knownValues.fingerprints.length === 0
     && (!knownValues.error || process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE === undefined)) {
     console.error("Known-value catalog unavailable. Set LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE to the committed scripts/privacy-known-value-fingerprints.json, or pass LLV_PRIVACY_KNOWN_VALUES_FILE or LLV_PRIVACY_KNOWN_VALUES.");
@@ -3044,13 +3078,13 @@ export function runPublicationGate(arguments_: string[], signedLandedTip?: strin
     pathFindings.set("inspection_error", (pathFindings.get("inspection_error") ?? 0) + 1);
   }
   if (arguments_.includes("--check-commits")) {
-    for (const [finding, count] of commitMessageFindings(inspectionRoot, trustedBase, notices)) {
+    for (const [finding, count] of commitMessageFindings(inspectionRoot, trustedBase, notices, landed)) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);
     }
     /* The branch commits publish their messages when they are pushed; the merge
        publishes a commit composed from their identities. Both are the commit
        surface, so one flag reads both. */
-    const boundary = mergeBoundaryReview(inspectionRoot, trustedBase, signedLandedTip);
+    const boundary = mergeBoundaryReview(inspectionRoot, trustedBase, landed?.tip);
     for (const [finding, count] of boundary.findings) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);
     }
