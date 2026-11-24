@@ -904,6 +904,116 @@ test.skipIf(process.platform !== "linux")("consume refuses a possible legacy wri
     }
   }), 24_000);
 
+test.skipIf(process.platform !== "linux")("a successor does not renew a live foreign claim after a wall-clock step", () =>
+  withControllerAuditState(async () => {
+    const { h, repo, root } = await realWorktreeLane("foreign-provisioning-clock", BUILD_ONLY as never);
+    const { captureProcessIdentity } = await import("@/lib/processIdentity");
+    const { settleProvisioningJobsForTests } = await import("./provisioningJob");
+    const owner = Bun.spawn([process.execPath, "--no-env-file", "-e", "await Bun.sleep(30_000)"], {
+      stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 30_000,
+    });
+    let now = Date.parse("2026-11-24T10:00:00Z"), monotonic = 0;
+    const timers = new Set<{ at: number; run: () => void }>();
+    const advance = (target: number) => {
+      monotonic = target;
+      for (const timer of [...timers]) if (timer.at <= monotonic) {
+        timers.delete(timer);
+        timer.run();
+      }
+    };
+    try {
+      delete h.ports.provisionExec;
+      h.ports.now = () => new Date(now).toISOString();
+      h.ports.provisionClock = {
+        wallMs: () => now, monotonicMs: () => monotonic,
+        arm(delay, run) {
+          const timer = { at: monotonic + delay, run };
+          timers.add(timer);
+          return () => { timers.delete(timer); };
+        },
+      };
+      const lane = (await createPipelineFromRequest({ task: "Recover a foreign claim with a stepped clock",
+        repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      const originalStart = now + 60_000, originalDeadline = originalStart + 10_000;
+      const token = "foreign-clock-fixture";
+      const identity = captureProcessIdentity(owner.pid);
+      expect(identity.startIdentity).toBeTruthy();
+      expect(identity.bootEpoch).toBeTruthy();
+      await withPipelineMutation(async (rows, persist) => {
+        const current = rows.find(row => row.id === lane.id)!;
+        current.provisioningJob = {
+          version: 1, kind: "provision", subject: "a".repeat(64), planSubject: "b".repeat(64),
+          generation: 1, token, owner: { ...identity, instance: "earlier-controller", release: "unversioned" },
+          since: originalStart, deadlineAt: originalDeadline, executionDeadlineAt: originalStart + 360_000,
+          status: "running", step: "checkingDependencies",
+        };
+        await persist([current]);
+      });
+      await driveProvisioning(h.ports, async () => [...timers].some(timer => timer.at === 10_000));
+      now -= 120_000;
+      advance(9_999);
+      await tickPipelinesController([], h.ports);
+      expect((await findControllerPipeline(lane.id))?.provisioningJob?.token).toBe(token);
+      expect(owner.exitCode).toBeNull();
+      advance(10_000);
+      await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.runs[0]?.attempts[0]?.state === "running");
+      const recovered = (await findControllerPipeline(lane.id))!;
+      expect(recovered.lastProvisioningInterruption).toMatchObject({
+        step: "checkingDependencies", since: originalStart, deadlineAt: originalDeadline, reason: "provision-step-timeout",
+      });
+      expect(recovered.runs[0]?.attempts).toHaveLength(1);
+      expect(owner.exitCode).toBeNull();
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null) owner.kill();
+      await owner.exited;
+      await settleProvisioningJobsForTests();
+      await settlePipelineControllerJobs();
+      await settlePipelineStopReadLanes();
+      await removeProvisioningFixture(root);
+    }
+  }), 24_000);
+
+test.skipIf(process.platform !== "linux").each(["missing guardian", "early EOF"] as const)(
+  "the source supervisor recovers from %s before the toolchain ready frame",
+  fault => withControllerAuditState(async () => {
+    const { h, repo, root } = await realWorktreeLane("toolchain-start-fault", BUILD_ONLY as never);
+    const { settleProvisioningJobsForTests } = await import("./provisioningJob");
+    const previousGuardian = process.env.LLV_HELPER_LEASE_ENTRY;
+    const guardian = path.join(root, "fixture-guardian.mjs");
+    let wall = Date.now();
+    let attempts = 0;
+    try {
+      // The configuration is private to this fixture. The real supervisor
+      // resolves and starts the configured guardian through its normal path.
+      if (fault === "early EOF") fs.writeFileSync(guardian, "process.exit(0);\n");
+      process.env.LLV_HELPER_LEASE_ENTRY = guardian;
+      delete h.ports.provisionExec;
+      h.ports.now = () => new Date(wall).toISOString();
+      h.ports.provisionToolchainReply = async (_id, type) => { if (type === "dispatch") attempts++; };
+      const lane = (await createPipelineFromRequest({ task: "Retry the source toolchain after a launch fault",
+        repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.provisioningJob?.status === "waiting");
+      const waiting = (await findControllerPipeline(lane.id))!;
+      expect(waiting.provisioningJob?.interruption).toMatchObject({ step: "startingToolchain", reason: "toolchain-start-failed" });
+      expect(waiting.runs[0]?.attempts).toHaveLength(0);
+      expect(attempts).toBe(0);
+      const inode = fs.statSync(lane.worktreeDir, { bigint: true }).ino;
+      if (previousGuardian === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+      else process.env.LLV_HELPER_LEASE_ENTRY = previousGuardian;
+      wall = waiting.provisioningJob!.retryAt!;
+      await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.runs[0]?.attempts[0]?.state === "running");
+      expect((await findControllerPipeline(lane.id))?.runs[0]?.attempts).toHaveLength(1);
+      expect(fs.statSync(lane.worktreeDir, { bigint: true }).ino).toBe(inode);
+    } finally {
+      if (previousGuardian === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+      else process.env.LLV_HELPER_LEASE_ENTRY = previousGuardian;
+      await settleProvisioningJobsForTests();
+      await settlePipelineControllerJobs();
+      await settlePipelineStopReadLanes();
+      await removeProvisioningFixture(root);
+    }
+  }), 20_000);
+
 test.skipIf(process.platform !== "linux").each(["step permit", "committed go"] as const)(
   "cross-process close orders against a withheld %s",
   heldFrame => withControllerAuditState(async () => {
@@ -918,6 +1028,7 @@ test.skipIf(process.platform !== "linux").each(["step permit", "committed go"] a
     let supplier: (() => Promise<void>) | undefined;
     let control: ReturnType<typeof Bun.spawn<"ignore", "pipe", "pipe">> | undefined;
     const admitted: string[] = [];
+    const refused: string[] = [];
     try {
       supplier = await seedProvisioningPackage(repo, root, process.env, process.execPath);
       await git(repo, "add", ".");
@@ -931,6 +1042,7 @@ test.skipIf(process.platform !== "linux").each(["step permit", "committed go"] a
       h.ports.provisionToolchainReply = async (id, type, detail) => {
         if (id !== lane.id) return;
         if (type === "dispatch" && detail) admitted.push(detail);
+        if (type === "stop" && detail) refused.push(detail);
         const barrier = heldFrame === "step permit" ? type === "step" && detail === "checkingDependencies"
           : type === "dispatch" && detail === "open-cache";
         if (barrier) { waiting = true; held.resolve(); await release.promise; }
@@ -960,6 +1072,7 @@ test.skipIf(process.platform !== "linux").each(["step permit", "committed go"] a
         await Bun.sleep(15);
       }
       expect(admitted).toEqual(heldFrame === "committed go" ? ["open-cache"] : []);
+      expect(refused).toEqual(heldFrame === "step permit" ? ["open-cache"] : []);
       expect(fs.existsSync(cache)).toBe(heldFrame === "committed go");
       expect(fs.existsSync(path.join(lane.worktreeDir, "node_modules"))).toBe(false);
       await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.provisioningJob === undefined);

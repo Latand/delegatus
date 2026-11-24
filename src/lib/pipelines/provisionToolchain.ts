@@ -95,7 +95,16 @@ export async function runProvisionToolchain(request: ToolchainRequest): Promise<
       if (frame.type === "step" && steps.has(frame.step)) {
         await parent(() => request.step(frame.step as ToolchainStep));
       } else if (frame.type === "dispatch" && effects.has(frame.effect)) {
-        await parent(() => request.dispatch(frame.effect as ToolchainEffect, sequence));
+        const effect = frame.effect as ToolchainEffect;
+        try { await parent(() => request.dispatch(effect, sequence)); }
+        catch (error) {
+          // Refuse this exact request while its pipe is still open. The
+          // guardian also closes the lease if the requester has already left.
+          if (await send({ type: "stop", token, seq: sequence }).then(() => true, () => false)) {
+            await request.observeReply?.("stop", effect);
+          }
+          throw error;
+        }
       } else if (frame.type === "cacheBusy" && validCacheIdentity(frame.identity)) {
         const identity = frame.identity;
         await parent(() => request.cacheBusy(identity));

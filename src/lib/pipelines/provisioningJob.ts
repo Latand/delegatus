@@ -55,7 +55,15 @@ type ProvisionPorts = {
 };
 
 type Handle = { finished: Promise<boolean>; abort: AbortController; subject: string; token?: string; revision?: string; child?: ChildProcess; writing?: boolean };
-type Pool = { handles: Map<string, Handle>; cancelWake?: () => void; due?: number; wake?: symbol; poll?: ReturnType<typeof setInterval> };
+type ForeignClaim = { token: string; step: ProvisionStep; since: number; deadlineAt: number; stopAt: number };
+type Pool = {
+  handles: Map<string, Handle>;
+  foreign: Map<string, ForeignClaim>;
+  cancelWake?: () => void;
+  due?: number;
+  wake?: symbol;
+  poll?: ReturnType<typeof setInterval>;
+};
 const pools = new Map<string, Pool>();
 
 export function stopProvisioningJobsForDemotion(): void {
@@ -73,6 +81,7 @@ export async function settleProvisioningJobsForTests(): Promise<void> {
   pool.cancelWake?.();
   delete pool.wake;
   delete pool.due;
+  pool.foreign.clear();
   const handles = [...pool.handles.values()];
   const closing = handles.map(handle => {
     const child = handle.child;
@@ -81,6 +90,7 @@ export async function settleProvisioningJobsForTests(): Promise<void> {
   });
   for (const handle of handles) handle.abort.abort(new JobRevoked());
   await Promise.all([...handles.map(handle => handle.finished), ...closing]);
+  if (!pool.handles.size) pools.delete(stateDir());
 }
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -142,6 +152,35 @@ function schedule(pool: Pool, at: number, clock: ProvisionClock, ports: Provisio
     ports.scheduleTick?.(0);
     requestPipelineTick();
   });
+}
+
+function observeForeignClaim(pool: Pool, id: string, slot: ProvisioningRecord, clock: ProvisionClock): number {
+  const observed = pool.foreign.get(id);
+  if (observed?.token === slot.token && observed.step === slot.step && observed.since === slot.since
+    && observed.deadlineAt === slot.deadlineAt) return observed.stopAt;
+  const { token, step, since, deadlineAt } = slot;
+  const stopAt = clock.monotonicMs() + Math.min(PROVISION_STEPS[step], Math.max(0, deadlineAt - clock.wallMs()));
+  // A release owns at most four executing claims. Keep a bounded observation
+  // set even if a restored store contains unverified owners from many releases.
+  if (!observed && pool.foreign.size >= MAX_EXECUTORS * 16) {
+    const oldest = pool.foreign.keys().next().value;
+    if (oldest !== undefined) pool.foreign.delete(oldest);
+  }
+  pool.foreign.set(id, { token, step, since, deadlineAt, stopAt });
+  return stopAt;
+}
+
+async function provisioningOwnerExited(owner: ProvisioningRecord["owner"]): Promise<boolean> {
+  const boot = systemBootEpoch();
+  if (!boot || owner.bootEpoch !== boot) return false;
+  if (process.platform !== "linux") return processIdentityStatus(owner) === "dead";
+  try {
+    const stat = await fs.promises.readFile(`/proc/${owner.pid}/stat`, { encoding: "utf8", signal: AbortSignal.timeout(500) });
+    const start = stat.slice(stat.lastIndexOf(")") + 2).trim().split(" ")[19];
+    return Boolean(start && owner.startIdentity && owner.startIdentity !== `${owner.pid}:${start}`);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
 }
 
 export function bindProvisioningGit(ports: Pick<ProvisionPorts, "exec" | "provisionExec">): { native: boolean; exec: ProvisionExecPort } {
@@ -223,7 +262,7 @@ export function advanceProvisioningJob(row: Pipeline, ports: ProvisionPorts, hoo
   if (!eligible(row) && !cleanup) return;
   const root = stateDir();
   let pool = pools.get(root);
-  if (!pool) pools.set(root, pool = { handles: new Map() });
+  if (!pool) pools.set(root, pool = { handles: new Map(), foreign: new Map() });
   const prior = pool.handles.get(row.id);
   if (prior) {
     if (cleanup) prior.abort.abort(new JobRevoked());
@@ -242,7 +281,10 @@ export function advanceProvisioningJob(row: Pipeline, ports: ProvisionPorts, hoo
   const git = bindProvisioningGit(ports);
   handle.finished = withoutOperationLease(async () => {
     await hooks.phaseDone;
-    if (cleanup) return retireProvisioningJob(row, root, git.native);
+    if (cleanup) {
+      ownedPool.foreign.delete(row.id);
+      return retireProvisioningJob(row, root, git.native);
+    }
     return runProvisioningJob(row.id, root, ports, hooks, git, clock, ownedPool, handle);
   }).catch(error => {
     if (!(error instanceof JobRevoked)) schedule(ownedPool, clock.wallMs() + 1_000, clock, ports);
@@ -253,7 +295,7 @@ export function advanceProvisioningJob(row: Pipeline, ports: ProvisionPorts, hoo
       if (!ownedPool.handles.size) {
         clearInterval(ownedPool.poll);
         delete ownedPool.poll;
-        if (ownedPool.due === undefined) pools.delete(root);
+        if (ownedPool.due === undefined && !ownedPool.foreign.size) pools.delete(root);
       }
       requestPipelineTick();
     };
@@ -288,7 +330,10 @@ export function advanceProvisioningJob(row: Pipeline, ports: ProvisionPorts, hoo
 async function runProvisioningJob(id: string, root: string, ports: ProvisionPorts, hooks: JobHooks,
   git: ReturnType<typeof bindProvisioningGit>, clock: ProvisionClock, pool: Pool, handle: Handle): Promise<boolean> {
   let row = await findControllerPipeline(id);
-  if (!row || !eligible(row) || subject(row) !== handle.subject) return false;
+  if (!row || !eligible(row) || subject(row) !== handle.subject) {
+    pool.foreign.delete(id);
+    return false;
+  }
   const previous = row.provisioningJob;
   if (previous !== undefined && !validProvisioningRecord(previous)) {
     await withProvisioningCheckpoint(tx => {
@@ -304,12 +349,15 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
   const release = hotStateWriterRevision(root) ?? "unversioned";
   const authority = readHotStateAuthority(root);
   const claimed = previous?.status === "running" || previous?.status === "awaitingApply";
-  if (claimed && previous.owner.instance !== instance && previous.deadlineAt > wall
+  let expired = claimed && previous.deadlineAt <= wall;
+  if (claimed && previous.owner.instance !== instance
     && !(authority?.mode === "sqlite" && hotStateSqliteWriterReady(root) && authority.releaseRevision !== previous.owner.release)) {
-    const boot = systemBootEpoch();
-    const sameDomain = boot && previous.owner.bootEpoch === boot;
-    if (!sameDomain || processIdentityStatus(previous.owner) !== "dead") {
-      schedule(pool, Math.min(previous.deadlineAt, wall + PROVISION_STEPS[previous.step]), clock, ports);
+    const stopAt = observeForeignClaim(pool, id, previous, clock);
+    const exited = clock.monotonicMs() < stopAt && await provisioningOwnerExited(previous.owner);
+    const remaining = stopAt - clock.monotonicMs();
+    expired = remaining <= 0;
+    if (!expired && !exited) {
+      schedule(pool, clock.wallMs() + remaining, clock, ports);
       return false;
     }
   }
@@ -321,7 +369,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     executionDeadlineAt: wall + EXECUTION_MS, retryAt: undefined,
     cacheOwner: undefined,
   };
-  if (claimed && previous.deadlineAt <= wall && !slot.interruption) {
+  if (claimed && expired && !slot.interruption) {
     slot.interruption = { step: previous.step, since: previous.since, deadlineAt: previous.deadlineAt, observedAt: wall, reason: "provision-step-timeout" };
   }
   const stale = previous?.planSubject !== undefined && previous.planSubject !== slot.planSubject;
@@ -516,6 +564,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
   };
   try {
     await write(() => {}, slot, true);
+    pool.foreign.delete(id);
     const execute = async () => {
       if (slot.worker) {
         if (!workerExited(slot.worker)) {
@@ -706,8 +755,11 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       return true;
     }
     const now = clock.wallMs();
-    const reason = timeout ? (clock.monotonicMs() >= executionStop ? "provision-execution-budget-exhausted" : "provision-step-timeout")
-      : workerFailure ? error.reason : describeTransientGitFailure(gitReason!, message).cause;
+    let reason: string;
+    if (timeout) {
+      if (clock.monotonicMs() >= executionStop) reason = "provision-execution-budget-exhausted";
+      else reason = slot.step === "startingToolchain" && !slot.worker ? "toolchain-start-failed" : "provision-step-timeout";
+    } else reason = workerFailure ? error.reason : describeTransientGitFailure(gitReason!, message).cause;
     const earlier = slot.admittedAdd ? slot.admittedAdd.previousWait : row!.provisioningWait;
     const budget = earlier?.budgetMs ?? RETRY_MS;
     const remaining = budget - Math.max(0, now - due(earlier?.startedAt ?? asDate(now)));
