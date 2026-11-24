@@ -1,4 +1,5 @@
 import { recordNativeTiming } from "./attemptTiming";
+import { createHash } from "node:crypto";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import fs from "node:fs";
@@ -650,6 +651,165 @@ function parseLedgerEvent(line: string, partial: boolean, previous?: number): Ru
     throw new Error(`runtime event ledger sequence gap after ${previous}`);
   }
   return parsed;
+}
+
+export interface RuntimeEventPosition {
+  source: string;
+  offset: number;
+  edge: string;
+  seq?: number;
+  /** Bounded bytes from a small record whose line has not ended. */
+  pending?: string;
+  /** Bytes already skipped from an oversized record, with offset at its line start. */
+  skip?: number;
+}
+
+export function normalizeRuntimeEventPosition(value: unknown): RuntimeEventPosition | undefined {
+  const position = value as RuntimeEventPosition | null;
+  if (!position || typeof position.source !== "string" || !/^\d+:\d+:\d+$/.test(position.source)
+    || !Number.isSafeInteger(position.offset) || position.offset < 0
+    || typeof position.edge !== "string" || !/^[a-f0-9]{64}$/.test(position.edge)
+    || (position.seq !== undefined && (!Number.isSafeInteger(position.seq) || position.seq < 1))
+    || (position.pending !== undefined && (typeof position.pending !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(position.pending)))
+    || (position.skip !== undefined && (!Number.isSafeInteger(position.skip) || position.skip < 1))
+    || position.skip !== undefined && position.pending !== undefined) return;
+  // Older cursors retained every byte of a long partial record. Convert them
+  // to a count so restored rows stop carrying that payload on their next tick.
+  const legacyPending = position.pending ? Math.floor(position.pending.length * 3 / 4) - (position.pending.endsWith("==") ? 2 : position.pending.endsWith("=") ? 1 : 0) : 0;
+  return { source: position.source, offset: position.offset, edge: position.edge,
+    ...(position.seq === undefined ? {} : { seq: position.seq }),
+    ...(position.skip !== undefined ? { skip: position.skip } : legacyPending > 0 ? { skip: legacyPending } : {}) };
+}
+
+const EVENT_PAGE_BYTES = 4 * 1024 * 1024;
+// Keep writer-valid medium records inside the bounded page parse budget.
+const EVENT_RECORD_BYTES = 512 * 1024;
+const eventPageSource = (stats: fs.Stats) => `${stats.dev}:${stats.ino}:${Math.trunc(stats.birthtimeMs)}`;
+
+async function readEventBytes(handle: Awaited<ReturnType<typeof open>>, start: number, length: number): Promise<Buffer> {
+  const bytes = Buffer.allocUnsafe(length);
+  let filled = 0;
+  while (filled < length) {
+    const { bytesRead } = await handle.read(bytes, filled, length - filled, start + filled);
+    if (bytesRead === 0) throw new Error("runtime event ledger shrank during page read");
+    filled += bytesRead;
+  }
+  return bytes;
+}
+
+async function eventPositionEdge(handle: Awaited<ReturnType<typeof open>>, offset: number, allowStableEof = false): Promise<string | undefined> {
+  const start = Math.max(0, offset - 256);
+  const bytes = await readEventBytes(handle, start, offset - start);
+  if (bytes.length === 0 || bytes.at(-1) === 10 || allowStableEof && offset === (await handle.stat()).size)
+    return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function verifyEventPageSource(handle: Awaited<ReturnType<typeof open>>, filename: string, before: fs.Stats): Promise<number> {
+  const after = await handle.stat();
+  const onPath = await stat(filename);
+  const identity = ledgerIdentity(before);
+  if (eventPageSource(onPath) !== eventPageSource(before) || after.size < before.size || onPath.size < before.size
+    || (after.size === before.size && !sameLedgerIdentity(identity, ledgerIdentity(after)))
+    || (onPath.size === before.size && !sameLedgerIdentity(identity, ledgerIdentity(onPath)))) {
+    throw new Error("runtime event ledger changed during page read");
+  }
+  return onPath.size;
+}
+
+/** Capture a complete prefix before an input is admitted. Its response cannot
+ * precede the boundary. A missing or torn ledger leaves the caller a cold scan. */
+export async function captureRuntimeEventPosition(threadId: string, directory = statePath("structured-host-events")): Promise<RuntimeEventPosition | undefined> {
+  const filename = hostLedgerFilename(threadId, directory);
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    const before = await handle.stat();
+    if (!before.isFile() || !Number.isSafeInteger(before.size)) return;
+    const edge = await eventPositionEdge(handle, before.size);
+    if (!edge) return;
+    await verifyEventPageSource(handle, filename, before);
+    return { source: eventPageSource(before), offset: before.size, edge };
+  } catch { return undefined; }
+  finally { await handle?.close(); }
+}
+
+/** Read one bounded page from the append-only host ledger. Records larger
+ * than the parse budget are skipped using a byte count across pages, so a
+ * large delta never becomes a persisted cursor payload. */
+export async function readRuntimeEventPage(threadId: string, position: RuntimeEventPosition | undefined,
+  visit: (event: RuntimeEvent) => boolean | void, signal?: AbortSignal, directory = statePath("structured-host-events"),
+): Promise<{ position: RuntimeEventPosition; state: "current" | "more" | "incomplete" } | null> {
+  const filename = hostLedgerFilename(threadId, directory);
+  const handle = await open(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || !Number.isSafeInteger(before.size)) throw new Error("invalid runtime event ledger");
+    const source = eventPageSource(before);
+    const start = position?.offset ?? 0;
+    const pending = position?.pending ? Buffer.from(position.pending, "base64") : Buffer.alloc(0);
+    let skip = position?.skip ?? 0;
+    if (position && (position.source !== source || start > before.size || start + skip + pending.length > before.size
+      || (await eventPositionEdge(handle, start, start === before.size)) !== position.edge)) return null;
+    signal?.throwIfAborted();
+    const readStart = start + skip + pending.length;
+    const added = await readEventBytes(handle, readStart, Math.min(EVENT_PAGE_BYTES, before.size - readStart));
+    const bytes = pending.length ? Buffer.concat([pending, added]) : added;
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    let consumed = 0;
+    let stopped = false;
+    let seq = position?.seq;
+    let yieldedAt = performance.now();
+    let skipOffset = start;
+    if (skip) {
+      const newline = added.indexOf(10);
+      seq = undefined;
+      if (newline < 0) skip += added.length;
+      else { consumed = newline + 1; skip = 0; skipOffset = start + (position?.skip ?? 0) + consumed; }
+    }
+    for (let end = bytes.indexOf(10, consumed); !skip && end >= 0; end = bytes.indexOf(10, consumed)) {
+      if (end - consumed > EVENT_RECORD_BYTES) { consumed = end + 1; seq = undefined; continue; }
+      const event = parseLedgerEvent(decoder.decode(bytes.subarray(consumed, end)), false, seq)!;
+      consumed = end + 1;
+      seq = event.seq;
+      if (visit(event)) { stopped = true; break; }
+      if (performance.now() - yieldedAt >= 4) {
+        await yieldToLoop(undefined, { signal });
+        yieldedAt = performance.now();
+      }
+    }
+    // A complete JSON value at stable EOF is accepted by load/scan as a
+    // writer-valid terminal record even when the delimiter was lost. Malformed
+    // or partial final bytes remain pending and do not advance the cursor.
+    if (!stopped && !skip && consumed < bytes.length && readStart + added.length === before.size && bytes.at(-1) !== 10
+      && bytes.length - consumed <= EVENT_RECORD_BYTES) {
+      const final = parseLedgerEvent(decoder.decode(bytes.subarray(consumed)), true, seq);
+      if (final) {
+        seq = final.seq;
+        consumed = bytes.length;
+        stopped = visit(final) === true;
+      }
+    }
+    signal?.throwIfAborted();
+    const trailing = !stopped && !skip && consumed < bytes.length ? bytes.subarray(consumed) : Buffer.alloc(0);
+    const incompleteLine = trailing.length > 0 && trailing.indexOf(10) < 0;
+    const carry = incompleteLine && (readStart + added.length < before.size || trailing.length > EVENT_RECORD_BYTES)
+      ? trailing : Buffer.alloc(0);
+    if (carry.length > EVENT_RECORD_BYTES) {
+      skip = carry.length;
+      skipOffset = start + (position?.skip ?? 0) + consumed;
+      seq = undefined;
+    }
+    const pendingBytes = carry.length > EVENT_RECORD_BYTES ? Buffer.alloc(0) : carry;
+    const offset = skip ? skipOffset : start + (position?.skip ?? 0) + consumed;
+    const edge = offset === start && position ? position.edge : await eventPositionEdge(handle, offset, offset === before.size);
+    if (!edge) throw new Error("runtime event page ended off its line boundary");
+    const size = await verifyEventPageSource(handle, filename, before);
+    return { position: { source, offset, edge, ...(seq === undefined ? {} : { seq }),
+      ...(skip ? { skip } : {}), ...(pendingBytes.length ? { pending: pendingBytes.toString("base64") } : {}) },
+      state: incompleteLine && !pendingBytes.length && !skip ? "incomplete"
+        : offset + skip + pendingBytes.length === size ? (incompleteLine ? "incomplete" : "current")
+        : offset + skip + pendingBytes.length < size ? "more" : size > before.size ? "more" : "incomplete" };
+  } finally { await handle.close(); }
 }
 
 export class FileRuntimeEventStore implements RuntimeEventStore {

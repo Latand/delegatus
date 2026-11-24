@@ -1,4 +1,4 @@
-import { normalizeSeatWakeResponse } from "./seatWakeResponse";
+import { normalizeSeatWakeResponse, normalizeWakeResponseStart } from "./seatWakeResponse";
 import { validFormPage } from "./seatTickForms";
 import { normalizeSeatAutoRotation } from "./seatAutoRotationState";
 import { normalizeSeatHostRecovery } from "./seatHostRecovery";
@@ -164,6 +164,7 @@ function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | nul
   const commit = normalizeWakeCommit(raw.commit);
   if (!clientMessageId || !conversationId || !commit || typeof seatEpoch !== "number" || !Number.isSafeInteger(seatEpoch)) return null;
   const recovery = raw.recovery as SeatTickOutstandingWake["recovery"];
+  const responseStart = normalizeWakeResponseStart(raw.responseStart);
   return {
     clientMessageId,
     conversationId,
@@ -180,6 +181,7 @@ function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | nul
         ...(typeof (raw.dispatch as Record<string, unknown>).reason === "string" ? { reason: String((raw.dispatch as Record<string, unknown>).reason) } : {}) } } : {}),
     ...(typeof raw.text === "string" ? { text: raw.text } : {}),
     ...(isoOrNull(raw.preparedAt) ? { preparedAt: raw.preparedAt as string } : {}),
+    ...(responseStart ? { responseStart } : {}),
     ...(raw.preparationTimeUnknown === true ? { preparationTimeUnknown: true as const } : {}),
     ...(recovery && isoOrNull(recovery.checkedAt) && isoOrNull(recovery.nextRetryAt)
       && isoOrNull(recovery.deadlineAt) && typeof recovery.reason === "string" ? { recovery: {
