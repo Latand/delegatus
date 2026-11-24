@@ -165,7 +165,7 @@ for (const scenario of ["slow privacy", "changed input", "changed privacy input"
       require("node:fs").appendFileSync(process.env.CREDENTIAL_EVENTS!, JSON.stringify({kind:"privacy-start",at:Number(require("node:fs").readFileSync(process.env.CREDENTIAL_CLOCK!, "utf8"))}) + "\\n");
       require("node:child_process").execFileSync(process.execPath, [process.env.HOOK_PRIVACY, ...process.argv.slice(3)], { stdio: "inherit" });
       require("node:fs").appendFileSync(process.env.CREDENTIAL_EVENTS!, JSON.stringify({kind:"privacy-complete",at:Number(require("node:fs").readFileSync(process.env.CREDENTIAL_CLOCK!, "utf8"))}) + "\\n");
-      const fs = require("node:fs"), file = ${JSON.stringify(clock)};
+      const fs = require("node:fs"), file = require("node:path").join(require("node:path").dirname(process.env.HOOK_CLOCK!), "privacy-elapsed");
       fs.writeFileSync(file, String(Number(fs.readFileSync(file, "utf8")) + (process.env.LLV_GATE_PUBLICATION_OBSERVED ? 0 : ${preparationMs})));
     }\n`);
     commitFixtureInputs(f);
@@ -198,7 +198,7 @@ for (const scenario of ["slow privacy", "changed input", "changed privacy input"
         expect(result).toMatchObject({ ok: false });
         expect(result.ok ? "" : result.error).toMatch(scenario === "changed input"
           ? /publication inputs cannot be certified: dirty worktree/
-          : /publication check inputs changed; changed components: privacy files \(LLV_PRIVACY_KNOWN_VALUES_FILE\)/);
+          : /publication inputs changed during transport; changed components: privacy files \(LLV_PRIVACY_KNOWN_VALUES_FILE\)/);
         if (scenario === "changed privacy input") {
           expect(result.ok ? undefined : result.failure?.retryablePrivacyDrift, result.ok ? "success" : result.failure?.outputTail).toBe(true);
           expect(http.events().some(event => event.kind === "rpc")).toBeFalse();

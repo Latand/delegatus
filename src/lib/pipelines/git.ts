@@ -2177,9 +2177,12 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies || preparingChecks)) {
         // Redaction may discard a stream containing decisive refusal evidence.
         // Only the classification survives; raw bytes are never persisted.
-        const rawOutput = `${executed.stdout}\n${executed.stderr}`;
+        const rawStreams = [executed.stdout, executed.stderr];
+        const rawOutput = rawStreams.filter(Boolean).join("\n");
         const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
         const rawPhase = preparingDependencies ? null : publicationFailurePhase({ outputTail: rawOutput });
+        const retryablePrivacyDrift = !preparingDependencies && publicationPrivacyDrift(rawOutput)
+          && !rawStreams.some(stream => stream.split("\n").some(line => decisiveRefusal(line.trim())));
         const privacyConfigurationFault = rawPhase === "privacy" && publicationPrivacyConfigurationFault(rawOutput)
           && !rawOutput.split("\n").some(line => !publicationPrivacyRefusal(line) && decisiveRefusal(line.trim()));
         const dependencyFailure = preparingDependencies || publicationFrozenInstallFailure(rawOutput);
@@ -2213,7 +2216,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: deadlineKind !== null,
           ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
-          ...(!preparingDependencies && publicationPrivacyDrift(rawOutput) ? { retryablePrivacyDrift: true } : {}),
+          ...(retryablePrivacyDrift ? { retryablePrivacyDrift: true } : {}),
           ...(privacyConfigurationFault ? { privacyConfigurationFault: true } : {}),
           ...(!preparingDependencies && rawPhase !== "privacy" && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
@@ -2523,18 +2526,17 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
       const runtime = preparation === 2 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
       const checked = await exec(runtime, ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
       if (checked.code !== 0) return { ...failure("checking the publication before transport", checked), phaseTimings: { ...phaseTimings, preparationMs: Math.max(0, Math.round(performance.now() - checkStarted)) } };
-      // Preparation includes the full privacy scan and heavy checks. The
-      // transport hook only validates their receipt, so its bound is fixed
-      // independently of preparation time; retain the pack margin outside it.
-      const preparationElapsed = Math.max(0, Math.round(performance.now() - checkStarted));
+      const elapsed = performance.now() - checkStarted;
+      const preparationElapsed = Math.max(0, Math.round(elapsed));
       const checkReceipt = readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
       phaseTimings = { preparationMs: Math.max(0, preparationElapsed - (checkReceipt.checksMs ?? preparationElapsed)),
         checksMs: checkReceipt.checksMs ?? preparationElapsed, transportMs: 0 };
       // Capability 1 still performs the privacy scan in its native hook. Keep
       // its established bounded hook/push allowance; capability 2 consumes the
       // sealed receipt and can use the short fixed transport window.
-      transportBudgetMs = preparation === 1 ? budget.ms
-        : Math.min(budget.ms, PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS);
+      transportBudgetMs = Math.min(budget.ms, (preparation === 1
+        ? Math.max(PUBLICATION_TRANSPORT_MS, Math.ceil(2 * elapsed))
+        : PUBLICATION_TRANSPORT_MS) + PUBLICATION_PACK_MARGIN_MS);
       // An older or failed gate cannot turn an exit code into a check receipt.
       const current = await currentPipelineBranchHead(pipeline, exec);
       if (!current.ok) return current;
