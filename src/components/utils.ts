@@ -213,7 +213,7 @@ export function engineEdge(file: FileEntry): { backgroundColor: string } {
 }
 
 export function engineBadgeFor(engine: string) {
-  const label = { codex: "Codex", claude: "Claude", shell: "Bash", openclaw: "OpenClaw" }[engine] ?? engine;
+  const label = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", shell: "Bash", openclaw: "OpenClaw" }[engine] ?? engine;
   const tint = tintOf(ENGINE_COLORS[engine] ?? NEUTRAL_COLOR);
   return { label, style: { backgroundColor: tint.soft, color: tint.color } };
 }

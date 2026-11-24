@@ -90,13 +90,14 @@ export function IncumbentHeader({
 }) {
   const { t } = useLocale();
   const designated = incumbent?.designated ? incumbent : null;
-  const engine = designated?.engine ?? (file?.engine === "claude" || file?.engine === "codex" ? file.engine : null);
+  const engine = designated?.engine ?? (file?.engine === "claude" || file?.engine === "codex" || file?.engine === "antigravity" ? file.engine : null);
   const model = designated?.model ?? file?.model ?? null;
   const effort = designated?.effort ?? null;
   const accountId = designated?.accountId ?? null;
-  const account = accountId
+  const account = accountId && (engine === "claude" || engine === "codex" || engine === null)
     ? catalog?.[engine ?? "claude"]?.accounts.find((candidate) => candidate.id === accountId)?.label ?? accountId
-    : null;
+    : accountId;
+  const working = Boolean(file && file.activity === "live" && file.proc === "running");
   const context: IncumbentContext | null = designated?.context ?? boardContext(file);
   /* The composer's pill names the model by its catalogue label and the tier by
      the locale's word; the header reads the same two, so one seat is not
@@ -123,7 +124,7 @@ export function IncumbentHeader({
         data-orchestrator-identity
         className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${inline ? "flex-1" : ""}`}
       >
-        {engine ? <EngineBadge engine={engine} className="min-h-5 px-2 py-0.5 text-caption font-semibold leading-none" /> : null}
+        {engine ? <EngineBadge engine={engine} className="min-h-5 px-2 py-0.5 text-caption font-semibold leading-none" working={working} /> : null}
         {model ? (
           /* A product name, so sans (design system §1.1 mono rule) — the tier
              rides with it because «opus» and «opus at high» are one answer to

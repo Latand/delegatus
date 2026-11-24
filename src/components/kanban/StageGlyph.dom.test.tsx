@@ -243,3 +243,53 @@ test.each([["en", "Claude Code cloud", "Local after Claude Code cloud failure: m
   }
   expect(draw(undefined, "header").querySelector("[data-stage-place]")).toBeNull();
 });
+
+test("Neon draws the periodic-table Ne tile across all five states and falls back for other Antigravity models", () => {
+  const neon = { engine: "antigravity", model: "gemini-4-neon" };
+  const argon = { engine: "antigravity", model: "gemini-4-argon" };
+  const host = mount(
+    <>
+      <StageGlyph state="running" model={neon} motion="ordinary" fallback="mark" />
+      <StageGlyph state="pending" model={neon} motion="waiting" fallback="mark" />
+      <StageGlyph state="passed" model={neon} fallback="mark" />
+      <StageGlyph state="failed" model={neon} fallback="mark" />
+      <StageGlyph state="needs_decision" model={neon} fallback="mark" />
+      <StageGlyph state="running" model={neon} motion="still" fallback="mark" />
+      <StageGlyph state="running" model={argon} motion="ordinary" fallback="mark" />
+    </>,
+  );
+  const glyphs = [...host.querySelectorAll<HTMLElement>(".mglyph")];
+  expect(glyphs.map((glyph) => [glyph.dataset.glyph, glyph.dataset.glyphEngine, glyph.dataset.glyphState, glyph.dataset.live ?? null, glyph.dataset.tier ?? null, Boolean(glyph.querySelector(".mg-badge"))])).toEqual([
+    ["neon", "antigravity", "running", "1", "ordinary", false],
+    ["neon", "antigravity", "waiting", null, null, false],
+    ["neon", "antigravity", "passed", null, null, true],
+    ["neon", "antigravity", "failed", null, null, true],
+    ["neon", "antigravity", "needs", null, null, true],
+    ["neon", "antigravity", "running", null, null, false],
+  ]);
+  expect(glyphs[0]!.querySelector("rect.mg-tile")).not.toBeNull();
+  expect(glyphs[0]!.querySelector("rect.mg-neon-gas")).not.toBeNull();
+  expect(glyphs[0]!.querySelectorAll(".mg-neon-num")).toHaveLength(2);
+  expect(glyphs[0]!.querySelector("path.mg-neon-sym")).not.toBeNull();
+  /* Other Antigravity models keep the host fallback mark. */
+  expect(host.querySelectorAll(".pmark")).toHaveLength(1);
+});
+
+test("Neon glyph carries the catalogue label in en and uk, and StageIdentity omits the engine mark only when the glyph draws", () => {
+  const named = <StageGlyph state="running" model={{ engine: "antigravity", model: "gemini-4-neon" }} motion="ordinary" fallback="dot" named />;
+  expect(mount(named).querySelector("[role=img]")!.getAttribute("aria-label")).toBe("Gemini 4 Neon: running");
+  setLocale("uk");
+  expect(mount(named).querySelector("[role=img]")!.getAttribute("aria-label")).toBe("Gemini 4 Neon: працює");
+  setLocale("en");
+
+  const identity = (model: string) => ({ engine: "antigravity", model, modelLabel: model, effort: "high", source: "launched" as const, modelIsDefault: false, next: null });
+  const host = mount(
+    <>
+      <span data-case="neon-glyph"><StageIdentity identity={identity("gemini-4-neon")} density="node" glyph /></span>
+      <span data-case="argon-fallback"><StageIdentity identity={identity("gemini-4-argon")} density="node" glyph /></span>
+      <span data-case="alone"><StageIdentity identity={identity("gemini-4-neon")} density="node" /></span>
+    </>,
+  );
+  const mark = (name: string) => host.querySelector(`[data-case="${name}"] [data-engine-mark]`)?.getAttribute("data-engine-mark") ?? null;
+  expect([mark("neon-glyph"), mark("argon-fallback"), mark("alone")]).toEqual([null, "antigravity", "antigravity"]);
+});

@@ -150,9 +150,10 @@ test("the design system §1.5 table documents the shipped token values", () => {
    mark token, already pinned at its own floor. */
 test("the model glyphs' silhouette inks clear the graphical-object floor in both schemes", () => {
   const surfaces = ["surface-card", "surface-canvas", "surface-well", "surface-sunken"].map(values);
-  for (const ink of ["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna"]) {
+  for (const ink of ["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna", "glyph-neon", "color-antigravity-mark"]) {
     const inks = values(ink);
     expect(inks.length).toBe(3);
+    expect(inks[1]).toBe(inks[2]);
     for (const scheme of [0, 1]) {
       for (const surface of surfaces) expect(contrast(inks[scheme], surface[scheme])).toBeGreaterThanOrEqual(3);
     }
@@ -198,7 +199,10 @@ test("a waiting glyph's drained silhouette still clears the graphical-object flo
   /* The Claude glyphs take the Claude mark: `--color-claude-mark` in light,
      which the dark blocks point at `--color-claude`. */
   const claude = [values("color-claude-mark")[0], values("color-claude")[1]];
-  const inks = { "glyph-claude": claude, ...Object.fromEntries(["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna"].map((name) => [name, values(name)])) };
+  const inks = {
+    "glyph-claude": claude,
+    ...Object.fromEntries(["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna", "glyph-neon"].map((name) => [name, values(name)])),
+  };
   const surfaces = ["surface-card", "surface-canvas", "surface-well", "surface-sunken"].map(values);
   for (const [name, pair] of Object.entries(inks)) {
     for (const scheme of [0, 1]) {
