@@ -7,13 +7,14 @@ export const PUBLICATION_TRANSPORT_MS = 60_000;
 const MAX_RECEIPT_BYTES = 4096;
 
 /** Read a declaration without executing an older gate's unknown arguments. */
-export function publicationPreparationVersion(root: string): 1 | 2 | undefined {
+export function publicationPreparationVersion(root: string): 1 | 3 | undefined {
   try {
     const file = path.join(root, "scripts/local-gate-capabilities.json");
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.size > 1024) return;
     const version = JSON.parse(fs.readFileSync(file, "utf8"))?.publicationPrepare;
-    if (version === 1 || version === 2) return version;
+    // Version 2 was also used by the sealed gate, which skips the live scan.
+    if (version === 1 || version === 3) return version;
   } catch { /* Use the ordinary gated push for an unknown capability. */ }
 }
 export interface PublicationCheckReceipt {

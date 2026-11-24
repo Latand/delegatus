@@ -22,6 +22,7 @@ import { publicationPushBudgetMs } from "./gateBudget";
 import { recoverablePublication } from "./publicationHistory";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
 import { publicationCheckBinding, writePublicationCheckReceipt } from "../git/publicationCheckReceipt";
+import { gateAdmissionInterpreter } from "../runtime/gateAdmissionLauncher";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -2278,9 +2279,10 @@ test.each(["pure", "assertion", "privacy", "started", "cleanup"] as const)("admi
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
 
-test.each([1, 2] as const)("capability %i prepares with its hook interpreter and lands one bounded push", async capability => {
+test.each([1, 2, 3] as const)("capability %i uses its own publication path and lands one push", async capability => {
   const box = await publishSandbox();
   const execPath = process.execPath;
+  const inheritedReceipt = process.env.LLV_GATE_PUBLICATION_RECEIPT;
   const containerRuntime = "/usr/local/bin/bun-container";
   try {
     const scripts = path.join(box.subject.worktreeDir, "scripts");
@@ -2293,19 +2295,28 @@ test.each([1, 2] as const)("capability %i prepares with its hook interpreter and
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare") {
         preparations.push(command);
+        if (capability === 3) {
+          expect(gateAdmissionInterpreter(env?.LLV_GATE_BUN) ?? env?.LLV_GATE_BUN).toBe(containerRuntime);
+        }
         writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(env!), "a".repeat(64), {}, 1);
         return { code: 0, stdout: "", stderr: "" };
       }
-      if (command === "git" && args[0] === "push") pushes.push(options?.timeoutMs ?? 0);
+      if (command === "git" && args[0] === "push") {
+        pushes.push(options?.timeoutMs ?? 0);
+        if (capability === 2) expect(env?.LLV_GATE_PUBLICATION_RECEIPT).toBeUndefined();
+      }
       return realExec(command, args, cwd, env, options);
     };
     process.execPath = containerRuntime;
+    process.env.LLV_GATE_PUBLICATION_RECEIPT = path.join(box.root, "inherited.json");
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
     expect(result).toMatchObject({ ok: true, sha: head, remote: "published" });
-    expect(preparations).toEqual([capability === 2 ? containerRuntime : "bun"]);
-    expect(pushes).toEqual([240_000]);
+    expect(preparations).toEqual(capability === 2 ? [] : [capability === 3 ? containerRuntime : "bun"]);
+    expect(pushes).toEqual([capability === 2 ? 900_000 : 240_000]);
     expect(await box.originHead()).toBe(head);
   } finally {
+    if (inheritedReceipt === undefined) delete process.env.LLV_GATE_PUBLICATION_RECEIPT;
+    else process.env.LLV_GATE_PUBLICATION_RECEIPT = inheritedReceipt;
     process.execPath = execPath;
     fs.rmSync(box.root, { recursive: true, force: true });
   }

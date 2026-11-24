@@ -96,13 +96,14 @@ test.each(["active", "expired"] as const)("native Git expires its discovered pas
   } finally { savePipelines(previous); http.close(); }
 }, 150_000);
 
-for (const capability of ["absent", "unsupported", "malformed"] as const) {
+for (const capability of ["absent", "historical", "unsupported", "malformed"] as const) {
   test(`a gate with ${capability} preparation capability keeps one ordinary gated push`, async () => {
     const f = fixture();
     delete f.env.LLV_GATE_PUBLICATION_RECEIPT;
     const marker = path.join(f.dir, "scripts/local-gate-capabilities.json");
     if (capability === "absent") fs.rmSync(marker);
-    else fs.writeFileSync(marker, capability === "unsupported" ? '{"publicationPrepare":3}' : '{');
+    else fs.writeFileSync(marker, capability === "historical" ? '{"publicationPrepare":2}'
+      : capability === "unsupported" ? '{"publicationPrepare":4}' : '{');
     // The native entry point retains the ordinary pre-push protocol. In
     // particular, nothing may try its unknown --publication-prepare argument.
     f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json", "scripts/local-gate.ts");
@@ -131,7 +132,7 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
   }, 90_000);
 }
 
-for (const [scenario, capability] of [["slow privacy", 1], ["changed input", 2], ["long preparation", 1], ["over cap", 2]] as const) {
+for (const [scenario, capability] of [["slow privacy", 1], ["changed input", 3], ["long preparation", 1], ["over cap", 3]] as const) {
   test(`measured publication transport handles ${scenario} with capability ${capability}`, async () => {
     const f = fixture();
     fs.writeFileSync(path.join(f.dir, "scripts/local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: capability }));

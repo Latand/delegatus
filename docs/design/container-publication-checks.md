@@ -167,8 +167,8 @@ about 1.0 s warm, and `workingInputsFingerprint` took 1.4 s cold and about
 |---|---|---|---|---|
 | Mechanism removed or added | Keeps all of 4f3c4fff's sealing (snapshot, object copy, drift retry, capability-split budget) and adds a `bwrap` invocation, a bind inventory and an image dependency (the image installs no bubblewrap) | Removes the sealed privacy receipt and its retry class, the 60 s admission timer and the capability-split budget. Adds one constant (transport hook allowance). Keeps main's #3549 receipt for heavy checks | Removes the hook from publication. Adds a server-side verification job and temporary-ref cleanup | Removes the receipt and the transport hook. Adds controller-side copies of the hook's ref checks |
 | Inputs that could still leak | Files outside the binds fail closed, but every bind is an input: Bun, Git and its helpers and libraries, the raster interpreter, LLV_PRIVACY_* and Git environment. Each still needs a hash in the receipt, so the inventory chase continues for executables and environment | Privacy: none beyond an ordinary push. The scan reads live inputs at transport, and the hook binds the pack to the one scanned ref. Heavy checks: the same exposure as today's pass reuse, which uses the same `gateInputSnapshot` key | All of it. The repository is public, and unscanned commits are fetchable the moment the temporary ref exists | Refs or tags added by Git configuration (`push.followTags`, `remote.*.push`, mirror) reach the remote unseen. Annotated tag messages are content no check read |
-| Transport budget, capability 1 / 2 | As 4f3c4fff: 2×preparation capped by the push budget / 60 s + 60 s pack | 180 s hook + 60 s pack, for both | No hook | No hook |
-| Failure modes | `bwrap` absent or denied fails every publication closed. Object copy of 1.2 GB per preparation. Bind list drifts with image upgrades. No macOS equivalent for the portable hook | Scan slower than 180 s at transport gets a named deadline, retried after 1, 5 and 15 min, then parked. Capability-2 heads under an old controller take the in-hook path until the deploy | Irreversible publication of unscanned content | Unchecked extra refs. Breaks the project rule that local hooks mirror the publication gate |
+| Transport budget | As 4f3c4fff: 2×preparation capped by the push budget / 60 s + 60 s pack | 180 s hook + 60 s pack for capabilities 1 and 3 | No hook | No hook |
+| Failure modes | `bwrap` absent or denied fails every publication closed. Object copy of 1.2 GB per preparation. Bind list drifts with image upgrades. No macOS equivalent for the portable hook | Scan slower than 180 s at transport gets a named deadline, retried after 1, 5 and 15 min, then parked. Capability-3 heads under the deployed capability-1 controller take the in-hook path until the deploy | Irreversible publication of unscanned content | Unchecked extra refs. Breaks the project rule that local hooks mirror the publication gate |
 | Test plan | A negative control per bind; `bwrap` absent and denied; macOS fallback; object-copy cleanup | T1–T6 below | n/a | n/a |
 
 Also considered and set aside:
@@ -205,12 +205,13 @@ inventory, and C1 and C2 publish content or refs that no check saw.
    `git push` timeout 240 s (never above the publication budget). This replaces
    both main's `max(60 s, 2 × preparation)` formula (up to 24 minutes for a
    25-minute budget) and 4f3c4fff's capability split.
-4. **Capability 2 keeps one meaning:** "the native hook runs under the image's
-   Bun inside the container, so prepare under the same interpreter". This is
-   what 334f39b6 declared it for. The controller already picks
-   `process.execPath` for capability 2 when it runs as `bun-container`; both
-   ends then fingerprint the same runtime and toolchain. Capability 2 never
-   reached main, so redefining it breaks no released checkout.
+4. **Capability 3 declares the in-image hook with a fresh privacy scan.** Older
+   worktrees used capability 2 for the sealed gate. They run the ordinary
+   native hook without a preparation receipt. For capability 3, the container
+   controller starts preparation with `bun-container` and binds the installed
+   CPU admission launcher's interpreter to it. The preparation and the native
+   hook then fingerprint the same runtime and toolchain, and the launcher
+   still routes admission to the installed CPU helper.
 
 ### Invariant check with numbers
 
@@ -239,8 +240,8 @@ heavy checks never run while the transport is open.
 | 4f3c4fff, capability 1 | publication budget | same as main | same as main | 60 s |
 | 4f3c4fff, capability 2 | publication budget, inside one CPU admission bounded at 60 s | 60 s, no privacy scan | 120 s | 60 s |
 | **B, capability 1** | publication budget (prepared with `bun`) | **180 s** (privacy scan) | **240 s** | 60 s |
-| **B, capability 2** | publication budget (prepared with `bun-container` in the image) | **180 s** (privacy scan) | **240 s** | 60 s |
-| No or unknown capability | n/a | ordinary hook, full publication budget | budget | n/a |
+| **B, capability 3** | publication budget (prepared and admitted with `bun-container` in the image) | **180 s** (privacy scan) | **240 s** | 60 s |
+| Capability 2, absent or unknown capability under B | n/a | ordinary hook, full publication budget | budget | n/a |
 
 The 4f3c4fff regression's own example still holds under B. A capability-1
 checkout with 70 s of preparation had a 140 s hook allowance on main and gets
@@ -314,8 +315,8 @@ test that fails without it. Restore everything else to `origin/main`.
 | `.githooks/pre-push` | run under `/usr/local/bin/bun-container` inside the image | the hook stays in the mount namespace Git publishes from; the `bun` shim enters the host's (`Dockerfile:137`) |
 | `scripts/local-gate.ts:238` | `LLV_DOCKER_NSENTER_SHIMS` in isolated checks | 3730c10f r1 P2 |
 | `scripts/local-gate.ts:1148–1154` | under `bun-container`, run `bun` steps with `process.execPath` and types with `node node_modules/typescript/bin/tsc` | the `bun`/`bunx` shim runs `/bin/sh -c 'cd …'` in the host's mount namespace, where a container-only check directory does not exist. The host's `/bin/sh` is bash, which explains the unexplained "sh: line 1: cd: …: No such file or directory" type failure of 2026-11-03 |
-| `scripts/local-gate-capabilities.json` | `publicationPrepare: 2`, with the meaning in Recommendation item 4 | the controller must know which interpreter the hook uses |
-| `src/lib/git/publicationCheckReceipt.ts` | `publicationPreparationVersion` (1 or 2), `checksMs` | capability detection; phase timings |
+| `scripts/local-gate-capabilities.json` | `publicationPrepare: 3`, with the meaning in Recommendation item 4 | the controller must know which interpreter the hook uses and whether it scans at transport |
+| `src/lib/git/publicationCheckReceipt.ts` | `publicationPreparationVersion` (1 or 3), `checksMs` | capability detection and phase timings |
 | `src/lib/pipelines/git.ts` | `LLV_DOCKER_NSENTER_SHIMS` pass-through (:1731–1733); `preparingChecks` for `process.execPath` (:2116–2117); preparation runtime choice (:2526); `phaseTimings` in results, journal and reconciliation | container fixes; timings for the live proof |
 | `src/lib/pipelines/types.ts` | `phaseTimings` | same |
 | `scripts/local-gate.fixture.ts`, `scripts/publicationHook.fixture.ts` | keep only the parts a remaining test uses | |
@@ -343,8 +344,8 @@ test that fails without it. Restore everything else to `origin/main`.
   The privacy scanner runs twice (preparation and transport), and one RPC
   lands. "Over cap": a transport scan that passes 180 s ends with
   `retryableDeadline: true`, `hookStoppedCheck: "privacy"`, no RPC and an
-  unchanged ref. In "a gate with … preparation capability keeps one ordinary
-  gated push" (main line 104), change the unsupported marker from 2 to 3.
+  unchanged ref. The ordinary gated-push cases cover the retired marker 2 and
+  an unknown marker.
 - **T2** `scripts/local-gate.publication.test.ts`: restore main's cases
   "prepared checks are consumed once by a fresh native hook, with fresh privacy
   and no second admission", "a privacy-only refresh retains all reused heavy
@@ -361,9 +362,11 @@ test that fails without it. Restore everything else to `origin/main`.
   cold-install case.
 - **T4** `src/lib/pipelines/git.test.ts`: replace the `capability $capability
   with $elapsed ms` table (:2281–2320) with one case per capability. Each
-  asserts the preparation interpreter (`process.execPath` for capability 2
-  under `bun-container`, `bun` otherwise), a 240 s push timeout and one landed
-  push. Keep the `phaseTimings` cases.
+  asserts the preparation interpreter (`process.execPath` for capability 3
+  under `bun-container`, `bun` for capability 1), a 240 s push timeout and one
+  landed push. Capability 3 also checks the admission interpreter. A
+  capability-2 checkout uses one ordinary push without a receipt. Keep the
+  `phaseTimings` cases.
 - **T5** `src/lib/pipelines/publication.test.ts`,
   `src/lib/pipelines/parkedPublication.test.ts`: delete the drift and
   tool-preparation admission cases; keep the rest.
@@ -379,7 +382,7 @@ instructions assign.
 
 ### Step 6: rollout and live proof (seat)
 
-Until the deploy, every head that carries capability 2 (this PR, and every lane
+Until the deploy, every head that carries capability 3 (this PR, and every lane
 that merges main after it) goes through the deployed controller's ordinary
 in-hook path and will hit the idle limit. Keep publishing those from the host,
 as now, and deploy promptly after the merge. After the deploy, the proof is

@@ -2484,8 +2484,20 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   /* The hook is handed the moment it must be done by, a minute before this
      limit for git to send the pack, so it ends with its own verdict or with
      a named missing one instead of being killed (scripts/local-gate.ts). */
+  // The repository's gate can finish before Git's authenticated discovery.
+  // The subsequent native hook verifies this exact operation's consumed
+  // inputs and scans fresh privacy data under a separate transport deadline.
+  const preparation = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
+    ? publicationPreparationVersion(pipeline.worktreeDir) : undefined;
+  const runtime = preparation === 3 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
+  // The installed launcher takes precedence over gate-slot's image detection.
+  // Keep its CPU helper and run it under the same Bun as the native hook.
+  const gateRuntime = runtime === "bun" ? {} : { LLV_GATE_BUN: runtime };
   const forgeEnv = engineForgeWriteEnv();
-  const pushEnv = { ...pipelinePublicationHookEnv(), ...lessons, ...forgeEnv, ...installedGateAdmissionEnv({ ...process.env, ...forgeEnv }),
+  const pushEnv: Partial<NodeJS.ProcessEnv> = { ...pipelinePublicationHookEnv(), ...lessons, ...forgeEnv, ...gateRuntime,
+    ...installedGateAdmissionEnv({ ...process.env, ...forgeEnv, ...gateRuntime }),
+    // Only the new operation can supply a receipt to its hook.
+    LLV_GATE_PUBLICATION_RECEIPT: undefined,
     // Older branches run their own hook scripts, so supply the gate's current
     // memory defaults here as well. Explicit caller settings remain authoritative.
     NODE_OPTIONS: process.env.NODE_OPTIONS ?? "--max-old-space-size=11264",
@@ -2493,11 +2505,6 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
     ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
-  // The repository's gate can finish before Git's authenticated discovery.
-  // The subsequent native hook verifies this exact operation's consumed
-  // inputs and scans fresh privacy data under a separate transport deadline.
-  const preparation = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
-    ? publicationPreparationVersion(pipeline.worktreeDir) : undefined;
   const transportBudgetMs = Math.min(budget.ms, PUBLICATION_TRANSPORT_HOOK_MS + PUBLICATION_PACK_MARGIN_MS);
   const receiptFile = preparation ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
   let phaseTimings = { preparationMs: 0, checksMs: 0, transportMs: 0 };
@@ -2514,9 +2521,6 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
         LLV_GATE_PUBLICATION_REMOTE_HEAD: remoteSha || "0".repeat(40),
       });
       const checkStarted = performance.now();
-      // Version 2's native hook stays in the image. Its preparation must
-      // fingerprint the same Bun, Git and environment before minting.
-      const runtime = preparation === 2 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
       const checked = await exec(runtime, ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
       if (checked.code !== 0) return { ...failure("checking the publication before transport", checked), phaseTimings: { ...phaseTimings, preparationMs: Math.max(0, Math.round(performance.now() - checkStarted)) } };
       const preparationElapsed = Math.max(0, Math.round(performance.now() - checkStarted));
