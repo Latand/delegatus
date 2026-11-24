@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cpuPressurePolicy } from "../src/lib/runtime/cpuPressure";
 import { GateCpuPressure } from "../src/lib/runtime/gateCpuPressure";
-import { ACTIVE_GATE_PREFIX, inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS } from "../src/lib/runtime/cpuAdmission";
+import { ACTIVE_GATE_PREFIX, inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS, PUBLICATION_LAUNCH_PROOF_ENV, publicationLaunchDigest } from "../src/lib/runtime/cpuAdmission";
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuQueueDetail, ordinal } from "../src/lib/runtime/cpuQueueText";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
@@ -187,6 +187,17 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const localPid = Number(/^NSpid:\s+(.+)$/m.exec(status)?.[1]?.trim().split(/\s+/).at(-1));
     return Number.isSafeInteger(localPid) && proof.pid === localPid && proof.startIdentity === `${localPid}:${fields[19]}`;
   };
+  let launches: ReturnType<CpuAdmissionQueue["publicationLaunches"]> | undefined;
+  const viewerLaunched = (parent: string, fields: string[]) => {
+    const env = readEnvironment(parent);
+    const operation = env("LLV_GATE_PUBLICATION_ID"), proof = env(PUBLICATION_LAUNCH_PROOF_ENV);
+    if (!operation || !proof) return false;
+    // Only the launch that put this secret into the process's exec
+    // environment knows the digest its row carries.
+    const digest = publicationLaunchDigest(proof);
+    return (launches ??= queue.publicationLaunches()).some(launch =>
+      launch.operation === operation && launch.proof === digest && hookParentMatches(launch.identity, parent, fields));
+  };
   const localPid = (base: string) => /^NSpid:\s+(.+)$/m.exec(fs.readFileSync(path.join(base, "status"), "utf8"))?.[1]?.trim().split(/\s+/).at(-1);
   const hookClient = (command: string[], cwd: () => string, client: string, runner: string) => {
     // The hook starts a second copy under an owned runner before it queues
@@ -218,6 +229,12 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     // The dispatcher starts the runner beside its own entry.
     if (fs.realpathSync(path.join(path.dirname(original.entry), "owned-runner.ts")) !== runner) return false;
     if (env("LLV_GATE_HOOK_DISPATCH") === binding) return true;
+    // The Viewer records each publication preparer it launches by the kernel
+    // identity it spawned (src/lib/runtime/publicationLaunch.ts). Every
+    // local-gate.ts whose preparer dispatches a cleanup runner starts it
+    // directly, so a lane checkout of any age is recognised by this record.
+    // The record needs this live parent, still carrying its operation.
+    if (original.mode === "--publication-prepare" && viewerLaunched(parent, parentStat)) return true;
     // A deployed dispatcher at the cutover predates the explicit handoff.
     // Bind its live parent proof to the known dispatcher that spawns this
     // exact client directly. A nested gate ticket cannot prove that launch.
