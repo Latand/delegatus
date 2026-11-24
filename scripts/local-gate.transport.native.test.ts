@@ -6,6 +6,7 @@ import { createPublicationFixtures } from "./publicationHook.fixture";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publishPipelineBranch } from "../src/lib/pipelines/git";
+import { engineForgeWriteEnv, FORGE_APP_REPOSITORIES_FILE } from "../src/lib/git/agentForgeCredentials";
 import { pipelineCorpus } from "../src/lib/pipelines/fixtures/corpus";
 import { findPipelineRecord, loadPipelines, savePipelines } from "../src/lib/pipelines/store";
 import { realExec, type ExecPort } from "../src/lib/workflows/provision";
@@ -102,6 +103,16 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
     f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json", "scripts/local-gate.ts");
     f.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "legacy gate capability");
     const http = await httpFixture(f, false), previous = loadPipelines();
+    let appCredentialEnv: Record<string, string | undefined> | undefined;
+    let appDeclaration: string | undefined;
+    let previousAppDeclaration: Buffer | undefined;
+    if (capability === "absent") {
+      const state = process.env.LLV_STATE_DIR!;
+      appDeclaration = path.join(state, FORGE_APP_REPOSITORIES_FILE);
+      if (fs.existsSync(appDeclaration)) previousAppDeclaration = fs.readFileSync(appDeclaration);
+      fs.writeFileSync(appDeclaration, JSON.stringify(["fixture/repo-fixture"]));
+      appCredentialEnv = engineForgeWriteEnv();
+    }
     let packagedRoot = root;
     if (capability === "absent") {
       packagedRoot = path.join(f.dir, ".git", "packaged-docker-app");
@@ -138,6 +149,11 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
           expect(Number(env?.GIT_CONFIG_COUNT)).toBeGreaterThanOrEqual(2);
           if (capability === "absent") {
             expect(env?.LLV_GATE_IMAGE_BUN).toBe("bun-container");
+            expect(Number(env?.GIT_CONFIG_COUNT)).toBeGreaterThan(Number(appCredentialEnv!.GIT_CONFIG_COUNT));
+            for (let index = 0; index < Number(appCredentialEnv!.GIT_CONFIG_COUNT); index++) {
+              expect(env?.[`GIT_CONFIG_KEY_${index}`]).toBe(appCredentialEnv![`GIT_CONFIG_KEY_${index}`]);
+              expect(env?.[`GIT_CONFIG_VALUE_${index}`]).toBe(appCredentialEnv![`GIT_CONFIG_VALUE_${index}`]);
+            }
           }
           expect(env?.[`GIT_CONFIG_VALUE_${hookIndex}`]).toBe(path.join(packagedRoot, ".githooks"));
         }
@@ -155,6 +171,10 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
       expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
     } finally {
       savePipelines(previous); http.close();
+      if (appDeclaration) {
+        if (previousAppDeclaration) fs.writeFileSync(appDeclaration, previousAppDeclaration);
+        else fs.rmSync(appDeclaration, { force: true });
+      }
       if (savedImageBun === undefined) delete process.env.LLV_GATE_IMAGE_BUN; else process.env.LLV_GATE_IMAGE_BUN = savedImageBun;
       process.cwd = savedCwd;
     }
