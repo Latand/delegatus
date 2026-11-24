@@ -194,7 +194,7 @@ const readySearchDatabases = new WeakSet<Database>();
 // Readiness is schema metadata. Invalidate on either replacement of the file
 // or a schema change; ordinary appends keep the same readiness. Bound the cache
 // because tests and offline tools can choose many independent state roots.
-const searchSchemas = new Map<string, { identity: string; schema: number; version: number; hit: number; vocabulary: number }>();
+const searchSchemas = new Map<string, { identity: string; schema: number; version: number; hit: number; vocabulary: number; bodyHash: number }>();
 const newestExpressions = new Map<string, string>();
 
 function normalizedBodyHash(body: string): string {
@@ -464,10 +464,11 @@ function openQueryDatabase(): Database {
     const identity = `${stat.dev}:${stat.ino}`;
     const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
     const cached = searchSchemas.get(filename);
-    const metadata = cached?.identity === identity && cached.schema === schema ? cached : db.query<{ version: number; hit: number; vocabulary: number }, []>(`
+    const metadata = cached?.identity === identity && cached.schema === schema ? cached : db.query<{ version: number; hit: number; vocabulary: number; bodyHash: number }, []>(`
       SELECT user_version AS version,
         EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='transcript_messages_search_hit') AS hit,
-        EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab') AS vocabulary
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab') AS vocabulary,
+        EXISTS(SELECT 1 FROM pragma_table_info('transcript_messages') WHERE name='body_hash') AS bodyHash
       FROM pragma_user_version
     `).get()!;
     if (metadata !== cached) {
@@ -475,14 +476,17 @@ function openQueryDatabase(): Database {
       searchSchemas.set(filename, { ...metadata, identity, schema });
     }
     const currentVersion = metadata.version;
-    // Pre-v4 schemas need table reshaping before they can be read. Close the
-    // reader before that compatibility upgrade; v4 work stays off-thread.
-    if (currentVersion < 4) {
+    // Only pre-v2 schemas (lacking `body_hash`, which read queries select) must
+    // upgrade inline before reading. v2–v5 schemas already carry `body_hash`, so
+    // reads execute immediately against the legacy schema while the leased worker
+    // runs the table rebuild, `sort_timestamp` backfill, and index build off-thread
+    // under the shared backoff schedule.
+    if (currentVersion < 2 || !metadata.bodyHash) {
       db.close();
       openWriterDatabase().close();
       return openQueryDatabase();
     }
-    if (metadata.hit && metadata.vocabulary) readySearchDatabases.add(db);
+    if (currentVersion >= 4 && metadata.hit && metadata.vocabulary) readySearchDatabases.add(db);
     if (currentVersion < TRANSCRIPT_SEARCH_SCHEMA_VERSION || !metadata.hit || !metadata.vocabulary) void scheduleSearchIndexBuild(filename);
     return db;
   } catch (error) {

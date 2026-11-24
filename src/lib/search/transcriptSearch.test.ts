@@ -690,11 +690,27 @@ test("upgrades version two with file-time fallbacks and a persistent ID watermar
   old.exec("DROP TABLE transcript_search_sequence");
   old.exec("PRAGMA user_version = 2");
   old.close();
-  expect(searchTranscripts({ query: "beryl" }).items[0].timestamp).toBe(12.345);
+  const originalExec = Database.prototype.exec;
+  let localMessageTableRebuilds = 0;
+  Database.prototype.exec = function exec(this: Database, sql: string) {
+    if (String(sql).includes("DROP TABLE transcript_messages_previous")) localMessageTableRebuilds += 1;
+    return originalExec.call(this, sql);
+  } as typeof Database.prototype.exec;
+  try {
+    expect(searchTranscripts({ query: "beryl" }).items[0].timestamp).toBe(12.345);
+  } finally {
+    Database.prototype.exec = originalExec;
+  }
+  expect(localMessageTableRebuilds).toBe(0);
+  const deadline = performance.now() + 10_000;
+  while (pendingTranscriptSearchIndexBuilds() && performance.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   const upgraded = new Database(filename, { readonly: true });
   try {
     expect(upgraded.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
     expect(upgraded.query("SELECT last_id FROM transcript_search_sequence").get()).toEqual({ last_id: 1 });
+    expect(upgraded.query("SELECT sort_timestamp FROM transcript_messages").get()).toEqual({ sort_timestamp: 12.345 });
   } finally { upgraded.close(); }
 });
 
@@ -2482,6 +2498,103 @@ test("query-initiated backoff is respected by a subsequent feed and escalates ex
     }
   } finally {
     setTranscriptMigrationRetryBackoffForTests(null);
+    await waitForTranscriptIndexIdleForTests();
+    if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+    else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+    if (prevState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevState;
+  }
+}, 20_000);
+
+test("first search on a pre-v4 (v2) database serves read-only without local rebuild and migrates off-thread with shared backoff", async () => {
+  const isolated = fs.mkdtempSync(path.join(sandbox, "v2-offthread-search-"));
+  const prevState = process.env.LLV_STATE_DIR;
+  const prevHelper = process.env.LLV_HELPER_LEASE_ENTRY;
+  process.env.LLV_STATE_DIR = isolated;
+  setTranscriptMigrationRetryBackoffForTests(250);
+  try {
+    const pathname = path.join(isolated, "v2-history.jsonl");
+    fs.writeFileSync(
+      pathname,
+      [
+        JSON.stringify({ type: "user", message: { content: "pre-v4 undated cobalt needle" } }),
+        JSON.stringify({ type: "assistant", timestamp: "2026-09-10T10:00:00Z", message: { content: "pre-v4 dated reply" } }),
+      ].join("\n") + "\n",
+    );
+    await indexTranscriptSources([{ ...source(pathname, "claude", "migration"), mtimeMs: 12_345_000 }]);
+    const dbPath = statePath("transcript-search.sqlite");
+    const downgrade = new Database(dbPath);
+    downgrade.exec(`
+      DROP TABLE IF EXISTS transcript_messages_vocab;
+      DROP INDEX IF EXISTS transcript_messages_search_hit;
+      DROP INDEX IF EXISTS transcript_messages_time;
+      DROP TABLE IF EXISTS transcript_search_sequence;
+      ALTER TABLE transcript_messages DROP COLUMN sort_timestamp;
+      PRAGMA user_version = 2;
+    `);
+    downgrade.close();
+
+    // First failing worker sets the shared 250ms backoff window; repeated searches
+    // inside that window must neither run synchronous main-thread rebuilds nor spawn extra workers.
+    const logFile = path.join(isolated, "worker-starts.log");
+    const fakeHelper = path.join(isolated, "fail-once-worker.ts");
+    fs.writeFileSync(fakeHelper, `
+      import fs from "node:fs";
+      fs.appendFileSync(${JSON.stringify(logFile)}, String(Date.now()) + "\\n");
+      process.exit(1);
+    `);
+    process.env.LLV_HELPER_LEASE_ENTRY = fakeHelper;
+
+    const originalExec = Database.prototype.exec;
+    let localRebuilds = 0;
+    Database.prototype.exec = function exec(this: Database, sql: string) {
+      if (String(sql).includes("DROP TABLE transcript_messages_previous")) localRebuilds += 1;
+      return originalExec.call(this, sql);
+    } as typeof Database.prototype.exec;
+    try {
+      const first = searchTranscripts({ query: "pre-v4 undated cobalt", order: "newest" });
+      expect(first.items).toHaveLength(1);
+      expect(first.items[0]?.timestamp).toBe(12_345);
+      // Wait for the failing worker to finish and record backoff.
+      while (pendingTranscriptSearchIndexBuilds()) await Bun.sleep(15);
+      // Repeated queries during the 250ms backoff window still serve read-only with 0 extra spawns.
+      const second = searchTranscripts({ query: "pre-v4 undated cobalt", order: "relevance" });
+      expect(second.items).toHaveLength(1);
+      expect(fs.readFileSync(logFile, "utf8").trim().split("\n")).toHaveLength(1);
+
+      // Restore the real worker before the deferred backoff timer fires.
+      if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+      else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+
+      const deadline = Date.now() + 10_000;
+      let upgradedVersion = 0;
+      while (Date.now() < deadline) {
+        const probe = new Database(dbPath, { readonly: true });
+        upgradedVersion = probe.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0;
+        const hasVocab = Boolean(probe.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab'").get());
+        probe.close();
+        if (upgradedVersion >= 6 && hasVocab) break;
+        await Bun.sleep(30);
+      }
+      expect(upgradedVersion).toBe(6);
+      expect(localRebuilds).toBe(0);
+    } finally {
+      Database.prototype.exec = originalExec;
+    }
+
+    const verify = new Database(dbPath, { readonly: true });
+    try {
+      expect(verify.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(6);
+      expect(verify.query<{ bad: number }, []>(
+        "SELECT COUNT(*) AS bad FROM transcript_messages WHERE sort_timestamp IS NOT COALESCE(timestamp, 12345)",
+      ).get()?.bad).toBe(0);
+      expect(verify.query<{ last_id: number }, []>("SELECT last_id FROM transcript_search_sequence WHERE singleton = 1").get()?.last_id).toBe(2);
+    } finally {
+      verify.close();
+    }
+  } finally {
+    setTranscriptMigrationRetryBackoffForTests(null);
+    while (pendingTranscriptSearchIndexBuilds()) await Bun.sleep(15);
     await waitForTranscriptIndexIdleForTests();
     if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
     else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
