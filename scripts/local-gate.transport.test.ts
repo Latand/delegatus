@@ -131,9 +131,10 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
   }, 90_000);
 }
 
-for (const scenario of ["slow privacy", "changed input", "long preparation", "over cap"] as const) {
-  test(`measured publication transport handles ${scenario}`, async () => {
+for (const [scenario, capability] of [["slow privacy", 1], ["changed input", 2], ["long preparation", 1], ["over cap", 2]] as const) {
+  test(`measured publication transport handles ${scenario} with capability ${capability}`, async () => {
     const f = fixture();
+    fs.writeFileSync(path.join(f.dir, "scripts/local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: capability }));
     // This path is embedded in tracked record.ts and scanned by the real
     // privacy gate, so keep it independent of the checkout's absolute path.
     const clock = ".git/privacy-elapsed";
