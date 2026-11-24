@@ -514,3 +514,42 @@ test("fallback publication retries an interrupted archive sweep and repeats it a
     await f.cleanup();
   }
 });
+
+test("startup checks an archived recipient when its first message arrives", async () => {
+  const f = migrationDeliveryFixture();
+  const current = f.registry.hostEntry(f.key)!;
+  f.registry.upsert({ ...current, status: "dead", claimOwner: null,
+    structuredHost: { ...current.structuredHost!, endpoint: "stdio:released" } });
+  expect(f.registry.archiveInactiveRows()).toBe(1);
+  const startup = await import("./startup");
+  let held = true;
+  const authority = spyOn(startup, "pipelineStartupTargetDeferred").mockImplementation(async () => held);
+  const recover = spyOn({ recover: async () => null }, "recover");
+  try {
+    f.journal.append({ scope: { type: "session", id: f.conversation.id }, kind: "session-status", payload: {
+      conversationId: f.conversation.id, sessionKey: f.key, hostKind: "codex-app-server", host: "unhosted", turn: "idle",
+      accountId: null, parentConversationId: null, cwd: f.root, artifactPath: current.artifactPath,
+    } });
+    await bindStructuredDeliveryQueue([], {
+      registry: f.registry, client: f.client, deferStartupWork: true, recover,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0,
+    });
+    await completeStructuredDeliveryQueueStartup([], undefined, undefined, new Set(), {
+      registry: f.registry, snapshot: await f.registry.prepareReadOnlySnapshot(), deferUnselected: true,
+    });
+    const operationId = "archived-recipient-held-at-startup";
+    f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+      conversationId: f.conversation.id, text: "Synthetic message after startup", policy: "queue" });
+    await kickStructuredDeliveryQueue();
+    expect(authority).toHaveBeenCalledWith(f.registry, f.conversation.id);
+    expect(recover).not.toHaveBeenCalled();
+    expect(f.journal.operationResult(operationId)?.receipt.status).toBe("queued");
+    held = false;
+    await kickStructuredDeliveryQueue();
+    expect(recover).toHaveBeenCalledTimes(1);
+  } finally {
+    authority.mockRestore();
+    recover.mockRestore();
+    await f.cleanup();
+  }
+});
