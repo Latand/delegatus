@@ -34,7 +34,11 @@ Median reload time to the first card fell by 1.28 s on desktop and 0.37 s on 4G.
 
 The board and task routes enforce access through the workspace authorization wrapper. The saved screen renders text and column placement. Editing, assignment, drop targets and seat input come from the network-backed components after their respective reads.
 
-The production build, 160 targeted tests across 14 test files, pre-commit checks and publication privacy audit passed.
+The browser safety run passed on desktop and phone in English and Ukrainian, in light and dark themes. It verified that the seat name and at least one readable card rendered before any held data request completed. The network board then replaced the saved screen. Blocked IndexedDB, an open error and quota exhaustion each recovered through the network board.
+
+On the same browser profile, a second signed-in member with access to the same project missed the first member's disk record. The workspace role change invalidated the record. Revocation redirected the member to the team page. Signing out cleared the disk record and returned the other open tab to the neutral shell.
+
+The production build, 160 targeted tests across 14 test files, pre-commit checks and publication privacy audit passed. The visual and access results are retained in `board-startup-safety.json` and its accompanying frames and geometry records.
 
 ## Unknowns
 
