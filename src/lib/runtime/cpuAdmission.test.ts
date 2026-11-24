@@ -647,13 +647,21 @@ for (const platform of ["linux", "win32"] as const) test.skipIf(platform === "li
     const startOwner = () => Bun.spawn([process.execPath, "-e", "for await (const chunk of Bun.stdin.stream()) void chunk"], { stdin: "pipe" });
     const workers = { head: startOwner(), peer: startOwner(), later: startOwner(), restarted: undefined as ReturnType<typeof startOwner> | undefined };
     const script = `
-      const [file, runtime, identityModule, platform, at, action, key, pid] = process.argv.slice(1);
+      const [file, runtime, legacyRuntime, identityModule, platform, at, elapsed, action, key, pid] = process.argv.slice(1);
       const { CpuAdmissionQueue, ACTIVE_GATE_PREFIX } = await import(runtime);
       const { captureProcessIdentity } = await import(identityModule);
       const owner = captureProcessIdentity(Number(pid));
       if (!owner.startIdentity || !owner.bootEpoch) throw new Error("missing kernel owner identity");
       Object.defineProperty(process, "platform", { value: platform });
-      const queue = new CpuAdmissionQueue(file, () => Number(at));
+      if (action === "legacy-poll") {
+        const { V2CpuAdmissionQueue } = await import(legacyRuntime);
+        const legacy = new V2CpuAdmissionQueue(file, () => Number(at));
+        try { console.log(JSON.stringify(legacy.check(key, true, owner, false, undefined, true))); }
+        finally { legacy.close(); }
+        process.exit(0);
+      }
+      const queue = new CpuAdmissionQueue(file, () => Number(at), undefined, undefined, undefined, undefined, undefined,
+        () => ({ domain: "fixture-boot", ms: Number(elapsed) }));
       try {
         let wait = null;
         if (action === "release") queue.releaseGateSlot(ACTIVE_GATE_PREFIX + key, JSON.stringify(owner));
@@ -662,9 +670,9 @@ for (const platform of ["linux", "win32"] as const) test.skipIf(platform === "li
         console.log(JSON.stringify({ wait, slots: queue.activeGateSlots().map(slot => slot.key) }));
       } finally { queue.close(); }
     `;
-    const run = (name: keyof typeof workers, at: number, action = "claim") => {
+    const run = (name: keyof typeof workers, at: number, action = "claim", elapsed = at) => {
       const result = spawnSync(process.execPath, ["-e", script, f.file, path.join(import.meta.dir, "cpuAdmission.ts"),
-        path.resolve(import.meta.dir, "../processIdentity.ts"), platform, String(at), action,
+        path.join(import.meta.dir, "cpuAdmission.v2.fixture.ts"), path.resolve(import.meta.dir, "../processIdentity.ts"), platform, String(at), String(elapsed), action,
         `command:bounded:${name}`, String(workers[name]!.pid)], { encoding: "utf8", timeout: 5_000 });
       expect(result.status, result.stderr).toBe(0);
       return JSON.parse(result.stdout);
@@ -672,22 +680,26 @@ for (const platform of ["linux", "win32"] as const) test.skipIf(platform === "li
     const activePeer = ["command:gate-active:command:bounded:peer"];
     const pastBound = CPU_QUEUE_UNPOLLED_MS + 1;
     try {
-      expect(run("head", 0, "poll")).toEqual({ wait: null, slots: [] });
-      expect(run("peer", CPU_QUEUE_UNPOLLED_MS)).toMatchObject({ wait: { position: 2, since: CPU_QUEUE_UNPOLLED_MS }, slots: [] });
+      const headWall = 300_000;
+      const rolledBack = platform === "linux" ? 300_000 : 0;
+      const wall = (elapsed: number) => headWall + elapsed - rolledBack;
+      expect(run("head", headWall, "poll", 0)).toEqual({ wait: null, slots: [] });
+      expect(run("peer", wall(CPU_QUEUE_UNPOLLED_MS), "claim", CPU_QUEUE_UNPOLLED_MS))
+        .toMatchObject({ wait: { position: 2, since: wall(CPU_QUEUE_UNPOLLED_MS) }, slots: [] });
       if (platform === "win32") {
-        expect(run("peer", pastBound)).toMatchObject({ wait: { position: 2 }, slots: [] });
+        expect(run("peer", wall(pastBound), "claim", pastBound)).toMatchObject({ wait: { position: 2 }, slots: [] });
         expect(f.read("SELECT key FROM unpolled")).toEqual([]);
         workers.head.stdin.end();
         expect(await workers.head.exited).toBe(0);
-        expect(run("peer", pastBound)).toEqual({ wait: null, slots: activePeer });
+        expect(run("peer", wall(pastBound), "claim", pastBound)).toEqual({ wait: null, slots: activePeer });
         return;
       }
 
-      expect(run("peer", pastBound)).toEqual({ wait: null, slots: activePeer });
+      expect(run("peer", wall(pastBound), "claim", pastBound)).toEqual({ wait: null, slots: activePeer });
       expect(f.read("SELECT key FROM unpolled")).toEqual([{ key: "command:bounded:head" }]);
-      const whileHeld = pastBound + CPU_QUEUE_SPACING_MS;
+      const whileHeld = wall(pastBound) + CPU_QUEUE_SPACING_MS;
       expect(run("later", pastBound, "poll")).toMatchObject({ wait: { position: 1 } });
-      expect(run("head", whileHeld)).toMatchObject({ wait: { position: 1, since: 0, heldBy: "queue" }, slots: activePeer });
+      expect(run("head", whileHeld)).toMatchObject({ wait: { position: 1, since: headWall, heldBy: "queue" }, slots: activePeer });
       expect(run("later", whileHeld)).toMatchObject({ wait: { position: 2 }, slots: activePeer });
       expect(f.read("SELECT key FROM unpolled")).toEqual([]);
 
@@ -699,6 +711,19 @@ for (const platform of ["linux", "win32"] as const) test.skipIf(platform === "li
       expect(run("later", whileHeld)).toMatchObject({ wait: { position: 1, heldBy: "queue" }, slots: activePeer });
       expect(run("peer", whileHeld, "release")).toEqual({ wait: null, slots: [] });
       expect(run("later", whileHeld)).toEqual({ wait: null, slots: ["command:gate-active:command:bounded:later"] });
+
+      // A mixed-version writer may repeat exactly the prior wall timestamp.
+      // Its real poll still invalidates the old boot-relative sample.
+      expect(run("later", whileHeld, "release")).toEqual({ wait: null, slots: [] });
+      const replayWall = whileHeld + CPU_QUEUE_SPACING_MS;
+      expect(run("restarted", replayWall, "poll")).toEqual({ wait: null, slots: [] });
+      const sample = () => f.read("SELECT linux_poll FROM tickets WHERE key = 'command:bounded:restarted'");
+      expect(sample()).toEqual([{ linux_poll: `fixture-boot:${replayWall}` }]);
+      expect(run("restarted", replayWall, "legacy-poll")).toBeNull();
+      expect(sample()).toEqual([{ linux_poll: null }]);
+      const observed = replayWall + CPU_QUEUE_UNPOLLED_MS + 1;
+      expect(run("peer", replayWall, "poll", observed)).toMatchObject({ wait: { position: 2 } });
+      expect(sample()).toEqual([{ linux_poll: `fixture-boot:${observed}` }]);
     } finally {
       for (const worker of Object.values(workers)) if (worker?.exitCode === null) worker.kill();
       await Promise.all(Object.values(workers).map(worker => worker?.exited));
@@ -924,7 +949,7 @@ test("releases racing to open an older queue describe it once and keep its live 
   // Every racer queued behind the command in its lane, none in its place.
   expect(waits.sort()).toEqual([2, 3, 4, 5, 6, 7]);
   expect(m.row(LIVE)).toEqual(first);
-  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 8 }]);
+  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 9 }]);
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
 });
 
@@ -942,7 +967,7 @@ test("a queue the first cut of this change left half-described keeps its live ti
   expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
   expect(m.row(LIVE)).toEqual(first);
   expect(m.read("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")).toEqual(
-    ["legacy_gate_retired", "suspended_hold", "suspended_keep", "suspended_release", "tickets_fifo", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
+    ["legacy_gate_retired", "suspended_hold", "suspended_keep", "suspended_release", "tickets_fifo", "tickets_gone", "tickets_linux_poll_reset", "tickets_poll", "tickets_queued"].map(name => ({ name })));
   m.at(2 * CPU_QUEUE_ABANDONED_MS + CPU_QUEUE_UNPOLLED_MS + 1);
   expect(q.check("stage:later", true)).toBeNull();
 });

@@ -1098,7 +1098,8 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   // The outer hook also allocates logs and Cloud input. Acquire its cleanup
   // owner before allocation; admitted children inherit the same journal.
   if (import.meta.main && !process.env.LLV_GATE_SANDBOX_RECORD) {
-    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) };
+    const parent = JSON.stringify(captureProcessIdentity(process.pid));
+    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: parent, LLV_GATE_HOOK_DISPATCH: parent };
     if (deadline) {
       const inherited = Number(env.LLV_OWNED_RUN_TIMEOUT_MS);
       const allowance = supervisorTimeoutMs(deadline.at, env);

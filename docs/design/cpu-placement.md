@@ -247,7 +247,9 @@ release that predates this records them as well. An unverified owner that has
 not checked in for 60 seconds is passed over, and after 24 hours removed. A
 dead owner is removed as before. Each of these writes one line naming the
 ticket and the reason. A bounded Linux gate waiter also yields its place after 60
-seconds without a poll, even when its wrapper is still alive. Its next poll
+seconds without a poll, even when its wrapper is still alive. Linux helpers
+persist the poll on the shared boot clock. A poll by an older helper clears
+that sample and the next observer starts a fresh interval. A returning waiter
 restores its original order and age. Other verified command owners keep their
 places. A start still needs its slot lock and the spacing when a ticket is
 passed over.
@@ -730,14 +732,15 @@ slot lock. The new wrapper waits for that pool to drain before its first
 claim. It checks the kernel's process view for wrappers that have consumed
 their tickets, owned runners and their cleanup supervisors. Signal-sandboxed
 callers use the verified host process view. A waiting shell still has its
-ticket. Local hooks can start an owned copy before heavy admission. The
-runner's recorded parent identity must match the live hook process and its
-command. For a client that predates the retirement journal, the cleanup
-runner must belong to the hook's checkout and supervise the matching hook
-with a live gate shell and an unconsumed queue ticket. The shell's step
-ancestry identifies the hook that launched it. A recorded retirement or
-missing evidence keeps a possible holder in the drain check. These checks
-use kernel process identities and queue state across wall-clock changes.
+ticket. A hook that starts its cleanup runner directly binds the launch to its
+live parent identity and exact command. The ordinary pre-push wrapper records
+its kernel identity when it takes the bypass branch. A unique service unit and
+its live launcher carry that proof into detached cleanup. During cutover, the
+known deployed dispatcher can still establish the direct launch from its live
+parent identity. An older ordinary wrapper also needs its own covered journal
+history and service invocation. A nested gate's ticket identifies only the
+nested gate. Possible legacy holders continue to fence the first claim until
+they exit.
 A held slot whose admission already passed the drain check carries that proof
 forward.
 The same final claim transaction rejects a drain observation if another caller
