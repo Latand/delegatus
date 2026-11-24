@@ -202,3 +202,39 @@ test("an event bound to a session revision is recorded only while the row still 
     expect(journal.readSession({ conversationId: "conversation_absent" })).toBeNull();
   } finally { journal.close(); }
 });
+
+test("startup operation pages retain native work after acknowledgement removes its outbox effect", async () => {
+  const journal = new RuntimeJournal(path.join(root, "startup-native-queue.sqlite"), { structuredHosts: true });
+  const host = new RuntimeHost(journal, undefined, undefined, true);
+  const conversationId = "conversation_startup_native";
+  const sessionKey = { engine: "codex" as const, sessionId: "startup-native-session" };
+  const page = async (pendingOperationsAfter: string) => {
+    const response = await host.handle({ id: "startup-active-operations", method: "startup-session-evidence",
+      params: { conversationIds: [], pendingOperationsAfter } });
+    expect(response.ok).toBe(true);
+    return response.result as RuntimeStartupSessionEvidence;
+  };
+  try {
+    journal.append({ scope: runtimeScope("session", conversationId), kind: "session-status", payload: {
+      conversationId, sessionKey, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      writerClaim: "synthetic:1", capabilities: { nativeQueue: true, steer: true, structuredAttention: true },
+    } });
+    const empty = await page("");
+    const operationId = "startup-native-work";
+    journal.executeOperation({ kind: "native-queue", conversationId, operationId, idempotencyKey: operationId,
+      action: "add", binding: { threadId: sessionKey.sessionId, accountId: null }, text: "Synthetic native work" });
+    journal.nativeQueueTransition(operationId, { phase: "prepared", input: [{ type: "text", text: "Synthetic native work" }] });
+    journal.nativeQueueTransition(operationId, { phase: "observed-queued", submission: {
+      id: "synthetic-native", clientUserMessageId: operationId, input: [{ type: "text", text: "Synthetic native work" }],
+    } });
+    expect(journal.effectBatch(100, ["runtime.native-queue"])).toHaveLength(0);
+    const pending = await page("");
+    expect(pending.effectsVersion).not.toBe(empty.effectsVersion);
+    expect(pending.pendingOperations).toEqual([expect.objectContaining({ operationId, conversationId, status: "queued" })]);
+    expect((await page(operationId)).pendingOperations).toEqual([]);
+    journal.transitionOperation(operationId, "failed");
+    const ended = await page("");
+    expect(ended.effectsVersion).not.toBe(pending.effectsVersion);
+    expect(ended.pendingOperations).toEqual([]);
+  } finally { journal.close(); }
+});

@@ -93,11 +93,11 @@ export interface StructuredDeliveryQueuePort {
   nativeQueueReconcile?(): Promise<void>;
   /** Startup owns recovery for hosts it has not registered yet. Leave their
    * original operations pending while already registered hosts keep serving. */
-  deferTarget?(conversationId: string): boolean;
+  deferTarget?(conversationId: string): boolean | Promise<boolean>;
   /** After restart-cut recognition, explicit sends may use normal keyed
    * recovery without waiting for unrelated startup rows. This grants no
    * engine-write authority and never admits automatic idle continuations. */
-  canRecoverDeferredTarget?(conversationId: string): boolean;
+  canRecoverDeferredTarget?(conversationId: string): boolean | Promise<boolean>;
   /** A reconfigure withdrawn before its claim, or whose claimed switch was cancelled (#1705). */
   reconfigureCancelled?(effect: StructuredReconfigureEffect): boolean;
   /** The failed account switch holding this conversation's messages, or null (#1846). */
@@ -1208,7 +1208,7 @@ export class StructuredDeliveryQueue {
         continue;
       }
       targets.push([conversationId, this.startLane(conversationId, async (lane) => {
-        if (this.port.deferTarget?.(conversationId)) {
+        if (await this.port.deferTarget?.(conversationId)) {
           const deferred = grouped.get(conversationId) ?? [];
           // Termination uses the recorded session identity without adopting
           // its host. Conditional kills still prove idleness and ownership at
@@ -1219,7 +1219,7 @@ export class StructuredDeliveryQueue {
           // that the ordinary per-conversation drain would process first. An
           // explicit interrupt rides with the sends: the ordinary drain gives
           // it its settlement ceiling, so it cannot hold them indefinitely.
-          const recoverSends = this.port.canRecoverDeferredTarget?.(conversationId)
+          const recoverSends = await this.port.canRecoverDeferredTarget?.(conversationId)
             && deferred.every(effect => (effect.kind === "send" && !effect.onlyIfIdle)
               || (effect.kind === "kill" && !effect.onlyIfIdle) || effect.kind === "interrupt");
           const heldControls: ControlEffect[] = [];
@@ -3705,7 +3705,7 @@ export class StructuredDeliveryQueue {
         this.rerun = true;
         return;
       }
-      if (this.port.deferTarget?.(effect.conversationId)) {
+      if (await this.port.deferTarget?.(effect.conversationId)) {
         releaseAdmissionWait();
         // A live predecessor may still be on its way to registration. A
         // refused competing recovery must not fail its original message.
@@ -3731,7 +3731,7 @@ export class StructuredDeliveryQueue {
         }
         return;
       }
-      if (error instanceof StructuredRecoverySynchronizingError && this.port.deferTarget?.(effect.conversationId)) {
+      if (error instanceof StructuredRecoverySynchronizingError && await this.port.deferTarget?.(effect.conversationId)) {
         releaseAdmissionWait();
         this.noteWait(effect, "startup", { wake: "retry" });
         this.retrySoon();

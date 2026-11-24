@@ -7,10 +7,12 @@ import { withHostStopOrigin } from "./hostExit";
 import { checkoutMergerCutForOperation, currentCheckoutMerger } from "./checkoutMergerRecovery";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { startupHostSnapshot } from "./startupSnapshot";
+import { startupHostSnapshot, startupStructuredHostKeys } from "./startupSnapshot";
+import { databaseFileIdentity } from "@/lib/state/currentDatabase";
+import { runtimeJournalPath } from "./deploymentLedger";
 import { verifiedBackgroundWork, type VerifiedBackgroundWorkCache, BACKGROUND_TASK_WAIT_CEILING_MS } from "@/lib/pipelines/backgroundTasks";
 import { AgentTranscriptCache } from "@/lib/agentState/transcript";
-import { registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
+import { registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart, flushStructuredHostPersistence, matchesStructuredHostCustody, structuredHostCustody, type AdoptedHostCustody } from "./registry";
@@ -126,6 +128,8 @@ interface HostAttachment {
 }
 
 type PreparedStartupPublication = {
+  work?: ReadonlySet<string>;
+  deferUnselected?: boolean;
   registry: AgentRegistry;
   snapshot: RegistryFile;
   ownsHost?: (item: StructuredDeliveryHost) => boolean;
@@ -840,6 +844,16 @@ export async function bindStructuredDeliveryQueue(
   let startupRecoveryReady = !startupPending;
   const startupRecipientGuards = new Map<string, () => void>();
   let deferredStartupConversations = new Set<string>();
+  let deferUnselected = false;
+  const pipelineDeferred = async (id: string) => {
+    const canonical = registry.canonicalConversationId(id as ViewerConversationId);
+    if (deferredStartupConversations.has(canonical)) return true;
+    if (!startupPending && !deferUnselected && !deferredStartupConversations.size) return false;
+    const { pipelineStartupTargetDeferred } = await import("./startup");
+    const held = await pipelineStartupTargetDeferred(registry, canonical).catch(() => true);
+    if (held && !startupPending) scheduleAutomaticRetry();
+    return held;
+  };
   let scheduleAutomaticRetry = () => {};
   let requestFailureNotices = () => {};
   let requestDrain = () => {};
@@ -1057,13 +1071,10 @@ export async function bindStructuredDeliveryQueue(
         return !Number.isFinite(accepted) || accepted >= Date.parse(hold.since);
       },
       terminalTurn: (conversationId) => registry.conversation(conversationId as ViewerConversationId)?.turn.state === "terminal",
-      deferTarget: (conversationId) => (startupPending
-        || (deferredStartupConversations.size > 0
-          && deferredStartupConversations.has(registry.canonicalConversationId(conversationId as ViewerConversationId))))
-        && hostResolver(registry, hosts)(conversationId) === null,
-      canRecoverDeferredTarget: (conversationId) => (startupRecoveryReady || startupPending)
-        && (deferredStartupConversations.size === 0
-          || !deferredStartupConversations.has(registry.canonicalConversationId(conversationId as ViewerConversationId))),
+      deferTarget: async (conversationId) => hostResolver(registry, hosts)(conversationId) === null
+        && (startupPending || await pipelineDeferred(conversationId) && hostResolver(registry, hosts)(conversationId) === null),
+      canRecoverDeferredTarget: async (conversationId) => (startupRecoveryReady || startupPending)
+        && !await pipelineDeferred(conversationId),
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
       /* Off the loop (rule c). The hold is written before the switch is
@@ -2396,6 +2407,7 @@ export async function bindStructuredDeliveryQueue(
     }
   };
   const publishedFallbacks = new Map<string, string>();
+  let fallbackJournal: string | null = null;
   let completion = Promise.resolve();
   const complete = (items: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive: () => void = () => {}, deferredConversationIds: ReadonlySet<string> = new Set(), prepared?: PreparedStartupPublication) => {
     /* Each startup phase begins on a turn of its own, so phases that settle
@@ -2423,17 +2435,17 @@ export async function bindStructuredDeliveryQueue(
          registering hosts so even a registration-triggered drain sees the
          repaired durable state. */
       deferredStartupConversations = new Set(deferredConversationIds);
+      deferUnselected = prepared?.deferUnselected === true;
       // This is a selection only. Marker repair, publication and terminal
       // settlement still read current ownership under their existing guards.
       const markerSnapshot = prepared?.registry === registry && registryStartupSelectionUnchanged(prepared.snapshot) === true
         ? prepared.snapshot : await registry.prepareReadOnlySnapshot();
       assertActive();
-      const markerKeys = registryKeysMatching(markerSnapshot, "entries", "structuredHost.kind",
-        ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"]);
+      const markerKeys = [...startupStructuredHostKeys(markerSnapshot, prepared?.work)];
       await forEachStartupBatch(markerKeys, async key => {
         const selected = performanceSpans.sync("runtime.startup.select", () => markerSnapshot.entries[key]);
         const entry = selected && startupHostSnapshot(registry, selected.key).entries[key];
-        if (entry?.pendingAction !== "spawn") return;
+        if (entry?.pendingAction !== "spawn" || entry.status === "dead" || entry.status === "unhosted") return;
         await registry.deliveryWriteOrBusy({ label: "registry.repairCompletedStructuredSpawnMarkers" }, () => {
           assertActive();
           if (superseded()) throw new StructuredDeliveryControllerUnavailableError();
@@ -2457,7 +2469,15 @@ export async function bindStructuredDeliveryQueue(
       }
       // Marker repair changes no membership or generation. This selection is
       // reused only to enumerate candidates; publication rechecks each host.
-      const startupSnapshot = markerSnapshot;
+      const journalPath = runtimeJournalPath();
+      const journal = databaseFileIdentity(journalPath);
+      if (journal !== fallbackJournal) {
+        publishedFallbacks.clear();
+        fallbackJournal = journal;
+      }
+      const sweep = registry.startupFallbackSweep?.(journal);
+      const startupSnapshot = sweep?.keys.length ? await registry.prepareReadOnlySnapshot() : markerSnapshot;
+      const fallbackKeys = new Set([...markerKeys, ...(sweep?.keys ?? [])]);
       /* Read only to skip republishing a projection that already says what
          this pass would say. It decides nothing else: the state published
          below is read off the registry, never off this snapshot, so a read
@@ -2472,9 +2492,7 @@ export async function bindStructuredDeliveryQueue(
       );
       await phase("publishing historical host fallbacks");
       const conversations = (function* () {
-        // Structured rows may be cold, so their indexed selection comes from
-        // marker repair.
-        for (const key of markerKeys) {
+        for (const key of fallbackKeys) {
           for (const conversation of registryConversationsForEntryKey(startupSnapshot, key)) {
             const generation = conversation.generations.at(-1);
             if (generation && sessionKeyId({ engine: conversation.engine, sessionId: generation.id }) === key) {
@@ -2506,6 +2524,15 @@ export async function bindStructuredDeliveryQueue(
         await successor(items, progress, assertActive, deferredConversationIds, prepared);
         return;
       }
+      if (sweep?.journal) {
+        await registry.deliveryWriteOrBusy({ label: "registry.startupFallbackWatermark" }, () => {
+          assertActive();
+          if (superseded() || databaseFileIdentity(journalPath) !== journal || !registry.finishStartupFallbackSweep(sweep)) {
+            throw new StructuredDeliveryControllerUnavailableError();
+          }
+        });
+      }
+      publishedFallbacks.clear();
       await phase("reconciling terminal delivery receipts");
       await reconcileTerminalDeliveries(registry, client, () => !stopped && state.activeQueue === queue, assertActive);
       await phase("draining startup delivery queue");

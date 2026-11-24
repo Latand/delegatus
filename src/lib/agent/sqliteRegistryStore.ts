@@ -495,7 +495,7 @@ function lookupSql(field: LookupField): string {
   return `json_extract(value_json,'${LOOKUP_PATHS[field]}')`;
 }
 
-type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
+type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue, hotOnly?: boolean) => string[];
 type BoundedKeyReader = (collection: RowCollection, filters: readonly { field: LookupField; value: LookupValue }[], limit: number) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
 type RetiredHostSelection = { keys: string[]; overflow: boolean; assertCurrent?: () => void };
@@ -801,6 +801,13 @@ export function registryKeysMatching<C extends RowCollection>(file: Pick<Registr
   return keyedReaders.get(file)?.(collection, field, value) ?? Object.entries(file[collection] ?? {}).filter(([, row]) => (typeof value === "string" ? [value] : value).includes(lookupValue(row, field) as string)).map(([key]) => key);
 }
 
+/** Indexed kind selection against the hot rows of this immutable view. */
+export function registryHotKeysMatching(file: RegistryFile, collection: "entries", field: "structuredHost.kind", value: LookupValue): string[] {
+  const cold = coldKeyReaders.get(file)?.(collection);
+  const indexed = coldKeyReaders.has(file) ? keyedReaders.get(file)?.(collection, field, value, true) : undefined;
+  return (indexed ?? registryKeysMatching(file, collection, field, value)).filter(key => !cold?.has(key));
+}
+
 /** A separate seek for each state keeps settled history outside the scan.
  * Each state contributes at most one page before the caller merges it. */
 export function registryOpenDeliveryKeys(file: RegistryFile, conversationId: string, states: readonly string[], after: string, limit: number): string[] {
@@ -991,6 +998,33 @@ const COLD_STABLE_ROW_BYTES = 48 * 1024 * 1024;
 const PREPARED_REPLAY_CHANGES = 256;
 
 type StoredRow = { collection: string; row_key: string; value_json: string; row_order: number };
+export type SpawnMarkerBackup = {
+  name: string;
+  revision: number;
+  row(collection: RowCollection, key: string): string | null;
+};
+
+type SpawnMarkerRepair = { key: string; launchId: string; backup: SpawnMarkerBackup };
+type SpawnMarkerImage = { value_json: string; row_order: number };
+type SpawnMarkerJournal = {
+  backup: string;
+  backupRevision: number;
+  revision: number;
+  rows: { collection: RowCollection; key: string; before: SpawnMarkerImage | null; after: SpawnMarkerImage | null }[];
+  meta: { key: (typeof META_FIELDS)[number]; before: string | null; after: string | null }[];
+};
+export class SpawnMarkerBackupChangedError extends Error {}
+const spawnMarkerJournalKey = (launchId: string) => `spawn_marker_settlement:${launchId}`;
+
+const STARTUP_FALLBACK_WATERMARK = "startup_fallback_watermark";
+export type StartupFallbackSweep = {
+  registry: string | null;
+  journal: string | null;
+  previous: string | null;
+  archiveId: number;
+  keys: string[];
+};
+
 type MetaRow = { key: string; value: string };
 type CachedRow = { valueJson: string; parsed: unknown };
 
@@ -3566,6 +3600,117 @@ export class SqliteAgentRegistryStore {
     return (file[collection] as Record<string, unknown>)[key];
   }
 
+  private spawnMarkerRow(collection: RowCollection, key: string): SpawnMarkerImage | null {
+    return this.db.query<SpawnMarkerImage, [string, string]>(
+      `SELECT value_json,row_order FROM ${this.recordsSource} WHERE collection=? AND row_key=?`,
+    ).get(collection, key);
+  }
+
+  spawnMarkerMatchesBackup({ key, launchId, backup }: SpawnMarkerRepair): boolean {
+    const before = this.spawnMarkerRow("entries", key);
+    const receipt = this.spawnMarkerRow("receipts", launchId);
+    return Boolean(before && receipt && before.value_json === backup.row("entries", key)
+      && receipt.value_json === backup.row("receipts", launchId));
+  }
+
+  private persistSpawnMarkerRepair(
+    file: DecidedRegistryFile, changes: RegistryChanges, revision: number, repair: SpawnMarkerRepair,
+  ): void {
+    if (this.meta(spawnMarkerJournalKey(repair.launchId))) throw new Error("a retained spawn marker settlement already owns this launch");
+    if (changes.order.size) throw new Error("spawn marker settlement cannot reorder registry collections");
+    const journal: SpawnMarkerJournal = {
+      backup: repair.backup.name, backupRevision: repair.backup.revision, revision: revision - 1, rows: [], meta: [],
+    };
+    for (const [collection, rows] of changes.rows) {
+      for (const key of rows.keys()) {
+        const before = this.spawnMarkerRow(collection, key);
+        if ((before?.value_json ?? null) !== repair.backup.row(collection, key)) throw new SpawnMarkerBackupChangedError();
+        journal.rows.push({ collection, key, before, after: null });
+      }
+    }
+    for (const key of changes.meta) journal.meta.push({ key, before: this.meta(key), after: null });
+    this.persistChanges(file, changes, revision);
+    for (const row of journal.rows) row.after = this.spawnMarkerRow(row.collection, row.key);
+    for (const row of journal.meta) row.after = this.meta(row.key);
+    // The registry and its before-images share the SQLite commit and backup.
+    // An interrupted writer cannot leave either half visible by itself.
+    this.setMeta(spawnMarkerJournalKey(repair.launchId), JSON.stringify(journal));
+  }
+
+  restoreSettledSpawnMarkers(launchId: string): "restored" | "missing-journal" | "changed-since-settlement" {
+    if (!this.writerHeld) throw new Error("spawn marker restore needs an admitted writer");
+    const key = spawnMarkerJournalKey(launchId);
+    const raw = this.meta(key);
+    if (!raw) return "missing-journal";
+    const journal = JSON.parse(raw) as SpawnMarkerJournal;
+    if (journal.rows.some(row => !isDeepStrictEqual(this.spawnMarkerRow(row.collection, row.key), row.after))
+      || journal.meta.some(row => this.meta(row.key) !== row.after)) return "changed-since-settlement";
+    for (const row of journal.rows) {
+      if (row.before) this.upsertRow(row.collection, row.key, row.before.value_json, row.before.row_order);
+      else this.deleteRow(row.collection, row.key);
+    }
+    for (const row of journal.meta) {
+      if (row.key === "conversationRevision" && row.before && row.after) {
+        const before = JSON.parse(row.before) as Record<string, number>;
+        const after = JSON.parse(row.after) as Record<string, number>;
+        for (const [engine, revision] of Object.entries(after)) if (revision !== before[engine]) after[engine] = revision + 1;
+        this.setMeta(row.key, JSON.stringify(after));
+      } else if (row.key === "engineRouting" && row.before && row.after) {
+        const before = JSON.parse(row.before) as Record<string, { revision: number }>;
+        const after = JSON.parse(row.after) as Record<string, { revision: number }>;
+        for (const engine of Object.keys(after)) if (after[engine]?.revision !== before[engine]?.revision) after[engine]!.revision += 1;
+        this.setMeta(row.key, JSON.stringify(after));
+      } else if (row.before === null) this.db.query("DELETE FROM registry_meta WHERE key=?").run(row.key);
+      else this.setMeta(row.key, row.before);
+    }
+    this.db.query("DELETE FROM registry_meta WHERE key=?").run(key);
+    const revision = Number(this.meta("revision") ?? 0) + 1;
+    this.setMeta("revision", String(revision));
+    this.drainEndingChanges();
+    this.db.exec("COMMIT");
+    this.writerHeld = false;
+    this.onDatabaseReopened(this.db);
+    this.rememberRevision(revision);
+    this.onCreditGuardChange?.();
+    return "restored";
+  }
+
+  startupFallbackSweep(journal: string | null): StartupFallbackSweep | null {
+    if (!this.changesReady) return null;
+    const registry = databaseFileIdentity(this.filename);
+    return this.db.transaction(() => {
+      const previous = this.meta(STARTUP_FALLBACK_WATERMARK);
+      let after = 0;
+      if (previous && journal) {
+        try {
+          const saved = JSON.parse(previous) as { journal?: string; archiveId?: number } | null;
+          if (saved?.journal === journal && Number.isSafeInteger(saved.archiveId) && saved.archiveId! >= 0) after = saved.archiveId!;
+        } catch { /* An unrecognized checkpoint requires a complete sweep. */ }
+      }
+      const archiveId = this.db.query<{ id: number }, []>("SELECT COALESCE(MAX(id),0) AS id FROM registry_archive").get()!.id;
+      const keys = this.db.query<{ row_key: string }, [number, number]>(`
+        SELECT c.row_key FROM registry_archive a CROSS JOIN registry_cold c
+        WHERE a.id > ? AND a.id <= ? AND a.collection='entries'
+          AND c.collection=a.collection AND c.row_key=a.row_key AND c.archive_id=a.id
+          AND json_extract(a.value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp','antigravity-acp')
+        ORDER BY a.id`,
+      ).all(after, archiveId).map(row => row.row_key);
+      return { registry, journal, previous, archiveId, keys };
+    })();
+  }
+
+  finishStartupFallbackSweep(sweep: StartupFallbackSweep): boolean {
+    if (!this.writerHeld) throw new Error("startup fallback watermark needs an admitted writer");
+    if (!sweep.journal || databaseFileIdentity(this.filename) !== sweep.registry
+      || this.meta(STARTUP_FALLBACK_WATERMARK) !== sweep.previous) return false;
+    const value = JSON.stringify({ journal: sweep.journal, archiveId: sweep.archiveId });
+    if (value === sweep.previous) return true;
+    this.setMeta(STARTUP_FALLBACK_WATERMARK, value);
+    this.db.exec("COMMIT");
+    this.writerHeld = false;
+    return true;
+  }
+
   /* 250 rows per pass keeps the write lock short: a 1,000-row pass held it for
      about 160 ms on an idle machine and 0.8 s on a loaded one, and every
      writer waits that long synchronously (#2761). */
@@ -4349,8 +4494,17 @@ export class SqliteAgentRegistryStore {
               (${startupSelectionCollections.map(() => "?").join(",")}) LIMIT 129`).all(startupSelectionChecked, ...startupSelectionCollections);
           if (changes.length > 128) return null;
           const read = this.db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`);
+          const hotStructuredEntry = this.db.query(`SELECT 1 FROM registry_hot_rows
+            WHERE collection='entries' AND row_key=? AND json_extract(value_json,'$.structuredHost.kind')
+              IN ('codex-app-server','claude-broker','copilot-acp','antigravity-acp')`);
+          const pinnedColdEntries = coldKeys.get("entries");
           const changed: StartupSelectionChange[] = [];
           for (const change of changes) {
+            if (change.collection === "entries" && pinnedColdEntries?.has(change.row_key)
+              && hotStructuredEntry.get(change.row_key)) {
+              changed.push({ collection: change.collection, key: change.row_key });
+              continue;
+            }
             const raw = read.get(change.collection,change.row_key);
             this.onRowPayloadRead?.(change.collection,raw ? 1 : 0);
             const current = raw ? parseSqliteJson(raw.value_json,this.db) : undefined;
@@ -4367,7 +4521,7 @@ export class SqliteAgentRegistryStore {
     const pinnedReceipts = this.changesReady ? this.pinnedRowKeys(file, "receipts", coldGrantChangeId, identity, this.collectionOrders.get("receipts")?.orders) : null;
     const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;
     const pinnedOwners = this.changesReady ? this.pinnedRowKeys(file, "deliveryOperationOwners", coldGrantChangeId, identity) : null;
-    const pinnedEntries = this.changesReady ? this.pinnedRowKeys(file, "entries", coldGrantChangeId, identity) : null;
+    const pinnedEntries = this.changesReady ? this.pinnedRowKeys(file, "entries", coldGrantChangeId, identity, this.collectionOrders.get("entries")?.orders) : null;
     pageReaders.set(file, (collection, after, limit, filter) => {
       if (this.changeId() !== coldGrantChangeId || databaseFileIdentity(this.filename) !== identity)
         throw new DatabaseReplacedError("registry page needs a fresh snapshot");
@@ -4401,13 +4555,15 @@ export class SqliteAgentRegistryStore {
       for (const { row_key: key } of changed) if (rows[key] && holds(rows[key])) keys.push(key);
       return keys.slice(0, limit);
     });
-    keyedReaders.set(file,(collection,field,value) => {
+    keyedReaders.set(file,(collection,field,value,hotOnly) => {
       const values = typeof value === "string" ? [value] : value;
       if (!values.length) return [];
-      const indexed = () => this.matchingRowKeys(collection, field, values);
+      const indexed = () => this.matchingRowKeys(collection, field, values, false, hotOnly);
       if (collection === "entries" && (field === "structuredHost.kind" || field === "artifactPath")) {
         const holds = (entry: AgentRegistryEntry) => values.includes(field === "artifactPath" ? entry.artifactPath : entry.structuredHost?.kind ?? "");
-        return pinnedEntries ? pinnedEntries(indexed, holds) : Object.keys(file.entries).filter(key => holds(file.entries[key]!));
+        const cold = hotOnly ? coldKeys.get("entries") : undefined;
+        return pinnedEntries ? pinnedEntries(indexed, holds, cold)
+          : Object.keys(file.entries).filter(key => !cold?.has(key) && holds(file.entries[key]!));
       }
       if (collection === "receipts") {
         const holds = (receipt: RegistryFile["receipts"][string]) => values.includes(lookupValue(receipt, field) as string);
@@ -4608,7 +4764,7 @@ export class SqliteAgentRegistryStore {
     let seen = changeId;
     let changed: Set<string> | null = new Set();
     let order: ReadonlyMap<string, number> | undefined = originalOrder;
-    return (indexed: () => string[], holds: (row: Row) => boolean): string[] => {
+    return (indexed: () => string[], holds: (row: Row) => boolean, exclude?: ReadonlySet<string>): string[] => {
       /* The index is read before the journal: whatever commits between the
          two reads is in the journal, and is then answered from the view. */
       const current = indexed();
@@ -4621,10 +4777,11 @@ export class SqliteAgentRegistryStore {
         seen = last;
       }
       const rows = file[collection] as Record<string, Row>;
-      if (!changed) return (mergedKeysOf(rows) ?? Object.keys(rows)).filter(key => holds(rows[key]!));
+      if (!changed) return (mergedKeysOf(rows) ?? Object.keys(rows)).filter(key => !exclude?.has(key) && holds(rows[key]!));
       if (!changed.size) return current;
       const owners = current.filter(key => !changed!.has(key));
       for (const key of changed) {
+        if (exclude?.has(key)) continue;
         const row = rows[key];
         if (row && holds(row)) owners.push(key);
       }
@@ -4684,7 +4841,7 @@ export class SqliteAgentRegistryStore {
   }
 
   /** The callback must finish inside the transaction; no lazy object escapes. */
-  private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[], exactSpawnAttempt = false): string[] {
+  private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[], exactSpawnAttempt = false, hotOnly = false): string[] {
     if (field === "custodyState" || field === "migration.custodyState") return this.matchingRowKeysBounded(collection, [{ field, value: values }], Number.MAX_SAFE_INTEGER, true);
     const distinct = [...new Set(values)];
     if (!distinct.length) return [];
@@ -4706,6 +4863,11 @@ export class SqliteAgentRegistryStore {
         const extracted = `json_extract(${column},'${jsonPath}')`;
         return exactSpawnAttempt ? `${extracted} = ${parameter}` : `${extracted} IN (${parameter})`;
       };
+      if (hotOnly && this.changesReady) {
+        return this.db.query<{ row_key: string; row_order: number }, string[]>(
+          `SELECT row_key,row_order FROM registry_hot_rows WHERE collection='${collection}' AND ${match("value_json")} ORDER BY row_order`,
+        ).all(...bindings);
+      }
       return mapped
         ? this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM registry_hot_rows
             WHERE collection='${collection}' AND ${match("value_json")}
@@ -5609,7 +5771,10 @@ export class SqliteAgentRegistryStore {
     return { result, file: null, revision };
   }
 
-  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string; noWait?: boolean } = {}): SqliteRegistryMutation<T> {
+  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string; noWait?: boolean; spawnMarkerRepair?: SpawnMarkerRepair } = {}): SqliteRegistryMutation<T> {
+    if (options.spawnMarkerRepair && (!this.writerHeld || this.mutationBatch)) {
+      throw new Error("spawn marker settlement needs its own admitted writer");
+    }
     if (this.mutationBatch) return this.mutateBatchMember(operation, includeSnapshot);
     let operationName = options.operationName ?? operation.name;
     /* {@link withWriter} already opened the write transaction for this call. */
@@ -5666,7 +5831,8 @@ export class SqliteAgentRegistryStore {
         if (changed) {
           // Inside the write lock, so no other connection commits in between.
           const before = this.storeStamp();
-          this.persistChanges(current.file, changes, revision);
+          if (options.spawnMarkerRepair) this.persistSpawnMarkerRepair(current.file, changes, revision, options.spawnMarkerRepair);
+          else this.persistChanges(current.file, changes, revision);
           stamps = { before, after: this.storeStamp() };
         }
         this.db.exec("COMMIT");

@@ -2268,6 +2268,13 @@ export function startStructuredHostRetirement(ports: {
   if (retirementHost.__llvStructuredHostRetirementTimer) return;
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
   const sweep = ports.sweep ?? (async () => {
+    // The inventory reaper runs in a sidecar. Settle historical launch
+    // markers here, where the serving release owns structured hosts.
+    if (process.env.LLV_STATE_OWNER === "viewer" && process.env.NODE_ENV !== "test") {
+      const { settleStaleSpawnMarkers } = await import("./structuredSpawn");
+      try { await settleStaleSpawnMarkers(agentRegistry(), runtimeHostClient(), { apply: true }); }
+      catch (error) { console.error("[spawn] stale marker batch failed", error instanceof Error ? error.name : "unknown"); }
+    }
     await releaseIdleStructuredHostEventWindows();
     return reconcileStructuredHostRetirement();
   });

@@ -1,10 +1,16 @@
-import { recordedAgentScope } from "./agentScope";
+import { agentScopeCommand, differentKernelBoot, normalizeAgentScope, recordedAgentScope } from "./agentScope";
 import { recoverMemberAdoption } from "./memberAdoptionRecovery";
 import { withStructuredSetupCustody } from "./structuredSetupCustody";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
-import { startupHostSnapshot } from "./startupSnapshot";
+import { startupHostSnapshot, startupStructuredHostKeys } from "./startupSnapshot";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { nextBuildPhase, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
+import { BACKUP_DIRECTORY, listBackups } from "@/lib/state/durability";
+import { databaseFileIdentity, databaseSwapInProgress } from "@/lib/state/currentDatabase";
+import { findPipelineRecord, withPipelineStartupAdmission } from "@/lib/pipelines/store";
+import { runtimeJournalPath } from "./deploymentLedger";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { guardedDiskCleanerProfile, type CleanerSandboxObservation } from "@/lib/agent/cleanerLaunchPolicy";
 import { assertCleanerSandboxAvailable } from "./cleanerSandboxProbe";
@@ -34,11 +40,11 @@ import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode, resolveAntigravityBinary, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
-import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns, type StructuredHostClaimDecision } from "@/lib/agent/registry";
+import { RegistryWriterBusyError, conversationIdsResolvingTo, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns, type StructuredHostClaimDecision } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { readRuntimeSnapshot } from "./snapshotReads";
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryKeysMatchingBounded, registryRowsMatching, type RowCollection } from "@/lib/agent/sqliteRegistryStore";
 import { yieldToRuntime } from "@/lib/cooperative";
 import type { SpawnResponse } from "@/lib/agent/spawnResponse";
 import { prepareManagedClaudeSpawnHome, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
@@ -1292,6 +1298,232 @@ async function actuateQueuedPinnedSpawn(
     }
   }
   return registry.spawnReceipt(receipt.launchId) ?? admissionClaim.receipt;
+}
+
+const staleMarkerCursor = new WeakMap<AgentRegistry, string>();
+const lastStaleMarkerSkips = new WeakMap<AgentRegistry, Map<string, string>>();
+const activeMarkerOperation = new Set(["pending", "queued", "delivering", "applying"]);
+
+function staleSpawnMarkerRefusal(file: RegistryFile, key: string, receipt: SpawnReceipt): string | null {
+  const entry = file.entries[key];
+  if (!entry || entry.pendingAction !== "spawn" || (entry.status !== "dead" && entry.status !== "unhosted")
+    || !receipt.key || sessionKeyId(receipt.key) !== key || entry.artifactPath !== receipt.artifactPath
+    || entry.structuredHostOperationId !== receipt.launchId || receipt.transport !== "structured") return "owner-changed";
+  if (entry.host || entry.structuredHost?.process || entry.claimOwner || receipt.queuedPinnedSpawn || receipt.retryClaim
+    || receipt.pane || receipt.verifiedHost) return "live-owner";
+  if (receipt.hostSetup?.phase === "executing" && !receipt.hostSetup.cleanupConfirmed && !receipt.hostSetup.processes.length) {
+    return "unproven-process";
+  }
+  const identities = [entry.paneAgent, entry.hostExitProcess, entry.structuredHost?.exitProcess, entry.previousHostExit?.process,
+    ...entry.pendingHostExits?.map(exit => exit.process) ?? [], ...entry.structuredTerminationSurvivors ?? [],
+    receipt.admissionOwner, ...receipt.hostSetup?.processes ?? []];
+  const boot = systemBootEpoch();
+  if (identities.some(identity => identity && (!identity.startIdentity || !identity.bootEpoch
+    || (identity.bootEpoch !== boot && !differentKernelBoot(identity.bootEpoch, boot))
+    || processIdentityStatus(identity) !== "dead"))) return "unproven-process";
+  if (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true) return "active-signal-domain";
+  const ids = conversationIdsResolvingTo(file, resolveConversationAlias(file, receipt.conversationId));
+  if (registryKeysMatchingBounded(file, "heldDeliveries", [
+    { field: "conversationId", value: ids }, { field: "state", value: ["held", "assigned", "delivery-uncertain"] },
+  ], 1).length || registryKeysMatchingBounded(file, "deliveryOperationOwners", [
+    { field: "conversationId", value: ids }, { field: "custodyState", value: "pending" },
+  ], 1).length) {
+    return "outstanding-delivery";
+  }
+  return null;
+}
+
+function closedMarkerPipelines(file: RegistryFile, receipt: SpawnReceipt): string[] | null {
+  const canonical = resolveConversationAlias(file, receipt.conversationId);
+  const ids = [...new Set(conversationIdsResolvingTo(file, canonical).flatMap(id =>
+    (file.memberships[id] ?? []).flatMap(member => member.kind === "pipeline" ? [member.containerId] : [])))];
+  if (!ids.length) return null;
+  try {
+    return ids.every(id => {
+      const pipeline = findPipelineRecord(id);
+      return pipeline && (pipeline.state === "completed" || pipeline.state === "closed" || pipeline.state === "failed" && pipeline.closedAt);
+    }) ? ids : null;
+  } catch { return null; }
+}
+
+function markerTranscriptStamp(pathname: string): string {
+  try {
+    const stat = fs.statSync(pathname, { bigint: true });
+    return JSON.stringify([String(stat.dev), String(stat.ino), String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)]);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw error;
+  }
+}
+
+/** The serving Viewer converges failed entry markers and closed staged
+    launches in bounded batches. Dry run takes the same decisions without
+    writer admission. Runtime and backup failures leave the marker pending. */
+export async function settleStaleSpawnMarkers(
+  registry: AgentRegistry,
+  client: RuntimeHostClient | null,
+  options: { apply: boolean; now?: () => number; limit?: number; afterKey?: string; journalPath?: string; assertActive?: () => void },
+): Promise<{ key: string; group: "M1" | "M2" | "M3" | "other"; reason: string }[]> {
+  const directory = path.dirname(registry.filename);
+  assertStateStartupMutation(directory, "registry spawn marker settlement");
+  if (options.apply && (process.env.LLV_STATE_OWNER !== "viewer"
+    || nextBuildPhase() || process.env.NODE_ENV === "test" || !stateMutationActivationOpen()
+    || process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER === "1")) throw new Error("spawn marker settlement requires the serving Viewer");
+  const authority = readHotStateAuthority(directory);
+  const journalPath = options.journalPath ?? runtimeJournalPath();
+  const journalIdentity = databaseFileIdentity(journalPath);
+  const checkAuthority = () => {
+    options.assertActive?.();
+    if (!options.apply) return;
+    const current = readHotStateAuthority(directory);
+    if (!viewerReleaseOwnsTraffic() || activeDrain() || current?.mode === "fencing"
+      || current?.epoch !== authority?.epoch || current?.releaseRevision !== authority?.releaseRevision
+      || !journalIdentity || databaseFileIdentity(journalPath) !== journalIdentity || databaseSwapInProgress(journalPath)) {
+      throw new Error("spawn marker settlement lost release or runtime journal authority");
+    }
+  };
+  const now = options.now ?? Date.now;
+  const limit = options.limit ?? STALE_STRUCTURED_SPAWN_ACTUATION_CAP;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > STALE_STRUCTURED_SPAWN_ACTUATION_CAP) throw new RangeError("invalid spawn marker batch size");
+  const snapshot = await registry.prepareReadOnlySnapshot();
+  const keys = [...startupStructuredHostKeys(snapshot)]
+    .filter(key => {
+      const entry = snapshot.entries[key];
+      return entry?.pendingAction === "spawn" && (entry.status === "dead" || entry.status === "unhosted");
+    }).sort();
+  if (!keys.length) return [];
+  const cursor = options.apply ? staleMarkerCursor.get(registry) : options.afterKey;
+  const next = cursor === undefined ? 0 : keys.findIndex(key => key > cursor);
+  if (next < 0 && !options.apply) return [];
+  const offset = Math.max(0, next);
+  const count = Math.min(limit, options.apply ? keys.length : keys.length - offset);
+  const batch = [...keys.slice(offset, offset + count), ...keys.slice(0, Math.max(0, offset + count - keys.length))];
+  const backups = path.join(directory, BACKUP_DIRECTORY);
+  const backup = listBackups(backups, "agent-registry.sqlite")[0];
+  const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+  const open = (filename: string) => sqlite ? new sqlite.Database(filename, { readonly: true, create: false }) : null;
+  const backupIdentity = backup && fs.lstatSync(backup.file, { throwIfNoEntry: false })?.isFile()
+    && !fs.existsSync(`${backup.file}-wal`) ? databaseFileIdentity(backup.file) : null;
+  const copy = backup && backupIdentity ? open(backup.file) : null;
+  let journal: ReturnType<typeof open> = null;
+  try {
+    journal = journalIdentity ? open(journalPath) : null;
+    const revision = Number(copy?.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='revision'").get()?.value ?? NaN);
+    const backupRow = copy?.query<{ value_json: string }, [string, string]>(
+      "SELECT value_json FROM registry_records WHERE collection=? AND row_key=?");
+    const proof = backupRow && backup && Number.isSafeInteger(revision)
+      ? { name: backup.name, revision, row: (collection: RowCollection, key: string) => backupRow.get(collection, key)?.value_json ?? null }
+      : null;
+    const openOperation = journal?.query<{ open: number }, [string, string, string]>(`
+      SELECT 1 AS open FROM operations WHERE (operation_id IN (?1, ?2) OR conversation_id=?3)
+        AND json_extract(receipt_json,'$.status') IN ('pending','queued','delivering','applying') LIMIT 1`);
+    const openEffect = journal?.query<{ open: number }, [string]>(`
+      SELECT 1 AS open FROM outbox WHERE state IN ('pending', 'retained') AND state='pending'
+        AND CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.conversationId') END=? LIMIT 1`);
+    const recordedOpen = (file: RegistryFile, receipt: SpawnReceipt) =>
+      conversationIdsResolvingTo(file, resolveConversationAlias(file, receipt.conversationId))
+        .some(id => openOperation?.get(receipt.launchId, `spawn_message_${receipt.launchId}`, id) || openEffect?.get(id));
+    const rows: Awaited<ReturnType<typeof settleStaleSpawnMarkers>> = [];
+    for (const key of batch) {
+      options.assertActive?.();
+      const entry = snapshot.entries[key]!;
+      const launchId = entry.structuredHostOperationId;
+      const receipt = launchId ? snapshot.receipts[launchId] : null;
+      const group = receipt?.state === "path-pending" ? "M3"
+        : receipt?.state === "failed" || receipt?.state === "conflicted" ? entry.status === "dead" ? "M1" : "M2" : "other";
+      const decide = async (): Promise<string> => {
+        if (!receipt || !launchId) return "missing-receipt";
+        if (receipt.state === "completed") return "completed-receipt";
+        if (group === "other") return "receipt-open";
+        const refusal = staleSpawnMarkerRefusal(snapshot, key, receipt);
+        if (refusal) return refusal;
+        if (!proof) return "backup-unavailable";
+        if (!registry.staleSpawnMarkerMatchesBackup(key, launchId, proof)) return "changed-since-backup";
+        const scopes = new Map<string, string | null>();
+        try {
+          const scope = recordedAgentScope(entry.structuredHost);
+          if (scope) scopes.set(scope.unit, scope.bootEpoch);
+          const memory = entry.structuredHost?.memory?.unit;
+          if (memory && !scopes.has(memory)) {
+            if (!normalizeAgentScope({ unit: memory, bootEpoch: null })) return "unproven-unit";
+            scopes.set(memory, null);
+          }
+          for (const [unit, boot] of scopes) {
+            if (boot && differentKernelBoot(boot, systemBootEpoch())) continue;
+            if (await agentScopeCommand(["show", "--value", "-p", "LoadState", unit]) !== "not-found") return "active-unit";
+          }
+        } catch { return "unproven-unit"; }
+        const pipes = group === "M3" ? closedMarkerPipelines(snapshot, receipt) : null;
+        if (group === "M3" && !pipes) return "pipeline-reserved";
+        if (group === "M3" && !stagedLaunchRecovery(receipt)) return "staged-recovery-unproven";
+        if (group === "M3" && (!Number.isFinite(structuredSetupStartedAt(receipt))
+          || now() - structuredSetupStartedAt(receipt) < STALE_STRUCTURED_SPAWN_TIMEOUT_MS)) return "receipt-fresh";
+        if (!client || !openOperation) return "runtime-unavailable";
+        const generation = await client.startupGeneration?.().catch(() => null);
+        if (!generation) return "runtime-unavailable";
+        const observations = await Promise.all([launchId, `spawn_message_${launchId}`].map(async operationId => {
+          try { return await client.operationStatus(operationId, { currentRetryLeaf: true }); }
+          catch { return undefined; }
+        }));
+        if (observations.includes(undefined) || generation !== await client.startupGeneration?.().catch(() => null)) return "runtime-unavailable";
+        if (observations.some(operation => operation && activeMarkerOperation.has(operation.receipt.status))
+          || recordedOpen(snapshot, receipt)) return "operation-open";
+        const pathname = receipt.artifactPath!;
+        const stamp = group === "M3" ? markerTranscriptStamp(pathname) : null;
+        const outcome = group !== "M3" ? "clear" : stamp !== "missing" && hasUserAuthoredMessage(pathname, receipt.engine) ? "recover" : "fail";
+        if (outcome === "fail" && observations[1] && ["delivered", "turn-started", "steered"].includes(observations[1].receipt.status)) {
+          return "delivery-evidence-unresolved";
+        }
+        if (!options.apply) return `would-${outcome}`;
+        if (client.startupListenerIdentity?.() !== generation) return "runtime-generation-unproven";
+        const write = (file: RegistryFile, current: SpawnReceipt): string | null => {
+          checkAuthority();
+          if (client.startupListenerIdentity?.() !== generation) return "runtime-generation-changed";
+          if (databaseFileIdentity(backup!.file) !== backupIdentity) return "backup-replaced";
+          const reason = staleSpawnMarkerRefusal(file, key, current);
+          if (reason) return reason;
+          if (recordedOpen(file, current)) return "operation-open";
+          if (group === "M3" && (!closedMarkerPipelines(file, current) || markerTranscriptStamp(pathname) !== stamp)) return "staged-evidence-changed";
+          return null;
+        };
+        const apply = () => registry.settleStaleSpawnMarker(key, launchId, proof, outcome, write);
+        if (pipes) return withPipelineStartupAdmission(async available => {
+          if (!available) return "pipeline-unavailable";
+          const admitted = registry.deliveryWriteNow({ label: "spawn.marker-settlement", operationId: launchId }, apply);
+          return admitted.acquired ? admitted.value : "writer-busy";
+        }, "settling closed staged launch", undefined, true, {
+          recipient: { ids: pipes, conversationIds: [receipt.conversationId], agentPaths: [pathname], sessionIds: [entry.key.sessionId] },
+        });
+        const admitted = await registry.deliveryWrite({ label: "spawn.marker-settlement", operationId: launchId }, apply);
+        return admitted.acquired ? admitted.value : "writer-busy";
+      };
+      let reason: string;
+      try { reason = await decide(); }
+      catch (error) {
+        checkAuthority();
+        console.error("[spawn] marker settlement deferred", { key, error: error instanceof Error ? error.name : "unknown" });
+        reason = "evidence-unavailable";
+      }
+      rows.push({ key, group, reason });
+      if (options.apply) staleMarkerCursor.set(registry, key);
+    }
+    if (options.apply) {
+      const previous = lastStaleMarkerSkips.get(registry) ?? new Map();
+      const current = new Map([...previous].filter(([key]) => keys.includes(key)));
+      for (const row of rows) {
+        if (["settled", "recovered", "failed"].includes(row.reason)) current.delete(row.key);
+        else if (current.get(row.key) !== row.reason) {
+          console.warn("[spawn] stale marker skipped", row);
+          current.set(row.key, row.reason);
+        }
+      }
+      lastStaleMarkerSkips.set(registry, current);
+    }
+    return rows;
+  } finally {
+    copy?.close();
+    journal?.close();
+  }
 }
 
 /** Bounded, idempotent convergence for stale non-terminal structured launches

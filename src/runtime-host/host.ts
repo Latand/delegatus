@@ -168,7 +168,11 @@ export class RuntimeHost {
         if (includeEvidence !== undefined && (typeof includeEvidence !== "boolean" || (includeEvidence && ids.length !== 1))) {
           throw new Error("runtime startup session evidence requires one identity");
         }
-        result = this.journal.startupSessionEvidence(ids, includeEvidence === true);
+        const after = request.params?.pendingOperationsAfter;
+        if (after !== undefined && (typeof after !== "string" || after.length > 512 || ids.length !== 0)) {
+          throw new Error("runtime startup operation cursor is invalid");
+        }
+        result = this.journal.startupSessionEvidence(ids, includeEvidence === true, after);
       }
       else if (request.method === "events") result = this.journal.replay(Number(request.params?.after ?? 0));
       else if (request.method === "wait") result = await this.journal.waitForEvents(

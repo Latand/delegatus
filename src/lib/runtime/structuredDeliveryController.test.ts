@@ -19,6 +19,7 @@ import type { RuntimeHostClient } from "./client";
 import {
   structuredDeliveryMcpObservation,
   bindStructuredDeliveryQueue,
+  completeStructuredDeliveryQueueStartup,
   structuredDeliveryHeapCounts,
   releaseIdleStructuredHostEventWindows,
   publishStructuredHostProjection,
@@ -471,3 +472,45 @@ for (const change of ["none", "voice-before", "voice-after", "owner-after", "epo
     } finally { releaseVoiceSession(f.conversation.id); await f.cleanup(); }
   });
 }
+
+test("fallback publication retries an interrupted archive sweep and repeats it after the journal is replaced", async () => {
+  const f = migrationDeliveryFixture();
+  const previousJournal = process.env.LLV_RUNTIME_JOURNAL;
+  const journalPath = path.join(f.root, "publication-identity.sqlite");
+  fs.writeFileSync(journalPath, "first journal identity");
+  process.env.LLV_RUNTIME_JOURNAL = journalPath;
+  const entry = f.registry.hostEntry(f.key)!;
+  f.registry.upsert({ ...entry, status: "dead", claimOwner: null,
+    structuredHost: { ...entry.structuredHost!, endpoint: "stdio:released" } });
+  expect(f.registry.archiveInactiveRows()).toBe(1);
+  const client = {
+    ...f.client, readSession: async () => null,
+    append: async (): Promise<unknown> => { throw new Error("fixture lost publication reply"); },
+  };
+  const read = spyOn(client, "readSession");
+  try {
+    const bind = () => bindStructuredDeliveryQueue([], { registry: f.registry, client, deferStartupWork: true,
+      watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
+    await bind();
+    await expect(completeStructuredDeliveryQueueStartup([])).rejects.toThrow("fixture lost publication reply");
+    expect(f.registry.startupFallbackSweep("unrelated-journal")!.previous).toBeNull();
+    client.append = f.client.append;
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(read).toHaveBeenCalledTimes(2);
+    const before = read.mock.calls.length;
+    await bind();
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(read).toHaveBeenCalledTimes(before);
+    const replacement = `${journalPath}.new`;
+    fs.writeFileSync(replacement, "replacement journal identity");
+    fs.renameSync(replacement, journalPath);
+    await bind();
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(read).toHaveBeenCalledTimes(before + 1);
+  } finally {
+    read.mockRestore();
+    if (previousJournal === undefined) delete process.env.LLV_RUNTIME_JOURNAL;
+    else process.env.LLV_RUNTIME_JOURNAL = previousJournal;
+    await f.cleanup();
+  }
+});

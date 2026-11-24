@@ -5,7 +5,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry, type AgentRegistrySqliteMode, type SpawnLauncher } from "@/lib/agent/registry";
-import { failedLaunchRepairQuery } from "@/lib/agent/sqliteRegistryStore";
+import { failedLaunchRepairQuery, type RowCollection } from "@/lib/agent/sqliteRegistryStore";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { claimPass, patchPass, readPass } from "@/lib/memory/curation/store";
@@ -29,7 +29,9 @@ import {
   recoverPendingStructuredSpawns,
   reconcileStructuredSpawnReplay,
   spawnStructuredConversation,
+  settleStaleSpawnMarkers,
   terminalizeStaleStructuredSpawns,
+  writeStagedRecovery,
 } from "./structuredSpawn";
 
 const DEAD_RUNTIME_CLIENT = {
@@ -1859,4 +1861,132 @@ test.each(["uncertain", "delivered"] as const)("a staged %s launch stays non-ret
   fs.writeFileSync(store.filename, JSON.stringify(cleaned));
   await terminalizeStaleStructuredSpawns(restarted, client, { now: () => start + STAGED_RECOVERY_BUDGET_MS });
   expect(restarted.snapshot().receipts[receipt.launchId]!.state).toBe("failed");
+});
+
+test("failed spawn marker dry run, backup comparison and guarded restore", async () => {
+  const store = registry("sqlite");
+  const directory = path.dirname(store.filename);
+  const { RuntimeJournal } = await import("../../runtime-host/journal");
+  const { BACKUP_DIRECTORY, backupDatabase, stateDatabases } = await import("@/lib/state/durability");
+  const journalPath = path.join(directory, "marker-runtime.sqlite");
+  const journal = new RuntimeJournal(journalPath, { structuredHosts: true });
+  const client = { ...DEAD_RUNTIME_CLIENT, startupGeneration: async () => "fixture-runtime" };
+  try {
+    const { receipt, key } = stagedStructuredReceipt(store, "marker-backup");
+    const row = store.hostEntry(key)!;
+    store.upsert({ ...row, status: "dead", claimOwner: null, structuredHost: { ...row.structuredHost!, process: null } });
+    const launchId = receipt.launchId;
+    await store.failSpawnOffLoop(launchId, "fixture first delivery failed");
+    const id = `codex:${key.sessionId}`;
+    expect(store.hostEntry(key)?.pendingAction).toBe("spawn");
+    const { conversationDeliverabilityFromRecord } = await import("@/lib/conversation/deliverability");
+    expect(await conversationDeliverabilityFromRecord(store.readOnlySnapshot(), { conversationId: receipt.conversationId }))
+      .toMatchObject({ condition: "synchronizing", resumeRequired: false });
+    const database = stateDatabases(directory).find(candidate => candidate.name === "agent-registry.sqlite")!;
+    const backup = backupDatabase(database, { backupDirectory: path.join(directory, BACKUP_DIRECTORY), freeBytes: () => null });
+    expect(backup.state).toBe("taken");
+    if (backup.state !== "taken") throw new Error("fixture backup was refused");
+    const copy = new Database(backup.file, { readonly: true });
+    try {
+      const proof = {
+        name: path.basename(backup.file), revision: Number(backup.revision),
+        row: (collection: RowCollection, key: string) => copy.query<{ value_json: string }, [string, string]>(
+          "SELECT value_json FROM registry_records WHERE collection=? AND row_key=?",
+        ).get(collection, key)?.value_json ?? null,
+      };
+      const options = { apply: false, journalPath };
+      expect(await settleStaleSpawnMarkers(store, client, options)).toEqual([{ key: id, group: "M1", reason: "would-clear" }]);
+      expect(store.hostEntry(key)?.pendingAction).toBe("spawn");
+      await expect(settleStaleSpawnMarkers(store, client, { ...options, apply: true })).rejects.toThrow("requires the serving Viewer");
+      const run = () => store.deliveryWriteOrBusy({ label: "spawn.marker-settlement" }, () =>
+        store.settleStaleSpawnMarker(id, launchId, proof, "clear", () => null));
+      const original = store.hostEntry(key)!;
+      expect(await run()).toBe("settled");
+      expect(store.hostEntry(key)).toMatchObject({ status: "dead", pendingAction: null, structuredHost: null });
+      expect(await conversationDeliverabilityFromRecord(store.readOnlySnapshot(), { conversationId: receipt.conversationId }))
+        .toMatchObject({ condition: "reclaimed", resumeRequired: true });
+      expect(store.spawnReceipt(launchId)?.state).toBe("failed");
+      const restore = () => store.deliveryWriteOrBusy({ label: "spawn.marker-restore" }, () => store.restoreSettledSpawnMarkers(launchId));
+      expect(await restore()).toBe("restored");
+      expect(store.hostEntry(key)).toEqual(original);
+      expect(await restore()).toBe("missing-journal");
+      expect(await run()).toBe("settled");
+      store.upsert({ ...store.hostEntry(key)!, status: "unhosted" });
+      expect(await restore()).toBe("changed-since-settlement");
+      expect(await run()).toBe("changed-since-backup");
+    } finally { copy.close(); }
+  } finally {
+    store.close();
+    journal.close();
+    fs.rmSync(directory, { force: true, recursive: true });
+  }
+});
+
+test("a closed stage returns its stale marker to spawn recovery while a running stage retains it", async () => {
+  const store = registry("sqlite");
+  const directory = path.dirname(store.filename);
+  const { RuntimeJournal } = await import("../../runtime-host/journal");
+  const { BACKUP_DIRECTORY, backupDatabase, stateDatabases } = await import("@/lib/state/durability");
+  const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+  const journalPath = path.join(directory, "marker-runtime.sqlite");
+  const journal = new RuntimeJournal(journalPath, { structuredHosts: true });
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  try {
+    const fixtures = ["closed", "running", "paused", "unreadable"].map(name => {
+      const { receipt, key } = stagedStructuredReceipt(store, `pipeline-marker-${name}`);
+      const row = store.hostEntry(key)!;
+      store.upsert({ ...row, status: "dead", claimOwner: null, structuredHost: { ...row.structuredHost!, process: null } });
+      const pipeline = buildPipeline({ id: `marker-${name}`, task: "Synthetic stage recovery", project: "fixture", repoDir: directory,
+        stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+          effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "high", access: "read-write", promptScaffold: null } }],
+        srcPath: null, srcConversationId: null, now: "2026-10-01T00:00:00.000Z" });
+      store.rememberMembership(receipt.conversationId, { kind: "pipeline", containerId: pipeline.id, role: "builder", slot: "build",
+        stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
+      if (name === "closed") {
+        pipeline.state = "closed";
+        pipeline.closedAt = "2026-10-02T00:00:00.000Z";
+        pipeline.cursor = null;
+      } else if (name === "running") pipeline.state = "running";
+      else if (name === "paused") pipeline.state = "paused";
+      return { name, receipt, key, pipeline };
+    });
+    for (const fixture of fixtures) {
+      expect(await writeStagedRecovery(store, fixture.receipt.launchId, {
+        phase: "uncertain", startedAt: Date.parse("2026-10-01T00:00:00.000Z"), checks: 5,
+        nextTryAt: Date.parse("2026-10-01T00:00:00.000Z"), reason: "fixture stopped", stopped: true,
+      })).toBe(true);
+    }
+    savePipelines(fixtures.filter(item => item.name !== "unreadable").map(item => item.pipeline));
+    const database = stateDatabases(directory).find(candidate => candidate.name === "agent-registry.sqlite")!;
+    const backup = backupDatabase(database, { backupDirectory: path.join(directory, BACKUP_DIRECTORY), freeBytes: () => null });
+    if (backup.state !== "taken") throw new Error("fixture backup was refused");
+    const client = { ...DEAD_RUNTIME_CLIENT, startupGeneration: async () => "fixture-runtime" };
+    const rows = await settleStaleSpawnMarkers(store, client, { apply: false, journalPath, now: AGED });
+    expect(rows.map(item => `${item.key} ${item.group} ${item.reason}`)).toEqual(fixtures
+      .map(item => `codex:${item.key.sessionId} M3 ${item.name === "closed" ? "would-fail" : "pipeline-reserved"}`).sort());
+    const target = fixtures[0]!;
+    const copy = new Database(backup.file, { readonly: true });
+    try {
+      const proof = {
+        name: path.basename(backup.file), revision: Number(backup.revision),
+        row: (collection: RowCollection, key: string) => copy.query<{ value_json: string }, [string, string]>(
+          "SELECT value_json FROM registry_records WHERE collection=? AND row_key=?",
+        ).get(collection, key)?.value_json ?? null,
+      };
+      const settled = await store.deliveryWriteOrBusy({ label: "spawn.marker-settlement" }, () => store.settleStaleSpawnMarker(
+        `codex:${target.key.sessionId}`, target.receipt.launchId, proof, "fail", () => null,
+      ));
+      expect(settled).toBe("failed");
+      expect(store.hostEntry(target.key)?.pendingAction).toBeNull();
+      expect(store.spawnReceipt(target.receipt.launchId)?.state).toBe("failed");
+      for (const fixture of fixtures.slice(1)) expect(store.hostEntry(fixture.key)?.pendingAction).toBe("spawn");
+    } finally { copy.close(); }
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    store.close();
+    journal.close();
+    fs.rmSync(directory, { force: true, recursive: true });
+  }
 });

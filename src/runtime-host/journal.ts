@@ -87,7 +87,11 @@ function nativeQueueReceipt(entry: NativeQueueRecord): NonNullable<RuntimeOperat
 }
 
 const STARTUP_EFFECT_REVISION = "startup_effect_revision";
+const activeStartupOperation = (row = "") => `json_extract(${row}receipt_json, '$.status') IN ('pending', 'queued', 'delivering', 'applying')`;
 const startupEffectWriteTriggers = [
+  ["active_operation_insert", `AFTER INSERT ON operations WHEN ${activeStartupOperation("NEW.")}`],
+  ["active_operation_update", `AFTER UPDATE OF receipt_json, operation_id, conversation_id ON operations WHEN ${activeStartupOperation("OLD.")} OR ${activeStartupOperation("NEW.")}`],
+  ["active_operation_delete", `AFTER DELETE ON operations WHEN ${activeStartupOperation("OLD.")}`],
   ["outbox_insert", "AFTER INSERT ON outbox WHEN NEW.state = 'pending'"],
   ["outbox_update", "AFTER UPDATE ON outbox WHEN OLD.state = 'pending' OR NEW.state = 'pending'"],
   ["outbox_delete", "AFTER DELETE ON outbox WHEN OLD.state = 'pending'"],
@@ -575,6 +579,7 @@ export class RuntimeJournal {
           receipt_json TEXT NOT NULL, event_seq INTEGER NOT NULL, orphaned_since INTEGER,
           UNIQUE(conversation_id, idempotency_key)
         )`,
+        `CREATE INDEX IF NOT EXISTS startup_active_operations ON operations(operation_id) WHERE ${activeStartupOperation()}`,
         `CREATE TABLE IF NOT EXISTS delivery_operation_actions (
           operation_id TEXT PRIMARY KEY,
           winner TEXT NOT NULL CHECK(winner IN ('discard', 'retry')),
@@ -2356,7 +2361,7 @@ export class RuntimeJournal {
     }).immediate();
   }
 
-  startupSessionEvidence(conversationIds: readonly string[], includeEvidence = false) {
+  startupSessionEvidence(conversationIds: readonly string[], includeEvidence = false, pendingOperationsAfter?: string) {
     this.assertHealthy();
     // Existing rows with no write tick predate the tracking schema.
     const read = this.db.query<{ stamp: number }, [string]>(`
@@ -2368,6 +2373,15 @@ export class RuntimeJournal {
       const version = this.effectPageVersion();
       const sessions = conversationIds.map(id => read.get(id)?.stamp ?? null);
       const result = { generation: this.effectReaderGeneration, version, effectsVersion, sessions };
+      if (pendingOperationsAfter !== undefined) {
+        // Native queue receipts can still be queued after their effect is
+        // completed. Only the active receipt index can attest to these.
+        const pendingOperations = this.db.query<{ receipt_json: string }, [string]>(`
+          SELECT receipt_json FROM operations WHERE operation_id > ? AND ${activeStartupOperation()}
+          ORDER BY operation_id LIMIT 100`,
+        ).all(pendingOperationsAfter).map(row => runtimePresentationReceipt(JSON.parse(row.receipt_json) as RuntimeOperationReceipt));
+        return { ...result, pendingOperations };
+      }
       if (!includeEvidence) return result;
       const session = this.entity<RuntimeSession>("session", conversationIds[0]!, false);
       const evidence = session && {

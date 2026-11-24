@@ -31,7 +31,7 @@ const UNREADABLE_LEDGER = "deployment ledger is unreadable";
  * lock, and never create the table if it is absent.
  */
 
-function ledgerPath(env: NodeJS.ProcessEnv = process.env): string {
+export function runtimeJournalPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.LLV_RUNTIME_JOURNAL?.trim() || statePath("runtime-events.sqlite");
 }
 
@@ -44,7 +44,7 @@ function openLedger(env: NodeJS.ProcessEnv = process.env): Database | null {
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) return null;
   try {
-    return observeSqlite(new sqlite.Database(ledgerPath(env), { readonly: true, create: false }), "deployment-ledger");
+    return observeSqlite(new sqlite.Database(runtimeJournalPath(env), { readonly: true, create: false }), "deployment-ledger");
   } catch {
     /* No journal on this host, or it is not readable from here. The caller
        reports that as unreadable rather than as an empty ledger. */

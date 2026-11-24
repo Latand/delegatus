@@ -1300,4 +1300,5 @@ export interface RuntimeStartupSessionEvidence {
   effectsVersion: string;
   sessions: (number | null)[];
   evidence?: StartupRuntimeSession | null;
+  pendingOperations?: RuntimeOperationReceipt[];
 }
