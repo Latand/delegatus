@@ -1,5 +1,5 @@
-/* Straight from lucide: `@/components/icons` imports this module for the two
-   engine glyph names, and a cycle through it would be needless. */
+/* Straight from lucide: `@/components/icons` imports this module for the engine
+   glyph names, and a cycle through it would be needless. */
 import { MessageCircle, Terminal } from "lucide-react";
 
 import { engineBadgeFor } from "@/components/utils";
@@ -7,11 +7,11 @@ import { engineBadgeFor } from "@/components/utils";
 /**
  * The one engine mark the Viewer draws (#1743). Every surface that used to pick
  * its own glyph — a lucide `Sparkle`, a `Command`, a coloured dot, a filled
- * avatar — renders this instead, so Claude and Codex read the same on a
- * conversation card, a stage chip, a graph node, a pane header and an account
- * picker.
+ * avatar — renders this instead, so Claude, Codex and Antigravity read the same
+ * on a conversation card, a stage chip, a graph node, a pane header and a
+ * limits footer.
  *
- * ## Where the two marks come from
+ * ## Where the marks come from
  *
  * **Claude** is the vendor's own mark, so it is recognisable rather than a
  * lookalike. The path is copied verbatim (geometry unaltered) from the
@@ -29,20 +29,46 @@ import { engineBadgeFor } from "@/components/utils";
  * outlined square of the shell's terminal glyph is a silhouette difference, not
  * a fill-and-hue one, so the two never read alike at 12 px.
  *
- * Colour never carries the engine alone: Claude's open spark and Codex's solid
- * disc differ in silhouette, so the pair reads in monochrome and for
- * colour-blind operators. `--color-claude-mark` / `--color-codex-mark` are the
- * mark tokens (light Claude is deepened to clear the 3:1 floor for a graphical
- * object on the tinted light surfaces).
+ * **Antigravity** is drawn for this product as the periodic-table tile for Neon
+ * (atomic number 10 in the top-left corner above Ne) — the exact same drawing
+ * `StageGlyph` uses for the `neon` model glyph (`NeonTileSvg`), painted in
+ * `--color-antigravity-mark` / `--glyph-neon` and sharing the CSS neon glow
+ * (`modelGlyph.css`) whenever `working` is true.
+ *
+ * Colour never carries the engine alone: Claude's open spark, Codex's solid
+ * disc and Antigravity's periodic-table Ne tile differ in silhouette, so they
+ * read in monochrome and for colour-blind operators. `--color-claude-mark`,
+ * `--color-codex-mark` and `--color-antigravity-mark` are the mark tokens
+ * (each clearing the 3:1 floor for a graphical object on light and dark
+ * surfaces).
  *
  * Codex's cut-out strokes are painted in `--engine-mark-cut`, which defaults to
  * the card surface. A host that draws the mark inside a filled avatar sets that
  * variable to its own fill, so the prompt stays a hole rather than a smudge.
  */
 
-export type EngineMarkSize = 12 | 14 | 16 | 18;
+export type EngineMarkSize = 12 | 14 | 16 | 18 | 24;
 
-export function EngineMark({ engine, size = 12, tone = "engine", label, className }: {
+/* Periodic-table cell for Neon (element 10, symbol Ne) on a 16-unit grid:
+   atomic number 10 in the top-left corner above Ne, plus an inner neon gas
+   chamber (`.mg-neon-gas`) that glows and pulses over GLYPH_TURN_MS when live. */
+const NEON_NUM = "M3.15 2.75V4.85";
+const NEON_SYM = "M3.2 12.6V6.8L7.3 12.6V6.8M9.55 10.6H12.9C12.9 9.25 12.15 8.4 11.2 8.4C10.15 8.4 9.45 9.3 9.45 10.55C9.45 11.8 10.2 12.6 11.35 12.6C12 12.6 12.5 12.38 12.8 12.05";
+
+/** Shared Neon periodic-table tile SVG drawn by both `EngineMark` and `StageGlyph`. */
+export function NeonTileSvg({ style }: { style?: { width: string; height: string } }) {
+  return (
+    <svg viewBox="0 0 16 16" style={style} aria-hidden="true">
+      <rect className="mg-neon-gas" x="2.1" y="2.1" width="11.8" height="11.8" rx="1.4" />
+      <rect className="mg-tile" x="1" y="1" width="14" height="14" rx="2.3" />
+      <path className="mg-neon-num" d={NEON_NUM} />
+      <rect className="mg-neon-num" x="4.4" y="2.75" width="1.7" height="2.1" rx="0.8" />
+      <path className="mg-neon-sym" d={NEON_SYM} />
+    </svg>
+  );
+}
+
+export function EngineMark({ engine, size = 12, tone = "engine", label, working = false, className }: {
   engine: string;
   /** Square box in px. The mark never shrinks inside a flex row. */
   size?: EngineMarkSize;
@@ -52,18 +78,24 @@ export function EngineMark({ engine, size = 12, tone = "engine", label, classNam
   /** Present: the mark is an image with this label. Absent: it is decoration
       beside text (or a host label) that already names the engine. */
   label?: string;
+  /** True only while the agent's turn is actively running. For Antigravity,
+      activates the shared CSS neon halo and gas pulse (steady under reduced motion). */
+  working?: boolean;
   className?: string;
 }) {
   const aria = label ? { role: "img" as const, "aria-label": label } : { "aria-hidden": true };
   const color = tone === "inherit" ? undefined
     : engine === "claude" ? "var(--color-claude-mark)"
       : engine === "codex" ? "var(--color-codex-mark)"
-        : engine === "openclaw" ? "var(--color-openclaw)"
-          : "var(--color-muted)";
+        : engine === "antigravity" ? "var(--color-antigravity-mark)"
+          : engine === "openclaw" ? "var(--color-openclaw)"
+            : "var(--color-muted)";
+  const isAntigravity = engine === "antigravity";
   return (
     <span
       data-engine-mark={engine}
-      className={`inline-grid shrink-0 place-items-center${className ? ` ${className}` : ""}`}
+      data-live={isAntigravity && working ? "1" : undefined}
+      className={`inline-grid shrink-0 place-items-center${isAntigravity ? " emark-neon" : ""}${className ? ` ${className}` : ""}`}
       style={{ width: `${size}px`, height: `${size}px`, color }}
       title={label}
       {...aria}
@@ -102,6 +134,7 @@ function EngineGlyph({ engine, size }: { engine: string; size: number }) {
       </svg>
     );
   }
+  if (engine === "antigravity") return <NeonTileSvg style={box} />;
   if (engine === "openclaw") return <MessageCircle style={box} aria-hidden />;
   if (engine === "shell") return <Terminal style={box} aria-hidden />;
   /* An engine this build has no mark for: a neutral dot, never a wrong mark. */
@@ -119,16 +152,17 @@ function EngineGlyph({ engine, size }: { engine: string; size: number }) {
  * size stay the host's, because these sit in rows tuned to very different
  * densities; what is shared is the mark, the word and the tint.
  */
-export function EngineBadge({ engine, className = "", title, size = 12 }: {
+export function EngineBadge({ engine, className = "", title, size = 12, working = false }: {
   engine: string;
   className?: string;
   title?: string;
   size?: EngineMarkSize;
+  working?: boolean;
 }) {
   const badge = engineBadgeFor(engine);
   return (
     <span className={`inline-flex shrink-0 items-center gap-1 rounded-full ${className}`} style={badge.style} title={title}>
-      <EngineMark engine={engine} size={size} tone="inherit" />
+      <EngineMark engine={engine} size={size} tone={engine === "antigravity" ? "engine" : "inherit"} working={working} />
       {badge.label}
     </span>
   );
