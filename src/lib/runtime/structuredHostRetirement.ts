@@ -1,7 +1,7 @@
 import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
 import { observeAgentProcess } from "@/lib/agentState/process";
 import { AGENT_STATE_POLICY } from "@/lib/agentState/model";
-import { entryRevision, subjectId } from "@/lib/agentState/store";
+import { entryRevision, readAgentProjection, subjectId } from "@/lib/agentState/store";
 import { fileSignature, NATIVE_SIZE_REFUSALS } from "@/lib/agentState/transcript";
 import { servingAgentStateService } from "@/lib/agentState/service";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
@@ -293,11 +293,33 @@ export function structuredHostRetirementBatch(
 const REPORT_FILE = () => statePath("host-retirement-report.json");
 const JOURNAL_FILE = () => statePath("host-retirement-journal.ndjson");
 const CURSOR_FILE = () => statePath("host-retirement-cursor.json");
+const CURSOR_V2_FILE = () => statePath("host-retirement-cursor-v2.json");
 const JOURNAL_ROTATE_BYTES = 4 * 1024 * 1024;
+const LEGACY_RETIREMENT_KEY = /^(claude|codex|copilot):[0-9a-f-]{36}$/i;
+const ANTIGRAVITY_RETIREMENT_KEY = /^antigravity:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+function isLegacyRetirementKey(key: string | null): boolean {
+  return key === null || LEGACY_RETIREMENT_KEY.test(key);
+}
+
+function isExtendedRetirementKey(key: string | null): boolean {
+  return isLegacyRetirementKey(key)
+    || (typeof key === "string" && ANTIGRAVITY_RETIREMENT_KEY.test(key) && !key.includes(".."));
+}
+
+function cursorFileSignature(filename: string): string | null {
+  try {
+    const stat = fs.statSync(filename, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch {
+    return null;
+  }
+}
 
 /** A key survives row removal and insertion, unlike an offset in a shrinking list. */
 function readRetirementCursor(): string | null {
   let value: unknown;
+  let v1Exists = true;
   try {
     const fd = fs.openSync(CURSOR_FILE(), "r");
     try {
@@ -308,16 +330,66 @@ function readRetirementCursor(): string | null {
     } finally { fs.closeSync(fd); }
   }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw new Error(`retirement cursor could not be read: ${safeReason(error)}`);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      v1Exists = false;
+      value = { version: 1, afterKey: null };
+    } else {
+      throw new Error(`retirement cursor could not be read: ${safeReason(error)}`);
+    }
   }
-  return parseRetirementCursor(value);
+  const v1Key = parseRetirementCursor(value);
+  if (v1Key === null) {
+    const v2Key = readRetirementCursorV2(v1Exists ? cursorFileSignature(CURSOR_FILE()) : null);
+    if (v2Key !== null) return v2Key;
+  }
+  return v1Key;
+}
+
+function readRetirementCursorV2(expectedV1Signature: string | null): string | null {
+  try {
+    const fd = fs.openSync(CURSOR_V2_FILE(), "r");
+    let raw: unknown;
+    try {
+      const buffer = Buffer.alloc(513);
+      const length = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      if (length > 512) return null;
+      raw = JSON.parse(buffer.subarray(0, length).toString("utf8"));
+    } finally { fs.closeSync(fd); }
+    const cursor = raw as { version?: unknown; afterKey?: unknown; v1Signature?: unknown } | null;
+    if (cursor?.version !== 2) return null;
+    if (typeof cursor.afterKey !== "string" || !isExtendedRetirementKey(cursor.afterKey)) return null;
+    if ((cursor.v1Signature ?? null) !== expectedV1Signature) return null;
+    return cursor.afterKey;
+  } catch {
+    return null;
+  }
+}
+
+function writeRetirementCursor(afterKey: string | null): void {
+  if (isLegacyRetirementKey(afterKey)) {
+    const cursor = { version: 1, afterKey };
+    parseRetirementCursor(cursor);
+    atomicWrite(CURSOR_FILE(), cursor);
+    try { fs.unlinkSync(CURSOR_V2_FILE()); } catch { /* absent */ }
+    return;
+  }
+  if (!isExtendedRetirementKey(afterKey)) {
+    throw new Error("retirement cursor is invalid");
+  }
+  // Keep `host-retirement-cursor.json` strictly v1-compatible (`afterKey: null`)
+  // so rollback to a previous release never fails cursor validation, while
+  // recording Antigravity's exact cursor in the additive v2 sidecar bound to v1's signature.
+  const v1Cursor = { version: 1, afterKey: null };
+  parseRetirementCursor(v1Cursor);
+  atomicWrite(CURSOR_FILE(), v1Cursor);
+  const v1Signature = cursorFileSignature(CURSOR_FILE());
+  atomicWrite(CURSOR_V2_FILE(), { version: 2, afterKey, v1Signature });
 }
 
 function parseRetirementCursor(value: unknown): string | null {
   const cursor = value as { version?: unknown; afterKey?: unknown } | null;
   if (cursor?.version !== 1 || !(cursor.afterKey === null
-    || typeof cursor.afterKey === "string" && /^(claude|codex|copilot):[0-9a-f-]{36}$/i.test(cursor.afterKey))) {
+    || typeof cursor.afterKey === "string" && isExtendedRetirementKey(cursor.afterKey))) {
     throw new Error("retirement cursor is invalid");
   }
   return cursor.afterKey;
@@ -1434,7 +1506,9 @@ function retirementSubject(
   });
   const finishedStage = qualifiesForPipelineWaiver(pipelineStanding);
 
-  const central = cachedAgentObservation(subjectId(entry)) ?? inputs.file.agentStates?.[subjectId(entry)];
+  const central = cachedAgentObservation(subjectId(entry))
+    ?? inputs.file.agentStates?.[subjectId(entry)]
+    ?? (entry.key.engine === "antigravity" ? readAgentProjection(agentRegistry(), subjectId(entry)) : undefined);
   let centralSettled: boolean | null = null;
   let abandonedTurn = false;
   let openNativeTurnId: string | null = null;
@@ -1988,11 +2062,7 @@ export async function runStructuredHostRetirementSweep(
 
   // Persist the attempted-work boundary before the first admission/termination
   // await. A failed write aborts visibly; restart resumes before deferred work.
-  (dependencies.writeCursor ?? ((afterKey) => {
-    const cursor = { version: 1, afterKey };
-    parseRetirementCursor(cursor);
-    atomicWrite(CURSOR_FILE(), cursor);
-  }))(afterKey);
+  (dependencies.writeCursor ?? writeRetirementCursor)(afterKey);
 
   const reconcileGoneAndReport = async (entry: RegistryFile["entries"][string], conversationId: string | null,
     unflushed: StructuredHostUnflushedEvents | null) => {

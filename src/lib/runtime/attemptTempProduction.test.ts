@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { buildPipeline, savePipelines, findPipelineRecord } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
-import { materializeStructuredHostAccess } from "./structuredSpawn";
+import { materializeOwnedStructuredHostAccess, materializeStructuredHostAccess, tempOwnerForConversation } from "./structuredSpawn";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { runTempSweep, scanProcesses, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { statePath } from "@/lib/configDir";
@@ -832,7 +835,7 @@ test.each([0, 1, 2, 3, 4])("a restored checkout holds scratch across consumer aw
   } finally { store.close(); }
 });
 
-test("production schedules scratch on attempt completion, cancels on reopen and retires after the next completion", async () => {
+test.each(["first launch", "rehost"])("production schedules scratch on attempt completion, cancels on reopen and retires after the next completion (%s)", async generation => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-production-")); roots.push(root);
   isolateState(root);
   const { AttemptTempStore } = await import("./attemptTempRetention");
@@ -846,19 +849,30 @@ test("production schedules scratch on attempt completion, cancels on reopen and 
     srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
   pipeline.state = "running";
   pipeline.cursor = null;
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: pipeline.worktreeDir!, transport: "structured" });
+  if (begun.kind !== "created") throw new Error("fixture receipt missing");
+  const { conversationId } = begun.receipt;
+  registry.rememberMembership(conversationId, { kind: "pipeline", containerId: pipeline.id, role: "builder",
+    slot: "build:1", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
   const attempt: PipelineStageAttempt = { n: 1, state: "running", launchId: "temp-launch", effectiveRole: role,
-    conversationId: "fixture-conversation", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    conversationId, sessionId: null, agentPath: null, paneId: null, flowId: null,
     startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null,
     output: null, verdict: null, error: null };
   pipeline.runs = [{ stageId: "build", attempts: [attempt] }];
   fs.mkdirSync(pipeline.worktreeDir!, { recursive: true });
   savePipelines([pipeline]);
-  const access = materializeStructuredHostAccess({ readOnly: false, sandbox: "full" }, { ...process.env, HOME: root }, null, undefined,
-    { pipelineId: pipeline.id, launchId: "temp-launch", retainUntilClose: false });
+  const newHost = generation === "rehost" ? "replacement-host-id" : attempt.launchId!;
+  const stageReceipt = stageGitReceiptDirectory(attempt.launchId!);
+  expect(tempOwnerForConversation(registry, conversationId, newHost, stageGitReceiptDirectory("another-attempt")).launchId).toBe(newHost);
+  const access = await materializeOwnedStructuredHostAccess({ readOnly: false, sandbox: "full" }, { ...process.env, HOME: root }, null,
+    () => tempOwnerForConversation(registry, conversationId, newHost, stageReceipt));
   const sandbox = access.env.LLV_AGENT_SANDBOX_ROOT;
   fs.writeFileSync(path.join(access.env.TMPDIR!, "review-export"), "settled scratch");
   const directories = [access.scratchDirectory!, sandbox!];
-  const scan = () => ({ ownNamespace: null, processes: [] });
+  let liveScratch = false;
+  const scan = () => ({ ownNamespace: null, processes: liveScratch
+    ? [{ pid: 41, namespace: null, stamped: false, paths: [access.scratchDirectory!] }] : [] });
   const tick = (mode = "on") => runAttemptTempSweep({ scan, references }, { NODE_ENV: "test", LLV_TEMP_SWEEP: mode });
   const store = new AttemptTempStore();
   const deadlines = () => directories.map(directory => store.retentionExpiry(directory));
@@ -869,6 +883,7 @@ test("production schedules scratch on attempt completion, cancels on reopen and 
     return now + ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS;
   };
   try {
+    expect(directories.map(directory => store.owner(directory)?.launchId ?? null)).toEqual([attempt.launchId, attempt.launchId]);
     await tick(); await tick(); await tick(); // Complete the initial audit.
     expect(deadlines()).toEqual([null, null]);
     now += 60_000;
@@ -907,10 +922,68 @@ test("production schedules scratch on attempt completion, cancels on reopen and 
     expect(preview).toMatchObject({ removed: 2, reclaimedBytes: 0, cleanup: { reclaimedBytesLastHour: 0 } });
     expect(directories.every(directory => fs.existsSync(directory))).toBeTrue();
     now += 60_000;
+    liveScratch = true;
+    expect(await tick()).toMatchObject({ checked: 2, removed: 1, liveHeld: 1, errors: 0 });
+    expect(fs.existsSync(access.scratchDirectory!)).toBeTrue();
+    liveScratch = false;
+    now += 30 * 60_000;
     const retired = await tick();
-    expect(retired).toMatchObject({ checked: 2, removed: 2, errors: 0 });
+    expect(retired).toMatchObject({ checked: 1, removed: 1, errors: 0 });
     expect(directories.some(directory => fs.existsSync(directory) || store.has(directory))).toBeFalse();
   } finally { store.close(); clock.mockRestore(); }
+});
+
+test("scheduled scratch adoption recovers a recorded attempt and holds an ambiguous sibling", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-scratch-custody-")); roots.push(root);
+  isolateState(root);
+  const { AttemptTempStore } = await import("./attemptTempRetention");
+  const { runAttemptTempSweep } = await import("./attemptTempProduction");
+  const now = Date.parse("2035-01-15T00:00:00Z"), clock = spyOn(Date, "now").mockReturnValue(now);
+  const completedAt = "2035-01-06T00:00:00Z", launchId = "legacy-scratch-launch";
+  const lane = finishedLane(root, completedAt);
+  lane.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId,
+    effectiveRole: lane.stages[0]!.effectiveRole, conversationId: "fixture", sessionId: null, agentPath: null,
+    paneId: null, flowId: null, startedAt: completedAt, completedAt, input: null,
+    activatedBy: null, output: "finished", verdict: { status: "pass" }, error: null }] }];
+  savePipelines([lane]);
+  const known = statePath("scratch", "llv-stage-Stale1"), unknown = statePath("scratch", "llv-stage-Stale2");
+  for (const directory of [known, unknown]) {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(directory, "data"), "scratch");
+  }
+  const store = new AttemptTempStore();
+  try {
+    store.adopt(now - 1); // Simulate the old production ledger's ownerless rows.
+    expect(store.owner(known)?.launchId).toBe("adopted");
+    await holdFinishedRoot(known, lane.id, "", [], launchId);
+    const report = await runAttemptTempSweep({ references, scan: () => ({ ownNamespace: null, processes: [] }) },
+      { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" });
+    expect(report).toMatchObject({ adopted: 1, removed: 1, errors: 0 });
+    expect(store.has(known)).toBeFalse();
+    expect(fs.existsSync(known)).toBeFalse();
+    expect(store.owner(unknown)).toMatchObject({ pipelineId: null, launchId: "adopted" });
+    expect(fs.readFileSync(path.join(unknown, "data"), "utf8")).toBe("scratch");
+  } finally { store.close(); clock.mockRestore(); }
+});
+
+test("a failed configuration marker rolls back registration of both attempt roots", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "attempt-register-failure-")); roots.push(root);
+  isolateState(root);
+  const { AttemptTempStore } = await import("./attemptTempRetention");
+  const store = new AttemptTempStore(), write = fs.writeFileSync, directories: string[] = [];
+  const marker = spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+    if (typeof file === "string" && path.basename(file) === ".delegatus-attempt-owner") {
+      directories.push(path.dirname(file));
+      if (path.basename(path.dirname(file)).startsWith("llv-stage-config-")) throw new Error("fixture configuration marker refused");
+    }
+    return write(file, data, options);
+  });
+  try {
+    expect(() => materializeStructuredHostAccess({ sandbox: "full", readOnly: false }, { ...process.env, HOME: root }, null,
+      undefined, { pipelineId: "fixture-lane", launchId: "fixture-launch", retainUntilClose: false })).toThrow("fixture configuration marker refused");
+    expect(directories).toHaveLength(2);
+    expect(directories.map(directory => [store.has(directory), fs.existsSync(directory)])).toEqual([[false, false], [false, false]]);
+  } finally { marker.mockRestore(); store.close(); }
 });
 
 test.skipIf(process.platform !== "linux").each(["live child", "mount", "linked evidence", "broken git pointer", "unknown checkout", "swap", "last handoff swap"] as const)(

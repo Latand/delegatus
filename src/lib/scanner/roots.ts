@@ -6,6 +6,7 @@ import path from "node:path";
 import { codexSessionRoots } from "@/lib/accounts/codex";
 import { claudeProjectRoots } from "@/lib/accounts/claude";
 import { copilotSessionRoots, legacyCopilotHome } from "@/lib/accounts/copilot";
+import { antigravitySessionRoots } from "@/lib/accounts/antigravity";
 
 import type { RootKey } from "../types";
 import { DEFAULT_SCHEME_CARDS_PER_PROJECT, DEFAULT_SCHEME_PROJECT_CAP } from "./schemeWindow";
@@ -125,7 +126,10 @@ export function pathAllowed(candidate: string): boolean {
 export function pathAllowedWithRoots(candidate: string, roots?: readonly [RootKey, string][]): boolean {
   const real = realpathSafe(candidate);
   if (!real || candidate.split(path.sep).some(isRelayConversationDir) || real.split(path.sep).some(isRelayConversationDir)) return false;
-  return (roots ?? scanRootEntries()).some(([, root]) => {
+  const allowedRoots = roots
+    ? roots.map(([, root]) => root)
+    : [...scanRootEntries().map(([, root]) => root), ...antigravitySessionRoots()];
+  return allowedRoots.some((root) => {
     const rootReal = realpathSafe(root);
     return rootReal !== null && real.startsWith(rootReal + path.sep);
   });
