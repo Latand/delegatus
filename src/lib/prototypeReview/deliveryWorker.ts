@@ -7,8 +7,6 @@ import type { PrototypeDecision, PrototypeReviewRound } from "./types";
 import { seatRoundPageWithCursor } from "./seatRounds";
 import { prototypeWorld } from "./world";
 import { postPrototypeReviewToTelegram } from "./telegramPost";
-import { reconcileReviewPolls, reviewPollsNeedRecovery } from "@/lib/telegram/bot/reviewPolls";
-import { telegramBotService } from "@/lib/telegram/bot/service";
 import { prototypeDeliverySettled } from "./deliveryPolicy";
 
 /*
@@ -48,14 +46,9 @@ interface WorkerState {
   seatScanAfter?: string;
   postTaskAfter?: string;
   postTaskRoundAfter?: string;
-  pollTaskAfter?: string;
-  pollTaskRoundAfter?: string;
   postSeatAfter?: string;
   postSeatRoundAfter?: string;
-  pollSeatAfter?: string;
-  pollSeatRoundAfter?: string;
   preferSeatPost?: boolean;
-  preferSeatPoll?: boolean;
   ticking: boolean;
   timer?: ReturnType<typeof setInterval>;
 }
@@ -150,66 +143,48 @@ async function scan(state: WorkerState, now: number, bounded: boolean): Promise<
   }
 }
 
-type DeliveryKind = "post" | "poll";
-
 /** Visit one indexed task page at a time. If the page still has eligible
     rounds after the batch, keep its task cursor and resume after the last
     visited round before moving to the next task page. */
-function taskDeliveryBatch(state: WorkerState, kind: DeliveryKind, limit: number): PrototypeReviewRound[] {
+function taskDeliveryBatch(state: WorkerState, limit: number): PrototypeReviewRound[] {
   const source = taskFeedSource();
-  const after = kind === "post" ? state.postTaskAfter : state.pollTaskAfter;
-  const roundAfter = kind === "post" ? state.postTaskRoundAfter : state.pollTaskRoundAfter;
+  const after = state.postTaskAfter;
+  const roundAfter = state.postTaskRoundAfter;
   const tasks = source ? withViewerOperation("prototype.state", () => source.keyRange(after ?? "t:", "t;", 16)) : loadTasksForList();
-  const candidates = tasks.flatMap(task => task.prototypeReviews ?? []).filter(round =>
-    (kind === "post" ? round.telegramPost?.state === "pending" : reviewPollsNeedRecovery(round))
-      && (roundAfter === undefined || round.id > roundAfter))
-    .sort((left, right) => left.id.localeCompare(right.id));
-  const selected = candidates.slice(0, limit);
-  if (source && selected.length === limit) {
-    if (kind === "post") state.postTaskRoundAfter = selected.at(-1)!.id;
-    else state.pollTaskRoundAfter = selected.at(-1)!.id;
-  } else {
-    const next = source && tasks.length === 16 ? `t:${tasks.at(-1)!.id}` : undefined;
-    if (kind === "post") { state.postTaskAfter = next; state.postTaskRoundAfter = undefined; }
-    else { state.pollTaskAfter = next; state.pollTaskRoundAfter = undefined; }
-    if (!source) {
-      if (kind === "post") state.postTaskRoundAfter = selected.length === limit ? selected.at(-1)!.id : undefined;
-      else state.pollTaskRoundAfter = selected.length === limit ? selected.at(-1)!.id : undefined;
-    }
+  const selected = tasks.flatMap(task => task.prototypeReviews ?? []).filter(round =>
+    round.telegramPost?.state === "pending" && (roundAfter === undefined || round.id > roundAfter))
+    .sort((left, right) => left.id.localeCompare(right.id)).slice(0, limit);
+  if (source && selected.length === limit) state.postTaskRoundAfter = selected.at(-1)!.id;
+  else {
+    state.postTaskAfter = source && tasks.length === 16 ? `t:${tasks.at(-1)!.id}` : undefined;
+    state.postTaskRoundAfter = !source && selected.length === limit ? selected.at(-1)!.id : undefined;
   }
   return selected;
 }
 
 /** Seat rounds use the same page/round split so a busy first page cannot
     permanently hide later rounds. */
-function seatDeliveryBatch(state: WorkerState, kind: DeliveryKind, limit: number): PrototypeReviewRound[] {
-  const after = kind === "post" ? state.postSeatAfter : state.pollSeatAfter;
-  const roundAfter = kind === "post" ? state.postSeatRoundAfter : state.pollSeatRoundAfter;
-  const page = withViewerOperation("prototype.state", () => seatRoundPageWithCursor(after, 16));
-  const candidates = page.rounds.filter(round =>
-    (kind === "post" ? round.telegramPost?.state === "pending" : reviewPollsNeedRecovery(round))
-      && (roundAfter === undefined || round.id > roundAfter))
-    .sort((left, right) => left.id.localeCompare(right.id));
-  const selected = candidates.slice(0, limit);
-  if (selected.length === limit) {
-    if (kind === "post") state.postSeatRoundAfter = selected.at(-1)!.id;
-    else state.pollSeatRoundAfter = selected.at(-1)!.id;
-  } else {
-    const next = page.scanned === 16 ? page.cursor : undefined;
-    if (kind === "post") { state.postSeatAfter = next; state.postSeatRoundAfter = undefined; }
-    else { state.pollSeatAfter = next; state.pollSeatRoundAfter = undefined; }
+function seatDeliveryBatch(state: WorkerState, limit: number): PrototypeReviewRound[] {
+  const roundAfter = state.postSeatRoundAfter;
+  const page = withViewerOperation("prototype.state", () => seatRoundPageWithCursor(state.postSeatAfter, 16));
+  const selected = page.rounds.filter(round =>
+    round.telegramPost?.state === "pending" && (roundAfter === undefined || round.id > roundAfter))
+    .sort((left, right) => left.id.localeCompare(right.id)).slice(0, limit);
+  if (selected.length === limit) state.postSeatRoundAfter = selected.at(-1)!.id;
+  else {
+    state.postSeatAfter = page.scanned === 16 ? page.cursor : undefined;
+    state.postSeatRoundAfter = undefined;
   }
   return selected;
 }
 
-function deliveryBatch(state: WorkerState, kind: DeliveryKind): PrototypeReviewRound[] {
-  const seatFirst = kind === "post" ? state.preferSeatPost === true : state.preferSeatPoll === true;
-  if (kind === "post") state.preferSeatPost = !seatFirst;
-  else state.preferSeatPoll = !seatFirst;
-  const first = seatFirst ? seatDeliveryBatch(state, kind, 16) : taskDeliveryBatch(state, kind, 16);
+function deliveryBatch(state: WorkerState): PrototypeReviewRound[] {
+  const seatFirst = state.preferSeatPost === true;
+  state.preferSeatPost = !seatFirst;
+  const first = seatFirst ? seatDeliveryBatch(state, 16) : taskDeliveryBatch(state, 16);
   const remaining = 16 - first.length;
   if (!remaining) return first;
-  const second = seatFirst ? taskDeliveryBatch(state, kind, remaining) : seatDeliveryBatch(state, kind, remaining);
+  const second = seatFirst ? taskDeliveryBatch(state, remaining) : seatDeliveryBatch(state, remaining);
   return [...first, ...second];
 }
 
@@ -220,15 +195,9 @@ export async function sweepPrototypeDeliveries(ports: PrototypeDeliveryPorts = p
   if (options.rescan !== false) await scan(state, now, options.limit !== undefined);
   const attempts: Promise<void>[] = [];
   if (options.rescan !== false) {
-    const posts = deliveryBatch(state, "post");
+    const posts = deliveryBatch(state);
     for (const round of posts) {
       attempts.push(postPrototypeReviewToTelegram(round, round.telegramPost!.key).then(() => {}, () => {}));
-    }
-    const polls = deliveryBatch(state, "poll");
-    for (const round of polls) {
-      await new Promise<void>(resolve => setImmediate(resolve));
-      if (telegramBotService().hasReviewPollWork(round.id, round.telegramPost!.key)) continue;
-      attempts.push(reconcileReviewPolls(round).catch(() => console.warn("Telegram review polls reconciliation deferred", "storage_unavailable")));
     }
   }
   const entries = state.owed.entries();

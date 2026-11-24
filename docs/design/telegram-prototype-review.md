@@ -1,24 +1,12 @@
 # Prototype reviews in Telegram through Celestia
 
-Implementation update, 2026-10-15: decision forms now add advisory native polls
-below the media post. The authenticated owner's text reply decides. The relay
-receives each outgoing poll's reference and numbered options, so a direct reply
-can identify its round from the parent message. The original design below is
-retained as the record of the earlier copy-line flow.
-
-Poll work runs separately from form publication in the shared bot service,
-with at most 16 queued forms and seven polls per form. Sends are serial and each
-has a five-second deadline. A durable pending claim becomes uncertain after an
-interruption; it is never resent automatically. Every outcome stays in the local
-round, and failures join the orchestrator's existing Telegram wake signals.
-Admitting a poll job persists an empty poll ledger before its first send, even
-while it waits behind another form. Recovery requires a ledger matching the
-publication key; older forms with no ledger stay unchanged and raise no poll alert.
-Poll metadata changes one task row and its cache revision while preserving its
-editor, timestamps and linked group stamps. Board answers leave polls alone.
-Questions exceeding the option count stay text-only. Full text remains in the
-form; poll questions and options shorten with an ellipsis under the
-[Bot API limits](https://core.telegram.org/bots/api#sendpoll).
+Implementation update, 2026-11-24. The Telegram copy starts with the project
+display name and the complete question text. Lettered options show the
+recommendation with ✅. The post keeps the board link, copy buttons and the
+authenticated owner’s text reply. Long copies reduce previews and, when
+needed, shorten option labels while keeping their letters. Delivery and
+resend both use the same rich message. Existing poll messages and their
+historical receipts stay intact.
 
 Status: design, 2026-10-11. Written by the architect stage of the task
 "Prototype reviews in Telegram through Celestia". Delegatus claims are at
@@ -38,28 +26,9 @@ operator separately; this lane changes neither the report chat nor Celestia.
 
 ## Originating requirement
 
-The operator, 2026-10-11 about 15:45 Kyiv, by voice in the seat chat, in
-Russian, verbatim as pinned on the task, after the research lane recommended
-a separate Delegatus bot:
-
-> «Не, не, не. ... нужно сделать так, чтобы он всё-таки работал через
-> [Celestia] ... Можно тогда без кнопок, можно показывать прототипы, как вот
-> этот слайд-шоу, да? С описанием, Rich Markdown, вариант классный был ... вот
-> вариант дослідницький тест 5 ... Ещё вот это есть, Rich Markdown первый
-> тест, который там, где вопросы ... О, кстати, у нас же есть там же
-> кнопочки. Скопировать короткий ответ. Да, у нас есть такое и в композере,
-> короткий ответ. А ещё у нас есть в Телеграме, есть возможность такую кнопку
-> сделать ... можно и сделать, что типа 3 варианта, и скопіювати відповідь,
-> да. А в відповіді може бути ответ. На вопросы, все вот эти рекомендуемые. И
-> дальше человек просто в ответе текстом отправляет делегатусу ответ, своему
-> вот этому клону, и оно всё равно ж попадает на тот... где делегатус
-> работает. Поэтому, в принципе, текстом он и обработает этот прототип.
-> Просто надо сделать так, что типа раз он... это прототип отправил, чтобы он
-> понимал, что раз это ответ на прототип, чтобы было видно, что там прототип
-> показан, и описаны варианты, чтобы из контекста было понятно, на что это
-> ответ ... И дальше, как бы, оно работает в штатном режиме ... Поэтому можно
-> отправлять такое сообщение, а [Celestia] и так уже обрабатывает, понимаешь?
-> Или может надо проверить, правильно ли обрабатывает.»
+Deliver the review through the paired Telegram clone with rich formatting,
+slides, questions and a copyable answer. The owner can reply to the review
+directly from Telegram.
 
 Pinned outcome, shortened: (1) a published round goes to the project's report
 chat as one rich message: slideshow with variant numbers, names and one-line

@@ -12,31 +12,46 @@ import { createBotApiTransport } from "@/lib/telegram/bot/transport";
 import { publishPOST, resendTelegramPOST } from "./http";
 import { NextRequest } from "next/server";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
-import { findPrototypeRound, roundDirectory, storedMediaPath, prototypeRoot } from "./store";
-import { clearSeatRoundsForTests, loadSeatRounds } from "./seatRounds";
+import { findPrototypeRound, mutatePrototypeRound, roundDirectory, storedMediaPath, prototypeRoot } from "./store";
+import { clearSeatRoundsForTests, insertSeatRound, loadSeatRounds } from "./seatRounds";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import { criticLane } from "./criticGate.fixture";
 import { telegramRound, telegramTask } from "./telegram.fixture";
-import { prototypeSlides, renderPrototypeTelegram, postPrototypeReviewToTelegram } from "./telegramPost";
+import { prototypeSlides, renderPrototypeTelegram, postPrototypeReviewToTelegram, renderPrototypeTelegramSummary } from "./telegramPost";
 import { telegramPostSignals } from "./telegramPostSignals";
 import { readPrototypeReviews } from "./read";
+import { setProjectPresentation } from "@/lib/projects/presentation";
+import * as claude from "@/lib/accounts/claude";
+import { decodeHTML } from "entities";
+import { prototypeReference } from "./telegramAnswer";
+import { startTestRelay } from "@/lib/externalRelay/testRelay";
+import { requestSchema } from "@/lib/externalRelay/protocol";
+import { sampleRequest } from "@/lib/externalRelay/request.fixture";
+import { runClaimedRequest } from "@/lib/externalRelay/runner";
+import { resetPrototypeDeliveryWorkerForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
 
 const roots: string[] = [];
 const restores: Array<() => void> = [];
 const services: bot.TelegramBotService[] = [];
+const transports: FakeBotTransport[] = [];
 afterEach(async () => {
   for (const restore of restores.splice(0)) restore();
-  for (const service of services.splice(0)) { await service.waitForReviewPolls(); await service.remove(); }
+  for (const service of services.splice(0)) await service.remove();
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+  for (const transport of transports.splice(0)) {
+    expect(transport.callsOf("sendPoll")).toHaveLength(0);
+    expect(transport.callsOf("stopPoll")).toHaveLength(0);
+  }
 });
 async function connected(publicationTarget?: bot.TelegramBotDependencies["publicationTarget"]) {
   const root = await fs.mkdtemp(path.join(process.env.TMPDIR!, "rich-post-")); roots.push(root);
   const store = new TelegramBotStore(path.join(root, "bot.sqlite"));
-  const transport = new FakeBotTransport();
+  const transport = new FakeBotTransport(); transports.push(transport);
   let token: string | null = null;
+  const published: string[] = [];
   const service = new bot.TelegramBotService({ ...bot.productionTelegramBotDependencies(), openStore: () => store,
     removeStoreFiles: () => {}, transportFor: () => transport, now: () => new Date("2026-10-11T13:00:00Z"), saveToken: t => { token = t; }, removeToken: () => { token = null; },
-    withStoredToken: consume => token ? consume(token, "42") : null, publishMessage: () => {},
+    withStoredToken: consume => token ? consume(token, "42") : null, publishMessage: receipt => { published.push(receipt.text); },
     ...(publicationTarget ? { publicationTarget } : {}) });
   services.push(service);
   transport.script("getMe", ok({ id: 42, is_bot: true, first_name: "Fixture" }));
@@ -46,7 +61,7 @@ async function connected(publicationTarget?: bot.TelegramBotDependencies["public
   service.setChat("-42", "reports", true);
   const factory = spyOn(bot, "telegramBotService").mockReturnValue(service);
   restores.push(() => factory.mockRestore());
-  return { service, transport, store };
+  return { service, transport, store, published };
 }
 
 describe("pipeline and seat Telegram destinations", () => {
@@ -88,26 +103,40 @@ describe("pipeline and seat Telegram destinations", () => {
     return findPrototypeRound(taskId, reviewId)!;
   }
   test("a stage carousel and seat forms with and without a task reach the same owner", async () => {
-    const { service, transport } = await sender();
+    const { transport } = await sender();
     const root = await fs.mkdtemp(path.join(process.env.HOME!, "stage-review-")); roots.push(root);
     const image = path.join(root, "frame.png");
     await sharp({ create: { width: 40, height: 40, channels: 3, background: "white" } }).png().toFile(image);
+    await setProjectPresentation("project-a", { name: "Garden Studio" }, "operator");
     const round = await publish(stage, { ...form("stage-carousel"), variants: [{ number: 1, name: "Compact",
       description: "Keeps controls together.", frames: [{ path: image, caption: "Layout" }] }] });
     expect(round.source).toEqual({ conversationId: "conversation_stage", pipelineId: "prototype-lane", stageId: "publish", attempt: 1 });
     expect(round.telegramPost?.state).toBe("sent");
     expect((await publish(seat, form("seat-form"))).telegramPost?.state).toBe("sent");
     expect((await publish(seat, { ...form("seat-task-form"), taskId: "task-prototype" })).telegramPost?.state).toBe("sent");
-    await service.waitForReviewPolls();
     expect(transport.callsOf("sendRichMessage").map(call => call.params.chat_id)).toEqual([41, 41, 41]);
     expect((transport.callsOf("sendRichMessage")[0]!.params.rich_message as { media: unknown[] }).media).toHaveLength(1);
+    for (const call of transport.callsOf("sendRichMessage")) {
+      const { markdown } = call.params.rich_message as { markdown: string };
+      expect(markdown).toContain("Проєкт: <b>Garden Studio</b>");
+      for (const question of form("fixture").questions!) {
+        expect(markdown).toContain(question.text);
+        for (const option of question.options) expect(markdown).toContain(option.label + (option.recommended ? " ✅" : ""));
+      }
+      expect(markdown).toContain("Повне рев’ю у Delegatus");
+      expect(markdown).toContain("Скопіювати рекомендовані");
+      expect(markdown).toContain("Дайте текстову відповідь на це повідомлення.");
+    }
+    expect(findPrototypeRound(round.taskId, round.id)?.telegramPolls).toBeUndefined();
   });
   test("stage and seat resend a stage review after its target returns, with replay sending once", async () => {
-    const { service, transport } = await sender();
+    const { transport } = await sender();
     updateRelayStore(s => ({ ...s, relays: [destinationRelay([])] }));
     const round = await publish(stage, form("initially-no-target"));
     expect(round.telegramPost).toMatchObject({ state: "failed", reason: "no_target" });
     updateRelayStore(s => ({ ...s, relays: [pairing()] }));
+    const legacy = { key: round.id, questions: [{ questionId: "place", state: "sent" as const, messageId: 13 }] };
+    mutatePrototypeRound(round.taskId, round.id, held => { held.telegramPolls = legacy; });
     for (const [caller, world] of [["stage", stage], ["seat", seat]] as const) {
       const body = { reviewId: round.id, clientRequestId: `resend-${caller}` };
       for (let replay = 0; replay < 2; replay++) {
@@ -115,13 +144,18 @@ describe("pipeline and seat Telegram destinations", () => {
         expect(response.status).toBe(200);
         expect((await response.json()).telegramPost).toMatchObject({ state: "sent" });
       }
-      await service.waitForReviewPolls();
     }
     expect(transport.callsOf("sendRichMessage").map(call => call.params.chat_id)).toEqual([41, 41]);
+    for (const call of transport.callsOf("sendRichMessage")) {
+      const { markdown } = call.params.rich_message as { markdown: string };
+      expect(markdown).toContain("Where should this live?");
+      expect(markdown).toContain("Existing review ✅");
+    }
+    expect(findPrototypeRound(round.taskId, round.id)?.telegramPolls).toEqual(legacy);
   });
   test.each(["no_relay", "paused", "no_target", "not_configured", "invalid_owner"] as const)(
     "destination configuration %s stays out of wake signals across publications and fresh-key resends", async reason => {
-      const { service, transport } = await sender();
+      const { transport } = await sender();
       const relay = destinationRelay();
       if (reason === "paused") relay.paused = true;
       if (reason === "no_target") relay.targets = [];
@@ -153,7 +187,6 @@ describe("pipeline and seat Telegram destinations", () => {
       const response = await resendTelegramPOST(request({ reviewId: rounds[0]!.id, clientRequestId: `still-missing-${reason}-seat` }), seat);
       expect(response.status).toBe(200);
       expect((await response.json()).telegramPost.state).toBe("sent");
-      await service.waitForReviewPolls();
       expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
       expect(signals()).toEqual([]);
     });
@@ -175,7 +208,7 @@ describe("pipeline and seat Telegram destinations", () => {
       expect(telegramPostSignals("project-b", [telegramTask([taskRound])], [seatRound])).toEqual([]);
     });
   test("a transient post failure wakes the seat and an explicit resend delivers it", async () => {
-    const { service, transport } = await sender();
+    const { transport } = await sender();
     transport.script("sendRichMessage", refused(429, "Too Many Requests"));
     const round = await publish(seat, form("transient-post"));
     expect(round.telegramPost).toMatchObject({ state: "failed", reason: "rate_limited" });
@@ -184,7 +217,6 @@ describe("pipeline and seat Telegram destinations", () => {
     const response = await resendTelegramPOST(request({ reviewId: round.id, clientRequestId: "retry-transient" }), seat);
     expect(response.status).toBe(200);
     expect((await response.json()).telegramPost).toMatchObject({ state: "sent", key: `${round.id}:resend:retry-transient` });
-    await service.waitForReviewPolls();
     expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
     expect(telegramPostSignals("project-a", [], loadSeatRounds("project-a"))).toEqual([]);
   });
@@ -238,7 +270,6 @@ describe("pipeline and seat Telegram destinations", () => {
       const response = await resendTelegramPOST(request({ reviewId: round.id, clientRequestId: "recovered-snapshot" }), stage);
       expect((await response.json()).telegramPost).toMatchObject({ state: "sent" });
       expect(findPrototypeRound(round.taskId, round.id)!.telegramPost).not.toHaveProperty("destinationDetail");
-      await service.waitForReviewPolls();
       expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
     } finally { refusal.mockRestore(); }
   });
@@ -369,7 +400,7 @@ test("publication posts to the paired owner's private chat once and an unpaired 
   expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
 });
 
-test("publication sends a schema-valid questionnaire when escaped Markdown exceeds Telegram's text limit", async () => {
+test("publication budgets escaped Unicode and keeps every full question and option letter", async () => {
   const { transport } = await connected();
   updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
   transport.handlers.getChat = () => ok({ id: 41, type: "private", first_name: "Owner" });
@@ -377,8 +408,8 @@ test("publication sends a schema-valid questionnaire when escaped Markdown excee
   transport.script("sendRichMessage", ok({ message_id: 12, date: 3 }));
   const questions = Array.from({ length: 7 }, (_, i) => ({
     id: `question-${i + 1}`,
-    text: "<&".repeat(150),
-    options: Array.from({ length: 6 }, (_, j) => ({ label: `${j}` + "<&".repeat(59), recommended: j === 0 })),
+    text: `${i + 1}. ${"&".repeat(270)} Keep this full sentence?`,
+    options: Array.from({ length: 6 }, (_, j) => ({ label: `${j}` + "&&🪴".repeat(39), recommended: j === 0 })),
   }));
   const response = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" },
     body: JSON.stringify({ clientRequestId: "long-questionnaire", taskId: "task-prototype", title: "T".repeat(120), variants: [], questions }) }));
@@ -387,12 +418,129 @@ test("publication sends a schema-valid questionnaire when escaped Markdown excee
   const sends = transport.callsOf("sendRichMessage");
   expect(sends).toHaveLength(1);
   const rich = sends[0]!.params.rich_message as { markdown: string };
-  expect(rich.markdown.length).toBeGreaterThan(32768);
-  for (let i = 1; i <= 7; i++) expect(rich.markdown).toContain(`Питання ${i}/7`);
-  expect(rich.markdown).toContain("&lt;&amp;".repeat(150));
-  expect(rich.markdown).toContain("a) 0&lt;&amp;&lt;&amp;");
+  expect(Buffer.byteLength(rich.markdown)).toBeLessThanOrEqual(32_768);
+  const rendered = decodeHTML(rich.markdown);
+  for (const [i, question] of questions.entries()) {
+    expect(rendered).toContain(`Питання ${i + 1}/7 · ${question.text}</b>`);
+    for (const [j, option] of question.options.entries()) {
+      const prefix = Array.from(option.label).slice(0, 31).join("");
+      expect(rendered).toContain(`${String.fromCharCode(97 + j)}) ${prefix}…${j === 0 ? " ✅" : ""}`);
+    }
+  }
+  expect(rendered).not.toContain("\uFFFD");
   expect(rich.markdown).toContain("Скопіювати рекомендовані");
   expect(rich.markdown).toContain("type=\"copy_text\"");
+});
+
+test("bounded media previews and the definite-limit fallback preserve full questions", () => {
+  const round = telegramRound("long-media");
+  round.title = '"'.repeat(120);
+  round.questions = Array.from({ length: 7 }, (_, i) => ({
+    id: `question-${i + 1}`, text: "&".repeat(299) + "?",
+    options: Array.from({ length: 6 }, (_, j) => ({ label: `${j}${"&".repeat(119)}`, recommended: j === 0 })),
+  }));
+  round.variants = Array.from({ length: 9 }, (_, n) => ({
+    number: n + 1, name: "🪴".repeat(60), description: "🪴".repeat(300), frames: [], videos: [],
+  }));
+  const slides = Array.from({ length: 50 }, (_, n) => ({
+    id: `frame-${n + 1}`, variantNumber: n % 9 + 1, caption: "🪴".repeat(264), blob: new Blob(),
+  }));
+  for (const payload of [renderPrototypeTelegram(round, slides), renderPrototypeTelegramSummary(round, slides)]) {
+    expect(Buffer.byteLength(payload.markdown)).toBeLessThanOrEqual(32_768);
+    expect(payload.images.length).toBeLessThanOrEqual(9);
+    expect(payload.plainText!.match(/&{299}\?/g)).toHaveLength(7);
+    expect(payload.markdown).toContain("Скопіювати рекомендовані");
+    expect(payload.markdown).toContain("Повне рев’ю у Delegatus");
+    expect(payload.markdown).toContain("Варіант 9");
+  }
+});
+
+test("review copies screen private paths and known account labels before formatting", async () => {
+  const round = telegramRound("private-content");
+  round.project = `dir-${"d".repeat(32)}`;
+  const directory = path.join(path.sep, "home", "fixture-operator", "private-fixture");
+  const account = "Fixture account";
+  const names = spyOn(claude, "claudeAccountsForPrivacy").mockReturnValue([{ id: "fixture-agent", label: account }]);
+  try {
+    await setProjectPresentation(round.project, { name: directory }, "operator");
+    round.title = `Layout by ${account}`;
+    round.questions![0]!.text = `Use ${directory} for previews?`;
+    round.questions![0]!.options[0]!.label = `Use ${account}`;
+    for (const payload of [renderPrototypeTelegram(round, [], directory), renderPrototypeTelegramSummary(round, [], directory)]) {
+      expect(payload.markdown).toContain("Проєкт без назви");
+      for (const text of [payload.markdown, payload.plainText!]) {
+        expect(text).not.toContain(directory);
+        expect(text).not.toContain(account);
+        expect(text).toContain("for previews?");
+      }
+    }
+    await setProjectPresentation(round.project, { name: "Planting & Design" }, "operator");
+    expect(renderPrototypeTelegram(round, []).markdown).toContain("Проєкт: <b>Planting &amp; Design</b>");
+  } finally { names.mockRestore(); }
+});
+
+test.each(["task", "seat"] as const)("a sweep preserves historical %s poll receipts and never edits them", async kind => {
+  const { service, transport } = await connected();
+  await resetPrototypeDeliveryWorkerForTests();
+  clearSeatRoundsForTests();
+  const round = telegramRound(`historical-${kind}`);
+  round.telegramPost = { key: round.id, state: "sent", at: round.createdAt };
+  round.telegramPolls = { key: round.id, questions: [
+    { questionId: "place", state: "sent", messageId: 11 },
+    { questionId: "scope", state: "pending" },
+    { questionId: "timing", state: "failed", reason: "rate_limited" },
+  ] };
+  if (kind === "seat") { round.taskId = null; saveTasks([]); insertSeatRound(round); }
+  else saveTasks([telegramTask([round])]);
+  try {
+    const before = findPrototypeRound(round.taskId, round.id);
+    transport.script("getUpdates", ok([{ update_id: 2, poll_answer: { poll_id: "fixture", user: { id: 41 }, option_ids: [1] } }]));
+    await service.pollOnce(new AbortController().signal);
+    await sweepPrototypeDeliveries(undefined, { force: true, rescan: true });
+    expect(findPrototypeRound(round.taskId, round.id)).toEqual(before);
+    expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
+    expect(telegramPostSignals(round.project, loadTasks(), loadSeatRounds(round.project))).toEqual([]);
+  } finally { await resetPrototypeDeliveryWorkerForTests(); clearSeatRoundsForTests(); }
+});
+
+test.each(["form", "historical poll"] as const)("the paired owner can answer with text alone in reply to a %s", async parentKind => {
+  const { transport, published } = await connected();
+  const round = telegramRound(parentKind);
+  if (parentKind === "historical poll") round.telegramPolls = { key: round.id, questions: [
+    { questionId: "place", state: "sent", messageId: 11 },
+  ] };
+  saveTasks([telegramTask([round])]);
+  let completions = 0;
+  const relay = await startTestRelay(req => {
+    if (req.url?.endsWith("/complete")) completions++;
+    return { body: { status: "ok" } };
+  });
+  try {
+    const paired = { ...destinationRelay(), api_base: `${relay.origin}/v1` };
+    updateRelayStore(s => ({ ...s, relays: [paired] }));
+    transport.handlers.getChat = () => ok({ id: 41, type: "private" });
+    transport.script("sendRichMessage", ok({ message_id: 10, date: 1791724800 }));
+    await postPrototypeReviewToTelegram(round);
+    const reply = "1b, 2a, 3a";
+    const parentText = parentKind === "form" ? published[0]! : `1. Where should this live? · ${prototypeReference(round)}`;
+    const request = requestSchema.parse({ ...sampleRequest, target_id: "first", request_id: "owner-text-reply",
+      input: { ...sampleRequest.input,
+        requester: { key: "owner", is_owner: true, is_admin: false, is_anonymous_admin: false, can_restrict_members: false, can_delete_messages: false },
+        conversation: [
+          { id: "posted", author: { key: "bot", name: "Clone", self: true }, sent_at: "2026-10-11T13:20:00Z", text: parentText, reply_to: null },
+          { id: "reply", author: { key: "owner", name: "Owner", self: false }, sent_at: "2026-10-11T13:21:00Z", text: reply, reply_to: "posted" },
+        ], respond_to: "reply",
+      } });
+    const result = await runClaimedRequest(paired, request, undefined, { command: "/missing-fixture-agent" });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("✅ Записав рішення") } });
+    const saved = findPrototypeRound(round.taskId, round.id)!;
+    expect(saved.decision?.originalReply).toBe(reply);
+    expect(saved.decision?.answers?.map(answer => answer.options)).toEqual([[1], [0], [0]]);
+    expect(saved.telegramPolls).toEqual(round.telegramPolls);
+    await runClaimedRequest(paired, request, undefined, { command: "/missing-fixture-agent" });
+    expect(findPrototypeRound(round.taskId, round.id)).toEqual(saved);
+    expect(completions).toBe(1);
+  } finally { await relay.close(); }
 });
 
 test("owner review sends nothing with no target, a paused relay or a changed destination during lookup", async () => {
@@ -498,7 +646,7 @@ test("a 238-frame nine-variant round survives a definite Telegram size refusal a
   expect(loadTasks()[0]!.prototypeReviews![0]!).toMatchObject({ telegramPost: { state: "sent" } });
 });
 
-test("owner review admits new sends before transport and optional poll metadata cannot fail a confirmed form", async () => {
+test("owner review admits new sends before transport and replays a confirmed receipt if publication metadata later fails", async () => {
   let unavailable = true;
   const { service, transport, store } = await connected(() => {
     if (unavailable) throw Error("fixture metadata unavailable");
@@ -506,7 +654,7 @@ test("owner review admits new sends before transport and optional poll metadata 
   });
   updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
   transport.handlers.getChat = () => ok({ id: 41, type: "private" });
-  const round = telegramRound("poll-metadata"); saveTasks([telegramTask([round])]);
+  const round = telegramRound("publication-metadata"); saveTasks([telegramTask([round])]);
   const input = { clientRequestId: round.id, message: renderPrototypeTelegram(round, []) };
   await expect(service.sendOwnerReview(input)).rejects.toThrow("fixture metadata unavailable");
   expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
@@ -518,7 +666,6 @@ test("owner review admits new sends before transport and optional poll metadata 
   };
   expect(await service.sendOwnerReview(input)).toMatchObject({ alreadySent: false, messageIds: [21] });
   expect(await service.sendOwnerReview(input)).toMatchObject({ alreadySent: true, messageIds: [21] });
-  await service.waitForReviewPolls();
   expect(transport.callsOf("sendPoll")).toHaveLength(0);
   expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
   expect(store.sendRow("prototype-review", round.id)?.state).toBe("sent");
@@ -530,15 +677,11 @@ test.each(["available", "refused"] as const)("a pending post after a lost comple
     if (unavailable) throw Error("fixture metadata unavailable");
     return null;
   });
-  const { mutatePrototypeRound } = await import("./store");
-  const { sweepPrototypeDeliveries } = await import("./deliveryWorker");
   updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
   transport.handlers.getChat = () => ok({ id: 41, type: "private" });
   const round = telegramRound("lost-completion"); saveTasks([telegramTask([round])]);
   transport.script("sendRichMessage", ok({ message_id: 21, date: 5 }));
   await postPrototypeReviewToTelegram(round);
-  await service.waitForReviewPolls();
-  const pollCalls = transport.callsOf("sendPoll").length;
   const receipt = store.sendRow("prototype-review", round.id)!;
   unavailable = metadata === "refused";
   mutatePrototypeRound(round.taskId, round.id, held => { held.telegramPost!.state = "pending"; });
@@ -546,8 +689,7 @@ test.each(["available", "refused"] as const)("a pending post after a lost comple
   expect(loadTasks()[0]!.prototypeReviews![0]!.telegramPost?.state).toBe("sent");
   expect(await service.sendOwnerReview({ clientRequestId: round.id, message: renderPrototypeTelegram(round, []) }))
     .toMatchObject({ alreadySent: true, messageIds: [21], sentAt: receipt.sentAt });
-  await service.waitForReviewPolls();
-  expect(transport.callsOf("sendPoll")).toHaveLength(pollCalls);
+  expect(transport.callsOf("sendPoll")).toHaveLength(0);
   expect(store.sendRow("prototype-review", round.id)).toEqual(receipt);
   expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
   updateRelayStore(s => ({ ...s, relays: [{ ...destinationRelay(), paused: true }] }));
@@ -563,7 +705,6 @@ test.each(["available", "refused"] as const)("a pending post after a lost comple
 
 test("media and size refusals in either order reach a text summary without dangling photo references", async () => {
   const { service, transport, store } = await connected();
-  const { renderPrototypeTelegramSummary } = await import("./telegramPost");
   const round = telegramRound();
   const slides = [{ id: "v1f1", variantNumber: 1, caption: "Preview", blob: new Blob(["frame"]) }];
   const mediaError = refused(400, "Bad Request: invalid photo dimensions");
