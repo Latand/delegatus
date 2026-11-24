@@ -1455,10 +1455,10 @@ export async function checkpointPipelineRollbackMirrorsForDemotionAsync(): Promi
   return { pipelines, pipelinesArchive };
 }
 
-/** Active collection source for the bounded MCP selection projection. */
-export function pipelineSelectionSource() {
-  const collection = pipelineStore();
-  return { filename: stateDatabaseFile(), read: (id: string) => collection.get(id) };
+/** By-id materialization for the bounded MCP selection projection. */
+export function pipelineSelectionSource(includeArchived = false) {
+  const { active, archive } = stores();
+  return { filename: stateDatabaseFile(), read: (id: string) => active.get(id) ?? (includeArchived ? archive.get(id) : null) };
 }
 
 /** Bind one in-flight operation to its store, avoiding state-path resolution

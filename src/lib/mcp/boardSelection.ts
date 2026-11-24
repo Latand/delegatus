@@ -20,14 +20,17 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
   return sqlite.Database;
 }
 
-/** One process-local scalar index per durable collection. Bootstrap reads only
+/** One process-local scalar index per selection. Bootstrap reads only
  * selection fields; later generations replay the indexed SQLite change journal.
  * Full records are fetched by primary key only for the delivered page. */
 export class BoardSelection {
   private db: Database;
-  private revision = -1;
+  private readonly collections: readonly string[];
+  private readonly revisions = new Map<string, number>();
   readonly work = { metadataRows: 0, recordReads: 0, rebuilds: 0 };
-  constructor(private filename: string, private collection: "tasks" | "pipelines" | "flows", private projects: ProjectSelection = defaultProjects) {
+  constructor(private filename: string, private collection: "tasks" | "pipelines" | "flows",
+    private projects: ProjectSelection = defaultProjects, includeArchivedPipelines = false) {
+    this.collections = collection === "pipelines" && includeArchivedPipelines ? [collection, "pipelines_archive"] : [collection];
     const Database = sqliteDatabase();
     this.db = observeSqlite(new Database(":memory:"), "board-selection");
     this.db.exec(`CREATE TABLE rows(id TEXT PRIMARY KEY, time TEXT, project TEXT, status TEXT, placement TEXT, priority TEXT, hidden INTEGER, text TEXT);
@@ -74,26 +77,47 @@ export class BoardSelection {
     const source = snapshot ?? observeSqlite(new Database(this.filename, { readonly: true }), "board-selection");
     try {
       if (!snapshot) source.exec("BEGIN");
-      const meta = source.query<{ revision: number; change_floor: number }, [string]>("SELECT revision,change_floor FROM state_collections WHERE collection=?").get(this.collection);
-      if (!meta) throw new Error(`missing ${this.collection} collection`);
-      if (meta.revision === this.revision) return;
-      const reset = this.revision < 0 || this.revision > meta.revision || this.revision < meta.change_floor;
-      const changes = reset ? [] : source.query<{ row_key: string }, [string, number, number]>(
+      const readMeta = source.query<{ revision: number; change_floor: number }, [string]>("SELECT revision,change_floor FROM state_collections WHERE collection=?");
+      const readChanges = source.query<{ row_key: string }, [string, number, number]>(
         "SELECT DISTINCT row_key FROM state_changes WHERE collection=? AND revision>? AND revision<=?"
-      ).all(this.collection, this.revision, meta.revision);
+      );
+      const updates = this.collections.flatMap(collection => {
+        const meta = readMeta.get(collection);
+        if (!meta) throw new Error(`missing ${collection} collection`);
+        const previous = this.revisions.get(collection) ?? -1;
+        if (meta.revision === previous) return [];
+        const reset = previous < 0 || previous > meta.revision || previous < meta.change_floor;
+        const changes = reset ? [] : readChanges.all(collection, previous, meta.revision);
+        return [{ collection, revision: meta.revision, changes }];
+      });
+      if (!updates.length) return;
       this.db.transaction(() => {
-        if (reset || !changes.length) {
+        if (updates.some(update => !update.changes.length)) {
           this.work.rebuilds++;
           this.db.exec("DELETE FROM rows; DELETE FROM terms; DELETE FROM links;");
-          for (const row of source.query<Metadata, [string]>(this.metadataSql()).all(this.collection)) this.put(row, source);
-        } else for (const { row_key } of changes) {
-          if (this.collection === "tasks" && !row_key.startsWith("t:")) continue;
-          const row = source.query<Metadata, [string, string]>(`${this.metadataSql()} AND row_key=?`).get(this.collection, row_key);
-          if (row) this.put(row, source);
-          else this.remove(this.collection === "tasks" ? row_key.slice(2) : row_key);
+          const readRows = source.query<Metadata, [string]>(this.metadataSql());
+          // Active rows take precedence, as they do in the by-id reader.
+          for (const collection of [...this.collections].reverse()) {
+            for (const row of readRows.iterate(collection)) this.put(row, source);
+          }
+        } else {
+          const changedKeys = new Set(updates.flatMap(update => update.changes.map(change => change.row_key)));
+          const readRow = source.query<Metadata, [string, string]>(`${this.metadataSql()} AND row_key=?`);
+          // Archival changes both journals in one transaction. Resolve each
+          // changed id once from the same snapshot across both collections.
+          for (const key of changedKeys) {
+            if (this.collection === "tasks" && !key.startsWith("t:")) continue;
+            let row: Metadata | null = null;
+            for (const collection of this.collections) {
+              row = readRow.get(collection, key);
+              if (row) break;
+            }
+            if (row) this.put(row, source);
+            else this.remove(this.collection === "tasks" ? key.slice(2) : key);
+          }
         }
       })();
-      this.revision = meta.revision;
+      for (const update of updates) this.revisions.set(update.collection, update.revision);
     } finally { if (!snapshot) source.close(); }
   }
   links(task: string): string[] {
@@ -144,9 +168,13 @@ export class BoardSelection {
         FROM json_each(state_rows.value_json,'$.runs') AS run, json_each(run.value,'$.attempts') AS attempt
         WHERE json_extract(attempt.value,'$.report.provenance.pullRequest.number') IS NOT NULL
       ),'[]'))))` : "";
+      const collections = this.collections.map(() => "?").join(",");
+      const unshadowed = this.collections.length > 1 ? ` AND (collection = 'pipelines' OR NOT EXISTS (
+        SELECT 1 FROM state_rows AS active WHERE active.collection = 'pipelines' AND active.row_key = state_rows.row_key
+      ))` : "";
       return database.query<{ value: string }, SQLQueryBindings[]>(`SELECT json_object(${fields}${provenance}) AS value FROM state_rows
-        WHERE collection=?${this.collection === "tasks" ? " AND row_key GLOB 't:*'" : ""}${where}${keys}`)
-        .all(this.collection, ...projects, ...(ids ?? [])).map(row => parseSqliteJson(row.value, database));
+        WHERE collection IN (${collections})${this.collection === "tasks" ? " AND row_key GLOB 't:*'" : ""}${unshadowed}${where}${keys}`)
+        .all(...this.collections, ...projects, ...(ids ?? [])).map(row => parseSqliteJson(row.value, database));
     } finally { if (!source.database) database.close(); }
   }
   page<T, Row>(source: Source<T>, scope: BoardScope, cursor: unknown, limit: number, project: (record: T) => Row) {
@@ -242,9 +270,9 @@ function matches(row: Record<string, any>, scope: BoardScope, collection: string
     && (scope.queryIds !== undefined ? scope.queryIds.includes(row.id) : !scope.query || (task ? row.text : row.task).toLowerCase().includes(scope.query));
 }
 function compare(a: { time: string; id: string }, b: { time: string; id: string }) { return a.time === b.time ? (a.id > b.id ? -1 : a.id === b.id ? 0 : 1) : a.time > b.time ? -1 : 1; }
-export function boardSelection(filename: string, collection: "tasks" | "pipelines" | "flows") {
-  const key = `${filename}:${collection}`;
+export function boardSelection(filename: string, collection: "tasks" | "pipelines" | "flows", includeArchivedPipelines = false) {
+  const key = `${filename}:${collection}:${includeArchivedPipelines}`;
   let projection = projections.get(key);
-  if (!projection) { projection = new BoardSelection(filename, collection); projections.set(key, projection); }
+  if (!projection) { projection = new BoardSelection(filename, collection, defaultProjects, includeArchivedPipelines); projections.set(key, projection); }
   return projection;
 }

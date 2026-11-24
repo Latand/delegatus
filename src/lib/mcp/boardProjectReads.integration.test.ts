@@ -25,6 +25,7 @@ import { createViewerMcpServer, createMcpToolService, SqliteMcpReceiptStore, req
 import { withWorkspaceMcpFence } from "./workspaceFence";
 import { McpPageCursorStore } from "./pageCursors";
 import { BoardSelection } from "./boardSelection";
+import { LIST_ANSWER_BYTES } from "./listAnswers";
 import { deferredTaskPage, indexedTaskPage } from "./taskListPage";
 
 const AT = "2026-11-06T12:00:00.000Z";
@@ -603,17 +604,19 @@ test("a fresh production SDK reader resolves and reads an archive-only project b
     const client = new Client({ name: "archive-board-reader", version: "1" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-    const read = async project => {
+    const read = async (project, filters = {}) => {
       const result = await client.callTool({ name: "list_pipelines", arguments: {
-        project, ids: [laneId], includeClosed: true, limit: 1, full: true,
+        project, limit: 1, full: true, ...filters,
       } });
       return result.structuredContent ?? result.content;
     };
     const outcomes = {
-      own: await read(own),
+      own: await read(own, { includeClosed: true }),
+      byId: await read(own, { ids: [laneId], includeClosed: true }),
+      active: await read(own),
     };
     manager = true; authorizedProject = own;
-    outcomes.foreign = await read(foreign);
+    outcomes.foreign = await read(foreign, { includeClosed: true });
     manager = false; authorizedProject = null;
     outcomes.unknown = await read("Unknown Archive Board");
     outcomes.ambiguous = await read("Shared Archive Board");
@@ -627,10 +630,70 @@ test("a fresh production SDK reader resolves and reads an archive-only project b
     stdout: "pipe", stderr: "pipe" });
   if (run.exitCode !== 0) throw new Error(new TextDecoder().decode(run.stderr));
   const outcomes = JSON.parse(new TextDecoder().decode(run.stdout)) as Record<string, unknown>;
-  expect(outcomes.own).toMatchObject({ ok: true, total: 1, pipelines: [{ id: lane.id }] });
+  expect(outcomes.byId).toMatchObject({ ok: true, total: 1, pipelines: [{ id: lane.id }] });
+  expect(outcomes.active).toMatchObject({ ok: true, total: 0, count: 0, hasMore: false, nextCursor: null, pipelines: [] });
+  expect(outcomes.own).toMatchObject({ ok: true, total: 1, count: 1, remainingCount: 0, hasMore: false, nextCursor: null,
+    cursorReset: false, pipelines: [{ id: lane.id, project: OWN, state: "closed" }] });
   expect(outcomes.foreign).toMatchObject({ ok: false, code: "cross_project_refused", retryable: false });
   expect(outcomes.unknown).toMatchObject({ ok: false, code: "unknown_project", retryable: false });
   expect(outcomes.ambiguous).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false });
+});
+
+test("list_pipelines pages through active and archived lanes with one order and byte budget", async () => {
+  const h = await harness(); h.indexed();
+  const lane = (id: string, now: string, project = OWN, task = `Lane ${id}`) => buildPipeline({ id, project, task, repoDir: h.folder,
+    stages: [], state: "draft", srcPath: null, srcConversationId: null, now, spec: "é".repeat(6500) });
+  const newer = lane("z-newer", "2026-11-05T12:00:00.000Z");
+  const older = lane("older", "2026-11-02T12:00:00.000Z");
+  const archived = lane("a-archived", newer.createdAt, OWN, "Archived lane PR #2800");
+  const foreign = lane("foreign-archive", AT, FOREIGN, "Foreign archive PR #2800");
+  for (const record of [archived, foreign]) {
+    record.state = "completed";
+    record.closedAt = AT;
+  }
+  savePipelines([older, foreign, archived, newer]);
+  const archiveAt = Date.parse(AT) + 4 * 24 * 60 * 60 * 1000;
+  expect(await archiveSettledPipelines(archiveAt)).toBe(2);
+  expect(loadArchivedPipelines().map(row => row.id).sort()).toEqual([archived.id, foreign.id].sort());
+
+  const filters = { project: OWN, includeClosed: true };
+  const first = await h.call("list_pipelines", { ...filters, full: false, limit: 2 });
+  expect(first).toMatchObject({ ok: true, total: 3, count: 2, remainingCount: 1, hasMore: true, nextCursor: expect.any(String),
+    cursorReset: false, pipelines: [{ id: newer.id }, { id: archived.id, state: "completed" }] });
+  if (!first.ok) throw new Error(first.error);
+  expect(await h.call("list_pipelines", { ...filters, full: false, limit: 2, cursor: first.nextCursor })).toMatchObject({
+    ok: true, total: 3, count: 1, remainingCount: 0, hasMore: false, nextCursor: null, cursorReset: false, pipelines: [{ id: older.id }],
+  });
+  expect(await h.call("list_pipelines", { project: OWN, full: false, limit: 3, cursor: first.nextCursor })).toMatchObject({
+    ok: true, total: 2, count: 2, hasMore: false, nextCursor: null, cursorReset: true,
+    pipelines: [{ id: newer.id }, { id: older.id }],
+  });
+  expect(await h.call("list_pipelines", { ...filters, full: false, query: "PR 2800" })).toMatchObject({
+    ok: true, total: 1, count: 1, hasMore: false, nextCursor: null, pipelines: [{ id: archived.id }],
+  });
+
+  let cursor: unknown;
+  for (const [index, record] of [newer, archived, older].entries()) {
+    const page = await h.call("list_pipelines", { ...filters, limit: 3, cursor });
+    const remainingCount = 2 - index;
+    expect(page).toMatchObject({ ok: true, total: 3, count: 1, remainingCount, hasMore: remainingCount > 0,
+      nextCursor: remainingCount ? expect.any(String) : null, cursorReset: false, pipelines: [{ id: record.id, spec: record.spec }] });
+    if (!page.ok) throw new Error(page.error);
+    expect(Buffer.byteLength(JSON.stringify(page.pipelines))).toBeLessThanOrEqual(LIST_ANSWER_BYTES);
+    cursor = page.nextCursor;
+  }
+
+  newer.state = "closed";
+  newer.closedAt = AT;
+  savePipelines([older, newer]);
+  expect(await archiveSettledPipelines(archiveAt)).toBe(1);
+  expect(await h.call("list_pipelines", { ...filters, full: false, limit: 3 })).toMatchObject({
+    ok: true, total: 3, count: 3, hasMore: false, nextCursor: null,
+    pipelines: [{ id: newer.id, state: "closed" }, { id: archived.id }, { id: older.id }],
+  });
+  expect(await h.call("list_pipelines", { project: OWN, full: false })).toMatchObject({
+    ok: true, total: 1, count: 1, hasMore: false, nextCursor: null, pipelines: [{ id: older.id }],
+  });
 });
 
 for (const workspace of [false, true]) for (const spelling of ["outer-alias", "legacy_board", "repo-33333333", "Historic Board"]) {
