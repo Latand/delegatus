@@ -23,6 +23,7 @@ import { recoverablePublication } from "./publicationHistory";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
 import { publicationCheckBinding, writePublicationCheckReceipt } from "../git/publicationCheckReceipt";
 import { gateAdmissionInterpreter } from "../runtime/gateAdmissionLauncher";
+import { PUBLICATION_LAUNCH_PROOF_ENV, publicationLaunchDigest } from "../runtime/cpuAdmission";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -2346,7 +2347,7 @@ test.skipIf(process.platform !== "linux")("the Viewer records the publication pr
   const inheritedLock = process.env.LLV_GATE_LOCK_DIR;
   const queueRows = () => {
     const db = new Database(path.join(lockDir, "admission.sqlite"), { readonly: true });
-    try { return db.query<{ identity: string; operation: string }, []>("SELECT identity, operation FROM publication_launches").all(); }
+    try { return db.query<{ identity: string; operation: string; proof: string }, []>("SELECT identity, operation, proof FROM publication_launch_proofs").all(); }
     finally { db.close(); }
   };
   try {
@@ -2357,7 +2358,7 @@ test.skipIf(process.platform !== "linux")("the Viewer records the publication pr
     fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: 1 }));
     const head = await box.commit("change.txt", "accepted work\n");
     const barrier = path.join(lockDir, "release");
-    const observed: { pid?: number; rows?: { identity: string; operation: string }[]; operation?: string } = {};
+    const observed: { pid?: number; rows?: { identity: string; operation: string; proof: string }[]; operation?: string; proof?: string } = {};
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare") {
         // A stand-in preparer that lives until the record has been read.
@@ -2370,6 +2371,7 @@ test.skipIf(process.platform !== "linux")("the Viewer records the publication pr
         }
         observed.rows = queueRows();
         observed.operation = env?.LLV_GATE_PUBLICATION_ID;
+        observed.proof = env?.[PUBLICATION_LAUNCH_PROOF_ENV];
         fs.writeFileSync(barrier, "release");
         const result = await running;
         expect(result.code, result.stderr).toBe(0);
@@ -2381,7 +2383,9 @@ test.skipIf(process.platform !== "linux")("the Viewer records the publication pr
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
     expect(result).toMatchObject({ ok: true, sha: head });
     expect(observed.operation).toEqual(expect.any(String));
-    expect(observed.rows).toEqual([{ identity: expect.stringContaining(`"pid":${observed.pid},`), operation: observed.operation! }]);
+    // The secret reached the preparer's environment; the queue holds only its digest.
+    expect(observed.proof).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(observed.rows).toEqual([{ identity: expect.stringContaining(`"pid":${observed.pid},`), operation: observed.operation!, proof: publicationLaunchDigest(observed.proof!) }]);
     expect(JSON.parse(observed.rows![0]!.identity).startIdentity).toStartWith(`${observed.pid}:`);
     expect(queueRows()).toEqual([]);
   } finally {

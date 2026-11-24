@@ -35,7 +35,8 @@ import { recordWorktreeProvenance } from "./worktreeProvenance";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
 import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
-import { stampPublicationPreparer, type PublicationPreparerStamp } from "@/lib/runtime/publicationLaunch";
+import { newPublicationLaunchProof, stampPublicationPreparer, type PublicationPreparerStamp } from "@/lib/runtime/publicationLaunch";
+import { PUBLICATION_LAUNCH_PROOF_ENV } from "@/lib/runtime/cpuAdmission";
 import { installedGateAdmissionEnv } from "@/lib/runtime/agentSignalSandbox";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
@@ -2165,10 +2166,13 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         if (command === "git" && args[0] === "push") writeStarted = true;
         // The machine's CPU queue tells a preparer's cleanup runner from a
         // legacy holder by this record, whatever the checkout's gate bytes.
+        // Only the process spawned here carries the launch's secret in its
+        // exec environment; the record holds its digest.
+        const proof = preparingChecks ? { [PUBLICATION_LAUNCH_PROOF_ENV]: newPublicationLaunchProof() } : {};
         const preparer = preparingChecks ? { onSpawn: (pid: number) => {
-          preparerLaunch.stamp = stampPublicationPreparer(pid, env?.LLV_GATE_PUBLICATION_ID, { ...process.env, ...env });
+          preparerLaunch.stamp = stampPublicationPreparer(pid, env?.LLV_GATE_PUBLICATION_ID, { ...process.env, ...env, ...proof }, cwd);
         } } : {};
-        executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env,
+        executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...proof,
           LLV_CPU_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS, LLV_CPU_WAIT_CONFIRM_ROOT: budget.directory, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, ...preparer, signal: abort.signal, inheritFd: descriptor, additionalInheritedFds: [...options?.additionalInheritedFds ?? [], runDescriptor!] });
       } finally {
         await preparerLaunch.stamp?.release();

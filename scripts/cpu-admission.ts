@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cpuPressurePolicy } from "../src/lib/runtime/cpuPressure";
 import { GateCpuPressure } from "../src/lib/runtime/gateCpuPressure";
-import { ACTIVE_GATE_PREFIX, inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS } from "../src/lib/runtime/cpuAdmission";
+import { ACTIVE_GATE_PREFIX, inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS, PUBLICATION_LAUNCH_PROOF_ENV, publicationLaunchDigest } from "../src/lib/runtime/cpuAdmission";
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuQueueDetail, ordinal } from "../src/lib/runtime/cpuQueueText";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
@@ -189,9 +189,14 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
   };
   let launches: ReturnType<CpuAdmissionQueue["publicationLaunches"]> | undefined;
   const viewerLaunched = (parent: string, fields: string[]) => {
-    const operation = readEnvironment(parent)("LLV_GATE_PUBLICATION_ID");
-    return Boolean(operation) && (launches ??= queue.publicationLaunches()).some(launch =>
-      launch.operation === operation && hookParentMatches(launch.identity, parent, fields));
+    const env = readEnvironment(parent);
+    const operation = env("LLV_GATE_PUBLICATION_ID"), proof = env(PUBLICATION_LAUNCH_PROOF_ENV);
+    if (!operation || !proof) return false;
+    // Only the launch that put this secret into the process's exec
+    // environment knows the digest its row carries.
+    const digest = publicationLaunchDigest(proof);
+    return (launches ??= queue.publicationLaunches()).some(launch =>
+      launch.operation === operation && launch.proof === digest && hookParentMatches(launch.identity, parent, fields));
   };
   const localPid = (base: string) => /^NSpid:\s+(.+)$/m.exec(fs.readFileSync(path.join(base, "status"), "utf8"))?.[1]?.trim().split(/\s+/).at(-1);
   const hookClient = (command: string[], cwd: () => string, client: string, runner: string) => {
