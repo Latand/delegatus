@@ -47,6 +47,7 @@ export interface ManagerAuthoritySources {
   conversationFacts(conversationId: string): ManagerConversationFacts | null;
   /** Canonical id after migration aliasing; identity must survive migration. */
   resolveAlias(conversationId: string): string;
+  /** Resolves every alias in the callback against one stable registry snapshot. */
   withAliases?<T>(read: (resolve: (id: string) => string) => T): T;
 }
 
@@ -96,23 +97,40 @@ export function authorizedManagerSeats(sources: ManagerAuthoritySources, callerI
       if (callerId !== undefined && callerId !== id) continue;
       claims.set(id, [...(claims.get(id) ?? []), seat]);
     }
-    const current: AuthorizedManagerSeat[] = [];
-    if (!claims.size) return current;
-    const newest = new Map<string, number>();
-    for (const revoked of sources.revocations()) {
-      const id = resolve(revoked.conversationId);
-      if (claims.has(id)) newest.set(id, Math.max(newest.get(id) ?? 0, revoked.seatEpoch));
-    }
+    const surviving = new Map<string, OrchestratorSeat>();
+    let minEpoch = Infinity;
     for (const [conversationId, group] of claims) {
       const seat = group[0]!;
       if (group.some(other => other.project !== seat.project)) continue;
+      surviving.set(conversationId, seat);
+      if (seat.seatEpoch < minEpoch) minEpoch = seat.seatEpoch;
+    }
+    const current: AuthorizedManagerSeat[] = [];
+    if (!surviving.size) return current;
+    const newest = new Map<string, number>();
+    for (const revoked of sources.revocations()) {
+      // Even an alias for a current claimant cannot revoke a newer designation.
+      if (revoked.seatEpoch < minEpoch) continue;
+      const id = resolve(revoked.conversationId);
+      if (surviving.has(id)) newest.set(id, Math.max(newest.get(id) ?? 0, revoked.seatEpoch));
+    }
+    for (const [conversationId, seat] of surviving) {
       if ((newest.get(conversationId) ?? 0) >= seat.seatEpoch) continue;
       current.push({ conversationId, path: seat.path, project: seat.project });
     }
     return current;
   };
 
-  const candidates = sources.withAliases ? sources.withAliases(currentClaims) : currentClaims(id => sources.resolveAlias(id));
+  const candidates = sources.withAliases ? sources.withAliases(resolve => {
+    const resolved = new Map<string, string>();
+    return currentClaims(id => {
+      const cached = resolved.get(id);
+      if (cached !== undefined) return cached;
+      const canonical = resolve(id);
+      resolved.set(id, canonical);
+      return canonical;
+    });
+  }) : currentClaims(id => sources.resolveAlias(id));
   return candidates.filter(seat => factsPermit(sources.conversationFacts(seat.conversationId), seat.project));
 }
 

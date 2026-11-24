@@ -8,6 +8,7 @@ import type { DeviceAttentionView } from "@/lib/attention/service";
 import type { AttentionNotice, AttentionRequestV1, AttentionState, FocusResolutionKind, ReturnPoint } from "@/lib/attention/types";
 import { MAX_ECHOED_IDS } from "@/lib/attention/targetRecords";
 import { applyPipelineSnapshot, applyTaskSnapshot, revertPipelineSnapshot } from "@/hooks/useFiles";
+import { ringCrossProjectNotice } from "@/components/attention/crossProjectNotice";
 import { publishNotices } from "@/components/attention/phoneNotices";
 import { cleanTitle } from "@/lib/title";
 
@@ -110,6 +111,9 @@ export interface AttentionOffersHandle {
       received leaves the record at `accepted`, and a caller that cannot tell
       that from success goes on as though the operator were following. */
   arrive: (request: AttentionRequestV1, resolution: FocusResolutionKind) => Promise<PostOutcome>;
+  /** The directed device found the operator in another project when the move
+      would take effect: close the move without making it. */
+  standDown: (request: AttentionRequestV1) => Promise<PostOutcome>;
   /** Likewise: a return that never landed leaves the record `following`, so the
       way back is still on offer and must not be forgotten. */
   goBack: (request: AttentionRequestV1, via?: "control" | "manual-move") => Promise<PostOutcome>;
@@ -237,6 +241,7 @@ export function useAttentionOffers({
   refusalTtlMs = REFUSAL_TTL_MS,
   fetchFn,
   surfaceVisible,
+  holdsBack,
 }: {
   deviceId: string | null;
   /** A surface that draws the board and answers no request — the phone. With
@@ -251,6 +256,12 @@ export function useAttentionOffers({
   /** Whether this surface is on screen. Defaults to the document's own
       visibility; a sheet collapsed out of sight passes its own answer. */
   surfaceVisible?: () => boolean;
+  /** Whether a request must not move this view now: it names another project
+      than the one the operator is in (`requestCrossesProject`). Asked each time
+      a request is about to be offered, with the project open at that moment. A
+      held request is rung as the notification and never offered, so nothing
+      here can turn it into a move. */
+  holdsBack?: (request: AttentionRequestV1) => boolean;
 }): AttentionOffersHandle {
   const [view, setView] = useState<DeviceAttentionView | null>(null);
   const [pollGeneration, setPollGeneration] = useState(0);
@@ -265,6 +276,8 @@ export function useAttentionOffers({
      poll on every render. */
   const visible = useRef<() => boolean>(documentIsVisible);
   useEffect(() => { visible.current = surfaceVisible ?? documentIsVisible; }, [surfaceVisible]);
+  const heldBack = useRef<(request: AttentionRequestV1) => boolean>(() => false);
+  useEffect(() => { heldBack.current = holdsBack ?? (() => false); }, [holdsBack]);
 
   /* A withdrawal is said once per lane: the row is off the board already, and
      a line repeated on every four-second poll would be a status rather than a
@@ -358,7 +371,10 @@ export function useAttentionOffers({
        board cannot draw yet is exactly the case this read carries the cure
        for, and the cure has to land before the handoff looks for the anchor. */
     noteWithdrawals(applyPushedRecords(first.records, appliedRecords.current));
-    const pending = first.live.find((entry) => entry.request.state === "pending");
+    const pendingEntries = first.live.filter((entry) => entry.request.state === "pending");
+    const held = pendingEntries.filter((entry) => heldBack.current(entry.request));
+    if (visible.current()) for (const entry of held) ringCrossProjectNotice(entry.request);
+    const pending = pendingEntries.find((entry) => !held.includes(entry));
     /* A surface nobody is looking at reads, but never claims the offer was
        shown: `pending` and `offered` are the difference between "no active
        device ever showed it" and "they saw it and said nothing", and a hidden
@@ -476,6 +492,10 @@ export function useAttentionOffers({
       if (deviceId) await answer(request.id, { kind: "dismiss", deviceId });
     }, [answer, deviceId]),
     arrive,
+    standDown: useCallback(async (request: AttentionRequestV1): Promise<PostOutcome> => {
+      if (!deviceId) return { ok: false, refusal: null };
+      return answer(request.id, { kind: "stand-down", deviceId });
+    }, [answer, deviceId]),
     goBack: useCallback(async (request, via: "control" | "manual-move" = "control"): Promise<PostOutcome> => {
       if (!deviceId) return { ok: false, refusal: null };
       return answer(request.id, { kind: "return", deviceId, via });
