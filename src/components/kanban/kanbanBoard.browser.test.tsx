@@ -39428,6 +39428,33 @@ describe("stale working status", () => {
             await agentWindow.screenshot({ path: path.join(out, `${name}-reader.png`) });
             reading[`${name}Window`] = { state: await header.innerText(), launchChips: 0, placeholder };
           }
+          /* A turn that ended four minutes ago on a live host, top level and sub-agent: the tile, the reader's
+             header and the open-agents rail read the phone's word, and none of them cuts it. */
+          const returnedWord = word("kanban.memberState.returned");
+          for (const [name, file] of [["finished", response.recent.topLevel], ["finishedSub", response.recent.subAgent]] as const) {
+            await scrim.click({ position: { x: 2, y: 2 } }).catch(() => undefined);
+            const tile = surface.locator(`[data-member="${file.path}"]`);
+            await tile.waitFor();
+            const tileState = tile.locator(".state");
+            expect((await tileState.innerText()).trim()).toBe(returnedWord);
+            await tile.click();
+            await agentWindow.waitFor();
+            const header = agentWindow.locator(".ch-state").first();
+            expect((await header.innerText()).trim()).toContain(returnedWord);
+            const rail = page.locator('[data-open-agent-jump][aria-current="true"]').first();
+            const fits = await page.evaluate(([tilePath]) => {
+              const cut = (cell: Element | null) => cell ? (cell as HTMLElement).scrollWidth > (cell as HTMLElement).clientWidth + 0.5 : null;
+              return {
+                tile: cut(document.querySelector(`[data-member="${tilePath}"] .state`)),
+                header: cut(document.querySelector("[data-agent-window-frame] .ch-state")),
+              };
+            }, [file.path]);
+            expect(fits).toEqual({ tile: false, header: false });
+            const railLabel = (await rail.getAttribute("aria-label")) ?? "";
+            expect(railLabel).toContain(returnedWord);
+            await agentWindow.screenshot({ path: path.join(out, `${name}-reader.png`) });
+            reading[`${name}Window`] = { tileWord: (await tileState.innerText()).trim(), headerWord: (await header.innerText()).trim(), rail: railLabel, ...fits };
+          }
           expect(pageErrors).toEqual([]);
           readings[`${lang}-${scheme}`] = reading;
         } finally { await context.close(); }

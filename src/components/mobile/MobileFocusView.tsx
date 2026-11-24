@@ -38,7 +38,9 @@ import { compactPipelineLayoutFlows } from "@/components/pipelines/pipelineModel
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useFavorites } from "@/components/favorites/FavoritesContext";
 import { useOrchestratorSeat } from "@/components/orchestrator/useOrchestratorSeat";
+import { resolveSeatFile, seatLivenessOf } from "@/components/orchestrator/seatState";
 import { useSeatPanel } from "@/components/orchestrator/useSeatPanel";
+import { useSeatSurface } from "@/components/orchestrator/useSeatSurface";
 import { SessionTitle } from "@/components/session/SessionTitle";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { deckKey } from "@/components/scheme/agentLinks";
@@ -496,6 +498,25 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const holdsSeat = resolvedKey !== null && seatKey !== null && resolvedKey === seatKey;
   const seatPanel = useSeatPanel({ project, files, seat: seatRead, holdsSeat, open: seatSheetOpen });
   const openDecisions = useOpenDecisionCount(project);
+  /* Whether the seat's turn is idle with its host alive, read ONCE for every
+     phone surface that names the seat: the bar, the switcher row and the ⋯
+     menu head. The switcher opens over any conversation, so the seat's own
+     file and surface are read here and not only through `useSeatPanel`, which
+     answers while the seat itself is on screen. */
+  const seatFile = useMemo(
+    () => resolveSeatFile({
+      files,
+      conversationId: seatConversationId,
+      seatPath: seatStatus?.seat?.path ?? null,
+      currentPath: null,
+    }),
+    [files, seatConversationId, seatStatus?.seat?.path],
+  );
+  const seatSurface = useSeatSurface(seatFile);
+  const seatWaiting = seatPanel
+    ? seatPanel.state.kind === "live" && seatPanel.state.liveness === "waiting"
+    : seatConversationId !== null
+      && seatLivenessOf({ file: seatFile, surface: seatSurface, incumbent: null, hostLive: false }) === "waiting";
   /* A rotation confirmed from here lands in the SUCCESSOR: the incumbent stays
      live under the draft for as long as the rotation takes, so the phone waits
      for the seat read to name a conversation other than this one — and for the
@@ -596,7 +617,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         offline={offline}
         seat={holdsSeat}
         decisionWaiting={holdsSeat && openDecisions > 0}
-        seatWaiting={holdsSeat && seatPanel?.state.kind === "live" && seatPanel.state.liveness === "waiting"}
+        seatWaiting={holdsSeat && seatWaiting}
         stage={stage}
         bump={bumpPulse?.side ?? null}
         renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
@@ -628,6 +649,8 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           title={displayName}
           entries={switchEntries}
           currentKey={resolvedKey}
+          seatWaiting={seatWaiting}
+          decisionWaiting={openDecisions > 0}
           onPick={(entry) => { close(); switchTo(entry, true); }}
           onBoard={canLeave ? () => { close(); nav.back(); } : undefined}
           onProjects={canLeave || !host ? undefined : () => nav.openSheet("projects")}
@@ -639,6 +662,8 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       return (
         <MobileConversationMenu
           file={activeFile}
+          seatWaiting={holdsSeat && seatWaiting}
+          decisionWaiting={holdsSeat && openDecisions > 0}
           hasPinned={pinnedRelations.length > 0}
           backgroundCount={backgroundTasks.length}
           onOpenPinned={() => nav.openSheet("pinned")}

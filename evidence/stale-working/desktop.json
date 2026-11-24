@@ -6,7 +6,7 @@
   "uk-light": {
     "quiet": "Completed launch\nготово\n30 хв тому",
     "dead": "Dead mid-turn\nзупинено\n30 хв тому",
-    "live": "Live agent\n22 с тому",
+    "live": "Live agent\n26 с тому",
     "quietWindow": {
       "state": "готово · 30 хв тому",
       "launchChips": 0,
@@ -16,12 +16,26 @@
       "state": "зупинено · 30 хв тому",
       "launchChips": 0,
       "placeholder": "написати агенту…"
+    },
+    "finishedWindow": {
+      "tileWord": "завершив хід",
+      "headerWord": "завершив хід · 4 хв тому",
+      "rail": "Перейти до Finished agent · Перевірити стан агентів: Агент, завершив хід",
+      "tile": false,
+      "header": false
+    },
+    "finishedSubWindow": {
+      "tileWord": "завершив хід",
+      "headerWord": "завершив хід · 4 хв тому",
+      "rail": "Перейти до Finished sub-agent · Перевірити стан агентів: Агент, завершив хід",
+      "tile": false,
+      "header": false
     }
   },
   "uk-dark": {
     "quiet": "Completed launch\nготово\n30 хв тому",
     "dead": "Dead mid-turn\nзупинено\n30 хв тому",
-    "live": "Live agent\n24 с тому",
+    "live": "Live agent\n31 с тому",
     "quietWindow": {
       "state": "готово · 30 хв тому",
       "launchChips": 0,
@@ -31,12 +45,26 @@
       "state": "зупинено · 30 хв тому",
       "launchChips": 0,
       "placeholder": "написати агенту…"
+    },
+    "finishedWindow": {
+      "tileWord": "завершив хід",
+      "headerWord": "завершив хід · 4 хв тому",
+      "rail": "Перейти до Finished agent · Перевірити стан агентів: Агент, завершив хід",
+      "tile": false,
+      "header": false
+    },
+    "finishedSubWindow": {
+      "tileWord": "завершив хід",
+      "headerWord": "завершив хід · 4 хв тому",
+      "rail": "Перейти до Finished sub-agent · Перевірити стан агентів: Агент, завершив хід",
+      "tile": false,
+      "header": false
     }
   },
   "en-light": {
     "quiet": "Completed launch\ndone\n30m ago",
     "dead": "Dead mid-turn\nstopped\n30m ago",
-    "live": "Live agent\n25s ago",
+    "live": "Live agent\n36s ago",
     "quietWindow": {
       "state": "done · 30m ago",
       "launchChips": 0,
@@ -46,12 +74,26 @@
       "state": "stopped · 30m ago",
       "launchChips": 0,
       "placeholder": "message the agent…"
+    },
+    "finishedWindow": {
+      "tileWord": "finished the turn",
+      "headerWord": "finished the turn · 4m ago",
+      "rail": "Go to Finished agent · Перевірити стан агентів: Agent, finished the turn",
+      "tile": false,
+      "header": false
+    },
+    "finishedSubWindow": {
+      "tileWord": "finished the turn",
+      "headerWord": "finished the turn · 4m ago",
+      "rail": "Go to Finished sub-agent · Перевірити стан агентів: Agent, finished the turn",
+      "tile": false,
+      "header": false
     }
   },
   "en-dark": {
     "quiet": "Completed launch\ndone\n30m ago",
     "dead": "Dead mid-turn\nstopped\n30m ago",
-    "live": "Live agent\n27s ago",
+    "live": "Live agent\n41s ago",
     "quietWindow": {
       "state": "done · 30m ago",
       "launchChips": 0,
@@ -61,6 +103,20 @@
       "state": "stopped · 30m ago",
       "launchChips": 0,
       "placeholder": "message the agent…"
+    },
+    "finishedWindow": {
+      "tileWord": "finished the turn",
+      "headerWord": "finished the turn · 4m ago",
+      "rail": "Go to Finished agent · Перевірити стан агентів: Agent, finished the turn",
+      "tile": false,
+      "header": false
+    },
+    "finishedSubWindow": {
+      "tileWord": "finished the turn",
+      "headerWord": "finished the turn · 4m ago",
+      "rail": "Go to Finished sub-agent · Перевірити стан агентів: Agent, finished the turn",
+      "tile": false,
+      "header": false
     }
   }
 }

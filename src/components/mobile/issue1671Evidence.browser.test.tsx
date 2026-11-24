@@ -12822,6 +12822,31 @@ describe("stale working status", () => {
             await page.locator("[data-mobile2-back]").first().click();
             await surface.waitFor();
           }
+          /* A turn that ended four minutes ago on a live host, top level and sub-agent: the board row and the
+             bar name it with the desktop's word, whole and inside the screen. */
+          for (const [name, file] of [["finished", response.recent.topLevel], ["finishedSub", response.recent.subAgent]] as const) {
+            const rowPhrase = row(file).locator("[data-mobile2-phrase]");
+            expect(await row(file).getAttribute("data-mobile2-state")).toBe("returned");
+            expect(await rowPhrase.innerText()).toStartWith(prefix("mobile2.board.returned"));
+            await row(file).click();
+            const screen = page.locator('[data-mobile2-screen="chat"]');
+            await screen.waitFor();
+            await page.mouse.move(0, 0);
+            const header = screen.locator("[data-mobile2-chat-state]").first();
+            const text = (await header.innerText()).trim();
+            expect(text).toStartWith(prefix("mobile2.chat.stateReturned"));
+            /* One word with the desktop's reader header, tile and rail for the same conversation. */
+            expect(text.split(" · ")[0]).toBe(word("kanban.memberState.returned"));
+            const fit = await header.evaluate((cell) => {
+              const box = cell.getBoundingClientRect();
+              return { cut: cell.scrollWidth > cell.clientWidth + 0.5, inside: box.left >= 0 && box.right <= innerWidth };
+            });
+            expect(fit).toEqual({ cut: false, inside: true });
+            await page.screenshot({ path: path.join(out, `${name}-chat.png`) });
+            reading[`${name}Chat`] = { state: text, ...fit };
+            await page.locator("[data-mobile2-back]").first().click();
+            await surface.waitFor();
+          }
           expect(pageErrors).toEqual([]);
           readings[`${lang}-${scheme}`] = reading;
         } finally { await context.close(); }
@@ -12877,6 +12902,78 @@ describe("idle seat reads waiting", () => {
           if (bar.text.startsWith(word("mobile2.chat.stateDone").split("{")[0]!)) failures.push(`${label}: the bar still reads «done»`);
           if (bar.cut) failures.push(`${label}: the bar's state phrase is cut`);
           if (bar.inside === false) failures.push(`${label}: the bar's state phrase leaves the screen`);
+          /* The switcher's seat row and the ⋯ menu's head name the same seat, so they read the bar's word in the
+             quiet tone, whole and inside the screen. */
+          const phraseReading = (selector: string) => page.evaluate((sel) => {
+            const cell = document.querySelector<HTMLElement>(sel);
+            if (!cell) return null;
+            cell.scrollIntoView({ block: "center" });
+            const box = cell.getBoundingClientRect();
+            const sheet = cell.closest<HTMLElement>("[data-mobile2-sheet]")?.getBoundingClientRect();
+            return {
+              text: cell.textContent ?? "", tone: cell.getAttribute("data-mobile2-state-phrase"),
+              cut: cell.scrollWidth > cell.clientWidth + 0.5,
+              inside: box.left >= 0 && box.right <= innerWidth && (!sheet || (box.top >= sheet.top && box.bottom <= sheet.bottom)),
+            };
+          }, selector);
+          for (const [name, opener, sheet, selector] of [
+            ["switcher", '[data-mobile2-open="switch"]', "switch", '[data-mobile2-sheet="switch"] [data-mobile2-section="orchestrator"] [data-mobile2-state-phrase]'],
+            ["menu", '[data-mobile2-open="menu"]', "menu", '[data-mobile2-sheet="menu"] [data-mobile2-chat-identity] [data-mobile2-state-phrase]'],
+          ] as const) {
+            await page.locator(opener).first().click();
+            await page.waitForSelector(`[data-mobile2-sheet="${sheet}"]`, { timeout: 15_000 });
+            await page.waitForSelector(selector, { timeout: 15_000 }).catch(() => failures.push(`${label}: the ${name} has no state phrase for the seat`));
+            await page.waitForTimeout(400);
+            const reading = await phraseReading(selector);
+            readings[`${label}-${name}`] = reading;
+            await page.screenshot({ path: path.join(out, `${label}-${name}.png`) });
+            if (!reading) failures.push(`${label}: the ${name} shows no seat phrase`);
+            else {
+              if (!reading.text.startsWith(waiting)) failures.push(`${label}: the ${name} reads «${reading.text}», the bar reads «${bar.text}»`);
+              if (reading.tone !== "neutral") failures.push(`${label}: the ${name} reads in the «${reading.tone}» tone, not the quiet one`);
+              if (reading.cut) failures.push(`${label}: the ${name}'s state phrase is cut`);
+              if (!reading.inside) failures.push(`${label}: the ${name}'s state phrase leaves its sheet or the screen`);
+            }
+            await page.locator(`[data-mobile2-sheet="${sheet}"] [data-mobile2-close]`).first().click();
+            await page.waitForSelector(`[data-mobile2-sheet="${sheet}"]`, { state: "detached", timeout: 15_000 });
+          }
+          /* The board's seat card and its sheet carry the same phrase, in the quiet tone; a running seat keeps «working». */
+          const badgeReading = (selector: string) => page.evaluate((sel) => {
+            const cell = document.querySelector<HTMLElement>(sel);
+            if (!cell) return null;
+            const box = cell.getBoundingClientRect();
+            return {
+              text: cell.textContent ?? "", tone: cell.getAttribute("data-mobile2-seat-badge"),
+              cut: cell.scrollWidth > cell.clientWidth + 0.5, inside: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+            };
+          }, selector);
+          for (const [scene, query, want] of [
+            ["idle", "1044", waiting.split(" ·")[0]!],
+            ["running", "running", word("mobile2.chat.stateWorking").split("{")[0]!.trim()],
+          ] as const) {
+            await page.goto(`${base}/?kanban=1&runtime=structured&seathost=${query}#p=atlas`);
+            const card = '[data-mobile2-seat-card] [data-mobile2-seat-badge]';
+            await page.waitForFunction(([sel, prefix]) => (document.querySelector(sel!)?.textContent ?? "").startsWith(prefix!), [card, want], { timeout: 25_000 })
+              .catch(() => failures.push(`${label}: the ${scene} seat card does not read «${want}»`));
+            await page.waitForTimeout(400);
+            const onCard = await badgeReading(card);
+            readings[`${label}-${scene}-card`] = onCard;
+            await page.screenshot({ path: path.join(out, `${label}-${scene}-card.png`) });
+            await page.locator("[data-mobile2-seat-controls]").first().click({ timeout: 15_000 }).catch(() => failures.push(`${label}: the ${scene} seat card has no sheet control`));
+            const sheetBadge = '[data-mobile2-sheet="seat"] [data-mobile2-seat-badge]';
+            await page.waitForSelector(sheetBadge, { timeout: 15_000 }).catch(() => failures.push(`${label}: the ${scene} seat sheet has no badge`));
+            await page.waitForTimeout(400);
+            const onSheet = await badgeReading(sheetBadge);
+            readings[`${label}-${scene}-sheet`] = onSheet;
+            await page.screenshot({ path: path.join(out, `${label}-${scene}-sheet.png`) });
+            for (const [where, reading] of [["card", onCard], ["sheet", onSheet]] as const) {
+              if (!reading) { failures.push(`${label}: the ${scene} seat ${where} shows no badge`); continue; }
+              if (!reading.text.startsWith(want)) failures.push(`${label}: the ${scene} seat ${where} reads «${reading.text}», not «${want}»`);
+              if (scene === "idle" && reading.tone !== "neutral") failures.push(`${label}: the idle seat ${where} reads in the «${reading.tone}» tone, not the quiet one`);
+              if (reading.cut) failures.push(`${label}: the ${scene} seat ${where} badge is cut`);
+              if (!reading.inside) failures.push(`${label}: the ${scene} seat ${where} badge leaves the screen`);
+            }
+          }
           /* A running seat keeps its own word. */
           await page.goto(`${base}/?chrome=0&nopin=1&seatnoise=ii&runtime=structured#c=conversation_running`);
           await page.waitForSelector("[data-mobile2-chat-state]", { timeout: 25_000 });
@@ -12891,7 +12988,7 @@ describe("idle seat reads waiting", () => {
     fs.mkdirSync("evidence/seat-waiting", { recursive: true });
     fs.writeFileSync("evidence/seat-waiting/phone.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
-  }, 300_000);
+  }, 1_200_000);
 });
 
 /*
