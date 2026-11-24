@@ -85,8 +85,12 @@ test("native caller snapshot marks a completed host lookup over the candidate ca
     }
     await registry.prepareNativeCallerArtifacts();
     const snapshot = registry.mcpNativeCallerSnapshot(sessionId, null);
-    expect(snapshot?.snapshot.nativeHostsLookupLimitExceeded).toBeTrue();
-    expect(snapshot?.snapshot.nativeHostsIncomplete).toBeUndefined();
+    const rows = snapshot?.snapshot;
+    if (!rows || !("nativeHostsLookupLimitExceeded" in rows)) {
+      throw new Error("expected the SQLite native caller snapshot shape");
+    }
+    expect(rows.nativeHostsLookupLimitExceeded).toBeTrue();
+    expect(rows.nativeHostsIncomplete).toBeUndefined();
   } finally {
     registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
