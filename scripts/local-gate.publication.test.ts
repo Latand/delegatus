@@ -270,7 +270,8 @@ test.each(["normal write", "metadata change"])("a scanner-side %s cannot certify
 test.each(["overlay", "configured user attributes"])("the scanner reads captured %s and transport refuses a later change", kind => {
   const f = fixture();
   const attributes = kind === "overlay" ? path.join(f.dir, ".git", "info", "attributes") : path.join(f.dir, ".git", "user-attributes");
-  fs.writeFileSync(attributes, "example.ts diff=fixture\n");
+  f.git("config", "core.ignoreCase", "true");
+  fs.writeFileSync(attributes, "EXAMPLE.ts diff=fixture\n");
   if (kind !== "overlay") f.git("config", "core.attributesFile", attributes);
   fs.appendFileSync(path.join(f.dir, "record.ts"), `
     if (process.argv[2] === "scripts/privacy-publication-gate.ts") {
@@ -283,7 +284,7 @@ test.each(["overlay", "configured user attributes"])("the scanner reads captured
   const prepared = f.run(true);
   expect(prepared.status, prepared.stderr).toBe(0);
   expect(fs.readFileSync(path.join(f.dir, ".git", "attribute-observation"), "utf8")).toBe("example.ts: diff: fixture\n");
-  fs.writeFileSync(attributes, "example.ts diff=updated\n");
+  fs.writeFileSync(attributes, "EXAMPLE.ts diff=updated\n");
   const before = f.calls().length;
   const transported = f.run(false);
   expect(transported.status, transported.stderr).not.toBe(0);

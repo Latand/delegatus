@@ -51,8 +51,8 @@ export function publicationScanComponentLabel(component: string): string {
 /** Resolve all variable scan data together. Commit IDs bind the complete Git
  * graph, including the trees and blobs used for hunks and provenance. Git's
  * graph overrides and ambient system attributes are disabled for the scan.
- * Replay scalar diff settings and capture the path-valued diff/attribute
- * inputs as files. The scanner's Git commands disable external diff drivers. */
+ * Replay attribute matching and scalar diff settings. Capture path-valued
+ * diff/attribute inputs as files. Git commands disable external diff drivers. */
 export function publicationScanInputs(root: string, base: string, env: NodeJS.ProcessEnv) {
   const head = git(root, env, ["--no-replace-objects", "rev-parse", "--verify", "HEAD^{commit}"]).trim();
   const scanBase = git(root, env, ["--no-replace-objects", "rev-parse", "--verify", `${base}^{commit}`]).trim();
@@ -65,7 +65,8 @@ export function publicationScanInputs(root: string, base: string, env: NodeJS.Pr
       const end = entry.indexOf("\n");
       return end === -1 ? [entry, "true"] : [entry.slice(0, end), entry.slice(end + 1)];
     });
-  const config = values.filter(([key]) => /^diff\./.test(key) && !/^(?:diff\.(?:external|orderfile)|diff\..+\.(?:command|textconv))$/.test(key));
+  const config = values.filter(([key]) => key === "core.ignorecase"
+    || /^diff\./.test(key) && !/^(?:diff\.(?:external|orderfile)|diff\..+\.(?:command|textconv))$/.test(key));
   const configPath = (key: string) => {
     if (!values.some(([name]) => name === key)) return undefined;
     return path.resolve(root, git(root, env, ["config", "--null", "--path", "--get", key]).slice(0, -1));
@@ -178,6 +179,7 @@ export function sealPublicationScan(sandbox: string, inputs: ReturnType<typeof p
   rmSync(path.join(repository, attributesFile));
   for (const [file, bytes] of inputs.files) write(file, bytes);
   for (const name of catalogNames) env[name] = inputs.files.has(`inputs/${name}`) ? path.join(snapshot, "inputs", name) : "";
+  git(repository, env, ["config", "--local", "core.ignoreCase", "false"]);
   for (const [key, value] of inputs.config) git(repository, env, ["config", "--local", "--add", key, value]);
   git(repository, env, ["config", "--local", "core.attributesFile", inputs.files.has("inputs/user-attributes")
     ? path.join(snapshot, "inputs/user-attributes") : "/dev/null"]);
