@@ -10,7 +10,7 @@ import { runGit } from "./git";
 import { RetentionWorker } from "./retentionWorker";
 import { retentionProcessScan, retentionScanWithObserver, withSelfObservation } from "./retentionInspection";
 import { observePrivilegedReleases, RELEASE_OBSERVER } from "./releaseObserver.worker";
-import { quarantineTree, sealProcessLinks } from "./gatedTrash";
+import { quarantineTree, sealProcessLinks, settleGatedTrash } from "./gatedTrash";
 import { cleanerJournal, createCleanerJournal, cleanerJournalFile } from "@/lib/cleaner/diskJournal";
 import { installStateOwnershipGraph, MODULE_CONSUMER_SOURCE } from "./stateOwnershipGraph.fixture";
 import { buildPipeline, loadPipelinesForList, savePipelines } from "@/lib/pipelines/store";
@@ -640,6 +640,20 @@ test("Cleaner preserves release repositories claimed by a parked pipeline at adm
   }
 }, 30_000);
 
+test("a parked repository claim through a symlink preserves the physical release", async () => {
+  const h = fixture(20), target = h.dirs[3]!, alias = path.join(h.root, "parked-repository-alias");
+  fs.symlinkSync(target, alias, "dir");
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] }));
+  h.ports.current = () => ({ record: h.record, inputs: h.inputs, fenced: true,
+    pipelineClaims: [{ repoDir: alias, worktreeDir: null }] });
+  h.ports.cleaner = { id: fixtureCleanerId("66666666", "6666", "4666", "8666", "666666666666"), allowed: () => true, dryRun: false, journal: () => {} };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(fs.existsSync(alias)).toBeTrue();
+  expect(fs.existsSync(target)).toBeTrue();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: target, reason: "pipeline-checkout" }));
+}, 30_000);
+
 test("the final closed-gate owner read restores a release newly claimed by a parked pipeline", async () => {
   const h = fixture(20), git = h.ports.git!;
   h.ports.git = async (args, cwd) => {
@@ -647,13 +661,15 @@ test("the final closed-gate owner read restores a release newly claimed by a par
     return args[0] === "worktree" && args[1] === "list" ? { ...result, stdout: `worktree ${h.root}\0HEAD main\0\0${result.stdout}` } : result;
   };
   const parkedRepo = h.dirs[3]!;
+  const parkedAlias = path.join(h.root, "late-parked-repository-alias");
+  fs.symlinkSync(parkedRepo, parkedAlias, "dir");
   fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] }));
   let observationsAfterQuarantine = 0;
   h.ports.current = () => {
     const quarantined = !exists(parkedRepo) && fs.readdirSync(path.dirname(parkedRepo)).some(name => name.startsWith(`.delegatus-trash-${path.basename(parkedRepo)}-`));
     observationsAfterQuarantine += Number(quarantined);
     return { record: h.record, inputs: h.inputs, fenced: true,
-      pipelineClaims: observationsAfterQuarantine >= 2 ? [{ repoDir: parkedRepo, worktreeDir: null }] : [] };
+      pipelineClaims: observationsAfterQuarantine >= 2 ? [{ repoDir: parkedAlias, worktreeDir: null }] : [] };
   };
   const journal: Array<{ phase: string; directory: string }> = [];
   h.ports.cleaner = { id: fixtureCleanerId("55555555", "5555", "4555", "8555", "555555555555"), allowed: () => true, dryRun: false,
@@ -673,18 +689,20 @@ test("release retention leaves Cleaner quarantine to Cleaner recovery and restor
   const state = path.dirname(h.ports.reportFile!);
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = state;
+  let quarantined: ReturnType<typeof quarantineTree> = null;
   try {
   fs.mkdirSync(state, { recursive: true });
   createCleanerJournal(originalPass);
   const proof = "verified release beyond newest 15 with owner and process checks clear";
   cleanerJournal(originalPass, "release")("intent", h.dirs[1]!, 4096, proof);
   const trashJournal = path.join(state, "release-trash-interrupted-cleaner.json");
-  const row = quarantineTree(h.dirs[1]!, trashJournal, { sha: h.shas[1]!, age: h.now - 20 * DAY }, { passId: originalPass, proof });
-  expect(row).not.toBeNull();
+  quarantined = quarantineTree(h.dirs[1]!, trashJournal, { sha: h.shas[1]!, age: h.now - 20 * DAY }, { passId: originalPass, proof });
+  expect(quarantined).not.toBeNull();
+  fs.chmodSync(quarantined!.gate, 0o000);
   const first = await h.run();
   expect(first.errors).toEqual([]);
   expect(fs.existsSync(h.dirs[1]!)).toBeFalse();
-  expect(fs.existsSync(path.join(row!.trash, ".next/DELEGATUS_RELEASE_READY"))).toBeTrue();
+  expect(fs.existsSync(quarantined!.trash)).toBeFalse(); // mode 000 hides the intact quarantine before recovery.
   h.ports.cleaner = { id: fixtureCleanerId("44444444", "4444", "4444", "8444", "444444444444"), allowed: () => true, dryRun: false,
     journal: () => {} };
   const recovered = await h.run();
@@ -695,6 +713,51 @@ test("release retention leaves Cleaner quarantine to Cleaner recovery and restor
   expect(audit.map(entry => entry.phase)).toEqual(["intent", "refused"]);
   expect(audit[1]).toMatchObject({ path: h.dirs[1], class: "release", proof });
   expect(h.commands.some(args => args[0] === "worktree" && args[1] === "remove" && args.at(-1) === h.dirs[1])).toBeFalse();
+  } finally {
+    if (quarantined && fs.existsSync(quarantined.gate)) fs.chmodSync(quarantined.gate, 0o700);
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
+}, 30_000);
+
+test("Cleaner leaves an unbound legacy release quarantine to ordinary retention replay", async () => {
+  const h = fixture(20), journal = path.join(path.dirname(h.ports.reportFile!), "release-trash-legacy.json");
+  const row = quarantineTree(h.dirs[1]!, journal, { sha: h.shas[1]!, age: h.now - 20 * DAY });
+  expect(row).not.toBeNull();
+  h.ports.cleaner = { id: fixtureCleanerId("77777777", "7777", "4777", "8777", "777777777777"), allowed: () => true, dryRun: true, journal: () => {} };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(fs.existsSync(row!.trash)).toBeTrue();
+  expect(fs.existsSync(journal)).toBeTrue();
+  expect(report.removed.some(item => item.dir === h.dirs[1])).toBeFalse();
+}, 30_000);
+
+test("Cleaner resumes its original audit after a crash following the first release unlink", async () => {
+  const h = fixture(20), pass = fixtureCleanerId("88888888", "8888", "4888", "8888", "888888888888");
+  const state = path.dirname(h.ports.reportFile!);
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  try {
+    fs.mkdirSync(state, { recursive: true }); createCleanerJournal(pass);
+    const proof = "verified old release with owner and process checks clear";
+    cleanerJournal(pass, "release")("intent", h.dirs[1]!, 4096, proof);
+    const journal = path.join(state, "release-trash-partial-cleaner.json");
+    const row = quarantineTree(h.dirs[1]!, journal, { sha: h.shas[1]!, age: h.now - 20 * DAY }, { passId: pass, proof, bytes: 4096 });
+    expect(row).not.toBeNull();
+    let removedFirst = false;
+    await expect(settleGatedTrash(journal, row!, { observe: async () => null,
+      remove: async entry => {
+        if (!removedFirst) { removedFirst = true; await fs.promises.rm(entry, { recursive: true, force: true }); throw new Error("interrupted after first unlink"); }
+        await fs.promises.rm(entry, { recursive: true, force: true });
+      } })).rejects.toThrow("interrupted after first unlink");
+    expect(JSON.parse(fs.readFileSync(journal, "utf8")).deleting).toBeTrue();
+    h.ports.cleaner = { id: fixtureCleanerId("99999999", "9999", "4999", "8999", "999999999999"), allowed: () => true, dryRun: false, journal: () => {} };
+    const report = await h.run();
+    expect(report.errors).toEqual([]);
+    expect(fs.existsSync(journal)).toBeFalse();
+    expect(fs.existsSync(h.dirs[1]!)).toBeFalse();
+    const outcomes = fs.readFileSync(cleanerJournalFile(pass), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(outcomes.map((entry: { phase: string }) => entry.phase)).toEqual(["intent", "removed"]);
+    expect(outcomes[1]).toMatchObject({ bytes: 4096 });
   } finally {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
   }

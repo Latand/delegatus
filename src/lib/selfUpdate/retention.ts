@@ -47,6 +47,30 @@ export type RetentionPorts = {
 };
 const under = (entry: string, root: string) => entry === root || entry.startsWith(root + path.sep);
 
+/** Resolve every symlink hop even when its final target has just been moved
+ * into quarantine. realpath stops at that dangling link and loses its owner. */
+function resolveClaimPath(input: string): string {
+  const absolute = path.resolve(input), root = path.parse(absolute).root;
+  const pending = absolute.slice(root.length).split(path.sep).filter(Boolean);
+  let current = root, links = 0;
+  while (pending.length) {
+    const part = pending.shift()!;
+    if (part === ".") continue;
+    if (part === "..") { current = path.dirname(current); continue; }
+    const next = path.join(current, part);
+    const stat = fs.lstatSync(next, { throwIfNoEntry: false });
+    if (stat?.isSymbolicLink()) {
+      if (++links > 40) throw new Error("pipeline claim symlink depth exceeded");
+      const target = fs.readlinkSync(next);
+      if (path.isAbsolute(target)) current = path.parse(target).root;
+      pending.unshift(...target.split(path.sep).filter(Boolean));
+      continue;
+    }
+    current = next;
+  }
+  return current;
+}
+
 /** Live and parked lanes keep any overlapping release checkout or worktree. */
 export async function readReleasePipelineClaims() {
   const [{ loadPipelinesForList }, { pipelineActivitySettled }] = await Promise.all([
@@ -141,6 +165,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     return { current, processes, unfenced: current.fenced !== true };
   };
   type Candidate = { dir: string; sha: string; age: number; locked: boolean; identity: string };
+  const candidateClaimBindings = new WeakMap<Candidate, Map<string, string>>();
   const byAge = (a: Candidate, b: Candidate) => a.age - b.age || (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0);
   const identity = (dir: string) => { const stat = fs.lstatSync(dir); return `${stat.dev}:${stat.ino}`; };
   const candidates: Candidate[] = [];
@@ -176,7 +201,24 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     const names = (directory: string | null) => directory !== null && under(directory, candidate.dir);
     const overlaps = (directory: string | null) => directory !== null
       && (under(directory, candidate.dir) || under(candidate.dir, directory));
-    if ((current.pipelineClaims ?? []).some(claim => overlaps(claim.repoDir) || overlaps(claim.worktreeDir))) return "pipeline-checkout";
+    const bindings = candidateClaimBindings.get(candidate) ?? new Map<string, string>();
+    candidateClaimBindings.set(candidate, bindings);
+    const physicalClaim = (directory: string | null) => {
+      if (!directory) return null;
+      // Resolve live aliases at admission. If quarantine later makes one
+      // dangling, keep its physical binding for the closed-gate owner check.
+      const bound = bindings.get(directory);
+      if (bound) return bound;
+      let target: string;
+      try { target = fs.realpathSync(directory); }
+      catch { target = resolveClaimPath(directory); }
+      bindings.set(directory, target);
+      return target;
+    };
+    if ((current.pipelineClaims ?? []).some(claim => {
+      const repo = physicalClaim(claim.repoDir), worktree = physicalClaim(claim.worktreeDir);
+      return overlaps(repo) || overlaps(worktree);
+    })) return "pipeline-checkout";
     if (names(active)) return "active";
     if ((state.rollbackPointers ?? []).some(raw => names(pointerDir(raw))) || names(state.rollbackPackage ?? null)) return "rollback";
     if ((state.inFlight ?? []).some(names)) return "in-flight";
@@ -479,7 +521,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const proof = `registered release ${candidate.sha} beyond newest ${keepCount}, ref preserved, fenced owner and process checks clear`;
           if (cleaner) cleaner.journal("intent", candidate.dir, bytes, proof);
           const row = quarantineTree(candidate.dir, journal, { sha: candidate.sha, age: candidate.age },
-            cleaner ? { passId: cleaner.id, proof } : undefined);
+            cleaner ? { passId: cleaner.id, proof, bytes } : undefined);
           if (cleaner && !row) cleaner.journal("refused", candidate.dir, bytes, proof);
           if (!row) { report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue; }
           const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree, first: [".next/DELEGATUS_RELEASE_READY"],
@@ -538,23 +580,46 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           if (!cleaner || !releaseTrash || !gated || !cleaner.allowed()
             || path.dirname(row.directory) !== root || !/^[a-f0-9]{12}$/.test(path.basename(row.directory))) continue;
           const audit = cleanerJournal(row.cleaner.passId, "release");
+          // A killed worker may leave mode 000 before the first unlink. Open
+          // the validated gate before reading the bound inode's contents.
+          reopenGate(row);
           const trash = fs.lstatSync(row.trash, { throwIfNoEntry: false });
           const bytes = trash ? await bytesOf(row.trash) : 0;
+          const auditBytes = row.cleaner.bytes ?? bytes;
+          if (row.deleting && trash) {
+            const candidate: Candidate = { dir: row.directory, sha: row.context?.sha ?? "", age: row.context?.age ?? 0,
+              locked: false, identity: row.identity };
+            const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree,
+              observe: async (tree, gate) => {
+                const { current, processes, unfenced } = await gatedObservation(tree, candidate.dir);
+                return protect(candidate, current, processes, true)
+                  ?? (heldByProcess(gate, processes) ? "process" : unfenced ? "owner-unfenced" : null);
+              },
+              beforeRemove: () => cleaner.allowed() ? null : "cleaner ownership changed" });
+            if (outcome.removed) {
+              audit("removed", row.directory, auditBytes, row.cleaner.proof);
+              report.removed.push({ dir: row.directory, sha: candidate.sha, bytes });
+              await dropWorktreeMetadata(row.directory);
+            } else report.kept.push({ dir: row.directory, reason: outcome.reason, bytes });
+            continue;
+          }
           const restored = restoreGatedTrash(journal, row);
           if (restored) {
-            audit("refused", row.directory, bytes, row.cleaner.proof);
+            audit("refused", row.directory, auditBytes, row.cleaner.proof);
             report.kept.push({ dir: row.directory, reason: "restored after Cleaner restart", bytes });
           } else if (row.deleting && !trash) {
-            audit("removed", row.directory, bytes, row.cleaner.proof);
+            audit("removed", row.directory, auditBytes, row.cleaner.proof);
             report.removed.push({ dir: row.directory, sha: row.context?.sha ?? "", bytes });
             await dropWorktreeMetadata(row.directory);
           } else {
-            audit("refused", row.directory, bytes, row.cleaner.proof);
+            audit("refused", row.directory, auditBytes, row.cleaner.proof);
             report.kept.push({ dir: row.directory, reason: "Cleaner quarantine requires guarded recovery", bytes });
           }
           continue;
         }
-        if (cleaner && (!releaseTrash || !gated)) continue;
+        // Historical release trash has no Cleaner pass binding. Leave replay
+        // to its original retention owner instead of deleting it unaudited.
+        if (cleaner && (!releaseTrash || !gated || !row.cleaner)) continue;
         let outputCandidate: Candidate | undefined;
         let generatedOutput = false;
         if (packageTrash) {

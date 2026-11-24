@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import { createInterface } from "node:readline";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { attemptTempConfigParent } from "@/lib/runtime/attemptTempPaths";
 import { assertRetentionTestPath } from "@/lib/retentionTestSafety";
-import { diskVolumes, type DiskPressure } from "@/lib/state/diskPressure";
+import { diskVolumes, type DiskPressure, type DiskRoot } from "@/lib/state/diskPressure";
+import { ownTempRoots } from "@/lib/tempSweep";
+import { includeIdleHostViews, tempViewAvailable } from "@/lib/state/hostTempViews";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { FileTransactionBusyError, withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { STATE_LOCK_WAIT_MS } from "@/lib/state/lockWait";
@@ -32,9 +34,17 @@ function needsCleaning(pressure: DiskPressure, threshold: number, readings: Clea
     || [...pressure.volumes, ...readings].some(row => row.freeBytes !== null && row.freeBytes < threshold);
 }
 
-function measure(pressure?: DiskPressure): CleanerSpace[] {
-  const roots = [{ role: "root", directory: "/" }, { role: "state", directory: statePath() },
+export function measureCleanerSpace(pressure?: DiskPressure, preserveTrigger = false): CleanerSpace[] {
+  const roots: DiskRoot[] = [{ role: "root", directory: "/" }, { role: "state", directory: statePath() },
     { role: "attempt config", directory: attemptTempConfigParent() }, { role: "checkout", directory: process.cwd() }];
+  if (pressure?.volumes.some(row => row.views?.length)) {
+    const views = includeIdleHostViews(ownTempRoots().map(path => ({ path, via: "" })));
+    for (const observed of pressure.volumes) for (const view of views) {
+      if (!observed.volume || !view.via || !view.anchor || !tempViewAvailable(view)) continue;
+      const key = `${view.anchor.namespace}:${createHash("sha256").update(view.path).digest("hex").slice(0, 16)}`;
+      if (observed.views?.includes(key)) roots.push({ role: observed.roles.join("/"), directory: view.via + view.path, view });
+    }
+  }
   if (pressure?.volumes.length && process.platform === "linux") {
     const wanted = new Map(pressure.volumes.filter(row => row.volume).map(row => [row.volume!, row.roles.join("/")]));
     const present = new Set(diskVolumes(roots).map(row => row.volume).filter((volume): volume is string => !!volume));
@@ -52,8 +62,17 @@ function measure(pressure?: DiskPressure): CleanerSpace[] {
       }
     } catch { /* Fixed path readings remain useful when mount inventory is unavailable. */ }
   }
-  return diskVolumes(roots)
+  const measured = diskVolumes(roots)
     .map(row => ({ volume: row.volume ?? `unknown:${row.roles.join("/")}`, roles: row.roles, freeBytes: row.freeBytes }));
+  if (pressure) for (const observed of pressure.volumes) {
+    const volume = observed.volume ?? `unknown:${observed.roles.join("/")}`;
+    if (!measured.some(row => row.volume === volume)) measured.push({ volume, roles: observed.roles,
+      // The trigger was sampled through disk-pressure's validated host view.
+      // Use that reading for admission; if it cannot be sampled after cleanup,
+      // retain the volume as explicitly unknown.
+      freeBytes: preserveTrigger ? observed.freeBytes : null });
+  }
+  return measured;
 }
 
 async function readJournal(id: string) {
@@ -99,7 +118,10 @@ export async function reconcileAutomaticDiskCleaner(pressure: DiskPressure, port
   if (!active()) return;
   const file = diskCleanerStateFile();
   assertRetentionTestPath(file);
-  const readSpace = () => ports.measure ? ports.measure(pressure) : measure(pressure);
+  const readSpace = (after = false) => {
+    if (ports.measure) return ports.measure(pressure);
+    return measureCleanerSpace(pressure, !after);
+  };
   const threshold = diskCleanerThreshold(env);
   const existing = readDiskCleanerPass();
   if (existing?.finished && existing.card && now() < existing.finished.at + DISK_CLEANER_COOLDOWN_MS) return;
@@ -111,7 +133,7 @@ export async function reconcileAutomaticDiskCleaner(pressure: DiskPressure, port
       let pass = readDiskCleanerPass();
       const finish = async (run: DiskCleanerPass, kept: CleanerHold[], errors: number, incomplete: boolean) => {
         const journal = await readJournal(run.id);
-        const result = { ...run, finished: { ...journal, errors: errors + journal.errors, incomplete, kept, at: now(), after: readSpace() } };
+        const result = { ...run, finished: { ...journal, errors: errors + journal.errors, incomplete, kept, at: now(), after: readSpace(true) } };
         writeJsonDurably(file, result);
         return result;
       };

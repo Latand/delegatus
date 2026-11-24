@@ -396,7 +396,7 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           assertRetentionTestPath(current);
           protection = temporaryDataProtection(row, current, clock, deadline);
           bytes = protection.bytes;
-          if ((row.kind === "lane-evidence" || row.kind === "agent-evidence")
+          if ((row.kind === "lane-evidence" || row.kind === "agent-evidence" || row.kind === "ownerless-copy")
             && protection.newest > now() - TEMPORARY_DATA_RETENTION_MS) { reason = "evidence touched within seven days"; return true; }
           const clear = await ports.references(row, current, inventory);
           assertRetentionTestPath(current);

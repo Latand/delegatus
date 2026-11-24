@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isolatedEnvironment } from "../../../scripts/local-gate";
-import { DISK_CLEANER_COOLDOWN_MS, diskCleanerThreshold } from "./diskController";
+import { DISK_CLEANER_COOLDOWN_MS, diskCleanerThreshold, measureCleanerSpace } from "./diskController";
 
 const NOW = Date.UTC(2031, 10, 23, 18);
 const PROJECT = "repo-cleaner-fixture";
@@ -13,6 +13,14 @@ test("the cleaner threshold is configurable in decimal GB", () => {
   expect(diskCleanerThreshold({})).toBe(150e9);
   expect(diskCleanerThreshold({ LLV_CLEANER_FREE_GB: "12.5" })).toBe(12.5e9);
   expect(diskCleanerThreshold({ LLV_CLEANER_FREE_GB: "-1" })).toBe(150e9);
+});
+
+test("a pressure reading through a host-only view is retained before and becomes unknown when its view disappears", () => {
+  const pressure = { at: new Date(NOW).toISOString(), episode: "host-view-episode",
+    volumes: [{ volume: "host-only-volume", roles: ["temp"], freeBytes: 42, level: "warning" as const, views: ["mnt:[host]:fixture"] }],
+    consumers: [], warningBytes: 100, criticalBytes: 10 };
+  expect(measureCleanerSpace(pressure, true)).toContainEqual({ volume: "host-only-volume", roles: ["temp"], freeBytes: 42 });
+  expect(measureCleanerSpace(pressure, false)).toContainEqual({ volume: "host-only-volume", roles: ["temp"], freeBytes: null });
 });
 
 test("pressure admission, cooldown, journal and seat report survive Viewer restarts", async () => {

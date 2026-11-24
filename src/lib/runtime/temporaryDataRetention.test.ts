@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
+import { statePath } from "@/lib/configDir";
 import { TemporaryDataStore, type TemporaryDataCandidate } from "./temporaryDataStore";
 import { sweepTemporaryData, temporaryDataProtection, TEMPORARY_DATA_RETENTION_MS as WEEK, type TemporaryDataPorts } from "./temporaryDataRetention";
 
@@ -25,6 +26,34 @@ function fixture(directory = true) {
     authority: async () => ({ expiresAt: NOW - 1, reason: "young", revision: "one", current: () => true }), references: async () => true };
   return { root, store, row, ports };
 }
+
+test("Cleaner applies the seven-day tree-age guard to ownerless copies before and after quarantine", async () => {
+  for (const age of [WEEK - 1, WEEK + 1]) {
+    const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = path.join(f.root, "state");
+    try {
+      const scope = statePath("evidence"), directory = path.join(scope, "copy-ownerless-fixture");
+      fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(path.join(directory, "screen.png"), "capture");
+      const timestamp = new Date(NOW - age), stat = fs.lstatSync(directory);
+      fs.utimesSync(directory, timestamp, timestamp);
+      fs.utimesSync(path.join(directory, "screen.png"), timestamp, timestamp);
+      const row = { ...f.row, directory, scope, kind: "ownerless-copy" as const, identity: `${stat.dev}:${stat.ino}` };
+      f.store.register(row);
+      const journal: string[] = [];
+      f.ports.cleaner = { allowed: () => true, journal: phase => journal.push(phase), processClear: () => true };
+      f.ports.mode = "on";
+      const report = await sweepTemporaryData(f.store, f.ports);
+      if (age < WEEK) {
+        expect(fs.existsSync(directory)).toBeTrue();
+        expect(journal).toEqual([]);
+        expect(report.removed).toBe(0);
+      } else {
+        expect(fs.existsSync(directory), JSON.stringify({ report, journal })).toBeFalse();
+        expect(journal).toEqual(["intent", "removed"]);
+      }
+    } finally { if (priorState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = priorState; }
+  }
+});
 
 async function runRecovery(f: ReturnType<typeof fixture>, mode: string, time: number) {
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "temporaryDataRetention.fixture.ts"), f.store.filename, mode, String(time)], { stdout: "pipe", stderr: "pipe" });

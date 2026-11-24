@@ -24,7 +24,7 @@ export type GatedTrashRow = {
   /** The release's revision and its age when it left its path. */
   context?: { sha: string; age?: number };
   /** Cleaner ownership is durable before the release leaves its path. */
-  cleaner?: { passId: string; proof: string };
+  cleaner?: { passId: string; proof: string; bytes?: number };
 };
 export type GatedTrashOutcome = { removed: true } | { removed: false; reason: string };
 export type GatedTrashOptions = {
@@ -53,7 +53,7 @@ export const isGatedTrashRow = (row: unknown): row is GatedTrashRow => {
     && sibling(value.gate, value.directory) && value.trash === path.join(value.gate, path.basename(value.directory))
     && (value.legacyTrash === undefined || typeof value.legacyTrash === "string" && sibling(value.legacyTrash, value.directory))
     && (value.cleaner === undefined || typeof value.cleaner.passId === "string" && /^[a-f0-9-]{36}$/.test(value.cleaner.passId)
-      && typeof value.cleaner.proof === "string");
+      && typeof value.cleaner.proof === "string" && (value.cleaner.bytes === undefined || Number.isSafeInteger(value.cleaner.bytes) && value.cleaner.bytes >= 0));
 };
 
 /** Journal, then rename the tree out of its path. Null when it is not a plain directory. */
