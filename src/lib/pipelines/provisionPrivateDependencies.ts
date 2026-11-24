@@ -16,6 +16,7 @@ export type PrivateInstallEffect = "private-scratch" | "private-install" | "priv
 
 type PrivateInstallPorts = {
   beforeEffect(effect: PrivateInstallEffect): Promise<void>;
+  observeLegacy?: typeof observeLegacyInstaller;
   uncertain(observation: Exclude<LegacyInstallerObservation, { kind: "clear" }>): Promise<never>;
   receipt(value: PrivateInstallReceipt): Promise<void>;
   intent(value: PrivateInstallIntent): Promise<void>;
@@ -91,7 +92,7 @@ async function filesMatch(reference: string, actual: string): Promise<boolean> {
 export async function preparePrivateDependencies(repository: string, checkout: string, claim: string, prior: PrivateInstallReceipt | undefined, priorIntent: PrivateInstallIntent | undefined,
   budgetMs: number, ports: PrivateInstallPorts): Promise<boolean> {
   const census = async () => {
-    const observation = await observeLegacyInstaller(checkout);
+    const observation = await (ports.observeLegacy ?? observeLegacyInstaller)(checkout);
     if (observation.kind !== "clear") await ports.uncertain(observation);
   };
   const permit = async (effect: PrivateInstallEffect) => { await census(); await ports.beforeEffect(effect); };

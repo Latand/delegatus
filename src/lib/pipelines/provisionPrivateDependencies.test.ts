@@ -24,6 +24,29 @@ test("a failed CoW request uses the staged ordinary copy and keeps the source pr
   } finally { await fs.rm(scratch, { recursive: true, force: true }); }
 });
 
+test.each(["enumeration", "process-identity", "expired"] as const)("private preparation stops before writes when the census reports %s", async reason => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "private-census-"));
+  const source = path.join(root, "source"), checkout = path.join(root, "checkout");
+  const effects: PrivateInstallEffect[] = [];
+  const refusal = new Error("fixture legacy installer census refused");
+  try {
+    await fs.mkdir(source);
+    await fs.mkdir(checkout);
+    await expect(preparePrivateDependencies(source, checkout, "census-test-claim", undefined, undefined, 5_000, {
+      async observeLegacy() { return { kind: "incomplete", reason }; },
+      async beforeEffect(effect) { effects.push(effect); },
+      async uncertain(observation) {
+        expect(observation).toEqual({ kind: "incomplete", reason });
+        throw refusal;
+      },
+      async receipt() { throw new Error("unexpected completion receipt"); },
+      async intent() { throw new Error("unexpected install intent"); },
+    })).rejects.toBe(refusal);
+    expect(effects).toEqual([]);
+    expect(await fs.readdir(checkout)).toEqual([]);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 const native = process.platform === "linux" || process.platform === "darwin" ? test : test.skip;
 native.each(["empty", "populated"] as const)("copy publication preserves a late %s foreign directory", async foreign => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "provision-publish-"));
@@ -40,6 +63,7 @@ native.each(["empty", "populated"] as const)("copy publication preserves a late 
     const effects: PrivateInstallEffect[] = [], receipts: PrivateInstallReceipt[] = [];
     let foreignInode: bigint | undefined;
     expect(await preparePrivateDependencies(source, checkout, "copy-test-claim", undefined, undefined, 5_000, {
+      async observeLegacy() { return { kind: "clear", observedAt: 1_000 }; },
       async beforeEffect(effect) {
         effects.push(effect);
         if (effect !== "private-publish") return;
