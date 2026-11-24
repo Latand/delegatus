@@ -4167,15 +4167,20 @@ async function recoverProviderCut(
   const cutTs = wait.turnTs;
   const controlGeneration = pipeline.controlGeneration;
   let continuationRefusal: string | null = null;
+  let preflightRefusal = false;
+  let deliveryUncertain = false;
+  const refuseBeforeExecution = (reason: string) => {
+    continuationRefusal = reason;
+    preflightRefusal = true;
+    return false;
+  };
   const continuationAllowed = async () => {
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) {
-      continuationRefusal = "operator-stop authority holds provider recovery";
-      return false;
+      return refuseBeforeExecution("operator-stop authority holds provider recovery");
     }
     const latest = await ports.durableTurnEvidence(engine, attempt.agentPath!, undefined, attemptEvidenceFloor(attempt), undefined, cutTs);
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) {
-      continuationRefusal = "operator-stop authority holds provider recovery";
-      return false;
+      return refuseBeforeExecution("operator-stop authority holds provider recovery");
     }
     continuationRefusal = pipeline.state !== "running" ? "pipeline is no longer running"
       : pipeline.closedAt ? "pipeline was closed"
@@ -4191,7 +4196,11 @@ async function recoverProviderCut(
       : latest.turn !== "terminal" ? `stage turn is ${latest.turn}`
       : latest.terminalProviderMessage?.ts !== cutTs ? "terminal provider record no longer matches the cut"
       : stageAccountBlocked(pipeline, attempt, ports);
-    return continuationRefusal === null;
+    if (continuationRefusal !== null) {
+      preflightRefusal = true;
+      return false;
+    }
+    return true;
   };
   let delivered: boolean;
   try {
@@ -4200,6 +4209,7 @@ async function recoverProviderCut(
     delivered = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       clientMessageId: key, text: `This stage was cut by ${condition.label}. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.`,
       policy: "queue", continuationAllowed, onRefused: reason => { continuationRefusal ??= reason; },
+      onUncertain: () => { deliveryUncertain = true; },
       project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir, ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}) });
   } catch (error) {
     await waitForProviderTransport(pipeline, attempt, condition, `continuation transport failed: ${String(error)}`, ports, persist);
@@ -4215,7 +4225,13 @@ async function recoverProviderCut(
     recordProviderRecovery(attempt, "continue", condition, sameConversationOnly ? `${detail}; last: ${wait.text}` : detail, now);
     pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
     await persist();
-  } else if (!wait.retryCancelled) await waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
+  } else if (!wait.retryCancelled) {
+    if (preflightRefusal && !deliveryUncertain) {
+      delete wait.continuationRequestedAt;
+      delete wait.receiptWaitStartedAt;
+    }
+    await waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
+  }
   return true;
 }
 
