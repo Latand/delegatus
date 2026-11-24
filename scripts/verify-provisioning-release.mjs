@@ -38,7 +38,8 @@ export async function provisioningFixtureEnvironment(sandbox, env) {
   return { ...env, LLV_CODEX_HOME: home, LLV_CODEX_BINARY: binary, PATH: [path.dirname(binary), env.PATH].filter(Boolean).join(path.delimiter) };
 }
 
-export async function seedProvisioningPackage(checkout, sandbox, env, bun) {
+/** @param {() => void | Promise<void>} [beforePackageResponse] */
+export async function seedProvisioningPackage(checkout, sandbox, env, bun, beforePackageResponse) {
   const directory = await mkdtemp(path.join(sandbox, "provision-package-"));
   await mkdir(path.join(directory, "package"));
   await writeFile(path.join(directory, "package", "package.json"), '{"name":"provision-fixture-dependency","version":"1.0.0"}\n');
@@ -47,8 +48,10 @@ export async function seedProvisioningPackage(checkout, sandbox, env, bun) {
   const bytes = await readFile(archive);
   const server = serveHttp((request, response) => {
     if (request.url !== "/package.tgz") { response.writeHead(404); response.end(); return; }
-    response.writeHead(200, { "content-type": "application/gzip", "content-length": bytes.length });
-    response.end(bytes);
+    void Promise.resolve(beforePackageResponse?.()).then(() => {
+      response.writeHead(200, { "content-type": "application/gzip", "content-length": bytes.length });
+      response.end(bytes);
+    }, error => response.destroy(error));
   });
   const close = async () => {
     server.closeAllConnections?.();

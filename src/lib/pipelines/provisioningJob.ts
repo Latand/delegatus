@@ -18,11 +18,12 @@ import {
   WORKTREE_INITIALIZATION_HELD, type PreservedProvisionRef, type ProvisionExecPort,
 } from "./git";
 import { pipelinePublishesRemoteBranch } from "./publication";
+import { provesProvisionCacheHolder } from "./provisionCacheHolder";
 import { physicalProvisioningPath, provisioningStripe, tryProvisioningLock, type ProvisioningGrant } from "./provisionCheckoutCustody";
 import { ProvisionToolchainFailure, runProvisionToolchain } from "./provisionToolchain";
 import { provisionToolchainEntry } from "./provisionToolchainEntry";
 import { PROVISION_STEPS, validProvisioningRecord, type ProvisioningRecord, type ProvisionStep } from "./provisioningRecord";
-import { controllerPipelineVersionNow, deliveryJournal, findControllerPipeline, withProvisioningCheckpoint } from "./store";
+import { controllerPipelineVersionNow, deliveryJournal, findControllerPipeline, provisioningCacheOwnerKeys, withProvisioningCheckpoint } from "./store";
 import type { Pipeline, PipelineBoundedWait } from "./types";
 import type { StateBoundedTransaction } from "@/lib/state/sqliteStateStore";
 
@@ -116,7 +117,8 @@ function eligible(row: Pipeline): boolean {
 class JobRevoked extends Error {}
 class StepDeadline extends Error {}
 class Deferred extends Error {
-  constructor(readonly step: ProvisionStep, readonly since: number, readonly deadline: number, readonly reason: string, readonly resource?: string) { super(reason); }
+  constructor(readonly step: ProvisionStep, readonly since: number, readonly deadline: number, readonly reason: string, readonly resource?: string,
+    readonly cache?: { identity: string; holderDeadline?: number }) { super(reason); }
 }
 
 function schedule(pool: Pool, at: number, clock: ProvisionClock, ports: ProvisionPorts) {
@@ -174,6 +176,37 @@ async function retireProvisioningJob(row: Pipeline, root: string, native: boolea
     clearTimeout(timer);
     for (const grant of grants) grant.close();
   }
+}
+
+/** An excluded lane may retire or revoke a slot. It may never start a new
+ * claim while a legacy domain walk owns the lane. */
+export async function reconcileExcludedProvisioning(row: Pipeline, ports: ProvisionPorts): Promise<boolean> {
+  if (stopped) return false;
+  const slot = row.provisioningJob;
+  if (!validProvisioningRecord(slot)) return false;
+  const root = stateDir();
+  const terminal = row.state === "closed" || row.state === "completed" || Boolean(row.hiddenAt);
+  const active = pools.get(root)?.handles.get(row.id);
+  if (active) {
+    if (terminal) active.abort.abort(new JobRevoked());
+    // A live local claim's monotonic timer owns expiry.
+    return false;
+  }
+  if (terminal) return retireProvisioningJob(row, root, bindProvisioningGit(ports).native);
+  const now = clockFor(ports).wallMs();
+  if (!eligible(row) || (slot.status !== "running" && slot.status !== "awaitingApply") || slot.deadlineAt > now) return false;
+  return withProvisioningCheckpoint(tx => {
+    const current = tx.get(row.id);
+    if (!current || !eligible(current) || subject(current) !== subject(row)
+      || current.provisioningJob?.token !== slot.token || current.provisioningJob.deadlineAt !== slot.deadlineAt
+      || current.provisioningJob.status !== slot.status) return false;
+    const reason = now >= slot.executionDeadlineAt ? "provision-execution-budget-exhausted" : "provision-step-timeout";
+    current.provisioningJob = { ...slot, token: randomUUID(), status: "waiting", retryAt: now + 5_000,
+      interruption: slot.interruption ?? { step: slot.step, since: slot.since, deadlineAt: slot.deadlineAt, observedAt: now, reason } };
+    current.stateDetail = `provisioning deferred: ${reason}`;
+    tx.put(current);
+    return true;
+  }, 500);
 }
 
 export function advanceProvisioningJob(row: Pipeline, ports: ProvisionPorts, hooks: JobHooks): Promise<boolean> | undefined {
@@ -277,6 +310,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     token: randomUUID(), owner: { ...captureProcessIdentity(process.pid), instance, release },
     step: "resolvingRepository", status: "running", since: wall, deadlineAt: wall + PROVISION_STEPS.resolvingRepository,
     executionDeadlineAt: wall + EXECUTION_MS, retryAt: undefined,
+    cacheOwner: undefined,
   };
   if (previous?.status === "running" && previous.deadlineAt <= wall && !slot.interruption) {
     slot.interruption = { step: previous.step, since: previous.since, deadlineAt: previous.deadlineAt, observedAt: wall, reason: "provision-step-timeout" };
@@ -288,6 +322,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     delete slot.privateReceipt;
     delete slot.privateIntent;
     delete slot.cacheWaitSince;
+    delete slot.cacheWaitIdentity;
   }
   let changed = false;
   let stopAt = clock.monotonicMs() + PROVISION_STEPS.resolvingRepository;
@@ -383,11 +418,11 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     hooks.parked(row!);
   };
   const wait = async (error: Deferred) => {
-    const at = Math.min(error.deadline, clock.wallMs() + 5_000);
+    const at = Math.min(error.deadline, clock.wallMs() + 5_000, error.cache?.holderDeadline ?? Infinity);
     await write(current => { current.stateDetail = `provisioning wait: ${error.reason}`; },
       { ...slot, step: error.step, since: error.since, deadlineAt: error.deadline, status: "waiting", retryAt: at,
       resource: error.resource, waitReason: error.reason,
-      ...(error.step === "waitingForCache" ? { cacheWaitSince: error.since } : {}),
+      ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity } : {}),
       ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since } : {}) }, false, true);
     schedule(pool, at, clock, ports);
   };
@@ -542,9 +577,33 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
           await write(() => {}, { ...slot, worker });
           reportProvisioningPhase(id, { phase: "toolchain-ready" });
         }, step, dispatch,
-        cacheBusy: async () => {
-          const since = slot.cacheWaitSince ?? clock.wallMs();
-          throw new Deferred("waitingForCache", since, since + PROVISION_STEPS.waitingForCache, "cache-holder-unclaimed");
+        cacheAcquired: async fence => {
+          const worker = slot.worker;
+          const cacheOwner = worker && await provesProvisionCacheHolder(worker, fence, signal) ? fence : undefined;
+          await write(() => {}, { ...slot, cacheWaitSince: undefined, cacheWaitIdentity: undefined, cacheOwner });
+        },
+        cacheBusy: async identity => {
+          const now = clock.wallMs();
+          const since = slot.cacheWaitIdentity === identity ? slot.cacheWaitSince ?? now : now;
+          let holderDeadline: number | undefined;
+          for (const ownerId of await provisioningCacheOwnerKeys(identity)) {
+            const observed = (await findControllerPipeline(ownerId))?.provisioningJob;
+            if (!validProvisioningRecord(observed) || observed.status !== "running"
+              || observed.cacheOwner?.identity !== identity || !observed.worker
+              || !await provesProvisionCacheHolder(observed.worker, observed.cacheOwner, signal)) continue;
+            const fresh = (await findControllerPipeline(ownerId))?.provisioningJob;
+            if (fresh?.token === observed.token && fresh.status === "running" && fresh.cacheOwner?.identity === identity
+              && fresh.cacheOwner.fd === observed.cacheOwner.fd) {
+              holderDeadline = fresh.deadlineAt;
+              break;
+            }
+          }
+          if (holderDeadline !== undefined && holderDeadline <= now) requestPipelineTick();
+          const cutoff = since + PROVISION_STEPS.waitingForCache;
+          const reason = holderDeadline === undefined ? "cache-holder-unclaimed"
+            : now >= cutoff ? "cache-wait-expired" : "waiting-for-cache-holder";
+          throw new Deferred("waitingForCache", since, cutoff, reason, undefined,
+            { identity, holderDeadline: holderDeadline !== undefined && holderDeadline > now ? holderDeadline : undefined });
         },
         legacyWriter: async cause => {
           const since = slot.legacyWaitSince ?? clock.wallMs();
@@ -598,7 +657,8 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     }
     if (error instanceof Deferred) {
       if (error.step !== "waitingForTurn" && clock.wallMs() >= error.deadline) {
-        await write(() => {}, { ...slot, step: error.step, since: error.since, deadlineAt: error.deadline, waitReason: error.reason }, false, true);
+        await write(() => {}, { ...slot, step: error.step, since: error.since, deadlineAt: error.deadline, waitReason: error.reason,
+          ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity } : {}) }, false, true);
         await park(error.reason);
       }
       else await wait(error);

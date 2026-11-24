@@ -81,7 +81,8 @@ async function prepare(): Promise<void> {
     exec, payloadExec: containedDependencyExec, repository, budgetMs,
     onStep: async step => { await request("step", { step }); },
     beforeEffect: async effect => { await request("dispatch", { effect }); },
-    onWriterWait: async () => { await request("cacheBusy"); },
+    onWriterWait: async identity => { await request("cacheBusy", { identity }); },
+    onWriterAcquired: async fence => { await request("cacheAcquired", { fence }); },
   });
   if (!completed && path.resolve(repository) !== path.resolve(checkout)) {
     const present = async (file: string) => fs.lstat(file).then(() => true, error => {

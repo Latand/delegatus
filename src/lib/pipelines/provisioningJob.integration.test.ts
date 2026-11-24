@@ -1,11 +1,20 @@
 import { FlowPipelineController } from "./controller";
-import { settlePipelineControllerJobs } from "./controllerJobs";
+import { settlePipelineControllerJobs, startPipelineControllerJob } from "./controllerJobs";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineStopReadLanes } from "./controllerStopRead";
 import { BUILD_ONLY, createPipelineFromRequest, expect, fs, path, realWorktreeLane, test } from "./engine.fixture";
 import { latch, until, withControllerAuditState } from "./fixtures/ownedStageControl";
 import { findControllerPipeline } from "./store";
 import { removeProvisioningFixture, seedProvisioningPackage } from "../../../scripts/verify-provisioning-release.mjs";
+
+async function driveProvisioning(ports: Parameters<typeof tickPipelinesController>[1], done: () => Promise<boolean>) {
+  const stop = performance.now() + 8_000;
+  while (!await done()) {
+    if (performance.now() >= stop) throw new Error("fixture did not converge");
+    await tickPipelinesController([], ports);
+    await Bun.sleep(20);
+  }
+}
 
 test("a held dependency reply expires and the controller adopts the original checkout", () => withControllerAuditState(async () => {
   const fixture = await realWorktreeLane("held-dependency-reply", BUILD_ONLY as never);
@@ -204,3 +213,98 @@ test("the leased worker borrows matching source tools without an install lockfil
     await removeProvisioningFixture(root);
   }
 }), 14_000);
+
+test("legacy exclusion leaves an expired v1 slot selectable without admitting more Git", () => withControllerAuditState(async () => {
+  const { h, repo, root } = await realWorktreeLane("mixed-mode-expiry", BUILD_ONLY as never);
+  const { settleProvisioningJobsForTests } = await import("./provisioningJob");
+  const original = h.ports.provisionExec!;
+  const entered = latch(), reply = latch(), legacy = latch();
+  let wall = Date.parse("2026-11-24T10:00:00Z"), reads = 0;
+  h.ports.now = () => new Date(wall).toISOString();
+  h.ports.provisionExec = async (command, args, cwd, signal, options) => {
+    if (command === "git" && args.includes("--git-common-dir") && ++reads === 1) {
+      entered.resolve();
+      await reply.promise;
+    }
+    return original(command, args, cwd, signal, options);
+  };
+  const create = async (task: string) => (await createPipelineFromRequest({
+    task, repoDir: repo, publication: "internal", stages: BUILD_ONLY as never,
+  }, h.ports)).pipeline!;
+  try {
+    const held = await create("A lane held by legacy work");
+    await tickPipelinesController([], h.ports);
+    await until(entered.promise);
+    const active = (await findControllerPipeline(held.id))!.provisioningJob!;
+    expect(active.status).toBe("running");
+    await settleProvisioningJobsForTests();
+    reply.resolve();
+    expect(startPipelineControllerJob(held.id, () => legacy.promise, async () => "held")).toBe(true);
+    wall = active.deadlineAt - 1;
+    await tickPipelinesController([], h.ports);
+    expect((await findControllerPipeline(held.id))?.provisioningJob?.token).toBe(active.token);
+    expect(reads).toBe(1);
+    wall++;
+    await tickPipelinesController([], h.ports);
+    const expired = await findControllerPipeline(held.id);
+    expect(expired?.provisioningJob).toMatchObject({ status: "waiting", interruption: {
+      reason: "provision-step-timeout", observedAt: wall, step: active.step,
+    } });
+    expect(expired?.provisioningJob?.token).not.toBe(active.token);
+    expect(reads).toBe(1);
+    const peer = await create("An independent lane can advance");
+    await driveProvisioning(h.ports, async () => (await findControllerPipeline(peer.id))?.state === "running");
+    expect((await findControllerPipeline(held.id))?.runs[0]?.attempts).toHaveLength(0);
+    expect((await findControllerPipeline(held.id))?.provisioningJob?.token).toBe(expired?.provisioningJob?.token);
+  } finally {
+    reply.resolve();
+    legacy.resolve();
+    await settleProvisioningJobsForTests();
+    await settlePipelineControllerJobs();
+    await settlePipelineStopReadLanes();
+    await removeProvisioningFixture(root);
+  }
+}), 18_000);
+
+test.skipIf(process.platform !== "linux")("a cache waiter identifies the v1 worker that owns the physical fence", () => withControllerAuditState(async () => {
+  const { h, git, repo, root } = await realWorktreeLane("identified-cache-holder", BUILD_ONLY as never);
+  const received = latch(), finish = latch();
+  let armed = false;
+  let closeSupply: (() => Promise<void>) | undefined;
+  try {
+    closeSupply = await seedProvisioningPackage(repo, root, { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(root, "lockfile-cache") }, process.execPath, async () => {
+      if (!armed) return;
+      received.resolve();
+      await finish.promise;
+    });
+    await git(repo, "add", ".");
+    await git(repo, "commit", "-m", "fixture cache inputs");
+    await git(repo, "push", "origin", "main");
+    delete h.ports.provisionExec;
+    h.ports.now = () => new Date().toISOString();
+    const create = async (task: string) => (await createPipelineFromRequest({
+      task, repoDir: repo, publication: "internal", stages: BUILD_ONLY as never,
+    }, h.ports)).pipeline!;
+    armed = true;
+    const owner = await create("Hold the actual dependency install");
+    await driveProvisioning(h.ports, async () => (await findControllerPipeline(owner.id))?.provisioningJob?.cacheOwner !== undefined);
+    await until(received.promise, 5_000);
+    const holder = (await findControllerPipeline(owner.id))!.provisioningJob!;
+    const waiter = await create("Wait for the same physical dependency cache");
+    await driveProvisioning(h.ports, async () => (await findControllerPipeline(waiter.id))?.provisioningJob?.step === "waitingForCache");
+    const waiting = (await findControllerPipeline(waiter.id))!.provisioningJob!;
+    expect(waiting.cacheWaitIdentity).toBe(holder.cacheOwner!.identity);
+    expect(waiting.waitReason).toBe("waiting-for-cache-holder");
+    expect(waiting.deadlineAt - waiting.since).toBe(180_000);
+    finish.resolve();
+    await driveProvisioning(h.ports, async () => (await findControllerPipeline(owner.id))?.state === "running");
+    await driveProvisioning(h.ports, async () => (await findControllerPipeline(waiter.id))?.state === "running");
+  } finally {
+    finish.resolve();
+    await (await import("./provisioningJob")).settleProvisioningJobsForTests();
+    await closeSupply?.();
+    await settlePipelineControllerJobs();
+    await settlePipelineStopReadLanes();
+    await removeProvisioningFixture(root);
+  }
+}), 25_000);

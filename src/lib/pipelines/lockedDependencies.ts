@@ -334,6 +334,7 @@ export async function lockedDependencyInputs(cwd: string) {
 
 export type DependencyPreparationStep = "checkingDependencies" | "validatingSealedGraph" | "preparingToolchain";
 export type DependencyPreparationEffect = "open-cache" | "prune-cache" | "prepare-cache" | "install-cache" | "publish-cache" | "link-cache";
+export type DependencyCacheFence = { identity: string; fd: number };
 type PreparationOptions = {
   exec?: ExecPort;
   payloadExec?: ExecPort;
@@ -341,7 +342,8 @@ type PreparationOptions = {
   assertCurrent?: () => void;
   repository?: string;
   budgetMs?: number;
-  onWriterWait?: () => void | Promise<void>;
+  onWriterWait?: (identity: string) => void | Promise<void>;
+  onWriterAcquired?: (fence: DependencyCacheFence) => Promise<void>;
   onStep?: (step: DependencyPreparationStep) => Promise<void>;
   beforeEffect?: (effect: DependencyPreparationEffect) => Promise<void>;
 };
@@ -691,6 +693,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
     let committed = false;
     try {
       const fenceEntry = await fd.stat({ bigint: true });
+      const identity = `${fenceEntry.dev}:${fenceEntry.ino}`;
       const assertFence = () => {
         assertNamespace();
         assertCache();
@@ -705,11 +708,12 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
         assertWriter();
         held = tryLockFenceExclusive({ fd: fd.fd, filename });
         if (held) break;
-        await options.onWriterWait?.();
+        await options.onWriterWait?.(identity);
         await delay(Math.min(50, remaining()), undefined, { signal: options.signal });
       }
 
       await options.onStep?.("preparingToolchain");
+      await options.onWriterAcquired?.({ identity, fd: fd.fd });
       enter("commit", "interrupted install cleanup");
       const marker = entryNow(activeBuild);
       if (marker) {

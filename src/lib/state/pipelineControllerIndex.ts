@@ -47,6 +47,39 @@ export function pipelineControllerObligationSql(value: string): string {
 }
 export type PipelineControllerSelection = keyof ReturnType<typeof predicates>;
 
+/** The slot projection can be read while the ordinary lane walk is excluded.
+ * Old writers maintain it through the same row triggers. */
+export function installProvisioningSlotIndex(db: Database, directory: string): void {
+  if (db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_provision_slot_update'").get()) return;
+  if (!mayRunStateStartupMutation(directory)) return;
+  db.exec(`CREATE TABLE IF NOT EXISTS pipeline_provision_slot (
+    row_key TEXT PRIMARY KEY, due_at INTEGER, cache_identity TEXT
+  );
+  CREATE INDEX IF NOT EXISTS pipeline_provision_slot_due ON pipeline_provision_slot(due_at,row_key) WHERE due_at IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS pipeline_provision_slot_cache ON pipeline_provision_slot(cache_identity,row_key) WHERE cache_identity IS NOT NULL`);
+  const select = (row: string, from = "") => {
+    const at = (field: string) => `json_extract(${row}.value_json,'$.${field}')`;
+    return `SELECT ${row}.row_key,
+      CASE
+        WHEN ${at("state")} IN ('closed','completed') OR ${at("hiddenAt")} IS NOT NULL THEN 0
+        WHEN ${at("state")}='provisioning' AND ${at("provisioningJob.status")} IN ('running','awaitingApply','waiting')
+        THEN COALESCE(${at("provisioningJob.retryAt")},${at("provisioningJob.deadlineAt")})
+      END,
+      CASE WHEN ${at("provisioningJob.status")}='running' THEN ${at("provisioningJob.cacheOwner.identity")} END
+      ${from} WHERE ${row}.collection='pipelines' AND CASE WHEN json_valid(${row}.value_json)
+        THEN ${at("provisioningJob.version")}=1 AND ${at("provisioningJob.kind")}='provision' ELSE 0 END`;
+  };
+  const put = `INSERT INTO pipeline_provision_slot(row_key,due_at,cache_identity) ${select("NEW")};`;
+  const remove = "DELETE FROM pipeline_provision_slot WHERE row_key=OLD.row_key AND OLD.collection='pipelines';";
+  db.exec(`CREATE TRIGGER pipeline_provision_slot_insert AFTER INSERT ON state_rows WHEN NEW.collection='pipelines'
+      BEGIN ${put} END;
+    CREATE TRIGGER pipeline_provision_slot_update AFTER UPDATE OF collection,row_key,value_json ON state_rows
+      WHEN OLD.collection='pipelines' OR NEW.collection='pipelines' BEGIN ${remove} ${put} END;
+    CREATE TRIGGER pipeline_provision_slot_delete AFTER DELETE ON state_rows WHEN OLD.collection='pipelines'
+      BEGIN ${remove} END`);
+  db.exec(`INSERT OR IGNORE INTO pipeline_provision_slot(row_key,due_at,cache_identity) ${select("r", "FROM state_rows r")}`);
+}
+
 /** Provisioning resources are ordered by their first durable enqueue. */
 export function installProvisioningWaitIndex(db: Database, directory: string): boolean {
   if (db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_provision_wait_update'").get()) return false;

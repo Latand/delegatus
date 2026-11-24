@@ -2,7 +2,8 @@ import type { ProcessIdentity } from "@/lib/processIdentity";
 import type { PipelineCheckoutPlan } from "./git";
 import type { Pipeline } from "./types";
 import type { PrivateInstallIntent, PrivateInstallReceipt } from "./provisionPrivateDependencies";
-import { validPrivateIntent, validPrivateReceipt } from "./provisionToolchainProtocol";
+import type { DependencyCacheFence } from "./lockedDependencies";
+import { validCacheFence, validCacheIdentity, validPrivateIntent, validPrivateReceipt } from "./provisionToolchainProtocol";
 
 export const PROVISION_STEPS = {
   resolvingRepository: 10_000,
@@ -46,6 +47,8 @@ export type ProvisioningRecord = {
   retryAt?: number;
   resource?: string;
   cacheWaitSince?: number;
+  cacheWaitIdentity?: string;
+  cacheOwner?: DependencyCacheFence;
   legacyWaitSince?: number;
   waitReason?: string;
   privateReceipt?: PrivateInstallReceipt;
@@ -89,6 +92,8 @@ export function validProvisioningRecord(value: unknown): value is ProvisioningRe
     || (value.retryAt !== undefined && !timestamp(value.retryAt))
     || (value.resource !== undefined && (!text(value.resource, 32) || !/^(?:checkout|repo):[0-9]{1,3}$/.test(value.resource)))
     || (value.cacheWaitSince !== undefined && !timestamp(value.cacheWaitSince))
+    || (value.cacheWaitIdentity !== undefined && !validCacheIdentity(value.cacheWaitIdentity))
+    || (value.cacheOwner !== undefined && (!value.worker || !validCacheFence(value.cacheOwner)))
     || (value.legacyWaitSince !== undefined && !timestamp(value.legacyWaitSince))
     || (value.waitReason !== undefined && !text(value.waitReason, 256))
     || (value.privateReceipt !== undefined && !validPrivateReceipt(value.privateReceipt))

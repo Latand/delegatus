@@ -24,7 +24,7 @@ import { DEFERRED_TEXT_ACCESSOR_BYTES, deferLongText } from "./deferredText";
 import { cacheCounter } from "../cacheTelemetry";
 import { readAttribution } from "../readAttribution";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
-import { installPipelineControllerIndex, installProvisioningWaitIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
+import { installPipelineControllerIndex, installProvisioningSlotIndex, installProvisioningWaitIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferenceIndexesCurrent, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, installPipelineTaskMembership, pipelineEvidenceIndexReady, pipelineEvidenceSchemaReady, pipelineTaskMembershipReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
@@ -891,6 +891,7 @@ function openRawDatabase(filename: string): Database {
           "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete", "pipeline_tick_priority_cursor"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
           && (names.has("pipeline_provision_wait_update") || !mayRunStateStartupMutation(path.dirname(filename)))
+          && (names.has("pipeline_provision_slot_update") || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineControllerReferencesReady(db, names)
           && pipelineControllerReferenceIndexesCurrent(db)
           && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
@@ -927,6 +928,7 @@ function openRawDatabase(filename: string): Database {
         }
         installPipelineControllerIndex(db, path.dirname(filename));
         const provisioningUpgrade = installProvisioningWaitIndex(db, path.dirname(filename));
+        installProvisioningSlotIndex(db, path.dirname(filename));
         // Only a policy upgrade resets the scheduler. Missing indexes repair
         // in place without changing existing queue clocks or cursors.
         installPipelineControllerSchedule(db, path.dirname(filename), provisioningUpgrade || !pipelineControllerReferencesCurrent(db));
@@ -2411,6 +2413,30 @@ export class SqliteStateCollection<T> {
 
   pipelineTickWork(now: number, excluded: readonly string[], limit = 4): PipelineTickWork[] {
     return selectPipelineTickWork(sharedStateReadonlyDatabase(this.filename), now, excluded, limit);
+  }
+
+  dueExcludedProvisioning(now: number, excluded: readonly string[]): PipelineTickWork | null {
+    if (!excluded.length) return null;
+    return sharedStateReadonlyDatabase(this.filename).query<PipelineTickWork, [number, string]>(`
+      SELECT w.* FROM pipeline_provision_slot s
+      JOIN pipeline_tick_work w USING(row_key)
+      WHERE s.due_at<=? AND s.row_key IN (SELECT value FROM json_each(?))
+      ORDER BY s.due_at,s.row_key LIMIT 1
+    `).get(now, JSON.stringify(excluded));
+  }
+
+  async acknowledgeExcludedProvisioning(work: PipelineTickWork, retryAt: number): Promise<void> {
+    await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
+      db.query(`UPDATE pipeline_provision_slot SET due_at=MAX(due_at,?)
+        WHERE row_key=? AND EXISTS (SELECT 1 FROM pipeline_tick_work WHERE row_key=? AND generation=?)`)
+        .run(retryAt, work.row_key, work.row_key, work.generation);
+    });
+  }
+
+  provisioningCacheOwnerKeys(identity: string): string[] {
+    return sharedStateReadonlyDatabase(this.filename).query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM pipeline_provision_slot WHERE cache_identity=? ORDER BY row_key LIMIT 2
+    `).all(identity).map(row => row.row_key);
   }
 
   pipelineAttemptWindow(key: string, after: number, limit: number): PipelineAttemptReference[] {

@@ -1,5 +1,16 @@
 import type { Readable } from "node:stream";
 import type { PrivateInstallIntent, PrivateInstallReceipt } from "./provisionPrivateDependencies";
+import type { DependencyCacheFence } from "./lockedDependencies";
+
+export function validCacheIdentity(value: unknown): value is string {
+  return typeof value === "string" && /^\d{1,20}:\d{1,20}$/.test(value);
+}
+
+export function validCacheFence(value: unknown): value is DependencyCacheFence {
+  if (!value || typeof value !== "object") return false;
+  const { identity, fd } = value as Partial<DependencyCacheFence>;
+  return validCacheIdentity(identity) && typeof fd === "number" && Number.isSafeInteger(fd) && fd >= 0 && fd <= 2 ** 31 - 1;
+}
 
 export const PROVISION_FRAME_LIMIT = 4096;
 

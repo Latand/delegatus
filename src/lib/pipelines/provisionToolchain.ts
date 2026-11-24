@@ -1,12 +1,12 @@
 import type { ChildProcess } from "node:child_process";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } from "@/lib/helperLease";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
-import type { DependencyPreparationEffect, DependencyPreparationStep } from "./lockedDependencies";
+import type { DependencyCacheFence, DependencyPreparationEffect, DependencyPreparationStep } from "./lockedDependencies";
 import type { PrivateInstallEffect, PrivateInstallIntent, PrivateInstallReceipt } from "./provisionPrivateDependencies";
 import type { LegacyInstallerObservation } from "./provisionLegacyInstaller";
 import type { ProvisionExecPort } from "./git";
 import { provisionToolchainEntry } from "./provisionToolchainEntry";
-import { provisionFrame, provisionFrames, validPrivateIntent, validPrivateReceipt } from "./provisionToolchainProtocol";
+import { provisionFrame, provisionFrames, validCacheFence, validCacheIdentity, validPrivateIntent, validPrivateReceipt } from "./provisionToolchainProtocol";
 
 type ToolchainStep = DependencyPreparationStep | "installingPrivateDependencies";
 type ToolchainEffect = DependencyPreparationEffect | PrivateInstallEffect;
@@ -35,7 +35,8 @@ type ToolchainRequest = {
   ready(workerPid: number): Promise<void>;
   step(step: ToolchainStep): Promise<void>;
   dispatch(effect: ToolchainEffect, sequence: number): Promise<void>;
-  cacheBusy(): Promise<never>;
+  cacheBusy(identity: string): Promise<never>;
+  cacheAcquired(fence: DependencyCacheFence): Promise<void>;
   legacyWriter(cause: Exclude<LegacyInstallerObservation, { kind: "clear" }>): Promise<never>;
   track(child: ChildProcess): void;
 };
@@ -93,8 +94,12 @@ export async function runProvisionToolchain(request: ToolchainRequest): Promise<
         await parent(() => request.step(frame.step as ToolchainStep));
       } else if (frame.type === "dispatch" && effects.has(frame.effect)) {
         await parent(() => request.dispatch(frame.effect as ToolchainEffect, sequence));
-      } else if (frame.type === "cacheBusy") {
-        await parent(request.cacheBusy);
+      } else if (frame.type === "cacheBusy" && validCacheIdentity(frame.identity)) {
+        const identity = frame.identity;
+        await parent(() => request.cacheBusy(identity));
+      } else if (frame.type === "cacheAcquired" && validCacheFence(frame.fence)) {
+        const fence = frame.fence;
+        await parent(() => request.cacheAcquired(fence));
       } else if (frame.type === "legacyWriter" && validLegacyObservation(frame.observation)) {
         const cause = frame.observation;
         await parent(() => request.legacyWriter(cause));

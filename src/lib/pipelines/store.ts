@@ -230,8 +230,19 @@ export async function pipelineRecoveryWindow(after: { row_order: number; row_key
   return waitForStateLock("pipelines.provider-recovery-schedule", () => stateLockAttempt("pipelines.provider-recovery-schedule", () => pipelineStore().pipelineRecoveryWindow(after, limit)));
 }
 
-export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
-  return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
+export async function selectPipelineControllerWork(now: number, excluded: readonly string[], limit = 4) {
+  return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded, limit)));
+}
+export async function selectExcludedProvisioning(now: number, excluded: readonly string[]) {
+  return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () =>
+    pipelineStore().dueExcludedProvisioning(now, excluded)));
+}
+export async function acknowledgeExcludedProvisioning(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork, retryAt: number) {
+  return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).acknowledgeExcludedProvisioning(work, retryAt);
+}
+export async function provisioningCacheOwnerKeys(identity: string): Promise<string[]> {
+  return waitForStateLock("pipelines.controller-candidate", () => stateLockAttempt("pipelines.controller-candidate", () =>
+    pipelineStore().provisioningCacheOwnerKeys(identity)));
 }
 export async function pipelineControlOwnership(key: string) {
   return waitForStateLock("pipelines.control-ownership", () => stateLockAttempt("pipelines.control-ownership", () =>
