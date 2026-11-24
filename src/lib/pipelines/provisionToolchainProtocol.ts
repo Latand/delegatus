@@ -11,7 +11,7 @@ function validPrivateDirectory(value: unknown): value is Omit<PrivateInstallRece
 }
 
 export function validPrivateReceipt(value: unknown): value is PrivateInstallReceipt {
-  return validPrivateDirectory(value) && ["staged", "handoff", "in-place"].includes((value as PrivateInstallReceipt).mode);
+  return validPrivateDirectory(value) && ["staged", "handoff", "in-place", "copied"].includes((value as PrivateInstallReceipt).mode);
 }
 
 export function validPrivateIntent(value: unknown): value is PrivateInstallIntent {

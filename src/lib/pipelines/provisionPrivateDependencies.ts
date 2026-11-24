@@ -4,14 +4,15 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { containedDependencyExec } from "./lockedDependencies";
 import { observeLegacyInstaller, type LegacyInstallerObservation } from "./provisionLegacyInstaller";
+import { hasCheckoutRelativeDependencies, stageWorktreeDependencyCopy, worktreeDependencyInputs } from "./worktreeDependencies";
 
-const FILES = ["package.json", "bun.lock", "bun.lockb", ".npmrc", "bunfig.toml"] as const;
+const INSTALL_FILES = new Set<string>(["package.json", "bun.lock", "bun.lockb", ".npmrc", "bunfig.toml"]);
 const MARKER = ".delegatus-install-receipt.json";
 const INTENT = ".delegatus-install-intent.json";
-export type PrivateInstallReceipt = { claim: string; inputs: string; device: string; inode: string; mode: "staged" | "handoff" | "in-place" };
+export type PrivateInstallReceipt = { claim: string; inputs: string; device: string; inode: string; mode: "staged" | "handoff" | "in-place" | "copied" };
 export type PrivateInstallIntent = Omit<PrivateInstallReceipt, "mode"> & { nonceDigest: string };
 export type PrivateInstallEffect = "private-scratch" | "private-install" | "private-marker" | "private-publish" | "private-cleanup"
-  | "create-modules-directory" | "install-in-place";
+  | "private-copy" | "create-modules-directory" | "install-in-place";
 
 type PrivateInstallPorts = {
   beforeEffect(effect: PrivateInstallEffect): Promise<void>;
@@ -87,17 +88,17 @@ async function filesMatch(reference: string, actual: string): Promise<boolean> {
   }
 }
 
-export async function preparePrivateDependencies(checkout: string, claim: string, prior: PrivateInstallReceipt | undefined, priorIntent: PrivateInstallIntent | undefined,
+export async function preparePrivateDependencies(repository: string, checkout: string, claim: string, prior: PrivateInstallReceipt | undefined, priorIntent: PrivateInstallIntent | undefined,
   budgetMs: number, ports: PrivateInstallPorts): Promise<boolean> {
   const census = async () => {
     const observation = await observeLegacyInstaller(checkout);
     if (observation.kind !== "clear") await ports.uncertain(observation);
   };
   const permit = async (effect: PrivateInstallEffect) => { await census(); await ports.beforeEffect(effect); };
-  const inputs = async () => {
+  const inputs = async (directory = checkout, names: Iterable<string> = [...worktreeDependencyInputs, "bunfig.toml"]) => {
     const files: Array<[string, Buffer]> = [];
-    for (const name of FILES) {
-      const file = path.join(checkout, name);
+    for (const name of names) {
+      const file = path.join(directory, name);
       if (await entry(file)) files.push([name, await fileBytes(file, 8 * 1024 * 1024)]);
     }
     const digest = createHash("sha256");
@@ -106,14 +107,16 @@ export async function preparePrivateDependencies(checkout: string, claim: string
   };
   try {
     await census();
-    const selected = await inputs();
+    // Keep the digest of existing install receipts stable across worker versions.
+    const selected = await inputs(checkout, INSTALL_FILES);
+    const copyInputs = await inputs();
     const manifest = selected.files.find(([name]) => name === "package.json")?.[1].toString();
-    if (!manifest || !selected.files.some(([name]) => name === "bun.lock" || name === "bun.lockb")) return false;
-    const content = JSON.parse(manifest);
+    if (!manifest) return false;
     const target = path.join(checkout, "node_modules");
     const before = await entry(target);
     if (before && !before.isDirectory()) return false;
-    if (prior && before && prior.inputs === selected.digest && prior.device === String(before.dev) && prior.inode === String(before.ino)) {
+    if (prior && before && prior.inputs === (prior.mode === "copied" ? copyInputs.digest : selected.digest)
+      && prior.device === String(before.dev) && prior.inode === String(before.ino)) {
       let marker;
       if (prior.mode !== "handoff") {
         try { marker = JSON.parse((await fileBytes(path.join(target, MARKER), 4096)).toString()); }
@@ -128,7 +131,12 @@ export async function preparePrivateDependencies(checkout: string, claim: string
         return true;
       }
     }
-    const relative = content.workspaces || content.patchedDependencies || /"(?:file:|link:|workspace:|\.{1,2}\/)/.test(manifest);
+    const relative = hasCheckoutRelativeDependencies(manifest);
+    const source = path.join(repository, "node_modules");
+    const canCopy = !relative && !before && !priorIntent && !!await entry(source)
+      && (await inputs(repository)).digest === copyInputs.digest;
+    const canInstall = selected.files.some(([name]) => name === "bun.lock" || name === "bun.lockb");
+    if (!canCopy && !canInstall) return false;
     if (relative && (process.platform !== "linux" || (before && !priorIntent))) return false;
     if (relative) {
       const checkoutHandle = await fs.open(checkout, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
@@ -144,9 +152,34 @@ export async function preparePrivateDependencies(checkout: string, claim: string
     const owns = (await entry(scratch))!;
     const reference = path.join(scratch, "node_modules");
     try {
+      const publish = async (staged: string, digest: string, mode: "copied" | "staged", current: () => Promise<boolean>) => {
+        const built = await entry(staged);
+        if (!built?.isDirectory() || !await current()) return false;
+        await permit("private-marker");
+        const marker = path.join(staged, MARKER);
+        await fs.writeFile(marker, JSON.stringify({ claim, inputs: digest, bun: Bun.version }), { flag: "wx" });
+        await permit("private-publish");
+        if (!await current() || !sameDirectory(built, await entry(staged))) return false;
+        if (!publishNoReplace(staged, target)) {
+          await fs.unlink(marker);
+          return false;
+        }
+        await census();
+        if (!sameDirectory(built, await entry(target)) || !await current()) throw new UnverifiedPrivateInstall();
+        await ports.receipt({ claim, inputs: digest, device: String(built.dev), inode: String(built.ino), mode });
+        return true;
+      };
+      if (canCopy) {
+        const staged = await stageWorktreeDependencyCopy(source, scratch, () => permit("private-copy"));
+        const current = async () => (await inputs()).digest === copyInputs.digest
+          && (await inputs(repository)).digest === copyInputs.digest;
+        if (staged && !await entry(path.join(staged, MARKER)) && !await entry(path.join(staged, INTENT))
+          && await publish(staged, copyInputs.digest, "copied", current)) return true;
+      }
+      if (!canInstall) return false;
       if (relative) {
         const result = await installInPlace({ checkout, target, scratch, reference, claim, inputs: selected.digest, budgetMs,
-          prior: priorIntent, original: before, permit, verify: async () => { await census(); return (await inputs()).digest === selected.digest; }, ports });
+          prior: priorIntent, original: before, permit, verify: async () => { await census(); return (await inputs(checkout, INSTALL_FILES)).digest === selected.digest; }, ports });
         return result;
       }
       for (const [name, value] of selected.files) await fs.writeFile(path.join(scratch, name), value, { flag: "wx" });
@@ -155,25 +188,14 @@ export async function preparePrivateDependencies(checkout: string, claim: string
         scratch, { NODE_ENV: "development" }, { timeoutMs: budgetMs });
       if (installed.code !== 0 || !sameDirectory(owns, await entry(scratch))) return false;
       if (!await entry(reference)) await fs.mkdir(reference);
-      const built = await entry(reference);
-      if (!built?.isDirectory() || (await inputs()).digest !== selected.digest) return false;
-      if (!await entry(target)) {
-        await permit("private-marker");
-        await fs.writeFile(path.join(reference, MARKER), JSON.stringify({ claim, inputs: selected.digest, bun: Bun.version }), { flag: "wx" });
-        await permit("private-publish");
-        if (publishNoReplace(reference, target)) {
-          await census();
-          if (!sameDirectory(built, await entry(target)) || (await inputs()).digest !== selected.digest) return false;
-          await ports.receipt({ claim, inputs: selected.digest, device: String(built.dev), inode: String(built.ino), mode: "staged" });
-          return true;
-        }
-        await fs.unlink(path.join(reference, MARKER));
-      }
+      const current = async () => (await inputs(checkout, INSTALL_FILES)).digest === selected.digest;
+      if (!await current()) return false;
+      if (!await entry(target) && await publish(reference, selected.digest, "staged", current)) return true;
       await census();
       const foreign = await entry(target);
       if (!foreign?.isDirectory() || !await filesMatch(reference, target) || !sameDirectory(foreign, await entry(target))) return false;
       await census();
-      if (!sameDirectory(foreign, await entry(target)) || (await inputs()).digest !== selected.digest) return false;
+      if (!sameDirectory(foreign, await entry(target)) || !await current()) return false;
       await ports.receipt({ claim, inputs: selected.digest, device: String(foreign.dev), inode: String(foreign.ino), mode: "handoff" });
       return true;
     } finally {

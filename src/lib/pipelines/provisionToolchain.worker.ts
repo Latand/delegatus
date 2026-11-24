@@ -92,7 +92,7 @@ async function prepare(): Promise<void> {
       const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], checkout);
       if (ignored.code !== 1) {
         await request("step", { step: "installingPrivateDependencies" });
-        const prepared = ignored.code === 0 && await preparePrivateDependencies(checkout, token,
+        const prepared = ignored.code === 0 && await preparePrivateDependencies(repository, checkout, token,
           validPrivateReceipt(start.privateReceipt) ? start.privateReceipt : undefined,
           validPrivateIntent(start.privateIntent) ? start.privateIntent : undefined, budgetMs, {
             beforeEffect: async effect => { await request("dispatch", { effect }); },

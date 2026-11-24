@@ -165,3 +165,42 @@ test("the checkout release starts a leased worker and consumes a cold shared gra
     await removeProvisioningFixture(root);
   }
 }), 18_000);
+
+test("the leased worker borrows matching source tools without an install lockfile", () => withControllerAuditState(async () => {
+  const { h, git, repo, root } = await realWorktreeLane("matching-private-source", BUILD_ONLY as never);
+  try {
+    fs.appendFileSync(path.join(repo, ".gitignore"), "node_modules\n");
+    fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ name: "fixture-tools" }));
+    const source = path.join(repo, "node_modules");
+    fs.mkdirSync(path.join(source, "fixture"), { recursive: true });
+    fs.mkdirSync(path.join(source, ".bin"));
+    fs.writeFileSync(path.join(source, "fixture", "cli.js"), "fixture executable\n", { mode: 0o755 });
+    fs.symlinkSync("../fixture/cli.js", path.join(source, ".bin", "fixture"));
+    await git(repo, "add", ".");
+    await git(repo, "commit", "-m", "fixture matching source dependency inputs");
+    await git(repo, "push", "origin", "main");
+    delete h.ports.provisionExec;
+    h.ports.now = () => new Date().toISOString();
+    const { pipeline: lane } = await createPipelineFromRequest({ task: "Borrow matching source tools", publication: "internal",
+      repoDir: repo, stages: BUILD_ONLY as never }, h.ports);
+    const stop = performance.now() + 8_000;
+    let current = await findControllerPipeline(lane!.id);
+    while (current?.state === "provisioning" && performance.now() < stop) {
+      await tickPipelinesController([], h.ports);
+      await Bun.sleep(20);
+      current = await findControllerPipeline(lane!.id);
+    }
+    expect(current?.stateDetail, current?.provisioningJob?.step).toBeNull();
+    expect(current?.state).toBe("running");
+    const local = path.join(lane!.worktreeDir, "node_modules");
+    expect(fs.lstatSync(local).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(local, ".bin", "fixture"), "utf8")).toBe("fixture executable\n");
+    fs.writeFileSync(path.join(local, "fixture", "cli.js"), "lane tools\n");
+    expect(fs.readFileSync(path.join(source, "fixture", "cli.js"), "utf8")).toBe("fixture executable\n");
+  } finally {
+    await (await import("./provisioningJob")).settleProvisioningJobsForTests();
+    await settlePipelineControllerJobs();
+    await settlePipelineStopReadLanes();
+    await removeProvisioningFixture(root);
+  }
+}), 14_000);
