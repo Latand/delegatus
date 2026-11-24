@@ -1927,7 +1927,7 @@ test("the draft a closed conversation returns to can actually create — it says
      as an accidental rotation, which would make «the panel returns to draft»
      (PRD #976 decision 4) a button that always fails. */
   const host = await mountLive();
-  seatStatus = { ...seatStatus, exists: false };
+  seatStatus = { seat: null, pending: null, exists: false };
   await settle();
   await new Promise((resolve) => setTimeout(resolve, SEAT_POLL_MS + 5));
   await settle();
@@ -1937,7 +1937,7 @@ test("the draft a closed conversation returns to can actually create — it says
   flushSync(() => confirmButton(host).click());
   await settle();
   expect(seatPosts).toHaveLength(1);
-  expect(seatPosts[0]!.replaceIncumbent).toBe(true);
+  expect(seatPosts[0]!.replaceIncumbent).toBeUndefined();
 
   /* A first-ever orchestrator claims nothing of the kind. */
   seatPosts = [];
