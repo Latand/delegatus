@@ -273,7 +273,7 @@ export function selectTreeTests(paths: readonly string[], read: ReadonlyMap<stri
   return batchTests(paths, file => read.has(file) && (!owned || owned.has(file))).map(file => ({ file, ...read.get(file)! }));
 }
 
-function selectDetectors(root: string, base: string, subject: string, files: readonly string[], reviewed: readonly ReviewedSubject[]): DetectorSelection {
+function selectDetectors(root: string, base: string, subject: string, files: readonly string[], reviewed: readonly ReviewedSubject[], browser: boolean): DetectorSelection {
   const changes = new Map<string, string[]>();
   const rows = reviewed.map(row => {
     const key = `${row.base}:${row.head}`;
@@ -286,9 +286,16 @@ function selectDetectors(root: string, base: string, subject: string, files: rea
   });
   const paths = [...new Set([...files, ...rows.flatMap(row => row.own)])];
   const read = reviewedTestReader(root, paths);
-  return { native: selectTreeTests(paths, read(subject)), main: selectTreeTests(paths, read(base)),
-    reviewed: rows.map(row => ({ number: row.number, base: selectTreeTests(paths, read(row.base)),
-      head: selectTreeTests(paths, read(row.head), new Set(row.own)) })) };
+  const select = (revision: string, owned?: ReadonlySet<string>) => selectTreeTests(paths, read(revision), owned);
+  const split = (entries: TreeTestFile[]) => ({ runnable: entries.filter(entry => browser || !isBrowserTest(entry.file)),
+    excluded: entries.filter(entry => !browser && isBrowserTest(entry.file)) });
+  const native = split(select(subject)), main = split(select(base));
+  const reviewedSelections = rows.map(row => ({ number: row.number, base: split(select(row.base)),
+    head: split(select(row.head, new Set(row.own))) }));
+  return { browser, native: native.runnable, main: main.runnable,
+    reviewed: reviewedSelections.map(row => ({ number: row.number, base: row.base.runnable, head: row.head.runnable })),
+    excluded: { native: native.excluded, main: main.excluded,
+      reviewed: reviewedSelections.map(row => ({ number: row.number, base: row.base.excluded, head: row.head.excluded })) } };
 }
 
 export function pinnedBunVersion(dockerfile: string): string {
@@ -329,9 +336,12 @@ interface PlanInputs {
   readonly discovery: string;
 }
 interface DetectorSelection {
+  readonly browser: boolean;
   readonly native: readonly TreeTestFile[];
   readonly main: readonly TreeTestFile[];
   readonly reviewed: readonly { number: number; base: readonly TreeTestFile[]; head: readonly TreeTestFile[] }[];
+  readonly excluded: { readonly native: readonly TreeTestFile[]; readonly main: readonly TreeTestFile[];
+    readonly reviewed: readonly { number: number; base: readonly TreeTestFile[]; head: readonly TreeTestFile[] }[] };
 }
 export type TreeTestFile = TreeTestEntry & { file: string };
 
@@ -358,13 +368,17 @@ function validPlan(value: unknown): value is GatePlan {
 
 function freezePlan(plan: GatePlan): GatePlan {
   if (plan.detectors) {
-    const { native, main, reviewed } = plan.detectors;
-    for (const files of [native, main, ...reviewed.flatMap(row => [row.base, row.head])]) {
+    const freezeFiles = (files: readonly TreeTestFile[]) => {
       files.forEach(Object.freeze);
       Object.freeze(files);
-    }
-    reviewed.forEach(Object.freeze);
-    Object.freeze(reviewed);
+    };
+    const freezeReviewed = (rows: readonly { number: number; base: readonly TreeTestFile[]; head: readonly TreeTestFile[] }[]) => {
+      for (const row of rows) { freezeFiles(row.base); freezeFiles(row.head); Object.freeze(row); }
+      Object.freeze(rows);
+    };
+    const { native, main, reviewed, excluded } = plan.detectors;
+    freezeFiles(native); freezeFiles(main); freezeReviewed(reviewed);
+    freezeFiles(excluded.native); freezeFiles(excluded.main); freezeReviewed(excluded.reviewed); Object.freeze(excluded);
     Object.freeze(plan.detectors);
   }
   for (const check of plan.checks) {
@@ -481,7 +495,11 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
   // The slot wrapper supplies this default to both producers. Normalize its
   // absent form when naming the graph before that wrapper runs.
   const checkEnv = checkEnvironment({ ...env, NODE_OPTIONS: env.NODE_OPTIONS || "--max-old-space-size=11264" });
-  const compilerInput = dependencyTreeFingerprint(root, "node_modules/typescript");
+  // Empty and prose-only pushes, plus pre-commit whitespace checks, never
+  // invoke a compiler. A broken ignored install must not block those plans.
+  const compilerNeeded = batch !== undefined || profile === "pre-push" && files.length > 0 &&
+    !files.every(proseOnly) && !files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
+  const compilerInput = compilerNeeded ? dependencyTreeFingerprint(root, "node_modules/typescript") : "not-selected";
   const tools = [env.PATH, checkEnv.PATH].map(PATH => ["bun", "bunx", "node", "git"].map(tool => Bun.which(tool, { PATH: PATH ?? "" })));
   const runtimeBinding = [process.platform, process.arch, Bun.version, execPath, SUPPORTED_CODEX_VERSIONS,
     environmentFingerprint(checkEnv), compilerInput, tools];
@@ -490,16 +508,30 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
     batch?.reviewed?.map(row => [row.number, row.base, row.head])]);
   const cache = new GateCache<GatePlan>(cacheDirectory(root, "plans"), validPlan);
   if (expectedPlanId) {
-    const cached = cache.find(candidate => candidate.planId === expectedPlanId && candidate.requestId === requestId &&
-      candidate.discoveryInputs.every(([file, digest]) => fileFingerprint(path.join(root, file)) === digest));
-    if (cached) return freezePlan(cached);
+    const cached = cache.read(expectedPlanId);
+    if (cached && cached.planId === expectedPlanId && cached.profile === profile && cached.requestId === requestId &&
+      cached.discoveryInputs.every(([file, digest]) => fileFingerprint(path.join(root, file)) === digest)) {
+      const { planId: cachedId, requestId: _requestId, discoveryInputs: _discoveryInputs, checks, detectors, ...header } = cached;
+      const cachedKey = fingerprint(header);
+      if (fingerprint([cachedKey, checks, detectors]) === cachedId) return freezePlan(cached);
+    }
   }
   const platformWorkflow = ".github/workflows/platform-tests.yml";
+  const traversedBytes = new Map<string, string>();
+  const capture = (file: string, contents: string) => traversedBytes.set(file, fingerprint(contents));
   const platformInputs = batch ? new Set<string>() : executedPaths(root,
-    workflowEntries(readFileSync(path.join(root, platformWorkflow), "utf8")));
+    workflowEntries(readFileSync(path.join(root, platformWorkflow), "utf8")), capture);
   const privacyTests = siblings.filter(file => /^scripts\/privacy-.*\.test\.ts$/.test(file));
   const privacyInputs = !batch && profile === "pre-push" && privacyTests.length
-    ? executedPaths(root, [...privacyTests, "test-preload.ts"]) : new Set<string>();
+    ? executedPaths(root, [...privacyTests, "test-preload.ts"], capture) : new Set<string>();
+  // Bind traversal to the exact bytes it consumed. If a reached helper moved
+  // between reading and planning, refuse this selection before any check runs.
+  for (const [file, digest] of traversedBytes) {
+    let current: string;
+    try { current = fingerprint(readFileSync(path.join(root, file), "utf8")); }
+    catch { current = "missing"; }
+    if (current !== digest) throw new Error(`gate plan inputs changed during discovery; retry required (${file})`);
+  }
   const sourceInputs = [...new Set([...dirty.filter(file => batchSource.test(file)), ...platformInputs, ...privacyInputs,
     ...(batch ? [] : [platformWorkflow]), ".github/workflows/bun-runtime.yml", "Dockerfile", "bun.lock", "package.json",
     "node_modules/typescript/package.json", "node_modules/eslint/package.json"])]
@@ -512,7 +544,9 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
   const inputs: PlanInputs = { version: VERSION, profile, subject, base, tree, changeClass, changedPaths, selector, trustPolicy,
     discovery: fingerprint([files, [...existing], siblings, bindings, batch?.browser ?? false, batch?.detectorBrowser ?? false, reviewed]) };
   const key = fingerprint(inputs);
-  const stored = cache.read(key);
+  // An explicitly handed-off address that failed validation is a cache miss;
+  // do not let a second alias silently authorize the rejected envelope.
+  const stored = expectedPlanId ? undefined : cache.read(key);
   const planId = (checks: readonly GateCheck[], detectors?: DetectorSelection) => fingerprint([key, checks, detectors]);
   if (stored) {
     const { planId: storedId, checks, detectors, requestId: _requestId, discoveryInputs: _discoveryInputs, ...header } = stored;
@@ -520,7 +554,7 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
       return freezePlan(stored);
   }
   const detectorBrowser = reviewed ? batch?.detectorBrowser ?? batch?.browser ?? false : undefined;
-  const detectors = reviewed ? selectDetectors(root, base, subject, files, reviewed) : undefined;
+  const detectors = reviewed ? selectDetectors(root, base, subject, files, reviewed, batch?.detectorBrowser ?? batch?.browser ?? false) : undefined;
   const steps = batch ? stepsForBatch(base, files, existing, batch.browser ?? false, detectorBrowser)
     : plan(profile as Mode, files, { ...discover(root, base, files, profile as Mode, siblings,
       { privacy: privacyInputs, platform: platformInputs }),
@@ -533,5 +567,8 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
   const checks = identifyChecks(inputs, steps, bindings, compilerInput, env, execPath, detectors, bunPin);
   const built = { ...inputs, requestId, discoveryInputs: sourceInputs, checks, ...(detectors ? { detectors } : {}), planId: planId(checks, detectors) };
   cache.write(key, built);
+  // The child receives planId, so keep a direct immutable address for the
+  // validated handoff. This avoids enumerating unrelated cache records.
+  cache.write(built.planId, built);
   return freezePlan(built);
 }

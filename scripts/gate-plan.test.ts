@@ -5,6 +5,7 @@ import path from "node:path";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import * as platformScopeModule from "./ci-platform-scope";
 import { executedPaths, workflowEntries } from "./ci-platform-scope";
+import { fingerprint, GateCache } from "./gate-cache";
 import { gatePlan } from "./gate-plan";
 import { createHookFixture } from "./local-gate.fixture";
 
@@ -123,7 +124,7 @@ test("a valid handoff hits the immutable plan, and damaged, changed-base, or cha
   const request = { profile: "pre-push" } as const;
   const first = gatePlan(f.dir, request, f.env);
   const dir = f.writablePath(".git/delegatus-gate/plans");
-  const file = path.join(dir, readdirSync(dir)[0]!);
+  const file = path.join(dir, `${fingerprint(first.planId)}.json`);
   const earlier = new Date(Date.now() - 60_000);
   utimesSync(file, earlier, earlier);
   const stamp = statSync(file).mtimeMs;
@@ -160,6 +161,32 @@ test("a valid handoff hits the immutable plan, and damaged, changed-base, or cha
   const moved = gatePlan(f.dir, request, f.env, process.execPath, first.planId);
   expect(moved.base).not.toBe(first.base);
   expect(names(moved)).toEqual(["privacy"]);
+});
+
+test("an addressed handoff reads one cache entry and never scans unrelated plans", () => {
+  const f = fixture();
+  write(f, "example.ts"); commit(f);
+  const first = gatePlan(f.dir, { profile: "pre-push" }, f.env);
+  const read = spyOn(GateCache.prototype, "read");
+  try {
+    expect(gatePlan(f.dir, { profile: "pre-push" }, f.env, process.execPath, first.planId)).toEqual(first);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0]?.[0]).toBe(first.planId);
+    expect("find" in GateCache.prototype).toBe(false);
+  } finally { read.mockRestore(); }
+});
+
+test("compiler-free plans tolerate an invalid ignored TypeScript installation", () => {
+  const f = fixture();
+  const typescript = f.writablePath("node_modules/typescript");
+  mkdirSync(path.dirname(typescript), { recursive: true });
+  symlinkSync(f.writablePath("missing-typescript-target"), typescript);
+  mkdirSync(f.writablePath(".git/info"), { recursive: true });
+  writeFileSync(f.writablePath(".git/info/exclude"), "node_modules/\n");
+  expect(names(gatePlan(f.dir, { profile: "pre-push" }, f.env))).toEqual(["privacy"]);
+  expect(names(gatePlan(f.dir, { profile: "pre-commit" }, f.env))).toEqual(["staged whitespace"]);
+  write(f, "example.ts"); commit(f);
+  expect(() => gatePlan(f.dir, { profile: "pre-push" }, f.env)).toThrow();
 });
 
 test("platform helper bytes invalidate cached discovery without changing the Git subject", () => {
@@ -206,6 +233,35 @@ test("platform helper bytes invalidate cached discovery without changing the Git
   expect(names(after)).toContain("Linux backend");
   expect(names(after)).toContain("Linux tests");
   expect(after.planId).not.toBe(first.planId);
+});
+
+test("a reached helper changed after traversal forces a retry before stale checks are cached", () => {
+  const f = fixture();
+  const workflow = f.writablePath(".github/workflows/platform-tests.yml");
+  const helper = "scripts/ignored-platform-helper.sh";
+  const source = readFileSync(workflow, "utf8");
+  const anchor = "      - name: Platform tests\n";
+  const start = source.indexOf("        run: |", source.indexOf(anchor)) + "        run: |\n".length;
+  writeFileSync(workflow, `${source.slice(0, start)}          bash ${helper}\n${source.slice(start)}`);
+  write(f, helper, "#!/bin/sh\nexit 0\n");
+  mkdirSync(f.writablePath(".git/info"), { recursive: true });
+  writeFileSync(f.writablePath(".git/info/exclude"), `${helper}\n`);
+  write(f, "example.ts"); commit(f);
+  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  write(f, "example.ts", "export const value = 2;\n"); commit(f);
+  const execute = platformScopeModule.executedPaths;
+  let changed = false;
+  const spy = spyOn(platformScopeModule, "executedPaths").mockImplementation((...args) => {
+    const result = execute(...args);
+    if (!changed && args[1].includes(helper)) {
+      changed = true;
+      writeFileSync(f.writablePath(helper), "#!/bin/sh\nbun ../src/lib/proc/proc.test.ts\n");
+    }
+    return result;
+  });
+  try {
+    expect(() => gatePlan(f.dir, { profile: "pre-push" }, f.env)).toThrow(/retry required/);
+  } finally { spy.mockRestore(); }
 });
 
 test("privacy helper bytes invalidate a warm selection and preserve its privacy self-test", () => {
@@ -269,6 +325,24 @@ test("reviewed batch graph runs its full trusted scan before the reviewed test c
   expect(plan.detectors?.reviewed.map(row => row.head.map(test => test.file))).toEqual([["src/example.test.ts"]]);
 });
 
+test("reviewed browser selection is recorded separately for runnable and excluded profiles", () => {
+  const f = fixture();
+  const base = f.git("rev-parse", "HEAD").toString().trim();
+  write(f, "src/example.browser.test.tsx", "test('browser case', () => {});\n");
+  const head = commit(f);
+  const reviewed = [{ number: 17, base, head }];
+  const skipped = gatePlan(f.dir, { profile: "batch", base, reviewed, detectorBrowser: false }, f.env).detectors!;
+  const included = gatePlan(f.dir, { profile: "batch", base, reviewed, detectorBrowser: true }, f.env).detectors!;
+  expect(skipped.browser).toBe(false);
+  expect(skipped.reviewed[0]?.head).toEqual([]);
+  expect(skipped.excluded.reviewed[0]?.head.map(entry => entry.file)).toEqual(["src/example.browser.test.tsx"]);
+  expect(Object.isFrozen(skipped.excluded.reviewed[0]?.head)).toBe(true);
+  expect(Object.isFrozen(skipped.excluded.reviewed)).toBe(true);
+  expect(included.browser).toBe(true);
+  expect(included.reviewed[0]?.head.map(entry => entry.file)).toEqual(["src/example.browser.test.tsx"]);
+  expect(included.excluded.reviewed[0]?.head).toEqual([]);
+});
+
 test("image and host obligations match and name different compiler observations", () => {
   const f = fixture();
   mkdirSync(f.writablePath("node_modules/typescript/bin"), { recursive: true });
@@ -313,7 +387,7 @@ test("check-step and pre-push share the publication selection and refuse a forge
     });
     const [code, stderr] = await Promise.all([stage.exited, new Response(stage.stderr).text()]);
     expect(code, stderr).toBe(0);
-    expect(publications).toHaveLength(1);
+    expect(publications).toHaveLength(2);
   } finally { monitor.close(); }
   expect(f.calls().map(call => call.args[0])).toEqual(["tsc"]);
   const native = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: f.env, encoding: "utf8", timeout: 25_000 });

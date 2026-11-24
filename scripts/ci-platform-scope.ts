@@ -66,7 +66,7 @@ function candidates(root: string, from: string, specifier: string): string[] {
 
 /** Repo-relative paths the given entry files execute, followed transitively
     through static and dynamic imports and through file paths they name. */
-export function executedPaths(root: string, entries: readonly string[]): Set<string> {
+export function executedPaths(root: string, entries: readonly string[], onRead?: (file: string, contents: string) => void): Set<string> {
   const reached = new Set<string>();
   const queue = entries.map((entry) => path.resolve(root, entry));
   const visited = new Set<string>();
@@ -82,7 +82,9 @@ export function executedPaths(root: string, entries: readonly string[]): Set<str
     visited.add(file);
     reached.add(path.relative(root, file));
     if (!exists(file)) continue;
-    const source = fs.readFileSync(file, "utf8").replace(TYPE_ONLY_STATEMENT, "").replace(TYPE_ONLY_IMPORT, "");
+    const raw = fs.readFileSync(file, "utf8");
+    onRead?.(path.relative(root, file), raw);
+    const source = raw.replace(TYPE_ONLY_STATEMENT, "").replace(TYPE_ONLY_IMPORT, "");
     const targets: string[] = [];
     for (const match of source.matchAll(IMPORT_SPECIFIER)) targets.push(...candidates(root, file, match[1]!));
     for (const match of source.matchAll(ANCHORED_PATH)) {

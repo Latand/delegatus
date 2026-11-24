@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cpuPressurePolicy } from "../src/lib/runtime/cpuPressure";
 import { GateCpuPressure } from "../src/lib/runtime/gateCpuPressure";
-import { ACTIVE_GATE_PREFIX, inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_STALE_GRACE_MS, CPU_QUEUE_UNPOLLED_MS } from "../src/lib/runtime/cpuAdmission";
+import { ACTIVE_GATE_PREFIX, cgroupScopeContainsUnit, inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_STALE_GRACE_MS, CPU_QUEUE_UNPOLLED_MS } from "../src/lib/runtime/cpuAdmission";
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuQueueDetail, ordinal } from "../src/lib/runtime/cpuQueueText";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
@@ -385,7 +385,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       const gate = path.join(proc, identity.split(":")[0]!);
       if (readStat(gate)[19] !== identity.split(":")[1]) return undefined;
       const membership = fs.readFileSync(path.join(gate, "cgroup"), "utf8");
-      if (membership !== child.scope || !membership.split("\n").some(line => line === `0::/${unit}` || line.includes(`/${unit}/`))) return undefined;
+      if (membership !== child.scope || !cgroupScopeContainsUnit(membership, unit)) return undefined;
       const hook = path.join(proc, readStat(gate)[1]!);
       if (fs.readFileSync(path.join(hook, "cgroup"), "utf8") !== child.scope) return undefined;
       const parent = path.join(proc, readStat(hook)[1]!);

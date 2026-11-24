@@ -963,9 +963,12 @@ export class MergeBatch {
       for (const file of Object.keys(unseen(detector))) validation.notApplicable.push({ source: detector.source, file,
         reason: `#${detector.pr} is not in this candidate; its reviewed detector is skipped` });
     }
-    if (!state.browser) for (const detector of active) for (const file of Object.keys(detector.corpus).filter(isBrowserTest)) {
-      delete detector.corpus[file];
-      validation.notApplicable.push({ source: detector.source, file, reason: "full browser campaign: opt in with gate --browser" });
+    if (!selection.browser) {
+      for (const file of selection.excluded.native) validation.notApplicable.push({ source: "native candidate", file: file.file,
+        reason: "full browser campaign: opt in with gate --browser" });
+      for (const row of selection.excluded.reviewed) for (const entry of row.head) validation.notApplicable.push({
+        source: `#${row.number}@${state.rows.find(member => member.number === row.number)!.head}`, file: entry.file,
+        reason: "full browser campaign: opt in with gate --browser" });
     }
     return active.filter(detector => Object.keys(detector.corpus).length);
   }

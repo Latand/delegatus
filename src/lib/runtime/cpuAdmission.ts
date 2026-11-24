@@ -24,6 +24,15 @@ export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
 const BOUNDED_GATE_PREFIX = "command:bounded:";
 export const ACTIVE_GATE_PREFIX = "command:gate-active:";
+/** True when unified cgroup membership names the declared service or a child. */
+export function cgroupScopeContainsUnit(scope: string, unit: string): boolean {
+  if (!/^[A-Za-z0-9_.@:-]+\.(?:service|scope)$/.test(unit)) return false;
+  return scope.split("\n").some(line => {
+    if (!line.startsWith("0::/")) return false;
+    const membership = line.slice(3).replace(/\/$/, "");
+    return membership === `/${unit}` || membership.endsWith(`/${unit}`) || membership.includes(`/${unit}/`);
+  });
+}
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; waitedMs: number; heldBy: "queue" | "pressure"; priority?: TaskPriority; stalledMs?: number };
 /** Recent kernel capacity evidence from before admission. Any intervening
