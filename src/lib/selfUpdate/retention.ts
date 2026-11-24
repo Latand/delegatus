@@ -4,6 +4,7 @@ import { RetentionWorker, RetentionInspectionError, type RetentionInspection } f
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import { cleanerJournal, type CleanerJournal } from "@/lib/cleaner/diskJournal";
+import { reconcileDiskCleanerReport } from "@/lib/cleaner/diskReport";
 import { assertRetentionTestPath } from "@/lib/retentionTestSafety";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -165,7 +166,6 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     return { current, processes, unfenced: current.fenced !== true };
   };
   type Candidate = { dir: string; sha: string; age: number; locked: boolean; identity: string };
-  const candidateClaimBindings = new WeakMap<Candidate, Map<string, string>>();
   const byAge = (a: Candidate, b: Candidate) => a.age - b.age || (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0);
   const identity = (dir: string) => { const stat = fs.lstatSync(dir); return `${stat.dev}:${stat.ino}`; };
   const candidates: Candidate[] = [];
@@ -201,19 +201,13 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     const names = (directory: string | null) => directory !== null && under(directory, candidate.dir);
     const overlaps = (directory: string | null) => directory !== null
       && (under(directory, candidate.dir) || under(candidate.dir, directory));
-    const bindings = candidateClaimBindings.get(candidate) ?? new Map<string, string>();
-    candidateClaimBindings.set(candidate, bindings);
     const physicalClaim = (directory: string | null) => {
       if (!directory) return null;
-      // Resolve live aliases at admission. If quarantine later makes one
-      // dangling, keep its physical binding for the closed-gate owner check.
-      const bound = bindings.get(directory);
-      if (bound) return bound;
-      let target: string;
-      try { target = fs.realpathSync(directory); }
-      catch { target = resolveClaimPath(directory); }
-      bindings.set(directory, target);
-      return target;
+      // Resolve again at every owner fence: parked aliases can be retargeted
+      // while the candidate is quarantined. Resolve dangling hops after the
+      // quarantine rename so their former physical target still matches.
+      try { return fs.realpathSync(directory); }
+      catch { return resolveClaimPath(directory); }
     };
     if ((current.pipelineClaims ?? []).some(claim => {
       const repo = physicalClaim(claim.repoDir), worktree = physicalClaim(claim.worktreeDir);
@@ -587,6 +581,10 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const bytes = trash ? await bytesOf(row.trash) : 0;
           const auditBytes = row.cleaner.bytes ?? bytes;
           if (row.deleting && trash) {
+            if (cleaner.dryRun) {
+              report.kept.push({ dir: row.directory, reason: "dry-run", bytes: row.cleaner.bytes ?? 0 });
+              continue;
+            }
             const candidate: Candidate = { dir: row.directory, sha: row.context?.sha ?? "", age: row.context?.age ?? 0,
               locked: false, identity: row.identity };
             const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree,
@@ -599,6 +597,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             if (outcome.removed) {
               audit("removed", row.directory, auditBytes, row.cleaner.proof);
               report.removed.push({ dir: row.directory, sha: candidate.sha, bytes });
+              await reconcileDiskCleanerReport(row.cleaner.passId);
               await dropWorktreeMetadata(row.directory);
             } else report.kept.push({ dir: row.directory, reason: outcome.reason, bytes });
             continue;
@@ -610,6 +609,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           } else if (row.deleting && !trash) {
             audit("removed", row.directory, auditBytes, row.cleaner.proof);
             report.removed.push({ dir: row.directory, sha: row.context?.sha ?? "", bytes });
+            await reconcileDiskCleanerReport(row.cleaner.passId);
             await dropWorktreeMetadata(row.directory);
           } else {
             audit("refused", row.directory, auditBytes, row.cleaner.proof);

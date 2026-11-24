@@ -136,6 +136,18 @@ test("preservation written during downtime restores the quarantined owner path",
   expect(f.store.get(f.row.directory)).toBeNull();
 });
 
+test("an open task discovered after restart restores its linked capture from quarantine", async () => {
+  const f = fixture(), source = path.join(f.row.directory, "screen.png");
+  const alias = path.join(f.root, "task-evidence-alias"); fs.symlinkSync(f.row.directory, alias, "dir");
+  expect(await runRecovery(f, "crash", NOW)).toBe("quarantined\n");
+  expect(() => fs.readFileSync(path.join(alias, "screen.png"), "utf8")).toThrow();
+  const result = JSON.parse(await runRecovery(f, "task-held", NOW + 60001));
+  expect(result).toMatchObject({ removed: 0, kept: { "referenced by an open task": 1 } });
+  expect(fs.readFileSync(source, "utf8")).toBe("capture");
+  expect(fs.readFileSync(path.join(alias, "screen.png"), "utf8")).toBe("capture");
+  expect(f.store.get(f.row.directory)?.reason).toBe("referenced by an open task");
+});
+
 for (const directory of [true, false]) {
   test(`a refusal thrown after quarantine restores before releasing the claim (directory=${directory})`, async () => {
     const f = fixture(directory), inode = fs.lstatSync(f.row.directory).ino;

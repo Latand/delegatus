@@ -326,6 +326,10 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         const authority = await ports.authority(row);
         assertRetentionTestPath(row.directory);
         if (taskHeld(authority)) {
+          // A task may have linked this evidence while the Viewer was down.
+          // Put an intact, identity-bound quarantine back at its public path
+          // before retaining it for that task.
+          if (claimed && fs.existsSync(journal)) restoreCandidate(row, journal);
           reason = "referenced by an open task";
           nextCheck = now() + 3600000;
           if (cleaner && !bytes && !fs.existsSync(journal)) {

@@ -684,6 +684,35 @@ test("the final closed-gate owner read restores a release newly claimed by a par
   expect(journal.filter(row => row.directory === h.dirs[0]!).map(row => row.phase)).toEqual(["intent", "removed"]);
 }, 30_000);
 
+test("a parked alias retargeted to a quarantined release restores it at the final owner fence", async () => {
+  const h = fixture(20), alias = path.join(h.root, "retargeted-parked-alias");
+  fs.symlinkSync(h.dirs[3]!, alias, "dir");
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] }));
+  let retargeted = false;
+  let candidate: string | undefined;
+  h.ports.current = () => {
+    const missingQuarantine = h.dirs.find(dir => !exists(dir)
+      && fs.readdirSync(path.dirname(dir)).some(name => name.startsWith(`.delegatus-trash-${path.basename(dir)}-`)));
+    if (missingQuarantine && !retargeted) {
+      candidate = missingQuarantine;
+      fs.unlinkSync(alias);
+      fs.symlinkSync(missingQuarantine, alias, "dir");
+      retargeted = true;
+    }
+    return { record: h.record, inputs: h.inputs, fenced: true,
+      pipelineClaims: retargeted ? [{ repoDir: alias, worktreeDir: null }] : [] };
+  };
+  const journal: Array<{ phase: string; directory: string }> = [];
+  h.ports.cleaner = { id: fixtureCleanerId("12121212", "1212", "4212", "8212", "121212121212"), allowed: () => true, dryRun: false,
+    journal: (phase, directory) => journal.push({ phase, directory }) };
+  const report = await h.run();
+  expect(retargeted).toBeTrue();
+  expect(candidate).toBeDefined();
+  expect(exists(candidate!)).toBeTrue();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: candidate, reason: "pipeline-checkout" }));
+  expect(journal.filter(row => row.directory === candidate).map(row => row.phase)).toEqual(["intent", "refused"]);
+}, 30_000);
+
 test("release retention leaves Cleaner quarantine to Cleaner recovery and restores it with an outcome", async () => {
   const h = fixture(20), originalPass = fixtureCleanerId("33333333", "3333", "4333", "8333", "333333333333");
   const state = path.dirname(h.ports.reportFile!);
@@ -750,7 +779,13 @@ test("Cleaner resumes its original audit after a crash following the first relea
         await fs.promises.rm(entry, { recursive: true, force: true });
       } })).rejects.toThrow("interrupted after first unlink");
     expect(JSON.parse(fs.readFileSync(journal, "utf8")).deleting).toBeTrue();
-    h.ports.cleaner = { id: fixtureCleanerId("99999999", "9999", "4999", "8999", "999999999999"), allowed: () => true, dryRun: false, journal: () => {} };
+    h.ports.cleaner = { id: fixtureCleanerId("99999999", "9999", "4999", "8999", "999999999999"), allowed: () => true, dryRun: true, journal: () => {} };
+    const dry = await h.run();
+    expect(dry.errors).toEqual([]);
+    expect(fs.existsSync(row!.trash)).toBeTrue();
+    expect(fs.existsSync(journal)).toBeTrue();
+    expect(fs.readFileSync(cleanerJournalFile(pass), "utf8").trim().split("\n").map(line => JSON.parse(line).phase)).toEqual(["intent"]);
+    h.ports.cleaner = { id: fixtureCleanerId("aaaaaaaa", "aaaa", "4aaa", "8aaa", "aaaaaaaaaaaa"), allowed: () => true, dryRun: false, journal: () => {} };
     const report = await h.run();
     expect(report.errors).toEqual([]);
     expect(fs.existsSync(journal)).toBeFalse();
