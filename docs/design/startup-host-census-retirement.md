@@ -268,6 +268,17 @@ without an effect, the builder adds those conversations through a keyed or
 journal-wide read; selecting all archived conversations is not an
 acceptable fix.
 
+As built: a native queue receipt can stay `queued` after its outbox effect
+completes, so the runtime host also pages every active operation receipt
+(`startupSessionEvidence` with `pendingOperationsAfter`), and the effect
+revision moves with active receipts. A runtime host of the preceding release
+keeps serving until host handoff, after this Viewer is promoted. It answers
+without operation pages, and its journal has no receipt triggers, so its
+effect revision does not move with receipts. Startup then reads every active
+receipt from that host's journal in one read transaction, and proves the
+answer current by reading the same set again before use. Unrelated session
+writes, which a live agent produces continuously, leave both answers equal.
+
 ### 5.4 Pipeline deferral by key
 
 Today every pipeline-member conversation in the selection is marked deferred
@@ -398,15 +409,15 @@ mechanism:
 
 | Requirement | Mechanism |
 | --- | --- |
-| owner-only | `assertStateStartupMutation(directory, "registry spawn marker settlement")` at entry, as `archiveInactive` does (`sqliteRegistryStore.ts:3574`). A build or test resolves a sandbox and never reaches the operator's registry (`src/lib/stateOwnership.ts`). |
-| dry run | the same function with `apply: false` returns the per-row plan without writing. The builder runs it against a copy of the newest backup (3.7 GB; copied into the stage scratch and removed by its recorded path afterwards) in isolated state before release, and records counts by class and reason in private evidence only. |
+| owner-only | `assertStateStartupMutation(directory, "registry spawn marker settlement")` at entry, as `archiveInactive` does (`sqliteRegistryStore.ts:3574`). Against the operator's state directory, `apply` also requires the serving Viewer: owner `viewer`, an open release activation, no build phase, no test environment and not the inventory sidecar. A sandboxed state directory, which a test builds for itself, admits the same apply path, so the tests drive it end to end (`src/lib/stateOwnership.ts`). |
+| dry run | the same function with `apply: false` returns the per-row plan without writing. The builder runs it against copies of the newest registry backup, the newest state backup (for pipeline records) and the runtime journal (`VACUUM INTO` from a read-only connection), with an operation-status source that reads the journal copy, in isolated state before release. Every row ends in a `would-*` decision or a named skip, recorded per row in private evidence only. |
 | verified backup of the exact revision | the newest durability backup is verified before publication (`durability.ts:891-899`). A row is settled only if its current `value_json` is byte-identical to its value in that backup, compared inside the write transaction. The backup therefore holds every changed row exactly as it stood at the moment of the write. Otherwise the row is skipped with `changed-since-backup` and retried after the next hourly backup. |
 | restorable | the convergence appends each row's before-image, the backup's name and revision, and the registry revision read in the write transaction to a 0600 settlement journal beside the registry. `restoreSettledSpawnMarkers(journal)` writes a before-image back only while the row still equals its after-image, and reports any other row. |
 | per-row terminal and liveness proof | receipt `failed` or `conflicted` (M1, M2); key, path and `structuredHostOperationId` match; no process and no claim. Every recorded identity (`hostExitProcess`, `structuredHost.exitProcess`, `pendingHostExits[*]`, `previousHostExit`, survivors) is `processIdentityStatus === "dead"` by PID, start token and boot or PID-namespace epoch. A recorded scope or memory unit is not an active unit; the signal domain is absent or retired. |
 | pending spawns, receipts, deliveries | skip `outstanding-delivery` when the conversation has a held delivery in a non-terminal state or a pending delivery-operation owner. Skip `operation-open` when the runtime host reports the launch operation non-terminal, and `runtime-unavailable` when it cannot answer. Skip `completed-receipt` for a completed receipt; `repairCompletedStructuredSpawnMarkers` owns live ones. |
 | recheck under generation and writer fence | the decision is recomputed inside `registry.deliveryWrite({ label: "spawn.marker-settlement" })` from the current row and receipt. The runtime operation status is read in the same reaper cycle from the current runtime-host client. A refused admission writes nothing. |
 | resumable bounded batches | at most `STALE_STRUCTURED_SPAWN_ACTUATION_CAP` rows per cycle; each row is idempotent; candidates come from H (markers block archiving), so selection is bounded. |
-| skipped rows with reasons | every skip is logged once per row and reason, and counted in the reaper's result. |
+| skipped rows with reasons | every skip is logged once per row and reason. The sweep logs the batch's outcomes by class and reason whenever they change. An error keeps a bounded reason code (`authority-lost`, `owner-refused`, `runtime-refused`, `release-fence-busy`, the error's class) and the first line of its message, both for a deferred row and for a failed batch. |
 
 M3 settles through the staged-launch path, which already runs under the
 writer, rechecks with a recovery fence (`structuredSpawn.ts:2748-2753`) and

@@ -5,7 +5,7 @@ import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot, startupStructuredHostKeys } from "./startupSnapshot";
-import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { assertStateStartupMutation, isOperatorOwnedDirectory, StateStartupMutationRefused } from "@/lib/stateOwnership";
 import { FileTransactionAdmissionError } from "@/lib/state/fileTransaction";
 import { nextBuildPhase, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
 import { BACKUP_DIRECTORY, listBackups } from "@/lib/state/durability";
@@ -1301,6 +1301,24 @@ async function actuateQueuedPinnedSpawn(
   return registry.spawnReceipt(receipt.launchId) ?? admissionClaim.receipt;
 }
 
+/** A refusal whose code names the fence that stopped a marker settlement. */
+export class SpawnMarkerSettlementRefused extends Error {
+  constructor(readonly code: "owner-refused" | "authority-lost", message: string) { super(message); this.name = "SpawnMarkerSettlementRefused"; }
+}
+
+/** A bounded reason for a settlement error: the fence, runtime, admission or
+    store that refused, and the first line of its message. */
+export function spawnMarkerSettlementError(error: unknown): { code: string; message: string } {
+  const message = (error instanceof Error ? error.message : String(error)).split("\n", 1)[0]!.slice(0, 240);
+  const code = error instanceof SpawnMarkerSettlementRefused ? error.code
+    : error instanceof RuntimeHostUnavailableError ? "runtime-refused"
+      : error instanceof FileTransactionAdmissionError ? "release-fence-busy"
+        : error instanceof StateStartupMutationRefused ? "owner-refused"
+          : (error as { code?: unknown } | null)?.code === "SQLITE_BUSY" ? "store-busy"
+            : error instanceof Error && error.name !== "Error" ? error.name : "error";
+  return { code, message };
+}
+
 const staleMarkerCursor = new WeakMap<AgentRegistry, string>();
 const lastStaleMarkerSkips = new WeakMap<AgentRegistry, Map<string, string>>();
 const activeMarkerOperation = new Set(["pending", "queued", "delivering", "applying"]);
@@ -1367,12 +1385,16 @@ export async function settleStaleSpawnMarkers(
   registry: AgentRegistry,
   client: RuntimeHostClient | null,
   options: { apply: boolean; now?: () => number; limit?: number; afterKey?: string; journalPath?: string; assertActive?: () => void },
-): Promise<{ key: string; group: "M1" | "M2" | "M3" | "other"; reason: string }[]> {
+): Promise<{ key: string; group: "M1" | "M2" | "M3" | "other"; reason: string; detail?: string }[]> {
   const directory = path.dirname(registry.filename);
   assertStateStartupMutation(directory, "registry spawn marker settlement");
-  if (options.apply && (process.env.LLV_STATE_OWNER !== "viewer"
+  // The operator's registry changes only in the serving Viewer. A sandboxed
+  // state directory, which a test builds for itself, admits the same path.
+  if (options.apply && isOperatorOwnedDirectory(directory) && (process.env.LLV_STATE_OWNER !== "viewer"
     || nextBuildPhase() || process.env.NODE_ENV === "test" || !stateMutationActivationOpen()
-    || process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER === "1")) throw new Error("spawn marker settlement requires the serving Viewer");
+    || process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER === "1")) {
+    throw new SpawnMarkerSettlementRefused("owner-refused", "spawn marker settlement requires the serving Viewer");
+  }
   const authority = readHotStateAuthority(directory);
   const journalPath = options.journalPath ?? runtimeJournalPath();
   const journalIdentity = databaseFileIdentity(journalPath);
@@ -1383,7 +1405,7 @@ export async function settleStaleSpawnMarkers(
     if (!viewerReleaseOwnsTraffic() || activeDrain() || current?.mode === "fencing"
       || current?.epoch !== authority?.epoch || current?.releaseRevision !== authority?.releaseRevision
       || !journalIdentity || databaseFileIdentity(journalPath) !== journalIdentity || databaseSwapInProgress(journalPath)) {
-      throw new Error("spawn marker settlement lost release or runtime journal authority");
+      throw new SpawnMarkerSettlementRefused("authority-lost", "spawn marker settlement lost release or runtime journal authority");
     }
   };
   const now = options.now ?? Date.now;
@@ -1422,7 +1444,7 @@ export async function settleStaleSpawnMarkers(
       SELECT 1 AS open FROM operations WHERE (operation_id IN (?1, ?2) OR conversation_id=?3)
         AND json_extract(receipt_json,'$.status') IN ('pending','queued','delivering','applying') LIMIT 1`);
     const openEffect = journal?.query<{ open: number }, [string]>(`
-      SELECT 1 AS open FROM outbox WHERE state IN ('pending', 'retained') AND state='pending'
+      SELECT 1 AS open FROM outbox WHERE state='pending'
         AND CASE WHEN json_valid(payload_json) THEN json_extract(payload_json,'$.conversationId') END=? LIMIT 1`);
     const recordedOpen = (file: RegistryFile, receipt: SpawnReceipt) =>
       conversationIdsResolvingTo(file, resolveConversationAlias(file, receipt.conversationId))
@@ -1513,13 +1535,16 @@ export async function settleStaleSpawnMarkers(
         return admitted.acquired ? admitted.value : "writer-busy";
       };
       let reason: string;
+      let detail: string | undefined;
       try { reason = await decide(); }
       catch (error) {
         checkAuthority();
-        console.error("[spawn] marker settlement deferred", { key, error: error instanceof Error ? error.name : "unknown" });
+        const cause = spawnMarkerSettlementError(error);
+        console.error("[spawn] marker settlement deferred", { key, ...cause });
         reason = "evidence-unavailable";
+        detail = cause.code;
       }
-      rows.push({ key, group, reason });
+      rows.push({ key, group, reason, ...(detail ? { detail } : {}) });
       if (options.apply) staleMarkerCursor.set(registry, key);
     }
     if (options.apply) {
@@ -1538,6 +1563,32 @@ export async function settleStaleSpawnMarkers(
   } finally {
     copy?.close();
     journal?.close();
+  }
+}
+
+const lastStaleMarkerOutcomes = new WeakMap<AgentRegistry, string>();
+
+/** The retirement sweep's batch. A failed batch logs its reason code, and the
+    batch's outcomes by class and reason are logged whenever they change. */
+export async function settleStaleSpawnMarkerBatch(
+  registry: AgentRegistry,
+  client: RuntimeHostClient | null,
+  options: { journalPath?: string; limit?: number } = {},
+): Promise<Awaited<ReturnType<typeof settleStaleSpawnMarkers>> | null> {
+  try {
+    const rows = await settleStaleSpawnMarkers(registry, client, { apply: true, ...options });
+    const outcomes: Record<string, number> = {};
+    for (const row of rows) {
+      const name = `${row.group} ${row.reason}${row.detail ? ` (${row.detail})` : ""}`;
+      outcomes[name] = (outcomes[name] ?? 0) + 1;
+    }
+    const summary = JSON.stringify(Object.entries(outcomes).sort());
+    if (rows.length && lastStaleMarkerOutcomes.get(registry) !== summary) console.info("[spawn] stale marker batch", { rows: rows.length, outcomes });
+    lastStaleMarkerOutcomes.set(registry, summary);
+    return rows;
+  } catch (error) {
+    console.error("[spawn] stale marker batch failed", spawnMarkerSettlementError(error));
+    return null;
   }
 }
 

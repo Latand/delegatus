@@ -10,7 +10,7 @@ import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope, startupStructuredHostKeys, startupWorkKeys, withStartupWork, outsideStartupWork, type StartupWorkKeys } from "./startupSnapshot";
-import { readStartupPendingOperations } from "./deploymentLedger";
+import { readStartupPendingOperationSet, startupPendingOperationSetDigest } from "./deploymentLedger";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { orphanedHostNoticeContext, unreachableOrphanedHost } from "./orphanedHost";
@@ -2160,7 +2160,6 @@ async function startupRuntimeReadIsCurrent(
   witness: StartupRuntimeWitness,
   stamps: ReadonlyMap<string, string | number | null>,
   checkEffects: boolean,
-  checkJournalVersion = false,
 ): Promise<boolean> {
   if (witness.generation === null) {
     const current = await startupRuntimeWitness(client, witness.version);
@@ -2178,7 +2177,6 @@ async function startupRuntimeReadIsCurrent(
     assertStartupReadActive();
     if (!current || current.generation !== witness.generation
       || (checkEffects && current.effectsVersion !== witness.effectsVersion)
-      || (checkJournalVersion && current.version !== witness.version)
       || batch.some((id, index) => stamps.get(id) !== current.sessions[index])) return false;
   }
   return true;
@@ -2329,14 +2327,20 @@ export async function structuredStartupSignals(
     const witness = await startupRuntimeWitness(client, checkpoint.effects?.version);
     const effects = await readStartupRuntimeEffects(client, witness, checkpoint);
     const pendingOperations: StartupRuntimeRead["recentOperations"] = [];
-    let readPredecessorJournal = false;
+    // A preceding host answers without operation pages, and its effect
+    // revision does not move with operation receipts. Its journal is read
+    // directly, and a second read of the same set proves the answer current.
+    let predecessorOperations: string | null = null;
     if (client.startupSessionEvidence && witness?.generation) {
       let after = { eventSeq: 0, rowId: 0 };
       for (;;) {
-        const remote = readPredecessorJournal ? null
-          : await client.startupSessionEvidence([], { ...startupRuntimeReadOptions(), pendingOperationsAfter: after });
-        if (!remote?.pendingOperations && client.startupListenerIdentity) readPredecessorJournal = true;
-        const page = readPredecessorJournal ? readStartupPendingOperations(after) : remote;
+        const page = await client.startupSessionEvidence([], { ...startupRuntimeReadOptions(), pendingOperationsAfter: after });
+        if (!page?.pendingOperations && client.startupListenerIdentity && after.eventSeq === 0 && after.rowId === 0) {
+          const operations = readStartupPendingOperationSet();
+          predecessorOperations = startupPendingOperationSetDigest(operations);
+          pendingOperations.push(...operations);
+          break;
+        }
         if (!page?.pendingOperations) break;
         pendingOperations.push(...page.pendingOperations);
         const next = page.pendingOperationsNext;
@@ -2359,7 +2363,8 @@ export async function structuredStartupSignals(
     const admittedMessages = await admittedRuntimeMessages(registry, runtime);
     const selected = selection;
     const evidenceIsCurrent = async () =>
-      (!witness || await startupRuntimeReadIsCurrent(client, witness, read?.stamps ?? new Map(), true, readPredecessorJournal))
+      (!witness || await startupRuntimeReadIsCurrent(client, witness, read?.stamps ?? new Map(), true))
+        && (predecessorOperations === null || startupPendingOperationSetDigest(readStartupPendingOperationSet()) === predecessorOperations)
         && registryStartupSelectionUnchanged(selected) !== false;
     if (!await evidenceIsCurrent()) continue;
     assertStartupReadActive();

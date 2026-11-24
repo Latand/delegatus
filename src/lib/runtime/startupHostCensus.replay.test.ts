@@ -25,6 +25,9 @@ import * as startupStatus from "./startupStatus";
 
 const full = process.env.LLV_STARTUP_CENSUS_REPLAY === "1";
 const seed = process.env.LLV_STARTUP_CENSUS_SEED;
+// The first boot after this release, or after a runtime journal replacement,
+// has no historical publication watermark. Every other boot has one.
+const boot = process.env.LLV_STARTUP_CENSUS_BOOT === "first" ? "first" : "steady";
 const fixtureDate = "2026-10-01T00:00:00.000Z";
 const census = {
   archived: (full ? 3580 : 358) + 9,
@@ -94,8 +97,10 @@ test("replay a retained structured-host registry", async () => {
   try {
     const archiveId = db.query<{ value: number }, []>("SELECT MAX(id) AS value FROM registry_archive").get()!.value;
     // Translate the completed watermark to the private journal copy's inode.
-    db.query("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('startup_fallback_watermark',?)")
-      .run(JSON.stringify({ journal: databaseFileIdentity(journalPath), archiveId }));
+    if (boot === "steady") {
+      db.query("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('startup_fallback_watermark',?)")
+        .run(JSON.stringify({ journal: databaseFileIdentity(journalPath), archiveId }));
+    } else db.query("DELETE FROM registry_meta WHERE key='startup_fallback_watermark'").run();
   } finally { db.close(); }
   let entryPayloadReads = 0;
   const openRegistry = () => new AgentRegistry(path.join(scratch, "agent-registry.json"), undefined, undefined, {
@@ -256,7 +261,7 @@ test("replay a retained structured-host registry", async () => {
       nonReleasedArchived: after.entries[hostKey(8)]?.structuredHost?.endpoint,
     };
     const metrics = {
-      selectedRows: selected.length, membershipRows, selectionReads, entryPayloadReads,
+      boot, selectedRows: selected.length, membershipRows, selectionReads, entryPayloadReads,
       keyedSnapshots: startupBoundary.mock.calls.length,
       retryFileProbes: retryProbes.mock.calls.filter(([filename]) => typeof filename === "string" && filename.startsWith(retryFiles)).length,
       runtimeReads: runtimeIds.size, fallbackReads: fallbackIds.size,
@@ -284,7 +289,18 @@ test("replay a retained structured-host registry", async () => {
       expect(runtimeIds.has(conversation(5))).toBe(true);
       expect(runtimeIds.has(conversation(6))).toBe(true);
       expect(runtimeIds.has(conversation(9))).toBe(false);
-      expect(fallbackIds.has(conversation(9))).toBe(false);
+      // Without a watermark historical publication reads every archived
+      // structured conversation once, as before this change.
+      expect(fallbackIds.has(conversation(9))).toBe(boot === "first");
+      if (boot === "first") {
+        expect(fallbackIds.size).toBeGreaterThanOrEqual(census.archived);
+        // The completed sweep leaves the watermark the next boot reads.
+        const written = new Database(sqliteFilename, { readonly: true });
+        try {
+          expect(JSON.parse(written.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='startup_fallback_watermark'").get()?.value ?? "null"))
+            .toMatchObject({ journal: databaseFileIdentity(journalPath) });
+        } finally { written.close(); }
+      }
     }
   } finally {
     for (const cleanup of cleanups) cleanup();
