@@ -13,6 +13,7 @@ import {
 
 const CHUNK_BYTES = 256 * 1024;
 const MAX_SCAN_BYTES = 16 * 1024 * 1024;
+const MAX_AUTHOR_SCAN_BYTES = 2 * CHUNK_BYTES;
 const MAX_LINE_BYTES = 16 * 1024 * 1024;
 const MAX_RECENT_MESSAGES = 8;
 
@@ -53,6 +54,8 @@ export interface MessagesPageQuery {
   cursor?: MessagesPageCursor | null;
   /** Total descriptor bytes this call may read, including timestamp/probe reads. */
   maxScanBytes?: number;
+  /** Skip the tail `lastRecordAt` probe when the caller ignores `lastRecordAt`. */
+  skipLatestProbe?: boolean;
 }
 
 export interface ConversationMessage extends SessionRecord {
@@ -275,7 +278,7 @@ export function readMessageAuthorContextWithStats(
   let scannedBytes = 0;
   do {
     const page = readMessagesPage(source, {
-      kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor,
+      kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor, skipLatestProbe: true,
     });
     scannedBytes += page.scanned.bytes;
     records.push(...page.records);
@@ -295,16 +298,17 @@ function upperAuthorBoundary(
   source: MessagesPageSource,
   offset: number,
   upper: number,
-): { offset: number; bytes: number; atEnd: boolean } | null {
+  budget: number,
+): { offset: number; bytes: number; atEnd: boolean } | { capped: true; bytes: number } {
   let position = offset;
   let bytes = 0;
   let carry = Buffer.alloc(0);
   while (position < source.size) {
-    if (bytes >= MAX_SCAN_BYTES) return null;
-    const length = Math.min(CHUNK_BYTES, source.size - position, MAX_SCAN_BYTES - bytes);
+    if (bytes >= budget) return { capped: true, bytes };
+    const length = Math.min(CHUNK_BYTES, source.size - position, budget - bytes);
     const chunk = Buffer.allocUnsafe(length);
     const read = fs.readSync(source.descriptor, chunk, 0, length, position);
-    if (!read) return null;
+    if (!read) return { capped: true, bytes };
     bytes += read;
     const base = position - carry.length;
     const data = carry.length ? Buffer.concat([carry, chunk.subarray(0, read)]) : chunk.subarray(0, read);
@@ -322,7 +326,7 @@ function upperAuthorBoundary(
       newline = data.indexOf(0x0a, start);
     }
     carry = Buffer.from(data.subarray(start));
-    if (carry.length > MAX_LINE_BYTES) return null;
+    if (carry.length > MAX_LINE_BYTES) return { capped: true, bytes };
   }
   if (carry.length) {
     const later = parsedLine(carry, source.engine).some((candidate) => candidate.record.role === "user"
@@ -332,10 +336,11 @@ function upperAuthorBoundary(
   return { offset: source.size, bytes, atEnd: true };
 }
 
-/** Read the time neighborhood of a requested page. The extra twenty minutes on
- * either side includes every row that could compete for an occurrence matching
- * a focused row. If the byte budget cannot prove both time boundaries, leave
- * occurrence authors unassigned. */
+/** Read the time neighborhood of a requested page under a dedicated tight I/O
+ * budget (`MAX_AUTHOR_SCAN_BYTES`). The extra twenty minutes on either side
+ * includes every row that could compete for an occurrence matching a focused
+ * row. If the budget cannot prove both time boundaries (for example on a dense
+ * multi-MB session), stop immediately and leave occurrence authors unassigned. */
 function readMessageAuthorNeighborhoodWithStats(
   source: MessagesPageSource,
   focus: ReadonlyArray<{ seq: number; role: string; ts: string | null }>,
@@ -346,19 +351,29 @@ function readMessageAuthorNeighborhoodWithStats(
   const window = 20 * 60_000;
   const lower = Math.min(...times) - window;
   const upper = Math.max(...times) + window;
+  const lowerIso = new Date(lower).toISOString();
   const newestOffset = Math.max(...users.map((record) => record.seq));
-  const boundary = upperAuthorBoundary(source, newestOffset, upper);
-  if (!boundary) return { records: null, scannedBytes: MAX_SCAN_BYTES };
+  const boundary = upperAuthorBoundary(source, newestOffset, upper, MAX_AUTHOR_SCAN_BYTES);
+  if ("capped" in boundary) return { records: null, scannedBytes: boundary.bytes };
   const records: ConversationMessage[] = [];
   let cursor: MessagesPageCursor | null = { o: boundary.offset, p: 0, r: [] };
   let spent = boundary.bytes;
   let sawUpperBoundary = boundary.atEnd;
   do {
+    const remaining = MAX_AUTHOR_SCAN_BYTES - spent;
+    if (remaining <= 0) return { records: null, scannedBytes: spent };
     const page = readMessagesPage(source, {
-      kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor,
+      kinds: new Set(["message"]),
+      roles: new Set(["user"]),
+      since: lowerIso,
+      limit: 200,
+      maxChars: 1,
+      cursor,
+      maxScanBytes: remaining,
+      skipLatestProbe: true,
     });
     spent += page.scanned.bytes;
-    if (page.scanned.capped || spent > MAX_SCAN_BYTES) return { records: null, scannedBytes: spent };
+    if (page.scanned.capped || spent > MAX_AUTHOR_SCAN_BYTES) return { records: null, scannedBytes: spent };
     for (const record of page.records) {
       const at = record.ts ? Date.parse(record.ts) : Number.NaN;
       if (!Number.isFinite(at)) continue;
@@ -401,7 +416,9 @@ export function readMessagesPage(source: MessagesPageSource, query: MessagesPage
   let hasMore = false;
   let next: MessagesPageCursor | null = null;
   const charge = (count: number): void => { bytes += count; };
-  const latest = newestRecordTimestamp(source, charge, scanLimit);
+  const latest = query.skipLatestProbe
+    ? { value: null, lines: 0 }
+    : newestRecordTimestamp(source, charge, scanLimit);
   lines += latest.lines;
 
   const isTwin = (candidate: NormalizedSessionLine): boolean => {

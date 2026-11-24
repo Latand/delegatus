@@ -9,7 +9,11 @@ import { beginProjectCatalogScan } from "@/lib/scanner/projectCatalog";
 import type { ConversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { publishTranscriptIndexFeed } from "@/lib/scanner/discover";
 import { SNIPPET_MATCH_CLOSE, SNIPPET_MATCH_OPEN, snippetSegments } from "./snippet";
-import { scheduleTranscriptIndex, waitForTranscriptIndexIdleForTests } from "./transcriptFeed";
+import {
+  scheduleTranscriptIndex,
+  setTranscriptMigrationRetryBackoffForTests,
+  waitForTranscriptIndexIdleForTests,
+} from "./transcriptFeed";
 import {
   indexTranscriptSources,
   InvalidTranscriptSearchCursorError,
@@ -1857,3 +1861,145 @@ test("v5 to v6 migration re-checks user_version inside BEGIN IMMEDIATE, preserve
   }
   expect(maxGapMs).toBeLessThan(500);
 });
+
+test("off-thread FTS migration defers without main-thread DDL or lock wait when worker fails or write lock is held, then retries with backoff", async () => {
+  const dir = fs.mkdtempSync(path.join(sandbox, "v5-deferred-"));
+  const prevState = process.env.LLV_STATE_DIR;
+  const prevHelper = process.env.LLV_HELPER_LEASE_ENTRY;
+  process.env.LLV_STATE_DIR = dir;
+  setTranscriptMigrationRetryBackoffForTests(150);
+
+  const claudeFile = path.join(dir, "claude-deferred.jsonl");
+  fs.writeFileSync(
+    claudeFile,
+    `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:00:00.000Z", message: { content: "deferredneedle legacy prompt" } })}\n`,
+  );
+  const sources = [source(claudeFile, "claude", "deferred-project")];
+  const dbPath = statePath("transcript-search.sqlite");
+
+  let locker: Database | null = null;
+  const origExec = Database.prototype.exec;
+  let localDdl = 0;
+
+  try {
+    // Seed a real v6 database, then downgrade `transcript_files` + `user_version` to v5.
+    expect((await indexTranscriptSources(sources, { complete: false })).failures).toEqual([]);
+    const setup = new Database(dbPath);
+    try {
+      setup.exec(`
+        PRAGMA foreign_keys = OFF;
+        PRAGMA legacy_alter_table = ON;
+        BEGIN IMMEDIATE;
+        ALTER TABLE transcript_files RENAME TO transcript_files_v6;
+        CREATE TABLE transcript_files (
+          path TEXT PRIMARY KEY,
+          size INTEGER NOT NULL,
+          mtime_ms REAL NOT NULL,
+          project TEXT NOT NULL,
+          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+          messages_count INTEGER NOT NULL,
+          indexed_at INTEGER NOT NULL
+        );
+        INSERT INTO transcript_files SELECT * FROM transcript_files_v6;
+        DROP TABLE transcript_files_v6;
+        PRAGMA user_version = 5;
+        COMMIT;
+        PRAGMA legacy_alter_table = OFF;
+        PRAGMA foreign_keys = ON;
+      `);
+    } finally {
+      setup.close();
+    }
+
+    Database.prototype.exec = function spyExec(this: Database, sql: string) {
+      if (String(sql).includes("DROP TABLE transcript_files_previous")) localDdl += 1;
+      return origExec.call(this, sql);
+    };
+
+    const readVersion = () => {
+      const probe = new Database(dbPath, { readonly: true });
+      try {
+        return probe.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0;
+      } finally {
+        probe.close();
+      }
+    };
+
+    // 1. Broken worker entry: never falls back to inline main-thread DDL, keeps v5 reads working.
+    process.env.LLV_HELPER_LEASE_ENTRY = path.join(dir, "missing-helper-lease.mjs");
+    let brokenMaxGapMs = 0;
+    let tick = performance.now();
+    const brokenTimer = setInterval(() => {
+      const now = performance.now();
+      brokenMaxGapMs = Math.max(brokenMaxGapMs, now - tick);
+      tick = now;
+    }, 5);
+    try {
+      scheduleTranscriptIndex({ sources, complete: false }, { force: true });
+      await waitForTranscriptIndexIdleForTests();
+    } finally {
+      clearInterval(brokenTimer);
+    }
+    expect(localDdl).toBe(0);
+    expect(brokenMaxGapMs).toBeLessThan(500);
+    expect(readVersion()).toBe(5);
+    expect(searchTranscripts({ query: "deferredneedle" }).items).toHaveLength(1);
+    while (pendingTranscriptSearchIndexBuilds() > 0) await Bun.sleep(10);
+
+    // Restore helper entry and reset backoff before the held-lock test.
+    if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+    else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+    setTranscriptMigrationRetryBackoffForTests(150);
+
+    // 2. Held write lock (`BEGIN IMMEDIATE`): background worker hits busy_timeout (5s) and exits non-zero,
+    //    Viewer main thread never runs DDL and never stalls on SQLite busy_timeout=5000, while v5 reads continue.
+    locker = new Database(dbPath);
+    locker.exec("BEGIN IMMEDIATE");
+    let lockedMaxGapMs = 0;
+    const lockedStart = performance.now();
+    tick = lockedStart;
+    const lockedTimer = setInterval(() => {
+      const now = performance.now();
+      lockedMaxGapMs = Math.max(lockedMaxGapMs, now - tick);
+      tick = now;
+    }, 5);
+    try {
+      scheduleTranscriptIndex({ sources, complete: false }, { force: true });
+      await waitForTranscriptIndexIdleForTests();
+    } finally {
+      clearInterval(lockedTimer);
+    }
+    const lockedElapsedMs = performance.now() - lockedStart;
+    expect(lockedElapsedMs).toBeGreaterThanOrEqual(4_000);
+    expect(localDdl).toBe(0);
+    expect(lockedMaxGapMs).toBeLessThan(500);
+    expect(readVersion()).toBe(5);
+    expect(searchTranscripts({ query: "deferredneedle" }).items).toHaveLength(1);
+
+    // 3. Release write lock: automatic backoff retry finishes off-thread upgrade to v6 with zero main-thread DDL.
+    locker.exec("ROLLBACK");
+    locker.close();
+    locker = null;
+
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && readVersion() < 6) {
+      await Bun.sleep(50);
+    }
+    await waitForTranscriptIndexIdleForTests();
+    expect(readVersion()).toBe(6);
+    expect(localDdl).toBe(0);
+    expect(searchTranscripts({ query: "deferredneedle" }).items).toHaveLength(1);
+  } finally {
+    Database.prototype.exec = origExec;
+    if (locker) {
+      try { locker.exec("ROLLBACK"); } catch { /* ignore */ }
+      try { locker.close(); } catch { /* ignore */ }
+    }
+    setTranscriptMigrationRetryBackoffForTests(null);
+    await waitForTranscriptIndexIdleForTests();
+    if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+    else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+    if (prevState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevState;
+  }
+}, 25_000);

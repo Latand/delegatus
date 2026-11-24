@@ -157,7 +157,10 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
 
 const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 6;
 const TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE = 256;
-const scheduledSearchIndexes = new Map<string, { promise: Promise<void>; ref: () => void }>();
+type SearchIndexBuildResult = { ok: true } | { ok: false; reason: string };
+export type SearchSchemaReadyResult = { ready: true } | { ready: false; reason: string };
+
+const scheduledSearchIndexes = new Map<string, { promise: Promise<SearchIndexBuildResult>; ref: () => void }>();
 const readySearchDatabases = new WeakSet<Database>();
 // Readiness is schema metadata. Invalidate on either replacement of the file
 // or a schema change; ordinary appends keep the same readiness. Bound the cache
@@ -421,14 +424,14 @@ function openQueryDatabase(): Database {
   }
 }
 
-function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<void> {
+function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<SearchIndexBuildResult> {
   const existing = scheduledSearchIndexes.get(filename);
   if (existing) {
     if (keepAlive) existing.ref();
     return existing.promise;
   }
-  let resolveBuild!: () => void;
-  const promise = new Promise<void>((resolve) => { resolveBuild = resolve; });
+  let resolveBuild!: (result: SearchIndexBuildResult) => void;
+  const promise = new Promise<SearchIndexBuildResult>((resolve) => { resolveBuild = resolve; });
   let ref = () => {};
   const entry = { promise, ref: () => ref() };
   scheduledSearchIndexes.set(filename, entry);
@@ -449,45 +452,63 @@ function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<
     const settle = (failure: string | null) => {
       if (settled) return;
       settled = true;
-      if (failure) console.error(`[transcript-search] ${failure}; migration will retry on the next search`);
+      if (failure) console.error(`[transcript-search] ${failure}; migration will retry with backoff`);
       if (scheduledSearchIndexes.get(filename) === entry) scheduledSearchIndexes.delete(filename);
-      resolveBuild();
+      resolveBuild(failure ? { ok: false, reason: failure } : { ok: true });
     };
     proc.once("error", () => settle("index worker failed"));
     proc.once("exit", (code, signal) => settle(code === 0 ? null : `index worker exited with status ${code ?? signal}`));
     if (!keepAlive) unrefLeasedHelper(proc);
-  } catch {
+  } catch (error) {
     if (scheduledSearchIndexes.get(filename) === entry) scheduledSearchIndexes.delete(filename);
-    console.error("[transcript-search] could not start index worker; migration will retry on the next search");
-    resolveBuild();
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error("[transcript-search] could not start index worker; migration will retry with backoff");
+    resolveBuild({ ok: false, reason: `could not start index worker: ${detail}` });
   }
   return promise;
 }
 
-/** Ensures an existing legacy transcript-search DB finishes schema upgrade
-    inside the leased background worker before the Viewer opens the writer
-    connection, keeping DDL/copy work off the Viewer's main event loop. */
-export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<void> {
-  const filename = statePath("transcript-search.sqlite");
+function probeTranscriptSearchSchemaVersion(
+  filename: string,
+): { exists: false } | { exists: true; version: number } | { exists: true; error: string } {
   try {
     fs.statSync(filename);
-  } catch {
-    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { exists: false };
+    return { exists: true, error: error instanceof Error ? error.message : String(error) };
   }
-  let needsUpgrade = false;
   const Database = sqliteDatabase();
   let probe: Database | null = null;
   try {
     probe = observeSqlite(new Database(filename, { readonly: true, strict: true }), "transcript-search");
-    probe.exec("PRAGMA busy_timeout = 250; PRAGMA query_only = ON;");
-    needsUpgrade = schemaVersion(probe) < TRANSCRIPT_SEARCH_SCHEMA_VERSION;
-  } catch {
-    return;
+    probe.exec("PRAGMA busy_timeout = 50; PRAGMA query_only = ON;");
+    return { exists: true, version: schemaVersion(probe) };
+  } catch (error) {
+    return { exists: true, error: error instanceof Error ? error.message : String(error) };
   } finally {
     try { probe?.close(); } catch { /* ignore */ }
   }
-  if (!needsUpgrade) return;
-  await scheduleSearchIndexBuild(filename, true);
+}
+
+/** Ensures an existing legacy transcript-search DB finishes schema upgrade
+    inside the leased background worker before the Viewer opens the writer
+    connection, keeping DDL/copy work and SQLite lock waits off the Viewer's
+    main event loop. Never falls back to inline main-thread DDL on failure. */
+export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<SearchSchemaReadyResult> {
+  const filename = statePath("transcript-search.sqlite");
+  const initial = probeTranscriptSearchSchemaVersion(filename);
+  if (!initial.exists) return { ready: true };
+  if ("error" in initial) return { ready: false, reason: `schema probe failed: ${initial.error}` };
+  if (initial.version >= TRANSCRIPT_SEARCH_SCHEMA_VERSION) return { ready: true };
+  const build = await scheduleSearchIndexBuild(filename, true);
+  if (!build.ok) return { ready: false, reason: build.reason };
+  const after = probeTranscriptSearchSchemaVersion(filename);
+  if (!after.exists) return { ready: true };
+  if ("error" in after) return { ready: false, reason: `post-migration schema probe failed: ${after.error}` };
+  if (after.version < TRANSCRIPT_SEARCH_SCHEMA_VERSION) {
+    return { ready: false, reason: `schema remained at v${after.version}` };
+  }
+  return { ready: true };
 }
 
 /** Background index builds this process started that have not exited yet. */

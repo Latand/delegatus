@@ -3976,11 +3976,13 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
     value => hardenedRedact(source.redactText ? source.redactText(value) : value)) : new Map();
   const contextPartAuthors = claudeOrigins ? agentRecordPartAuthors(transcriptPath, authorRecords, claudeOrigins) : new Map();
   const humanBySeq = new Map<number, RecordAuthor>();
-  for (const [index, author] of recordAuthors(conversationId, authorRecords.map((record, index) => ({
-    role: agentAuthors.has(index) || contextPartAuthors.has(index) ? "system" : record.role,
-    ts: record.ts,
-    text: record.sourceText ?? record.text,
-  })))) humanBySeq.set(authorRecords[index]!.seq, author);
+  if (context) {
+    for (const [index, author] of recordAuthors(conversationId, context.map((record, index) => ({
+      role: agentAuthors.has(index) || contextPartAuthors.has(index) ? "system" : record.role,
+      ts: record.ts,
+      text: record.sourceText ?? record.text,
+    })))) humanBySeq.set(context[index]!.seq, author);
+  }
   const agentBySeq = new Map<number, AgentRecordAuthor>();
   for (const [index, author] of agentAuthors) agentBySeq.set(authorRecords[index]!.seq, author);
   const authors = new Map<number, RecordAuthor | AgentRecordAuthor>();
