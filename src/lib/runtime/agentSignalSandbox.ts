@@ -386,12 +386,10 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
 }
 
 /** Route Linux admission calls from older helper copies through the installed
- * detector, even when they carry an explicit LLV_GATE_BUN interpreter. Without
- * one the launcher runs `bun` from the caller's PATH, as gate-slot does: the
- * Viewer's own interpreter can be container-only (`bun-container` in the
- * image) and a bridged agent runs on the host. Check keys and Cloud inputs
- * read the recorded interpreter (gateAdmissionLauncher.ts), never this path. */
-export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.ProcessEnv>> = process.env): Record<string, string> {
+ * detector. An explicit LLV_GATE_BUN stays a check input. The launcher's
+ * default is local to its caller: the image selects bun-container, and a
+ * bridged agent uses bun from the host PATH. */
+export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.ProcessEnv>> = process.env, localDefault?: string): Record<string, string> {
   if (process.platform !== "linux") return {};
   try {
     const helper = path.join(path.dirname(resolveSignalTooling().gate), "cpu-admission.ts");
@@ -400,6 +398,9 @@ export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.Proces
     // while retaining the caller's original interpreter, or its absence.
     const recorded = gateAdmissionInterpreter(source.LLV_GATE_BUN);
     const nativeBun = recorded === undefined ? source.LLV_GATE_BUN || "" : recorded ?? "";
+    // The image's admission default belongs to the launcher. Only a caller's
+    // explicit check input is recorded for reuse and Cloud submission.
+    const launcherBun = nativeBun || localDefault;
     const body = Buffer.from(`#!/bin/bash
 set -eu
 if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
@@ -407,7 +408,7 @@ if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
     --wait|--claim) shift; set -- ${quote(helper)} "$@" ;;
   esac
 fi
-exec ${nativeBun ? quote(nativeBun) : "bun"} "$@"
+exec ${launcherBun ? quote(launcherBun) : "bun"} "$@"
 `);
     const directory = cacheSignalTooling(gateAdmissionLauncherParent(), new Map([["bun", body], ["interpreter", Buffer.from(nativeBun)]]));
     return { LLV_GATE_BUN: path.join(directory, "bun") };
