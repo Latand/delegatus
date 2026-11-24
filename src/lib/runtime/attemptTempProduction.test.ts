@@ -883,7 +883,7 @@ test.each(["first launch", "rehost"])("production schedules scratch on attempt c
     return now + ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS;
   };
   try {
-    expect(directories.map(directory => store.owner(directory)?.launchId)).toEqual([attempt.launchId, attempt.launchId]);
+    expect(directories.map(directory => store.owner(directory)?.launchId ?? null)).toEqual([attempt.launchId, attempt.launchId]);
     await tick(); await tick(); await tick(); // Complete the initial audit.
     expect(deadlines()).toEqual([null, null]);
     now += 60_000;
