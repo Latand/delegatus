@@ -1096,6 +1096,8 @@ export type PipelinePublicationFailure = {
   retryableDeadline?: boolean;
   /** The proven deadline expired during CPU admission before checks started. */
   admissionDeadline?: true;
+  /** The local preparation could not reserve memory headroom for types. */
+  memoryAdmissionDeferred?: true;
   /** The scanner reported only a configuration fault, and this head changes
       none of its script inputs. Computed on complete output before redaction. */
   privacyConfigurationFault?: true;
@@ -1109,7 +1111,9 @@ export type PipelinePublicationResult = (
   | { ok: true; sha: string; remote: "published" | "unavailable"; detail?: string; uncertain?: boolean }
   | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
   | { ok: false; error: string }
-) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded" };
+) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded";
+  /** Monotonic phase timings and sampled local preparation peak. */
+  phaseTimings?: { preparationMs: number; checksMs: number; transportMs: number; peakRssBytes?: number } };
 
 export type PipelineDelivery = {
   target: PipelineDeliveryTarget;

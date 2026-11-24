@@ -746,7 +746,7 @@ test("agent_activity compact rows drop paths, host detail and the reports (#1845
 
 test("account_limits answers each account's windows and tiers, narrowed by engine and account (#1845)", async () => {
   const now = Date.parse("2026-09-19T09:00:00.000Z");
-  const observation = (engine: "claude" | "codex" | "copilot", accountId: string, session: number, weekly: number, tiers: Array<{ tier: string; usedPercent: number }> = []) => ({
+  const observation = (engine: "claude" | "codex" | "copilot" | "antigravity", accountId: string, session: number, weekly: number, tiers: Array<{ tier: string; usedPercent: number }> = []) => ({
     engine,
     accountId,
     authenticated: true,
@@ -768,19 +768,21 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
         claude: [{ accountId: "claude-a", label: "Account A" }, { accountId: "claude-b", label: "Account B" }],
         codex: [{ accountId: "codex-a", label: "Codex A", spendCredits: true }],
         copilot: [{ accountId: "copilot-a", label: "Copilot A" }],
+        antigravity: [{ accountId: "default", label: "Default" }],
       },
-      active: { claude: "claude-a", codex: "codex-a", copilot: "copilot-a" },
+      active: { claude: "claude-a", codex: "codex-a", copilot: "copilot-a", antigravity: "default" },
       observations: {
         claude: { "claude-a": observation("claude", "claude-a", 12, 40, [{ tier: "opus", usedPercent: 55 }]) },
         codex: { "codex-a": observation("codex", "codex-a", 3, 8) },
         copilot: { "copilot-a": { ...observation("copilot", "copilot-a", 0, 10), limits: { session: null, weekly: { usedPercent: 10, resetsAt: now / 1000 + 86_400, windowMinutes: 43_200 }, tiers: [], plan: null, capturedAt: now / 1000 - 60 }, provenance: { source: "transcript", reason: null, staleSince: null } } },
+        antigravity: { default: { ...observation("antigravity", "default", 100, 0), limits: { session: { usedPercent: 100, resetsAt: now / 1000 + 3_600, windowMinutes: 300, observedAt: now / 1000 - 60 }, weekly: null, tiers: [], plan: "Pro", capturedAt: now / 1000 - 60 }, provenance: { source: "transcript", reason: null, staleSince: null }, limitReached: true } },
       },
       now,
     }),
   } as never);
 
   const all = await bindings.account_limits({ clientRequestId: "limits-all" }) as { count: number; accounts: Array<Record<string, unknown>> };
-  expect(all.count).toBe(4);
+  expect(all.count).toBe(5);
   expect(all.accounts.find(account => account.engine === "codex")).toMatchObject({ spendCredits: true, credits: null });
   expect(all.accounts[0]).toEqual({
     engine: "claude",
@@ -806,9 +808,11 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
   expect(codex.accounts.map((account) => account.accountId)).toEqual(["codex-a"]);
   const copilot = await bindings.account_limits({ clientRequestId: "limits-copilot", engine: "copilot" }) as { accounts: Array<{ accountId: string; engine: string; active: boolean; fresh: boolean; plan: string | null; session: unknown; weekly: { usedPercent: number; resetsAt: string }; tiers: unknown[]; observedAt: string }> };
   expect(copilot.accounts).toEqual([{ accountId: "copilot-a", engine: "copilot", active: true, fresh: true, plan: null, session: null, weekly: { usedPercent: 10, resetsAt: new Date(now / 1000 * 1000 + 86_400_000).toISOString() }, tiers: [], observedAt: new Date(now - 60_000).toISOString() }]);
+  const antigravity = await bindings.account_limits({ clientRequestId: "limits-antigravity", engine: "antigravity" }) as { accounts: Array<{ accountId: string; engine: string; active: boolean; fresh: boolean; plan: string | null; session: { usedPercent: number; resetsAt: string }; weekly: unknown; tiers: unknown[]; observedAt: string }> };
+  expect(antigravity.accounts).toEqual([{ accountId: "default", engine: "antigravity", active: true, fresh: true, plan: "Pro", session: { usedPercent: 100, resetsAt: "2026-09-19T10:00:00.000Z" }, weekly: null, tiers: [], observedAt: "2026-09-19T08:59:00.000Z" }]);
   const one = await bindings.account_limits({ clientRequestId: "limits-one", accountId: "claude-b" }) as { accounts: Array<{ accountId: string }> };
   expect(one.accounts.map((account) => account.accountId)).toEqual(["claude-b"]);
-  await expect(bindings.account_limits({ clientRequestId: "limits-missing", accountId: "nobody" })).rejects.toThrow("no claude, codex or copilot account has the id nobody");
+  await expect(bindings.account_limits({ clientRequestId: "limits-missing", accountId: "nobody" })).rejects.toThrow("no claude, codex, copilot or antigravity account has the id nobody");
 
   const selectedBindings = viewerMcpBindings(undefined, undefined, {
     accountLimitsSource: () => ({

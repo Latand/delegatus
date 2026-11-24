@@ -175,11 +175,16 @@ test("V2 and current connections preserve legacy rows and spacing while each cla
   const columns = f.db.query("PRAGMA table_info(tickets)").all();
   f.open();
   const installed = schema();
-  expect(installed.filter(row => row.name !== "legacy_gate_retired")).toEqual(original);
-  expect(installed.filter(row => row.name === "legacy_gate_retired")).toMatchObject([{ type: "trigger", tbl_name: "tickets" }]);
+  const addedTriggers = ["legacy_gate_retired", "tickets_linux_poll_reset"];
+  expect(installed.filter(row => !addedTriggers.includes(row.name))).toEqual(original);
+  expect(installed.filter(row => addedTriggers.includes(row.name))).toMatchObject(
+    addedTriggers.map(name => ({ name, type: "trigger", tbl_name: "tickets" })));
   const upgraded = f.db.query("PRAGMA table_info(tickets)").all();
-  expect(upgraded.slice(0, -1)).toEqual(columns);
-  expect(upgraded.at(-1)).toMatchObject({ name: "aging", type: "INTEGER", notnull: 1, dflt_value: "0" });
+  expect(upgraded.slice(0, columns.length)).toEqual(columns);
+  expect(upgraded.slice(columns.length)).toMatchObject([
+    { name: "linux_poll", type: "TEXT", notnull: 0, dflt_value: null },
+    { name: "aging", type: "INTEGER", notnull: 1, dflt_value: "0" },
+  ]);
   const reopened = new V2CpuAdmissionQueue(f.file, () => clock, GAP, T, Infinity);
   cleanup.push(() => reopened.close());
   f.priority("normal", "normal"); old.check("normal", true, f.owner, false, f.source("normal"), true);

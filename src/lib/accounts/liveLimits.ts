@@ -71,7 +71,7 @@ export function recordLiveObservation(
     console.error("[account limits] paid-credit guard reconciliation deferred", error);
   });
   if (observation.engine === "codex") forgetCachedLimits(observation.engine, observation.accountId);
-  if (observation.engine !== "copilot") logQuotaEvent({
+  if (observation.engine !== "copilot" && observation.engine !== "antigravity") logQuotaEvent({
     engine: observation.engine,
     accountId: observation.accountId,
     accountKind,
