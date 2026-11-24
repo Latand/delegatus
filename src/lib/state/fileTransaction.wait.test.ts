@@ -335,28 +335,149 @@ test("external callers under id-bearing directories log callSite='external' with
   }
 });
 
-test("explicit untrusted withWaitCorrelation labels are clamped to the closed set on all file-transaction paths", async () => {
-  const lines: string[] = [];
-  resetBlockingWaitsForTests((line) => { lines.push(line); });
-  const file = path.join(root, "explicit-correlation.json");
-  const lock = `${file}.write-lock`;
-  fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid, startIdentity: null, token: "t1", role: "worker" }));
-  setTimeout(() => fs.rmSync(lock, { force: true }), 80);
+test("explicit untrusted withWaitCorrelation labels, operationId suffixes, and custom roles are redacted on admission and refusal", async () => {
+  const prevOwner = process.env.LLV_STATE_OWNER;
+  const tag = "fixture-account-729";
+  const customRole = "fixture-caller-727";
+  const person = "Fixture Person";
+  const holderRole = "fixture-worker-728";
+  const lockFile = path.join(root, tag, "owner.lock");
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  try {
+    for (const [callerRole, expectedRole] of [["test", "test"], [customRole, "unowned"]] as const) {
+      process.env.LLV_STATE_OWNER = callerRole;
+      for (const kind of ["admit", "refuse"] as const) {
+        const lines: string[] = [];
+        resetBlockingWaitsForTests((line) => { lines.push(line); });
+        fs.writeFileSync(`${lockFile}.write-lock`, JSON.stringify({
+          pid: process.ppid,
+          startIdentity: null,
+          token: "held",
+          role: holderRole,
+        }));
+        let calls = 0;
+        let refused = false;
+        const timer = kind === "admit"
+          ? setTimeout(() => fs.rmSync(`${lockFile}.write-lock`, { force: true }), 80)
+          : null;
+        try {
+          await withWaitCorrelation(
+            { label: person, operationId: `account-removal:claude:${tag}` },
+            () => withFileTransactionAsync(lockFile, person, () => { calls += 1; }, { waitMs: kind === "admit" ? 600 : 100 }),
+          );
+        } catch (error) {
+          if (!(error instanceof FileTransactionBusyError)) throw error;
+          refused = true;
+        } finally {
+          if (timer) clearTimeout(timer);
+          fs.rmSync(`${lockFile}.write-lock`, { force: true });
+        }
+        expect(refused).toBe(kind === "refuse");
+        expect(calls).toBe(kind === "admit" ? 1 : 0);
+        expect(lines.length).toBeGreaterThan(0);
+        const combined = lines.join("\n");
+        expect(combined).not.toContain(tag);
+        expect(combined).not.toContain(person);
+        expect(combined).not.toContain(holderRole);
+        expect(combined).not.toContain(customRole);
+        const row = JSON.parse(lines[0]!.slice("[blocking-wait] ".length)) as {
+          subject: string;
+          label: string;
+          operationId: string | null;
+          role: string;
+          holder?: { kind: string };
+        };
+        expect(row).toMatchObject({
+          subject: "file-transaction",
+          label: "file-transaction",
+          operationId: "account-removal",
+          role: expectedRole,
+          holder: { kind: "other-process" },
+        });
+      }
+    }
 
-  const result = await withWaitCorrelation(
-    { label: "external-account-134", operationId: "fixture-operation" },
-    () => withFileTransactionAsync(file, "arbitrary busy", () => "ok"),
-  );
-  expect(result).toBe("ok");
-  const sample = blockingWaitDiagnostics().longest.find((item) => item.site === "file-transaction");
-  expect(sample).toMatchObject({
-    site: "file-transaction",
-    subject: "file-transaction",
-    label: "file-transaction",
-    operationId: "fixture-operation",
+    // Unknown operationId prefix (not in closed set) is dropped completely (null).
+    const unknownLines: string[] = [];
+    resetBlockingWaitsForTests((line) => { unknownLines.push(line); });
+    fs.writeFileSync(`${lockFile}.write-lock`, JSON.stringify({ pid: process.ppid, startIdentity: null, token: "t2", role: "worker" }));
+    setTimeout(() => fs.rmSync(`${lockFile}.write-lock`, { force: true }), 80);
+    await withWaitCorrelation(
+      { label: "external-account-134", operationId: "untrusted-prefix:secret-id" },
+      () => withFileTransactionAsync(lockFile, "arbitrary busy", () => "ok"),
+    );
+    expect(unknownLines.join("\n")).not.toContain("external-account-134");
+    expect(unknownLines.join("\n")).not.toContain("untrusted-prefix");
+    expect(unknownLines.join("\n")).not.toContain("secret-id");
+    expect(blockingWaitDiagnostics().longest[0]).toMatchObject({
+      site: "file-transaction",
+      label: "file-transaction",
+      operationId: null,
+    });
+  } finally {
+    resetBlockingWaitsForTests();
+    if (prevOwner === undefined) delete process.env.LLV_STATE_OWNER;
+    else process.env.LLV_STATE_OWNER = prevOwner;
+  }
+});
+
+test("synchronous writer never runs diagnostic stat between attempts or delays admission after lock release", async () => {
+  const file = path.join(root, "sync-slow-metadata");
+  const lock = `${file}.write-lock`;
+  const ready = `${file}.ready`;
+  const stamp = `${file}.stamp`;
+  const worker = path.join(root, "sync-release-worker.ts");
+  fs.writeFileSync(worker, [
+    'import fs from "node:fs";',
+    'const [lockPath, readyPath, stampPath] = process.argv.slice(2);',
+    'fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: "fixture", startIdentity: null, role: "test" }));',
+    'fs.writeFileSync(readyPath, "1");',
+    'await Bun.stdin.text();',
+    'await Bun.sleep(65);',
+    'fs.unlinkSync(lockPath);',
+    'fs.writeFileSync(stampPath, String(Date.now()));',
+  ].join("\n"));
+
+  const child = Bun.spawn([process.execPath, worker, lock, ready, stamp], {
+    stdin: "pipe",
+    stdout: "ignore",
+    stderr: "pipe",
   });
-  expect(lines.join("\n")).not.toContain("external-account-134");
-  expect(lines.some((line) => line.includes('"label":"file-transaction"'))).toBe(true);
+  const originalStatSync = fs.statSync;
+  let lockStatCalls = 0;
+  let ran = 0;
+  let admittedAt = 0;
+  try {
+    const deadline = Date.now() + 3_000;
+    while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(5);
+    expect(fs.existsSync(ready)).toBe(true);
+    fs.statSync = (function (target: fs.PathLike, ...args: unknown[]) {
+      const value = (originalStatSync as (...a: unknown[]) => fs.Stats).call(fs, target, ...args);
+      if (String(target) === lock) {
+        lockStatCalls += 1;
+        Bun.sleepSync(320);
+      }
+      return value;
+    }) as typeof fs.statSync;
+    const t0 = Date.now();
+    child.stdin.end();
+    withFileTransactionSync(file, "fixture busy", () => {
+      ran += 1;
+      admittedAt = Date.now() - t0;
+    });
+    expect(await child.exited).toBe(0);
+    const releasedAt = Number(fs.readFileSync(stamp, "utf8")) - t0;
+    expect(ran).toBe(1);
+    expect(lockStatCalls).toBe(0);
+    expect(admittedAt - releasedAt).toBeLessThan(170);
+  } finally {
+    fs.statSync = originalStatSync;
+    if (child.exitCode === null) {
+      child.kill();
+      await child.exited;
+    }
+    fs.rmSync(lock, { force: true });
+  }
 });
 
 test("slow diagnostic holder metadata never delays lock admission or causes FileTransactionBusyError", async () => {

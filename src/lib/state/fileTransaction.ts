@@ -10,6 +10,7 @@ import {
   KNOWN_FILE_TRANSACTION_WAIT_LABELS,
   normalizeBlockingWaitHolderKind,
   recordBlockingWait,
+  sanitizeFileTransactionOperationId,
   sanitizeFileTransactionWaitLabel,
   type BlockingWaitCorrelation,
   type FileLockHolder,
@@ -146,7 +147,8 @@ function fileTransactionWaitCorrelation(
   const label = candidate && KNOWN_FILE_TRANSACTION_WAIT_LABELS.has(candidate)
     ? candidate
     : fileTransactionWaitLabel(busyMessage, subject, explicitLabel);
-  return current?.operationId ? { label, operationId: current.operationId } : { label };
+  const operationId = sanitizeFileTransactionOperationId(current?.operationId);
+  return operationId ? { label, operationId } : { label };
 }
 
 function parseHolderRecord(raw: string, mtimeMs: number): FileLockHolder | undefined {
@@ -397,7 +399,6 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
       if (descriptor === null) {
         if (!waited) {
           waited = true;
-          holder = readLockHolderSync(ticket.lockPath);
           callSiteStack = new Error().stack;
         }
         // eslint-disable-next-line no-restricted-syntax -- Legacy synchronous file-transaction API still reached while serving; async API is available.
@@ -412,6 +413,9 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
         release(ticket, descriptor);
       }
     }
+    // Collect holder metadata only on final timeout so diagnostic stat/read
+    // I/O never runs between retry attempts or delays admission.
+    holder = readLockHolderSync(ticket.lockPath);
     throw new FileTransactionBusyError(busyMessage);
   } finally {
     removeIfOwned(ticket.ticketPath, ticket.owner.token);

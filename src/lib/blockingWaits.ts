@@ -261,6 +261,33 @@ export function sanitizeFileTransactionWaitLabel(rawLabel: unknown, fallback = "
   return KNOWN_FILE_TRANSACTION_WAIT_LABELS.has(safeFallback) ? safeFallback : "file-transaction";
 }
 
+/** Closed set of permitted operation-kind prefixes for `file-transaction`
+ * blocking-wait correlation ids. Any suffix after the first `:` (such as an
+ * engine or account id) is stripped; unknown kinds are dropped (`null`). */
+export const KNOWN_FILE_TRANSACTION_OPERATION_KINDS: ReadonlySet<string> = new Set([
+  "account-removal",
+  "account-switch",
+  "account-migration",
+  "delivery",
+  "spawn",
+  "pipeline",
+  "recorded-check",
+  "release",
+  "state-recovery",
+  "voice-settings",
+  "quota",
+  "memory",
+]);
+
+export function sanitizeFileTransactionOperationId(rawOperationId: unknown): string | null {
+  if (typeof rawOperationId !== "string") return null;
+  const trimmed = rawOperationId.trim();
+  if (!trimmed) return null;
+  const colonIndex = trimmed.indexOf(":");
+  const kind = (colonIndex >= 0 ? trimmed.slice(0, colonIndex) : trimmed).trim();
+  return KNOWN_FILE_TRANSACTION_OPERATION_KINDS.has(kind) ? kind : null;
+}
+
 const KNOWN_SRC_TOP_ENTRIES: ReadonlySet<string> = new Set([
   "app",
   "components",
@@ -427,14 +454,18 @@ export function recordBlockingWait(input: {
       },
     } : {}),
     ...(input.stateWait ? { stateWait: input.stateWait } : {}),
-    role: blockingWaitRole(),
+    role: input.site === "file-transaction"
+      ? normalizeBlockingWaitHolderKind(blockingWaitRole(), "unowned")
+      : blockingWaitRole(),
     durationMs: round(input.durationMs),
     synchronous: input.synchronous,
     subject: input.subject ? input.subject.slice(0, 80) : null,
     label: input.site === "file-transaction"
       ? (context?.label ? sanitizeFileTransactionWaitLabel(context.label, "file-transaction") : null)
       : (context?.label ? context.label.slice(0, 80) : null),
-    operationId: context?.operationId ? context.operationId.slice(0, 120) : null,
+    operationId: input.site === "file-transaction"
+      ? sanitizeFileTransactionOperationId(context?.operationId)
+      : (context?.operationId ? context.operationId.slice(0, 120) : null),
     ...(deferred ? { deferred: true as const } : input.refused ? { refused: true as const } : {}),
     at: new Date().toISOString(),
   };
