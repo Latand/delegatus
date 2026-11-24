@@ -1,21 +1,17 @@
 # Sign in with ChatGPT for Delegatus's API-key features
 
-## 1. Originating requirement
+## 1. Scope
 
-The owner, 2026-11-24, through the verified owner relay (operator authority),
-answering a post that announced OpenAI's Sign in with ChatGPT. The verbatim
-words stay in the task record of pipeline `c71f4a65`; this public document
-paraphrases them (AGENTS.md, working rule 12). In substance: apply as Delegatus
-and build it in. The relay spelled this out as two parts. First, request a
-client ID, and prepare the full application for the owner when the form needs
-data only the owner has. Second, integrate the flow: OAuth loopback with PKCE,
-a stable `ext_agent_host_id`, token storage, and Responses API inference
-(`store: false`, `stream: true`) on subscription credits.
+Delegatus uses the open-source Sign in with ChatGPT flow to register a
+client named Delegatus for the operator who signs in. The first slice
+covers the API backend's text delegation turns in Voice Delegatus calls
+started by the operator. It uses loopback OAuth with PKCE, a stable
+`ext_agent_host_id`, private token storage and streamed Responses requests
+with `store: false`.
 
-Scope change, the owner, same day, same relay: Sign in with ChatGPT replaces
-only the places where Delegatus calls OpenAI with an API key for its own
-features. Agent launching, the Codex and Claude accounts and everything else
-stay untouched. The rest of the pinned specification stands.
+Team members' voice calls use the API key. The key also covers audio, the
+Decisions API and in-call fallback. Agent launching and the Codex and
+Claude accounts keep their existing authentication.
 
 ## 2. Verdict
 
@@ -24,9 +20,8 @@ stay untouched. The rest of the pinned specification stands.
   client ID is issued to each user at their first sign-in, through the
   documented `dynamic_agent_client` entry point with `agent_name_hint`
   "Delegatus". A read-only probe (§4.3) showed the authorize endpoint accepts
-  that entry point. The interest form is for commercial partners with paid or
-  remotely hosted apps; its answers are prepared in §10, with the owner-only
-  fields marked.
+  that entry point. The commercial interest form fields are recorded for
+  reference in §10.2.
 - **One of Delegatus's OpenAI API-key calls is on the supported route:** the
   text turns of Voice Delegatus's API backend. The other API-key features are
   audio (dictation, read aloud, the live voice session) or use the Decisions
@@ -64,7 +59,7 @@ stay untouched. The rest of the pinned specification stands.
   endpoint carrying a fresh random host ID, the name `probe`, a 127.0.0.1
   callback and a PKCE challenge (§4.3). No account was signed in, no
   registration or token was created, and no Responses or model request was
-  sent. The form was not submitted.
+  sent.
 - **Code**: `main` at `43fab846adb9`, the commit this lane started from. Every
   `file:line` below is on that commit. Inventory search, run from the
   repository root:
@@ -496,9 +491,8 @@ backend turns make up is unmeasured.
 
 **Not moved, with the reason** (see Deferred):
 
-- Rows 1–3 would need a Responses rewrite of three classifiers and a
-  recalibration of three thresholds against labelled examples. Revisit if
-  OpenAI lists `/v1/decisions` for plan usage.
+- Rows 1–3 keep their existing Decisions API requests and API-key billing.
+  Revisit if OpenAI lists `/v1/decisions` for plan usage.
 - Rows 4–7 are audio, which the flow does not serve.
 
 ## 7. How a signed-in ChatGPT account relates to the Codex accounts
@@ -1057,7 +1051,7 @@ model catalog and a tool-calling turn on the plan route (§4.3).
 
 | Pinned item | What the docs say | This design |
 | --- | --- | --- |
-| Apply for a client ID | Open-source apps register at first sign-in; the form is for commercial partners (§4.1) | Delegatus registers as "Delegatus" at the owner's first sign-in; the form answers are prepared (§10) for the owner to decide |
+| Apply for a client ID | Open-source apps register at first sign-in; the form is for commercial partners (§4.1) | Delegatus registers as "Delegatus" at the owner's first sign-in (§10.1) |
 | Client ID is configuration; off without it | The client ID is issued per account | Protocol constants in code; issued ID saved per account; off until a validated sign-in, and the row says why (§8.2) |
 | Loopback on 127.0.0.1, ephemeral port | "only the port may vary", never `localhost` | Port 0 on 127.0.0.1, path `/auth/callback` (§8.4) |
 | Stable `ext_agent_host_id` per installation | Required; opaque; one per host | `urn:uuid:` in the state directory, never regenerated (§8.3) |
@@ -1067,100 +1061,33 @@ model catalog and a tool-calling turn on the plan route (§4.3).
 | Errors mapped per the errors page | Codes and recovery as quoted | §8.11 |
 | Inference on subscription credits | Text on `/v1/responses` only | Row 8 moves; rows 1–7 keep the API key (§5, §6) |
 
-## 10. Client ID application
+## 10. Client registration
 
-### 10.1 The open-source path (the one Delegatus uses)
+### 10.1 Open-source registration
 
-Nothing is submitted. The first time the owner presses **Continue with
-ChatGPT**, the authorize request carries `client_id=dynamic_agent_client` and
-`agent_name_hint=Delegatus`. OpenAI shows the owner the agent name, which
-they may edit ("it is display metadata, not identity"), and the permissions.
-On consent the callback returns the issued client ID. That registration is
-Delegatus "applying" in the owner's account. Each user who installs Delegatus
-does the same in their own account.
+On first sign-in, the authorize request carries
+`client_id=dynamic_agent_client` and `agent_name_hint=Delegatus`. OpenAI shows
+the operator the agent name and the permissions. The callback returns the
+issued client ID, which Delegatus retains for reauthorization.
 
-### 10.2 The interest form (commercial partners), prepared for the owner
+### 10.2 Commercial interest form reference
 
-URL: https://openai.com/form/sign-in-with-chatgpt-interest/ (the relay's
-"paid/hosted apps" link is the same form). The page says it is for commercial
-partners and sends open-source developers to the docs. Submitting it is
-optional for Delegatus. It matters only if the owner plans a paid or remotely
-hosted Delegatus offering, or wants OpenAI to consider the questions in field
-8.
+OpenAI's commercial interest form has the following fields as of
+2026-11-24. [OpenAI interest form](https://openai.com/form/sign-in-with-chatgpt-interest/)
 
-Facts about the form, read from its markup on 2026-11-24:
+| Field (label and internal name) | Required | Source |
+| --- | --- | --- |
+| Work email (`Email`) | Yes | Owner only |
+| First name (`FirstName`) | Yes | Owner only |
+| Last name (`LastName`) | Yes | Owner only |
+| Company name (`Company`) | Yes | Owner only |
+| Website URL (`mkto_website_form_fill`) | Yes | Owner only |
+| Job title (`Title`) | No | Owner only |
+| What capabilities would you like to implement? (`mkto_sign_in_use_case[]`, radio) | Yes | Integration scope |
+| Which of your products would use Sign in with ChatGPT? (Briefly describe each product) (`mkto_describe_use_case`, up to 2,000 characters) | Yes | Product description |
 
-- Eight fields; their internal names are given in the table.
-- A Cloudflare Turnstile check, so a person submits it in a browser.
-- No billing field, no terms-acceptance checkbox, and the marketing opt-in is
-  disabled in its definition (`marketingOptInEnabled: false`).
-- Submitting still sends the owner's identity and contact details to OpenAI,
-  which is an outward publication. **The owner submits it, or approves the
-  exact text first.**
+## Deferred
 
-| # | Field (label, internal name) | Required | Proposed answer | Who supplies |
-| --- | --- | --- | --- | --- |
-| 1 | Work email (`Email`) | yes | — | **OWNER ONLY** (identity, contact) |
-| 2 | First name (`FirstName`) | yes | — | **OWNER ONLY** (identity) |
-| 3 | Last name (`LastName`) | yes | — | **OWNER ONLY** (identity) |
-| 4 | Company name (`Company`) | yes | If no company stands behind the project: "Delegatus (open-source project)" | **OWNER ONLY** (company; the owner decides whether a company or the project is named) |
-| 5 | Website URL (`mkto_website_form_fill`) | yes | The project's public repository or website | **OWNER ONLY** (the repository address carries an account handle, so this public document does not write it) |
-| 6 | Job title (`Title`) | no | May be left empty | **OWNER ONLY** (identity) |
-| 7 | What capabilities would you like to implement? (`mkto_sign_in_use_case[]`, radio) | yes | "Sign in and ChatGPT plan use for AI requests" (value `Identity and Token Sharing`) | Agent-proposed; owner confirms |
-| 8 | Which of your products would use Sign in with ChatGPT? (Briefly describe each product) (`mkto_describe_use_case`, at most 2,000 characters) | yes | Text below | Agent-proposed; owner confirms |
-
-Proposed text for field 8 (1,339 characters):
-
-> Delegatus is an open-source (MIT) workspace for running AI coding agents.
-> Each user installs it on their own computer or self-hosted server. It puts
-> Codex and Claude agents on a task board, chains them into build and review
-> pipelines, and adds a few AI features of its own: a voice assistant that
-> answers questions about the board and hands work to the coordinating agent,
-> message classifiers, memory selection, dictation and read-aloud. Today these
-> features run on the user's own OpenAI API key.
->
-> We are adding ChatGPT plan usage through the open-source flow: dynamic client
-> registration under the agent name "Delegatus", a loopback PKCE callback on
-> 127.0.0.1, one stable host ID per installation, credentials kept in an
-> owner-only file on the user's machine, and streamed Responses requests with
-> store set to false. The first feature to use it is the voice assistant's
-> text turns, which call tools over the user's task board. Audio features stay
-> on the API key because the flow covers text only.
->
-> We would like to learn: (1) whether an installation one person runs for a
-> small team on a self-hosted server counts as locally hosted; (2) whether
-> classification requests, which we send to the Decisions API today, could
-> become eligible on this route; and (3) whether a project like ours should
-> register anything beyond the open-source flow.
-
-**Owner-only fields**: 1 Work email, 2 First name, 3 Last name, 4 Company
-name, 5 Website URL, 6 Job title (optional). Fields 7 and 8 have proposed
-answers for the owner to confirm. The form asks for no billing details and
-has no terms checkbox; submitting it is the owner's act.
-
-## 11. Decisions left to the owner (none blocks slice 1)
-
-1. **Submit the interest form?** Options: (a) do not submit; the open-source
-   path needs nothing. (b) Submit with §10.2 after filling in the owner-only
-   fields. Recommendation: (a), unless a paid or hosted Delegatus offering is
-   planned. Field 8's questions are the only gain from (b).
-2. **May team members' voice calls use the owner's plan?** Recommendation:
-   no. The registration is bound to the person who signed in; members keep
-   the API key path they use today. Changing this is one condition in §8.9.
-3. **Move the classifiers (rows 1–3) by rewriting them on Responses?**
-   Recommendation: no, for now (Deferred).
-
-## Deferred — not currently justified
-
-- **The asks, memory and learned-rules classifiers on the plan.** This needs
-  a Responses rewrite without probabilities, recalibration of thresholds
-  0.85, 0.70 and 0.3 against labelled examples, and their latency budgets
-  (2 s, 1.5 s) checked on the plan route. They are also high-frequency
-  background work that would share a Plus account's five-hour pool. Revisit
-  if OpenAI lists `/v1/decisions` for plan usage, or after a labelled
-  comparison.
-- **Audio features** (dictation, read aloud, the voice live session): "not
-  supported by this flow".
 - **Several ChatGPT accounts and an account picker.** The docs describe one;
   one account per installation serves the requirement.
 - **Encrypting the credential file with an OS keychain** (the devkit's
@@ -1177,15 +1104,12 @@ has no terms checkbox; submitting it is the owner's act.
 - **`force_reconsent=true`**: only after OpenAI confirms it for the
   integration; `prompt=consent` is used meanwhile.
 - **A model picker for plan models**: the voice backend keeps its fixed model.
-- **A configurable partner client ID**: only if the commercial form leads to
-  one, under the contract that comes with it.
-- **Member-started calls on the owner's plan** (decision 2).
+- **A configurable partner client ID** for a future commercial integration.
 
 ## Validation against the originating requirement
 
 - *Apply as Delegatus*: the open-source registration names the agent
-  "Delegatus" at the owner's first sign-in (§10.1). The commercial form is
-  prepared with the owner-only fields marked (§10.2).
+  "Delegatus" at the owner's first sign-in (§10.1).
 - *Build it in, only where Delegatus uses an OpenAI API key for its own
   features*: §5 lists every such call, and §6 moves the one the documented
   route can serve. The API key stays wherever the plan cannot serve,
