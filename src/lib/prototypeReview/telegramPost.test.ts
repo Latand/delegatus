@@ -523,7 +523,8 @@ test.each(["form", "historical poll"] as const)("the paired owner can answer wit
     await postPrototypeReviewToTelegram(round);
     const reply = "1b, 2a, 3a";
     const parentText = parentKind === "form" ? published[0]! : `1. Where should this live? · ${prototypeReference(round)}`;
-    const request = requestSchema.parse({ ...sampleRequest, target_id: "first", request_id: "owner-text-reply",
+    const requestId = parentKind === "form" ? "owner-form-text-reply" : "owner-legacy-poll-text-reply";
+    const request = requestSchema.parse({ ...sampleRequest, target_id: "first", request_id: requestId,
       answer: { max_chars: 4000, progress: "notes" },
       input: { ...sampleRequest.input,
         requester: { key: "owner", is_owner: true, is_admin: false, is_anonymous_admin: false, can_restrict_members: false, can_delete_messages: false },
