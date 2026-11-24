@@ -9024,7 +9024,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
       const removed = await ownerControl.request.delete(membership, { headers: authHeaders, data: { memberId: me.id } });
       if (!removed.ok()) throw new Error("fixture workspace revocation failed");
       await board.reload({ waitUntil: "domcontentloaded" });
-      await board.waitForURL("**/team");
+      await board.waitForURL(url => url.pathname === "/team");
       if (await board.locator(preview).count()) throw new Error("revoked member still saw board cards");
       note("a revoked workspace grant closed the real board route");
     } finally {
@@ -9039,7 +9039,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
     const settings = await context.newPage();
     await settings.goto(base + "/team", { waitUntil: "domcontentloaded" });
     await settings.locator("[data-team-sign-out]").click({ timeout: 15_000 });
-    await settings.waitForURL("**/sign-in");
+    await settings.waitForURL(url => url.pathname === "/sign-in");
     await board.waitForSelector("[data-boot-shell]", { timeout: 15_000 });
     if (await settings.evaluate(hasRecord)) throw new Error("sign-out retained the first screen");
     note("team sign-out cleared disk and retired the other tab");
