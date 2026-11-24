@@ -661,13 +661,14 @@ test("list_pipelines pages through active and archived lanes with one order and 
 
   const filters = { project: OWN, includeClosed: true };
   const first = await h.call("list_pipelines", { ...filters, full: false, limit: 2 });
-  expect(first).toMatchObject({ ok: true, total: 3, count: 2, remainingCount: 1, hasMore: true, nextCursor: expect.any(String),
+  expect(first).toMatchObject({ ok: true, total: 3, count: 2, remainingCount: 1, hasMore: true,
     cursorReset: false, pipelines: [{ id: newer.id }, { id: archived.id, state: "completed" }] });
   if (!first.ok) throw new Error(first.error);
+  expect(typeof first.nextCursor).toBe("string");
   expect(await h.call("list_pipelines", { ...filters, full: false, limit: 2, cursor: first.nextCursor })).toMatchObject({
     ok: true, total: 3, count: 1, remainingCount: 0, hasMore: false, nextCursor: null, cursorReset: false, pipelines: [{ id: older.id }],
   });
-  expect(await h.call("list_pipelines", { project: OWN, full: false, limit: 3, cursor: first.nextCursor })).toMatchObject({
+  expect(await h.call("list_pipelines", { project: OWN, full: false, limit: 2, cursor: first.nextCursor })).toMatchObject({
     ok: true, total: 2, count: 2, hasMore: false, nextCursor: null, cursorReset: true,
     pipelines: [{ id: newer.id }, { id: older.id }],
   });
@@ -680,8 +681,10 @@ test("list_pipelines pages through active and archived lanes with one order and 
     const page = await h.call("list_pipelines", { ...filters, limit: 3, cursor });
     const remainingCount = 2 - index;
     expect(page).toMatchObject({ ok: true, total: 3, count: 1, remainingCount, hasMore: remainingCount > 0,
-      nextCursor: remainingCount ? expect.any(String) : null, cursorReset: false, pipelines: [{ id: record.id, spec: record.spec }] });
+      cursorReset: false, pipelines: [{ id: record.id, spec: record.spec }] });
     if (!page.ok) throw new Error(page.error);
+    if (remainingCount) expect(typeof page.nextCursor).toBe("string");
+    else expect(page.nextCursor).toBeNull();
     expect(Buffer.byteLength(JSON.stringify(page.pipelines))).toBeLessThanOrEqual(LIST_ANSWER_BYTES);
     cursor = page.nextCursor;
   }
