@@ -771,6 +771,16 @@ const uploadPlan = add(conversation("upload-plan", "Plan: 8 MB chunks, resume to
 const uploadApi = add(conversation("upload-api", "Endpoint and resume token in place", { mtime: now - 6 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const uploadRevApi = add(conversation("upload-rev-api", "Round 2 approved", { mtime: now - 4 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const uploadUi = add(conversation("upload-ui", "Wiring the resume banner", working({ plan: { current: "Wiring the resume banner" } })));
+/* `?paneid=ctx`: the lane's started stage conversations carry what real ones carry on their identity row, an effort
+   tier and the context-window chip, so the Stages sheet's pane head has its longest ordinary row to hold. */
+if (new URLSearchParams(location.search).get("paneid") === "ctx") {
+  for (const file of [uploadPlan, uploadApi, uploadRevApi, uploadUi]) {
+    Object.assign(file, { effort: "high", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } });
+  }
+  Object.assign(uploadPlan, { model: "claude-opus-5-5" });
+  /* A round chip as well: the longest ordinary row, which wraps among its chips. */
+  Object.assign(uploadApi, { continues: { conversationId: "conversation_upload-api-previous", path: null, round: 3 } });
+}
 /* t-export: two plain conversations. */
 const exportImpl = add(conversation("export-impl", "Implementer: simplify the export settings", working({ plan: { current: "Writing the preset model" } })));
 const exportExplore = add(conversation("export-explore", "Explorer: list every export toggle", { mtime: now - 120 * MIN, engine: "codex", model: "gpt-5.6" }));

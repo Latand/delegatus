@@ -12810,6 +12810,8 @@ describe("stale working status", () => {
             await page.mouse.move(0, 0);
             const header = screen.locator("[data-mobile2-chat-state]").first();
             expect(await header.innerText()).toStartWith(prefix(state));
+            /* One word with the desktop's header and tile for the same conversation. */
+            if (name === "quiet") expect((await header.innerText()).split(" · ")[0]).toBe(word("kanban.memberState.done"));
             expect(await screen.locator('[data-turn-status="running"], [role="timer"]').count()).toBe(0);
             expect(await screen.locator("[data-launch-chips], .animate-spin").count()).toBe(0);
             expect(await screen.innerText()).not.toContain(file.spawn!.launchId.slice(0, 8));
@@ -12827,6 +12829,68 @@ describe("stale working status", () => {
       fs.mkdirSync("evidence/stale-working", { recursive: true });
       fs.writeFileSync("evidence/stale-working/phone.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }, 300_000);
+});
+
+/*
+ * The seat's bar reads «waiting · age» while its turn is over and no decision form is open
+ * (`?chrome=0&nopin=1&seatnoise=ii&runtime=structured&seatidle=<seconds>`), and «working» while its
+ * turn runs. The seat card and the seat sheet take the same phrase from `seatBadgeReading`
+ * (`mobileSeatCard.dom.test.tsx`). 390 px, light and dark, en and uk.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=… bun test \
+ *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "idle seat reads waiting"
+ */
+describe("idle seat reads waiting", () => {
+  browserTest("the seat bar reads «waiting · age», not «done», and a running seat keeps «working»", async () => {
+    const out = path.resolve(".artifacts/seat-waiting-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const word = (key: Parameters<typeof translate>[1]) => translate(lang, key);
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          const label = `${lang}-${scheme}`;
+          const waiting = word("mobile2.chat.stateWaiting").split("{")[0]!;
+          /* The seat's bar. */
+          await page.goto(`${base}/?chrome=0&nopin=1&seatnoise=ii&runtime=structured&seatidle=1044#c=conversation_running`);
+          await page.waitForSelector("[data-mobile2-chat-state]", { timeout: 25_000 });
+          await page.waitForFunction((prefix) => (document.querySelector("[data-mobile2-chat-state]")?.textContent ?? "").startsWith(prefix), waiting, { timeout: 25_000 })
+            .catch(() => failures.push(`${label}: the seat's bar does not read «${waiting.trim()}»`));
+          await page.waitForTimeout(500);
+          const bar = await page.evaluate(() => {
+            const cell = document.querySelector<HTMLElement>("[data-mobile2-chat-state]");
+            const box = cell?.getBoundingClientRect();
+            return { text: cell?.textContent ?? "", cut: cell ? cell.scrollWidth > cell.clientWidth + 0.5 : null, inside: box ? box.left >= 0 && box.right <= innerWidth : null };
+          });
+          readings[`${label}-bar`] = bar;
+          await page.screenshot({ path: path.join(out, `${label}-bar.png`) });
+          if (!bar.text.startsWith(waiting)) failures.push(`${label}: the bar reads «${bar.text}»`);
+          if (bar.text.startsWith(word("mobile2.chat.stateDone").split("{")[0]!)) failures.push(`${label}: the bar still reads «done»`);
+          if (bar.cut) failures.push(`${label}: the bar's state phrase is cut`);
+          if (bar.inside === false) failures.push(`${label}: the bar's state phrase leaves the screen`);
+          /* A running seat keeps its own word. */
+          await page.goto(`${base}/?chrome=0&nopin=1&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await page.waitForSelector("[data-mobile2-chat-state]", { timeout: 25_000 });
+          await page.waitForTimeout(500);
+          const running = (await page.locator("[data-mobile2-chat-state]").first().innerText()).trim();
+          readings[`${label}-running`] = running;
+          if (!running.startsWith(word("mobile2.chat.stateWorking").split("{")[0]!.trim())) failures.push(`${label}: a running seat reads «${running}»`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    fs.mkdirSync("evidence/seat-waiting", { recursive: true });
+    fs.writeFileSync("evidence/seat-waiting/phone.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
   }, 300_000);
 });
 

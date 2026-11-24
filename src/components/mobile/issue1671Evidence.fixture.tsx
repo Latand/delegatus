@@ -144,6 +144,7 @@ const RUNNING_PATH = `/state/agent-log-viewer/shared/accounts/claude/${ACCOUNT}/
 /* `?seatnoise=<i..v>` (docs/design/seat-panel-noise.md): the running conversation is an orchestrator seat, on a
    structured host, in the state the case names; the driver opens it in the focus view. */
 const SEAT_NOISE = new URLSearchParams(location.search).get("seatnoise");
+const SEAT_IDLE = new URLSearchParams(location.search).has("seatidle") ? Number(new URLSearchParams(location.search).get("seatidle")) : null;
 /* Composer context mode (docs/design/composer-context-mode.md, `?context-mode=1`): the running conversation is a
    Codex conversation on a structured host that can inject. `noinject` serves the same session without the
    capability. The driver flips the turn and publishes receipts through `evidence`. */
@@ -282,6 +283,12 @@ const files: FileEntry[] = [
     ...(queueRecovery ? {
       activity: "idle", lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 20) * 1_000 },
       authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(20), terminalKind: "completed" },
+    } : {}),
+    /* `&seatidle=<seconds>` (with `seatnoise=ii&runtime=structured`): the seat's own turn ended that long ago and its host
+       stays alive, so the seat reads «waiting» with no decision form open. */
+    ...(SEAT_IDLE !== null ? {
+      activity: "idle", mtime: now - SEAT_IDLE, lastTurn: { startedAt: (now - SEAT_IDLE - 400) * 1_000, endedAt: (now - SEAT_IDLE) * 1_000 },
+      authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(SEAT_IDLE), terminalKind: "completed" },
     } : {}),
   }),
   ...Array.from({ length: 30 }, (_, i) => conversation(
@@ -1757,13 +1764,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       schemaVersion: 1, snapshotSeq: (snapshotReads += 1), retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
       sessions: [{
         conversationId: SEAT_NOISE !== null ? files[0]!.conversationId : "conversation_running", sessionKey: { engine: SEAT_NOISE !== null || CONTEXT_MODE !== null ? files[0]!.engine : "claude", sessionId: "running-session" }, hostKind: MENU_STATE === "compact" ? "codex-app-server" : (SEAT_NOISE !== null || CONTEXT_MODE !== null) && files[0]!.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
-        turn: CONTEXT_MODE !== null ? evidence.contextTurn : queueRecovery ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [],
+        turn: CONTEXT_MODE !== null ? evidence.contextTurn : queueRecovery || SEAT_IDLE !== null ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [],
         recentReceipts: CONTEXT_MODE !== null ? evidence.contextReceipts : [], accountId: ACCOUNT,
         parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: SEAT_NOISE !== null ? files[0]!.path : RUNNING_PATH,
         capabilities: CONTEXT_MODE !== null
           ? { steer: true, structuredAttention: true, ...(CONTEXT_MODE === "noinject" ? {} : { inject: true }) }
           : { steer: false, structuredAttention: true },
-        activeTurnId: CONTEXT_MODE !== null ? (evidence.contextTurn === "running" ? "turn-1" : null) : queueRecovery ? null : "turn-1", pendingReconfigure: null,
+        activeTurnId: CONTEXT_MODE !== null ? (evidence.contextTurn === "running" ? "turn-1" : null) : queueRecovery || SEAT_IDLE !== null ? null : "turn-1", pendingReconfigure: null,
       }],
       attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
     });

@@ -31968,7 +31968,8 @@ describe("compact card menu and overflow menus: today and built", () => {
         await openCardMenu(page, "t-links");
         const rest = await capture(page, where, MENU, "card", "rest");
         if (BUILT) {
-          /* The words that used to be a tooltip: under the Hide cell, and under the two ends of the priority row. */
+          /* The words that used to be a tooltip: under the Hide cell. The two ends of the priority row are the Inbox's, so this
+             In progress card's row says nothing under them. */
           const words = await page.evaluate(() => {
             const menu = document.querySelector<HTMLElement>(".kb .menu");
             const whole = (selector: string) => {
@@ -31982,7 +31983,7 @@ describe("compact card menu and overflow menus: today and built", () => {
           });
           said[keyOf(where)] = words;
           if (!words.hide?.startsWith(`${t("kanban.menu.cell.hide")}: `)) failures.push(`${keyOf(where)} card rest: no line under the Hide cell (${JSON.stringify(words.hide)})`);
-          if (words.high !== t("kanban.priorityHint.high") || words.low !== t("kanban.priorityHint.low")) failures.push(`${keyOf(where)} card rest: the priority row does not say what its ends do (${JSON.stringify([words.high, words.low])})`);
+          if (words.high !== null || words.low !== null) failures.push(`${keyOf(where)} card rest: an In progress card's priority row carries the Inbox's hints (${JSON.stringify([words.high, words.low])})`);
           bounded(where, [rest, ...await walk(page, where, "card")]);
         }
         /* Taps to eight frequent actions, counted from the closed menu. */
@@ -39398,9 +39399,9 @@ describe("stale working status", () => {
           expect(await surface.locator('[data-card-status="running"]').count()).toBe(1);
           expect(await live.locator('[data-card-status="running"]').count()).toBe(1);
           expect(await live.locator(".bg-success").count()).toBe(1);
-          /* The phone's words: «готово» for the launch whose turn ended, the
+          /* One word with the phone: «готово» for the launch whose turn ended, the
              killed reading for the host that died over its open turn. */
-          expect(await quiet.locator(".state").innerText()).toContain(word("kanban.memberState.launchDone"));
+          expect(await quiet.locator(".state").innerText()).toContain(word("kanban.memberState.done"));
           expect(await dead.locator(".state").innerText()).toContain(word("kanban.memberState.killed"));
           const reading: Record<string, unknown> = { quiet: await quiet.innerText(), dead: await dead.innerText(), live: await live.innerText() };
           await surface.screenshot({ path: path.join(out, "task.png") });
@@ -39411,7 +39412,7 @@ describe("stale working status", () => {
           await agentWindow.locator('[data-turn-status="running"] [role="timer"]').waitFor();
           expect(await agentWindow.locator('[data-turn-status="running"] [role="timer"]').count()).toBe(1);
           await agentWindow.screenshot({ path: path.join(out, "live-reader.png") });
-          for (const [name, row, state] of [["quiet", quiet, "kanban.memberState.launchDone"], ["dead", dead, "kanban.memberState.killed"]] as const) {
+          for (const [name, row, state] of [["quiet", quiet, "kanban.memberState.done"], ["dead", dead, "kanban.memberState.killed"]] as const) {
             await scrim.click({ position: { x: 2, y: 2 } });
             await row.click();
             await agentWindow.waitFor();
@@ -47672,4 +47673,247 @@ describe("relay requester enrolment on the board", () => {
       fs.rmSync(build, { recursive: true, force: true });
     }
   }, 180_000);
+});
+
+describe("one set of hints and one row of controls: priority hints belong to the Inbox, the pane's «…» keeps its line, the command has one copy, a connector is whole", () => {
+  /*
+   * Rendered evidence for what the phone and the desktop disagreed on in the
+   * 2.3.0 frames, over the existing fixture, desktop 1440×900 (and 1024 and
+   * 1272 for the stage pane), en and uk, light and dark:
+   *
+   *   - the card menu's priority hints («Top of the Inbox» / «Bottom of the
+   *     Inbox») stand under the row on an Inbox card and nowhere else; an
+   *     In progress card's levels keep their plain titles;
+   *   - the identity row of a stage pane holds the context chip, and the «…» and
+   *     the speaker stay on its first line, in one group at the row's end;
+   *   - an expanded command has one copy control, ending its meta row, clear of
+   *     the output's own control;
+   *   - a connector between two panes is drawn only while the whole of it is
+   *     inside the lane's box; the same pass with the rule taken out finds a
+   *     connector cut by the edge, which shows the check can fail.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=… bun test \
+   *     src/components/kanban/kanbanBoard.browser.test.tsx -t "one set of hints"
+   *
+   * Readings go to `evidence/shared-states-and-hints/readings.json`; frames to
+   * `.artifacts/shared-states-and-hints/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/shared-states-and-hints");
+  const EVIDENCE = path.resolve("evidence/shared-states-and-hints");
+  const SCHEMES_HERE = ["light", "dark"] as const;
+  const LANGS_HERE = ["en", "uk"] as const;
+
+  browserTest("the Inbox card says what its priority ends do; an In progress card says nothing there", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/shared-states-and-hints-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of LANGS_HERE) for (const scheme of SCHEMES_HERE) {
+        const t = (key: string) => translate(lang, key as never);
+        const label = `desktop-1440-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-priority`, VIEWPORT, scheme, lang);
+        try {
+          await page.waitForSelector(card("t-prio-notes"), { timeout: 30_000 });
+          const fold = page.locator("[data-seat-collapse]");
+          if (await fold.count()) await fold.first().click();
+          await page.mouse.move(0, 0);
+          const read = () => page.evaluate(() => {
+            const menu = document.querySelector<HTMLElement>(".menu");
+            const frame = menu?.getBoundingClientRect();
+            const ends = [...document.querySelectorAll<HTMLElement>(".menu [data-cm-end]")].map((end) => {
+              const box = end.getBoundingClientRect();
+              return { id: end.getAttribute("data-cm-end"), text: (end.textContent ?? "").trim(), whole: !!frame && box.height > 0 && box.left >= frame.left && box.right <= frame.right + 0.5 && box.bottom <= frame.bottom + 0.5 };
+            });
+            const levels = [...document.querySelectorAll<HTMLElement>('.menu [data-cm-segments="priority"] [role="menuitemradio"]')].map((item) => ({ cap: (item.querySelector(".cm-cap")?.textContent ?? "").trim(), title: item.getAttribute("title") }));
+            return { ends, levels, endsLine: Boolean(document.querySelector('.menu [data-cm-ends="priority"]')) };
+          });
+          /* Inbox: the hints stand under the row, whole. */
+          await page.locator(`${card("t-prio-notes")} [data-menu]`).click();
+          await page.waitForSelector(".menu", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          const inbox = await read();
+          await page.locator(".menu").screenshot({ path: path.join(OUT, `${label}-inbox-menu.png`) });
+          readings[`${label}-inbox`] = inbox;
+          const hints = inbox.ends.map((end) => [end.id, end.text]);
+          if (JSON.stringify(hints) !== JSON.stringify([["priority:high", t("kanban.priorityHint.high")], ["priority:low", t("kanban.priorityHint.low")]])) failures.push(`${label}: the Inbox card's hints read ${JSON.stringify(hints)}`);
+          if (inbox.ends.some((end) => !end.whole)) failures.push(`${label}: an Inbox hint is cut ${JSON.stringify(inbox.ends)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".menu", { state: "detached", timeout: 10_000 });
+          /* In progress: no hint line, and each level keeps its own title. */
+          await page.locator(`${card("t-prio-search")} [data-menu]`).click();
+          await page.waitForSelector(".menu", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          const progress = await read();
+          await page.locator(".menu").screenshot({ path: path.join(OUT, `${label}-in-progress-menu.png`) });
+          readings[`${label}-in-progress`] = progress;
+          if (progress.ends.length || progress.endsLine) failures.push(`${label}: an In progress card carries hints ${JSON.stringify(progress.ends)}`);
+          const plain = ["high", "normal", "low"].map((level) => t(`kanban.priority.${level}`));
+          if (JSON.stringify(progress.levels.map((level) => level.cap)) !== JSON.stringify(plain)) failures.push(`${label}: the levels read ${JSON.stringify(progress.levels)}`);
+          if (progress.levels.some((level) => level.title !== level.cap)) failures.push(`${label}: a level's title is not its own label ${JSON.stringify(progress.levels)}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "hints.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+
+  browserTest("a stage pane's «…» stays on the first line with the context chip; a command has one copy control; a connector is whole", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/shared-states-and-hints-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const width of [1024, 1272, 1440]) for (const lang of LANGS_HERE) for (const scheme of SCHEMES_HERE) {
+        const t = (key: string) => translate(lang, key as never);
+        const label = `stages-${width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages&paneid=ctx`, { width, height: 900 }, scheme, lang);
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 30_000 });
+          await page.waitForTimeout(700);
+          await page.locator(`${card("t-upload")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.click(`${card("t-upload")} [data-open-stages]`);
+          await page.waitForSelector(".gsheet .pane[data-stage] .ch-meta.pane-id", { timeout: 15_000 });
+          await page.waitForTimeout(800);
+          await page.mouse.move(0, 0);
+          await page.screenshot({ path: path.join(OUT, `${label}.png`) });
+
+          /* The identity row: «…» (and the speaker) in one group on the first line, the row one line when its chips fit. */
+          const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".gsheet .pane[data-stage]")].flatMap((pane) => {
+            const row = pane.querySelector<HTMLElement>(".ch-meta.pane-id");
+            const menu = row?.querySelector<HTMLElement>("[data-reader-menu]");
+            const chips = row?.querySelector<HTMLElement>(".ch-chips");
+            const controls = row?.querySelector<HTMLElement>(".ch-controls");
+            if (!row || !menu || !chips || !controls || !row.querySelector(".ch-model")) return [];
+            const rowBox = row.getBoundingClientRect();
+            const menuBox = menu.getBoundingClientRect();
+            const controlsBox = controls.getBoundingClientRect();
+            const chipBoxes = [...chips.children].map((child) => child.getBoundingClientRect()).filter((box) => box.height > 0);
+            const lines = new Set(chipBoxes.map((box) => Math.round(box.top / 4))).size;
+            return [{
+              stage: pane.getAttribute("data-stage"), rowHeight: Math.round(rowBox.height * 10) / 10, rowWidth: Math.round(rowBox.width), chipLines: lines,
+              menuOnFirstLine: menuBox.top - rowBox.top <= 4, controlsTopFromRow: Math.round((controlsBox.top - rowBox.top) * 10) / 10, menuTopFromRow: Math.round((menuBox.top - rowBox.top) * 10) / 10,
+              controlsAtEnd: Math.abs(controlsBox.right - rowBox.right) <= 1, menuInside: menuBox.right <= rowBox.right + 0.5 && menuBox.left >= rowBox.left,
+              ctx: Boolean(row.querySelector("[data-ctx-chip], .ch-ctx, [class*='ctx']")), chipsWidth: Math.round(chips.getBoundingClientRect().width), controlsWidth: Math.round(controlsBox.width),
+            }];
+          }));
+          readings[label] = { rows };
+          if (width === 1024 && lang === "en" && scheme === "light") {
+            /* The red path: the old structure, one wrapping row of loose siblings, drops «…» to a line of its own where the chips wrap. */
+            const old = await page.evaluate(() => {
+              const style = Object.assign(document.createElement("style"), { textContent: ".kb .pane .ch-meta.pane-id { flex-wrap: wrap !important; } .kb .pane .ch-meta.pane-id > .ch-chips, .kb .pane .ch-meta.pane-id > .ch-controls { display: contents !important; }" });
+              document.head.append(style);
+              const wrapped = [...document.querySelectorAll<HTMLElement>(".gsheet .pane[data-stage] .ch-meta.pane-id")].flatMap((row) => {
+                const menu = row.querySelector<HTMLElement>("[data-reader-menu]");
+                return menu && row.querySelector(".ch-model") ? [Math.round((menu.getBoundingClientRect().top - row.getBoundingClientRect().top) * 10) / 10] : [];
+              });
+              style.remove();
+              return wrapped;
+            });
+            readings[`${label}-old-structure`] = old;
+            if (!old.some((top) => top > 4)) failures.push(`${label}: with the old structure «…» stays on the first line everywhere, so the check cannot fail (${JSON.stringify(old)})`);
+          }
+          if (rows.length < 3) failures.push(`${label}: only ${rows.length} started panes with an identity row`);
+          for (const row of rows) {
+            if (!row.menuOnFirstLine) failures.push(`${label} ${row.stage}: «…» is not on the first line (${JSON.stringify(row)})`);
+            if (!row.controlsAtEnd || !row.menuInside) failures.push(`${label} ${row.stage}: the controls leave the row's end (${JSON.stringify(row)})`);
+            if (row.chipLines === 1 && row.rowHeight > 32) failures.push(`${label} ${row.stage}: a row whose chips fit is ${row.rowHeight}px tall`);
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+
+          if (width === 1440) {
+            /* Connectors: whole inside the lane's box at every scroll position; the red path takes the rule out. */
+            const sweep = async (force: boolean) => page.evaluate(async (forceVisible) => {
+              const lane = document.querySelector<HTMLElement>(".gsheet .lane")!;
+              const style = forceVisible ? Object.assign(document.createElement("style"), { textContent: '.kb .lane-conn[data-whole="0"] { visibility: visible !important; }' }) : null;
+              if (style) document.head.append(style);
+              const frames = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+              const max = lane.scrollWidth - lane.clientWidth;
+              let shown = 0, cut = 0, steps = 0;
+              const wholeAtZero = { shown: 0 };
+              for (let left = 0; left <= max + 13; left += 13) {
+                lane.scrollLeft = Math.min(left, max);
+                await frames();
+                const bounds = lane.getBoundingClientRect();
+                for (const connector of lane.querySelectorAll<HTMLElement>(".lane-conn")) {
+                  if (getComputedStyle(connector).visibility === "hidden") continue;
+                  const box = connector.getBoundingClientRect();
+                  if (box.width === 0) continue;
+                  shown += 1;
+                  if (left === 0) wholeAtZero.shown += 1;
+                  if (box.left < bounds.left - 0.5 || box.right > bounds.right + 0.5) cut += 1;
+                }
+                steps += 1;
+              }
+              lane.scrollLeft = 0;
+              style?.remove();
+              return { shown, cut, steps, atZero: wholeAtZero.shown };
+            }, force);
+            const fixed = await sweep(false);
+            const withoutRule = await sweep(true);
+            readings[`${label}-connectors`] = { fixed, withoutRule };
+            if (fixed.cut) failures.push(`${label}: ${fixed.cut} connector readings cut by the lane's edge`);
+            if (!fixed.atZero) failures.push(`${label}: no connector is drawn at the lane's start`);
+            if (!withoutRule.cut) failures.push(`${label}: the same sweep without the rule finds no cut connector, so the check cannot fail`);
+            await page.screenshot({ path: path.join(OUT, `${label}-lane-start.png`) });
+
+            /* The command's one copy control, in the first started pane's conversation. */
+            /* The conversation folds its calls into one group row; open it, then the command's own row. */
+            const group = page.locator('.gsheet .pane[data-stage] [data-tool-row="group"]').first();
+            await group.scrollIntoViewIfNeeded();
+            await group.click();
+            const toolRow = page.locator('.gsheet .pane[data-stage] [data-tool-row]:not([data-tool-row="group"])').filter({ hasText: "rg --files" }).first();
+            await toolRow.waitFor({ timeout: 10_000 });
+            await toolRow.scrollIntoViewIfNeeded();
+            await toolRow.click();
+            await page.waitForSelector('.gsheet [data-command-copy="meta"]', { timeout: 10_000 });
+            await page.waitForTimeout(300);
+            const copy = await page.evaluate((labels) => {
+              const meta = document.querySelector<HTMLElement>('.gsheet [data-command-copy="meta"]')!;
+              const body = meta.closest<HTMLElement>(".rounded-surface") ?? meta.parentElement!.parentElement!;
+              const buttons = [...body.querySelectorAll<HTMLElement>("button")];
+              const command = buttons.filter((button) => button.getAttribute("aria-label") === labels.command);
+              const output = buttons.filter((button) => [labels.output, labels.stderr].includes(button.getAttribute("aria-label") ?? ""));
+              const pre = [...body.querySelectorAll<HTMLElement>("pre")].find((element) => (element.textContent ?? "").includes("rg --files"))!;
+              const preBox = pre.getBoundingClientRect();
+              const cmdBox = command[0]?.getBoundingClientRect();
+              const outBox = output[0]?.getBoundingClientRect();
+              const overlap = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+              return {
+                commandCopies: command.length, outputCopies: output.length, endsMetaRow: meta.contains(command[0] ?? null),
+                inPre: pre.contains(command[0] ?? null), overlapsCommand: cmdBox ? overlap(cmdBox, preBox) : null,
+                gap: cmdBox && outBox ? Math.round((outBox.top - cmdBox.bottom) * 10) / 10 : null, commandLine: Math.round(preBox.height * 10) / 10,
+                cmdSize: cmdBox ? [Math.round(cmdBox.width), Math.round(cmdBox.height)] : null,
+              };
+            }, { command: t("tools.copyCommand"), output: t("tools.copyOutput"), stderr: t("tools.copyStderr") });
+            readings[`${label}-copy`] = copy;
+            if (copy.commandCopies !== 1 || !copy.endsMetaRow || copy.inPre) failures.push(`${label}: the command's copy is not one control ending its meta row ${JSON.stringify(copy)}`);
+            if (copy.overlapsCommand) failures.push(`${label}: the command's copy overlaps the command ${JSON.stringify(copy)}`);
+            if (copy.outputCopies >= 1 && (copy.gap === null || copy.gap < copy.commandLine)) failures.push(`${label}: the command's copy and the output's are ${copy.gap}px apart, under the command's line ${copy.commandLine}px`);
+            const body = page.locator('.gsheet [data-command-copy="meta"]').first().locator("xpath=ancestor::div[contains(@class,'rounded-surface')][1]");
+            await body.screenshot({ path: path.join(OUT, `${label}-command-copy.png`) });
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "panes.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
 });

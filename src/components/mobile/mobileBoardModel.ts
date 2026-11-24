@@ -12,7 +12,7 @@ import type { FileEntry } from "@/lib/types";
 
 export { pipelineHiddenFromBoard } from "@/lib/pipelines/laneMovement";
 
-import { attentionReason, buildAttentionQueue, reasonAsksOperator, stalledAttention, type ConversationReason } from "../attention";
+import { attentionReason, buildAttentionQueue, heldStuckDelivery, reasonAsksOperator, stalledAttention, type ConversationReason } from "../attention";
 import { pipelineNeedsYou } from "../pipelines/pipelineBlockModel";
 import { isAuxTask, isChildConversation, isConversation, isSubagent, projectKey } from "../projectModel";
 import { turnIsRunning, turnLeftOpen } from "../turnDuration";
@@ -127,15 +127,27 @@ function waitingBadge(reason: ConversationReason): MobileRowBadge {
   }
 }
 
-function heldDeliveries(file: FileEntry): number {
-  return activeCardMigration(file.migration, accountIdFromPath(file.path))?.heldDeliveries ?? 0;
+/** Messages queued behind something that is not the agent: the account-switch fence's count, else the one reservation
+    the outbox is still holding past the queue's wait. Either way the lane must not read as running. */
+function heldDeliveries(file: FileEntry, now: number): number {
+  const fence = activeCardMigration(file.migration, accountIdFromPath(file.path))?.heldDeliveries ?? 0;
+  if (fence > 0) return fence;
+  return file.stuckDelivery && heldStuckDelivery(file, now) !== null ? 1 : 0;
 }
 
 /**
  * The one state of one conversation, by the design's precedence. `now` is in
  * epoch seconds, like every other clock the board reads.
  */
-export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000, { decisionWaiting = false }: { decisionWaiting?: boolean } = {}): MobileRowState {
+export function mobileRowState(
+  file: FileEntry,
+  now: number = Date.now() / 1000,
+  { decisionWaiting = false, seatWaiting = false }: {
+    decisionWaiting?: boolean;
+    /** The project's seat is hosted and idle between turns, with no form open: it is waiting for the next task, quietly. */
+    seatWaiting?: boolean;
+  } = {},
+): MobileRowState {
   const bits = (over: Partial<MobileRowState> & { key: MobileRowStateKey }): MobileRowState => ({
     section: sectionOf(over.key),
     dot: "neutral",
@@ -177,7 +189,7 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000,
       seconds: Math.max(0, now - file.mtime),
     });
   }
-  const held = heldDeliveries(file);
+  const held = heldDeliveries(file, now);
   if (held > 0) return bits({ key: "held", dot: "warning", held });
   /* A dead host runs nothing, whatever freshness the transcript still carries. */
   if (file.proc !== "killed" && turnIsRunning(file)) {
@@ -187,17 +199,18 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000,
   }
   /* The seat's own turn is over while a decision form of its project waits: it is waiting on the operator, and says so, not «done». */
   if (decisionWaiting) return bits({ key: "waiting", dot: "warning", edge: "warning", badge: "decision", seconds: Math.max(0, now - file.mtime) });
+  /* An idle hosted seat is waiting for its next task. It asks nothing of the
+     operator, so it keeps the neutral dot, no badge, and the recent section. */
+  if (seatWaiting) return bits({ key: "waiting", section: "recent", dot: "neutral", seconds: Math.max(0, now - file.mtime) });
   if (file.activity === "recent") return bits({ key: "returned", dot: "accent", seconds: Math.max(0, now - file.mtime) });
   return bits({ key: "done", dot: "neutral", seconds: Math.max(0, now - file.mtime) });
 }
 
 /** The word a state is named by on the reader header, the rail and the tile:
     the dot's own words for an agent whose activity the scan knows («idle»,
-    «waiting on a check»), the row key's word otherwise. A launch placeholder
-    that settled reads the phone's own finished word («готово»), so both
-    surfaces name the same launch the same way. */
-export function rowStateWord(t: TFunction, row: { key: string; activity?: MobileRowState["activity"]; settledLaunch?: boolean }): string {
-  if (row.key === "done" && row.settledLaunch) return t("kanban.memberState.launchDone");
+    «waiting on a check»), the row key's word otherwise. The key's word is the
+    phone's word for the same state, so one conversation reads one way on both. */
+export function rowStateWord(t: TFunction, row: { key: string; activity?: MobileRowState["activity"] }): string {
   if (row.activity === "idle") return t("cardStatus.idle");
   if (row.activity === "checking") return t("cardStatus.checking");
   return t(`kanban.memberState.${row.key as MobileRowStateKey}`);

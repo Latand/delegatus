@@ -1,0 +1,29 @@
+{
+  "readings": {
+    "en-light-bar": {
+      "text": "waiting · 17m ago",
+      "cut": false,
+      "inside": true
+    },
+    "en-light-running": "working 6:40",
+    "en-dark-bar": {
+      "text": "waiting · 17m ago",
+      "cut": false,
+      "inside": true
+    },
+    "en-dark-running": "working 6:40",
+    "uk-light-bar": {
+      "text": "чекає · 17 хв тому",
+      "cut": false,
+      "inside": true
+    },
+    "uk-light-running": "працює 6:41",
+    "uk-dark-bar": {
+      "text": "чекає · 17 хв тому",
+      "cut": false,
+      "inside": true
+    },
+    "uk-dark-running": "працює 6:41"
+  },
+  "failures": []
+}

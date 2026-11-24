@@ -1598,7 +1598,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       onPick: (color) => setColor(card, color),
     };
     if (value.kind === "colour") return { label: t("kanban.colour"), items: [{ type: "head", label: t("kanban.colour") }, swatches] };
-    /* Only the Inbox sorts by it, so the hints say where the card goes there. */
+    /* Only the Inbox sorts by it, so the hints say where the card goes there
+       and only an Inbox card carries them. */
     const priorityItems: KanbanMenuItem[] = card.task ? [
       { type: "sep" },
       { type: "head", label: t("kanban.priority") },
@@ -1606,7 +1607,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         type: "radio",
         id: `priority:${priority}`,
         label: t(`kanban.priority.${priority}`),
-        why: priority === "normal" ? null : t(`kanban.priorityHint.${priority}`),
+        why: priority === "normal" || card.status !== "inbox" ? null : t(`kanban.priorityHint.${priority}`),
         checked: card.priority === priority,
         onSelect: () => setPriority(card, priority),
       })),

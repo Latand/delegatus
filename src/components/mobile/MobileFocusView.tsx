@@ -596,6 +596,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         offline={offline}
         seat={holdsSeat}
         decisionWaiting={holdsSeat && openDecisions > 0}
+        seatWaiting={holdsSeat && seatPanel?.state.kind === "live" && seatPanel.state.liveness === "waiting"}
         stage={stage}
         bump={bumpPulse?.side ?? null}
         renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
@@ -958,13 +959,15 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
  * operator must not read as a running one because its own word ran out of room
  * (2026-08 audit findings 3 and 4).
  */
-export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null, seat = false, decisionWaiting = false }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null;
+export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null, seat = false, decisionWaiting = false, seatWaiting = false }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null;
   /** The project's orchestrator: its title is its role's name, whole, and its account is under ⋯ → Details. */
   seat?: boolean;
   /** A decision form of the seat's project is open: a finished turn reads «waiting». */
-  decisionWaiting?: boolean }) {
+  decisionWaiting?: boolean;
+  /** The seat is hosted and idle with no form open: its finished turn reads «waiting», quietly. */
+  seatWaiting?: boolean }) {
   const { t } = useLocale();
-  const bits = chatStateBits(t, file, { offline, decisionWaiting });
+  const bits = chatStateBits(t, file, { offline, decisionWaiting, seatWaiting });
   /* While the server is being reconnected (#2071 D7) the quiet reconnecting
      line takes the meta line's place: the state it would show is the state
      from before the outage. */

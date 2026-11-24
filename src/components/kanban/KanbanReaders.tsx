@@ -9,7 +9,6 @@ import type { FileEntry } from "@/lib/types";
 import { SpeakButton } from "@/components/feed/SpeakButton";
 import { BranchPane } from "@/components/BranchPane";
 import { mobileRowState, rowStateWord } from "@/components/mobile/mobileBoardModel";
-import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
@@ -248,7 +247,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
   const kill = useProcessKill(file);
   const row = mobileRowState(file, now);
-  const stateWord = rowStateWord(t, { ...row, settledLaunch: isSettledLaunchPlaceholder(file) });
+  const stateWord = rowStateWord(t, row);
   const tone = DOT_TONE[row.dot] ?? "tone-neutral";
   const working = row.key === "working";
   const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
@@ -345,14 +344,20 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
         chrome={{
           header: (
             <div className="conv-head">
+              {/* The identity chips wrap among themselves; the controls are one
+                  group that keeps its place at the row's end, so «…» never
+                  drops to a line of its own. */}
               <div className="ch-meta pane-id">
-                <RoleFrameMark role={frameRole} />
-                <RoleAvatar role={frameRole} size={20} />
-                {identity}
-                <span className="spacer" />
-                <SpeakButton scope={file.path} header />
-                {dismissLaunch}
-                {menuButton}
+                <span className="ch-chips">
+                  <RoleFrameMark role={frameRole} />
+                  <RoleAvatar role={frameRole} size={20} />
+                  {identity}
+                </span>
+                <span className="ch-controls">
+                  <SpeakButton scope={file.path} header />
+                  {dismissLaunch}
+                  {menuButton}
+                </span>
               </div>
             </div>
           ),

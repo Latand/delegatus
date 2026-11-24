@@ -1889,8 +1889,8 @@ test("stale working: a launch whose host died over an open turn reads killed, a 
     expect(row).toMatchObject({ key: "done", dot: "neutral" });
     expect(isSettledLaunchPlaceholder(quiet)).toBe(true);
     expect(isSettledLaunchPlaceholder(dead)).toBe(true);
-    expect(rowStateWord((key) => translate("uk", key), { ...row, settledLaunch: true })).toBe("готово");
-    expect(rowStateWord((key) => translate("en", key), { ...row, settledLaunch: true })).toBe("done");
+    expect(rowStateWord((key) => translate("uk", key), row)).toBe("готово");
+    expect(rowStateWord((key) => translate("en", key), row)).toBe("done");
     expect(workingAgentCount([dead, quiet], now / 1000)).toBe(0);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

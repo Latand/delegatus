@@ -1,0 +1,839 @@
+{
+  "readings": {
+    "stages-1024-en-light": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 44,
+          "rowWidth": 574,
+          "chipLines": 2,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1024-en-light-old-structure": [
+      0,
+      28,
+      0,
+      0
+    ],
+    "stages-1024-en-dark": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 44,
+          "rowWidth": 574,
+          "chipLines": 2,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1024-uk-light": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 44,
+          "rowWidth": 574,
+          "chipLines": 2,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1024-uk-dark": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 44,
+          "rowWidth": 574,
+          "chipLines": 2,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1272-en-light": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 44,
+          "rowWidth": 574,
+          "chipLines": 2,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1272-en-dark": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 44,
+          "rowWidth": 574,
+          "chipLines": 2,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1272-uk-light": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 44,
+          "rowWidth": 574,
+          "chipLines": 2,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1272-uk-dark": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 44,
+          "rowWidth": 574,
+          "chipLines": 2,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 574,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 514,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1440-en-light": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1440-en-light-connectors": {
+      "fixed": {
+        "shown": 592,
+        "cut": 0,
+        "steps": 296,
+        "atZero": 2
+      },
+      "withoutRule": {
+        "shown": 2072,
+        "cut": 1480,
+        "steps": 296,
+        "atZero": 7
+      }
+    },
+    "stages-1440-en-light-copy": {
+      "commandCopies": 1,
+      "outputCopies": 1,
+      "endsMetaRow": true,
+      "inPre": false,
+      "overlapsCommand": false,
+      "gap": 37.4,
+      "commandLine": 21.4,
+      "cmdSize": [
+        22,
+        22
+      ]
+    },
+    "stages-1440-en-dark": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1440-en-dark-connectors": {
+      "fixed": {
+        "shown": 592,
+        "cut": 0,
+        "steps": 296,
+        "atZero": 2
+      },
+      "withoutRule": {
+        "shown": 2072,
+        "cut": 1480,
+        "steps": 296,
+        "atZero": 7
+      }
+    },
+    "stages-1440-en-dark-copy": {
+      "commandCopies": 1,
+      "outputCopies": 1,
+      "endsMetaRow": true,
+      "inPre": false,
+      "overlapsCommand": false,
+      "gap": 37.4,
+      "commandLine": 21.4,
+      "cmdSize": [
+        22,
+        22
+      ]
+    },
+    "stages-1440-uk-light": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 44,
+          "rowWidth": 608,
+          "chipLines": 2,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1440-uk-light-connectors": {
+      "fixed": {
+        "shown": 592,
+        "cut": 0,
+        "steps": 296,
+        "atZero": 2
+      },
+      "withoutRule": {
+        "shown": 2072,
+        "cut": 1480,
+        "steps": 296,
+        "atZero": 7
+      }
+    },
+    "stages-1440-uk-light-copy": {
+      "commandCopies": 1,
+      "outputCopies": 1,
+      "endsMetaRow": true,
+      "inPre": false,
+      "overlapsCommand": false,
+      "gap": 37.4,
+      "commandLine": 21.4,
+      "cmdSize": [
+        22,
+        22
+      ]
+    },
+    "stages-1440-uk-dark": {
+      "rows": [
+        {
+          "stage": "plan",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-api",
+          "rowHeight": 44,
+          "rowWidth": 608,
+          "chipLines": 2,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "review-api",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        },
+        {
+          "stage": "build-ui",
+          "rowHeight": 24,
+          "rowWidth": 608,
+          "chipLines": 1,
+          "menuOnFirstLine": true,
+          "controlsTopFromRow": 0,
+          "menuTopFromRow": 0,
+          "controlsAtEnd": true,
+          "menuInside": true,
+          "ctx": false,
+          "chipsWidth": 548,
+          "controlsWidth": 54
+        }
+      ]
+    },
+    "stages-1440-uk-dark-connectors": {
+      "fixed": {
+        "shown": 592,
+        "cut": 0,
+        "steps": 296,
+        "atZero": 2
+      },
+      "withoutRule": {
+        "shown": 2072,
+        "cut": 1480,
+        "steps": 296,
+        "atZero": 7
+      }
+    },
+    "stages-1440-uk-dark-copy": {
+      "commandCopies": 1,
+      "outputCopies": 1,
+      "endsMetaRow": true,
+      "inPre": false,
+      "overlapsCommand": false,
+      "gap": 37.4,
+      "commandLine": 21.4,
+      "cmdSize": [
+        22,
+        22
+      ]
+    }
+  },
+  "failures": []
+}
