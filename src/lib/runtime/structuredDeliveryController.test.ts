@@ -547,7 +547,7 @@ test("startup checks an archived recipient when its first message arrives", asyn
     await kickStructuredDeliveryQueue();
     expect(authority).toHaveBeenCalledWith(f.registry, f.conversation.id);
     expect(recover).not.toHaveBeenCalled();
-    expect(["queued", "pending"]).toContain(f.journal.operationResult(operationId)?.receipt.status);
+    expect(["queued", "pending"]).toContain(f.journal.operationResult(operationId)?.receipt.status ?? "missing");
     held = false;
     await kickStructuredDeliveryQueue();
     expect(recover).toHaveBeenCalledTimes(1);

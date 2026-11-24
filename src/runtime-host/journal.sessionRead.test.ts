@@ -234,7 +234,7 @@ test("startup operation pages retain native work after acknowledgement removes i
     const pending = await page();
     expect(pending.effectsVersion).not.toBe(empty.effectsVersion);
     expect(pending.pendingOperations).toEqual([expect.objectContaining({ operationId, conversationId, status: "queued" })]);
-    expect(readStartupPendingOperations({ eventSeq: 0, rowId: 0 }, { LLV_RUNTIME_JOURNAL: filename }).pendingOperations)
+    expect(readStartupPendingOperations({ eventSeq: 0, rowId: 0 }, { ...process.env, LLV_RUNTIME_JOURNAL: filename }).pendingOperations)
       .toEqual(pending.pendingOperations!);
     expect((await page({ eventSeq: journal.publishedSeq(), rowId: Number.MAX_SAFE_INTEGER })).pendingOperations).toEqual([]);
     journal.nativeQueueTransition(operationId, { phase: "proven", proof: {
