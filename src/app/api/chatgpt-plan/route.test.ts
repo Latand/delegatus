@@ -13,6 +13,7 @@ const origin = "http://127.0.0.1:8898";
 let f: ReturnType<typeof planFixture>;
 const staging = process.env.LLV_STAGING;
 const formerState = process.env.LLV_STATE_DIR;
+const formerClient = process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
 let nonce: string | undefined;
 const raw = (method: string, body?: unknown, headers: Record<string, string> = {}, cookie?: string) =>
   new NextRequest(`${origin}/api/chatgpt-plan`, { method, headers: { host: new URL(origin).host, origin,
@@ -21,6 +22,7 @@ const raw = (method: string, body?: unknown, headers: Record<string, string> = {
 
 beforeEach(() => {
   delete process.env.LLV_STAGING;
+  process.env.LLV_CHATGPT_PLAN_CLIENT_ID = "dynamic_agent_client";
   f = planFixture(url => {
     if (url === discovery.jwks_uri) return jwks();
     if (url === discovery.token_endpoint) return Response.json(grant(nonce));
@@ -38,14 +40,16 @@ afterEach(() => {
   delete globals.__delegatusChatGPTPlan;
   if (staging === undefined) delete process.env.LLV_STAGING; else process.env.LLV_STAGING = staging;
   if (formerState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = formerState;
+  if (formerClient === undefined) delete process.env.LLV_CHATGPT_PLAN_CLIENT_ID; else process.env.LLV_CHATGPT_PLAN_CLIENT_ID = formerClient;
   resetTeamStoreForTests();
   f.dispose();
 });
 
 test("the plan is off with no issued client ID and cannot be used on staging", async () => {
+  delete process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
   const read = await GET(raw("GET"));
   expect(read.headers.get("cache-control")).toBe("no-store");
-  expect(await read.json()).toMatchObject({ state: "not_connected" });
+  expect(await read.json()).toMatchObject({ state: "off_unconfigured" });
   process.env.LLV_STAGING = "1";
   expect(await (await GET(raw("GET"))).json()).toEqual({ state: "off_staging" });
   expect((await POST(raw("POST", { action: "sign-in" }))).status).toBe(409);

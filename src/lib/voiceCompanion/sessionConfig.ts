@@ -93,8 +93,8 @@ export function backendRequest(input: readonly BackendItem[], options: { final?:
   const added = options.tools?.servers.length ? options.tools : null;
   return { model: LIVE_BACKEND_MODEL, instructions: `${BACKEND_INSTRUCTIONS}${added ? ` ${ADDED_TOOL_RULES}` : ""}\n\n${interfaceLanguage(options.locale ?? "en")}`, input,
     tools: added ? [...COMPANION_TOOLS, ...snapshotBackendTools(added)] : COMPANION_TOOLS,
-    tool_choice: options.final ? "none" as const : "auto" as const, parallel_tool_calls: false, max_output_tokens: BACKEND_MAX_OUTPUT_TOKENS, service_tier: "default",
-    reasoning: { effort: "none" }, store: false };
+    tool_choice: options.final ? "none" as const : "auto" as const, parallel_tool_calls: false, max_output_tokens: BACKEND_MAX_OUTPUT_TOKENS, service_tier: "default", store: false, stream: true,
+    reasoning: { effort: "none" } };
 }
 export type BackendRequest = ReturnType<typeof backendRequest>;
 

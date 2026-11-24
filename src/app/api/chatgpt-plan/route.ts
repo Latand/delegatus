@@ -5,6 +5,7 @@ import { keysJson, keysOwnerGate, keysOwnerRequest, readBoundedJson } from "@/li
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { isStagingMode } from "@/lib/staging";
 import { PlanError } from "@/lib/chatgptPlan/errors";
+import { configuredClientId } from "@/lib/chatgptPlan/constants";
 import { chatgptPlan } from "@/lib/chatgptPlan/session";
 import { LIVE_BACKEND_MODEL } from "@/lib/voiceCompanion/sessionConfig";
 
@@ -41,7 +42,7 @@ export async function POST(req: NextRequest) {
   const body = await readBoundedJson(req, 1_024);
   const recheck = writeGate(req);
   if (recheck) return recheck;
-  if (!body || Object.keys(body).length !== 1) return keysJson({ reason: "invalid_request" }, 400);
+  if (!body || !((Object.keys(body).length === 1) || (body.action === "replace-registration" && Object.keys(body).length === 2))) return keysJson({ reason: "invalid_request" }, 400);
   const session = chatgptPlan();
   const guard = () => !writeGate(req);
   try {
@@ -55,6 +56,9 @@ export async function POST(req: NextRequest) {
       case "cancel":
         session.oauth.cancel();
         return keysJson({ ok: true });
+      case "replace-registration":
+        await session.replaceRejectedRegistration(typeof body.clientId === "string" ? body.clientId : configuredClientId() ?? "", guard);
+        return writeGate(req) ?? keysJson({ ok: true });
       case "acknowledge":
         await session.acknowledge(guard);
         return writeGate(req) ?? keysJson({ ok: true });

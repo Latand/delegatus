@@ -18,6 +18,8 @@ export type Credentials = {
   pendingRegistration?: true; pendingRotation?: true;
   signedOut?: true; revocationConfirmed?: boolean; acknowledged?: boolean;
   reconnect?: "reconnect_required" | "client_rejected";
+  planPauseUntil?: number;
+  pendingGrantRefresh?: string;
 };
 
 const hasOwner = (uid: number) => !process.getuid || process.getuid() === uid;
@@ -85,6 +87,8 @@ export class PlanStore {
     if (!row || row.version !== 1 || row.issuer !== ISSUER || !clientIdValid(row.clientId) || !epoch(row.savedAt)
       || (row.email !== undefined && (typeof row.email !== "string" || row.email.length > 320))
       || (row.subject !== undefined && !textField(row.subject))
+      || (row.planPauseUntil !== undefined && !epoch(row.planPauseUntil))
+      || (row.pendingGrantRefresh !== undefined && !textField(row.pendingGrantRefresh))
       || (row.models !== undefined && (!Array.isArray(row.models) || row.models.length > 200 || !row.models.every(modelSlug)))
       || ["pendingRotation", "pendingRegistration", "signedOut"].some(key => row[key] !== undefined && row[key] !== true)
       || ["acknowledged", "revocationConfirmed"].some(key => row[key] !== undefined && typeof row[key] !== "boolean")

@@ -3801,13 +3801,16 @@ for (const outcome of ["handed", "uncertain", "withdrawn"] as const) test(`recon
   } finally { await f.service.close(n.sessionId); }
 });
 
-test.each(["owner", "member", "unconfigured", "limit"] as const)("voice %s bills only completed plan turns to the plan and reserves each key turn", async mode => {
+test.each(["owner", "member", "unconfigured", "limit", "policy"] as const)("voice %s bills only completed plan turns to the plan and reserves each key turn", async mode => {
+  const oldClient = process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
+  process.env.LLV_CHATGPT_PLAN_CLIENT_ID = "dynamic_agent_client";
   const f = fixture();
   const planRequests: Array<Record<string, unknown>> = [];
   const plan = planFixture((url, init) => {
     expect(url).toBe(`${RESOURCE}/responses`);
     planRequests.push(JSON.parse(String(init?.body)));
     if (mode === "limit") return stream({ type: "response.failed", response: { error: { code: "subscription_sharing_usage_limit_exceeded" } } });
+    if (mode === "policy") return stream({ type: "response.failed", response: { error: { code: "chatpass_v2_scope_not_authorized" } } });
     if (planRequests.length === 1) return stream(complete(backendResponse("plan-tool", [
       { ...functionCall("wrong", "call_clock"), namespace: "unexpected" },
       { ...functionCall("valid", "call_clock"), namespace: PLAN_TOOL_NAMESPACE },
@@ -3851,6 +3854,13 @@ test.each(["owner", "member", "unconfigured", "limit"] as const)("voice %s bills
       expect(stored()).toEqual({});
       const settings = f.storage.settings();
       expect(settings.usageUsd + settings.reservedUsd).toBeCloseTo(VOICE_SESSION_RESERVE_USD);
+    } else if (mode === "policy") {
+      expect(planRequests).toHaveLength(1);
+      expect(f.provider.requests).toHaveLength(0);
+      expect(stored()).toEqual({});
+      const settings = f.storage.settings();
+      expect(settings.usageUsd + settings.reservedUsd).toBeCloseTo(VOICE_SESSION_RESERVE_USD);
+      expect(service.planBillingFor(starter)).toEqual({ source: "key", reason: "policy_denied" });
     } else {
       expect(planRequests).toHaveLength(mode === "limit" ? 1 : 0);
       expect(f.provider.requests).toHaveLength(1);
@@ -3869,5 +3879,6 @@ test.each(["owner", "member", "unconfigured", "limit"] as const)("voice %s bills
   } finally {
     await service.close(call.sessionId);
     plan.dispose();
+    if (oldClient === undefined) delete process.env.LLV_CHATGPT_PLAN_CLIENT_ID; else process.env.LLV_CHATGPT_PLAN_CLIENT_ID = oldClient;
   }
 });

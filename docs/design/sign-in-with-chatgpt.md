@@ -16,12 +16,13 @@ Claude accounts keep their existing authentication.
 ## 2. Verdict
 
 - **No client ID application is needed for the open-source path.** Delegatus is
-  an MIT-licensed app each user runs on their own machine. For such apps the
-  client ID is issued to each user at their first sign-in, through the
-  documented `dynamic_agent_client` entry point with `agent_name_hint`
-  "Delegatus". A read-only probe (§4.3) showed the authorize endpoint accepts
-  that entry point. The commercial interest form fields are recorded for
-  reference in §10.2.
+  an MIT-licensed app each user runs on their own machine. An owner explicitly
+  enables that flow with `LLV_CHATGPT_PLAN_CLIENT_ID=dynamic_agent_client`;
+  with the setting absent, sign-in, discovery and credential writes stay off.
+  OpenAI issues each user a client ID at first sign-in through the documented
+  bootstrap entry point with `agent_name_hint` "Delegatus". A read-only probe
+  (§4.3) showed the authorize endpoint accepts it. The commercial interest
+  form fields are recorded for reference in §10.2.
 - **One of Delegatus's OpenAI API-key calls is on the supported route:** the
   text turns of Voice Delegatus's API backend. The other API-key features are
   audio (dictation, read aloud, the live voice session) or use the Decisions
@@ -108,9 +109,11 @@ Claude accounts keep their existing authentication.
   client ID to save or use for token exchange. This direct flow needs neither a
   client secret nor a partner API key."
 
-So no application is needed for Delegatus. The issued client ID (an
-`oaiapp_…` value in the docs' example) is per-user state that the sign-in
-callback returns. It is never something the project configures.
+So no application is needed for Delegatus's open-source flow. An owner may
+configure either the documented bootstrap value or an issued client ID with
+`LLV_CHATGPT_PLAN_CLIENT_ID`. The issued client ID (an `oaiapp_…` value in the
+docs' example) is per-user state returned by the sign-in callback and stored
+under the operator's state directory.
 
 ### 4.2 Client, host and `ext_agent_host_id`
 
@@ -1066,10 +1069,12 @@ model catalog and a tool-calling turn on the plan route (§4.3).
 
 ### 10.1 Open-source registration
 
-On first sign-in, the authorize request carries
-`client_id=dynamic_agent_client` and `agent_name_hint=Delegatus`. OpenAI shows
-the operator the agent name and the permissions. The callback returns the
-issued client ID, which Delegatus retains for reauthorization.
+When `LLV_CHATGPT_PLAN_CLIENT_ID=dynamic_agent_client` is configured, the first
+authorize request carries that bootstrap value and `agent_name_hint=Delegatus`.
+OpenAI shows the operator the agent name and permissions. The callback returns
+the issued client ID, which Delegatus retains for reauthorization. An owner can
+replace a rejected saved registration from Settings after configuring its
+replacement client ID; the stable installation host ID remains in place.
 
 ### 10.2 Commercial interest form reference
 
@@ -1084,8 +1089,8 @@ OpenAI's commercial interest form has the following fields as of
 | Company name (`Company`) | Yes | Owner only |
 | Website URL (`mkto_website_form_fill`) | Yes | Owner only |
 | Job title (`Title`) | No | Owner only |
-| What capabilities would you like to implement? (`mkto_sign_in_use_case[]`, radio) | Yes | Integration scope |
-| Which of your products would use Sign in with ChatGPT? (Briefly describe each product) (`mkto_describe_use_case`, up to 2,000 characters) | Yes | Product description |
+| What capabilities would you like to implement? (`mkto_sign_in_use_case[]`, radio) | Yes | Sign in and ChatGPT plan use for AI requests |
+| Which of your products would use Sign in with ChatGPT? (Briefly describe each product) (`mkto_describe_use_case`, up to 2,000 characters) | Yes | Proposed: Delegatus is an open-source, locally hosted agent orchestration workspace. An operator may sign in with ChatGPT to use eligible subscription credits for text-only Responses API inference. The account is used only by the local operator; agent accounts, workspace members, credentials and account details remain owner-only. |
 
 ## Deferred
 

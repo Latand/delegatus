@@ -2,7 +2,7 @@ import { chmodSync, lstatSync, readFileSync, renameSync, symlinkSync, writeFileS
 import { join } from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { hostId } from "./hostId";
-import { planFixture } from "./plan.fixture";
+import { clientId, planFixture } from "./plan.fixture";
 import { PlanStore } from "./store";
 
 const fixture = () => scratch = planFixture();
@@ -25,6 +25,14 @@ test("host identity survives new stores, atomic replacement, and owner-only perm
   writeFileSync(join(f.directory, "host.json"), "{}");
   await expect(hostId(f.store)).rejects.toThrow("host_file");
   expect(readFileSync(join(f.directory, "host.json"), "utf8")).toBe("{}");
+});
+
+test("a missing host identity cannot be regenerated when credentials remain", async () => {
+  const f = fixture();
+  f.seed();
+  await expect(hostId(f.store)).rejects.toThrow("host_file");
+  expect(await f.store.read("host")).toBeUndefined();
+  expect(await f.store.credentials()).toMatchObject({ clientId });
 });
 
 test.each(["mode", "link", "owner", "oversize", "malformed"])("refuses unsafe %s credentials without changing bytes", async kind => {

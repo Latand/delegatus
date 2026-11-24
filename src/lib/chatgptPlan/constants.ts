@@ -1,6 +1,10 @@
 export const ISSUER = "https://auth.openai.com";
 export const RESOURCE = "https://api.openai.com/v1";
 export const DYNAMIC_CLIENT = "dynamic_agent_client";
+/** Dynamic registration must be explicitly enabled by an installation owner. */
+export const configuredClientId = () => process.env.LLV_CHATGPT_PLAN_CLIENT_ID?.trim() || undefined;
+export const planConfigured = () => !!configuredClientId();
+export const credentialStorageSupported = (platform = process.platform) => platform !== "win32";
 export const CALLBACK = "/auth/callback";
 export const PLAN_SCOPE = "chatgpt.tokens.use.direct";
 export const SCOPES = `openid profile email offline_access resource.invoke ${PLAN_SCOPE}`;

@@ -1,7 +1,7 @@
 export const PLAN_USAGE_URL = "https://chatgpt.com/settings/usage";
 export const CHATGPT_SETTINGS_URL = "https://chatgpt.com/settings";
 
-export type PlanState = "off_staging" | "not_connected" | "connecting" | "connected"
+export type PlanState = "off_staging" | "off_unconfigured" | "off_unsupported_platform" | "plan_limit" | "not_connected" | "connecting" | "connected"
   | "plan_disabled" | "reconnect_required" | "remote_browser" | "error";
 
 export type PlanFallback = "plan_limit" | "retry_later" | "not_eligible" | "request_invalid"

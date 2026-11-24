@@ -834,6 +834,10 @@ export class CompanionLiveSessions {
             if (active.ended || active.closePromise || active.abort.signal.aborted) return;
             active.planBilling = { source: "key", reason: fallbackReason(error) };
             if (this.lastPlanBilling?.id === active.id) this.lastPlanBilling.billing = active.planBilling;
+            if (active.planBilling.reason === "policy_denied") {
+              reply(delegationSpeech("This ChatGPT account is not authorized for this request. No request was sent.", facts));
+              return;
+            }
           }
         }
         if (!usedPlan) {

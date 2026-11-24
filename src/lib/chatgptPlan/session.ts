@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { isStagingMode } from "@/lib/staging";
-import { PLAN_SCOPE } from "./constants";
+import { clientIdValid, credentialStorageSupported, PLAN_SCOPE, planConfigured } from "./constants";
 import { PlanError, unusableRefresh } from "./errors";
 import { validateIdentity } from "./idToken";
 import { PlanOAuth } from "./oauth";
@@ -23,6 +23,7 @@ export class PlanSession {
   private unavailable(row: Credentials | undefined, model?: string) {
     if (isStagingMode() || this.signingOut || !row || row.signedOut || row.pendingRegistration) return "not_connected";
     if (row.reconnect || (row.tokens && row.tokens.refreshedAt + REFRESH_LIFETIME <= this.now())) return "reconnect_required";
+    if (row.planPauseUntil && row.planPauseUntil > this.now()) return "plan_limit";
     if (!row.tokens) return "not_connected";
     if (!row.tokens.scopes.includes(PLAN_SCOPE) && !row.pendingRotation) return "plan_disabled";
     if (model && row.models && !row.models.includes(model)) return "plan_disabled";
@@ -31,6 +32,8 @@ export class PlanSession {
 
   async status(model: string, owner: boolean, local: boolean): Promise<PlanStatus> {
     if (isStagingMode()) return { state: "off_staging" };
+    if (!credentialStorageSupported()) return { state: "off_unsupported_platform" };
+    if (!planConfigured()) return { state: "off_unconfigured" };
     if (owner && !local) return { state: "remote_browser" };
     try {
       const wasChanging = this.oauth.pending || this.signingOut;
@@ -54,7 +57,7 @@ export class PlanSession {
   }
 
   async eligible(model: string): Promise<boolean> {
-    if (isStagingMode() || this.signingOut) return false;
+    if (isStagingMode() || this.signingOut || !planConfigured() || !credentialStorageSupported()) return false;
     try {
       const row = await this.store.credentials();
       return !this.unavailable(row, model);
@@ -133,18 +136,40 @@ export class PlanSession {
   }
 
   async respond(body: Record<string, unknown> & { model: string }, signal: AbortSignal, owner: () => boolean) {
+    if (!planConfigured() || !credentialStorageSupported()) throw new PlanError("plan_disabled");
     validatePlanRequest(body);
     if (!owner()) throw new PlanError("plan_disabled");
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
     const accessToken = await this.access(body.model, deadline, owner);
     if (!owner()) throw new PlanError("plan_disabled");
     if (this.signingOut) throw new PlanError("not_connected");
-    return streamPlanResponse(this.oidc.http, accessToken, body, deadline);
+    try { return await streamPlanResponse(this.oidc.http, accessToken, body, deadline); }
+    catch (error) {
+      const reason = error instanceof PlanError ? error.reason : "interrupted";
+      if (reason === "plan_limit" || reason === "retry_later") {
+        const pause = reason === "plan_limit" ? 60 * 60_000 : 30_000;
+        await this.store.transaction("credentials", async () => {
+          const current = await this.store.credentials();
+          if (current?.tokens && !current.signedOut) this.store.write("credentials", { ...current, planPauseUntil: this.now() + pause });
+        }).catch(() => undefined);
+      }
+      throw error;
+    }
   }
 
   start(consent: boolean, guard: () => boolean): Promise<string> {
     if (this.signingOut) throw new PlanError("busy");
     return this.oauth.start(consent, guard);
+  }
+
+  async replaceRejectedRegistration(clientId: string, guard: () => boolean): Promise<void> {
+    if (!clientIdValid(clientId)) throw new PlanError("invalid_request");
+    await this.store.transaction("credentials", async () => {
+      const row = await this.store.credentials();
+      if (!guard()) throw new PlanError("declined");
+      if (row?.reconnect !== "client_rejected" || row.tokens) throw new PlanError("invalid_request");
+      this.store.write("credentials", { version: 1, issuer: row.issuer, clientId, savedAt: this.now(), pendingRegistration: true });
+    });
   }
 
   async acknowledge(guard: () => boolean): Promise<void> {
@@ -159,20 +184,21 @@ export class PlanSession {
     if (this.signingOut) throw new PlanError("busy");
     if (!guard()) throw new PlanError("declined");
     this.signingOut = true;
+    const oauthWasPending = this.oauth.pending;
     this.oauth.cancel();
     try {
       return await this.store.transaction("credentials", async () => {
         const row = await this.store.credentials();
         if (!guard()) throw new PlanError("declined");
         if (!row) return true;
-        const refreshToken = row.tokens?.refreshToken;
+        const refreshToken = row.tokens?.refreshToken ?? row.pendingGrantRefresh;
         // The durable sign-out removes the tokens before network I/O. A
         // process stop here leaves only the remote-revocation uncertainty.
         const signedOut: Credentials = { ...row, signedOut: true, tokens: undefined, pendingRotation: undefined,
-          pendingRegistration: undefined, reconnect: undefined, revocationConfirmed: refreshToken ? false : row.revocationConfirmed ?? true };
+          pendingRegistration: undefined, reconnect: undefined, revocationConfirmed: refreshToken || oauthWasPending ? false : row.revocationConfirmed ?? true };
         this.store.write("credentials", signedOut);
         const confirmed = refreshToken ? await this.revoke(row.clientId, refreshToken) : signedOut.revocationConfirmed!;
-        if (confirmed !== signedOut.revocationConfirmed) this.store.write("credentials", { ...signedOut, revocationConfirmed: confirmed });
+        if (refreshToken) this.store.write("credentials", { ...signedOut, pendingGrantRefresh: confirmed ? undefined : refreshToken, revocationConfirmed: confirmed });
         console.info(confirmed ? "[chatgpt-plan] signed-out" : "[chatgpt-plan] revocation-unconfirmed");
         return confirmed;
       });

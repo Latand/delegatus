@@ -4,15 +4,18 @@ import { unusableRefresh } from "./errors";
 import { clientId, complete, discovery, grant, jwks, model, now, planFixture, stream, synth } from "./plan.fixture";
 import { PlanSession } from "./session";
 import { PlanStore } from "./store";
+import { credentialStorageSupported } from "./constants";
 
 let fixture: ReturnType<typeof planFixture>;
-afterEach(() => fixture.dispose());
+const priorClient = process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
+afterEach(() => { fixture.dispose(); if (priorClient === undefined) delete process.env.LLV_CHATGPT_PLAN_CLIENT_ID; else process.env.LLV_CHATGPT_PLAN_CLIENT_ID = priorClient; });
 const body = { model, input: [{ role: "user", content: "Read the board" }] };
 const signal = () => AbortSignal.timeout(4_000);
 const owner = () => true;
 const responsesUrl = `${RESOURCE}/responses`;
-function create(handle?: Parameters<typeof planFixture>[0]) {
-  fixture = planFixture((url, init) => url === responsesUrl ? stream(complete({ output: [] })) : handle!(url, init));
+function create(handle?: Parameters<typeof planFixture>[0], response?: () => Response) {
+  process.env.LLV_CHATGPT_PLAN_CLIENT_ID = "dynamic_agent_client";
+  fixture = planFixture((url, init) => url === responsesUrl ? response?.() ?? stream(complete({ output: [] })) : handle!(url, init));
   return new PlanSession(fixture.store, fixture.oidc, () => now);
 }
 function expiring(expiresAt = now + 60_000) {
@@ -39,6 +42,27 @@ test("model catalog and granted scopes gate inference", async () => {
   expect((await session.status(model, true, true)).state).toBe("plan_disabled");
   await expect(session.respond(body, signal(), owner)).rejects.toThrow("plan_disabled");
   expect(fixture.requests).toHaveLength(0);
+});
+
+test("rejected client registration can be replaced by the owner while retaining the host identity", async () => {
+  const session = create();
+  const host = await (await import("./hostId")).hostId(fixture.store);
+  const row = fixture.seed({ reconnect: "client_rejected", tokens: undefined });
+  await session.replaceRejectedRegistration("replacement-client", owner);
+  expect(await fixture.store.credentials()).toMatchObject({ clientId: "replacement-client", pendingRegistration: true });
+  expect(await (await import("./hostId")).hostId(fixture.store)).toBe(host);
+  expect(row.clientId).toBe(clientId);
+  expect(credentialStorageSupported("win32")).toBe(false);
+});
+
+test("plan limit persists a bounded pause across calls", async () => {
+  const session = create(undefined, () => Response.json({ error: { code: "subscription_sharing_usage_limit_exceeded" } }, { status: 429 }));
+  fixture.seed();
+  await expect(session.respond(body, signal(), owner)).rejects.toThrow("plan_limit");
+  expect(await session.eligible(model)).toBe(false);
+  await expect(session.respond(body, signal(), owner)).rejects.toThrow("plan_limit");
+  expect(inferences()).toHaveLength(1);
+  expect((await session.status(model, true, true))).toMatchObject({ state: "plan_limit", usageUrl: "https://chatgpt.com/settings/usage" });
 });
 
 test("above the refresh window reuses the token and below it serializes independent sessions", async () => {

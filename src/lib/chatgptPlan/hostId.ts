@@ -7,6 +7,7 @@ export async function hostId(store: PlanStore): Promise<string> {
   return store.transaction("host", async () => {
     const raw = await store.read("host");
     if (raw === undefined) {
+      if (await store.credentials()) throw new PlanError("host_file");
       const id = `urn:uuid:${randomUUID()}`;
       store.write("host", { version: 1, id });
       return id;

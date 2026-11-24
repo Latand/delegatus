@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { CALLBACK, clientIdValid, DYNAMIC_CLIENT, ISSUER, PLAN_SCOPE, RESOURCE, SCOPES } from "./constants";
+import { CALLBACK, clientIdValid, configuredClientId, credentialStorageSupported, DYNAMIC_CLIENT, ISSUER, object, PLAN_SCOPE, RESOURCE, SCOPES } from "./constants";
 import { PlanError } from "./errors";
 import { hostId } from "./hostId";
 import { validateIdentity } from "./idToken";
@@ -14,6 +14,10 @@ type Attempt = {
   timer: ReturnType<typeof setTimeout>;
   server?: Server;
   retryUrl?: string;
+  refreshToken?: string;
+  grantClientId?: string;
+  grantCheckpoint?: Promise<void>;
+  revocation?: Promise<boolean>;
   guard: () => boolean;
 };
 const random = () => randomBytes(32).toString("base64url");
@@ -31,7 +35,7 @@ export class PlanOAuth {
   get retryUrl() { return this.attempt?.retryUrl; }
 
   constructor(private readonly store: PlanStore, private readonly oidc: PlanOidc,
-    private readonly now = Date.now, private readonly timeoutMs = 10 * 60_000) {}
+    private readonly now = Date.now, private readonly timeoutMs = 10 * 60_000, private readonly platform = process.platform) {}
 
   private closeListener(attempt: Attempt): void {
     const server = attempt.server;
@@ -47,6 +51,35 @@ export class PlanOAuth {
     clearTimeout(attempt.timer);
     attempt.abort.abort();
     this.closeListener(attempt);
+    if (attempt.refreshToken) void this.revokeGrant(attempt, attempt.refreshToken);
+  }
+
+  private revokeGrant(attempt: Attempt, token: string): Promise<boolean> {
+    if (attempt.revocation) return attempt.revocation;
+    attempt.revocation = this.performGrantRevocation(attempt, token);
+    return attempt.revocation;
+  }
+
+  private async performGrantRevocation(attempt: Attempt, token: string): Promise<boolean> {
+    await attempt.grantCheckpoint?.catch(() => undefined);
+    let confirmed = false;
+    try {
+      const deadline = AbortSignal.timeout(10_000);
+      const config = await this.oidc.configuration(deadline);
+      const response = await this.oidc.http(config.revocation_endpoint, { method: "POST", redirect: "error", signal: deadline,
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: attempt.grantClientId ?? configuredClientId() ?? "", token, token_type_hint: "refresh_token" }) });
+      confirmed = response.ok;
+    } catch { confirmed = false; }
+    try {
+      await this.store.transaction("credentials", async () => {
+        const row = await this.store.credentials();
+        if (row?.pendingGrantRefresh !== token) return;
+        this.store.write("credentials", { ...row, pendingGrantRefresh: confirmed ? undefined : token, revocationConfirmed: confirmed });
+      });
+    } catch { confirmed = false; }
+    if (!confirmed) console.info("[chatgpt-plan] revocation-unconfirmed");
+    return confirmed;
   }
 
   cancel(): void {
@@ -60,6 +93,9 @@ export class PlanOAuth {
 
   async start(consent: boolean, guard: () => boolean): Promise<string> {
     if (this.attempt) throw new PlanError("busy");
+    if (!credentialStorageSupported(this.platform)) throw new PlanError("plan_disabled");
+    const configured = configuredClientId();
+    if (!configured || (configured !== DYNAMIC_CLIENT && !clientIdValid(configured))) throw new PlanError("plan_disabled");
     this.reason = undefined;
     const attempt: Attempt = {
       abort: new AbortController(), guard,
@@ -127,7 +163,7 @@ export class PlanOAuth {
     redirect = `http://${address}${CALLBACK}`;
     const url = new URL(config.authorization_endpoint);
     url.search = new URLSearchParams({
-      client_id: saved?.clientId ?? DYNAMIC_CLIENT,
+      client_id: saved?.clientId ?? configuredClientId()!,
       ...(!saved ? { agent_name_hint: "Delegatus" } : {}),
       ext_agent_host_id: host, response_type: "code", redirect_uri: redirect, resource: RESOURCE,
       scope: SCOPES, state, nonce, code_challenge_method: "S256",
@@ -162,6 +198,20 @@ export class PlanOAuth {
       const deadline = AbortSignal.any([attempt.abort.signal, AbortSignal.timeout(15_000)]);
       const result = await this.oidc.exchange({ grant_type: "authorization_code", client_id: clientId,
         code, code_verifier: verifier, redirect_uri: redirect }, deadline);
+      const refreshToken = object(result.body)?.refresh_token;
+      if (typeof refreshToken === "string" && refreshToken.length > 0) {
+        attempt.refreshToken = refreshToken;
+        attempt.grantClientId = clientId;
+        attempt.grantCheckpoint = this.store.transaction("credentials", async () => {
+          const current = await this.store.credentials();
+          if (current?.clientId === clientId) {
+            saved = { ...current, pendingGrantRefresh: refreshToken, revocationConfirmed: false };
+            this.store.write("credentials", saved);
+          }
+        });
+        await attempt.grantCheckpoint;
+        if (attempt.abort.signal.aborted) { await this.revokeGrant(attempt, refreshToken); return; }
+      }
       this.check(attempt);
       if (result.code === "invalid_grant" && mayRetry) {
         const retryUrl = await this.listen(attempt, saved, host, consent, false);
@@ -186,9 +236,10 @@ export class PlanOAuth {
         if (JSON.stringify(current) !== previous) throw new PlanError("busy");
         this.store.write("credentials", {
           version: 1, issuer: ISSUER, clientId, ...identity, tokens, models,
-          savedAt: this.now(), acknowledged,
+          savedAt: this.now(), acknowledged, pendingGrantRefresh: undefined, revocationConfirmed: undefined,
         } satisfies Credentials);
       });
+      attempt.refreshToken = undefined;
       this.settle(attempt);
       console.info("[chatgpt-plan] connected");
     } catch (error) {

@@ -3,12 +3,15 @@ import { request } from "node:http";
 import { afterEach, expect, test } from "bun:test";
 import { CALLBACK, DYNAMIC_CLIENT, RESOURCE, SCOPES } from "./constants";
 import { PlanOAuth } from "./oauth";
+import { hostId } from "./hostId";
 import { clientId, discovery, grant, jwks, jwt, model, modelsUrl, now, planFixture, synth, until } from "./plan.fixture";
 
 const dispose: (() => void)[] = [];
-afterEach(() => { for (const cleanup of dispose.splice(0).reverse()) cleanup(); });
+const priorClient = process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
+afterEach(() => { for (const cleanup of dispose.splice(0).reverse()) cleanup(); if (priorClient === undefined) delete process.env.LLV_CHATGPT_PLAN_CLIENT_ID; else process.env.LLV_CHATGPT_PLAN_CLIENT_ID = priorClient; });
 
 function create(answer?: Parameters<typeof planFixture>[0], timeout?: number) {
+  process.env.LLV_CHATGPT_PLAN_CLIENT_ID = "dynamic_agent_client";
   const fixture = planFixture(answer);
   const oauth = new PlanOAuth(fixture.store, fixture.oidc, () => now, timeout);
   dispose.push(fixture.dispose, () => oauth.cancel());
@@ -100,6 +103,7 @@ test.each([
 
 test("explicit consent uses the full grant and refuses a different callback client", async () => {
   const fixture = create();
+  await hostId(fixture.store);
   fixture.seed();
   const first = params(await fixture.oauth.start(true, allowed));
   expect(first.get("prompt")).toBe("consent");
@@ -163,4 +167,44 @@ test("cancel and deadline close the real loopback listener", async () => {
   const second = params(await fixture.oauth.start(false, allowed));
   await until(() => (fixture.oauth.reason) === "expired");
   await expect(http(callback(second))).rejects.toThrow();
+});
+
+test("Windows disables sign-in before credential files, discovery, or a listener", async () => {
+  const fixture = create();
+  const windows = new PlanOAuth(fixture.store, fixture.oidc, () => now, undefined, "win32");
+  await expect(windows.start(false, allowed)).rejects.toThrow("plan_disabled");
+  expect(fixture.requests).toHaveLength(0);
+  expect(await fixture.store.read("host")).toBeUndefined();
+  windows.cancel();
+});
+
+test("cancel after the grant is issued revokes the uncommitted refresh token", async () => {
+  let nonce = "";
+  let releaseModels!: (response: Response) => void;
+  let modelsWaiting!: () => void;
+  const waiting = new Promise<void>(resolve => { modelsWaiting = resolve; });
+  const models = new Promise<Response>(resolve => { releaseModels = resolve; });
+  const fixture = create(async (url, init) => {
+    if (url === discovery.jwks_uri) return jwks();
+    if (url === modelsUrl) { modelsWaiting(); return models; }
+    if (url === discovery.revocation_endpoint) {
+      expect((init?.body as URLSearchParams).get("token")).toBe(synth("refresh"));
+      return new Response(null, { status: 200 });
+    }
+    return Response.json(grant(nonce));
+  });
+  const authorize = params(await fixture.oauth.start(false, allowed));
+  nonce = authorize.get("nonce")!;
+  await http(callback(authorize));
+  await waiting;
+  expect(await fixture.store.credentials()).toMatchObject({ pendingRegistration: true, pendingGrantRefresh: synth("refresh") });
+  fixture.oauth.cancel();
+  releaseModels(Response.json({ models: [] }));
+  const deadline = performance.now() + 1_500;
+  while ((await fixture.store.credentials())?.revocationConfirmed !== true) {
+    if (performance.now() > deadline) throw new Error("Uncommitted grant revocation did not settle");
+    await Bun.sleep(5);
+  }
+  expect(await fixture.store.credentials()).toMatchObject({ pendingRegistration: true, revocationConfirmed: true });
+  expect(fixture.requests.filter(row => row.url === discovery.revocation_endpoint)).toHaveLength(1);
 });

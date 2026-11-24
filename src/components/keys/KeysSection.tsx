@@ -625,7 +625,7 @@ function useChatGPTPlan(open: boolean) {
     next();
     return () => { stopped = true; window.clearTimeout(timer); generation.current++; };
   }, [open, busy, connecting, load]);
-  const action = async (action: "sign-in" | "enable-plan" | "cancel" | "acknowledge" | "sign-out") => {
+  const action = async (action: "sign-in" | "enable-plan" | "cancel" | "acknowledge" | "sign-out" | "replace-registration") => {
     if (writing.current) return;
     writing.current = true;
     setBusy(true);
@@ -650,6 +650,8 @@ function useChatGPTPlan(open: boolean) {
         setStatus({ state: "connecting" });
       } else if (action === "acknowledge") {
         setStatus(previous => previous && { ...previous, acknowledged: true });
+      } else if (action === "replace-registration") {
+        await load();
       } else setStatus(null);
     } catch {
       tab?.close();
@@ -703,6 +705,10 @@ function ChatGPTPlanRow({ size, owner, plan }: { size: Size; owner: boolean; pla
       {owner && state === "not_connected" && reason !== "declined" ? <p className="text-ui text-secondary">{t("chatgptPlan.intro")}</p> : null}
       {owner && explanation ?
         <p role="status" className="text-ui text-warning">{t(`chatgptPlan.reason.${explanation}`)}</p> : null}
+      {owner && state === "reconnect_required" && reason === "client_rejected" ?
+        <button type="button" className={`${button} border border-border`} disabled={busy} onClick={() => void action("replace-registration")}>
+          {t("chatgptPlan.replaceRegistration")}
+        </button> : null}
       {owner && canStart ? <button data-chatgpt-plan-start="" type="button" className={`${button} bg-brand text-on-brand`} disabled={busy}
         onClick={() => void action(state === "plan_disabled" ? "enable-plan" : "sign-in")}>
         {t(state === "plan_disabled" ? "chatgptPlan.enable" : "chatgptPlan.continue")}
