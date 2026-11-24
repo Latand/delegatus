@@ -161,32 +161,44 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const entry = checkoutEntry(argv[1]!, "scripts", cwd);
     if (entry) return { mode: argv[2], entry: fs.realpathSync(entry) };
   };
-  const isHookBootstrap = (command: string[], cwd: () => string, readParent: () => string | undefined,
-    readEnv: () => ((key: string) => string | undefined) | undefined, clientIdentity: string | undefined) => {
+  const hookParentMatches = (proof: ProcessIdentity, parent: string, fields: string[]) => {
+    if (!epoch || ["Z", "X", "x"].includes(fields[0]!)) return false;
+    const hostPid = Number(path.basename(parent));
+    if (proof.bootEpoch === epoch) return proof.pid === hostPid && proof.startIdentity === `${hostPid}:${fields[19]}`;
+    // The client can carry the hook's namespace-local identity. The service's
+    // launch record carries the translated one. Match either to its live PPID.
+    const namespace = fs.readlinkSync(path.join(parent, "ns/pid"));
+    if (proof.bootEpoch !== `linux:${epoch.split(":")[1]}:pidns:${namespace}`) return false;
+    const status = fs.readFileSync(path.join(parent, "status"), "utf8");
+    const localPid = Number(/^NSpid:\s+(.+)$/m.exec(status)?.[1]?.trim().split(/\s+/).at(-1));
+    return Number.isSafeInteger(localPid) && proof.pid === localPid && proof.startIdentity === `${localPid}:${fields[19]}`;
+  };
+  const isHookBootstrap = (command: string[], cwd: () => string, client: string, readProof: () => ProcessIdentity | undefined) => {
     // The hook starts a second copy under an owned runner before it queues
     // ESLint or the publication checks. An identical command alone can also
     // be run under a legacy grant, so require its original hook process.
     const hook = hookBootstrap(command, cwd);
     if (!hook) return false;
-    let proof: { parent?: ProcessIdentity; mode?: string; entry?: string } | undefined;
-    try { proof = JSON.parse(readEnv()?.("LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP") ?? "null"); } catch { return false; }
-    const parent = readParent();
-    if (!proof?.parent || proof.mode !== hook.mode || proof.entry !== hook.entry || !parent ||
-      !recordedParent(proof.parent) || proof.parent.pid !== Number(path.basename(parent))) return false;
-    // The launch marker proves the live command relationship. A retired
+    const proof = readProof();
+    const clientStat = readStat(client);
+    const parentPid = clientStat[1];
+    if (!epoch || !proof || !parentPid || !/^[1-9]\d*$/.test(parentPid) || ["Z", "X", "x"].includes(clientStat[0]!)) return false;
+    const parent = path.join(proc, parentPid);
+    const parentStat = readStat(parent);
+    if (!hookParentMatches(proof, parent, parentStat)) return false;
+    // The parent identity and the two commands prove the relationship. A retired
     // legacy ticket for that exact client proves it already consumed
     // admission, so it cannot be treated as an unadmitted cleanup bootstrap.
-    if (!epoch) return false;
     const prior = history ??= queue.legacyGateHistory(epoch);
-    if (!clientIdentity || prior.retirements.has(clientIdentity) ||
-      !proof.parent.startIdentity || prior.retirements.has(proof.parent.startIdentity)) return false;
-    const original = parent && hookBootstrap(readArgv(parent), readCwd(parent));
+    if (prior.retirements.has(`${path.basename(client)}:${clientStat[19]}`) ||
+      prior.retirements.has(`${parentPid}:${parentStat[19]}`)) return false;
+    const original = hookBootstrap(readArgv(parent), readCwd(parent));
     if (!original || original.mode !== hook.mode || original.entry !== hook.entry) return false;
     // A same-command process launched under an older gate has already crossed
     // admission even when its ticket predates the retirement journal. Require
     // the original hook to have a non-gate parent before treating its re-entry
     // as cleanup bootstrap evidence.
-    const originalParent = readStat(parent!)[1];
+    const originalParent = parentStat[1];
     if (!/^[1-9]\d*$/.test(originalParent)) return false;
     const parentArgv = readArgv(path.join(proc, originalParent));
     const parentScript = path.basename(parentArgv[1] ?? "");
@@ -327,11 +339,13 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     }
     return false;
   };
-  const isHookRunner = (argv: string[], base: string, parentPid: string | undefined) => {
+  const isHookRunner = (argv: string[], base: string) => {
     const command = argv.slice(argv[2] === "--portable" || argv[2] === "--namespace" ? 3 : 2);
     const cwd = readCwd(base);
-    const clientIdentity = `${path.basename(base)}:${readStat(base)[19]}`;
-    const bootstrap = isHookBootstrap(command, cwd, () => parentPid ? path.join(proc, parentPid) : undefined, () => readEnvironment(base), clientIdentity);
+    const bootstrap = isHookBootstrap(command, cwd, base, () => {
+      const proof = readEnvironment(base)("LLV_OWNED_RUN_PARENT_IDENTITY");
+      try { return proof ? JSON.parse(proof) as ProcessIdentity : undefined; } catch { return undefined; }
+    });
     const ordinary = isHookParent(command, cwd);
     if (!bootstrap && !ordinary && !hookBootstrap(command, cwd)) return false;
     const runner = fs.realpathSync(path.resolve(cwd(), argv[1]!));
@@ -440,9 +454,8 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
         // parent which deliberately runs outside the gate pool.
         try {
           const launch = JSON.parse(fs.readFileSync(path.join(base, "root", argv[3]!), "utf8"));
-          if (isHookBootstrap(serviceCommand(launch.command, argv[1]!), () => launch.cwd,
-            () => recordedParent(launch.parent), () => key => launch.env?.[key],
-            recordedParent(launch.owner) ? launch.owner.startIdentity : undefined)) return false;
+          const client = recordedParent(launch.owner);
+          if (client && isHookBootstrap(serviceCommand(launch.command, argv[1]!), () => launch.cwd, client, () => launch.parent)) return false;
           if (isHookParent(serviceCommand(launch.command, argv[1]!), () => launch.cwd) &&
             !serviceCouldUsePool(base, argv[1]!, argv[3]!)) return false;
           return samePool(launch.env.LLV_GATE_LOCK_DIR, launch.cwd);
@@ -451,14 +464,14 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
           return serviceCouldUsePool(base, argv[1]!, argv[3]!);
         }
       }
-      if (script === "owned-runner.ts" && isHookRunner(argv, base, fields[1])) return false;
+      if (script === "owned-runner.ts" && isHookRunner(argv, base)) return false;
       if (script === "test-child-guardian.ts") {
         const runner = JSON.parse(argv[3]!);
         if (String(runner.pid) === fields[1] && runner.bootEpoch === epoch && cpuOwnerStatus(runner) === "alive") {
           const runnerBase = path.join(proc, String(runner.pid));
           const launch = readArgv(runnerBase);
           if (path.basename(launch[1] ?? "") === "owned-runner.ts" &&
-            isHookRunner(launch, runnerBase, readStat(runnerBase)[1])) return false;
+            isHookRunner(launch, runnerBase)) return false;
         }
       }
       const candidate = readEnvironment(base)("LLV_GATE_LOCK_DIR");

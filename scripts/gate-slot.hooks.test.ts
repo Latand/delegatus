@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { redactBounded } from "../src/lib/monitor/redact";
+import { captureProcessIdentity } from "../src/lib/processIdentity";
 import { installedGateAdmissionEnv } from "../src/lib/runtime/agentSignalSandbox";
 import { CPU_QUEUE_SPACING_MS } from "../src/lib/runtime/cpuAdmission";
+import { hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { realExec } from "../src/lib/workflows/provision";
 import { fixture, legacyGateTree, pathWithoutFlock, queuedTickets, until } from "./gate-slot.queue.fixture";
@@ -387,11 +389,12 @@ command -p git "$@"
   }
 }, 50_000);
 
-for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "service hooks", "historical service hook", "older helper head"] as const) test.skipIf(
+for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "mixed service prepare", "service hooks", "historical service hook", "older helper head"] as const) test.skipIf(
   process.platform !== "linux" || !mode.startsWith("portable") && !hasUserManager
 )(`FIFO publication admits the first check while the peer waits (${mode})`, async () => {
     const useService = !mode.startsWith("portable");
     const historical = mode === "historical service hook", olderHead = mode === "older helper head";
+    const mixedPrepare = mode === "mixed service prepare";
     const ordinary = mode.includes("hooks") || historical || olderHead;
     const firstOpen = mode.endsWith("first-open");
     const f = fixture(), control = new AbortController(), roots: string[] = [];
@@ -465,10 +468,22 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
       return { env, waitFor };
     };
     try {
-      const first = publicationFixture();
+      const first = (() => {
+        if (!mixedPrepare) return publicationFixture();
+        const deployed = legacyGateTree(f.dir, "43fab846adb9a443384d30540cf7e318a12a6198");
+        execFileSync("git", ["init", "--quiet", deployed], { env: fixtureGitEnv() });
+        return createPublicationFixtures(deployed, roots).fixture();
+      })();
       const peer = historical
         ? createPublicationFixtures(legacyGateTree(f.dir, "c0ceb7ff5eb064b1d9d29a9aef2540edd15d5dd1"), roots).fixture()
         : publicationFixture();
+      if (mixedPrepare) {
+        // The deployed hook supplies only the cleanup owner's parent identity.
+        // Its own gate wrapper gets the admission helper from the new release.
+        const helper = path.join(first.writablePath("scripts"), "cpu-admission.ts");
+        fs.unlinkSync(helper);
+        fs.symlinkSync(path.resolve("scripts/cpu-admission.ts"), helper);
+      }
       if (olderHead) {
         // The exact older admission implementation observed at the FIFO head.
         const historicalTree = legacyGateTree(f.dir, "36b68a986862c5391cadf0c8c162aeea73012447");
@@ -502,12 +517,31 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
         f.db.exec("DROP TRIGGER IF EXISTS legacy_gate_retired; DROP TABLE IF EXISTS legacy_gate_cutover; DROP TABLE IF EXISTS legacy_gate_retirements");
       }
       const grants = () => f.db.query("SELECT at FROM grants ORDER BY rowid").all();
+      if (mixedPrepare) {
+        const orphan = Bun.spawn(["bash", "-c", "read -r line"], { stdin: "pipe" });
+        try {
+          const owner = hostProcessIdentity(captureProcessIdentity(orphan.pid));
+          f.db.query("INSERT INTO tickets (key, since, owner) VALUES (?, ?, ?)")
+            .run("command:dead-head", previous, JSON.stringify(owner));
+        } finally {
+          orphan.stdin.end();
+          await orphan.exited;
+        }
+      }
       const firstRun = launch(first, "first");
-      await firstRun.waitFor("its first private ticket", () => f.count() === 1);
+      await firstRun.waitFor("its first private ticket", () =>
+        f.count() === 1 && (!mixedPrepare || stderr("first").includes("removed command:dead-head:")));
       const firstTicket = f.db.query<{ owner: string }, []>(`SELECT owner ${queuedTickets}`).get()!;
+      if (mixedPrepare) {
+        expect(stderr("first")).toContain("removed command:dead-head:");
+        expect(fs.readlinkSync(path.join(signalSandboxContext()?.hostProc ?? "/proc", String(JSON.parse(firstTicket.owner).pid), "cwd"))).toBe(first.dir);
+      }
       const peerRun = launch(peer, "peer");
       await peerRun.waitFor("the second private ticket", () => f.count() === 2);
       expect(last()).toBe(previous);
+      expect(grants()).toEqual([]);
+      expect(f.db.query("SELECT 1 FROM sqlite_master WHERE name = 'gate_slots'").get()).toBeNull();
+      expect(Bun.spawnSync(["flock", "-n", path.join(f.dir, "llv-heavy-gate.slot1.lock"), "true"]).exitCode).toBe(0);
       fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
       await firstRun.waitFor("the admitted check starting", () => fs.existsSync(started));
       const admitted = last()!;

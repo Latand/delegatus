@@ -638,6 +638,25 @@ test("a live owner the kernel verifies keeps the head however long it stays sile
   expect(f.read("SELECT key FROM suspended")).toEqual([]);
 });
 
+test("a live bounded gate that stops polling yields its head and recovers its place on its next poll", () => {
+  const f = ownerFixture(), { live } = owners();
+  const head = "command:bounded:stopped", next = "command:bounded:next", later = "command:bounded:later";
+  expect(f.open().check(head, true, live, false, undefined, true)).toBeNull();
+  f.at(CPU_QUEUE_UNPOLLED_MS);
+  const peer = f.open();
+  expect(peer.check(next, true, live, false, undefined, true)).toMatchObject({ position: 2 });
+  expect(peer.activeGateSlots()).toEqual([]);
+  f.at(CPU_QUEUE_UNPOLLED_MS + 1);
+  expect(f.open().check(next, true, live, true, undefined, true)).toBeNull();
+  expect(f.read("SELECT key FROM unpolled")).toEqual([{ key: head }]);
+  expect(f.lines).toEqual([`passed over ${head}: its owner process ${live.pid} has not checked in for 60 s; its next check returns it to its place`]);
+  expect(f.open().check(later, true, live, false, undefined, true)).toMatchObject({ position: 1 });
+  f.at(CPU_QUEUE_UNPOLLED_MS + 1 + CPU_QUEUE_SPACING_MS);
+  expect(f.open().check(head, true, live, false, undefined, true)).toBeNull();
+  expect(f.open().check(later, true, live, false, undefined, true)).toMatchObject({ position: 2 });
+  expect(f.read("SELECT key FROM unpolled")).toEqual([]);
+});
+
 test("an unverifiable owner silent for a day is removed with one reason line", () => {
   const f = ownerFixture(), q = f.open(), { foreign } = owners();
   q.check("command:foreign", false, foreign);

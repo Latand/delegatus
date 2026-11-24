@@ -246,9 +246,11 @@ it as for a stage ticket. The poll trigger stamps owned tickets too, so a
 release that predates this records them as well. An unverified owner that has
 not checked in for 60 seconds is passed over, and after 24 hours removed. A
 dead owner is removed as before. Each of these writes one line naming the
-ticket and the reason. An owner the kernel shows alive keeps its place however
-long it stays silent. Passing a ticket over changes only the order: a start
-still needs its slot lock and the spacing.
+ticket and the reason. A bounded gate waiter also yields its place after 60
+seconds without a poll, even when its wrapper is still alive. Its next poll
+restores its original order and age. Other verified command owners keep their
+places. A start still needs its slot lock and the spacing when a ticket is
+passed over.
 
 When the head of a ticket's lane is past its ten-minute bound and nothing has
 been admitted on the machine for a minute since, the wait no longer promises minutes: the state detail reads
@@ -729,9 +731,10 @@ claim. It checks the kernel's process view for wrappers that have consumed
 their tickets, owned runners and their cleanup supervisors. Signal-sandboxed
 callers use the verified host process view. A waiting shell still has its
 ticket. The pre-commit hook and publication preparer bootstrap an owned copy
-before heavy admission. Their original hook process identifies the cleanup
-client and service so they can wait for their own nested gate. A held slot
-whose admission already passed the drain check carries that proof forward.
+before heavy admission. The runner's recorded parent identity and the live
+process relationship identify the cleanup client and service so they can wait
+for their own nested gate. A held slot whose admission already passed the
+drain check carries that proof forward.
 The same final claim transaction rejects a drain observation if another caller
 admitted work during the check.
 
