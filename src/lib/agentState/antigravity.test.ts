@@ -964,4 +964,192 @@ describe("Antigravity agentState integration", () => {
       }
     }
   });
+
+  it("looks up Antigravity journal history in O(1) via indexed SQLite query and per-subject JSON index even with 12,000 foreign journal rows", async () => {
+    const { Database } = await import("bun:sqlite");
+    const { registryLatestAgentStateJournalBySubject } = await import("@/lib/agent/sqliteRegistryStore");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ag-journal-12k-"));
+    roots.push(root);
+    const fn = path.join(root, "agent-registry.json");
+    const sq = path.join(root, "agent-registry.sqlite");
+    const proc = captureProcessIdentity(process.pid);
+    fs.writeFileSync(fn, JSON.stringify(fixtureRegistry(root, "antigravity", proc, null)));
+    const rows = fixtureRecords("antigravity");
+    fs.writeFileSync(path.join(root, "native.jsonl"), [...rows.open, ...rows.close].map((row) => JSON.stringify(row)).join("\n") + "\n");
+
+    const reg = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: sq });
+    const entry = reg.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })!;
+    const targetSubject = subjectId(entry);
+    reg.close();
+
+    // Seed 12,000 foreign journal rows directly into SQLite `registry_rows`.
+    const foreignCount = 12_000;
+    const db = new Database(sq);
+    try {
+      const plan = db.query<{ detail: string }, [string]>(`
+        EXPLAIN QUERY PLAN
+        SELECT row_key, value_json FROM registry_rows
+        WHERE collection='agentStateJournal' AND json_extract(value_json,'$.subject')=?
+        ORDER BY json_extract(value_json,'$.at') DESC, row_key DESC
+        LIMIT 1
+      `).all(targetSubject);
+      expect(plan.some((step) => step.detail.includes("registry_agent_state_journal_subject"))).toBe(true);
+      expect(plan.some((step) => /TEMP B-TREE/i.test(step.detail))).toBe(false);
+
+      const insert = db.query(
+        "INSERT INTO registry_rows (collection, row_key, value_json, row_order) VALUES ('agentStateJournal', ?, ?, ?)",
+      );
+      db.exec("BEGIN");
+      for (let i = 0; i < foreignCount; i += 1) {
+        const key = `${String(1_700_000_000_000 + i).padStart(16, "0")}:foreign-${i}`;
+        const foreignSubj = `f${i.toString(16).padStart(47, "0")}`;
+        const payload = JSON.stringify({
+          version: 1,
+          id: key,
+          at: 1_700_000_000_000 + i,
+          subject: foreignSubj,
+          entryKey: `claude:foreign-${i}`,
+          conversationId: `conversation_foreign_${i}`,
+          from: null,
+          to: "idle",
+          reason: "seeded foreign journal row",
+          effectiveAt: null,
+          fromTurn: { state: null, nativeId: null, cacheRef: null },
+          toTurn: { state: "absent", nativeId: null, cacheRef: null },
+          divergence: null,
+          evidence: [],
+        });
+        insert.run(key, payload, i);
+      }
+      db.exec("COMMIT");
+    } finally {
+      db.close();
+    }
+
+    const regHot = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: sq });
+    const origParse = JSON.parse;
+    let foreignJournalParses = 0;
+    let targetJournalParses = 0;
+    JSON.parse = function (body: string, ...args: unknown[]) {
+      const parsed = (origParse as (text: string, ...rest: unknown[]) => unknown).call(JSON, body, ...args) as
+        | { subject?: string; entryKey?: string; id?: string }
+        | null;
+      if (parsed && typeof parsed.id === "string" && typeof parsed.subject === "string" && typeof parsed.entryKey === "string") {
+        if (parsed.subject === targetSubject) targetJournalParses += 1;
+        else if (parsed.id.includes(":foreign-")) foreignJournalParses += 1;
+      }
+      return parsed;
+    } as typeof JSON.parse;
+    try {
+      // 1. Point lookup inside a write transaction decodes ZERO foreign journal rows across 12,000 rows.
+      foreignJournalParses = 0;
+      targetJournalParses = 0;
+      const unseenLookup = regHot.agentStateWrite((file) => registryLatestAgentStateJournalBySubject(file, targetSubject));
+      expect(unseenLookup).toBeUndefined();
+      expect(foreignJournalParses).toBe(0);
+      expect(targetJournalParses).toBe(0);
+
+      // 2. Full `AgentStateService.request()` for a brand-new Antigravity process never walks all 12,000 rows
+      //    (bounded maintenance reads at most one page of 256 rows; `commitAgentObservation` decodes 0 foreign rows).
+      foreignJournalParses = 0;
+      targetJournalParses = 0;
+      await new AgentStateService({
+        registry: regHot,
+        now: () => FIXTURE_NOW + 2000,
+        owns: () => true,
+        process: () => "alive",
+        memory: () => null,
+        release: "fixture",
+        publish: async () => true,
+      }).request();
+      expect(foreignJournalParses).toBeLessThanOrEqual(256);
+      expect(readAgentProjection(regHot, targetSubject)).not.toBeNull();
+      expect(readAgentStateMetrics(regHot).subjectsObserved).toBe(1);
+
+      // 3. Drop the projection row while keeping its journal row + 12,000 foreign rows:
+      //    point lookup decodes ONLY that exact subject's newest journal row (0 foreign decodes),
+      //    and `AgentStateService.request()` recovers without double-counting.
+      const dbDrop = new Database(sq);
+      try {
+        dbDrop.query("DELETE FROM registry_antigravity_agent_states WHERE subject = ?").run(targetSubject);
+      } finally {
+        dbDrop.close();
+      }
+      foreignJournalParses = 0;
+      targetJournalParses = 0;
+      const seenLookup = regHot.agentStateWrite((file) => registryLatestAgentStateJournalBySubject(file, targetSubject));
+      expect(seenLookup?.subject).toBe(targetSubject);
+      expect(foreignJournalParses).toBe(0);
+      expect(targetJournalParses).toBe(1);
+
+      foreignJournalParses = 0;
+      targetJournalParses = 0;
+      await new AgentStateService({
+        registry: regHot,
+        now: () => FIXTURE_NOW + 4000,
+        owns: () => true,
+        process: () => "alive",
+        memory: () => null,
+        release: "fixture",
+        publish: async () => true,
+      }).request();
+      expect(foreignJournalParses).toBeLessThanOrEqual(256);
+      expect(targetJournalParses).toBeLessThanOrEqual(1);
+      expect(readAgentProjection(regHot, targetSubject)).not.toBeNull();
+      expect(readAgentStateMetrics(regHot).subjectsObserved).toBe(1);
+    } finally {
+      JSON.parse = origParse;
+      regHot.close();
+    }
+
+    // 3. JSON `off` mode builds the per-subject journal index once on load and
+    //    never walks `Object.values(file.agentStateJournal)` on hot lookups.
+    const jsonRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ag-journal-json-idx-"));
+    roots.push(jsonRoot);
+    const jsonFn = path.join(jsonRoot, "agent-registry.json");
+    const jsonSeed = fixtureRegistry(jsonRoot, "antigravity", proc, null) as unknown as {
+      agentStateJournal: Record<string, unknown>;
+    };
+    jsonSeed.agentStateJournal = {};
+    for (let i = 0; i < 500; i += 1) {
+      const key = `${String(1_700_000_000_000 + i).padStart(16, "0")}:j-${i}`;
+      jsonSeed.agentStateJournal[key] = {
+        version: 1,
+        id: key,
+        at: 1_700_000_000_000 + i,
+        subject: `e${i.toString(16).padStart(47, "0")}`,
+        entryKey: `claude:j-${i}`,
+        conversationId: `conversation_j_${i}`,
+        from: null,
+        to: "idle",
+        reason: "seeded json row",
+        effectiveAt: null,
+        fromTurn: { state: null, nativeId: null, cacheRef: null },
+        toTurn: { state: "absent", nativeId: null, cacheRef: null },
+        divergence: null,
+        evidence: [],
+      };
+    }
+    fs.writeFileSync(jsonFn, JSON.stringify(jsonSeed));
+    const jsonReg = new AgentRegistry(jsonFn, undefined, undefined, { sqliteMode: "off" });
+    try {
+      jsonReg.agentStateRead((file) => {
+        let ownKeysCalls = 0;
+        const origValues = Object.values;
+        Object.values = function (obj: unknown) {
+          if (obj === file.agentStateJournal) ownKeysCalls += 1;
+          return origValues(obj as Record<string, unknown>);
+        } as typeof Object.values;
+        try {
+          expect(registryLatestAgentStateJournalBySubject(file, targetSubject)).toBeUndefined();
+          expect(registryLatestAgentStateJournalBySubject(file, `e${(499).toString(16).padStart(47, "0")}`)?.id).toContain(":j-499");
+          expect(ownKeysCalls).toBe(0);
+        } finally {
+          Object.values = origValues;
+        }
+      });
+    } finally {
+      jsonReg.close();
+    }
+  });
 });

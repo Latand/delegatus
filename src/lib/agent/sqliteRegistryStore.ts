@@ -22,7 +22,7 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, DatabaseReplacedError, openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentStateMetricsForStorage, type AgentProjection, type AgentStateMetricsRow } from "@/lib/agentState/model";
+import { agentStateMetricsForStorage, type AgentProjection, type AgentStateJournal, type AgentStateMetricsRow } from "@/lib/agentState/model";
 
 /** Non-enumerable per-transaction accessor attached to lazy `RegistryFile` views
  * so Antigravity `AgentProjection` rows persist in `registry_antigravity_agent_states`
@@ -475,6 +475,7 @@ const registryRowIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_phase ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),json_extract(value_json,'$.migration.phase'),row_order)",
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_custody ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END,row_order)",
   "CREATE INDEX IF NOT EXISTS registry_seat_children_order ON registry_rows(json_extract(value_json, '$.parentConversationId'), row_order) WHERE collection = 'lineageEdges' AND json_extract(value_json, '$.source') = 'viewer-spawn'",
+  "CREATE INDEX IF NOT EXISTS registry_agent_state_journal_subject ON registry_rows(json_extract(value_json,'$.subject'),json_extract(value_json,'$.at') DESC,row_key DESC) WHERE collection='agentStateJournal'",
 ]);
 const registryLivenessIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_liveness_receipts_order ON registry_liveness_receipts(row_order)",
@@ -592,6 +593,8 @@ interface RegistryFileReaders {
   liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
   retiredHosts?: WeakMap<object, (limit: number, cutBoundary?: string) => RetiredHostSelection>;
   structuredProcess?: WeakMap<object, (pids: readonly number[]) => boolean>;
+  latestAgentStateJournal?: WeakMap<object, (subject: string) => AgentStateJournal | undefined>;
+  jsonAgentStateJournalBySubject?: WeakMap<object, Map<string, AgentStateJournal>>;
 }
 /* Next standalone evaluates instrumentation and route handlers in separate
    bundle realms, each with its own copy of this module, while the process
@@ -620,6 +623,66 @@ const startupSelectionReaders = fileReaders.startupSelection ??= new WeakMap();
 const projectionReaders = fileReaders.projection;
 const livenessReaders = fileReaders.liveness;
 const structuredProcessReaders = fileReaders.structuredProcess ??= new WeakMap();
+const latestAgentStateJournalReaders = fileReaders.latestAgentStateJournal ??= new WeakMap();
+const jsonAgentStateJournalIndexes = fileReaders.jsonAgentStateJournalBySubject ??= new WeakMap();
+
+function isNewerJournalRow(candidate: AgentStateJournal, current: AgentStateJournal | undefined): boolean {
+  return !current || candidate.at > current.at || (candidate.at === current.at && candidate.id >= current.id);
+}
+
+/** Attach a prebuilt per-subject latest-journal index for a JSON-loaded
+ * `agentStateJournal` record so hot-path lookups never rescan the collection. */
+export function attachAgentStateJournalSubjectIndex(
+  journal: Record<string, AgentStateJournal>,
+  index: Map<string, AgentStateJournal>,
+): void {
+  jsonAgentStateJournalIndexes.set(journal, index);
+}
+
+/** Maintain the JSON per-subject latest-journal index in O(1) on append.
+ * No-op for SQLite proxy collections (which use the SQLite index directly). */
+export function noteAgentStateJournalRow(
+  journal: Record<string, AgentStateJournal>,
+  row: AgentStateJournal,
+): void {
+  const index = jsonAgentStateJournalIndexes.get(journal);
+  if (!index) return;
+  if (isNewerJournalRow(row, index.get(row.subject))) index.set(row.subject, row);
+}
+
+/** Maintain the JSON per-subject latest-journal index in O(1) when pruning the
+ * oldest journal entry. No-op for SQLite proxy collections (avoids extra reads). */
+export function removeAgentStateJournalRowFromIndex(
+  journal: Record<string, AgentStateJournal>,
+  key: string,
+): void {
+  const index = jsonAgentStateJournalIndexes.get(journal);
+  if (!index) return;
+  const existing = journal[key];
+  if (existing && index.get(existing.subject)?.id === key) {
+    index.delete(existing.subject);
+  }
+}
+
+/** Point lookup of the newest `agentStateJournal` row for one exact `subject`.
+ * Uses `registry_agent_state_journal_subject` (`LIMIT 1`) in SQLite mode and
+ * a per-subject `Map` built once per collection in JSON mode. */
+export function registryLatestAgentStateJournalBySubject(
+  file: RegistryFile,
+  subject: string,
+): AgentStateJournal | undefined {
+  const reader = latestAgentStateJournalReaders.get(file);
+  if (reader) return reader(subject);
+  let index = jsonAgentStateJournalIndexes.get(file.agentStateJournal);
+  if (!index) {
+    index = new Map<string, AgentStateJournal>();
+    for (const row of Object.values(file.agentStateJournal)) {
+      if (isNewerJournalRow(row, index.get(row.subject))) index.set(row.subject, row);
+    }
+    jsonAgentStateJournalIndexes.set(file.agentStateJournal, index);
+  }
+  return index.get(subject);
+}
 
 /** An extant process slot, including scope custody on a terminal row, belongs
  * to registered host recovery. Never seize it through orphan discovery. */
@@ -786,6 +849,8 @@ class RegistryReaderViews {
     if (projections) projectionReaders.set(frozen, projections);
     const retiredHosts = retiredHostReaders.get(file);
     if (retiredHosts) retiredHostReaders.set(frozen, retiredHosts);
+    const latestJournal = latestAgentStateJournalReaders.get(file);
+    if (latestJournal) latestAgentStateJournalReaders.set(frozen, latestJournal);
     return frozen;
   }
 
@@ -4457,6 +4522,17 @@ export class SqliteAgentRegistryStore {
         throw new DatabaseReplacedError("registry page needs a fresh snapshot");
       return this.rowKeyPage(collection, after, limit, filter);
     });
+    latestAgentStateJournalReaders.set(file, (subject) => {
+      if (this.changeId() !== coldGrantChangeId || databaseFileIdentity(this.filename) !== identity)
+        throw new DatabaseReplacedError("registry journal lookup needs a fresh snapshot");
+      const row = this.db.query<{ value_json: string }, [string]>(`
+        SELECT value_json FROM registry_rows
+        WHERE collection='agentStateJournal' AND json_extract(value_json,'$.subject')=?
+        ORDER BY json_extract(value_json,'$.at') DESC, row_key DESC
+        LIMIT 1
+      `).get(subject);
+      return row ? parseSqliteJson(row.value_json, this.db) as AgentStateJournal : undefined;
+    });
     boundedReaders.set(file, (collection, filters, limit) => {
       const holds = (row: unknown) => filters.every(filter => {
         const values = typeof filter.value === "string" ? [filter.value] : filter.value;
@@ -6132,6 +6208,33 @@ export class SqliteAgentRegistryStore {
         if (key > after && row && (!filter || values!.includes(lookupValue(row, filter.field) as string))) keys.add(key); else keys.delete(key);
       }
       return [...keys].sort().slice(0, limit);
+    });
+    latestAgentStateJournalReaders.set(file, (subject) => {
+      const dirty = dirtyRows.get("agentStateJournal");
+      let best: AgentStateJournal | undefined;
+      for (const key of dirty ?? []) {
+        const row = file.agentStateJournal[key];
+        if (row && row.subject === subject && isNewerJournalRow(row, best)) best = row;
+      }
+      if (reorderedCollections.has("agentStateJournal")) {
+        for (const row of Object.values(file.agentStateJournal)) {
+          if (row.subject === subject && isNewerJournalRow(row, best)) best = row;
+        }
+        return best;
+      }
+      const rows = this.db.query<{ row_key: string; value_json: string }, [string, number]>(`
+        SELECT row_key, value_json FROM registry_rows
+        WHERE collection='agentStateJournal' AND json_extract(value_json,'$.subject')=?
+        ORDER BY json_extract(value_json,'$.at') DESC, row_key DESC
+        LIMIT ?
+      `).all(subject, 1 + (dirty?.size ?? 0));
+      for (const candidate of rows) {
+        if (dirty?.has(candidate.row_key)) continue;
+        const parsed = parseSqliteJson(candidate.value_json, this.db) as AgentStateJournal;
+        if (isNewerJournalRow(parsed, best)) best = parsed;
+        break;
+      }
+      return best;
     });
     openDeliveryReaders.set(file, (conversationId, states, after, limit) => {
       const dirty = dirtyRows.get("heldDeliveries");

@@ -1,6 +1,14 @@
 import crypto from "node:crypto";
 import type { AgentRegistry, AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
-import { registryCollectionPage, registryConversationsForEntryKey, type AntigravityAgentStatesView } from "@/lib/agent/sqliteRegistryStore";
+import {
+  attachAgentStateJournalSubjectIndex,
+  noteAgentStateJournalRow,
+  registryCollectionPage,
+  registryConversationsForEntryKey,
+  registryLatestAgentStateJournalBySubject,
+  removeAgentStateJournalRowFromIndex,
+  type AntigravityAgentStatesView,
+} from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { AGENT_STATE_POLICY, emptyAgentStateMetrics, evaluateAgentState, fact, validAgentFacts, validAgentEvidence, type AgentFacts, type AgentProjection, type AgentStateJournal, type AgentStateMetrics, type AgentStateMetricsRow } from "./model";
 
@@ -36,6 +44,7 @@ export function normalizeAgentStateRows(value: unknown, kind: "projection" | "jo
   if (value === undefined) return {};
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid agent-state collection");
   const rows: Record<string, AgentProjection | AgentStateJournal | AgentStateMetricsRow> = {};
+  const journalSubjectIndex = kind === "journal" ? new Map<string, AgentStateJournal>() : null;
   for (const [key, row] of Object.entries(value)) {
     if (!row || row.version !== 1 || key.length > 128 || Buffer.byteLength(JSON.stringify(row)) > 8192
       || (kind === "projection" && (!validAgentFacts(row.facts) || row.subject !== row.facts.subject || !row.verdict || !Number.isSafeInteger(row.revision)))
@@ -46,7 +55,19 @@ export function normalizeAgentStateRows(value: unknown, kind: "projection" | "jo
       // Registry snapshots are written as whole files. Keep the original
       // sparse representation there so an unrelated write cannot migrate history.
       rows[key] = preserveStoredShape ? row as AgentStateMetricsRow : metrics;
-    } else rows[key] = row;
+    } else {
+      rows[key] = row;
+      if (journalSubjectIndex) {
+        const journalRow = row as AgentStateJournal;
+        const existing = journalSubjectIndex.get(journalRow.subject);
+        if (!existing || journalRow.at > existing.at || (journalRow.at === existing.at && journalRow.id >= existing.id)) {
+          journalSubjectIndex.set(journalRow.subject, journalRow);
+        }
+      }
+    }
+  }
+  if (journalSubjectIndex) {
+    attachAgentStateJournalSubjectIndex(rows as Record<string, AgentStateJournal>, journalSubjectIndex);
   }
   return rows;
 }
@@ -235,10 +256,9 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
       // and journal row, whereas an already-journaled subject (even if its earlier
       // observation was unverified and therefore absent from `physicalSubjects`) MUST
       // NOT be counted a second time after a prior JSON release dropped its projection row.
-      for (const row of Object.values(file.agentStateJournal)) {
-        if (row.subject !== next.subject) continue;
-        if (!latestJournalForSubject || row.at >= latestJournalForSubject.at) latestJournalForSubject = row;
-      }
+      // Point lookup only: SQLite uses `registry_agent_state_journal_subject` (`LIMIT 1`),
+      // JSON mode uses the per-subject index built once on load — never a full journal scan.
+      latestJournalForSubject = registryLatestAgentStateJournalBySubject(file, next.subject);
       previouslyObservedWithoutRow = inPhysicalSubjects || Boolean(latestJournalForSubject && latestJournalForSubject.to !== "dead");
       if (previouslyObservedWithoutRow && latestJournalForSubject && !observation.repair && !observation.repairConversation) {
         const nextEffectiveAt = next.facts.turn.determined ? next.facts.turn.value.at : null;
@@ -284,10 +304,15 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
     if (!file.agentStateJournal[journal.id]) {
       // A failure inserting this row rolls back the repaired cache too.
       file.agentStateJournal[journal.id] = journal;
+      noteAgentStateJournalRow(file.agentStateJournal, journal);
       metrics.journalRows++;
       for (const stale of registryCollectionPage(file, "agentStateJournal", "", 2)) {
         if (metrics.journalRows <= 16384) break;
-        if (stale !== journal.id) { delete file.agentStateJournal[stale]; metrics.journalRows--; }
+        if (stale !== journal.id) {
+          removeAgentStateJournalRowFromIndex(file.agentStateJournal, stale);
+          delete file.agentStateJournal[stale];
+          metrics.journalRows--;
+        }
       }
       if (journal.divergence && old?.divergenceKey !== next.divergenceKey) metrics.registryTranscriptDivergencesTotal++;
     }
@@ -390,7 +415,9 @@ export function recordAgentProcessEnded(registry: AgentRegistry, observed: Agent
     row.verdict.projectionRevision = row.revision;
     row.pendingPublication = false;
     if (!primary) antigravityStates.set(observed.subject, row);
-    file.agentStateJournal[journal.id] = { ...journal, from: before.verdict.state, to: "dead" };
+    const deadJournal: AgentStateJournal = { ...journal, from: before.verdict.state, to: "dead" };
+    file.agentStateJournal[journal.id] = deadJournal;
+    noteAgentStateJournalRow(file.agentStateJournal, deadJournal);
     metrics.journalRows++;
     changeMetrics(file, metrics, before, row, antigravityStates);
     file.agentStateMetrics.current = metrics;
