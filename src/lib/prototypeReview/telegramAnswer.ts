@@ -130,9 +130,16 @@ export function matchPrototypeAnswer(text: string, tasks: readonly BoardTask[] =
   seatRounds: readonly PrototypeReviewRound[] = loadSeatRounds(), replyToText?: string): PrototypeAnswerMatch | null {
   const explicit = /#proto-[a-f0-9]{8}\b/i.test(normalizeTelegramAnswer(text));
   const identity = explicit ? text : replyToText ?? "";
-  const references = normalizeTelegramAnswer(identity).match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
+  const normalizedIdentity = normalizeTelegramAnswer(identity);
+  const allReferences = normalizedIdentity.match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
+  // Current decision forms place their canonical reference on a dedicated
+  // line. Ignore incidental references in project/task names on that parent.
+  const dedicatedReferences = normalizedIdentity.split("\n").map(line => line.trim())
+    .filter(line => /^#proto-[a-f0-9]{8}$/i.test(line));
+  const references = !explicit && dedicatedReferences.length ? dedicatedReferences : allReferences;
   if (!explicit && new Set(references.map(ref => ref.toLowerCase())).size !== 1) return null;
-  const line = normalizeTelegramAnswer(identity).split("\n").find(line => /#proto-[a-f0-9]{8}\b/i.test(line));
+  const line = normalizedIdentity.split("\n").find(line => dedicatedReferences.length
+    ? /^\s*#proto-[a-f0-9]{8}\s*$/i.test(line) : /#proto-[a-f0-9]{8}\b/i.test(line));
   const ref = line?.match(/#proto-[a-f0-9]{8}\b/i)?.[0].toLowerCase();
   if (!ref) return null;
   const matches: Array<{ task?: BoardTask; round: PrototypeReviewRound }> = [

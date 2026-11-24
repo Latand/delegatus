@@ -23,7 +23,7 @@ import { readPrototypeReviews } from "./read";
 import { setProjectPresentation } from "@/lib/projects/presentation";
 import * as claude from "@/lib/accounts/claude";
 import { decodeHTML } from "entities";
-import { prototypeReference } from "./telegramAnswer";
+import { matchPrototypeAnswer, prototypeReference } from "./telegramAnswer";
 import { startTestRelay } from "@/lib/externalRelay/testRelay";
 import { requestSchema } from "@/lib/externalRelay/protocol";
 import { sampleRequest } from "@/lib/externalRelay/request.fixture";
@@ -400,7 +400,7 @@ test("publication posts to the paired owner's private chat once and an unpaired 
   expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
 });
 
-test("publication budgets escaped Unicode and keeps every full question and option letter", async () => {
+test("publication budgets escaped Unicode and keeps every full question and distinct option", async () => {
   const { transport } = await connected();
   updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
   transport.handlers.getChat = () => ok({ id: 41, type: "private", first_name: "Owner" });
@@ -423,8 +423,7 @@ test("publication budgets escaped Unicode and keeps every full question and opti
   for (const [i, question] of questions.entries()) {
     expect(rendered).toContain(`Питання ${i + 1}/7 · ${question.text}</b>`);
     for (const [j, option] of question.options.entries()) {
-      const prefix = Array.from(option.label).slice(0, 31).join("");
-      expect(rendered).toContain(`${String.fromCharCode(97 + j)}) ${prefix}…${j === 0 ? " ✅" : ""}`);
+      expect(rendered).toContain(`${String.fromCharCode(97 + j)}) ${j}&&`);
     }
   }
   expect(rendered).not.toContain("\uFFFD");
@@ -449,9 +448,38 @@ test("bounded media previews and the definite-limit fallback preserve full quest
     expect(Buffer.byteLength(payload.markdown)).toBeLessThanOrEqual(32_768);
     expect(payload.images.length).toBeLessThanOrEqual(9);
     expect(payload.plainText!.match(/&{299}\?/g)).toHaveLength(7);
+    for (const [index, option] of round.questions![0]!.options.entries()) {
+      expect(decodeHTML(payload.markdown)).toContain(`${String.fromCharCode(97 + index)}) ${option.label[0]}&&`);
+    }
     expect(payload.markdown).toContain("Скопіювати рекомендовані");
     expect(payload.markdown).toContain("Повне рев’ю у Delegatus");
     expect(payload.markdown).toContain("Варіант 9");
+  }
+});
+
+test("normal and limit-fallback renders keep shared-prefix choices distinguishable", () => {
+  const round = telegramRound("shared-prefix-options");
+  round.questions = Array.from({ length: 7 }, (_, i) => ({
+    id: `question-${i + 1}`, text: `${i + 1}. ${"Question detail ".repeat(16)}?`,
+    options: Array.from({ length: 6 }, (_, j) => ({
+      label: `${"Shared opening phrase ".repeat(12)}unique ending ${String.fromCharCode(97 + j)}`,
+      recommended: j === 0,
+    })),
+  }));
+  round.variants = Array.from({ length: 9 }, (_, i) => ({
+    number: i + 1, name: `Variant ${i + 1}`, description: "Long variant details. ".repeat(180), frames: [], videos: [],
+  }));
+  const slides = Array.from({ length: 50 }, (_, i) => ({
+    id: `slide-${i + 1}`, variantNumber: i % 9 + 1, caption: "Long slide caption. ".repeat(40), blob: new Blob(),
+  }));
+  for (const payload of [renderPrototypeTelegram(round, slides), renderPrototypeTelegramSummary(round, slides)]) {
+    expect(Buffer.byteLength(payload.markdown)).toBeLessThanOrEqual(32_768);
+    for (const [index, option] of round.questions![0]!.options.entries()) {
+      const uniqueEnd = `unique ending ${String.fromCharCode(97 + index)}`;
+      expect(payload.plainText).toContain(`${String.fromCharCode(97 + index)}) `);
+      expect(payload.plainText).toContain(uniqueEnd);
+      expect(decodeHTML(payload.markdown)).toContain(uniqueEnd);
+    }
   }
 });
 
@@ -477,6 +505,33 @@ test("review copies screen private paths and known account labels before formatt
     await setProjectPresentation(round.project, { name: "Planting & Design" }, "operator");
     expect(renderPrototypeTelegram(round, []).markdown).toContain("Проєкт: <b>Planting &amp; Design</b>");
   } finally { names.mockRestore(); }
+});
+
+test("Windows profile paths are wholly hidden and safe punctuated project names remain visible", async () => {
+  const round = telegramRound("windows-private-content");
+  const windowsPath = String.raw`C:\Users\fixture-profile\Documents\private-project`;
+  await setProjectPresentation(round.project, { name: "Design / Research" }, "operator");
+  round.questions![0]!.text = `Use ${windowsPath} for previews?`;
+  for (const payload of [renderPrototypeTelegram(round, []), renderPrototypeTelegramSummary(round, [])]) {
+    expect(payload.markdown).toContain("Проєкт: <b>Design / Research</b>");
+    expect(payload.plainText).toContain("Проєкт: Design / Research");
+    for (const text of [payload.markdown, payload.plainText!]) {
+      expect(text).not.toContain("fixture-profile");
+      expect(text).not.toContain("private-project");
+      expect(text).toContain("for previews?");
+    }
+  }
+});
+
+test("a project name containing an old reference cannot shadow the reply reference", async () => {
+  const round = telegramRound("reply-reference-position");
+  await setProjectPresentation(round.project, { name: "Design #proto-deadcafe" }, "operator");
+  const payload = renderPrototypeTelegram(round, []);
+  expect(payload.plainText).toContain("Проєкт: Design #proto-deadcafe");
+  const referenceLine = payload.plainText!.split("\n").find(line => line === prototypeReference(round));
+  expect(referenceLine).toBe(prototypeReference(round));
+  const match = matchPrototypeAnswer("1a, 2a, 3a", [telegramTask([round])], undefined, [], payload.plainText);
+  expect(match?.input?.answers?.map(answer => answer.options)).toEqual([[0], [0], [0]]);
 });
 
 test.each(["task", "seat"] as const)("a sweep preserves historical %s poll receipts and never edits them", async kind => {
@@ -506,6 +561,7 @@ test.each(["task", "seat"] as const)("a sweep preserves historical %s poll recei
 test.each(["form", "historical poll"] as const)("the paired owner can answer with text alone in reply to a %s", async parentKind => {
   const { transport, published } = await connected();
   const round = telegramRound(parentKind);
+  if (parentKind === "form") await setProjectPresentation(round.project, { name: "Design #proto-deadcafe" }, "operator");
   if (parentKind === "historical poll") round.telegramPolls = { key: round.id, questions: [
     { questionId: "place", state: "sent", messageId: 11 },
   ] };
@@ -523,6 +579,11 @@ test.each(["form", "historical poll"] as const)("the paired owner can answer wit
     await postPrototypeReviewToTelegram(round);
     const reply = "1b, 2a, 3a";
     const parentText = parentKind === "form" ? published[0]! : `1. Where should this live? · ${prototypeReference(round)}`;
+    if (parentKind === "form") {
+      expect(parentText).toContain("Проєкт: Design #proto-deadcafe");
+      expect(parentText.split("\n")).toContain(prototypeReference(round));
+      expect(matchPrototypeAnswer(reply, [telegramTask([round])], undefined, [], parentText)?.input?.originalReply).toBe(reply);
+    }
     const requestId = parentKind === "form" ? "owner-form-text-reply" : "owner-legacy-poll-text-reply";
     const request = requestSchema.parse({ ...sampleRequest, target_id: "first", request_id: requestId,
       answer: { max_chars: 4000, progress: "notes" },

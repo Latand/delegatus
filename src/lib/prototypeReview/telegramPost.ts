@@ -46,6 +46,23 @@ function shorten(value: string, limit: number): string {
   return points.length <= limit ? value : points.slice(0, limit - 1).join("") + "…";
 }
 
+function shortenDistinctLabels(labels: readonly string[], initialLimit = 32): string[] {
+  const distinctLabels = new Set(labels);
+  const maxLength = Math.max(1, ...labels.map(label => Array.from(label).length));
+  let limit = Math.min(initialLimit, maxLength);
+  while (true) {
+    const shortened = labels.map(label => {
+      const points = Array.from(label);
+      if (points.length <= limit) return label;
+      const retained = limit - 1;
+      const head = Math.ceil(retained / 2);
+      return `${points.slice(0, head).join("")}…${points.slice(points.length - (retained - head)).join("")}`;
+    });
+    if (new Set(shortened).size === distinctLabels.size || limit >= maxLength) return shortened;
+    limit = Math.min(limit + 8, maxLength);
+  }
+}
+
 function reviewTextDenyList(): PublicDenyList {
   const accounts = [...claudeAccountsForPrivacy(), ...codexAccountsForPrivacy(), ...copilotAccountsForPrivacy()];
   return { ...EMPTY_DENY_LIST, accounts: accounts.flatMap(account => [account.id, account.label]),
@@ -55,9 +72,17 @@ function reviewTextDenyList(): PublicDenyList {
 function reviewText(value: string, deny: PublicDenyList): string {
   // The owner's private review can include web links and repository names.
   // Screen machine paths, secrets and identities before escaping or shortening.
-  const matches = privateMatches(value.replaceAll("\\", "/"), deny)
+  const normalized = value.replaceAll("\\", "/");
+  const matches = privateMatches(normalized, deny)
     .filter(match => ["path", "account", "host", "email", "secret"].includes(match.class))
     .sort((left, right) => left.start - right.start || right.end - left.end);
+  // The shared matcher points at the drive-path prefix. Extend it through the
+  // remaining Windows components so profile and nested folder names disappear.
+  const windowsPath = /(?<![\p{L}\p{N}_])[a-z]:(?:\\|\/)(?!\/)(?:[^\\/\s]+(?:[ \t]+[^\\/\s]+)*(?:\\|\/))*[^\\/\s]+/giu;
+  for (const match of normalized.matchAll(windowsPath)) {
+    matches.push({ class: "path", start: match.index!, end: match.index! + match[0].length });
+  }
+  matches.sort((left, right) => left.start - right.start || right.end - left.end);
   let cursor = 0;
   let text = "";
   for (const match of matches) {
@@ -75,7 +100,7 @@ function reviewProjectName(project: string, deny: PublicDenyList): string {
   const root = !name && isOpaqueProjectKey(key) ? projectDirectoryFallbacks([key])[key] : undefined;
   const fallback = projectDisplayName(key, name || (root && path.basename(root.replaceAll("\\", "/"))));
   const label = presentationName(projectPresentation(key), fallback).trim();
-  return isOpaqueProjectKey(label) || /[\/\\@]/u.test(label) || reviewText(label, deny) !== label ? "Проєкт без назви" : shorten(label, 120);
+  return isOpaqueProjectKey(label) || reviewText(label, deny) !== label ? "Проєкт без назви" : shorten(label, 120);
 }
 
 function reviewCopy(round: PrototypeReviewRound, slides: readonly PrototypeSlide[], taskTitle: string) {
@@ -104,8 +129,11 @@ function renderCompact(copy: ReviewCopy, shortenOptions: boolean, sample = false
     const withFullOptions = renderReview(condensed, true, sample);
     if (Buffer.byteLength(withFullOptions.markdown) <= RICH_TEXT_MAX_BYTES) return withFullOptions;
   }
-  const questions = round.questions?.map(q => ({ ...q,
-    options: q.options.map(o => ({ ...o, label: shorten(shortenHashesInText(o.label), 32) })) }));
+  // Retain both ends and grow the retained context until labels stay distinct.
+  const questions = round.questions?.map(q => {
+    const labels = shortenDistinctLabels(q.options.map(option => shortenHashesInText(option.label)));
+    return { ...q, options: q.options.map((option, i) => ({ ...option, label: labels[i]! })) };
+  });
   const withShortOptions = renderReview({ ...condensed, round: { ...condensed.round, questions } }, true, sample);
   if (Buffer.byteLength(withShortOptions.markdown) <= RICH_TEXT_MAX_BYTES) return withShortOptions;
   return renderReview({ ...copy, slides: [], round: { ...round, questions,
@@ -172,8 +200,8 @@ function renderReview({ round, slides, taskTitle, projectName }: ReviewCopy, com
   const title = `${sample ? "Зразок · " : ""}${round.variants.length ? "Прототип" : "Форма рішення"} · ${round.title}`;
   const reference = prototypeReference(round);
   const lines = [`# 🧪 ${inline(title)}`, `<p>Проєкт: <b>${escapeText(projectName)}</b></p>`, "",
-    `${taskTitle ? `${inline(taskTitle)} · ` : ""}${reference}`, ""];
-  const plain = [`🧪 ${title}`, `Проєкт: ${projectName}`, `${taskTitle ? `${taskTitle} · ` : ""}${reference}`, ""];
+    ...(taskTitle ? [`${inline(taskTitle)}`, ""] : []), reference, ""];
+  const plain = [`🧪 ${title}`, `Проєкт: ${projectName}`, ...(taskTitle ? [taskTitle, ""] : []), reference, ""];
   if (sample) {
     const notice = "Це зразок нового повідомлення для перегляду на телефоні.";
     lines.push(notice, "");
