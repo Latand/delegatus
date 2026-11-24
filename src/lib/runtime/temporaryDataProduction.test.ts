@@ -11,6 +11,8 @@ import { sweepTemporaryData, TEMPORARY_DATA_RETENTION_MS as WEEK } from "./tempo
 import { AttemptTempStore, type EvidenceCopy } from "./attemptTempRetention";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
+import { savePipelines } from "@/lib/pipelines/store";
+import { finishedLane, nameInReport } from "./attemptTempRetention.testSupport";
 
 const NOW = Date.UTC(2035, 0, 15), roots: string[] = [], stores: TemporaryDataStore[] = [];
 type Facts = ReturnType<AgentRegistry["temporaryDataFacts"]>;
@@ -206,7 +208,7 @@ test("an unattributed adopted copy ignores a launch copied from a replacement so
   fs.mkdirSync(directory); writeEnvelope(path.join(directory, "manifest.json"), { original, identity });
   const row = f.candidate(directory, "ownerless-copy", name), adoptedRow = { ...row, adoptedAt: NOW };
   f.store.forget(directory); f.store.register(adoptedRow);
-  let copy: EvidenceCopy | null = { destination: directory, pipelineId: null, launchId: "replacement-agent", kind: "unattributed",
+  const copy: EvidenceCopy = { destination: directory, pipelineId: null, launchId: "replacement-agent", kind: "unattributed",
     createdAt: NOW, expiresAt: null, checkedAt: NOW, bytes: 0 };
   const source = { owner: () => ({ directory: original, identity: "99:88", launchId: "replacement-agent", pipelineId: null,
     retainUntilClose: false, createdAt: NOW, released: 0, checkedAt: NOW, bytes: 0 }), copy: () => copy };
@@ -214,12 +216,10 @@ test("an unattributed adopted copy ignores a launch copied from a replacement so
     entry: { status: "dead", updatedAt: new Date(NOW - WEEK * 3).toISOString() }, pipelines: [] } as unknown as Facts;
   f.registry.temporaryDataFacts = () => replacement;
   const authority = temporaryDataAuthority(adoptedRow, f.registry, source, () => NOW);
-  expect(authority.expiresAt).toBe(NOW + WEEK); expect(authority.reason).toBe("adoption-grace");
-  expect(authority.current()).toBeTrue(); copy = { ...copy!, launchId: "other-generation" };
-  expect(authority.current()).toBeFalse();
+  expect(authority.expiresAt).toBeNull(); expect(authority.reason).toBe("copy-owner-unknown");
 });
 
-test("legacy copy adoption keeps seven-day grace when its replacement source has another identity", async () => {
+test("legacy copy adoption retains a copy when its replacement source has another identity", async () => {
   const f = fixture(), priorState = process.env.LLV_STATE_DIR, state = path.join(f.root, "state");
   process.env.LLV_STATE_DIR = state;
   const original = path.join(f.root, "llv-stage-source"); fs.mkdirSync(original); fs.writeFileSync(path.join(original, "capture.png"), "capture");
@@ -243,11 +243,63 @@ test("legacy copy adoption keeps seven-day grace when its replacement source has
     const report = await sweepTemporaryData(f.store, { now: () => NOW, mounts: () => [], claim: async () => () => {},
       references: async () => true, authority: async row => temporaryDataAuthority(row, f.registry, ledger, () => NOW) });
     expect(adoption.adopted).toBe(1); expect(ledger.copy(directory)?.launchId).toBe("legacy");
-    expect(authority.expiresAt).toBe(NOW + WEEK); expect(authority.reason).toBe("adoption-grace");
+    expect(authority.expiresAt).toBeNull(); expect(authority.reason).toBe("copy-owner-unknown");
     expect(report.removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
   } finally {
     ledger.close();
     if (priorState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = priorState;
+  }
+});
+
+test("the one-time copy pass resumes in a new process and keeps ambiguous, live and linked copies", async () => {
+  const f = fixture(), state = path.join(f.root, "state"), previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  const finishedAt = new Date(NOW - WEEK - 60_000).toISOString();
+  const lane = finishedLane(f.root, finishedAt), launchId = "finished-copy-launch";
+  lane.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId,
+    effectiveRole: lane.stages[0]!.effectiveRole, conversationId: "fixture", sessionId: null, agentPath: null,
+    paneId: null, flowId: null, startedAt: finishedAt, completedAt: finishedAt,
+    input: null, activatedBy: null, output: "finished", verdict: { status: "pass" }, error: null }] }];
+  savePipelines([lane]);
+  const ledger = new AttemptTempStore(), temporary = new TemporaryDataStore();
+  const rows = Array.from({ length: 10 }, (_, index) => {
+    const original = path.join(state, "scratch", `llv-stage-${String(index).padStart(6, "0")}`), identity = "17:23";
+    const name = createHash("sha256").update(original).update("\0").update(identity).digest("hex");
+    return { original, identity, name, directory: path.join(state, "evidence", "attempt-temp", name) };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+  const finished = rows[0]!.directory, ambiguous = rows[1]!.directory, live = rows[2]!.directory, linked = rows[3]!.directory;
+  try {
+    for (const { original, identity, name, directory } of rows) {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, "frame.png"), "preserved fixture");
+      writeEnvelope(path.join(directory, "manifest.json"), { original, identity, pipelineId: lane.id,
+        launchId: directory === ambiguous || directory === rows[9]!.directory ? "unconfirmed-copy-launch" : launchId });
+      ledger.registerCopy({ destination: directory, pipelineId: null, launchId: "legacy", kind: "unattributed",
+        createdAt: NOW - WEEK * 2, expiresAt: null, checkedAt: 0, bytes: 4096 });
+      const stat = fs.lstatSync(directory);
+      temporary.register({ directory, scope: path.join(state, "evidence"), kind: "ownerless-copy", owner: name,
+        identity: `${stat.dev}:${stat.ino}`, adoptedAt: NOW - WEEK * 2, checkedAt: NOW + WEEK, bytes: 4096, reason: "deferred" });
+    }
+    nameInReport(path.join(linked, "frame.png"));
+    const tick = async (at: number) => {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), "--legacy-copy-tick", String(at), live],
+        { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(exit, errors).toBe(0);
+      return JSON.parse(output);
+    };
+    expect(await tick(NOW)).toMatchObject({ removed: 5, errors: 0 });
+    expect(fs.existsSync(finished)).toBeFalse(); expect(fs.existsSync(rows[8]!.directory)).toBeTrue();
+    expect(temporary.meta("unattributed-copies-v1")).toBe(rows[7]!.directory);
+    expect(await tick(NOW + 1)).toMatchObject({ removed: 1, errors: 0 });
+    expect(temporary.meta("unattributed-copies-v1")).toBe("done");
+    expect(ledger.unattributedCopies()).toEqual({ count: 4, bytes: 4 * 4096 });
+    expect(await tick(NOW + 2)).toMatchObject({ checked: 0, removed: 0 });
+    for (const directory of [ambiguous, live, linked, rows[9]!.directory])
+      expect(fs.readFileSync(path.join(directory, "frame.png"), "utf8")).toBe("preserved fixture");
+  } finally {
+    temporary.close(); ledger.close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
   }
 });
 
