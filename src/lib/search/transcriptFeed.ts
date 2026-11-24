@@ -31,6 +31,7 @@ interface ScheduledFeed {
 
 interface DeferredMigrationRetry {
   dbPath: string;
+  generation: number;
   feed: TranscriptIndexFeed;
   nextAttemptAt: number;
 }
@@ -63,13 +64,15 @@ function clearMigrationRetryTimer(current: TranscriptFeedState): void {
 
 function scheduleMigrationRetry(
   current: TranscriptFeedState,
+  generation: number,
   feed: TranscriptIndexFeed,
   schema: Extract<SearchSchemaReadyResult, { ready: false }>,
 ): void {
+  // Never arm a retry for a feed that has already been superseded by a newer publication.
+  if (current.generation !== generation) return;
   const capturedDbPath = statePath("transcript-search.sqlite");
   const existing = current.deferredRetry;
-  // Always keep the latest feed queued for the single shared retry deadline.
-  current.deferredRetry = { dbPath: capturedDbPath, feed, nextAttemptAt: schema.nextAttemptAt };
+  current.deferredRetry = { dbPath: capturedDbPath, generation, feed, nextAttemptAt: schema.nextAttemptAt };
   if (!schema.throttled) {
     console.error(
       `[transcript search] schema migration deferred (${schema.reason}); keeping existing reads and retrying off-thread in ${schema.retryAfterMs}ms`,
@@ -91,6 +94,9 @@ function scheduleMigrationRetry(
     const deferred = latest.deferredRetry;
     if (!deferred) return;
     delete latest.deferredRetry;
+    // Drop stale retries if a newer publication arrived or work is already queued/running.
+    if (latest.generation !== deferred.generation) return;
+    if (latest.pending || latest.active || latest.scheduled) return;
     if (statePath("transcript-search.sqlite") !== deferred.dbPath || !fs.existsSync(deferred.dbPath)) return;
     scheduleTranscriptIndex(deferred.feed, { force: true });
   }, delayMs);
@@ -104,11 +110,14 @@ async function productionRun(
   listedAt: number,
 ): Promise<void> {
   const current = state();
-  const generation = current.generation;
+  const generation = current.generation ?? 0;
   const schema = await withViewerOperation("transcript.index", () =>
     performanceSpans.wait("transcript.index", () => ensureTranscriptSearchSchemaReadyOffThread()));
+  // A newer feed superseded this one while awaiting off-thread schema readiness;
+  // let the drain loop run that newer feed instead of arming or indexing stale data.
+  if (current.generation !== generation) return;
   if (!schema.ready) {
-    scheduleMigrationRetry(current, { sources, complete, listedAt }, schema);
+    scheduleMigrationRetry(current, generation, { sources, complete, listedAt }, schema);
     return;
   }
   clearMigrationRetryTimer(current);
@@ -196,7 +205,9 @@ export function scheduleTranscriptIndex(
 ): void {
   if (process.env.NODE_ENV === "test" && !options.force) return;
   const current = state();
-  if (options.run) clearMigrationRetryTimer(current);
+  // Any newer publication supersedes an earlier deferred retry immediately so
+  // an expiring timer from an older generation can never re-enqueue stale sources.
+  clearMigrationRetryTimer(current);
   current.generation = (current.generation ?? 0) + 1;
   current.pending = { feed: { ...feed, listedAt: feed.listedAt ?? Date.now() }, run: options.run ?? productionRun };
   if (current.active || current.scheduled) return;

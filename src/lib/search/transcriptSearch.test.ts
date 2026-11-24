@@ -2102,3 +2102,390 @@ test("shared off-thread FTS migration backoff is respected by burst scanner feed
     else process.env.LLV_STATE_DIR = prevState;
   }
 }, 20_000);
+
+test("stale migration retry timers never overwrite newer complete inventories across early, near-deadline, and mid-worker arrivals", async () => {
+  const { ensureTranscriptSearchSchemaReadyOffThread } = await import("./transcriptSearch");
+  const prevState = process.env.LLV_STATE_DIR;
+  const prevHelper = process.env.LLV_HELPER_LEASE_ENTRY;
+
+  const downgradeToV5 = (dbPath: string) => {
+    const setup = new Database(dbPath);
+    try {
+      setup.exec(`
+        PRAGMA foreign_keys = OFF;
+        PRAGMA legacy_alter_table = ON;
+        BEGIN IMMEDIATE;
+        ALTER TABLE transcript_files RENAME TO transcript_files_v6;
+        CREATE TABLE transcript_files (
+          path TEXT PRIMARY KEY,
+          size INTEGER NOT NULL,
+          mtime_ms REAL NOT NULL,
+          project TEXT NOT NULL,
+          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+          messages_count INTEGER NOT NULL,
+          indexed_at INTEGER NOT NULL
+        );
+        INSERT INTO transcript_files SELECT * FROM transcript_files_v6;
+        DROP TABLE transcript_files_v6;
+        PRAGMA user_version = 5;
+        COMMIT;
+        PRAGMA legacy_alter_table = OFF;
+        PRAGMA foreign_keys = ON;
+      `);
+    } finally {
+      setup.close();
+    }
+  };
+
+  try {
+    // 1. Early arrival (before deadline) & near-deadline arrival (1-2 ms after deadline while
+    //    the previous timer's cushion has not fired yet): ONLY newest B survives in SQLite.
+    for (const mode of ["early", "near-deadline"] as const) {
+      const dir = fs.mkdtempSync(path.join(sandbox, `v5-inventory-${mode}-`));
+      process.env.LLV_STATE_DIR = dir;
+      setTranscriptMigrationRetryBackoffForTests(350);
+
+      const seedFile = path.join(dir, "seed.jsonl");
+      fs.writeFileSync(seedFile, `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:00:00.000Z", message: { content: "seedinventory" } })}\n`);
+      expect((await indexTranscriptSources([source(seedFile, "claude", "inv")], { complete: true })).failures).toEqual([]);
+      const dbPath = statePath("transcript-search.sqlite");
+      downgradeToV5(dbPath);
+
+      const olderFile = path.join(dir, "olderinventory.jsonl");
+      const newestFile = path.join(dir, "newestinventory.jsonl");
+      fs.writeFileSync(olderFile, `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:01:00.000Z", message: { content: "olderinventorytoken" } })}\n`);
+      fs.writeFileSync(newestFile, `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:02:00.000Z", message: { content: "newestinventorytoken" } })}\n`);
+      const olderSource = source(olderFile, "claude", "inv");
+      const newestSource = source(newestFile, "claude", "inv");
+
+      const opened: string[] = [];
+      const origOpen = fs.promises.open;
+      fs.promises.open = (async function spyOpen(...args: Parameters<typeof fs.promises.open>) {
+        if (String(args[0]) === olderFile || String(args[0]) === newestFile) {
+          opened.push(path.basename(String(args[0])));
+        }
+        return origOpen.apply(fs.promises, args);
+      }) as typeof fs.promises.open;
+
+      process.env.LLV_HELPER_LEASE_ENTRY = path.join(dir, "missing.mjs");
+      try {
+        scheduleTranscriptIndex({ sources: [olderSource], complete: true }, { force: true });
+        await waitForTranscriptIndexIdleForTests();
+        const waiting = await ensureTranscriptSearchSchemaReadyOffThread();
+        expect(waiting.ready).toBe(false);
+        if (waiting.ready) throw new Error("expected deferred migration");
+
+        if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+        else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+
+        const targetWait = mode === "early"
+          ? Math.max(0, waiting.nextAttemptAt - Date.now() - 120)
+          : Math.max(0, waiting.nextAttemptAt - Date.now() + 1);
+        await Bun.sleep(targetWait);
+
+        scheduleTranscriptIndex({ sources: [newestSource], complete: true }, { force: true });
+        await waitForTranscriptIndexIdleForTests();
+        await Bun.sleep(Math.max(0, waiting.nextAttemptAt - Date.now()) + 450);
+        await waitForTranscriptIndexIdleForTests();
+
+        const probe = new Database(dbPath, { readonly: true });
+        try {
+          const paths = probe.query<{ path: string }, []>("SELECT path FROM transcript_files ORDER BY path").all()
+            .map((row) => path.basename(row.path));
+          expect(paths).toEqual(["newestinventory.jsonl"]);
+        } finally {
+          probe.close();
+        }
+        expect(opened.includes("olderinventory.jsonl")).toBe(false);
+        expect(searchTranscripts({ query: "newestinventorytoken" }).items).toHaveLength(1);
+        expect(searchTranscripts({ query: "olderinventorytoken" }).items).toHaveLength(0);
+      } finally {
+        fs.promises.open = origOpen;
+        setTranscriptMigrationRetryBackoffForTests(null);
+        await waitForTranscriptIndexIdleForTests();
+      }
+    }
+
+    // 2. Mid-worker arrival: feed C arrives WHILE feed B is awaiting a slow failing worker;
+    //    B must drop itself instead of arming a retry for B, and C must win after recovery.
+    {
+      const dir = fs.mkdtempSync(path.join(sandbox, "v5-inventory-midworker-"));
+      process.env.LLV_STATE_DIR = dir;
+      setTranscriptMigrationRetryBackoffForTests(150);
+
+      const seedFile = path.join(dir, "seed.jsonl");
+      fs.writeFileSync(seedFile, `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:00:00.000Z", message: { content: "midseed" } })}\n`);
+      expect((await indexTranscriptSources([source(seedFile, "claude", "inv")], { complete: true })).failures).toEqual([]);
+      const dbPath = statePath("transcript-search.sqlite");
+      downgradeToV5(dbPath);
+
+      const fileB = path.join(dir, "mid-b.jsonl");
+      const fileC = path.join(dir, "mid-c.jsonl");
+      fs.writeFileSync(fileB, `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:01:00.000Z", message: { content: "midworkerbtoken" } })}\n`);
+      fs.writeFileSync(fileC, `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:02:00.000Z", message: { content: "midworkerctoken" } })}\n`);
+      const sourceB = source(fileB, "claude", "inv");
+      const sourceC = source(fileC, "claude", "inv");
+
+      const slowFail = path.join(dir, "slow-fail.mjs");
+      fs.writeFileSync(slowFail, "setTimeout(() => process.exit(1), 220);\n");
+      process.env.LLV_HELPER_LEASE_ENTRY = slowFail;
+
+      scheduleTranscriptIndex({ sources: [sourceB], complete: true }, { force: true });
+      await Bun.sleep(60);
+      // C arrives while B is still waiting on slow-fail.mjs.
+      scheduleTranscriptIndex({ sources: [sourceC], complete: true }, { force: true });
+      await waitForTranscriptIndexIdleForTests();
+
+      // Restore real worker; the retry scheduled for C (not B) upgrades and indexes C.
+      if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+      else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const probe = new Database(dbPath, { readonly: true });
+        const version = probe.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0;
+        probe.close();
+        if (version >= 6) break;
+        await Bun.sleep(40);
+      }
+      await waitForTranscriptIndexIdleForTests();
+
+      const probe = new Database(dbPath, { readonly: true });
+      try {
+        const paths = probe.query<{ path: string }, []>("SELECT path FROM transcript_files ORDER BY path").all()
+          .map((row) => path.basename(row.path));
+        expect(paths).toEqual(["mid-c.jsonl"]);
+      } finally {
+        probe.close();
+      }
+      expect(searchTranscripts({ query: "midworkerctoken" }).items).toHaveLength(1);
+      expect(searchTranscripts({ query: "midworkerbtoken" }).items).toHaveLength(0);
+    }
+  } finally {
+    setTranscriptMigrationRetryBackoffForTests(null);
+    await waitForTranscriptIndexIdleForTests();
+    if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+    else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+    if (prevState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevState;
+  }
+}, 25_000);
+
+test("partial v6 commit before vocabulary preserves shared retry deadline across feeds and queries, then recovers after deadline", async () => {
+  const prevState = process.env.LLV_STATE_DIR;
+  const prevHelper = process.env.LLV_HELPER_LEASE_ENTRY;
+  const dir = fs.mkdtempSync(path.join(sandbox, "v5-partial-v6-"));
+  process.env.LLV_STATE_DIR = dir;
+  setTranscriptMigrationRetryBackoffForTests(null);
+
+  try {
+    const initialFile = path.join(dir, "partial-initial.jsonl");
+    const extraFile = path.join(dir, "partial-extra.jsonl");
+    fs.writeFileSync(initialFile, `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:00:00.000Z", message: { content: "partiallegacyword" } })}\n`);
+    fs.writeFileSync(extraFile, `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:01:00.000Z", message: { content: "partialextraword" } })}\n`);
+    const initialSource = source(initialFile, "claude", "partial");
+    const extraSource = source(extraFile, "claude", "partial");
+    expect((await indexTranscriptSources([initialSource], { complete: false })).failures).toEqual([]);
+
+    const dbPath = statePath("transcript-search.sqlite");
+    const setup = new Database(dbPath);
+    try {
+      setup.exec(`
+        PRAGMA foreign_keys = OFF;
+        PRAGMA legacy_alter_table = ON;
+        BEGIN IMMEDIATE;
+        ALTER TABLE transcript_files RENAME TO transcript_files_v6;
+        CREATE TABLE transcript_files (
+          path TEXT PRIMARY KEY,
+          size INTEGER NOT NULL,
+          mtime_ms REAL NOT NULL,
+          project TEXT NOT NULL,
+          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+          messages_count INTEGER NOT NULL,
+          indexed_at INTEGER NOT NULL
+        );
+        INSERT INTO transcript_files SELECT * FROM transcript_files_v6;
+        DROP TABLE transcript_files_v6;
+        DROP TABLE IF EXISTS transcript_messages_vocab;
+        PRAGMA user_version = 5;
+        COMMIT;
+        PRAGMA legacy_alter_table = OFF;
+        PRAGMA foreign_keys = ON;
+      `);
+    } finally {
+      setup.close();
+    }
+
+    const logFile = path.join(dir, "partial-workers.log");
+    const faultWorker = path.join(dir, "partial-fault-worker.ts");
+    const realWorker = path.resolve("src/lib/transcriptSearchIndex.worker.ts");
+    fs.writeFileSync(
+      faultWorker,
+      `import fs from "node:fs";
+import { Database } from "bun:sqlite";
+fs.appendFileSync(${JSON.stringify(logFile)}, Date.now() + "\\n");
+const origExec = Database.prototype.exec;
+Database.prototype.exec = function (sql: string) {
+  if (String(sql).includes("CREATE VIRTUAL TABLE IF NOT EXISTS transcript_messages_vocab")) {
+    throw new Error("fixture interrupted search accelerator build");
+  }
+  return origExec.call(this, sql);
+};
+await import(${JSON.stringify(realWorker)});
+`,
+    );
+
+    const shape = () => {
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        return {
+          version: db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0,
+          vocab: db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'transcript_messages_vocab'").get()?.n ?? 0,
+        };
+      } finally {
+        db.close();
+      }
+    };
+
+    const flush = async () => { while (pendingTranscriptSearchIndexBuilds() > 0) await Bun.sleep(5); };
+    const publish = async (list: TranscriptIndexSource[]) => {
+      scheduleTranscriptIndex({ sources: list, complete: false }, { force: true });
+      await waitForTranscriptIndexIdleForTests();
+    };
+    const query = async (word: string) => {
+      const res = searchTranscripts({ query: word });
+      await flush();
+      return res.items.length;
+    };
+
+    process.env.LLV_HELPER_LEASE_ENTRY = faultWorker;
+    await publish([initialSource]);
+    const firstFailureAt = Date.now();
+    expect(shape()).toEqual({ version: 6, vocab: 0 });
+
+    const hits: number[] = [];
+    hits.push(await query("partiallegacyword"), await query("partiallegacyword"));
+    for (let i = 0; i < 3; i += 1) {
+      await Bun.sleep(70);
+      await publish([initialSource, extraSource]);
+      hits.push(await query("partiallegacyword"));
+    }
+
+    const offsets = fs.readFileSync(logFile, "utf8").trim().split("\n").map(Number).map((t) => t - firstFailureAt);
+    expect(hits).toEqual([1, 1, 1, 1, 1]);
+    // Scanner feed on partial-v6 must NOT clear shared backoff, while still indexing new v6 rows.
+    expect(offsets.filter((ms) => ms < 1_450)).toHaveLength(1);
+    expect(await query("partialextraword")).toBe(1);
+
+    // After the backoff deadline elapses and the fault clears, a query finishes building vocab.
+    if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+    else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+    await Bun.sleep(Math.max(0, 1_550 - (Date.now() - firstFailureAt)));
+    expect(await query("partiallegacyword")).toBe(1);
+    expect(shape()).toEqual({ version: 6, vocab: 1 });
+  } finally {
+    setTranscriptMigrationRetryBackoffForTests(null);
+    await waitForTranscriptIndexIdleForTests();
+    if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+    else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+    if (prevState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevState;
+  }
+}, 25_000);
+
+test("query-initiated backoff is respected by a subsequent feed and escalates exponentially across consecutive failures", async () => {
+  const prevState = process.env.LLV_STATE_DIR;
+  const prevHelper = process.env.LLV_HELPER_LEASE_ENTRY;
+  const dir = fs.mkdtempSync(path.join(sandbox, "v5-query-first-"));
+  process.env.LLV_STATE_DIR = dir;
+  setTranscriptMigrationRetryBackoffForTests(180);
+
+  try {
+    const file = path.join(dir, "qfirst.jsonl");
+    fs.writeFileSync(file, `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:00:00.000Z", message: { content: "queryfirstneedle" } })}\n`);
+    const src = source(file, "claude", "qfirst");
+    expect((await indexTranscriptSources([src], { complete: false })).failures).toEqual([]);
+
+    const dbPath = statePath("transcript-search.sqlite");
+    const setup = new Database(dbPath);
+    try {
+      setup.exec(`
+        PRAGMA foreign_keys = OFF;
+        PRAGMA legacy_alter_table = ON;
+        BEGIN IMMEDIATE;
+        ALTER TABLE transcript_files RENAME TO transcript_files_v6;
+        CREATE TABLE transcript_files (
+          path TEXT PRIMARY KEY,
+          size INTEGER NOT NULL,
+          mtime_ms REAL NOT NULL,
+          project TEXT NOT NULL,
+          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+          messages_count INTEGER NOT NULL,
+          indexed_at INTEGER NOT NULL
+        );
+        INSERT INTO transcript_files SELECT * FROM transcript_files_v6;
+        DROP TABLE transcript_files_v6;
+        PRAGMA user_version = 5;
+        COMMIT;
+        PRAGMA legacy_alter_table = OFF;
+        PRAGMA foreign_keys = ON;
+      `);
+    } finally {
+      setup.close();
+    }
+
+    const logFile = path.join(dir, "qfirst-starts.log");
+    const stub = path.join(dir, "qfirst-fail.mjs");
+    fs.writeFileSync(stub, `import fs from "node:fs"; fs.appendFileSync(${JSON.stringify(logFile)}, Date.now() + "\\n"); process.exit(1);\n`);
+    process.env.LLV_HELPER_LEASE_ENTRY = stub;
+
+    // 1. Search query fails first and establishes the 180 ms backoff deadline.
+    expect(searchTranscripts({ query: "queryfirstneedle" }).items).toHaveLength(1);
+    while (pendingTranscriptSearchIndexBuilds() > 0) await Bun.sleep(5);
+
+    // 2. Subsequent scanner feed before 180 ms spawns 0 workers and arms a retry for the remaining deadline.
+    await Bun.sleep(40);
+    scheduleTranscriptIndex({ sources: [src], complete: false }, { force: true });
+    await waitForTranscriptIndexIdleForTests();
+    expect(fs.readFileSync(logFile, "utf8").trim().split("\n")).toHaveLength(1);
+
+    // 3. When the 180 ms deadline elapses, the feed retry runs worker #2 (fails -> escalates to 360 ms).
+    await Bun.sleep(220);
+    await waitForTranscriptIndexIdleForTests();
+    const afterTwo = fs.readFileSync(logFile, "utf8").trim().split("\n").map(Number);
+    expect(afterTwo).toHaveLength(2);
+    expect(afterTwo[1]! - afterTwo[0]!).toBeGreaterThanOrEqual(160);
+
+    // 4. Another feed 120 ms later (within the escalated 360 ms window) still spawns 0 workers.
+    await Bun.sleep(120);
+    scheduleTranscriptIndex({ sources: [src], complete: false }, { force: true });
+    await waitForTranscriptIndexIdleForTests();
+    expect(fs.readFileSync(logFile, "utf8").trim().split("\n")).toHaveLength(2);
+
+    // 5. Restore worker: the escalated 360 ms retry upgrades cleanly to v6.
+    if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+    else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const probe = new Database(dbPath, { readonly: true });
+      const version = probe.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0;
+      probe.close();
+      if (version >= 6) break;
+      await Bun.sleep(40);
+    }
+    await waitForTranscriptIndexIdleForTests();
+    const probe = new Database(dbPath, { readonly: true });
+    try {
+      expect(probe.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(6);
+    } finally {
+      probe.close();
+    }
+  } finally {
+    setTranscriptMigrationRetryBackoffForTests(null);
+    await waitForTranscriptIndexIdleForTests();
+    if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+    else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+    if (prevState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevState;
+  }
+}, 20_000);

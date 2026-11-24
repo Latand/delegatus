@@ -519,9 +519,12 @@ function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<
   return promise;
 }
 
-function probeTranscriptSearchSchemaVersion(
-  filename: string,
-): { exists: false } | { exists: true; version: number } | { exists: true; error: string } {
+type SearchReadinessProbe =
+  | { exists: false }
+  | { exists: true; version: number; hit: boolean; vocabulary: boolean }
+  | { exists: true; error: string };
+
+function probeTranscriptSearchReadiness(filename: string): SearchReadinessProbe {
   try {
     fs.statSync(filename);
   } catch (error) {
@@ -533,7 +536,13 @@ function probeTranscriptSearchSchemaVersion(
   try {
     probe = observeSqlite(new Database(filename, { readonly: true, strict: true }), "transcript-search");
     probe.exec("PRAGMA busy_timeout = 50; PRAGMA query_only = ON;");
-    return { exists: true, version: schemaVersion(probe) };
+    const row = probe.query<{ version: number; hit: number; vocabulary: number }, []>(`
+      SELECT user_version AS version,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='transcript_messages_search_hit') AS hit,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab') AS vocabulary
+      FROM pragma_user_version
+    `).get()!;
+    return { exists: true, version: row.version, hit: Boolean(row.hit), vocabulary: Boolean(row.vocabulary) };
   } catch (error) {
     return { exists: true, error: error instanceof Error ? error.message : String(error) };
   } finally {
@@ -545,10 +554,11 @@ function probeTranscriptSearchSchemaVersion(
     inside the leased background worker before the Viewer opens the writer
     connection, keeping DDL/copy work and SQLite lock waits off the Viewer's
     main event loop. Never falls back to inline main-thread DDL on failure,
-    and shares one per-DB retry deadline across feeds and search queries. */
+    and shares one per-DB retry deadline across feeds and search queries
+    (including when v6 committed before read accelerators finished). */
 export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<SearchSchemaReadyResult> {
   const filename = statePath("transcript-search.sqlite");
-  const initial = probeTranscriptSearchSchemaVersion(filename);
+  const initial = probeTranscriptSearchReadiness(filename);
   if (!initial.exists) {
     searchBuildBackoffs.delete(filename);
     return { ready: true };
@@ -570,7 +580,10 @@ export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<Sear
     return { ready: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false };
   }
   if (initial.version >= TRANSCRIPT_SEARCH_SCHEMA_VERSION) {
-    searchBuildBackoffs.delete(filename);
+    // Only clear shared backoff once the read accelerators that the same
+    // background worker builds are also present; partial-v6 DBs keep the
+    // existing retry deadline while still letting writers proceed on v6.
+    if (initial.hit && initial.vocabulary) searchBuildBackoffs.delete(filename);
     return { ready: true };
   }
   const build = await scheduleSearchIndexBuild(filename, true);
@@ -583,7 +596,7 @@ export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<Sear
       throttled: build.throttled,
     };
   }
-  const after = probeTranscriptSearchSchemaVersion(filename);
+  const after = probeTranscriptSearchReadiness(filename);
   if (!after.exists) {
     searchBuildBackoffs.delete(filename);
     return { ready: true };
@@ -598,7 +611,11 @@ export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<Sear
     const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, reason);
     return { ready: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false };
   }
-  searchBuildBackoffs.delete(filename);
+  if (after.hit && after.vocabulary) {
+    searchBuildBackoffs.delete(filename);
+  } else {
+    recordSearchBuildFailure(filename, "search read accelerators incomplete after migration");
+  }
   return { ready: true };
 }
 
