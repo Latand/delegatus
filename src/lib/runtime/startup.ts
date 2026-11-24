@@ -2325,6 +2325,13 @@ export async function structuredStartupSignals(
   for (;;) {
     if (!selection || registryStartupSelectionUnchanged(selection) !== true) selection = await preparedStartupSnapshot(registry);
     const witness = await startupRuntimeWitness(client, checkpoint.effects?.version);
+    // The selected conversations are read first, as before the census
+    // change. Journal-wide pending work can then name a conversation outside
+    // the selection (an archived row), which one more checkpointed read adds.
+    const selectedIds = await startupRuntimeConversationIds(registry, owedConversationIds, selection, scope);
+    let read = witness && (witness.generation !== null || client.readSession)
+      ? await readCheckpointedStartupRuntime(client, selectedIds, witness, checkpoint, options?.onProgress) : undefined;
+    if (read === null) continue;
     const effects = await readStartupRuntimeEffects(client, witness, checkpoint);
     const pendingOperations: StartupRuntimeRead["recentOperations"] = [];
     // A preceding host answers without operation pages, and its effect
@@ -2352,12 +2359,18 @@ export async function structuredStartupSignals(
         assertStartupReadActive();
       }
     }
-    const readConversationIds = new Set([...owedConversationIds, ...effects.pending]);
-    for (const receipt of pendingOperations) if (receipt.kind !== "kill") readConversationIds.add(receipt.conversationId);
-    const ids = await startupRuntimeConversationIds(registry, readConversationIds, selection, scope);
-    const read = witness && (witness.generation !== null || client.readSession)
-      ? await readCheckpointedStartupRuntime(client, ids, witness, checkpoint, options?.onProgress) : undefined;
-    if (read === null) continue;
+    const workConversationIds = new Set(effects.pending);
+    for (const receipt of pendingOperations) if (receipt.kind !== "kill") workConversationIds.add(receipt.conversationId);
+    const alreadySelected = new Set(selectedIds);
+    const workIds = workConversationIds.size
+      ? (await startupRuntimeConversationIds(registry, new Set([...owedConversationIds, ...workConversationIds]), selection, scope))
+        .filter(id => !alreadySelected.has(id))
+      : [];
+    const ids = [...selectedIds, ...workIds];
+    if (read && witness && workIds.length) {
+      read = await readCheckpointedStartupRuntime(client, ids, witness, checkpoint, options?.onProgress);
+      if (read === null) continue;
+    }
     const runtime = read ?? await readStartupRuntime(client, ids);
     await options?.beforeUse?.();
     const admittedMessages = await admittedRuntimeMessages(registry, runtime);
@@ -3699,8 +3712,12 @@ async function adoptStructuredHostsPass(
       },
     );
     const previousWorkSize = work.size;
-    const runtimeWorkSnapshot = await preparedStartupSnapshot(registry);
-    for (const id of signals.pendingOperationConversationIds) addConversationWork(runtimeWorkSnapshot, id);
+    // Resolve runtime work against a current view only when there is some;
+    // an idle runtime leaves the validated selection as the pass's view.
+    if (signals.pendingOperationConversationIds.size) {
+      const runtimeWorkSnapshot = await preparedStartupSnapshot(registry);
+      for (const id of signals.pendingOperationConversationIds) addConversationWork(runtimeWorkSnapshot, id);
+    }
     if (retainedFromPreviousGeneration) {
       for (const key of work) if (!retainedFromPreviousGeneration.has(key)) (resumeDeferred as Set<string>).add(key);
     }
