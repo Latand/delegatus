@@ -1,7 +1,7 @@
 import { ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
 
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
-import { currentConversationFile } from "@/lib/accounts/identity";
+import { currentConversationFile, isArchivedPredecessor } from "@/lib/accounts/identity";
 import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -580,11 +580,13 @@ export function resolveSeatFile(input: {
     return input.files.find((file) => file.path === input.currentPath) ?? null;
   }
   const byId = currentConversationFile(input.files, input.conversationId);
-  if (byId) return byId;
+  if (byId && !isArchivedPredecessor(byId)) return byId;
+  if (byId && isArchivedPredecessor(byId)) return null;
   for (const path of [input.currentPath, input.seatPath]) {
     if (!path) continue;
     const entry = input.files.find((file) => file.path === path);
     if (!entry) continue;
+    if (isArchivedPredecessor(entry)) continue;
     /* The entry a path names may itself be a retired generation; its own id
        resolves forward to the one the operator is watching. */
     return (entry.conversationId ? currentConversationFile(input.files, entry.conversationId) : null) ?? entry;

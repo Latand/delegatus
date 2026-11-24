@@ -676,6 +676,8 @@ describe("the dock binds the seat by its durable conversation id (#1182)", () =>
     /* The recorded path is an archived predecessor of the live generation, so
        the id's current entry wins over the entry the path names. */
     const archived = file({ migratedTo: successorPath } as Partial<FileEntry>);
+    expect(resolveSeatFile({ files: [archived], conversationId: "conversation_orchestrator", seatPath: archived.path, currentPath: null }))
+      .toBeNull();
     expect(resolveSeatFile({ files: [archived, successor], conversationId: "conversation_orchestrator", seatPath: archived.path, currentPath: null })).toBe(successor);
     /* No seat at all binds nothing, whatever the catalog holds. */
     expect(resolveSeatFile({ files: [successor], conversationId: null, seatPath: successorPath, currentPath: successorPath })).toBeNull();

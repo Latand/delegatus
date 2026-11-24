@@ -886,11 +886,11 @@ test("a missing seat transcript keeps the path, board link, rotation and Re-bind
   try {
     await act(async () => {
       openButton(host).click();
-      for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+      for (let turn = 0; turn < 64; turn += 1) await Promise.resolve();
     });
     await act(async () => {
       jest.advanceTimersByTime(SEAT_TRANSCRIPT_TIMEOUT_MS);
-      for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+      for (let turn = 0; turn < 64; turn += 1) await Promise.resolve();
     });
   } finally {
     jest.useRealTimers();
@@ -1015,8 +1015,8 @@ test("a stalled mobile transcript body aborts at the deadline and exposes recove
       for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
     });
     await act(async () => {
-      await jest.advanceTimersByTimeAsync(SEAT_TRANSCRIPT_TIMEOUT_MS);
-      for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+      jest.advanceTimersByTime(SEAT_TRANSCRIPT_TIMEOUT_MS);
+      for (let turn = 0; turn < 64; turn += 1) await Promise.resolve();
     });
   } finally {
     jest.useRealTimers();
