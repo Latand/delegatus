@@ -98,8 +98,29 @@ test("authorized flow answers from an allowlist and keeps all credentials out of
     nonce = authorize.searchParams.get("nonce")!;
     const target = new URL(authorize.searchParams.get("redirect_uri")!);
     target.search = new URLSearchParams({ state: authorize.searchParams.get("state")!, code: synth("code"), client_id: "issued-fixture" }).toString();
-    results.push(await (await fetch(target)).text());
-    await until(() => (globals.__delegatusChatGPTPlan?.oauth.pending) === false);
+    let resumeRead!: () => void;
+    let beganRead = false, captured = false;
+    const held = new Promise<void>(resolve => { resumeRead = resolve; });
+    const read = f.store.credentials.bind(f.store);
+    const probe = spyOn(f.store, "credentials").mockImplementation(async () => {
+      if (beganRead) return read();
+      beganRead = true;
+      const snapshot = await read();
+      captured = true;
+      await held;
+      return snapshot;
+    });
+    const pending = GET(raw("GET"));
+    try {
+      await until(() => captured);
+      results.push(await (await fetch(target)).text());
+      await until(() => globals.__delegatusChatGPTPlan?.oauth.pending === false);
+      resumeRead();
+      expect(await (await pending).json()).toMatchObject({ state: "connecting" });
+    } finally {
+      resumeRead();
+      probe.mockRestore();
+    }
     const status = await (await GET(raw("GET"))).text();
     results.push(status);
     expect(JSON.parse(status)).toMatchObject({ state: "connected", account: { email: label }, planModels: { voiceBackend: false } });

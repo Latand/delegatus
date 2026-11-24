@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { PLAN_SCOPE, RESOURCE } from "./constants";
 import { unusableRefresh } from "./errors";
 import { clientId, complete, discovery, grant, jwks, model, now, planFixture, stream, synth } from "./plan.fixture";
@@ -66,25 +66,36 @@ test("above the refresh window reuses the token and below it serializes independ
 });
 
 test("a peer's short-lived rotation serves requests already waiting for the previous token", async () => {
-  let readOld!: () => void;
-  const oldRead = new Promise<void>(resolve => { readOld = resolve; });
+  let firstRead!: () => void, peerRead!: () => void;
+  const oldRead = Promise.all([
+    new Promise<void>(resolve => { firstRead = resolve; }),
+    new Promise<void>(resolve => { peerRead = resolve; }),
+  ]);
   const session = create(async () => {
     await oldRead;
     const { id_token: _identity, ...reply } = grant();
     return Response.json({ ...reply, expires_in: 30 });
   });
   expiring(now + 5_000);
+  const credentials = fixture.store.credentials.bind(fixture.store);
+  const observed = spyOn(fixture.store, "credentials").mockImplementation(async () => {
+    const row = await credentials();
+    firstRead();
+    return row;
+  });
   class PeerStore extends PlanStore {
     override async credentials() {
       const row = await super.credentials();
-      readOld();
+      peerRead();
       return row;
     }
   }
   const peer = new PlanSession(new PeerStore(() => fixture.directory), fixture.oidc, () => now);
-  await Promise.all([session.respond(body, signal(), owner), peer.respond(body, signal(), owner)]);
-  expect(refreshes()).toHaveLength(1);
-  expect(inferences()).toHaveLength(2);
+  try {
+    await Promise.all([session.respond(body, signal(), owner), peer.respond(body, signal(), owner)]);
+    expect(refreshes()).toHaveLength(1);
+    expect(inferences()).toHaveLength(2);
+  } finally { observed.mockRestore(); }
 });
 
 test("refresh eligibility time uses a still-valid access token, and refuses an expired one", async () => {

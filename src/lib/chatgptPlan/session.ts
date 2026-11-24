@@ -33,12 +33,15 @@ export class PlanSession {
     if (isStagingMode()) return { state: "off_staging" };
     if (owner && !local) return { state: "remote_browser" };
     try {
+      const wasChanging = this.oauth.pending || this.signingOut;
       const row = await this.store.credentials();
       const unavailable = this.unavailable(row);
       const reason = owner ? this.oauth.reason ?? row?.reconnect : undefined;
       let state: PlanStatus["state"] = unavailable ?? (row?.pendingRotation ? "reconnect_required" : "connected");
-      if (this.oauth.pending || this.signingOut) state = "connecting";
-      if (reason === "client_rejected" || reason === "account_mismatch" || reason === "reconnect_required") state = "reconnect_required";
+      // A read already in flight when the callback settles can still hold the
+      // pending registration. Keep polling once so the page sees the commit.
+      if (wasChanging || this.oauth.pending || this.signingOut) state = "connecting";
+      else if (reason === "client_rejected" || reason === "account_mismatch" || reason === "reconnect_required") state = "reconnect_required";
       if (!owner) return { state };
       return { state, reason, acknowledged: row?.acknowledged === true, usageUrl: PLAN_USAGE_URL,
         ...(row?.email && !row.signedOut ? { account: { email: row.email } } : {}),
