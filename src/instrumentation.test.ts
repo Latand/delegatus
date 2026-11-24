@@ -1144,31 +1144,36 @@ test("the role mapping retirement pass runs with the serving release, first, and
   expect(started).toEqual(["pipelines"]);
 });
 
-test("release readiness waits for board preparation and stays refused on failure", async () => {
+test("release readiness waits for essential activation and stays refused on failure", async () => {
   for (const fail of [false, true]) {
     let release!: () => void;
+    let entered!: () => void;
     let ready = false;
     const held = new Promise<void>(resolve => { release = resolve; });
+    const enteredControllers = new Promise<void>(resolve => { entered = resolve; });
     const activation = completeViewerRuntimeActivation({
       initializeOperatorCapability: async () => undefined,
       publishHotStateActivation: () => undefined,
       startStructuredHosts: null,
-      startControllers: async () => undefined,
-      prepareBoard: async () => { await held; if (fail) throw new Error("fixture board unavailable"); },
+      startControllers: async () => {
+        entered();
+        await held;
+        if (fail) throw new Error("fixture controller unavailable");
+      },
       publishViewerReleaseReady: () => { ready = true; },
     });
     const settled = activation.then(() => null, error => error);
-    await Bun.sleep(10);
+    await enteredControllers;
     expect(ready).toBe(false);
     release();
     const error = await settled;
     expect(ready).toBe(!fail);
-    if (fail) expect(error.message).toContain("board unavailable");
+    if (fail) expect(error.message).toContain("controller unavailable");
     else expect(error).toBeNull();
   }
 });
 
-test("saved-board readiness precedes attention refinement and retirement still awaits it", async () => {
+test("release readiness precedes board refinement and retirement still awaits it", async () => {
   const { createViewerStartupBarrier } = await import("@/lib/viewerInstrumentation");
   const barrier = createViewerStartupBarrier(new AbortController());
   let finish!: () => void;
@@ -1179,12 +1184,11 @@ test("saved-board readiness precedes attention refinement and retirement still a
     initializeOperatorCapability: async () => undefined,
     publishHotStateActivation: () => undefined,
     startStructuredHosts: null,
-    prepareBoard: async () => { events.push("saved-board"); },
     startControllers: async () => undefined,
     publishViewerReleaseReady: () => { events.push("ready"); },
     refineBoard: () => barrier.run(async () => { events.push("refine"); await held; }),
   });
-  expect(events).toEqual(["saved-board", "ready", "refine"]);
+  expect(events).toEqual(["ready", "refine"]);
   const retirement = barrier.quiesce(new Error("retired")).then(() => { retired = true; });
   await Promise.resolve();
   expect(retired).toBe(false);

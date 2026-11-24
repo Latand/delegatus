@@ -72,6 +72,11 @@ export function proxy(request: NextRequest): NextResponse {
   // signed frames. Credentials never authorize an attacker-chosen DNS name.
   const foreignHost = rejectForeignHost(request);
   if (foreignHost) return foreignHost;
+  // The readiness route discloses only this process's public build revision.
+  // Its handler still requires the launcher's exact revision, and the normal
+  // host check above remains in force. Let it reach the handler even when an
+  // install key cannot be represented in an HTTP header.
+  if (request.nextUrl.pathname === "/api/ready") return NextResponse.next();
   // These assets previously bypassed the proxy matcher. Keep them loadable
   // without credentials, after checking Host like every other route.
   if (request.nextUrl.pathname.startsWith("/_next/static/") || request.nextUrl.pathname === "/favicon.ico") return NextResponse.next();
