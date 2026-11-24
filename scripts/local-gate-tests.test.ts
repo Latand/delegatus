@@ -393,6 +393,7 @@ test("mixed selections retain ordinary parallelism and bound nested harness work
   const workers = (files: string[], ceiling: number, portable = false) =>
     comparisonFileGroups(files, ceiling, portable).map(group => ({ files: group.indices.map(index => files[index]), workers: group.workers }));
   expect(workers(regular, 8)).toEqual([{ files: regular, workers: 8 }]);
+  expect(workers(regular, 8, true)).toEqual([{ files: regular, workers: 8 }]);
   expect(workers(nested.slice(0, 1), 8)).toEqual([{ files: nested.slice(0, 1), workers: 1 }]);
   expect(workers(mixed, 8)).toEqual([{ files: regular, workers: 8 }, { files: nested, workers: 2 }]);
   expect(workers(mixed, 3)).toEqual([{ files: regular, workers: 3 }, { files: nested, workers: 2 }]);

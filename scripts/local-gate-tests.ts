@@ -65,6 +65,7 @@ const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const RUN_BUDGET_MS = 15 * 60 * 1000;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
+const FILE_CLEANUP_MS = 5_000;
 // Engine selections took eleven minutes at six workers, leaving no room for
 // confirmations after a slow full-file baseline. Bound head work to eight owned
 // runners in the shared CPU work slice; baseline and retries retain three.
@@ -78,10 +79,10 @@ export function comparisonFileGroups(files: readonly string[], ceiling: number, 
     const launchesChecks = /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/"));
     (launchesChecks ? nested : ordinary).push(index);
   }
-  const limit = sharedPortable ? 1 : ceiling;
+  const limit = sharedPortable && nested.length ? 1 : ceiling;
   return [
-    { indices: ordinary, workers: Math.min(ordinary.length, limit) },
-    { indices: nested, workers: Math.min(nested.length, limit, 2) },
+    { indices: ordinary, workers: Math.min(ordinary.length, limit), nested: false },
+    { indices: nested, workers: Math.min(nested.length, limit, 2), nested: true },
   ].filter(group => group.workers > 0);
 }
 
@@ -348,18 +349,21 @@ interface TestBudgets { fileMs: number; runMs: number }
 const DEFAULT_TEST_BUDGETS: TestBudgets = { fileMs: FILE_BUDGET_MS, runMs: RUN_BUDGET_MS };
 const fileRunnerPath = (env: NodeJS.ProcessEnv) => `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
 const sharesPortableRunner = () => process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0;
-async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; onFile?: (run: TestRun, cleanupConfirmed: boolean) => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number } = {}): Promise<TestRun> {
+async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; onFile?: (run: TestRun, cleanupConfirmed: boolean) => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number; deferNestedFiles?: boolean } = {}): Promise<TestRun> {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   const now = options.now ?? (() => performance.now());
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const results: TestRun[] = new Array(files.length);
   const groups = comparisonFileGroups(files, options.workers ?? 3, sharesPortableRunner());
-  const runFile = async (index: number) => {
+  const runFile = async (index: number, minimumRemaining: number) => {
     const file = files[index]!;
     const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
     if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
+    if (remaining < minimumRemaining) {
+      throw new BudgetExhausted(`${label}: remaining run budget cannot fit ${file} and its cleanup; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
+    }
     const sites = options.sites?.filter(site => site.file === file);
     const filtered = !!sites && !sites.some(site => site.kind === "error");
     const filter = filtered ? testNameFilter(sites) : [];
@@ -446,9 +450,10 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   const workers: PromiseSettledResult<void>[] = [];
   for (const group of groups) {
     options.log?.(`touched-tests: ${label} selected ${group.indices.length} files with ${group.workers} file workers`);
+    const minimumRemaining = group.nested && options.deferNestedFiles ? budgets.fileMs + FILE_CLEANUP_MS : 0;
     let next = 0;
     const settled = await Promise.allSettled(Array.from({ length: group.workers }, async () => {
-      while (next < group.indices.length) await runFile(group.indices[next++]!);
+      while (next < group.indices.length) await runFile(group.indices[next++]!, minimumRemaining);
     }));
     workers.push(...settled);
     if (settled.some(worker => worker.status === "rejected")) break;
@@ -653,6 +658,9 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // a green file after its runner and sandbox have been cleaned, with the
     // same inputs verified on both sides of that file's execution.
     const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers: HEAD_FILE_WORKERS,
+      // A head that can resume from durable checkpoints can yield before a
+      // short phase remainder cuts off a nested hook during its teardown.
+      deferNestedFiles: !!headCache && budgets.runMs > budgets.fileMs + FILE_CLEANUP_MS,
       onFile: headCache ? (run, cleanupConfirmed) => {
         if (!cleanupConfirmed || !isGreenHeadFile(run)) return;
         if (sameHeadInputs()) headCache.write(headKey(run.completed[0]!), run);

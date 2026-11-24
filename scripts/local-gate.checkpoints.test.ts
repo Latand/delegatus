@@ -279,6 +279,41 @@ console.log("retryable=" + publicationDeadlineOnly(lines.join("\\n") + "\\nowned
   }
 }, 60_000);
 
+serviceTest("a nested file waits for a fresh run when the remaining budget would clip its runner", () => {
+  const f = fixture();
+  const nested = "scripts/local-gate.nested.test.ts";
+  mkdirSync(path.join(f.repo, "scripts"));
+  writeFileSync(path.join(f.repo, nested), f.source("nested"));
+  f.git("add", "."); f.git("commit", "-m", "Nested checkpoint fixture");
+  const base = f.git("rev-parse", "origin/main");
+  const driver = path.join(f.root, "nested-budget.ts");
+  writeFileSync(driver, `import { comparatorEnding, touchedTests } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+let now = 0;
+Object.defineProperty(performance, "now", { value: () => now });
+try {
+  await touchedTests(process.cwd(), ${JSON.stringify(base)}, ${JSON.stringify(["a.test.ts", nested])}, {
+    log(line) {
+      console.log(line);
+      if (process.argv.at(-1) === "defer" && line.startsWith("touched-tests: head file a.test.ts:")) now = 650_000;
+    },
+  });
+} catch (error) {
+  const { line, code } = comparatorEnding(error);
+  console.error(line); process.exitCode = code;
+}
+`);
+  const run = (mode: string) => spawnSync(process.execPath, [driver, mode],
+    { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
+  const deferred = run("defer");
+  expect(deferred.status, deferred.stdout + deferred.stderr).toBe(75);
+  expect(deferred.stderr).toContain(`remaining run budget cannot fit ${nested} and its cleanup`);
+  expect(f.samples()).toEqual({ a: 1 });
+  const resumed = run("resume");
+  expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+  expect(resumed.stdout).toContain("reused complete green head file a.test.ts");
+  expect(f.samples()).toEqual({ a: 1, nested: 1 });
+}, 60_000);
+
 test("portable file samples remain fresh even when their assertions pass", () => {
   const f = fixture();
   writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b"));
