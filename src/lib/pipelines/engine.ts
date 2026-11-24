@@ -5334,6 +5334,13 @@ function resumablePassedPublication(pipeline: Pipeline): boolean {
       && (operation.passedStage === true || (operation.state === "settled" && operation.result?.ok === false))));
 }
 
+function runningPassWithPublishedHead(pipeline: Pipeline): boolean {
+  const delivery = pipeline.delivery;
+  return pipeline.state === "running" && !pipeline.closedAt && !pipeline.hiddenAt && awaitingPassedPublication(pipeline)
+    && !!delivery?.target.remote && publishesRemoteBranch(pipeline) && !!settledPublicationForHead(pipeline, pipeline.lastPassedCommit)
+    && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...delivery.target, active: true }));
+}
+
 function passedPublicationEvidence(pipeline: Pipeline): string {
   const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
   return JSON.stringify([attempt?.verdict, attempt?.reviewHeadSha, attempt?.expectedReviewHeadSha,
@@ -5652,9 +5659,16 @@ async function retryTerminalStagePublication(
     await advancePipeline(pipeline, stage, ports, attempt);
     return;
   }
-  if (attempt.publicationRepair && !await settlePublicationRepair(pipeline, stage, attempt, ports, persist)) return;
+  const repair = attempt.publicationRepair;
+  // A rejected turn for an older SHA cannot restore over a newer accepted
+  // head that has its own publication receipt. Pending cleanup still owns
+  // the checkout. The newer head must pass the normal clean checkout proof.
+  const publishedAfterRejection = !!repair?.settledAt && repair.outcome?.status === "rejected"
+    && !repair.committedSha && repair.sha !== pipeline.lastPassedCommit
+    && (!repair.rollback || repair.rollback.phase === "done") && runningPassWithPublishedHead(pipeline);
+  if (repair && !publishedAfterRejection && !await settlePublicationRepair(pipeline, stage, attempt, ports, persist)) return;
   const current = (await currentPipelineBranchHead(pipeline, ports.exec));
-  if (current.ok && current.sha !== pipeline.lastPassedCommit && stage.kind === "run" && attempt.effectiveRole.access === "read-write") {
+  if (!publishedAfterRejection && current.ok && current.sha !== pipeline.lastPassedCommit && stage.kind === "run" && attempt.effectiveRole.access === "read-write") {
     const repaired = await performanceSpans.wait("pipeline.attempt-push-proof", () => settleStageAttemptPush(pipeline, attempt, ports.exec, ports.now(), { acceptedHead: pipeline.lastPassedCommit }));
     if (repaired?.ok) {
       pipeline.lastPassedCommit = repaired.sha;
@@ -5682,6 +5696,7 @@ async function retryTerminalStagePublication(
   const published = queuePipelinePublication(pipeline, ports.exec, {
     acceptedSha: pipeline.lastPassedCommit,
     publishedSha: pipeline.publishedCommit ?? null,
+    unchangedHead: true,
   });
   if (!published.ok) {
     if (await retryRefusedPublication(pipeline, attempt, published, ports)) return;
@@ -15547,19 +15562,20 @@ export function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchRe
  * A caller that names the stage (and the attempt) it saw is refused when the
  * pipeline is no longer waiting on exactly that: not waiting on a decision, on
  * another stage, or on another latest own attempt of the same stage. A
- * lineage-adopted (historical) attempt is never the one compared.
+ * lineage-adopted (historical) attempt is never the one compared. A retry
+ * can also wake the running stage's published pass for settlement.
  * `expectedAttempt: 0` states that the stage has no own attempt yet (a
  * provisioning park waits on its first stage before any attempt exists), so a
  * pipeline that has since started attempt 1 there is refused too.
  */
-function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
+function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest, retryPublishedPass = false): PipelinePatchResult | null {
   if (req.expectedStageId === undefined) return null;
   const pendingRetry = req.action === "retry-stage" && ["running", "paused"].includes(pipeline.state)
     && pipeline.cursor?.state === "pending" && unstartedPendingAttempt(currentAttempt(pipeline, pipeline.cursor.stageId));
   const waiting = pipeline.state === "needs_decision" || (req.action === "retry-stage"
     && (pipeline.state === "running" && ["running", "spawning"].includes(pipeline.cursor?.state ?? "")
       || pipeline.state === "paused" && pipeline.cursor?.state === "spawning")
-    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? "")) || pendingRetry
+    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? "")) || pendingRetry || retryPublishedPass
     ? pipeline.cursor?.stageId ?? null : null;
   if (waiting !== req.expectedStageId) {
     const repair = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId)?.publicationRepair : undefined;
@@ -17492,6 +17508,12 @@ async function applyPipelinePatch(
         return { pipeline: current };
       }
       const attempt = current.cursor ? currentAttempt(current, current.cursor.stageId) : null;
+      if (req.acceptedSha === undefined && attempt && runningPassWithPublishedHead(current)) {
+        delete attempt.settlementAdmissionRetry;
+        renewPullRequestInspection(current, attempt, ports.now());
+        await persist(); requestPipelineTick();
+        return { pipeline: current };
+      }
       if (req.acceptedSha === undefined && current.state === "needs_decision" && passedStageCustodyPark(current, attempt)) {
         // Custody stopped before lastPassedCommit could accept the stage head.
         // Retry that proof outside the mutation lease before reserving a push.
@@ -18065,7 +18087,8 @@ async function applyPipelinePatch(
       if (explicitReceiptRetry && (typeof req.stageId !== "string" || typeof req.launchId !== "string")) {
         return { error: "receipt retry requires both stageId and launchId", status: 400 };
       }
-      const expectation = expectedStageRefusal(pipeline, req);
+      const retryPublishedPass = !explicitReceiptRetry && runningPassWithPublishedHead(pipeline);
+      const expectation = expectedStageRefusal(pipeline, req, retryPublishedPass);
       if (expectation) return expectation;
       if (explicitReceiptRetry && stage?.id !== req.stageId) {
         return { error: "the clicked launch belongs to a different pipeline stage", status: 409 };
@@ -18075,6 +18098,12 @@ async function applyPipelinePatch(
       }
       const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasksForList());
       if (elsewhere) return elsewhere;
+      if (attempt && retryPublishedPass) {
+        delete attempt.settlementAdmissionRetry;
+        renewPullRequestInspection(pipeline, attempt, ports.now());
+        await persist(); requestPipelineTick();
+        return { pipeline };
+      }
       const switchRetry = attempt && recoverableRuntimeSwitch(attempt);
       if (stage && attempt && switchRetry && ["running", "needs_decision"].includes(pipeline.state)) {
         if (attempt.report) return { error: "stage already reported", status: 409 };

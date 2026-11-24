@@ -1,4 +1,111 @@
-import { expect, test, spawnSync, fs, path, Database, tickPipelines, loadPipelines, savePipelines, patchPipeline, entry, harness, finishReported, REMOTE_BRANCH, create, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
+import { expect, test, spawnSync, fs, path, Database, tickPipelines, loadPipelines, savePipelines, patchPipeline, rawPatchPipeline, entry, harness, finishReported, REMOTE_BRANCH, create, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
+import { tickPipelinesController } from "./controllerPass";
+import { settlePipelineControllerJobs } from "./controllerJobs";
+import { publishPipelineBranch } from "./git";
+import { recordPublicationFailure, PUBLICATION_RETRY_DELAYS_MS } from "./publicationHistory";
+
+test.each(["automatic", "publish", "retry-stage", "dirty", "moved", "rollback-pending"] as const)(
+  "a settled publication reaches the pass edge after interrupted pushes and a retired admission (%s)", async action => {
+    const h = harness();
+    const box = publishHarness(h, { remoteReadFails: true });
+    const exec = h.ports.exec;
+    const remote = "https://github.com/fixture/project.git";
+    let prCreates = 0;
+    const checkoutWrites: string[] = [];
+    h.ports.exec = async (command, args, cwd, env, options) => {
+      if (command === "git" && args[0] === "remote" && args[1] === "get-url")
+        return { code: 0, stdout: remote + "\n", stderr: "" };
+      if (command === "gh" && args[1] === "create") {
+        prCreates++;
+        return { code: 0, stdout: "created", stderr: "" };
+      }
+      if (command === "gh" && args[1] === "list") {
+        const lane = loadPipelines()[0]!;
+        return { code: 0, stdout: JSON.stringify(prCreates ? [{ number: 42, headRefName: lane.branch,
+          baseRefName: lane.baseBranch, state: "OPEN", headRefOid: box.passedSha, isCrossRepository: false }] : []), stderr: "" };
+      }
+      if (command === "git" && ["add", "clean", "reset", "restore"].includes(args[0]!)) checkoutWrites.push(args[0]!);
+      return exec(command, args, cwd, env, options);
+    };
+    await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "Accepted output")], h.ports);
+    const lane = loadPipelines()[0]!;
+    const attempt = lane.runs[0]!.attempts[0]!;
+    expect(lane.cursor).toMatchObject({ stageId: "build", state: "committing" });
+    expect(attempt.state).toBe("passed");
+    const oldSha = lane.baseRef;
+    const refusal = "publishing the passed stage: the repository's pre-push hook failed in its touched tests phase";
+    const now = h.ports.now();
+    attempt.publicationRepair = { sha: oldSha, baseSha: oldSha, operationId: "old-head-refusal", stageId: "build", attempt: attempt.n,
+      refusedAt: now, settledAt: now, requestedAt: now, cleanHead: { sha: oldSha, branch: lane.branch },
+      detail: "pre-push: touched tests: failed (1)", parkDetail: refusal,
+      outcome: { status: "rejected", reason: "The producer did not finish in time." } };
+    if (action === "rollback-pending") attempt.publicationRepair.rollback = { index: oldSha, tree: oldSha,
+      afterTree: oldSha, tracked: [], untracked: [], phase: "restore" };
+    delete lane.publicationRecovery;
+    delete attempt.publicationRetry;
+    const delivery = lane.delivery!;
+    const reservation = delivery.operation!;
+    for (let index = 0; index < 7; index++) {
+      const superseded = index === 4;
+      const detail = superseded ? "publication admission superseded by the passed-stage settlement decision"
+        : "interrupted publication did not leave its accepted head on the remote";
+      const id = `prior-publication-${index}`;
+      delivery.operation = { ...reservation, id, state: "settled", result: { ok: false, error: detail,
+        ...(superseded ? {} : { outcome: "not-landed" as const }) } };
+      recordPublicationFailure(lane, attempt, { operationId: id, epoch: delivery.epoch, at: h.ports.now(),
+        cause: superseded ? "check-failure" : "interrupted", detail, recoverable: !superseded }, PUBLICATION_RETRY_DELAYS_MS);
+    }
+    delete delivery.operation;
+    lane.stateDetail = refusal;
+    attempt.error = refusal;
+    savePipelines([lane]);
+    box.setRemoteReadFails(false);
+    box.setRemote(box.passedSha);
+    expect(await publishPipelineBranch(lane, h.ports.exec, { acceptedSha: box.passedSha, now: h.ports.now }))
+      .toMatchObject({ ok: true, remote: "published", sha: box.passedSha });
+    const published = loadPipelines()[0]!;
+    expect(published).toMatchObject({ state: "running", stateDetail: refusal,
+      cursor: { stageId: "build", state: "committing" }, publishedCommit: box.passedSha });
+    const receipt = published.delivery!.operation;
+    const history = published.publicationRecovery;
+    expect(history?.[box.passedSha]).toMatchObject({ failures: 6, totalAttempts: 7 });
+    checkoutWrites.length = 0;
+    const reads = box.remoteReadAttempts();
+    const seat = { kind: "agent", role: "orchestrator", conversationId: "conversation_creator" } as const;
+    if (action === "dirty") box.setDirty(true);
+    if (action === "moved") box.setLocalHead("9".repeat(40));
+    if (action === "publish") expect((await rawPatchPipeline(lane.id, { action }, h.ports, seat)).error).toBeUndefined();
+    if (action === "retry-stage") {
+      expect(await rawPatchPipeline(lane.id, { action, expectedStageId: "build", expectedAttempt: attempt.n + 1 }, h.ports, seat))
+        .toMatchObject({ code: "STAGE_CHANGED", field: "expectedAttempt" });
+      expect((await rawPatchPipeline(lane.id, { action, expectedStageId: "build", expectedAttempt: attempt.n }, h.ports, seat)).error)
+        .toBeUndefined();
+    }
+    await tickPipelinesController([], h.ports);
+    await settlePipelineControllerJobs();
+    const after = loadPipelines()[0]!;
+    expect(after.publicationRecovery).toEqual(history);
+    expect(after.delivery!.operation).toEqual(receipt);
+    expect(after.runs[0]!.attempts).toHaveLength(1);
+    expect(after.runs[0]!.attempts[0]!.publicationRepair).toEqual(attempt.publicationRepair);
+    expect(checkoutWrites).toEqual([]);
+    expect(box.order).toEqual(["commit"]);
+    expect(box.remoteReadAttempts()).toBe(reads);
+    if (action === "dirty" || action === "moved" || action === "rollback-pending") {
+      expect(after.cursor).toMatchObject({ stageId: "build", state: "committing" });
+      expect(prCreates).toBe(0);
+      if (action === "dirty") expect(after.stateDetail).toContain("uncommitted changes");
+      if (action === "moved") expect(after.stateDetail).toContain("the worktree moved");
+      return;
+    }
+    expect(after).toMatchObject({ state: "running", stateDetail: null, delivery: { target: { pr: 42 } },
+      cursor: { stageId: "review", state: "pending", input: "Accepted output", activatedBy: { stageId: "build", attempt: attempt.n, edge: "pass" } } });
+    expect(after.runs[0]!.attempts[0]).toMatchObject({ state: "passed", verdict: { status: "pass" }, error: null, completedAt: attempt.completedAt });
+    expect(prCreates).toBe(1);
+  });
 
 test.each([false, true])("own-id takeover resumes a delivery-refusal park without rerunning the pass (publish first: %s)", async (publishFirst) => {
   const { h, box, pipeline, id } = await deliveryRefusalPark();
