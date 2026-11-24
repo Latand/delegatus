@@ -103,7 +103,7 @@ async function inspectLegacyInstallers(checkout: string): Promise<LegacyInstalle
   const pids = names.filter(name => /^[1-9][0-9]*$/.test(name));
   for (let at = 0; at < pids.length; at += 32) {
     if (performance.now() - started >= CENSUS_MS) return { kind: "incomplete", reason: "expired" };
-    const results = await Promise.all(pids.slice(at, at + 32).map(inspect));
+    const results = await Promise.all(pids.slice(at, at + 32).map(name => inspect(name)));
     const issue = results.find(result => result !== undefined);
     if (issue) return issue;
   }

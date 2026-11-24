@@ -10,6 +10,7 @@ import postcss from "postcss";
 import sharp from "sharp";
 
 import { translate } from "@/lib/i18n";
+import type { Pipeline } from "@/lib/pipelines/types";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 import { stubVoiceDevices as stubVoiceDevicesForSettings } from "@/test-helpers/voiceDevicesStub";
 import { createGateSandbox } from "../../../scripts/local-gate";
