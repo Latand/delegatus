@@ -173,5 +173,8 @@ const REASONS: Record<NativeCallerReason, string> = {
 };
 
 export function nativeAdmissionMessage(admission?: NativeCallerRefusal): string {
+  if (admission?.reason === "evidence-incomplete" && !admission.retryable) {
+    return "[evidence-incomplete] The native host lookup exceeded its verification limit. Open the conversation in Delegatus and continue it under its host.";
+  }
   return `${admission ? `[${admission.reason}] ${REASONS[admission.reason]} ` : ""}A Claude Code session started outside Delegatus needs explicit operator approval for its live process and transcript generation. Otherwise open the conversation in Delegatus and continue it there under its host.`;
 }

@@ -70,7 +70,16 @@ export const STUB_ADMISSION = `if (pathname === "/api/self-update/launcher-admis
       if (fs.existsSync(state + "/${WORK_STARTED}")) return Response.json({ admitted: false });
     }`;
 
-export const STUB_NEXT = (exitAtOnce: boolean, tokenProtected = false) => exitAtOnce ? "process.exit(3);\n" : `
+export const STUB_READY = `
+    if (pathname === "/api/ready") {
+      const revision = process.env.LLV_DIAGNOSTIC_REVISION;
+      return revision && new URL(request.url).searchParams.get("revision") === revision
+        ? new Response(null, { headers: { "x-delegatus-viewer-revision": revision } })
+        : new Response(null, { status: 409 });
+    }
+`;
+
+export const STUB_NEXT = (exitAtOnce: boolean, tokenProtected = false, revisionReadiness = false) => exitAtOnce ? "process.exit(3);\n" : `
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 export const config = join(process.env.XDG_CONFIG_HOME, "delegatus");
@@ -96,7 +105,7 @@ export const server = Bun.serve({
         return new Response("Unauthorized", { status: 401 });
       }
     }
-    if (pathname === "/api/ready") return new Response(null, { status: 404 });
+    ${revisionReadiness ? STUB_READY : 'if (pathname === "/api/ready") return new Response(null, { status: 404 });'}
     ${STUB_ADMISSION}
     if (pathname === "/api/self-update/launcher-admission") return Response.json({ admitted: true });
     return new Response(process.cwd());
@@ -372,7 +381,9 @@ export async function protectedInstall(shape: "checkout" | "package", alias: "LL
   const candidate = release(f, "private-terminal-candidate");
   if (shape === "package") {
     renameSync(path.join(f.checkout, ".git"), path.join(f.root, "saved-git"));
-    writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ type: "module", version: "0.0.1" }));
+    writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ type: "module", version: "0.0.1", gitHead: candidate.sha }));
+    writeFileSync(path.join(candidate.dir, "dist/standalone/server.js"),
+      server.replace("../../dist/perimeter.mjs", "../perimeter.mjs").replace('if (pathname === "/api/ready") return new Response(null, { status: 404 });', STUB_READY));
   }
   const key = randomBytes(32).toString("hex");
   delete f.env.LLV_TOKEN; delete f.env.DELEGATUS_TOKEN;

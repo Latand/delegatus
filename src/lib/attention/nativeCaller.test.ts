@@ -120,9 +120,15 @@ test("incomplete native artifact evidence stays fail-closed and tells the caller
 test("a completed native host lookup over its fixed candidate cap refuses without a pointless retry", () => {
   const f = fixture();
   Object.assign(f.snapshot, { nativeHostsLookupLimitExceeded: true });
-  expect(resolveNativeCaller(f.sources)).toEqual({ kind: "refused", reason: "evidence-incomplete", retryable: false });
+  const capped = resolveNativeCaller(f.sources);
+  expect(capped).toEqual({ kind: "refused", reason: "evidence-incomplete", retryable: false });
+  if (capped.kind !== "refused") throw new Error("expected capped lookup refusal");
+  expect(nativeAdmissionMessage(capped)).toBe("[evidence-incomplete] The native host lookup exceeded its verification limit. Open the conversation in Delegatus and continue it under its host.");
   Object.assign(f.snapshot, { nativeHostsLookupLimitExceeded: undefined, nativeHostsIncomplete: true });
-  expect(resolveNativeCaller(f.sources)).toEqual({ kind: "refused", reason: "evidence-incomplete", retryable: true });
+  const pending = resolveNativeCaller(f.sources);
+  expect(pending).toEqual({ kind: "refused", reason: "evidence-incomplete", retryable: true });
+  if (pending.kind !== "refused") throw new Error("expected pending lookup refusal");
+  expect(nativeAdmissionMessage(pending)).toContain("Repeat the same request after preparation finishes.");
 });
 
 test("a session id owned twice is refused", () => {

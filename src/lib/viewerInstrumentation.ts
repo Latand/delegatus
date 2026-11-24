@@ -69,8 +69,9 @@ interface ViewerReleaseActivationOptions {
   log?: (...args: unknown[]) => void;
   fenceRequest?: () => HotStateAuthority | null;
   onFenceRequested?: (request: HotStateAuthority) => void | Promise<void>;
-  /** A fence this release acknowledged was withdrawn while it stayed current. */
+  /** A fence this release processed was withdrawn while it stayed current. */
   onFenceWithdrawn?: () => void | Promise<void>;
+  resumeWorktreeRecovery?: () => Promise<void>;
   onDemoted?: (context: { fenced: boolean }) => void | Promise<void>;
 }
 
@@ -240,6 +241,7 @@ export async function activateViewerRuntimeWhenCurrent(
   let started = false;
   let demoted = false;
   let fenceInProgress = false;
+  let fenceObserved = false;
   let fencedEpoch: number | null = null;
   const monitor = () => {
     if (demoted) return;
@@ -252,13 +254,20 @@ export async function activateViewerRuntimeWhenCurrent(
     }
     const fence = started ? options.fenceRequest?.() ?? null : null;
     if (!fence || fence.mode !== "fencing") {
-      if (!fenceInProgress && fencedEpoch !== null) {
+      if (!fenceInProgress && fenceObserved) {
+        fenceObserved = false;
         fencedEpoch = null;
-        void Promise.resolve(options.onFenceWithdrawn?.()).catch((error) => {
+        void (async () => {
+          await options.onFenceWithdrawn?.();
+          if (isCurrent() && options.fenceRequest?.()?.mode !== "fencing") {
+            await options.resumeWorktreeRecovery?.();
+          }
+        })().catch((error) => {
           log("[viewer release] withdrawn fence recovery failed", error);
         });
       }
     } else if (fencedEpoch !== fence.epoch && !fenceInProgress) {
+      fenceObserved = true;
       fenceInProgress = true;
       void Promise.resolve(options.onFenceRequested?.(fence)).then(() => {
         fencedEpoch = fence.epoch;
@@ -962,7 +971,7 @@ export async function prepareRegistryForNativeCallers(
   signal: AbortSignal,
 ): Promise<void> {
   await registry.prepareReadOnlySnapshot(signal);
-  await registry.prepareNativeCallerArtifacts(signal);
+  await registry.prepareNativeCallerArtifacts(signal, { waitUntilReady: true });
 }
 
 /** Check every state database before a store opens one (#1870 slice 10):
@@ -1002,6 +1011,47 @@ export function createViewerStartupBarrier(controller: AbortController) {
     async quiesce(reason: Error): Promise<void> {
       controller.abort(reason);
       await Promise.allSettled([...pending]);
+    },
+  };
+}
+
+/** Keep the seat gate across fence epochs, and give each recovery attempt
+ * its own signal so withdrawal can resume after the fenced worker exits. */
+export function createViewerWorktreeRecovery(
+  recover: (signal: AbortSignal, assertAuthority: () => void) => Promise<{ folded: number; leftAlone: number }>,
+  hasAuthority: () => boolean,
+) {
+  let finish!: () => void;
+  const committed = new Promise<void>(resolve => { finish = resolve; });
+  let done = false;
+  let active: { controller: AbortController; work: Promise<void> } | null = null;
+  return {
+    committed,
+    async start() {
+      if (done) return;
+      if (active) return active.work;
+      const controller = new AbortController();
+      const { signal } = controller;
+      const assertAuthority = () => {
+        signal.throwIfAborted();
+        if (!hasAuthority()) throw new Error("worktree recovery lost release authority");
+      };
+      const work = retryWorktreeRecoveryUntilCommitted(async () => {
+        assertAuthority();
+        await recover(signal, assertAuthority);
+        assertAuthority();
+        done = true;
+        finish();
+      }, signal, error => console.error("[worktree recovery] worker failed; retrying in this Viewer generation",
+        error instanceof Error ? error.name : "unknown")).finally(() => { active = null; });
+      active = { controller, work };
+      return work;
+    },
+    async quiesce(reason: Error) {
+      const attempt = active;
+      if (!attempt) return;
+      attempt.controller.abort(reason);
+      await attempt.work.catch(() => {});
     },
   };
 }
@@ -1063,11 +1113,19 @@ export async function registerViewerRuntime(): Promise<void> {
   const releaseRevision = () => hotStateWriterRevision(hotStateDirectory);
   let activatedReleaseRevision: string | null = null;
   const startupAbort = new AbortController();
-  let finishWorktreeRecovery!: () => void;
-  const worktreeRecoveryCommitted = new Promise<void>(resolve => { finishWorktreeRecovery = resolve; });
+  const worktreeRecovery = createViewerWorktreeRecovery(async (signal, assertAuthority) => {
+    const { recoverWorktreesInWorker } = await import("@/lib/state/durability");
+    assertAuthority();
+    return recoverWorktreesInWorker(hotStateDirectory, signal);
+  }, () => {
+    const authority = readHotStateAuthority(hotStateDirectory);
+    return isCurrent() && authority?.mode !== "fencing" && (activatedReleaseRevision === null
+      || (authority?.mode === "sqlite" && authority.releaseRevision === activatedReleaseRevision));
+  });
   const startupBarrier = createViewerStartupBarrier(startupAbort);
   const quiesceStartup = async () => {
-    await startupBarrier.quiesce(new Error("structured startup retired by release handover"));
+    const reason = new Error("structured startup retired by release handover");
+    await Promise.all([startupBarrier.quiesce(reason), worktreeRecovery.quiesce(reason)]);
   };
   const assertStartupActive = () => {
     // Observe durable retirement at every phase/batch boundary, including
@@ -1159,19 +1217,11 @@ export async function registerViewerRuntime(): Promise<void> {
         : null,
       refineBoard: async () => {
         await new Promise<void>(resolve => setImmediate(resolve));
-        assertStartupActive();
+        // The legacy receipt can arrive after readiness. A withdrawn fence
+        // resumes this work separately from the retired startup phases.
+        startupAbort.signal.throwIfAborted();
+        await worktreeRecovery.start();
         await startupBarrier.run(async () => {
-          // Live worktree resolutions are persisted as they are observed.
-          // This legacy repair considers only removed checkout paths from
-          // retained history, so its full catalog/evidence walk can refine
-          // those records after controllers and readiness are available.
-          const { recoverWorktreesInWorker } = await import("@/lib/state/durability");
-          assertStartupActive();
-          await retryWorktreeRecoveryUntilCommitted(
-            () => recoverWorktreesInWorker(hotStateDirectory, startupAbort.signal), startupAbort.signal,
-            error => console.error("[worktree recovery] startup worker failed; retrying in this Viewer generation", error instanceof Error ? error.name : "unknown"),
-          );
-          finishWorktreeRecovery();
           assertStartupActive();
           const { prepareBoardSummary } = await import("@/app/api/files/operatorProjection");
           assertStartupActive();
@@ -1184,7 +1234,7 @@ export async function registerViewerRuntime(): Promise<void> {
         }));
       },
       startControllers: async () => {
-        await startCurrentReleaseControllers(process.env, undefined, { beforeSeatTick: worktreeRecoveryCommitted });
+        await startCurrentReleaseControllers(process.env, undefined, { beforeSeatTick: worktreeRecovery.committed });
         const { startRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
         await startRecordedCheckObserver();
       },
@@ -1239,8 +1289,10 @@ export async function registerViewerRuntime(): Promise<void> {
       const authority = readHotStateAuthority(hotStateDirectory);
       if (!isCurrent() || revision === null || authority?.mode !== "sqlite" || authority.releaseRevision !== revision) return;
       const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
+      if (!isCurrent() || readHotStateAuthority(hotStateDirectory)?.epoch !== authority.epoch) return;
       await ensureLegacyCollectionsImported();
     },
+    resumeWorktreeRecovery: worktreeRecovery.start,
     onDemoted: async ({ fenced }) => {
       (await import("@/lib/projects/cloudEnvironmentController")).stopCloudEnvironmentController();
       try {

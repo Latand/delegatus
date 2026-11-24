@@ -13,6 +13,7 @@ import { hostedConversationsFromSnapshot, attentionCallerSources, productionDoma
 import { runAsMcpHttpCaller } from "./callerContext";
 import { nativePeerProof, verifyNativePeer } from "./nativePeer";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, type McpToolBindings } from "./server";
+import { withWorkspaceMcpFence } from "./workspaceFence";
 import crypto from "node:crypto";
 
 const roots: string[] = [];
@@ -82,6 +83,89 @@ test.skipIf(process.platform !== "linux")("an unwatchable retained host path lea
   await prepareRegistryForNativeCallers(registry, new AbortController().signal);
   expect(registry.mcpNativeCallerSnapshot(session, null).snapshot).toMatchObject({ nativeHostsIncomplete: true });
 });
+
+test.skipIf(process.platform !== "linux").each(["budget", "cancelled waiter"] as const)(
+  "a cold native MCP mutation keeps its own preparation budget with %s", async scenario => {
+    const { registry, sqliteFilename } = fixture(2048);
+    const home = path.dirname(sqliteFilename);
+    const projectsDir = path.join(home, "projects");
+    const retained = path.join(home, "retained") + path.sep;
+    const artifact = path.join(projectsDir, `${session}.jsonl`);
+    fs.mkdirSync(projectsDir);
+    fs.mkdirSync(retained);
+    fs.writeFileSync(artifact, "");
+    const db = new Database(sqliteFilename);
+    try {
+      db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.engine','claude','$.generations[0].path',?,'$.generations[0].archivedAt',json('null')) WHERE collection='conversations' AND row_key=?")
+        .run(artifact, id);
+      db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.artifactPath',? || row_order,'$.structuredHost',json(?)) WHERE collection='entries' AND row_key LIKE 'history:%'")
+        .run(retained, JSON.stringify(structuredHostFixture(null, "codex-app-server")));
+    } finally { db.close(); }
+    const sources: NativeCallerSources = {
+      platform: "linux", ancestry: () => [99, 42], isClaude: pid => pid === 42, hostStamp: () => null,
+      home: () => home, accounts: () => [{ home, projectsDir }], realpath: file => fs.realpathSync(file),
+      record: () => ({ kind: "record", value: { pid: 42, sessionId: session, procStart: "100",
+        pidDomain: "fixture-domain", startedAt: 11_000, kind: "interactive" } }),
+      identity: () => "42:100", domain: () => "fixture-domain", bootTime: () => 10_000, processStartedAt: () => 11_000,
+      sessionHeldElsewhere: () => false, cwd: () => home,
+      snapshot: sessionId => registry.mcpNativeCallerSnapshot(sessionId, null).snapshot,
+      generationProof: () => "fixture-generation", association: () => ({ status: "approved", proof: "fixture-approved" }),
+      hostStatus: () => "dead",
+    };
+    const snapshot = registry.readOnlySnapshot();
+    const dependencies = { ...productionDomainDependencies, registrySnapshot: () => snapshot,
+      attentionAuthority: () => {
+        const verdict = resolveNativeCaller(sources);
+        return verdict.kind === "admitted"
+          ? { kind: "worker" as const, role: "worker", conversationId: id }
+          : { kind: "unidentified" as const, conversationId: null, admission: verdict };
+      },
+    };
+    let dispatches = 0;
+    const bindings = { send_message: async () => { dispatches++; return { operationId: "fixture-delivery" }; } } as unknown as McpToolBindings;
+    const service = withWorkspaceMcpFence(createMcpToolService(bindings, new MemoryMcpReceiptStore(), undefined,
+      { recovery: viewerMcpRecoverableTools(dependencies) }), dependencies, signal => registry.prepareNativeCallerArtifacts(signal));
+    const call = (clientRequestId: string, signal: AbortSignal) => runAsMcpHttpCaller({ nativePeer: {} as never },
+      () => service.callTool("send_message", { clientRequestId, conversationId: id, text: "fixture", nativeCallerProof: "a".repeat(43) },
+        { signal, deadlineAt: Date.now() + 30_000 }));
+    const caller = new AbortController();
+    if (scenario === "cancelled waiter") {
+      const cancelled = new AbortController();
+      const first = call("cancelled-native", cancelled.signal).then(() => null, error => error);
+      const second = call("live-native", caller.signal);
+      cancelled.abort(new Error("first waiter cancelled"));
+      const [error, result] = await Promise.all([first, second]);
+      expect(error).toBe(cancelled.signal.reason);
+      expect(result).toMatchObject({ ok: true, operationId: "fixture-delivery" });
+      expect(dispatches).toBe(1);
+      return;
+    }
+    let elapsed = 0;
+    const now = performance.now.bind(performance);
+    const monotonic = spyOn(performance, "now").mockImplementation(() => now() + elapsed);
+    const lstat = fs.lstatSync;
+    const slowPaths = spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof lstat>) => {
+      if (typeof args[0] === "string" && args[0].startsWith(retained)) {
+        elapsed += 20;
+        if (elapsed >= 30_000) caller.abort(new Error("executor deadline"));
+      }
+      return Reflect.apply(lstat, fs, args);
+    }) as typeof lstat);
+    try {
+      const result = await call("slow-native", caller.signal);
+      expect(result).toMatchObject({ ok: false, code: "caller_unidentified", retryable: true,
+        error: expect.stringContaining("[evidence-incomplete]") });
+      expect(caller.signal.aborted).toBe(false);
+      expect(elapsed).toBeLessThan(10_000);
+      expect(dispatches).toBe(0);
+    } finally {
+      slowPaths.mockRestore();
+      monotonic.mockRestore();
+    }
+    expect(await call("slow-native", caller.signal)).toMatchObject({ ok: true, operationId: "fixture-delivery" });
+    expect(dispatches).toBe(1);
+  },
+);
 
 test("every mutating tool resolves its policy caller once, including concurrent calls", async () => {
   const snapshot = fixture(0).registry.readOnlySnapshot();

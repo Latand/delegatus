@@ -138,7 +138,7 @@ function packageRevision(packageRoot) {
  * package root that moved since was updated by hand (`git pull`, a build), and
  * that newer choice wins over an older self-update release.
  *
- * @returns {{ dir: string, sha: string | null, published: boolean }}
+ * @returns {{ dir: string, sha: string | null, published: boolean, kind?: "package" }}
  */
 export function installedRelease(pointerFile, packageRoot) {
   const rootHead = isGitCheckout(packageRoot) ? headRevision(packageRoot) : null;
@@ -149,7 +149,7 @@ export function installedRelease(pointerFile, packageRoot) {
       const next = JSON.parse(readFileSync(join(parsed.dir, "package.json"), "utf8"));
       if (base.version === parsed.baseVersion && next.version === parsed.version
         && existsSync(join(parsed.dir, "dist", "standalone", "server.js")) && existsSync(join(parsed.dir, "dist", "runtime-host.mjs")))
-        return { dir: parsed.dir, sha: parsed.sha, published: true };
+        return { dir: parsed.dir, sha: parsed.sha, published: true, kind: "package" };
     }
     const sha = typeof parsed?.sha === "string" && /^[0-9a-f]{40}$/.test(parsed.sha) ? parsed.sha : null;
     const dir = typeof parsed?.dir === "string" ? parsed.dir : null;
@@ -410,9 +410,10 @@ const READY_ROUTE = "/api/ready";
 const LEGACY_READY_ROUTE = "/api/files";
 const readinessSleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
-/** The selected build itself declares the protocol, independent of the
- * revision the launcher expected when it started. */
+/** A package update target is selected by a revision-bearing pointer. Its
+ * executable might be stale, so the route files cannot grant legacy fallback. */
 export function releaseHasRevisionReadiness(release) {
+  if (release?.kind === "package") return true;
   if (!release?.dir) return false;
   // Source proves the selected checkout's protocol even when its retained
   // build output predates that source. Compiled route output covers packaged
@@ -447,8 +448,8 @@ function probeViewer(port, endpoint, revision, timeoutMs, headers) {
   }).catch(error => ({ error: readinessError(error) }));
 }
 
-/** The release is fixed for this child's lifetime. Only an artifact that
- * lacks the readiness route may use the legacy probe within the same budget.
+/** The release is fixed for this child's lifetime. A legacy-eligible release
+ * may use the fallback probe within the same budget.
  * @param {number} port
  * @param {{ revision: string | null, timeoutMs: number, allowLegacyFallback?: boolean, assertChildRunning?: () => void, probeAccess?: () => { headers: Record<string, string>, accessKeyUnsendable?: boolean }, onPhase?: (event: ReadinessPhase) => void, now?: () => number, sleep?: (ms: number) => Promise<void>, probe?: typeof probeViewer }} options
  */
@@ -457,6 +458,7 @@ export async function waitForViewerReadiness(port, {
   probeAccess = () => ({ headers: {}, accessKeyUnsendable: false }), onPhase = () => {},
   now = () => performance.now(), sleep = readinessSleep, probe = probeViewer,
 }) {
+  if (!revision && !allowLegacyFallback) return false;
   const deadline = now() + timeoutMs;
   let endpoint = revision ? READY_ROUTE : LEGACY_READY_ROUTE;
   while (now() < deadline) {
@@ -485,8 +487,7 @@ export async function waitForViewerReadiness(port, {
     assertChildRunning();
     if (ready) return true;
     // A known legacy build's perimeter can deny an unknown route before Next
-    // returns 404. The selected artifact, rather than this status, establishes
-    // whether fallback is permitted.
+    // returns 404. Both statuses still require legacy eligibility.
     if (endpoint === READY_ROUTE && allowLegacyFallback && (httpStatus === 404 || accessRefused)) {
       endpoint = LEGACY_READY_ROUTE;
       continue;

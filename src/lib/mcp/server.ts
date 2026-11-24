@@ -5647,7 +5647,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   );
   return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(
     service, productionDomainDependencies,
-    async signal => (await prepareAgentRegistry()).prepareNativeCallerArtifacts(signal),
+    async signal => (await prepareAgentRegistry(signal)).prepareNativeCallerArtifacts(signal),
   ));
 }
 

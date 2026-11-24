@@ -6,7 +6,8 @@ import { writeDrain } from "./selfUpdate/drain";
 import { expect, test, spyOn } from "bun:test";
 import { normalizeRegistry } from "./agent/registry";
 import { loopProgressProbe } from "./agent/registryLockHolderFixture";
-import { checkStateDatabasesBeforeStores, completeViewerRuntimeActivation, createViewerStartupBarrier, prepareRegistryForNativeCallers, registerViewerRuntime, retryWorktreeRecoveryUntilCommitted, settleInterruptedTransfers, startCurrentReleaseControllers } from "./viewerInstrumentation";
+import { activateViewerRuntimeWhenCurrent, checkStateDatabasesBeforeStores, completeViewerRuntimeActivation, createViewerStartupBarrier, createViewerWorktreeRecovery, prepareRegistryForNativeCallers, registerViewerRuntime, retryWorktreeRecoveryUntilCommitted, settleInterruptedTransfers, startCurrentReleaseControllers } from "./viewerInstrumentation";
+import { acknowledgeHotStateFence, publishHotStateAuthority, readHotStateAuthority, restoreHotStateAuthority } from "./state/hotStateAuthority";
 
 test("legacy worktree catalog refinement cannot delay controller activation or release readiness", async () => {
   const order: string[] = [];
@@ -67,6 +68,80 @@ test("a failed recovery keeps the seat tick fenced until a same-generation retry
   await Promise.resolve();
   expect(attempts).toBe(2);
   expect(tickStarted).toBeTrue();
+});
+
+test.each(["before", "after"] as const)("withdrawing a fence %s acknowledgement starts seat tick once the incumbent's recovery receipt arrives", async withdrawal => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-withdrawal-"));
+  const revision = "a".repeat(40);
+  const scheduled: Array<() => void> = [];
+  const initial = publishHotStateAuthority(directory, "sqlite", revision);
+  const firstReceipt = Promise.withResolvers<{ folded: number; leftAlone: number }>();
+  const resumedReceipt = Promise.withResolvers<{ folded: number; leftAlone: number }>();
+  const resumed = Promise.withResolvers<void>();
+  const log: string[] = [];
+  const poll = async () => {
+    scheduled.shift()!();
+    await new Promise<void>(resolve => setImmediate(resolve));
+  };
+  let ticks = 0;
+  const signals: AbortSignal[] = [];
+  const recovery = createViewerWorktreeRecovery(signal => {
+    signals.push(signal);
+    return signals.length === 1 ? firstReceipt.promise : resumedReceipt.promise;
+  }, () => readHotStateAuthority(directory)?.mode === "sqlite");
+  try {
+    await activateViewerRuntimeWhenCurrent(async () => {
+      await startCurrentReleaseControllers({}, {
+        loadFlowPipelineController: async () => ({ startFlowPipelineController: () => {} }),
+        loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
+        loadSeatTick: async () => ({ startSeatTick: () => { ticks++; return true; } }),
+      }, { beforeSeatTick: recovery.committed });
+      void recovery.start().catch(() => {});
+    }, () => true, {
+      schedule: callback => { scheduled.push(callback); return {}; },
+      log: message => { log.push(String(message)); },
+      fenceRequest: () => readHotStateAuthority(directory),
+      onFenceRequested: async fence => {
+        await recovery.quiesce(new Error("fenced"));
+        acknowledgeHotStateFence(directory, fence, {
+          flows: 0, pipelines: 0, pipelinesArchive: 0, workflows: 0,
+        });
+      },
+      resumeWorktreeRecovery: async () => {
+        await recovery.start();
+        resumed.resolve();
+      },
+    });
+    const request = publishHotStateAuthority(directory, "fencing", revision);
+    await poll();
+    expect(signals[0]?.aborted).toBe(true);
+    expect(readHotStateAuthority(directory)?.checkpoint).toBeUndefined();
+    if (withdrawal === "before") expect(restoreHotStateAuthority(directory, initial, request))
+      .toMatchObject({ mode: "sqlite", releaseRevision: revision });
+    firstReceipt.resolve({ folded: 1, leftAlone: 0 });
+    await poll();
+    expect(ticks).toBe(0);
+    if (withdrawal === "after") {
+      const fence = readHotStateAuthority(directory)!;
+      expect(fence.checkpoint).toBeDefined();
+      expect(restoreHotStateAuthority(directory, initial, fence)).toMatchObject({ mode: "sqlite", releaseRevision: revision });
+    }
+    await poll();
+    expect(log).toEqual(withdrawal === "before" ? ["[viewer release] hot-state fence checkpoint failed"] : []);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(ticks).toBe(0);
+    resumedReceipt.resolve({ folded: 0, leftAlone: 0 });
+    await resumed.promise;
+    await poll();
+    expect(ticks).toBe(1);
+    expect(signals).toHaveLength(2);
+  } finally {
+    firstReceipt.resolve({ folded: 0, leftAlone: 0 });
+    resumedReceipt.resolve({ folded: 0, leftAlone: 0 });
+    await recovery.quiesce(new Error("test cleanup"));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("native caller readiness waits through every artifact batch before controllers start", async () => {

@@ -569,14 +569,22 @@ test("a host restart whose new and previous releases both fail is retried by the
   expect(child.exitCode).toBeNull();
 }, 60_000);
 
-for (const broken of [false, true]) {
-  test(`a packaged install relaunches all processes and rolls back=${broken}`, async () => {
+for (const output of ["revision-ready", "crashing", "legacy"] as const) {
+  test(`a packaged update rechecks revision readiness with ${output} standalone output`, async () => {
     const fixture = install();
-    const next = release(fixture, "npm-package", { broken });
-    writeFileSync(path.join(next.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "0.0.1" }));
-    mkdirSync(path.join(next.dir, "dist", "standalone"), { recursive: true });
-    writeFileSync(path.join(next.dir, "dist", "standalone", "server.js"), STUB_NEXT(broken));
+    const broken = output !== "revision-ready";
+    const next = release(fixture, "npm-package");
+    const standalone = path.join(next.dir, "dist", "standalone");
+    writeFileSync(path.join(next.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.1", gitHead: next.sha }));
+    mkdirSync(standalone, { recursive: true });
+    writeFileSync(path.join(standalone, "server.js"), STUB_NEXT(output === "crashing", false, !broken)
+      .replace("return new Response(process.cwd());", `if (pathname === "/") return new Response(process.cwd() + '<script src="/_next/static/chunks/app.js"></script>');
+        return new Response(process.cwd());`));
+    const launcher = path.join(next.dir, "bin", "cli.mjs");
+    writeFileSync(launcher, readFileSync(launcher, "utf8").replace("const RESTART_READINESS_TIMEOUT_MS = 90_000", "const RESTART_READINESS_TIMEOUT_MS = 1_000"));
     renameSync(path.join(fixture.checkout, ".git"), path.join(fixture.root, "saved-git"));
+    const packageFile = path.join(fixture.checkout, "package.json");
+    writeFileSync(packageFile, JSON.stringify({ ...JSON.parse(readFileSync(packageFile, "utf8")), gitHead: fixture.first }));
     const running = await start(fixture);
     const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" ? r : null; });
     expect(before.checkout).toBeNull();
@@ -588,8 +596,22 @@ for (const broken of [false, true]) {
     expect(after.launcher.pid).toBe(before.launcher.pid);
     expect(after.web.pid).not.toBe(before.web.pid);
     expect(after.runtimeHost.pid).not.toBe(before.runtimeHost.pid);
-    expect(await served(running.port)).toBe(broken ? fixture.checkout : next.dir + "/dist/standalone");
-    if (broken) { expect(after.launcher.error?.kind).toBe("fell-back"); expect(existsSync(before.releasePointer)).toBe(false); }
+    expect(await served(running.port)).toBe(broken ? fixture.checkout : standalone + '<script src="/_next/static/chunks/app.js"></script>');
+    if (broken) {
+      expect(after.launcher.error?.kind).toBe("fell-back");
+      expect(existsSync(before.releasePointer)).toBe(false);
+      expect(after.web.revision).toBe(fixture.first.slice(0, 7));
+    }
     else expect(after.launcher.revision).toBe(next.sha);
+    if (output === "legacy") {
+      const readiness = JSON.parse(readFileSync(before.requestFile.replace("request-", "readiness-"), "utf8"));
+      const candidate = readiness.runs.find((run: { revision: string }) => run.revision === next.sha);
+      expect(candidate.phases.files.observations.at(-1)).toMatchObject({ endpoint: "/api/ready", httpStatus: 404 });
+      expect(candidate.phases.page.attempts).toBe(0);
+      const incumbent = readiness.runs.at(-1);
+      expect(incumbent.status).toBe("ready");
+      expect(incumbent.phases.files.observations.slice(-2).map((observation: { endpoint: string }) => observation.endpoint))
+        .toEqual(["/api/ready", "/api/files"]);
+    }
   }, 120_000);
 }

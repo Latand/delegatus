@@ -184,7 +184,7 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
   const newer = install(); const candidate = release(newer, "terminal-candidate", { brokenHost: failure === "host" });
   if (shape === "package") {
     writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.1" }));
-    mkdirSync(path.join(candidate.dir, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(candidate.dir, "dist", "standalone", "server.js"), STUB_NEXT(false));
+    mkdirSync(path.join(candidate.dir, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(candidate.dir, "dist", "standalone", "server.js"), STUB_NEXT(false, false, true));
   } else git(fixture.checkout, "fetch", candidate.dir, candidate.sha);
   const running = await start(fixture);
   let record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
@@ -441,7 +441,7 @@ for (const broken of [false, true]) (legacySource ? test : test.skip)(`actual le
   renameSync(path.join(fixture.checkout, ".git"), path.join(fixture.root, "saved-git"));
   const candidateFixture = install(); const candidate = release(candidateFixture, "package-handoff", { brokenHost: broken });
   writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.1" }));
-  mkdirSync(path.join(candidate.dir, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(candidate.dir, "dist", "standalone", "server.js"), STUB_NEXT(false));
+  mkdirSync(path.join(candidate.dir, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(candidate.dir, "dist", "standalone", "server.js"), STUB_NEXT(false, false, true));
   const running = await start(fixture);
   const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   const record = { ...before, installRoot: fixture.checkout } as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord;

@@ -1490,7 +1490,6 @@ function trackMutableJson<T>(
 export class SqliteAgentRegistryStore {
   private readonly db: BunDatabase;
   private nativeArtifactRead: NativeArtifactRead | null = null;
-  private nativeArtifactPreparation: Promise<"ready" | "pending" | "unavailable"> | null = null;
   /** One prepared snapshot owner, on its own read connection. The writer's
       keyed transactions remain available while it yields. */
   private preparedReader: SqliteAgentRegistryStore | null = null;
@@ -2108,36 +2107,27 @@ export class SqliteAgentRegistryStore {
 
   /** Preparation is shared by native calls and yields between fixed-size
       batches. The synchronous selector always checks new changes itself. */
-  async prepareNativeCallerArtifacts(signal?: AbortSignal): Promise<void> {
+  async prepareNativeCallerArtifacts(signal?: AbortSignal, { waitUntilReady = false } = {}): Promise<void> {
     if (process.platform !== "linux" || this.closed) return;
-    const work = async (): Promise<"ready" | "pending" | "unavailable"> => {
-      const deadline = performance.now() + 5_000;
-      let restarted = false;
-      while (!this.closed && performance.now() < deadline) {
-        signal?.throwIfAborted();
-        try {
-          if (performanceSpans.sync("registry.prepare.slice", () => this.withCallerRead(() => this.advanceNativeArtifacts()))) return "ready";
-        } catch {
-          this.resetNativeArtifacts();
-          if (restarted) return "unavailable";
-          restarted = true;
-        }
-        await yieldToRuntime();
-      }
-      return this.closed ? "unavailable" : "pending";
-    };
-    let result;
-    do {
+    const deadline = waitUntilReady ? Infinity : performance.now() + 5_000;
+    let restarted = false;
+    // Each slice advances the shared index synchronously. Between slices the
+    // caller keeps its own deadline and can withdraw without ending other work.
+    while (!this.closed && performance.now() < deadline) {
       signal?.throwIfAborted();
-      this.nativeArtifactPreparation ??= work().finally(() => { this.nativeArtifactPreparation = null; });
-      result = await this.nativeArtifactPreparation;
-      // Startup can finish a large cold index while a native request keeps
-      // the existing per-call budget. An unavailable index fails caller proof.
-    } while (signal && result === "pending");
-    signal?.throwIfAborted();
-    if (signal && result === "unavailable" && !this.closed) {
-      console.warn("[registry] native caller artifact preparation unavailable");
+      try {
+        if (performanceSpans.sync("registry.prepare.slice", () => this.withCallerRead(() => this.advanceNativeArtifacts()))) return;
+      } catch {
+        this.resetNativeArtifacts();
+        if (restarted) {
+          if (waitUntilReady) console.warn("[registry] native caller artifact preparation unavailable");
+          return;
+        }
+        restarted = true;
+      }
+      await yieldToRuntime(signal);
     }
+    signal?.throwIfAborted();
   }
 
   /** A native Claude generation is engine-qualified. Seek the recorded and
