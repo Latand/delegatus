@@ -155,7 +155,10 @@ export function sealPublicationScan(sandbox: string, inputs: ReturnType<typeof p
   const snapshot = path.join(physical, publicationScanDirectory);
   const repository = path.join(snapshot, "repository");
   const scratch = path.join(physical, "publication-scan-tmp");
-  const env = Object.fromEntries(Object.entries(sourceEnv).filter(([name]) => !name.startsWith("GIT_") && name !== "BASH_ENV" && name !== "ENV"));
+  const env = { ...sourceEnv };
+  for (const name of Object.keys(env)) {
+    if (name.startsWith("GIT_") || name === "BASH_ENV" || name === "ENV") delete env[name];
+  }
   Object.assign(env, {
     GIT_ATTR_NOSYSTEM: "1", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null",
     GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0",
