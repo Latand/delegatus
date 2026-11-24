@@ -679,3 +679,127 @@ test("conversation_messages caps author attribution I/O on dense multi-MB transc
     else process.env.LLV_STATE_DIR = prevState;
   }
 });
+
+test("conversation_messages reads small dense transcripts once within the 512 KiB author cap", async () => {
+  const { antigravityDefaultSessionsDir } = await import("@/lib/accounts/antigravity");
+  const { viewerReadTools } = await import("@/lib/mcp/bindings");
+  const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { resetTeamStoreForTests, teamStore } = await import("@/lib/team/store");
+  const { messageTextDigest } = await import("@/lib/team/events");
+  const crypto = await import("node:crypto");
+
+  const prevState = process.env.LLV_STATE_DIR;
+  const pageRoot = fs.mkdtempSync(path.join(SANDBOX, "mcp-small-dense-author-"));
+  process.env.LLV_STATE_DIR = path.join(pageRoot, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  setAgentRegistryForTests(registry);
+  resetTeamStoreForTests();
+  try {
+    const id = crypto.randomUUID();
+    const file = path.join(antigravityDefaultSessionsDir(), id, "events.jsonl");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const fd = fs.openSync(file, "w");
+    fs.writeSync(fd, `${JSON.stringify({ type: "session.start", data: { sessionId: id, cwd: pageRoot } })}\n`);
+    // 2,300 short user messages in a < 256 KiB file: previously re-read the buffer
+    // across 12 x 200-record pages (~1.33 MiB); single-pass reads the file once (~213 KiB).
+    const totalRows = 2300;
+    let lastUserText = "";
+    let lastUserTs = "";
+    for (let i = 0; i < totalRows; i += 1) {
+      const ts = new Date(1_600_000_000_000 + i * 250).toISOString();
+      const content = `row ${i}`;
+      lastUserText = content;
+      lastUserTs = ts;
+      fs.writeSync(fd, `${JSON.stringify({ type: "user.message", timestamp: ts, data: { content } })}\n`);
+    }
+    fs.closeSync(fd);
+
+    registry.reconcileConversations([{
+      engine: "antigravity",
+      path: file,
+      accountId: "default",
+      launchProfile: emptyLaunchProfile({ cwd: pageRoot }),
+      turn: { state: "terminal", source: "lifecycle", terminalAt: null },
+      observedAt: new Date().toISOString(),
+    }]);
+    const conversation = registry.conversationForPath(file);
+    expect(conversation?.id).toBeTruthy();
+
+    const stat = fs.statSync(file);
+    expect(stat.size).toBeLessThan(262_144);
+
+    const ranges: Array<[number, number]> = [];
+    const origReadSync = fs.readSync;
+    fs.readSync = function readSpy(f: number, b: NodeJS.ArrayBufferView, o: number, len: number, pos: number | null) {
+      const n = (origReadSync as (fd: number, buf: NodeJS.ArrayBufferView, offset: number, length: number, position: number | null) => number)(f, b, o, len, pos);
+      try {
+        const st = fs.fstatSync(f);
+        if (st.ino === stat.ino && st.dev === stat.dev && typeof pos === "number") ranges.push([pos, pos + n]);
+      } catch { /* ignore */ }
+      return n;
+    } as typeof fs.readSync;
+
+    const measure = () => {
+      let end = -1;
+      let covered = 0;
+      let total = 0;
+      for (const [a, z] of [...ranges].sort((x, y) => x[0] - y[0])) {
+        total += z - a;
+        if (z > end) {
+          covered += z - Math.max(a, end);
+          end = z;
+        }
+      }
+      ranges.length = 0;
+      return { total, covered };
+    };
+
+    try {
+      const tool = viewerReadTools().conversation_messages;
+      await tool({ conversationId: conversation!.id, limit: 4, maxChars: 45, includeMetadata: true });
+      const base = measure();
+
+      const tStore = teamStore();
+      tStore.insertMember({
+        id: "m_small_dense_fixture",
+        name: "Small Dense Fixture Member",
+        role: "owner",
+        status: "active",
+        color: "teal",
+        telegram: null,
+        createdAt: lastUserTs,
+        createdBy: "claim",
+        revokedAt: null,
+      });
+      tStore.recordMessageAuthor({
+        clientMessageId: "cm-small-dense-author",
+        conversationId: conversation!.id,
+        memberId: "m_small_dense_fixture",
+        at: lastUserTs,
+        textDigest: messageTextDigest(lastUserText),
+      });
+
+      const authoredPage = await tool({ conversationId: conversation!.id, limit: 4, maxChars: 45, includeMetadata: true }) as {
+        records: Array<{ seq: number; role: string; author?: { kind: string; memberId?: string } }>;
+        scanned?: { bytes: number };
+      };
+      const authored = measure();
+      const extraAuthorBytes = authored.total - base.total;
+      expect(authoredPage.records).toHaveLength(4);
+      expect(authoredPage.records.some((r) => r.role === "user" && r.author?.kind === "member" && r.author.memberId === "m_small_dense_fixture")).toBe(true);
+      expect(extraAuthorBytes).toBeLessThanOrEqual(stat.size);
+      expect(extraAuthorBytes).toBeLessThanOrEqual(524_288);
+      expect(authoredPage.scanned?.bytes).toBeGreaterThanOrEqual(authored.total);
+    } finally {
+      fs.readSync = origReadSync;
+    }
+  } finally {
+    resetTeamStoreForTests();
+    setAgentRegistryForTests(null);
+    registry.close();
+    if (prevState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevState;
+  }
+});

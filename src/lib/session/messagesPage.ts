@@ -253,6 +253,112 @@ export interface MessageAuthorContextResult {
   scannedBytes: number;
 }
 
+function createTwinFilter(recent: CursorRecentMessage[]): (candidate: NormalizedSessionLine) => boolean {
+  return (candidate: NormalizedSessionLine): boolean => {
+    const representation = representationCode(candidate.representation);
+    if (candidate.record.kind !== "message" || !representation) return false;
+    const hash = normalizedMessageHash(candidate.record);
+    const timestamp = timestampMillis(candidate.record.ts);
+    const twin = recent.some((prior) => prior.h === hash
+      && prior.e !== representation
+      && (timestamp !== null && prior.t !== null ? Math.abs(prior.t - timestamp) <= 2_000 : true));
+    /* Keep one representative of a doubled Codex message. Remembering the
+       discarded twin would make an immediately repeated, distinct message
+       match that opposite representation and disappear as well. */
+    if (!twin) {
+      recent.unshift({ h: hash, t: timestamp, e: representation });
+      if (recent.length > MAX_RECENT_MESSAGES) recent.pop();
+    }
+    return twin;
+  };
+}
+
+/** Single-pass newest-first user-message reader with a strict byte ceiling.
+ * Reads each chunk at most once (never re-reading across 200-record pages) so
+ * small transcripts with thousands of short lines and dense neighborhoods stay
+ * strictly within `maxBytes`. */
+function readUserMessagesBackward(
+  source: MessagesPageSource,
+  startOffset: number,
+  options: {
+    maxBytes: number;
+    lower?: number;
+    upper?: number;
+    sawUpperBoundary?: boolean;
+  },
+): MessageAuthorContextResult {
+  const maxBytes = Math.max(0, options.maxBytes);
+  const records: ConversationMessage[] = [];
+  const isTwin = createTwinFilter([]);
+  let end = Math.min(source.size, Math.max(0, startOffset));
+  let bytes = 0;
+  let carry = Buffer.alloc(0);
+  let sawUpperBoundary = options.sawUpperBoundary ?? true;
+
+  const consumeLine = (line: Buffer, offset: number): "continue" | "done" | "abort" => {
+    const normalized = parsedLine(line, source.engine).filter((candidate) => candidate.record.text.trim());
+    for (let part = normalized.length - 1; part >= 0; part -= 1) {
+      const candidate = normalized[part]!;
+      const timestamp = timestampMillis(candidate.record.ts);
+      if (options.lower !== undefined && timestamp !== null && timestamp < options.lower) {
+        return sawUpperBoundary ? "done" : "abort";
+      }
+      if (isTwin(candidate)) continue;
+      if (candidate.record.kind !== "message" || candidate.record.role !== "user") continue;
+      if (options.upper !== undefined) {
+        if (timestamp === null) continue;
+        if (timestamp > options.upper) {
+          sawUpperBoundary = true;
+          continue;
+        }
+        if (!sawUpperBoundary) return "abort";
+      }
+      records.push(boundedRecord(candidate, offset, 1, undefined, part));
+      if (records.length > 10_000) return "abort";
+    }
+    return "continue";
+  };
+
+  while (end > 0) {
+    if (bytes >= maxBytes) return { records: null, scannedBytes: bytes };
+    const allowance = maxBytes - bytes;
+    const start = Math.max(0, end - Math.min(CHUNK_BYTES, allowance));
+    const buffer = Buffer.allocUnsafe(end - start);
+    const read = fs.readSync(source.descriptor, buffer, 0, buffer.length, start);
+    bytes += read;
+    if (read === 0) break;
+    const window = carry.length
+      ? Buffer.concat([buffer.subarray(0, read), carry])
+      : buffer.subarray(0, read);
+    const firstNewline = start === 0 ? -1 : window.indexOf(0x0a);
+    if (start > 0 && firstNewline < 0) {
+      if (window.length > MAX_LINE_BYTES) return { records: null, scannedBytes: bytes };
+      carry = Buffer.from(window);
+      end = start;
+      continue;
+    }
+    const lineBase = firstNewline < 0 ? 0 : firstNewline + 1;
+    const nextCarry = firstNewline < 0 ? Buffer.alloc(0) : Buffer.from(window.subarray(0, firstNewline));
+    let lineEnd = window.length;
+    while (lineEnd > lineBase) {
+      if (window[lineEnd - 1] === 0x0a) lineEnd -= 1;
+      const newline = window.lastIndexOf(0x0a, lineEnd - 1);
+      const lineStart = Math.max(lineBase, newline + 1);
+      const line = window.subarray(lineStart, lineEnd);
+      if (line.length) {
+        const outcome = consumeLine(line, start + lineStart);
+        if (outcome === "done") return { records, scannedBytes: bytes };
+        if (outcome === "abort") return { records: null, scannedBytes: bytes };
+      }
+      lineEnd = lineStart;
+    }
+    carry = nextCarry;
+    end = start;
+  }
+
+  return { records: sawUpperBoundary ? records : null, scannedBytes: bytes };
+}
+
 /** A complete, bounded author join domain. Partial transcript scans cannot
  * safely assign an occurrence to one of several identical messages. */
 export function readMessageAuthorContext(
@@ -262,33 +368,20 @@ export function readMessageAuthorContext(
   return readMessageAuthorContextWithStats(source, focus).records;
 }
 
-/** Bounded author join domain with exact scanned byte accounting. When focused
- * rows are provided on a transcript larger than one chunk (256 KiB), reads only
- * the ±20-minute neighborhood around the page instead of scanning the full file. */
+/** Bounded author join domain with exact scanned byte accounting. Every path
+ * reads each byte at most once and stays strictly within `MAX_AUTHOR_SCAN_BYTES`
+ * (512 KiB) total across forward and backward scans. */
 export function readMessageAuthorContextWithStats(
   source: MessagesPageSource,
   focus: ReadonlyArray<{ seq: number; role: string; ts: string | null }> = [],
 ): MessageAuthorContextResult {
-  if (focus.length > 0 && source.size > CHUNK_BYTES) {
+  if (source.size <= CHUNK_BYTES) {
+    return readUserMessagesBackward(source, source.size, { maxBytes: MAX_AUTHOR_SCAN_BYTES });
+  }
+  if (focus.length > 0) {
     return readMessageAuthorNeighborhoodWithStats(source, focus);
   }
-  if (source.size > MAX_SCAN_BYTES) return readMessageAuthorNeighborhoodWithStats(source, focus);
-  const records: ConversationMessage[] = [];
-  let cursor: MessagesPageCursor | null = null;
-  let scannedBytes = 0;
-  do {
-    const page = readMessagesPage(source, {
-      kinds: new Set(["message"]), roles: new Set(["user"]), limit: 200, maxChars: 1, cursor, skipLatestProbe: true,
-    });
-    scannedBytes += page.scanned.bytes;
-    records.push(...page.records);
-    if (records.length > 10_000 || page.scanned.capped) {
-      const neighborhood = readMessageAuthorNeighborhoodWithStats(source, focus);
-      return { records: neighborhood.records, scannedBytes: scannedBytes + neighborhood.scannedBytes };
-    }
-    cursor = page.cursor;
-  } while (cursor);
-  return { records, scannedBytes };
+  return readUserMessagesBackward(source, source.size, { maxBytes: MAX_AUTHOR_SCAN_BYTES });
 }
 
 /** Find the first later user row outside the time neighborhood, starting at
@@ -339,8 +432,9 @@ function upperAuthorBoundary(
 /** Read the time neighborhood of a requested page under a dedicated tight I/O
  * budget (`MAX_AUTHOR_SCAN_BYTES`). The extra twenty minutes on either side
  * includes every row that could compete for an occurrence matching a focused
- * row. If the budget cannot prove both time boundaries (for example on a dense
- * multi-MB session), stop immediately and leave occurrence authors unassigned. */
+ * row. If the combined forward + backward budget cannot prove both time
+ * boundaries (for example on a dense multi-MB session), stop immediately and
+ * leave occurrence authors unassigned. */
 function readMessageAuthorNeighborhoodWithStats(
   source: MessagesPageSource,
   focus: ReadonlyArray<{ seq: number; role: string; ts: string | null }>,
@@ -351,43 +445,20 @@ function readMessageAuthorNeighborhoodWithStats(
   const window = 20 * 60_000;
   const lower = Math.min(...times) - window;
   const upper = Math.max(...times) + window;
-  const lowerIso = new Date(lower).toISOString();
   const newestOffset = Math.max(...users.map((record) => record.seq));
   const boundary = upperAuthorBoundary(source, newestOffset, upper, MAX_AUTHOR_SCAN_BYTES);
   if ("capped" in boundary) return { records: null, scannedBytes: boundary.bytes };
-  const records: ConversationMessage[] = [];
-  let cursor: MessagesPageCursor | null = { o: boundary.offset, p: 0, r: [] };
-  let spent = boundary.bytes;
-  let sawUpperBoundary = boundary.atEnd;
-  do {
-    const remaining = MAX_AUTHOR_SCAN_BYTES - spent;
-    if (remaining <= 0) return { records: null, scannedBytes: spent };
-    const page = readMessagesPage(source, {
-      kinds: new Set(["message"]),
-      roles: new Set(["user"]),
-      since: lowerIso,
-      limit: 200,
-      maxChars: 1,
-      cursor,
-      maxScanBytes: remaining,
-      skipLatestProbe: true,
-    });
-    spent += page.scanned.bytes;
-    if (page.scanned.capped || spent > MAX_AUTHOR_SCAN_BYTES) return { records: null, scannedBytes: spent };
-    for (const record of page.records) {
-      const at = record.ts ? Date.parse(record.ts) : Number.NaN;
-      if (!Number.isFinite(at)) continue;
-      if (at > upper) {
-        sawUpperBoundary = true;
-        continue;
-      }
-      if (!sawUpperBoundary) return { records: null, scannedBytes: spent };
-      if (at < lower) return { records, scannedBytes: spent };
-      records.push(record);
-    }
-    cursor = page.cursor;
-  } while (cursor);
-  return { records: sawUpperBoundary ? records : null, scannedBytes: spent };
+  const remaining = MAX_AUTHOR_SCAN_BYTES - boundary.bytes;
+  const backward = readUserMessagesBackward(source, boundary.offset, {
+    maxBytes: remaining,
+    lower,
+    upper,
+    sawUpperBoundary: boundary.atEnd,
+  });
+  return {
+    records: backward.records,
+    scannedBytes: boundary.bytes + backward.scannedBytes,
+  };
 }
 
 function boundedPageInteger(value: number, fallback: number, maximum: number): number {
@@ -421,23 +492,7 @@ export function readMessagesPage(source: MessagesPageSource, query: MessagesPage
     : newestRecordTimestamp(source, charge, scanLimit);
   lines += latest.lines;
 
-  const isTwin = (candidate: NormalizedSessionLine): boolean => {
-    const representation = representationCode(candidate.representation);
-    if (candidate.record.kind !== "message" || !representation) return false;
-    const hash = normalizedMessageHash(candidate.record);
-    const timestamp = timestampMillis(candidate.record.ts);
-    const twin = recent.some((prior) => prior.h === hash
-      && prior.e !== representation
-      && (timestamp !== null && prior.t !== null ? Math.abs(prior.t - timestamp) <= 2_000 : true));
-    /* Keep one representative of a doubled Codex message. Remembering the
-       discarded twin would make an immediately repeated, distinct message
-       match that opposite representation and disappear as well. */
-    if (!twin) {
-      recent.unshift({ h: hash, t: timestamp, e: representation });
-      if (recent.length > MAX_RECENT_MESSAGES) recent.pop();
-    }
-    return twin;
-  };
+  const isTwin = createTwinFilter(recent);
 
   const consumeLine = (line: Buffer, offset: number, partLimit: number): "continue" | "full" | "since" => {
     lines += 1;

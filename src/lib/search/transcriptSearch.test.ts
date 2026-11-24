@@ -2003,3 +2003,102 @@ test("off-thread FTS migration defers without main-thread DDL or lock wait when 
     else process.env.LLV_STATE_DIR = prevState;
   }
 }, 25_000);
+
+test("shared off-thread FTS migration backoff is respected by burst scanner feeds and search queries", async () => {
+  const prevState = process.env.LLV_STATE_DIR;
+  const prevHelper = process.env.LLV_HELPER_LEASE_ENTRY;
+
+  try {
+    for (const mode of ["feed-burst", "query-burst"] as const) {
+      const dir = fs.mkdtempSync(path.join(sandbox, `v5-${mode}-`));
+      process.env.LLV_STATE_DIR = dir;
+      setTranscriptMigrationRetryBackoffForTests(null);
+
+      const claudeFile = path.join(dir, "claude-burst.jsonl");
+      fs.writeFileSync(
+        claudeFile,
+        `${JSON.stringify({ type: "user", timestamp: "2026-09-11T00:00:00.000Z", message: { content: "burstneedle legacy prompt" } })}\n`,
+      );
+      const sources = [source(claudeFile, "claude", "burst-project")];
+      expect((await indexTranscriptSources(sources, { complete: false })).failures).toEqual([]);
+
+      const dbPath = statePath("transcript-search.sqlite");
+      const setup = new Database(dbPath);
+      try {
+        setup.exec(`
+          PRAGMA foreign_keys = OFF;
+          PRAGMA legacy_alter_table = ON;
+          BEGIN IMMEDIATE;
+          ALTER TABLE transcript_files RENAME TO transcript_files_v6;
+          CREATE TABLE transcript_files (
+            path TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            mtime_ms REAL NOT NULL,
+            project TEXT NOT NULL,
+            engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+            messages_count INTEGER NOT NULL,
+            indexed_at INTEGER NOT NULL
+          );
+          INSERT INTO transcript_files SELECT * FROM transcript_files_v6;
+          DROP TABLE transcript_files_v6;
+          PRAGMA user_version = 5;
+          COMMIT;
+          PRAGMA legacy_alter_table = OFF;
+          PRAGMA foreign_keys = ON;
+        `);
+      } finally {
+        setup.close();
+      }
+
+      const startsLog = path.join(dir, "worker-starts.log");
+      const stub = path.join(dir, "fail-worker.mjs");
+      fs.writeFileSync(
+        stub,
+        `import fs from "node:fs"; fs.appendFileSync(${JSON.stringify(startsLog)}, Date.now() + "\\n"); process.exit(1);\n`,
+      );
+      process.env.LLV_HELPER_LEASE_ENTRY = stub;
+
+      const advertisedDelays: number[] = [];
+      const origError = console.error;
+      console.error = (...args: unknown[]) => {
+        const line = args.map(String).join(" ");
+        const match = line.match(/retrying off-thread in (\d+)ms/);
+        if (match) advertisedDelays.push(Number(match[1]));
+      };
+
+      const hits: number[] = [];
+      try {
+        scheduleTranscriptIndex({ sources, complete: false }, { force: true });
+        await waitForTranscriptIndexIdleForTests();
+
+        for (let i = 0; i < 3; i += 1) {
+          await Bun.sleep(70);
+          if (mode === "feed-burst") {
+            scheduleTranscriptIndex({ sources, complete: false }, { force: true });
+            await waitForTranscriptIndexIdleForTests();
+          } else {
+            hits.push(searchTranscripts({ query: "burstneedle" }).items.length);
+            while (pendingTranscriptSearchIndexBuilds() > 0) await Bun.sleep(5);
+          }
+        }
+      } finally {
+        console.error = origError;
+      }
+
+      const attempts = fs.readFileSync(startsLog, "utf8").trim().split("\n").map(Number);
+      const offsets = attempts.map((at) => at - attempts[0]!);
+      expect(offsets.filter((ms) => ms < 1_450)).toHaveLength(1);
+      expect(advertisedDelays).toEqual([1_500]);
+      if (mode === "query-burst") expect(hits).toEqual([1, 1, 1]);
+      setTranscriptMigrationRetryBackoffForTests(null);
+      await waitForTranscriptIndexIdleForTests();
+    }
+  } finally {
+    setTranscriptMigrationRetryBackoffForTests(null);
+    await waitForTranscriptIndexIdleForTests();
+    if (prevHelper === undefined) delete process.env.LLV_HELPER_LEASE_ENTRY;
+    else process.env.LLV_HELPER_LEASE_ENTRY = prevHelper;
+    if (prevState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevState;
+  }
+}, 20_000);

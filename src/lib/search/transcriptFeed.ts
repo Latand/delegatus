@@ -3,13 +3,12 @@ import { statePath } from "@/lib/configDir";
 import {
   ensureTranscriptSearchSchemaReadyOffThread,
   indexTranscriptSources,
+  setTranscriptSearchMigrationRetryBackoffForTests,
+  type SearchSchemaReadyResult,
   type TranscriptIndexSource,
 } from "./transcriptSearch";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
-
-const DEFAULT_MIGRATION_RETRY_BASE_MS = 1_500;
-const MAX_MIGRATION_RETRY_MS = 30_000;
 
 export interface TranscriptIndexFeed {
   sources: readonly TranscriptIndexSource[];
@@ -30,14 +29,19 @@ interface ScheduledFeed {
   run: TranscriptIndexRun;
 }
 
+interface DeferredMigrationRetry {
+  dbPath: string;
+  feed: TranscriptIndexFeed;
+  nextAttemptAt: number;
+}
+
 interface TranscriptFeedState {
   generation?: number;
   pending?: ScheduledFeed;
   active?: Promise<void>;
   scheduled: boolean;
   idleWaiters: Array<() => void>;
-  migrationBackoffMs?: number;
-  migrationRetryBaseMs?: number;
+  deferredRetry?: DeferredMigrationRetry;
   retryTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -54,30 +58,41 @@ function clearMigrationRetryTimer(current: TranscriptFeedState): void {
     clearTimeout(current.retryTimer);
     delete current.retryTimer;
   }
+  delete current.deferredRetry;
 }
 
 function scheduleMigrationRetry(
   current: TranscriptFeedState,
-  generation: number | undefined,
   feed: TranscriptIndexFeed,
-  reason: string,
+  schema: Extract<SearchSchemaReadyResult, { ready: false }>,
 ): void {
-  const baseMs = current.migrationRetryBaseMs ?? DEFAULT_MIGRATION_RETRY_BASE_MS;
-  const delayMs = current.migrationBackoffMs && current.migrationBackoffMs >= baseMs
-    ? Math.min(MAX_MIGRATION_RETRY_MS, current.migrationBackoffMs * 2)
-    : baseMs;
-  current.migrationBackoffMs = delayMs;
   const capturedDbPath = statePath("transcript-search.sqlite");
-  console.error(
-    `[transcript search] schema migration deferred (${reason}); keeping existing reads and retrying off-thread in ${delayMs}ms`,
-  );
-  clearMigrationRetryTimer(current);
+  const existing = current.deferredRetry;
+  // Always keep the latest feed queued for the single shared retry deadline.
+  current.deferredRetry = { dbPath: capturedDbPath, feed, nextAttemptAt: schema.nextAttemptAt };
+  if (!schema.throttled) {
+    console.error(
+      `[transcript search] schema migration deferred (${schema.reason}); keeping existing reads and retrying off-thread in ${schema.retryAfterMs}ms`,
+    );
+  }
+  const timerAlreadyCoversDeadline = current.retryTimer !== undefined
+    && existing?.dbPath === capturedDbPath
+    && existing.nextAttemptAt === schema.nextAttemptAt;
+  if (timerAlreadyCoversDeadline) return;
+  if (current.retryTimer !== undefined) {
+    clearTimeout(current.retryTimer);
+    delete current.retryTimer;
+  }
+  // Small +5ms cushion guarantees `Date.now() >= nextAttemptAt` when the timer wakes.
+  const delayMs = Math.max(5, schema.nextAttemptAt - Date.now() + 5);
   const timer = setTimeout(() => {
     const latest = state();
     if (latest.retryTimer === timer) delete latest.retryTimer;
-    if (latest.generation !== generation) return;
-    if (statePath("transcript-search.sqlite") !== capturedDbPath || !fs.existsSync(capturedDbPath)) return;
-    scheduleTranscriptIndex(feed, { force: true });
+    const deferred = latest.deferredRetry;
+    if (!deferred) return;
+    delete latest.deferredRetry;
+    if (statePath("transcript-search.sqlite") !== deferred.dbPath || !fs.existsSync(deferred.dbPath)) return;
+    scheduleTranscriptIndex(deferred.feed, { force: true });
   }, delayMs);
   timer.unref?.();
   current.retryTimer = timer;
@@ -93,10 +108,9 @@ async function productionRun(
   const schema = await withViewerOperation("transcript.index", () =>
     performanceSpans.wait("transcript.index", () => ensureTranscriptSearchSchemaReadyOffThread()));
   if (!schema.ready) {
-    scheduleMigrationRetry(current, generation, { sources, complete, listedAt }, schema.reason);
+    scheduleMigrationRetry(current, { sources, complete, listedAt }, schema);
     return;
   }
-  current.migrationBackoffMs = 0;
   clearMigrationRetryTimer(current);
   const indexed = await withViewerOperation("transcript.index", () =>
     performanceSpans.wait("transcript.index", () => indexTranscriptSources(sources, { complete })));
@@ -182,7 +196,7 @@ export function scheduleTranscriptIndex(
 ): void {
   if (process.env.NODE_ENV === "test" && !options.force) return;
   const current = state();
-  clearMigrationRetryTimer(current);
+  if (options.run) clearMigrationRetryTimer(current);
   current.generation = (current.generation ?? 0) + 1;
   current.pending = { feed: { ...feed, listedAt: feed.listedAt ?? Date.now() }, run: options.run ?? productionRun };
   if (current.active || current.scheduled) return;
@@ -194,9 +208,7 @@ export function scheduleTranscriptIndex(
 export function setTranscriptMigrationRetryBackoffForTests(baseMs: number | null): void {
   const current = state();
   clearMigrationRetryTimer(current);
-  current.migrationBackoffMs = 0;
-  if (baseMs === null) delete current.migrationRetryBaseMs;
-  else current.migrationRetryBaseMs = Math.max(10, Math.floor(baseMs));
+  setTranscriptSearchMigrationRetryBackoffForTests(baseMs);
 }
 
 /** Test-only observation seam for focused fixture runs. */

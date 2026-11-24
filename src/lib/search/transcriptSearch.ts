@@ -157,10 +157,26 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
 
 const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 6;
 const TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE = 256;
-type SearchIndexBuildResult = { ok: true } | { ok: false; reason: string };
-export type SearchSchemaReadyResult = { ready: true } | { ready: false; reason: string };
+const DEFAULT_SEARCH_MIGRATION_RETRY_BASE_MS = 1_500;
+const MAX_SEARCH_MIGRATION_RETRY_MS = 30_000;
+let searchMigrationRetryBaseMs = DEFAULT_SEARCH_MIGRATION_RETRY_BASE_MS;
+
+interface SearchBuildBackoff {
+  delayMs: number;
+  nextAttemptAt: number;
+  lastReason: string;
+}
+
+type SearchIndexBuildResult =
+  | { ok: true }
+  | { ok: false; reason: string; retryAfterMs: number; nextAttemptAt: number; throttled: boolean };
+
+export type SearchSchemaReadyResult =
+  | { ready: true }
+  | { ready: false; reason: string; retryAfterMs: number; nextAttemptAt: number; throttled: boolean };
 
 const scheduledSearchIndexes = new Map<string, { promise: Promise<SearchIndexBuildResult>; ref: () => void }>();
+const searchBuildBackoffs = new Map<string, SearchBuildBackoff>();
 const readySearchDatabases = new WeakSet<Database>();
 // Readiness is schema metadata. Invalidate on either replacement of the file
 // or a schema change; ordinary appends keep the same readiness. Bound the cache
@@ -424,11 +440,38 @@ function openQueryDatabase(): Database {
   }
 }
 
+function recordSearchBuildFailure(filename: string, reason: string): {
+  delayMs: number;
+  nextAttemptAt: number;
+} {
+  const prev = searchBuildBackoffs.get(filename);
+  const delayMs = prev && prev.delayMs >= searchMigrationRetryBaseMs
+    ? Math.min(MAX_SEARCH_MIGRATION_RETRY_MS, prev.delayMs * 2)
+    : searchMigrationRetryBaseMs;
+  const nextAttemptAt = Date.now() + delayMs;
+  if (searchBuildBackoffs.size >= 64 && !searchBuildBackoffs.has(filename)) {
+    searchBuildBackoffs.delete(searchBuildBackoffs.keys().next().value!);
+  }
+  searchBuildBackoffs.set(filename, { delayMs, nextAttemptAt, lastReason: reason });
+  return { delayMs, nextAttemptAt };
+}
+
 function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<SearchIndexBuildResult> {
   const existing = scheduledSearchIndexes.get(filename);
   if (existing) {
     if (keepAlive) existing.ref();
     return existing.promise;
+  }
+  const now = Date.now();
+  const activeBackoff = searchBuildBackoffs.get(filename);
+  if (activeBackoff && now < activeBackoff.nextAttemptAt) {
+    return Promise.resolve({
+      ok: false,
+      reason: activeBackoff.lastReason,
+      retryAfterMs: Math.max(1, activeBackoff.nextAttemptAt - now),
+      nextAttemptAt: activeBackoff.nextAttemptAt,
+      throttled: true,
+    });
   }
   let resolveBuild!: (result: SearchIndexBuildResult) => void;
   const promise = new Promise<SearchIndexBuildResult>((resolve) => { resolveBuild = resolve; });
@@ -452,9 +495,15 @@ function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<
     const settle = (failure: string | null) => {
       if (settled) return;
       settled = true;
-      if (failure) console.error(`[transcript-search] ${failure}; migration will retry with backoff`);
       if (scheduledSearchIndexes.get(filename) === entry) scheduledSearchIndexes.delete(filename);
-      resolveBuild(failure ? { ok: false, reason: failure } : { ok: true });
+      if (failure) {
+        const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, failure);
+        console.error(`[transcript-search] ${failure}; migration will retry with backoff`);
+        resolveBuild({ ok: false, reason: failure, retryAfterMs: delayMs, nextAttemptAt, throttled: false });
+      } else {
+        searchBuildBackoffs.delete(filename);
+        resolveBuild({ ok: true });
+      }
     };
     proc.once("error", () => settle("index worker failed"));
     proc.once("exit", (code, signal) => settle(code === 0 ? null : `index worker exited with status ${code ?? signal}`));
@@ -462,8 +511,10 @@ function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<
   } catch (error) {
     if (scheduledSearchIndexes.get(filename) === entry) scheduledSearchIndexes.delete(filename);
     const detail = error instanceof Error ? error.message : String(error);
+    const reason = `could not start index worker: ${detail}`;
+    const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, reason);
     console.error("[transcript-search] could not start index worker; migration will retry with backoff");
-    resolveBuild({ ok: false, reason: `could not start index worker: ${detail}` });
+    resolveBuild({ ok: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false });
   }
   return promise;
 }
@@ -493,22 +544,70 @@ function probeTranscriptSearchSchemaVersion(
 /** Ensures an existing legacy transcript-search DB finishes schema upgrade
     inside the leased background worker before the Viewer opens the writer
     connection, keeping DDL/copy work and SQLite lock waits off the Viewer's
-    main event loop. Never falls back to inline main-thread DDL on failure. */
+    main event loop. Never falls back to inline main-thread DDL on failure,
+    and shares one per-DB retry deadline across feeds and search queries. */
 export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<SearchSchemaReadyResult> {
   const filename = statePath("transcript-search.sqlite");
   const initial = probeTranscriptSearchSchemaVersion(filename);
-  if (!initial.exists) return { ready: true };
-  if ("error" in initial) return { ready: false, reason: `schema probe failed: ${initial.error}` };
-  if (initial.version >= TRANSCRIPT_SEARCH_SCHEMA_VERSION) return { ready: true };
-  const build = await scheduleSearchIndexBuild(filename, true);
-  if (!build.ok) return { ready: false, reason: build.reason };
-  const after = probeTranscriptSearchSchemaVersion(filename);
-  if (!after.exists) return { ready: true };
-  if ("error" in after) return { ready: false, reason: `post-migration schema probe failed: ${after.error}` };
-  if (after.version < TRANSCRIPT_SEARCH_SCHEMA_VERSION) {
-    return { ready: false, reason: `schema remained at v${after.version}` };
+  if (!initial.exists) {
+    searchBuildBackoffs.delete(filename);
+    return { ready: true };
   }
+  if ("error" in initial) {
+    const active = searchBuildBackoffs.get(filename);
+    const now = Date.now();
+    if (active && now < active.nextAttemptAt) {
+      return {
+        ready: false,
+        reason: active.lastReason,
+        retryAfterMs: Math.max(1, active.nextAttemptAt - now),
+        nextAttemptAt: active.nextAttemptAt,
+        throttled: true,
+      };
+    }
+    const reason = `schema probe failed: ${initial.error}`;
+    const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, reason);
+    return { ready: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false };
+  }
+  if (initial.version >= TRANSCRIPT_SEARCH_SCHEMA_VERSION) {
+    searchBuildBackoffs.delete(filename);
+    return { ready: true };
+  }
+  const build = await scheduleSearchIndexBuild(filename, true);
+  if (!build.ok) {
+    return {
+      ready: false,
+      reason: build.reason,
+      retryAfterMs: build.retryAfterMs,
+      nextAttemptAt: build.nextAttemptAt,
+      throttled: build.throttled,
+    };
+  }
+  const after = probeTranscriptSearchSchemaVersion(filename);
+  if (!after.exists) {
+    searchBuildBackoffs.delete(filename);
+    return { ready: true };
+  }
+  if ("error" in after) {
+    const reason = `post-migration schema probe failed: ${after.error}`;
+    const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, reason);
+    return { ready: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false };
+  }
+  if (after.version < TRANSCRIPT_SEARCH_SCHEMA_VERSION) {
+    const reason = `schema remained at v${after.version}`;
+    const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, reason);
+    return { ready: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false };
+  }
+  searchBuildBackoffs.delete(filename);
   return { ready: true };
+}
+
+/** Test-only seam to tune or reset per-DB off-thread migration backoff state. */
+export function setTranscriptSearchMigrationRetryBackoffForTests(baseMs: number | null): void {
+  searchBuildBackoffs.clear();
+  searchMigrationRetryBaseMs = baseMs === null
+    ? DEFAULT_SEARCH_MIGRATION_RETRY_BASE_MS
+    : Math.max(10, Math.floor(baseMs));
 }
 
 /** Background index builds this process started that have not exited yet. */
