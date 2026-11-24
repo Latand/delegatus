@@ -66,7 +66,14 @@ async function fixture(held: "released" | "late-release" | "expired" | "revoked"
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);
   });
-  const storage = sqliteRegistryFixture("launch-custody", preHostWriter ? { sqliteWriterDeadlineMs: 60 } : {});
+  let writerClockMs = 0;
+  let preHostWriterHeld = false;
+  const storage = sqliteRegistryFixture("launch-custody", preHostWriter ? {
+    // Give initial SDK admission its normal deadline. Expire the SQLite
+    // clock only while the intended writer owns the lock.
+    sqliteWriterDeadlineMs: 5_000,
+    writerClock: () => (writerClockMs += preHostWriterHeld ? 5_000 : 5),
+  } : {});
   cleanups.push(storage.cleanup);
   const { registry, root } = storage;
   // TASKS_FILE is captured when the module loads. Each registry fixture uses
@@ -135,13 +142,17 @@ async function fixture(held: "released" | "late-release" | "expired" | "revoked"
     const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, action) => {
       if (correlation.label !== preHostWriter || preHostRefusals) return write(correlation, action);
       await holder.hold();
+      preHostWriterHeld = true;
       try { return await write(correlation, action); }
       catch (error) {
         expect((error as Error).message).toContain(`${REGISTRY_WRITER_BUSY} (${preHostWriter}); holder=migration.stop.sweep`);
         preHostRefusals++;
         if (held === "revoked") authorized = false;
         throw error;
-      } finally { await holder.release(); }
+      } finally {
+        preHostWriterHeld = false;
+        await holder.release();
+      }
     });
     cleanups.push(() => admission.mockRestore());
   }
