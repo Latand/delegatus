@@ -11,7 +11,7 @@ import { antigravityTurnState, turnStateFromRecords } from "./nativeTurnState";
 import { observeAgentProcess } from "./process";
 import { clearAgentObservations } from "./projectionCache";
 import { AgentStateService } from "./service";
-import { readAgentProjection, subjectId } from "./store";
+import { readAgentProjection, readAgentStateMetrics, readAgentStatePage, readAgentStatesPage, subjectId } from "./store";
 import { FIXTURE_NOW, FIXTURE_SESSION, fixtureRecords, fixtureRegistry } from "./testFixture";
 import { foldNativeBoundaries, readNativePromptAnchor } from "./transcript";
 
@@ -725,6 +725,92 @@ describe("Antigravity agentState integration", () => {
         expect(measure()).toEqual({ extra: 1, subjects: 1, journal: 1 });
       } finally {
         regAgain.close();
+      }
+    }
+  });
+
+  it("records separate subject accounting and journal entries when an Antigravity process is replaced under the same session key", async () => {
+    for (const previousExits of [false, true]) {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-ag-pid-swap-${previousExits ? "dead" : "live"}-`));
+      roots.push(root);
+      const fn = path.join(root, "agent-registry.json");
+      const sq = path.join(root, "agent-registry.sqlite");
+      const baseIdentity = captureProcessIdentity(process.pid);
+      const firstProcess = baseIdentity;
+      const secondProcess = {
+        ...baseIdentity,
+        pid: baseIdentity.pid + 1000,
+        startIdentity: `${baseIdentity.startIdentity ?? "1"}-gen-2`,
+      };
+
+      fs.writeFileSync(fn, JSON.stringify(fixtureRegistry(root, "antigravity", firstProcess, null)));
+      const rows = fixtureRecords("antigravity");
+      fs.writeFileSync(
+        path.join(root, "native.jsonl"),
+        [...rows.open, ...rows.close].map((row) => JSON.stringify(row)).join("\n") + "\n",
+      );
+
+      const reg = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: sq });
+      try {
+        let firstAlive = true;
+        let clock = FIXTURE_NOW + 2000;
+        const service = new AgentStateService({
+          registry: reg,
+          now: () => clock,
+          owns: () => true,
+          process: (identity) => {
+            if (identity.pid === firstProcess.pid && identity.startIdentity === firstProcess.startIdentity) {
+              return firstAlive ? "alive" : "dead";
+            }
+            return "alive";
+          },
+          memory: () => null,
+          release: "fixture",
+          publish: async () => true,
+        });
+
+        await service.request();
+        const firstEntry = reg.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })!;
+        const firstSubject = subjectId(firstEntry);
+        expect(readAgentStatesPage(reg, "", 16).length).toBe(1);
+        expect(readAgentStateMetrics(reg).subjectsObserved).toBe(1);
+        expect(readAgentStatePage(reg, "agentStateJournal", "", 16).rows.length).toBe(1);
+
+        // Replace PID + startIdentity under the same Antigravity session key.
+        if (previousExits) firstAlive = false;
+        clock += 5000;
+        const entryKey = `antigravity:${FIXTURE_SESSION}`;
+        reg.agentStateWrite((file) => {
+          const entry = file.entries[entryKey];
+          if (entry?.structuredHost) {
+            entry.structuredHost.process = secondProcess;
+          }
+        });
+
+        await service.request();
+        const secondEntry = reg.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })!;
+        const secondSubject = subjectId(secondEntry);
+        expect(secondSubject).not.toBe(firstSubject);
+
+        const projections = readAgentStatesPage(reg, "", 16);
+        const metrics = readAgentStateMetrics(reg);
+        const journalRows = readAgentStatePage(reg, "agentStateJournal", "", 16).rows as Array<{ subject?: string; from?: string | null; to?: string | null }>;
+
+        expect(projections.map((row) => row.subject).sort()).toEqual([firstSubject, secondSubject].sort());
+        expect(metrics.subjectsObserved).toBe(2);
+        const secondJournalRows = journalRows.filter((row) => row.subject === secondSubject);
+        expect(secondJournalRows.length).toBe(1);
+        expect(secondJournalRows[0]?.from).toBeNull();
+        expect(secondJournalRows[0]?.to).toBe("unowned");
+        if (!previousExits) {
+          expect(journalRows.length).toBe(2);
+        } else {
+          // First process recorded its initial observation + death transition; second process recorded its own initial observation.
+          expect(journalRows.filter((row) => row.subject === firstSubject).some((row) => row.to === "dead")).toBe(true);
+          expect(journalRows.length).toBeGreaterThanOrEqual(2);
+        }
+      } finally {
+        reg.close();
       }
     }
   });

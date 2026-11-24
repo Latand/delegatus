@@ -224,27 +224,33 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
     // accounted for. Re-materialize the projection without double-counting
     // `subjectsObserved` or appending a duplicate journal row.
     let previouslyObservedWithoutRow = false;
-    let latestJournalForEntry: AgentStateJournal | undefined;
+    let latestJournalForSubject: AgentStateJournal | undefined;
     if (isAntigravity && !old) {
       const identity = next.facts.process.determined ? next.facts.process.value.identity : null;
       const priorProcessMetric = identity ? file.agentStateMetrics[`process:${hash(identity).slice(0, 48)}`] : undefined;
       const inPhysicalSubjects = Boolean(priorProcessMetric?.physicalSubjects?.includes(next.subject));
-      for (const row of Object.values(file.agentStateJournal)) {
-        if (row.entryKey !== next.entryKey) continue;
-        if (!latestJournalForEntry || row.at >= latestJournalForEntry.at) latestJournalForEntry = row;
+      // Match strictly by exact subject identity (`next.subject`, bound to `(entryKey,
+      // processIdentity)`), never by `entryKey` alone: replacing a session's host process
+      // produces a distinct subject that MUST get its own first-observation accounting
+      // and journal row rather than reusing the predecessor's.
+      if (inPhysicalSubjects || !identity) {
+        for (const row of Object.values(file.agentStateJournal)) {
+          if (row.subject !== next.subject) continue;
+          if (!latestJournalForSubject || row.at >= latestJournalForSubject.at) latestJournalForSubject = row;
+        }
       }
-      previouslyObservedWithoutRow = inPhysicalSubjects || Boolean(latestJournalForEntry && latestJournalForEntry.to !== "dead");
-      if (previouslyObservedWithoutRow && latestJournalForEntry && !observation.repair && !observation.repairConversation) {
+      previouslyObservedWithoutRow = inPhysicalSubjects || Boolean(latestJournalForSubject && latestJournalForSubject.to !== "dead");
+      if (previouslyObservedWithoutRow && latestJournalForSubject && !observation.repair && !observation.repairConversation) {
         const nextEffectiveAt = next.facts.turn.determined ? next.facts.turn.value.at : null;
         const nextTurnState = next.facts.turn.determined ? next.facts.turn.value.state : null;
         const nextTurnNativeId = next.facts.turn.determined ? next.facts.turn.value.nativeId : null;
         const nextCacheRef = current.structuredHost?.activeTurnRef ?? null;
-        const matchesPriorJournal = latestJournalForEntry.to === next.verdict.state
-          && latestJournalForEntry.conversationId === next.conversationId
-          && latestJournalForEntry.effectiveAt === nextEffectiveAt
-          && (latestJournalForEntry.toTurn?.state ?? null) === nextTurnState
-          && (latestJournalForEntry.toTurn?.nativeId ?? null) === nextTurnNativeId
-          && (latestJournalForEntry.toTurn?.cacheRef ?? null) === nextCacheRef;
+        const matchesPriorJournal = latestJournalForSubject.to === next.verdict.state
+          && latestJournalForSubject.conversationId === next.conversationId
+          && latestJournalForSubject.effectiveAt === nextEffectiveAt
+          && (latestJournalForSubject.toTurn?.state ?? null) === nextTurnState
+          && (latestJournalForSubject.toTurn?.nativeId ?? null) === nextTurnNativeId
+          && (latestJournalForSubject.toTurn?.cacheRef ?? null) === nextCacheRef;
         if (matchesPriorJournal) {
           const metrics = readMetrics();
           next.revision = metrics.revision;
@@ -266,7 +272,7 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
     next.pendingPublication = next.conversationId !== null && next.publishable !== false;
     next.pendingFilesRevision = !old || old.publishable === false || (old.pendingPublication && old.pendingFilesRevision !== false)
       || boardFacts(old) !== boardFacts(next);
-    const journal: AgentStateJournal = { ...observation.journal, from: old?.verdict.state ?? (previouslyObservedWithoutRow ? latestJournalForEntry?.to ?? null : null), to: next.verdict.state,
+    const journal: AgentStateJournal = { ...observation.journal, from: old?.verdict.state ?? (previouslyObservedWithoutRow ? latestJournalForSubject?.to ?? null : null), to: next.verdict.state,
       conversationId: next.conversationId, entryKey: next.entryKey,
       effectiveAt: next.facts.turn.determined ? next.facts.turn.value.at : null,
       fromTurn: { state: old?.facts.turn.determined ? old.facts.turn.value.state : null,
@@ -285,7 +291,7 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
       }
       if (journal.divergence && old?.divergenceKey !== next.divergenceKey) metrics.registryTranscriptDivergencesTotal++;
     }
-    changeMetrics(file, metrics, old, next, antigravityStates, previouslyObservedWithoutRow, latestJournalForEntry?.to === null);
+    changeMetrics(file, metrics, old, next, antigravityStates, previouslyObservedWithoutRow, latestJournalForSubject?.to === null);
     if (isAntigravity) {
       // Keep Antigravity projections out of the shared `agentStates` collection
       // so rollback to a prior release never fails strict engine validation,
