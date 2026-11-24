@@ -232,11 +232,13 @@ while [[ ! -f "$FIXTURE_RELEASE" ]]; do sleep 0.02; done
   }
 }, 45_000);
 
-test.skipIf(!hasUserManager)("a same-command pre-commit that consumed a legacy ticket keeps the only slot until it drains", async () => {
+for (const beforeJournal of [false, true]) test.skipIf(!hasUserManager)(
+  `a same-command pre-commit keeps its legacy grant until it drains (grant predates journal: ${beforeJournal})`, async () => {
   const f = fixture(), control = new AbortController(), pending: ReturnType<typeof realExec>[] = [];
   const entered = path.join(f.dir, "entered"), release = path.join(f.dir, "release");
   const log = path.join(f.dir, "entrant.stderr"), slot = path.join(f.dir, "llv-heavy-gate.slot1.lock");
   const grants = () => f.db.query("SELECT at FROM grants ORDER BY rowid").all();
+  const journalExists = () => f.db.query("SELECT 1 FROM sqlite_master WHERE name = 'legacy_gate_retirements'").get() !== null;
   const stat = (pid: string) => fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1)!.split(" ");
   try {
     const legacy = legacyGateTree(f.dir), bin = pathWithoutFlock(f.dir);
@@ -257,8 +259,7 @@ if (process.env.FIXTURE_HOOK_CHILD === "1") {
 } else {
   const parent = captureProcessIdentity(process.pid);
   const child = Bun.spawn(["/bin/bash", process.env.FIXTURE_LEGACY_GATE!, process.execPath, import.meta.path, "pre-commit"], {
-    env: { ...process.env, FIXTURE_HOOK_CHILD: "1", LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(parent),
-      LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP: JSON.stringify({ parent, mode: "pre-commit", entry: import.meta.path }) },
+    env: { ...process.env, FIXTURE_HOOK_CHILD: "1", LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(parent) },
     stdout: "inherit", stderr: "inherit",
   });
   fs.writeFileSync(process.env.FIXTURE_CLIENT!, String(child.pid));
@@ -269,6 +270,7 @@ if (process.env.FIXTURE_HOOK_CHILD === "1") {
     const env = withoutInheritedGate({ ...f.env, LLV_GATE_SLOTS: "1", LLV_GATE_RUNNER: "off", LLV_GATE_BUN: process.execPath,
       DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_PUSH_DEADLINE: undefined, LLV_GATE_SANDBOX_RECORD: undefined });
     f.db.exec("CREATE TABLE grants (at INTEGER); CREATE TRIGGER count_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO grants VALUES (NEW.last); END");
+    if (beforeJournal) f.db.exec("DROP TRIGGER legacy_gate_retired; DROP TABLE legacy_gate_cutover; DROP TABLE legacy_gate_retirements");
     pending.push(realExec("/bin/bash", ["-c", '"$@"; exit $?', "hook-fixture", process.execPath, entry, "pre-commit"], hook,
       { ...env, PATH: bin, FIXTURE_ENTERED: entered, FIXTURE_RELEASE: release, FIXTURE_CLIENT: clientFile,
         FIXTURE_LEGACY_GATE: path.join(legacy, "scripts/gate-slot.sh") }, { timeoutMs: 30_000, signal: control.signal }));
@@ -284,8 +286,11 @@ if (process.env.FIXTURE_HOOK_CHILD === "1") {
     const service = fs.readFileSync(`/proc/${supervisor}/cmdline`, "utf8").split("\0");
     expect(service.slice(1, 3)).toEqual([clientArgv[1], "--service"]);
     expect(fs.existsSync(service[3]!)).toBe(false);
-    expect(f.db.query<{ owner: string }, []>("SELECT owner FROM legacy_gate_retirements").all()
-      .map(row => JSON.parse(row.owner).startIdentity)).toContain(`${client}:${stat(client)[19]}`);
+    expect(journalExists()).toBe(!beforeJournal);
+    if (!beforeJournal) {
+      expect(f.db.query<{ owner: string }, []>("SELECT owner FROM legacy_gate_retirements").all()
+        .map(row => JSON.parse(row.owner).startIdentity)).toContain(`${client}:${stat(client)[19]}`);
+    }
     const held = f.db.query<{ last: number }, []>("SELECT last FROM admission").get()!.last;
     expect(grants()).toEqual([{ at: held }]);
     expect(f.count()).toBe(0);
@@ -300,6 +305,7 @@ if (process.env.FIXTURE_HOOK_CHILD === "1") {
       if (polled && polled > held + CPU_QUEUE_SPACING_MS) polls.add(polled);
       return grants().length > 1 || polls.size >= 3 && stderr().includes("Waiting for legacy heavy commands to drain");
     }, 10_000, () => new Error(stderr()));
+    expect(journalExists()).toBe(true);
     expect(grants()).toEqual([{ at: held }]);
     expect(stat(hookPid)[0]).not.toBe("Z");
     expect(f.count()).toBe(1);
@@ -389,12 +395,12 @@ command -p git "$@"
   }
 }, 50_000);
 
-for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "mixed service prepare", "service hooks", "historical service hook", "older helper head"] as const) test.skipIf(
+for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "mixed service prepare", "mixed service prepare first-open", "service hooks", "historical service hook", "older helper head"] as const) test.skipIf(
   process.platform !== "linux" || !mode.startsWith("portable") && !hasUserManager
 )(`FIFO publication admits the first check while the peer waits (${mode})`, async () => {
     const useService = !mode.startsWith("portable");
     const historical = mode === "historical service hook", olderHead = mode === "older helper head";
-    const mixedPrepare = mode === "mixed service prepare";
+    const mixedPrepare = mode.startsWith("mixed service prepare");
     const ordinary = mode.includes("hooks") || historical || olderHead;
     const firstOpen = mode.endsWith("first-open");
     const f = fixture(), control = new AbortController(), roots: string[] = [];
@@ -512,8 +518,8 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
       f.db.exec("CREATE TABLE grants (at INTEGER); CREATE TRIGGER count_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO grants VALUES (NEW.last); END");
       if (firstOpen) {
         // Keep the old queue's prior-grant boundary while removing the new
-        // observer metadata. The first nested gate installs it with both
-        // ordinary hook supervisors already alive.
+        // observer metadata. The nested gate installs it after the outer
+        // hook and its cleanup client have already started.
         f.db.exec("DROP TRIGGER IF EXISTS legacy_gate_retired; DROP TABLE IF EXISTS legacy_gate_cutover; DROP TABLE IF EXISTS legacy_gate_retirements");
       }
       const grants = () => f.db.query("SELECT at FROM grants ORDER BY rowid").all();

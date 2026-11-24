@@ -13,9 +13,9 @@ import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext 
 export const CPU_QUEUE_MAX_WAIT_MS = 10 * 60_000;
 export const CPU_QUEUE_SPACING_MS = 2_000;
 export const CPU_STAGE_POLL_MS = 5_000;
-/** A waiting stage polls every five seconds. Ownerless tickets, bounded gate
- * waiters and unverifiable owners that stop polling keep their rows but stop
- * counting ahead of others, for every release sharing the file. */
+/** A waiting stage polls every five seconds. Ownerless tickets, bounded Linux
+ * gate waiters and unverifiable owners that stop polling keep their rows but
+ * stop counting ahead of others, for every release sharing the file. */
 export const CPU_QUEUE_UNPOLLED_MS = 60_000;
 /** An ownerless ticket unpolled for this long, and held by no fence, is
  * removed; so is a ticket whose owner no kernel check here can prove alive. */
@@ -38,7 +38,8 @@ function matchesUrgentStage(decision: UrgentStageDecision): boolean {
   catch { return false; } // A state reader with no current evidence cannot authorize an early start.
 }
 type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null; low_pressure: number };
-const boundedGateWaiter = (row: Ticket) => row.low_pressure === 1 && row.key.startsWith(BOUNDED_GATE_PREFIX);
+const boundedLinuxGateWaiter = (row: Ticket) =>
+  process.platform === "linux" && row.low_pressure === 1 && row.key.startsWith(BOUNDED_GATE_PREFIX);
 type GateSlot = { slot: number | null; cap: number };
 type ActiveGateSlot = GateSlot & { key: string; owner: string };
 /** The queue judges owners with these; `log` receives one line for each ticket
@@ -443,7 +444,7 @@ export class CpuAdmissionQueue {
       if (row.key === key) { if (!source && row.source) rank(row.source); continue; }
       const quiet = sampledAt - (row.polled ?? (row.owner === null ? sampledAt : row.since));
       const unverifiable = row.owner === null || observed?.status === "unverified";
-      if (quiet > this.unpolledMs && (unverifiable || boundedGateWaiter(row))
+      if (quiet > this.unpolledMs && (unverifiable || boundedLinuxGateWaiter(row))
         || quiet > CPU_QUEUE_ABANDONED_MS && unverifiable) continue;
       if (row.source) rank(row.source);
     }
@@ -468,9 +469,9 @@ export class CpuAdmissionQueue {
         }
         // An owner recorded in another PID namespace, or one the kernel will
         // not describe, is never proven alive or dead here, so its polls stand
-        // for it as for an ownerless ticket. A bounded gate also polls while
-        // it waits: a stopped wrapper may be alive without making progress.
-        if (row.key === key || status !== "unverified" && !boundedGateWaiter(row)) continue;
+        // for it as for an ownerless ticket. A stopped Linux gate wrapper can
+        // also be alive without making progress on its bounded wait.
+        if (row.key === key || status !== "unverified" && !boundedLinuxGateWaiter(row)) continue;
         const quiet = now - (row.polled ?? row.since);
         if (status === "unverified" && quiet > CPU_QUEUE_ABANDONED_MS) {
           this.cancel(row.key);

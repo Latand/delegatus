@@ -638,24 +638,72 @@ test("a live owner the kernel verifies keeps the head however long it stays sile
   expect(f.read("SELECT key FROM suspended")).toEqual([]);
 });
 
-test("a live bounded gate that stops polling yields its head and recovers its place on its next poll", () => {
-  const f = ownerFixture(), { live } = owners();
-  const head = "command:bounded:stopped", next = "command:bounded:next", later = "command:bounded:later";
-  expect(f.open().check(head, true, live, false, undefined, true)).toBeNull();
-  f.at(CPU_QUEUE_UNPOLLED_MS);
-  const peer = f.open();
-  expect(peer.check(next, true, live, false, undefined, true)).toMatchObject({ position: 2 });
-  expect(peer.activeGateSlots()).toEqual([]);
-  f.at(CPU_QUEUE_UNPOLLED_MS + 1);
-  expect(f.open().check(next, true, live, true, undefined, true)).toBeNull();
-  expect(f.read("SELECT key FROM unpolled")).toEqual([{ key: head }]);
-  expect(f.lines).toEqual([`passed over ${head}: its owner process ${live.pid} has not checked in for 60 s; its next check returns it to its place`]);
-  expect(f.open().check(later, true, live, false, undefined, true)).toMatchObject({ position: 1 });
-  f.at(CPU_QUEUE_UNPOLLED_MS + 1 + CPU_QUEUE_SPACING_MS);
-  expect(f.open().check(head, true, live, false, undefined, true)).toBeNull();
-  expect(f.open().check(later, true, live, false, undefined, true)).toMatchObject({ position: 2 });
-  expect(f.read("SELECT key FROM unpolled")).toEqual([]);
-});
+for (const platform of ["linux", "win32"] as const) test.skipIf(platform === "linux" && process.platform !== "linux")(
+  `an unpolled bounded gate and its peers keep a one-slot queue consistent (${platform})`, async () => {
+    const f = ownerFixture();
+    // Like the wrapper, keep each owner alive while fresh helpers open SQLite
+    // for its polls and claims. Simulate portable admission on the same host
+    // by switching only the queue policy after initializing native PID probes.
+    const startOwner = () => Bun.spawn([process.execPath, "-e", "for await (const chunk of Bun.stdin.stream()) void chunk"], { stdin: "pipe" });
+    const workers = { head: startOwner(), peer: startOwner(), later: startOwner(), restarted: undefined as ReturnType<typeof startOwner> | undefined };
+    const script = `
+      const [file, runtime, identityModule, platform, at, action, key, pid] = process.argv.slice(1);
+      const { CpuAdmissionQueue, ACTIVE_GATE_PREFIX } = await import(runtime);
+      const { captureProcessIdentity } = await import(identityModule);
+      const owner = captureProcessIdentity(Number(pid));
+      if (!owner.startIdentity || !owner.bootEpoch) throw new Error("missing kernel owner identity");
+      Object.defineProperty(process, "platform", { value: platform });
+      const queue = new CpuAdmissionQueue(file, () => Number(at));
+      try {
+        let wait = null;
+        if (action === "release") queue.releaseGateSlot(ACTIVE_GATE_PREFIX + key, JSON.stringify(owner));
+        else wait = queue.check(key, true, owner, action === "claim", undefined, true,
+          action === "claim" ? { lastBeforeProbe: queue.lastAdmission(), slot: null, cap: 1 } : undefined);
+        console.log(JSON.stringify({ wait, slots: queue.activeGateSlots().map(slot => slot.key) }));
+      } finally { queue.close(); }
+    `;
+    const run = (name: keyof typeof workers, at: number, action = "claim") => {
+      const result = spawnSync(process.execPath, ["-e", script, f.file, path.join(import.meta.dir, "cpuAdmission.ts"),
+        path.resolve(import.meta.dir, "../processIdentity.ts"), platform, String(at), action,
+        `command:bounded:${name}`, String(workers[name]!.pid)], { encoding: "utf8", timeout: 5_000 });
+      expect(result.status, result.stderr).toBe(0);
+      return JSON.parse(result.stdout);
+    };
+    const activePeer = ["command:gate-active:command:bounded:peer"];
+    const pastBound = CPU_QUEUE_UNPOLLED_MS + 1;
+    try {
+      expect(run("head", 0, "poll")).toEqual({ wait: null, slots: [] });
+      expect(run("peer", CPU_QUEUE_UNPOLLED_MS)).toMatchObject({ wait: { position: 2, since: CPU_QUEUE_UNPOLLED_MS }, slots: [] });
+      if (platform === "win32") {
+        expect(run("peer", pastBound)).toMatchObject({ wait: { position: 2 }, slots: [] });
+        expect(f.read("SELECT key FROM unpolled")).toEqual([]);
+        workers.head.stdin.end();
+        expect(await workers.head.exited).toBe(0);
+        expect(run("peer", pastBound)).toEqual({ wait: null, slots: activePeer });
+        return;
+      }
+
+      expect(run("peer", pastBound)).toEqual({ wait: null, slots: activePeer });
+      expect(f.read("SELECT key FROM unpolled")).toEqual([{ key: "command:bounded:head" }]);
+      const whileHeld = pastBound + CPU_QUEUE_SPACING_MS;
+      expect(run("later", pastBound, "poll")).toMatchObject({ wait: { position: 1 } });
+      expect(run("head", whileHeld)).toMatchObject({ wait: { position: 1, since: 0, heldBy: "queue" }, slots: activePeer });
+      expect(run("later", whileHeld)).toMatchObject({ wait: { position: 2 }, slots: activePeer });
+      expect(f.read("SELECT key FROM unpolled")).toEqual([]);
+
+      workers.head.stdin.end();
+      expect(await workers.head.exited).toBe(0);
+      workers.restarted = startOwner();
+      expect(run("restarted", whileHeld)).toMatchObject({ wait: { position: 2, since: whileHeld }, slots: activePeer });
+      expect(f.read("SELECT key FROM tickets WHERE key = 'command:bounded:head'")).toEqual([]);
+      expect(run("later", whileHeld)).toMatchObject({ wait: { position: 1, heldBy: "queue" }, slots: activePeer });
+      expect(run("peer", whileHeld, "release")).toEqual({ wait: null, slots: [] });
+      expect(run("later", whileHeld)).toEqual({ wait: null, slots: ["command:gate-active:command:bounded:later"] });
+    } finally {
+      for (const worker of Object.values(workers)) if (worker?.exitCode === null) worker.kill();
+      await Promise.all(Object.values(workers).map(worker => worker?.exited));
+    }
+  }, 15_000);
 
 test("an unverifiable owner silent for a day is removed with one reason line", () => {
   const f = ownerFixture(), q = f.open(), { foreign } = owners();

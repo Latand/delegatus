@@ -186,12 +186,10 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const parent = path.join(proc, parentPid);
     const parentStat = readStat(parent);
     if (!hookParentMatches(proof, parent, parentStat)) return false;
-    // The parent identity and the two commands prove the relationship. A retired
-    // legacy ticket for that exact client proves it already consumed
-    // admission, so it cannot be treated as an unadmitted cleanup bootstrap.
-    const prior = history ??= queue.legacyGateHistory(epoch);
-    if (prior.retirements.has(`${path.basename(client)}:${clientStat[19]}`) ||
-      prior.retirements.has(`${parentPid}:${parentStat[19]}`)) return false;
+    // Either process could have entered through a slotless wrapper that
+    // execs in place. Require complete retirement coverage for its lifetime
+    // or proof that it was born after the last grant before coverage began.
+    if (!noLegacyGrant(client) || !noLegacyGrant(parent)) return false;
     const original = hookBootstrap(readArgv(parent), readCwd(parent));
     if (!original || original.mode !== hook.mode || original.entry !== hook.entry) return false;
     // A same-command process launched under an older gate has already crossed
@@ -311,6 +309,8 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const born = Number(readStat(base)[19]);
     return born > (grantUptime + 2) * clockTicks;
   };
+  const noLegacyGrant = (base: string) =>
+    skippedAdmission(base) || unobservedUnretired(base) && bornAfterPriorGrant(base);
   const waitingGateInService = (unit: string) => {
     const group = `/${unit}`;
     for (const identity of waiting) {
@@ -367,7 +367,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
           // relationship before treating an unrecorded pre-cutover ticket as
           // a cleanup child. The cutover grant distinguishes a hook already
           // holding admission from one launched afterwards.
-          return bootstrap || ordinary && waitingGateInService(unit) && (skippedAdmission(base) || unobservedUnretired(base) && bornAfterPriorGrant(base));
+          return bootstrap || ordinary && waitingGateInService(unit) && noLegacyGrant(base);
         }
       }
       if (!bootstrap && args[1] === path.join(path.dirname(runner), "test-child-guardian.ts")) {
