@@ -541,6 +541,7 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
 
 test.skipIf(!hasUserManager).each([
   { cap: 1, mode: "drain" }, { cap: 2, mode: "drain" }, { cap: 6, mode: "drain" }, { cap: 1, mode: "deadline" },
+  { cap: 2, mode: "recorder identity changed" },
 ])("a recorded native pre-push and competing waiter at cap $cap ($mode)", async ({ cap, mode }) => {
   const f = fixture(), roots: string[] = [], control = new AbortController();
   const { fixture: publicationFixture } = createPublicationFixtures(process.cwd(), roots);
@@ -575,13 +576,17 @@ test.skipIf(!hasUserManager).each([
     await until(() => waiting().length === 1, 10_000, diag);
     const first = waiting()[0]!;
     const child = JSON.parse(first.owner);
-    if (fs.existsSync(phaseFile)) {
-      const proof = JSON.parse(fs.readFileSync(phaseFile, "utf8"));
-      expect(child.pid).not.toBe(proof.recorder.pid);
-      expect(child.pid).not.toBe(proof.wrapper.pid);
-      expect(proof.recorder.pid).not.toBe(proof.wrapper.pid);
-      expect(proof.command).toEqual([".githooks/pre-push"]);
-    }
+    await until(() => {
+      try { return Boolean(JSON.parse(fs.readFileSync(phaseFile, "utf8")).child); }
+      catch { return false; }
+    }, 10_000, diag);
+    const proof = JSON.parse(fs.readFileSync(phaseFile, "utf8"));
+    expect(child.pid).not.toBe(proof.recorder.pid);
+    expect(child.pid).not.toBe(proof.wrapper.pid);
+    expect(proof.recorder.pid).not.toBe(proof.wrapper.pid);
+    expect(proof.command).toEqual([".githooks/pre-push"]);
+    expect(proof.child).toMatchObject({ ticket: first.key, identity: child });
+    expect(proof.child.scope).toBe(fs.readFileSync("/proc/" + child.pid + "/cgroup", "utf8"));
     pending.push(realExec("bash", f.command("competing").slice(1), process.cwd(), env,
       { timeoutMs: limit, signal: control.signal }));
     await until(() => waiting().length === 2, 10_000, diag);
@@ -622,7 +627,8 @@ test.skipIf(!hasUserManager).each([
       const phase = cap === 2 && fs.existsSync(phaseFile) ? fs.readFileSync(phaseFile, "utf8") : null;
       if (phase) {
         const stale = JSON.parse(phase);
-        stale.wrapper.startIdentity = `${stale.wrapper.pid}:0`;
+        if (mode === "recorder identity changed") stale.recorder.startIdentity = `${stale.recorder.pid}:0`;
+        else stale.child.ticket = second.key;
         fs.writeFileSync(phaseFile, JSON.stringify(stale));
       }
       fs.writeFileSync(releaseHolder, "release");

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { ALWAYS_IN_SCOPE, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
-import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache } from "./gate-cache";
+import { cacheDirectory, checkEnvironment, dependencyTreeFingerprint, environmentFingerprint, fileFingerprint, fingerprint, GateCache } from "./gate-cache";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -379,8 +379,8 @@ function stepsForBatch(base: string, paths: string[], existing: ReadonlySet<stri
     { name: "dependencies", command: ["bun", "install", "--frozen-lockfile"], capped: true },
     { ...types(), name: "tsc" },
     ...(lint.length ? [{ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", base, ...lint], capped: true }] : []),
+    { name: "privacy", command: ["bun", "scripts/privacy-publication-gate.ts", "--base", base, "--require-known-values", "--check-commits"], capped: true },
     ...(tests.length ? [{ name: "tests", command: ["bun", "test", ...tests.map(file => `./${file}`)], capped: true }] : []),
-    { name: "privacy", command: ["bun", "scripts/privacy-publication-gate.ts", "--base", base, "--check-commits"], capped: true },
     ...(detectorBrowser === undefined ? [] : [
       { name: "reviewed detectors", command: ["bun", "test"], capped: true, selection: detectorBrowser ? "include browser" : "exclude browser" },
       { name: "test attribution", command: ["bun", "test"], capped: true, selection: "reported cases and omitted-member controls" },
@@ -401,7 +401,7 @@ function effectiveStep(step: Step, execPath: string, env: NodeJS.ProcessEnv): St
   return { ...step, command };
 }
 
-function identifyChecks(inputs: PlanInputs, steps: Step[], bindings: string, env: NodeJS.ProcessEnv, execPath: string,
+function identifyChecks(inputs: PlanInputs, steps: Step[], bindings: string, compilerInput: string, env: NodeJS.ProcessEnv, execPath: string,
   detectors?: DetectorSelection, bunPin?: string): GateCheck[] {
   const batch = inputs.profile === "batch";
   const names = new Set(steps.map(step => step.name));
@@ -421,10 +421,8 @@ function identifyChecks(inputs: PlanInputs, steps: Step[], bindings: string, env
       ? [...new Set([...detectors.native, ...detectors.reviewed.flatMap(row => row.head)].map(entry => entry.file))]
       : step.command.slice(prefix).map(file => file.replace(/^\.\//, ""));
     const previous = steps[index - 1];
-    const previousBatch = name === "privacy" && detectors && previous?.name === "tests" ? steps[index - 2] : previous;
-    const after = batch ? name === "tests" && detectors ? ["privacy"]
-      : name === "reviewed detectors" ? [names.has("tests") ? "tests" : "privacy"]
-      : previousBatch ? [previousBatch.name] : [] : [
+    const after = batch ? name === "reviewed detectors" ? ["privacy"] : name === "test attribution" ? ["reviewed detectors"]
+      : previous ? [previous.name] : [] : [
         ...(step.group && names.has("frozen install") ? ["frozen install"] : []),
         ...(step.lane ? steps.slice(0, index).filter(other => other.lane === step.lane).slice(-1).map(other => other.name) : []),
         ...(inputs.profile === "pre-commit" && previous ? [previous.name] : []),
@@ -432,7 +430,8 @@ function identifyChecks(inputs: PlanInputs, steps: Step[], bindings: string, env
     const runtime = { executable: step.command[0]!,
       bun: step.pinned ? bunPin ?? "unresolved Dockerfile pin" : /bun(?:x|-container)?$/.test(step.command[0]!) ? Bun.version : null,
       codex: step.codex ?? null };
-    const checkKey = fingerprint([VERSION, inputs.subject, inputs.tree, inputs.base, inputs.selector, inputs.trustPolicy, bindings,
+    const compiler = ["types", "tsc"].includes(name) ? compilerInput : null;
+    const checkKey = fingerprint([VERSION, inputs.subject, inputs.tree, inputs.base, inputs.selector, inputs.trustPolicy, bindings, compiler,
       step.command, runtime, step.capped ?? false, step.selection ?? null, step.deferrable ?? false,
       environment, cleanup, producer, fresh, corpus ? inputs.discovery : null]);
     return { checkKey, step, files, after, runtime, environment, cleanup, producer, fresh };
@@ -471,15 +470,18 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
     return batch ? existsSync(absolute) && statSync(absolute, { throwIfNoEntry: false })?.isFile() : existsSync(absolute);
   }));
   const siblings = batch ? [] : siblingTests(root, [...files, "scripts/local-gate.ts"]);
-  const sourceInputs = [...new Set([...dirty.filter(file => batchSource.test(file)),
+  const platformWorkflowPath = path.join(root, ".github/workflows/platform-tests.yml");
+  const platformInputs = executedPaths(root, workflowEntries(readFileSync(platformWorkflowPath, "utf8")));
+  const sourceInputs = [...new Set([...dirty.filter(file => batchSource.test(file)), ...platformInputs,
     ".github/workflows/platform-tests.yml", ".github/workflows/bun-runtime.yml", "Dockerfile", "bun.lock", "package.json",
     "node_modules/typescript/package.json", "node_modules/eslint/package.json"])]
     .map(file => [file, fileFingerprint(path.join(root, file))]);
   // The slot wrapper supplies this default to both producers. Normalize its
   // absent form when naming the graph before that wrapper runs.
   const checkEnv = checkEnvironment({ ...env, NODE_OPTIONS: env.NODE_OPTIONS || "--max-old-space-size=11264" });
+  const compilerInput = dependencyTreeFingerprint(root, "node_modules/typescript");
   const bindings = fingerprint([process.platform, process.arch, Bun.version, execPath, SUPPORTED_CODEX_VERSIONS,
-    environmentFingerprint(checkEnv), sourceInputs,
+    environmentFingerprint(checkEnv), sourceInputs, compilerInput,
     ...[env.PATH, checkEnv.PATH].map(PATH => ["bun", "bunx", "node", "git"].map(tool => Bun.which(tool, { PATH: PATH ?? "" })))]);
   const reviewed = batch?.reviewed?.map(row => ({ number: row.number, base: commit(row.base), head: commit(row.head) }));
   const runtime = files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
@@ -506,7 +508,7 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
     try { bunPin = pinnedBunVersion(readFileSync(path.join(root, "Dockerfile"), "utf8")); }
     catch { /* Keep the required check. Its runtime preparation reports the error. */ }
   }
-  const checks = identifyChecks(inputs, steps, bindings, env, execPath, detectors, bunPin);
+  const checks = identifyChecks(inputs, steps, bindings, compilerInput, env, execPath, detectors, bunPin);
   const built = { ...inputs, checks, ...(detectors ? { detectors } : {}), planId: planId(checks, detectors) };
   cache.write(key, built);
   return freezePlan(built);

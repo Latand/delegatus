@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
+import { executedPaths, workflowEntries } from "./ci-platform-scope";
 import { gatePlan } from "./gate-plan";
 import { createHookFixture } from "./local-gate.fixture";
 
@@ -36,7 +37,7 @@ test.each([
   { profile: "runtime and native matrix", file: "Dockerfile", push: ["privacy", ...runtime], commit: ["staged whitespace"], batch: ["dependencies", "tsc", "privacy"] },
   { profile: "dependency", file: "package.json", push: ["privacy", "frozen install", "types", ...linux, "audit retry tests", "supply chain"], commit: ["staged whitespace"], batch: ["dependencies", "tsc", "privacy"] },
   { profile: "workflow and privacy", file: ".github/workflows/privacy-publication.yml", push: ["privacy", "types", "touched tests"], commit: ["staged whitespace"], batch: ["dependencies", "tsc", "privacy"] },
-  { profile: "shared source", file: "example.ts", push: ["privacy", "types", "eslint", "touched tests"], commit: ["staged whitespace", "eslint"], batch: ["dependencies", "tsc", "eslint", "tests", "privacy"] },
+  { profile: "shared source", file: "example.ts", push: ["privacy", "types", "eslint", "touched tests"], commit: ["staged whitespace", "eslint"], batch: ["dependencies", "tsc", "eslint", "privacy", "tests"] },
 ])("$profile preserves the ordered obligations of each adapter", ({ file, push, commit: staged, batch }) => {
   const f = fixture();
   if (file.includes("privacy-publication")) {
@@ -160,8 +161,71 @@ test("a valid handoff hits the immutable plan, and damaged, changed-base, or cha
   expect(names(moved)).toEqual(["privacy"]);
 });
 
+test("platform helper bytes invalidate cached discovery without changing the Git subject", () => {
+  const f = fixture();
+  const workflow = f.writablePath(".github/workflows/platform-tests.yml");
+  let workflowText = readFileSync(workflow, "utf8");
+  const anchor = "      - name: Platform tests\n";
+  expect(workflowText).toContain(anchor);
+  const runStart = workflowText.indexOf("        run: |", workflowText.indexOf(anchor));
+  expect(runStart).toBeGreaterThan(0);
+  const runEnd = runStart + "        run: |\n".length;
+  workflowText = `${workflowText.slice(0, runEnd)}          bash scripts/ignored-platform-helper.sh\n${workflowText.slice(runEnd)}`;
+  writeFileSync(workflow, workflowText);
+  const helper = f.writablePath("scripts/ignored-platform-helper.sh");
+  writeFileSync(helper, "#!/bin/sh\nexit 0\n");
+  mkdirSync(f.writablePath(".git/info"), { recursive: true });
+  writeFileSync(f.writablePath(".git/info/exclude"), "scripts/ignored-platform-helper.sh\n");
+  f.git("add", ".github/workflows/platform-tests.yml");
+  f.git("-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", "platform helper baseline");
+  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  write(f, "example.ts", "export const value = 2;\n");
+  commit(f);
+  const first = gatePlan(f.dir, { profile: "pre-push" }, f.env);
+  expect(first.changedPaths).toEqual(["example.ts"]);
+  expect(names(first)).not.toContain("Linux tests");
+
+  writeFileSync(helper, '#!/bin/sh\nbun "../example.ts"\n');
+  const entries = workflowEntries(readFileSync(workflow, "utf8"));
+  expect(entries).toContain("scripts/ignored-platform-helper.sh");
+  expect(executedPaths(f.dir, entries)).toContain("example.ts");
+  const after = gatePlan(f.dir, { profile: "pre-push" }, f.env);
+  expect(after.subject).toBe(first.subject);
+  expect(after.base).toBe(first.base);
+  expect(after.changedPaths).toEqual(first.changedPaths);
+  expect(names(after)).toContain("Linux backend");
+  expect(names(after)).toContain("Linux tests");
+  expect(after.planId).not.toBe(first.planId);
+});
+
+test("batch graph follows privacy before native and reviewed observations with trusted scan arguments", () => {
+  const f = fixture();
+  write(f, "src/example.ts", "export const value = 1;\n");
+  const base = commit(f);
+  write(f, "src/example.ts", "export const value = 2;\n");
+  write(f, "src/example.test.ts", "test('native case', () => {});\n");
+  const head = commit(f);
+  const plan = gatePlan(f.dir, { profile: "batch", base, reviewed: [{ number: 17, base, head }] }, f.env);
+  expect(names(plan)).toEqual(["dependencies", "tsc", "eslint", "privacy", "tests", "reviewed detectors", "test attribution"]);
+  expect(plan.checks.map(check => [check.step.name, check.after])).toEqual([
+    ["dependencies", []], ["tsc", ["dependencies"]], ["eslint", ["tsc"]], ["privacy", ["eslint"]],
+    ["tests", ["privacy"]], ["reviewed detectors", ["privacy"]], ["test attribution", ["reviewed detectors"]],
+  ]);
+  expect(plan.checks.find(check => check.step.name === "privacy")?.step.command)
+    .toEqual(["bun", "scripts/privacy-publication-gate.ts", "--base", base, "--require-known-values", "--check-commits"]);
+  const dispatched = plan.checks.filter(check => !["tests", "reviewed detectors", "test attribution"].includes(check.step.name))
+    .map(check => check.step.name);
+  expect(dispatched).toEqual(["dependencies", "tsc", "eslint", "privacy"]);
+  expect(plan.checks.find(check => check.step.name === "reviewed detectors")?.after).toEqual(["privacy"]);
+  expect(plan.detectors?.native.map(test => test.file)).toEqual(["src/example.test.ts"]);
+  expect(plan.detectors?.reviewed.map(row => row.head.map(test => test.file))).toEqual([["src/example.test.ts"]]);
+});
+
 test("image and host obligations match and name different compiler observations", () => {
   const f = fixture();
+  mkdirSync(f.writablePath("node_modules/typescript/bin"), { recursive: true });
+  writeFileSync(f.writablePath("node_modules/typescript/package.json"), '{"name":"typescript"}\n');
+  writeFileSync(f.writablePath("node_modules/typescript/bin/tsc"), "#!/usr/bin/env node\n// compiler first\n");
   write(f, "example.ts");
   commit(f);
   const which = Bun.which;
@@ -178,6 +242,10 @@ test("image and host obligations match and name different compiler observations"
     expect(compiler(image).step.command).toEqual(["node", "node_modules/typescript/bin/tsc", "--noEmit"]);
     expect(compiler(image).checkKey).not.toBe(compiler(host).checkKey);
     expect(image.planId).not.toBe(host.planId);
+    writeFileSync(f.writablePath("node_modules/typescript/bin/tsc"), "#!/usr/bin/env node\n// compiler second\n");
+    const replaced = gatePlan(f.dir, request, f.env, "/usr/local/bin/bun-container");
+    expect(compiler(replaced).checkKey).not.toBe(compiler(image).checkKey);
+    expect(replaced.checks.map(check => check.step.name)).toEqual(image.checks.map(check => check.step.name));
   } finally { tool.mockRestore(); }
 });
 

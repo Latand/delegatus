@@ -55,6 +55,11 @@ function treeFingerprint(directory: string, label: string, exclude: (relative: s
   return hash.digest("hex");
 }
 
+/** Bind installed compiler bytes when a check executes that dependency. */
+export function dependencyTreeFingerprint(root: string, relative: string): string {
+  return treeFingerprint(path.join(root, relative), relative);
+}
+
 export function installedFingerprint(root: string): string {
   return treeFingerprint(path.join(root, "node_modules"), "node_modules");
 }
