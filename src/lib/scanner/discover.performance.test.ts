@@ -60,6 +60,7 @@ test("large-catalog reconciliation catalogs every conversation, reporting its ev
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const padding = "x".repeat(1_900);
@@ -104,6 +105,7 @@ test("pipeline status churn keeps a 100 MB growing transcript scan incremental, 
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all([...Object.values(roots), stateDir].map((root) => mkdir(root, { recursive: true })));
     const flowPath = path.join(stateDir, "flows.json");

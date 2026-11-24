@@ -1091,7 +1091,7 @@ function validResourceSession(value: unknown): boolean {
   return typeof value.target === "string" && value.target.length > 0
     && Number.isSafeInteger(value.panePid) && (value.panePid as number) > 0
     && nullableString(value.path)
-    && (value.engine === "claude" || value.engine === "codex" || value.engine === "copilot" || value.engine === null)
+    && (value.engine === "claude" || value.engine === "codex" || value.engine === "copilot" || value.engine === "antigravity" || value.engine === null)
     && nullableString(value.title)
     && nullableString(value.project)
     && (value.activity === "live" || value.activity === "recent" || value.activity === "stalled" || value.activity === "idle" || value.activity === null)
@@ -1156,7 +1156,7 @@ function validStructuredHostKillRef(value: unknown): value is StructuredHostKill
        recycled since (#1199). */
     && typeof value.startIdentity === "string" && value.startIdentity.length > 0
     && nullableString(value.bootEpoch)
-    && (value.engine === "claude" || value.engine === "codex" || value.engine === "copilot")
+    && (value.engine === "claude" || value.engine === "codex" || value.engine === "copilot" || value.engine === "antigravity")
     && nullableString(value.sessionId)
     && nullableString(value.conversationId)
     && nullableBoolean(value.seat)

@@ -11,7 +11,8 @@ export type RootKey =
   | "claude-projects"
   | "claude-tasks"
   | "openclaw-sessions"
-  | "copilot-sessions";
+  | "copilot-sessions"
+  | "antigravity-sessions";
 
 export type Engine = "codex" | "claude" | "shell" | "openclaw" | "copilot" | "antigravity";
 export type Activity = "live" | "recent" | "stalled" | "idle";

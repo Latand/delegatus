@@ -42,6 +42,13 @@ function pickModel(entry: FileEntry, obj: Record<string, unknown>): string | nul
     if (obj.type === "session.model_change") return stringValue(data?.newModel);
     if (obj.type === "assistant.message") return stringValue(data?.model);
     if (obj.type === "session.start" || obj.type === "session.resume") return stringValue(data?.selectedModel);
+  } else if (entry.root === "antigravity-sessions") {
+    const data = recordValue(obj.data);
+    if (obj.type === "session.model_change") return stringValue(data?.model) ?? stringValue(data?.newModel) ?? stringValue(data?.baseModel);
+    if (obj.type === "assistant.message") return stringValue(data?.model);
+    if (obj.type === "session.start" || obj.type === "session.resume") {
+      return stringValue(data?.model) ?? stringValue(data?.baseModel) ?? stringValue(data?.selectedModel);
+    }
   } else if (obj.type === "assistant") {
     const model = stringValue(recordValue(obj.message)?.model);
     if (model && model !== "<synthetic>") return model;
@@ -56,7 +63,7 @@ export function entryModelsResult(entry: FileEntry): EntryModelsResult {
     if (model) return { value: { display: shortModel(model), launch: model }, complete: true };
   }
   if (
-    (entry.root !== "claude-projects" && entry.root !== "codex-sessions" && entry.root !== "openclaw-sessions" && entry.root !== "copilot-sessions")
+    (entry.root !== "claude-projects" && entry.root !== "codex-sessions" && entry.root !== "openclaw-sessions" && entry.root !== "copilot-sessions" && entry.root !== "antigravity-sessions")
     || !entry.path.endsWith(".jsonl")
   ) {
     return { value: { display: null, launch: null }, complete: true };
