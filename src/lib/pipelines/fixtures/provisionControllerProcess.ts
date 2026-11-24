@@ -5,13 +5,14 @@ import { settlePipelineControllerJobs } from "../controllerJobs";
 import { tickPipelinesController } from "../controllerPass";
 import { registerPipelineTick } from "../controllerSignal";
 import { settlePipelineStopReadLanes } from "../controllerStopRead";
-import { defaultPipelinePorts } from "../engine";
+import { defaultPipelinePorts, patchPipeline } from "../engine";
 import { realProvisionExec } from "../git";
 import { findControllerPipeline } from "../store";
 
 const input = JSON.parse(process.env.LLV_PROVISION_PROCESS_FIXTURE ?? "null") as {
   lane: string; state: string; launches: string; end: string;
   applyBarrier?: { entered: string; release: string };
+  pauseAndClose?: true;
 } | null;
 if (!input || input.state !== process.env.LLV_STATE_DIR || process.env.NODE_ENV !== "test") {
   throw new Error("provisioning subprocess requires isolated fixture state");
@@ -19,6 +20,15 @@ if (!input || input.state !== process.env.LLV_STATE_DIR || process.env.NODE_ENV 
 const unregister = registerPipelineTick(async () => {});
 const ports = defaultPipelinePorts();
 ports.scheduleTick = () => {};
+if (input.pauseAndClose) {
+  const pause = await patchPipeline(input.lane, { action: "pause", reason: "Hold the fixture lane before close" }, ports);
+  if (pause.pipeline?.state !== "paused") throw new Error("fixture pause refused");
+  const close = await patchPipeline(input.lane, { action: "close" }, ports);
+  if (close.pipeline?.state !== "closed") throw new Error("fixture close refused");
+  unregister();
+  closeAgentRegistryForTests();
+  process.exit(0);
+}
 ports.drainHold = () => null;
 ports.cpuPressureHold = () => null;
 ports.cpuAdmissionReconcile = () => {};

@@ -2,7 +2,7 @@ import { FlowPipelineController } from "./controller";
 import { settlePipelineControllerJobs, startPipelineControllerJob } from "./controllerJobs";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineStopReadLanes } from "./controllerStopRead";
-import { BUILD_ONLY, createPipelineFromRequest, expect, fs, path, realWorktreeLane, test } from "./engine.fixture";
+import { BUILD_ONLY, createPipelineFromRequest, expect, fs, path, realWorktreeLane, spyOn, test } from "./engine.fixture";
 import { latch, until, withControllerAuditState } from "./fixtures/ownedStageControl";
 import { findControllerPipeline, withPipelineMutation } from "./store";
 import { removeProvisioningFixture, seedProvisioningPackage } from "../../../scripts/verify-provisioning-release.mjs";
@@ -637,13 +637,23 @@ linuxInstall.each([
   }), 26_000);
 
 const legacyTree = process.env.LLV_PROVISION_LEGACY_TREE;
-test.skipIf(!legacyTree)("pre-v1 reads the committed plan after origin moves and the forward release retires its slot", () =>
+test.skipIf(!legacyTree).each(["no private tree", "partial private tree"] as const)(
+  "pre-v1 reads the committed plan after origin moves with %s",
+  privateTree =>
   withControllerAuditState(async () => {
     const { h, git, repo, root } = await realWorktreeLane("legacy-plan-readback", BUILD_ONLY as never);
     const { settleProvisioningJobsForTests } = await import("./provisioningJob");
     const held = latch(), release = latch();
     let predecessor: ReturnType<typeof Bun.spawn<"ignore", "pipe", "pipe">> | undefined;
     try {
+      const partial = privateTree === "partial private tree";
+      if (partial) {
+        fs.appendFileSync(path.join(repo, ".gitignore"), "node_modules\n");
+        fs.writeFileSync(path.join(repo, "package.json"), '{"name":"fixture-private","dependencies":{"local":"file:./missing-local"}}\n');
+        await git(repo, "add", ".");
+        await git(repo, "commit", "-m", "checkout-relative fixture inputs before rollback");
+        await git(repo, "push", "origin", "main");
+      }
       delete h.ports.provisionExec;
       h.ports.now = () => new Date().toISOString();
       const lane = (await createPipelineFromRequest({ task: "Use the committed checkout plan across releases", repoDir: repo,
@@ -662,6 +672,12 @@ test.skipIf(!legacyTree)("pre-v1 reads the committed plan after origin moves and
       expect(stopped.provisioningWait).toBeUndefined();
       const planned = stopped.provisioningJob?.plan?.expectedHead;
       expect(stopped.baseRef).toBe(planned!);
+      const modules = path.join(lane.worktreeDir, "node_modules");
+      const unchecked = path.join(modules, "unfinished");
+      if (partial) {
+        fs.mkdirSync(modules);
+        fs.writeFileSync(unchecked, "partial installation");
+      }
       await git(repo, "commit", "--allow-empty", "-m", "move origin after the selected checkout");
       await git(repo, "push", "origin", "main");
       expect(await git(repo, "rev-parse", "HEAD")).not.toBe(planned!);
@@ -678,6 +694,11 @@ test.skipIf(!legacyTree)("pre-v1 reads the committed plan after origin moves and
       expect(stdout.split("\n").filter(line => line.includes('"phase":"git-finished","step":"worktree-add","status":"failed"'))).toHaveLength(1);
       expect(fs.readFileSync(launches, "utf8").trim()).toBe(lane.worktreeDir);
       expect(await git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(planned!);
+      if (partial) {
+        expect(fs.readFileSync(unchecked, "utf8")).toBe("partial installation");
+        expect(fs.existsSync(path.join(modules, ".delegatus-install-receipt.json"))).toBe(false);
+        expect(fs.existsSync(path.join(modules, "local"))).toBe(false);
+      }
       expect((await findControllerPipeline(lane.id))?.provisioningJob?.token).toBe(stopped.provisioningJob?.token);
       await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.provisioningJob === undefined);
       expect((await findControllerPipeline(lane.id))?.runs[0]?.attempts).toHaveLength(1);
@@ -821,3 +842,139 @@ test.skipIf(process.platform !== "linux")("a slotless checkout waits for the liv
       await removeProvisioningFixture(root);
     }
   }), 24_000);
+
+test.skipIf(process.platform !== "linux")("consume refuses a possible legacy writer with an unreadable working directory", () =>
+  withControllerAuditState(async () => {
+    const { h, git, repo, root } = await realWorktreeLane("legacy-at-consume", BUILD_ONLY as never);
+    const { settleProvisioningJobsForTests } = await import("./provisioningJob");
+    let supplier: (() => Promise<void>) | undefined;
+    let writer: ReturnType<typeof Bun.spawn<"pipe", "pipe", "ignore">> | undefined;
+    let wall = Date.now();
+    try {
+      supplier = await seedProvisioningPackage(repo, root, process.env, process.execPath, undefined, "fixture-private");
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "fixture inputs for private consume");
+      await git(repo, "push", "origin", "main");
+      delete h.ports.provisionExec;
+      h.ports.now = () => new Date(wall).toISOString();
+      const lane = (await createPipelineFromRequest({ task: "Prove private readiness at consume",
+        repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      h.ports.observeProvisioningCheckpoint = async (id, view) => {
+        if (id !== lane.id || view?.step !== "applyingCheckout" || writer) return;
+        writer = Bun.spawn([process.execPath, "--no-env-file", "-e", `
+          import { dlopen, FFIType } from "bun:ffi";
+          const libc = dlopen("libc.so.6", { prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 } });
+          if (libc.symbols.prctl(4, 0n, 0n, 0n, 0n) !== 0) process.exit(1);
+          console.log("ready");
+          for await (const chunk of Bun.stdin.stream()) if (chunk.length) break;
+        `, "--", "install"], { cwd: lane.worktreeDir, stdin: "pipe", stdout: "pipe", stderr: "ignore", timeout: 14_000 });
+        const reader = writer.stdout.getReader();
+        try {
+          await until(reader.read().then(frame => {
+            expect(new TextDecoder().decode(frame.value)).toBe("ready\n");
+          }), 3_000);
+          expect(() => fs.readlinkSync(`/proc/${writer!.pid}/cwd`)).toThrow();
+        } finally { reader.releaseLock(); }
+      };
+      await driveProvisioning(h.ports, async () => {
+        const row = await findControllerPipeline(lane.id);
+        return row?.provisioningJob?.step === "waitingForLegacyInstaller" || row?.state === "running";
+      });
+      const waiting = (await findControllerPipeline(lane.id))!;
+      expect(waiting.provisioningJob).toMatchObject({
+        step: "waitingForLegacyInstaller", status: "waiting", waitReason: "private-install-writer-live (working-directory)",
+      });
+      expect(waiting.runs[0]?.attempts).toHaveLength(0);
+      expect(writer).toBeDefined();
+      writer!.stdin.end();
+      expect(await writer!.exited).toBe(0);
+      wall = waiting.provisioningJob!.retryAt!;
+      await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.runs[0]?.attempts[0]?.state === "running");
+      expect((await findControllerPipeline(lane.id))?.runs[0]?.attempts).toHaveLength(1);
+    } finally {
+      if (writer && writer.exitCode === null && writer.signalCode === null) {
+        writer.stdin.end();
+        await writer.exited;
+      }
+      await settleProvisioningJobsForTests();
+      await supplier?.();
+      await settlePipelineControllerJobs();
+      await settlePipelineStopReadLanes();
+      await removeProvisioningFixture(root);
+    }
+  }), 24_000);
+
+test.skipIf(process.platform !== "linux").each(["step permit", "committed go"] as const)(
+  "cross-process close orders against a withheld %s",
+  heldFrame => withControllerAuditState(async () => {
+    const { h, git, repo, root } = await realWorktreeLane("close-provisioning-permit", BUILD_ONLY as never);
+    const { settleProvisioningJobsForTests } = await import("./provisioningJob");
+    const { processIdentityStatus } = await import("@/lib/processIdentity");
+    const held = latch(), release = latch();
+    const nativeInterval = setInterval;
+    // Hold the control poll so only keyed dispatch can refuse the stale permit.
+    const poll = spyOn(globalThis, "setInterval").mockImplementation((callback, delay, ...args) =>
+      nativeInterval(callback, delay === 50 ? 30_000 : delay, ...args));
+    let supplier: (() => Promise<void>) | undefined;
+    let control: ReturnType<typeof Bun.spawn<"ignore", "pipe", "pipe">> | undefined;
+    const admitted: string[] = [];
+    try {
+      supplier = await seedProvisioningPackage(repo, root, process.env, process.execPath);
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "fixture inputs for dispatch ordering");
+      await git(repo, "push", "origin", "main");
+      delete h.ports.provisionExec;
+      h.ports.now = () => new Date().toISOString();
+      const lane = (await createPipelineFromRequest({ task: "Close while dependency preparation waits for permission",
+        repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      let waiting = false;
+      h.ports.provisionToolchainReply = async (id, type, detail) => {
+        if (id !== lane.id) return;
+        if (type === "dispatch" && detail) admitted.push(detail);
+        const barrier = heldFrame === "step permit" ? type === "step" && detail === "checkingDependencies"
+          : type === "dispatch" && detail === "open-cache";
+        if (barrier) { waiting = true; held.resolve(); await release.promise; }
+      };
+      await driveProvisioning(h.ports, async () => waiting);
+      await until(held.promise);
+      const before = (await findControllerPipeline(lane.id))!.provisioningJob!;
+      expect(before.worker).toBeDefined();
+      expect(before.effect?.name === "open-cache").toBe(heldFrame === "committed go");
+      const cache = path.join(repo, ".git", "delegatus-dependencies");
+      expect(fs.existsSync(cache)).toBe(false);
+      control = Bun.spawn([process.execPath, "--no-env-file", path.join(import.meta.dir, "fixtures", "provisionControllerProcess.ts")], {
+        stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 4_000,
+        env: { ...process.env, LLV_PROVISION_PROCESS_FIXTURE: JSON.stringify({
+          lane: lane.id, state: process.env.LLV_STATE_DIR, pauseAndClose: true,
+        }) },
+      });
+      const [code, stdout, stderr] = await Promise.all([control.exited, new Response(control.stdout).text(), new Response(control.stderr).text()]);
+      expect(code, stdout + stderr).toBe(0);
+      const closed = (await findControllerPipeline(lane.id))!;
+      expect(closed.state).toBe("closed");
+      expect(closed.provisioningJob?.token).toBe(before.token);
+      release.resolve();
+      const end = performance.now() + 5_000;
+      while (processIdentityStatus(before.worker!) !== "dead") {
+        if (performance.now() >= end) throw new Error("the closed lane kept its worker after the reply was delivered");
+        await Bun.sleep(15);
+      }
+      expect(admitted).toEqual(heldFrame === "committed go" ? ["open-cache"] : []);
+      expect(fs.existsSync(cache)).toBe(heldFrame === "committed go");
+      expect(fs.existsSync(path.join(lane.worktreeDir, "node_modules"))).toBe(false);
+      await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.provisioningJob === undefined);
+      const final = (await findControllerPipeline(lane.id))!;
+      expect(final.state).toBe("closed");
+      expect(final.runs[0]?.attempts).toHaveLength(0);
+    } finally {
+      release.resolve();
+      poll.mockRestore();
+      if (control && control.exitCode === null && control.signalCode === null) control.kill();
+      await control?.exited;
+      await settleProvisioningJobsForTests();
+      await supplier?.();
+      await settlePipelineControllerJobs();
+      await settlePipelineStopReadLanes();
+      await removeProvisioningFixture(root);
+    }
+  }), 23_000);

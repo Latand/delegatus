@@ -20,6 +20,7 @@ import {
 import { pipelinePublishesRemoteBranch } from "./publication";
 import { provesProvisionCacheHolder } from "./provisionCacheHolder";
 import { physicalProvisioningPath, provisioningStripe, tryProvisioningLock, type ProvisioningGrant } from "./provisionCheckoutCustody";
+import { observeLegacyInstaller, type LegacyInstallerObservation } from "./provisionLegacyInstaller";
 import { ProvisionToolchainFailure, runProvisionToolchain } from "./provisionToolchain";
 import { provisionToolchainEntry } from "./provisionToolchainEntry";
 import { PROVISION_STEPS, provisioningStepView, validProvisioningRecord, type ProvisioningRecord, type ProvisioningStepView, type ProvisionStep } from "./provisioningRecord";
@@ -46,7 +47,7 @@ type ProvisionPorts = {
   provisionExec?: ProvisionExecPort;
   provisionClock?: ProvisionClock;
   provisionToolchainReply?: (id: string, type: string, detail?: string) => Promise<void>;
-  observeProvisioningCheckpoint?: (id: string, step: ProvisioningStepView | undefined, at: number) => void;
+  observeProvisioningCheckpoint?: (id: string, step: ProvisioningStepView | undefined, at: number) => void | Promise<void>;
   now(): string;
   monotonicNow(): number;
   scheduleTick?(delayMs?: number): void;
@@ -396,7 +397,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       const view = provisioningStepView(result);
       const at = clock.wallMs();
       if (view) reportProvisioningPhase(id, { phase: "step", view }, asDate(at));
-      ports.observeProvisioningCheckpoint?.(id, view, at);
+      if (ports.observeProvisioningCheckpoint) await ports.observeProvisioningCheckpoint(id, view, at);
     }
     requestPipelineTick();
   };
@@ -440,6 +441,13 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity } : {}),
       ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since, legacyWriter: error.legacyWriter } : {}) }, false, true);
     schedule(pool, at, clock, ports);
+  };
+  const deferLegacyWriter = async (cause: Exclude<LegacyInstallerObservation, { kind: "clear" }>): Promise<never> => {
+    const since = slot.legacyWaitSince ?? clock.wallMs();
+    const detail = cause.kind === "possible-writer" ? "possible-writer" : cause.reason;
+    const writer = cause.kind === "possible-writer" ? { pid: cause.pid, start: cause.start } : undefined;
+    throw new Deferred("waitingForLegacyInstaller", since, since + PROVISION_STEPS.waitingForLegacyInstaller,
+      `private-install-writer-live (${detail})`, undefined, undefined, writer);
   };
   const disk = () => {
     const lane = row!;
@@ -621,13 +629,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
           throw new Deferred("waitingForCache", since, cutoff, reason, undefined,
             { identity, holderDeadline: holderDeadline !== undefined && holderDeadline > now ? holderDeadline : undefined });
         },
-        legacyWriter: async cause => {
-          const since = slot.legacyWaitSince ?? clock.wallMs();
-          const detail = cause.kind === "possible-writer" ? "possible-writer" : cause.reason;
-          const writer = cause.kind === "possible-writer" ? { pid: cause.pid, start: cause.start } : undefined;
-          throw new Deferred("waitingForLegacyInstaller", since, since + PROVISION_STEPS.waitingForLegacyInstaller,
-            `private-install-writer-live (${detail})`, undefined, undefined, writer);
-        }, track: child => { handle.child = child; },
+        legacyWriter: deferLegacyWriter, track: child => { handle.child = child; },
       }); else {
         await step("checkingDependencies");
         const prepared = await prepareProvisionedPipeline(row!, result.sha, exec, signal);
@@ -642,6 +644,11 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       }
       if (slot.privateReceipt) {
         const receipt = slot.privateReceipt;
+        // Toolchain verification can precede apply by another state-admission
+        // window. Qualify readiness with a fresh census at the consume boundary.
+        const observation = await observeLegacyInstaller(row!.worktreeDir);
+        read();
+        if (observation.kind !== "clear") await deferLegacyWriter(observation);
         const modules = await fs.promises.lstat(path.join(row!.worktreeDir, "node_modules"), { bigint: true });
         if (!modules.isDirectory() || String(modules.dev) !== receipt.device || String(modules.ino) !== receipt.inode) {
           throw new ProvisionToolchainFailure("private-install-unverified");
