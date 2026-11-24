@@ -1,4 +1,6 @@
-import type { TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
+import type { SpendEngine, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
+import { tokenCost } from "@/lib/activity/tokenPrices";
+import { emptyTokens } from "@/lib/activity/tokenUsage";
 import type { MemoryProfileView, ProfilePartView } from "@/lib/memory/profileTypes";
 import type { CuratorPassView, RoleMemoryProjectView, RuleView, ScopeView, StageLessonView } from "@/lib/memory/roleTypes";
 import type { AutonomySetting } from "@/lib/monitor/autonomy";
@@ -602,15 +604,34 @@ export function buildProfile(lang: Lang, bootSeconds: number, rules: RoleMemoryP
 export function buildTaskSpend(lang: Lang): Record<string, TaskSpendSummary> {
   const L = (en: string, uk: string) => (lang === "uk" ? uk : en);
   const WEEK = { claude: { main: 31, work: 12 }, codex: { main: 22 } } as const;
-  const account = (engine: "claude" | "codex", id: "main" | "work", label: string, plan: string, pp: number, sessionPp: number | null = null) => ({
-    key: `${engine}:${id}`, label, plan, weeklyPp: pp, tokens: Math.round(pp * 410_000),
-    week: { usedPercent: engine === "claude" ? WEEK.claude[id] : WEEK.codex.main, taskPp: pp }, sessionPp,
-  });
+  const model = { claude: "claude-opus-5-5", codex: "gpt-6-sol" } as const;
+  const range = (pp: number) => ({ low: pp * 0.7, high: pp * 1.3 });
+  // The demo models the token counts as cache reads in its scripted conversations.
+  const apiPrice = (engine: SpendEngine, tokens: number) =>
+    tokenCost(model[engine], "standard", { ...emptyTokens(), cacheRead: tokens });
+  const account = (engine: SpendEngine, id: "main" | "work", label: string, plan: string, pp: number, sessionPp: number | null = null): TaskSpendAccount => {
+    const tokens = Math.round(pp * (engine === "claude" ? 410_000 : 380_000));
+    return {
+      key: `${engine}:${id}`, label, plan, planTier: null, weeklyPp: pp, tokens,
+      basis: "measured", range: range(pp), budget: null, apiUsd: apiPrice(engine, tokens),
+      week: { usedPercent: engine === "claude" ? WEEK.claude[id] : WEEK.codex.main, taskPp: pp }, sessionPp,
+    };
+  };
+  const provider = (engine: SpendEngine, pp: number, accounts: TaskSpendAccount[]): TaskSpendProvider => {
+    const tokens = accounts.reduce((total, entry) => total + entry.tokens, 0);
+    const apiUsd = apiPrice(engine, tokens);
+    return {
+      engine, weeklyPp: pp, tokens, bound: "approx", floor: null, accounts,
+      basis: "measured", range: range(pp), budgets: [], outsideBudget: false,
+      apiUsd, apiPricedTokens: apiUsd === null ? 0 : tokens, issues: [],
+      unpricedModels: apiUsd === null ? [model[engine]] : [], unpricedTokens: apiUsd === null ? tokens : 0,
+    };
+  };
   const main = L("Main", "Основний");
   const claude = (pp: number, accounts = [account("claude", "main", main, "max", pp)]) =>
-    ({ engine: "claude" as const, weeklyPp: pp, tokens: Math.round(pp * 410_000), bound: "approx" as const, floor: null, accounts });
+    provider("claude", pp, accounts);
   const codex = (pp: number) =>
-    ({ engine: "codex" as const, weeklyPp: pp, tokens: Math.round(pp * 380_000), bound: "approx" as const, floor: null, accounts: [account("codex", "main", main, "pro", pp)] });
+    provider("codex", pp, [account("codex", "main", main, "pro", pp)]);
   const spend = (...providers: TaskSpendSummary["providers"]): TaskSpendSummary => ({ providers });
   return {
     "t-refunds": spend(claude(3.2, [account("claude", "main", main, "max", 2.1, 9), account("claude", "work", L("Work", "Робочий"), "max", 1.1)]), codex(1.4)),

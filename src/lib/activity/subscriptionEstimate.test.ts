@@ -4,7 +4,7 @@ import { apiCost, estimateShare, meterCost, planBudget, planWithoutFixedLimit } 
 import { emptyTokens } from "./tokenUsage";
 
 test("mixed Claude models use the rates for cache reads, both cache write durations, and output", () => {
-  const opus = { input: 300_000, cacheRead: 68_600_000, cacheWrite: 900_000, cacheWrite1h: 100_000, output: 200_000, reasoning: 100_000 };
+  const opus = { ...emptyTokens(), requests: 1, input: 300_000, cacheRead: 68_600_000, cacheWrite: 900_000, cacheWrite1h: 100_000, output: 200_000, reasoning: 100_000 };
   const sonnet = { ...emptyTokens(), input: 100_000, cacheRead: 2_000_000, output: 50_000 };
   const usd = apiCost("claude-opus-5-5", "standard", opus)! + apiCost("claude-sonnet-5-5", "standard", sonnet)!;
   expect(usd).toBeCloseTo(24.62, 8);
