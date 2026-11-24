@@ -11,32 +11,48 @@ import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { realExec } from "../src/lib/workflows/provision";
 import { fixture, legacyGateTree, pathWithoutFlock, queuedTickets, until } from "./gate-slot.queue.fixture";
 import { createHookFixture, fixtureGitEnv } from "./local-gate.fixture";
-import { createPublicationFixtures } from "./publicationHook.fixture";
+import { createPublicationFixtures, stubOlderPublicationChecks } from "./publicationHook.fixture";
 
 const systemctl = process.platform === "linux" ? Bun.which("systemctl") : null;
 const hasUserManager = systemctl !== null && Bun.spawnSync([systemctl, "--user", "show-environment"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
 
-test("publication fixture writes stay inside the fixture repository", () => {
-  const roots = [fs.mkdtempSync(path.join(tmpdir(), "publication-write-"))];
+test("older publication stubs preserve the tracked files of the checkout used as cwd", () => {
+  const cwd = process.cwd(), roots: string[] = [];
+  const scratch = fs.mkdtempSync(path.join(tmpdir(), "publication-write-"));
+  const checkout = path.join(scratch, "checkout");
+  const env = fixtureGitEnv();
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: checkout, env, stdio: "pipe" });
   try {
-    const outside = path.join(roots[0], "source.ts");
-    fs.writeFileSync(outside, "original\n");
-    const publication = createPublicationFixtures(process.cwd(), roots).fixture();
-    fs.symlinkSync(outside, path.join(publication.dir, "file-link"));
-    fs.symlinkSync(path.dirname(outside), path.join(publication.dir, "directory-link"), "dir");
-    fs.linkSync(outside, path.join(publication.dir, "hard-link"));
-    const missing = path.join(path.dirname(outside), "missing");
-    fs.symlinkSync(missing, path.join(publication.dir, "dangling-link"));
-    for (const target of [outside, path.relative(publication.dir, outside), "file-link", "directory-link/new/source.ts", "dangling-link", "hard-link"]) {
-      expect(() => publication.write(target, "replacement\n")).toThrow("Refusing to write outside the hook fixture");
-    }
-    expect(fs.readFileSync(outside, "utf8")).toBe("original\n");
-    expect(fs.existsSync(missing)).toBeFalse();
-    expect(fs.existsSync(path.join(path.dirname(outside), "new"))).toBeFalse();
-    publication.write("private/nested.ts", "replacement\n");
-    expect(fs.readFileSync(path.join(publication.dir, "private/nested.ts"), "utf8")).toBe("replacement\n");
+    execFileSync("git", ["clone", "--quiet", "--shared", "--no-checkout", cwd, checkout], { env, stdio: "pipe" });
+    git("checkout", "--quiet", "--detach", "HEAD");
+    process.chdir(checkout);
+    const { fixture: publicationFixture } = createPublicationFixtures(process.cwd(), roots);
+    const f = publicationFixture();
+    const script = "scripts/local-gate-tests.ts";
+    const tracked = path.join(checkout, script);
+    const original = fs.readFileSync(tracked);
+    stubOlderPublicationChecks(f);
+    const stub = f.writablePath(script);
+    expect(fs.readFileSync(stub, "utf8")).toContain("process.argv.slice(1)");
+    fs.unlinkSync(stub);
+    fs.symlinkSync(tracked, stub);
+    expect(() => stubOlderPublicationChecks(f)).toThrow(/Fixture write refused.*symbolic link/);
+    expect(fs.readFileSync(tracked).equals(original)).toBe(true);
+    expect(git("status", "--porcelain=v1").toString()).toBe("");
+    git("diff", "--no-ext-diff", "--exit-code", "HEAD");
+
+    expect(() => f.writablePath(tracked)).toThrow("target must be inside the fixture's temporary root");
+    expect(() => f.writablePath(path.relative(f.dir, tracked))).toThrow("target must be inside the fixture's temporary root");
+    fs.symlinkSync(path.dirname(tracked), f.writablePath("linked-scripts"), "dir");
+    expect(() => f.writablePath("linked-scripts/new.ts")).toThrow(/symbolic link/);
+    fs.symlinkSync(path.join(checkout, "missing.ts"), f.writablePath("dangling.ts"));
+    expect(() => f.writablePath("dangling.ts")).toThrow(/symbolic link/);
+    expect(fs.existsSync(path.join(checkout, "missing.ts"))).toBeFalse();
+    fs.linkSync(tracked, f.writablePath("linked-file.ts"));
+    expect(() => f.writablePath("linked-file.ts")).toThrow(/hard-linked file/);
   } finally {
-    for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+    process.chdir(cwd);
+    for (const root of [...roots, scratch]) fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -382,9 +398,6 @@ for (const mode of ["portable hooks first-open", "service hooks first-open", "po
     const historical = mode === "historical service hook", olderHead = mode === "older helper head";
     const comparator = path.join(process.cwd(), "scripts/local-gate-tests.ts");
     const comparatorBefore = olderHead ? fs.readFileSync(comparator) : undefined;
-    const checkStub = olderHead
-      ? 'import fs from "node:fs"; fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n'
-      : undefined;
     const ordinary = mode.includes("hooks") || historical || olderHead;
     const firstOpen = mode.endsWith("first-open");
     const f = fixture(), control = new AbortController(), roots: string[] = [];
@@ -404,8 +417,8 @@ for (const mode of ["portable hooks first-open", "service hooks first-open", "po
       if (olderHead) {
         // Route through the same host-only interpreter binding supplied by the
         // launcher. The fixture's Bun shim still stands in for the check.
-        const bun = path.join(publication.dir, "shims", "bun");
-        publication.write("shims/bun", fs.readFileSync(bun, "utf8").replace("#!/bin/bash\n", `#!/bin/bash
+        const bun = publication.writablePath("shims/bun");
+        fs.writeFileSync(bun, fs.readFileSync(bun, "utf8").replace("#!/bin/bash\n", `#!/bin/bash
 case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
 `));
         env.LLV_GATE_BUN = process.execPath;
@@ -458,34 +471,30 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
       return { env, waitFor };
     };
     try {
-      const first = publicationFixture(checkStub);
+      const first = publicationFixture();
       const peer = historical
         ? createPublicationFixtures(legacyGateTree(f.dir, "c0ceb7ff5eb064b1d9d29a9aef2540edd15d5dd1"), roots).fixture()
-        : publicationFixture(checkStub);
+        : publicationFixture();
       if (olderHead) {
         // The exact older admission implementation observed at the FIFO head.
         const historicalTree = legacyGateTree(f.dir, "36b68a986862c5391cadf0c8c162aeea73012447");
         for (const entry of ["cpu-admission.ts", "gate-slot.sh"]) {
-          const target = path.join(first.dir, "scripts", entry);
+          const target = path.join(first.writablePath("scripts"), entry);
           fs.unlinkSync(target);
           fs.symlinkSync(path.join(historicalTree, "scripts", entry), target);
         }
       }
       for (const publication of [first, peer]) {
-        if (!useService) publication.write("shims/systemctl", "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-        fs.mkdirSync(path.join(publication.dir, "scripts/gate-runner"));
-        if (checkStub) {
-          for (const file of ["privacy-publication-gate", "eslint-changes", "verify-platform-backend"]) {
-            publication.write(`scripts/${file}.ts`, checkStub);
-          }
-        }
+        if (!useService) fs.writeFileSync(publication.writablePath("shims/systemctl"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+        fs.mkdirSync(publication.writablePath("scripts/gate-runner"));
+        if (olderHead) stubOlderPublicationChecks(publication);
       }
       if (comparatorBefore) expect(fs.readFileSync(comparator).equals(comparatorBefore)).toBeTrue();
-      first.write("record.ts", `\nif (process.argv[2] === "tsc") {
+      fs.appendFileSync(first.writablePath("record.ts"), `\nif (process.argv[2] === "tsc") {
         const fs = require("node:fs");
         fs.writeFileSync(${JSON.stringify(started)}, "started");
         while (!fs.existsSync(${JSON.stringify(release)})) await Bun.sleep(20);
-      }\n`, { flag: "a" });
+      }\n`);
       commitFixtureInputs(first);
       if (!useService) commitFixtureInputs(peer);
       // The first-open supervisor must have a clear post-grant birth time;
