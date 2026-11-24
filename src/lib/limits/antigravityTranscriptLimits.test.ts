@@ -69,6 +69,7 @@ test("picks newest exhaustion across newest 5 sessions, skips truncated tail, an
   expect(active).toEqual({
     source: "transcript",
     reason: null,
+    lastQuotaEventAt: Math.floor(Date.parse(tNew) / 1000),
     data: {
       session: {
         usedPercent: 100,
@@ -84,12 +85,13 @@ test("picks newest exhaustion across newest 5 sessions, skips truncated tail, an
     },
   });
 
-  // After reset window elapses, limits clear cleanly to unavailable.
+  // After reset window elapses, limits clear cleanly to unavailable while retaining lastQuotaEventAt.
   const expired = readAntigravityTranscriptLimits(parent, resetNew * 1000 + 1000, { tierName: "Pro" });
   expect(expired).toEqual({
     data: null,
     source: "unavailable",
     reason: "antigravity quota reset window elapsed",
+    lastQuotaEventAt: Math.floor(Date.parse(tNew) / 1000),
   });
 });
 
@@ -266,31 +268,23 @@ test("isolates per-file EIO errors and bounds warm directory scan stat calls acr
     expect(opens).toBe(0);
     expect(bytes).toBe(0);
 
-    // Adding new sessions one by one updates the directory cache incrementally
-    // (<= 6 child stats per poll, never re-statting all 257/258/259 historical dirs).
-    for (let k = 1; k <= 3; k += 1) {
-      writeSession(scaleDir, `fixture-incremental-${k}`, padLine, 2000 + k);
-      stats = 0;
-      opens = 0;
-      readAntigravityTranscriptLimits(scaleDir);
-      expect(stats).toBeLessThanOrEqual(6);
-      expect(opens).toBeLessThanOrEqual(1);
-    }
-
-    // Creating a new session subdirectory with active exhaustion is still picked up immediately with incremental stats.
+    // Creating a new session subdirectory with active exhaustion triggers a
+    // clean directory stat recomputation, opens only the new file, and picks up exhaustion immediately.
     writeSession(scaleDir, "fixture-newest-after-warm", exhaustionLine(t0, "Individual quota reached. Resets in 1h", resetAt), 5000);
-    stats = 0;
+    opens = 0;
     const afterNewDir = readAntigravityTranscriptLimits(scaleDir, Date.parse(t0) + 10_000);
-    expect(stats).toBeLessThanOrEqual(6);
+    expect(opens).toBeLessThanOrEqual(1);
     expect(afterNewDir.source).toBe("transcript");
     expect(afterNewDir.data?.session?.usedPercent).toBe(100);
 
-    // Subsequent unchanged poll stays at <= 5 child stats and 0 opens.
+    // Subsequent unchanged poll stays strictly on the fast path (<= 5 child stats, 0 opens, 0 reads).
     stats = 0;
     opens = 0;
+    bytes = 0;
     readAntigravityTranscriptLimits(scaleDir, Date.parse(t0) + 10_000);
     expect(stats).toBeLessThanOrEqual(5);
     expect(opens).toBe(0);
+    expect(bytes).toBe(0);
   } finally {
     fs.statSync = origStatSync;
     fs.openSync = origOpenSync;
@@ -366,13 +360,20 @@ test("rebuilds top-N on same-name session replacement, in-place mtime backdate, 
   fs.utimesSync(s6File, 20, 20);
   expect(readAntigravityTranscriptLimits(inPlaceDir, nowMs).data?.session?.usedPercent).toBe(100);
 
-  // 3. Same-name delete + recreate of a #6 session (outside top 5) with a newer mtime (900):
-  const offTopDir = path.join(root, "off-top-same-name");
-  fs.mkdirSync(offTopDir, { recursive: true });
-  writeSession(offTopDir, "s1", empty, 100);
-  for (let i = 2; i <= 6; i += 1) writeSession(offTopDir, `s${i}`, empty, i * 100);
-  expect(readAntigravityTranscriptLimits(offTopDir, nowMs).data).toBeNull();
-  fs.rmSync(path.join(offTopDir, "s1"), { recursive: true, force: true });
-  writeSession(offTopDir, "s1", exhaustionLine(t0, "Individual quota reached. Resets in 1h", resetAt), 900);
-  expect(readAntigravityTranscriptLimits(offTopDir, nowMs).data?.session?.usedPercent).toBe(100);
+  // 3. Same-name delete + recreate of a #6 session (outside top 5) with a newer mtime (900),
+  //    INCLUDING when another brand-new session is added in the same interval (#4407 P2):
+  const offTopWarm = path.join(root, "off-top-mixed-warm");
+  const offTopCold = path.join(root, "off-top-mixed-cold");
+  for (const dir of [offTopWarm, offTopCold]) {
+    fs.mkdirSync(dir, { recursive: true });
+    for (let i = 1; i <= 6; i += 1) writeSession(dir, `s${i}`, empty, i * 100);
+  }
+  expect(readAntigravityTranscriptLimits(offTopWarm, nowMs).data).toBeNull();
+  for (const dir of [offTopWarm, offTopCold]) {
+    fs.rmSync(path.join(dir, "s1"), { recursive: true, force: true });
+    writeSession(dir, "s1", exhaustionLine(t0, "Individual quota reached. Resets in 1h", resetAt), 900);
+    writeSession(dir, "new-session", empty, 1000);
+  }
+  expect(readAntigravityTranscriptLimits(offTopWarm, nowMs).data?.session?.usedPercent).toBe(100);
+  expect(readAntigravityTranscriptLimits(offTopCold, nowMs).data?.session?.usedPercent).toBe(100);
 });

@@ -213,6 +213,7 @@ const productionProbe: QuotaProbePort = {
         ? { data: null, reason: "Antigravity CLI is signed out", source: "unavailable" as const }
         : readAntigravityTranscriptLimits(candidate.sessionsDir, now, { tierName: candidate.tierName });
       const authenticated = candidate.auth === "signed_in" || limits.data !== null;
+      const eventSec = "lastQuotaEventAt" in limits ? limits.lastQuotaEventAt : undefined;
       return {
         engine: "antigravity",
         accountId: candidate.id,
@@ -224,6 +225,7 @@ const productionProbe: QuotaProbePort = {
           ? now
           : limits.data.capturedAt * 1000,
         limitReached: limits.data !== null,
+        ...(eventSec === undefined ? {} : { lastQuotaEventAt: eventSec }),
       };
     }
     const candidate = account as CodexAccount;
@@ -410,8 +412,12 @@ export class QuotaController {
         const providerWithUnknownLimits = engine === "claude" && "provider" in account && Boolean(account.provider);
         const previousObservedMs = previous ? Date.parse(previous.observedAt) : Number.NaN;
         const previousWatermarkSec = engine === "antigravity" ? antigravityObservationEventSec(previous) : null;
-        const incomingEventSec = engine === "antigravity" && observation?.limits
-          ? antigravityObservationEventSec(observation)
+        const incomingEventSec = engine === "antigravity" && observation
+          ? (typeof observation.lastQuotaEventAt === "number" && Number.isFinite(observation.lastQuotaEventAt) && observation.lastQuotaEventAt > 0
+            ? Math.floor(observation.lastQuotaEventAt)
+            : observation.limits
+              ? antigravityObservationEventSec(observation)
+              : null)
           : null;
         const previousAntigravityActive = engine === "antigravity"
           && isAntigravitySessionWindowActive(previous?.limits?.session, Math.floor(now / 1000));
