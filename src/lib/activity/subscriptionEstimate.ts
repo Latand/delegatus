@@ -15,6 +15,11 @@ export function meterCost(model: string, tier: string, engine: string, counts: T
   return standard === null ? null : standard * multiplier;
 }
 
+export function reportedPlan(value: string | null | undefined): string | null {
+  const plan = value?.trim();
+  return plan && plan.toLowerCase() !== "unknown" ? plan : null;
+}
+
 const planKey = (plan: string) => plan.trim().toLowerCase().replace(/[-_ ]/g, "");
 const budgetKey = (engine: string, plan: string, window: string, tier: string | null | undefined) =>
   `${engine}:${planKey(plan)}:${window}:${tier ?? ""}`;

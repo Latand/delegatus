@@ -13,7 +13,7 @@ import { ActivityStore, activityStorePath, conversationDigest } from "./store";
 import { countsFromRow, DAY, HOUR, usageMeta } from "./tokenStore";
 import { tokenTotal } from "./tokenUsage";
 import { invalidateUnattributedCodexRates, LIMIT_RATE_SCHEMA, nearestRate, refreshLimitRates, utcDay, type LimitRate, type SpendObservations } from "./limitRates";
-import { apiCost, ESTIMATE_VERSION, estimateShare, meterCost, planBudget, planWithoutFixedLimit, shareBasis } from "./subscriptionEstimate";
+import { apiCost, ESTIMATE_VERSION, estimateShare, meterCost, planBudget, planWithoutFixedLimit, reportedPlan, shareBasis } from "./subscriptionEstimate";
 import { priceTier } from "./tokenPrices";
 import { activityOperation } from "./operation";
 import type { TaskSpendAccount, TaskSpendProvider, TaskSpendResponse, SpendEngine } from "./taskLimitSpendTypes";
@@ -430,14 +430,18 @@ export function readTaskLimitSpend(db: Database | null, ids: readonly string[], 
   // Read-only requests can arrive before the background writer adds columns.
   const lastPlan = metaColumns.has("estimate_version")
     ? db.query<{ plan: string; plan_tier: string | null }, [string]>(`SELECT plan,plan_tier FROM usage_limit_rates
-      WHERE account=? AND plan IS NOT NULL ORDER BY day DESC, computed_at DESC LIMIT 1`) : null;
+      WHERE account=? AND plan IS NOT NULL AND lower(trim(plan)) NOT IN ('', 'unknown')
+      ORDER BY day DESC, computed_at DESC LIMIT 1`) : null;
   const accountPlan = (account: string) => {
     let info = planByAccount.get(account);
     if (info) return info;
     const observation = observations.get(account);
-    const prior = observation?.plan && observation.planTier ? null : lastPlan?.get(account);
-    const plan = observation?.plan ?? prior?.plan ?? null;
-    info = { plan, tier: observation?.planTier ?? (prior?.plan === plan ? prior?.plan_tier ?? null : null) };
+    const observedPlan = reportedPlan(observation?.plan);
+    const observedTier = observedPlan ? observation?.planTier : null;
+    const prior = observedPlan && observedTier ? null : lastPlan?.get(account);
+    const priorPlan = reportedPlan(prior?.plan);
+    const plan = observedPlan ?? priorPlan;
+    info = { plan, tier: observedTier ?? (priorPlan === plan ? prior?.plan_tier ?? null : null) };
     planByAccount.set(account, info);
     return info;
   };

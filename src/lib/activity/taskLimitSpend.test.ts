@@ -470,7 +470,9 @@ test("an indexed plan fallback prices the unrated days and keeps account metadat
   put.run(account, "2026-10-10", "pro", now, null);
   put.run(account, "2026-10-11", "max", now, "default_claude_max_20x");
   put.run(account, "2026-10-12", null, now, null);
+  put.run(account, "2026-10-13", "unknown", now, null);
   const deps = world([task("a")]);
+  deps.observations = () => new Map([[account, { plan: "unknown", session: null, weekly: null, capturedAt: now / 1000 }]]);
   const owner = readTaskLimitSpend(store.db, ["a"], { canChoose: true }, deps).tasks.a!.providers[0]!;
   expect(owner).toMatchObject({ tokens: 40_000_000, weeklyPp: 15, basis: "mixed", apiUsd: 160, apiPricedTokens: 40_000_000,
     bound: "approx", floor: null, outsideBudget: true, accounts: [{ key: account, plan: "max", planTier: "default_claude_max_20x" }] });
@@ -479,7 +481,8 @@ test("an indexed plan fallback prices the unrated days and keeps account metadat
   const member = readTaskLimitSpend(store.db, ["a"], { canChoose: false }, deps).tasks.a!.providers[0]!;
   expect(member).toEqual({ ...owner, accounts: null });
   const queryPlan = store.db.query(`EXPLAIN QUERY PLAN SELECT plan,plan_tier FROM usage_limit_rates
-    WHERE account=? AND plan IS NOT NULL ORDER BY day DESC,computed_at DESC LIMIT 1`).all(account);
+    WHERE account=? AND plan IS NOT NULL AND lower(trim(plan)) NOT IN ('', 'unknown')
+    ORDER BY day DESC, computed_at DESC LIMIT 1`).all(account);
   expect(JSON.stringify(queryPlan)).toContain("usage_limit_rates_latest_plan");
 });
 

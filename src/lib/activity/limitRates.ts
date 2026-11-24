@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { setImmediate as yieldLoop } from "node:timers/promises";
 import type { EngineLimits, LimitSample } from "@/lib/types";
-import { ESTIMATE_VERSION, meterCost } from "./subscriptionEstimate";
+import { ESTIMATE_VERSION, meterCost, reportedPlan } from "./subscriptionEstimate";
 import { countsFromRow, DAY, HOUR, SUM_TOKENS } from "./tokenStore";
 
 export type RateWindow = "weekly" | "session";
@@ -123,8 +123,10 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
       const weight = weights.get(account) ?? 0;
       const rate = historyCovered ? dayRate(rise, weight) : null;
       const observation = deps.observations.get(account);
-      const plan = observation?.plan ?? prior?.plan ?? null;
-      const planTier = observation?.planTier ?? (plan === prior?.plan ? prior?.plan_tier ?? null : null);
+      const observedPlan = reportedPlan(observation?.plan);
+      const priorPlan = reportedPlan(prior?.plan);
+      const plan = observedPlan ?? priorPlan;
+      const planTier = (observedPlan ? observation?.planTier : null) ?? (plan === priorPlan ? prior?.plan_tier ?? null : null);
       pending.push({ account, window, day, rate, rise, weight, source: rate === null ? "none" : "own",
         plan, plan_tier: planTier, meter_version: ESTIMATE_VERSION,
         frozen: coverageComplete && historyCovered && day < today ? 1 : 0, computed_at: now });
