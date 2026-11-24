@@ -10,6 +10,7 @@ import { installAction } from "../src/lib/selfUpdate/actions";
 import type { LauncherRecord } from "../src/lib/selfUpdate/launcher";
 import { isAlive } from "../src/lib/selfUpdate/pid";
 import { readStartIdentity } from "./self-update-supervisor.mjs";
+import { STUB_READY } from "./__fixtures__/cli-self-update";
 import { prepareLauncherCredentials } from "./launcher-credentials.mjs";
 import { ApplyController } from "../src/lib/selfUpdate/apply";
 import { resetWindowsSnapshotForTests, windowsBackend } from "../src/lib/proc/windows";
@@ -161,7 +162,10 @@ async function fixture(alias: "LLV_TOKEN" | "DELEGATUS_TOKEN" = "LLV_TOKEN", lab
       import { NextRequest } from "next/server";
       const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT), fetch(request) {
         const result = proxy(new NextRequest(request));
-        return result.headers.get("x-middleware-next") === "1" ? new Response("synthetic route") : result;
+        if (result.headers.get("x-middleware-next") !== "1") return result;
+        const pathname = new URL(request.url).pathname;
+        ${directory === candidate ? STUB_READY : ""}
+        return new Response("synthetic route");
       } });
       process.on("SIGTERM", () => { server.stop(true); process.exit(0); });
     `);

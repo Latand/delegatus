@@ -1123,7 +1123,7 @@ export function backupsDue(stateDirectory: string, lastRevisions: ReadonlyMap<st
 export interface BackupWorkerRequest {
   stateDirectory: string;
   lastRevisions: [string, string][];
-  operation?: "activation" | "checkpoint" | "retirement-guard";
+  operation?: "activation" | "checkpoint" | "retirement-guard" | "worktree-recovery";
   revision?: string;
   owner?: import("@/lib/processIdentity").ProcessIdentity;
 }
@@ -1132,6 +1132,8 @@ export interface BackupWorkerResponse {
   outcomes: [string, BackupOutcome][];
   incidents?: StorageIncident[];
   recoveryFailure?: string;
+  worktreeRecoveryFinished?: true;
+  worktreeRecovery?: { folded: number; leftAlone: number };
   checkpoint?: import("./hotStateAuthority").HotStateCheckpoint["revisions"];
 }
 
@@ -1203,13 +1205,28 @@ export async function checkpointHotStateRollbackMirrorsInWorker(stateDirectory: 
   return response.checkpoint;
 }
 
+/** The catalog and transcript evidence are read synchronously. Run recovery
+    and its follow-up scan on the leased worker, outside the HTTP thread. */
+export async function recoverWorktreesInWorker(stateDirectory: string, signal: AbortSignal): Promise<{ folded: number; leftAlone: number }> {
+  assertStateStartupMutation(stateDirectory, "worktree project recovery");
+  const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "worktree-recovery" }, { signal });
+  const recovery = response.worktreeRecovery;
+  if (response.worktreeRecoveryFinished !== true || !recovery
+    || !Number.isSafeInteger(recovery.folded) || recovery.folded < 0
+    || !Number.isSafeInteger(recovery.leftAlone) || recovery.leftAlone < 0) {
+    throw new Error("the worktree recovery worker returned no commit or verified no-op result");
+  }
+  return recovery;
+}
+
 async function runDurabilityWorker(
   request: BackupWorkerRequest,
-  options: { launch?: { executable: string; workerPath: string }; timeoutMs?: number } = {},
+  options: { launch?: { executable: string; workerPath: string }; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<BackupWorkerResponse> {
   const { stateDirectory } = request;
   const launch = options.launch ?? stateBackupWorkerLaunch();
   const { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } = await import("@/lib/helperLease");
+  options.signal?.throwIfAborted();
   const useNice = fs.existsSync("/usr/bin/nice");
   /* Under a lease: a pass that outlives its Viewer would keep the service's
      cgroup populated after it (src/lib/helperLease.ts). */
@@ -1230,16 +1247,23 @@ async function runDurabilityWorker(
       // worker before reporting its timeout, so recovery cannot race imports.
     }, options.timeoutMs ?? BACKUP_WORKER_TIMEOUT_MS);
     timeout.unref?.();
+    const abort = () => endLeasedHelper(child);
+    options.signal?.addEventListener("abort", abort, { once: true });
+    const cleanup = () => {
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", abort);
+    };
     child.stdout!.setEncoding("utf8");
     child.stdout!.on("data", (chunk: string) => { output += chunk; });
     input.on("error", () => { /* the exit below reports it */ });
     child.once("error", (error) => {
-      clearTimeout(timeout);
+      cleanup();
       reject(error);
     });
     child.once("close", (code, signal) => {
-      clearTimeout(timeout);
+      cleanup();
       try {
+        options.signal?.throwIfAborted();
         if (timedOut) throw new Error(`the backup worker ran past ${options.timeoutMs ?? BACKUP_WORKER_TIMEOUT_MS} ms and was stopped`);
         if (code !== 0) throw new Error(`the backup worker exited with ${code ?? signal}`);
         resolve(JSON.parse(output.trim().split("\n").at(-1) ?? "") as BackupWorkerResponse);
@@ -1247,6 +1271,7 @@ async function runDurabilityWorker(
         reject(error);
       }
     });
+    if (options.signal?.aborted) abort();
     input.end(JSON.stringify(request));
   });
   return response;

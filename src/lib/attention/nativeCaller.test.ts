@@ -27,7 +27,7 @@ function fixture(overrides: Partial<NativeCallerSources> = {}) {
   return { sources, record, conversation, generation, snapshot };
 }
 function refused(sources: NativeCallerSources, reason: NativeCallerReason) {
-  expect(resolveNativeCaller(sources)).toEqual({ kind: "refused", reason, retryable: reason === "session-not-scanned" });
+  expect(resolveNativeCaller(sources)).toEqual({ kind: "refused", reason, retryable: reason === "session-not-scanned" || reason === "evidence-incomplete" });
 }
 
 test("an operator-approved current generation ignores cwd claims in the record", () => {
@@ -110,6 +110,27 @@ test("an unscanned session is retryable and admitted once scanned", () => {
   f.snapshot.conversations = saved; expect(resolveNativeCaller(f.sources).kind).toBe("admitted");
 });
 
+test("incomplete native artifact evidence stays fail-closed and tells the caller to retry", () => {
+  const f = fixture();
+  Object.assign(f.snapshot, { nativeHostsIncomplete: true });
+  refused(f.sources, "evidence-incomplete");
+  expect(nativeAdmissionMessage({ reason: "evidence-incomplete", retryable: true })).toContain("Repeat the same request");
+});
+
+test("a completed native host lookup over its fixed candidate cap refuses without a pointless retry", () => {
+  const f = fixture();
+  Object.assign(f.snapshot, { nativeHostsLookupLimitExceeded: true });
+  const capped = resolveNativeCaller(f.sources);
+  expect(capped).toEqual({ kind: "refused", reason: "evidence-incomplete", retryable: false });
+  if (capped.kind !== "refused") throw new Error("expected capped lookup refusal");
+  expect(nativeAdmissionMessage(capped)).toBe("[evidence-incomplete] The native host lookup exceeded its verification limit. Open the conversation in Delegatus and continue it under its host.");
+  Object.assign(f.snapshot, { nativeHostsLookupLimitExceeded: undefined, nativeHostsIncomplete: true });
+  const pending = resolveNativeCaller(f.sources);
+  expect(pending).toEqual({ kind: "refused", reason: "evidence-incomplete", retryable: true });
+  if (pending.kind !== "refused") throw new Error("expected pending lookup refusal");
+  expect(nativeAdmissionMessage(pending)).toContain("Repeat the same request after preparation finishes.");
+});
+
 test("a session id owned twice is refused", () => {
   const f = fixture(); Object.assign(f.snapshot.conversations, { other: { ...f.conversation, id: "conversation_other" } });
   refused(f.sources, "generation-ambiguous");
@@ -165,9 +186,9 @@ test("the real bounded reader refuses symlinks, directories, oversized and malfo
 });
 
 test("every refusal gives the reason and continuation route without identity disclosure", () => {
-  const reasons: NativeCallerReason[] = ["platform-unverified", "no-claude-ancestor", "capability-unresolved", "capability-conflict", "ancestry-ambiguous", "foreign-host", "unknown-claude-home", "session-record-missing", "session-record-invalid", "session-kind", "process-identity-mismatch", "domain-mismatch", "record-predates-process", "session-held-twice", "session-not-scanned", "generation-ambiguous", "generation-not-current", "transcript-outside-home", "generation-hosted", "session-changed", "session-proof-unavailable", "approval-waiting", "approval-refused", "approval-unavailable"];
+  const reasons: NativeCallerReason[] = ["platform-unverified", "no-claude-ancestor", "capability-unresolved", "capability-conflict", "ancestry-ambiguous", "foreign-host", "unknown-claude-home", "session-record-missing", "session-record-invalid", "session-kind", "process-identity-mismatch", "domain-mismatch", "record-predates-process", "session-held-twice", "session-not-scanned", "generation-ambiguous", "generation-not-current", "transcript-outside-home", "generation-hosted", "evidence-incomplete", "session-changed", "session-proof-unavailable", "approval-waiting", "approval-refused", "approval-unavailable"];
   for (const reason of reasons) {
-    const text = nativeAdmissionMessage({ reason, retryable: reason === "session-not-scanned" });
+    const text = nativeAdmissionMessage({ reason, retryable: reason === "session-not-scanned" || reason === "evidence-incomplete" });
     expect(text).toContain(`[${reason}]`); expect(text).toContain("open the conversation in Delegatus");
     expect(text).not.toContain("conversation_native");
   }
