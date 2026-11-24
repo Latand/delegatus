@@ -16,7 +16,7 @@ import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraff
 import { createRuntimeFilesStatusProjection } from "@/lib/client/runtimeFilesStatus";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
 import { boardBootRetired, bootSnapshotStore, readBoardBootAuthority, recheckBoardBoot, subscribeBoardBootAuthority } from "@/lib/client/boardBootAuthority";
-import { CREATION_RECEIPT_LIMIT, usableCreationLocators, FILES_SNAPSHOT_MAX_BYTES, FILES_SNAPSHOT_VERSION, type CreationLocator, type CreationLocators, type FilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
+import { CREATION_RECEIPT_LIMIT, usableCreationLocators, FILES_SNAPSHOT_MAX_BYTES, FILES_SNAPSHOT_VERSION, type CreationLocator, type CreationLocators, type FilesSnapshotRecord, type FilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
 import type { PipelineCreationReceipt } from "@/lib/pipelines/creationQueue";
 import type { Flow } from "@/lib/flows/types";
 import { EMPTY_FILES_WORK_LINKS, type FilesWorkLinks } from "@/lib/forge/workLinks";
@@ -217,8 +217,14 @@ export interface FilesClientCache {
   applySpawnedConversation(file: FileEntry): void;
   /** Paint an answer an earlier document certified (#2071): published as
       `cached` and remembered under its ETag, so the first request of this
-      document is conditional. Ignored once anything has loaded. */
-  hydrate(record: { etag: string; text: string }): boolean;
+      document is conditional. Ignored once anything has loaded. A `held`
+      record is remembered for the conditional request only and shown by
+      {@link showHeld}: the document has not yet confirmed whose it is. */
+  hydrate(record: { etag: string; text: string }, mode?: "show" | "hold"): boolean;
+  /** Paint a held record as `cached`, unless the network answered first. */
+  showHeld(): boolean;
+  /** Forget a held record that belongs to another identity. */
+  dropHeld(): void;
   /** The global scope's representation, when the network certified it in
       this document: what the snapshot store keeps. */
   certifiedGlobal(): { etag: string; raw: Record<string, unknown> } | null;
@@ -373,6 +379,11 @@ export function createFilesClientCache(
   };
   let disposed = false;
   const representations = new Map<string, Representation>();
+
+  /* A saved catalog the document may not show yet: only its ETag and rows
+     reach the first request, so the server can answer 304 or a delta. */
+  let held: (Representation & { url: string }) | null = null;
+  const heldFor = (url: string): Representation | undefined => held?.url === url ? held : undefined;
   const listeners = new Map<
     (data: FilesData, priority?: "background" | "urgent") => void,
     string
@@ -871,7 +882,10 @@ export function createFilesClientCache(
           const store = hooks.creationStore?.();
           const generation = authorityGeneration;
           const accessScope = readBoardBootAuthority()?.scope ?? undefined;
-          const current = () => ownsCreation(generation) && accessScope === (readBoardBootAuthority()?.scope ?? undefined);
+          /* A write begun before the access answer stays valid when it arrives; a
+             different confirmed identity cancels it. */
+          const current = () => ownsCreation(generation)
+            && (accessScope === undefined || accessScope === (readBoardBootAuthority()?.scope ?? undefined));
           creationWritePending = true;
           creationWrites = creationWrites.then(async () => {
             if (!current() || !store?.updateCreations) return;
@@ -903,6 +917,7 @@ export function createFilesClientCache(
   };
 
   const rememberRepresentation = (url: string, data: FilesData, etag?: string, raw?: RawFilesResponse, built?: FilesBuilt) => {
+    if (held?.url === url) held = null;
     representations.delete(url);
     representations.set(url, { data, etag, raw, built });
     trimRepresentations();
@@ -997,7 +1012,7 @@ export function createFilesClientCache(
     }
     const generation = ++requestedGeneration;
     const healthRequest = ++requestedWriteHealth;
-    const representation = representations.get(url);
+    const representation = representations.get(url) ?? heldFor(url);
     /* Only a tab holding the server's exact representation can apply a delta
        to it; otherwise the conditional request asks for the whole body. */
     const headers = filesRequestHeaders(representation?.etag ?? "", revision, requiredGeneration, Boolean(representation?.raw));
@@ -1362,7 +1377,7 @@ export function createFilesClientCache(
     publish(undefined, "urgent");
   };
 
-  const hydrate = (record: { etag: string; text: string }): boolean => {
+  const hydrate = (record: { etag: string; text: string }, mode: "show" | "hold" = "show"): boolean => {
     const url = filesApiUrl();
     if (disposed || snapshot.loaded || snapshot.cached || representations.has(url) || !record.etag) return false;
     let parsed: unknown;
@@ -1374,15 +1389,34 @@ export function createFilesClientCache(
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
     if ("boardProtocol" in parsed && parsed.boardProtocol !== 2) return false;
     const data: FilesData = { ...parsedFilesData(parsed as FilesResponse, url), loaded: false, cached: true, scopeCertified: false };
+    const raw = rawSharingRows(parsed as RawFilesResponse, data);
+    fullCatalogText.set(raw, record.text);
+    if (mode === "hold") {
+      held = { url, data, etag: record.etag, raw };
+      return true;
+    }
     snapshot = data;
     serverPipelines = data.pipelines;
     serverTasks = data.tasks;
-    const raw = rawSharingRows(parsed as RawFilesResponse, data);
-    fullCatalogText.set(raw, record.text);
     rememberRepresentation(url, data, record.etag, raw);
     publish(undefined, "urgent");
     return true;
   };
+
+  const showHeld = (): boolean => {
+    const url = filesApiUrl();
+    const record = heldFor(url);
+    if (disposed || !record || snapshot.loaded || snapshot.cached || representations.has(url)) return false;
+    held = null;
+    snapshot = record.data;
+    serverPipelines = record.data.pipelines;
+    serverTasks = record.data.tasks;
+    rememberRepresentation(url, record.data, record.etag, record.raw);
+    publish(undefined, "urgent");
+    return true;
+  };
+
+  const dropHeld = () => { held = null; };
 
   const certifiedGlobal = () => {
     const representation = representations.get(filesApiUrl());
@@ -1455,18 +1489,25 @@ export function createFilesClientCache(
   };
 
   return { creationCards: () => cards, materializedCreationIds: () => materializedIds, reserveCreation, restoreCreations, reconcileCreations, dismissCreation, attachCreationLink, refreshCreationAuthority,
-    read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, revalidateWriteHealth, subscribe, applyPipeline, revertPipeline, applyTask, revertTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
+    read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, revalidateWriteHealth, subscribe, applyPipeline, revertPipeline, applyTask, revertTask, applySpawnedConversation, hydrate, showHeld, dropHeld, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
 
-/* The first catalog request waits for the bounded snapshot read, after the
-   document has server-confirmed access, so it can ask conditionally. */
+/* The cached-first board (#2071, D4). The browser's snapshot store is read the
+   moment this module loads, before React mounts and in parallel with the
+   access check; the first request waits for that local read (bounded), never
+   for the check, so it can ask conditionally. The record is only held until
+   the check names the scope it was saved under. */
 const RESTORE_WAIT_MS = 1_500;
 let snapshotStore: FilesSnapshotStore | null = bootSnapshotStore;
 let persistedEtag: string | null = null;
 let persistScheduled = false;
 let firstPersistDone = false;
+let savedSnapshot: { cache: FilesClientCache; record: FilesSnapshotRecord } | null = null;
+/* The browser's own store is always scoped; a test store is unless it asks. */
+let scopedTestStore = false;
+const scopedSnapshotStore = (store: FilesSnapshotStore | null) => store === bootSnapshotStore || scopedTestStore;
 
 function newFilesClientCache(): FilesClientCache {
   return createFilesClientCache(defaultFilesFetcher, {
@@ -1474,37 +1515,63 @@ function newFilesClientCache(): FilesClientCache {
     creationStore: () => snapshotStore,
     accessDenied: (owner) => {
       persistedEtag = null;
+      savedSnapshot = null;
       void snapshotStore?.clear(owner);
-      if (readBoardBootAuthority()) void recheckBoardBoot();
+      void recheckBoardBoot();
     },
   });
+}
+
+/** A saved catalog from the browser's own store waits for the server's access
+    answer: shown when the scope it was saved under is the confirmed one,
+    dropped when it is not, and held out of every display until then. */
+function settleSavedSnapshot(): void {
+  const saved = savedSnapshot;
+  if (!saved) return;
+  const authority = readBoardBootAuthority();
+  if (!authority && !boardBootRetired()) return;
+  savedSnapshot = null;
+  if (authority?.scope && saved.record.accessScope === authority.scope) {
+    /* The network may have certified the same rows first: nothing to rewrite. */
+    if (saved.cache.showHeld() || saved.cache.certifiedGlobal()?.etag === saved.record.etag) persistedEtag = saved.record.etag;
+  } else {
+    saved.cache.dropHeld();
+  }
 }
 
 function restoreFilesSnapshot(cache: FilesClientCache, store: FilesSnapshotStore | null): Promise<void> {
   if (!store) return Promise.resolve();
   const before = browserCreationAuthority();
-  const injectedStore = store !== bootSnapshotStore;
-  const scope = readBoardBootAuthority()?.scope;
+  const scoped = scopedSnapshotStore(store);
   const read = store.read().then((record) => {
     if (!record) return;
     if (record.creations) cache.restoreCreations(record.creations);
-    if (!injectedStore && (!scope || record.accessScope !== scope || readBoardBootAuthority()?.scope !== scope)) return;
-    const current = browserCreationAuthority();
-    if (injectedStore && record.creations && (!current || record.creations.owner !== current.owner || record.creations.scope !== current.signature || before?.signature !== current.signature)) return;
-    if (cache.hydrate(record)) persistedEtag = record.etag;
+    if (!scoped) {
+      const current = browserCreationAuthority();
+      if (record.creations && (!current || record.creations.owner !== current.owner || record.creations.scope !== current.signature || before?.signature !== current.signature)) return;
+      if (cache.hydrate(record)) persistedEtag = record.etag;
+      return;
+    }
+    if (!cache.hydrate(record, "hold")) return;
+    savedSnapshot = { cache, record };
+    settleSavedSnapshot();
   }, () => undefined);
   const bound = new Promise<void>((resolve) => setTimeout(resolve, RESTORE_WAIT_MS));
   return Promise.race([read, bound]);
 }
 
 let filesClientCache = newFilesClientCache();
-let snapshotRestore: Promise<void> | undefined;
+let snapshotRestore: Promise<void> | undefined = typeof window === "undefined" ? undefined : restoreFilesSnapshot(filesClientCache, snapshotStore);
 
 const creationAuthorityChanged = () => {
   filesClientCache.refreshCreationAuthority();
   void filesClientCache.reconcileCreations(true);
 };
-subscribeBoardBootAuthority(creationAuthorityChanged);
+subscribeBoardBootAuthority(() => {
+  settleSavedSnapshot();
+  creationAuthorityChanged();
+  if (filesClientCache.certifiedGlobal()) persistAfterFirstLoad();
+});
 subscribeTeamAuthority(creationAuthorityChanged);
 subscribeConfirmedWorkspaces(creationAuthorityChanged);
 
@@ -1566,8 +1633,8 @@ function persistFilesSnapshot(): void {
   const store = snapshotStore;
   const current = filesClientCache.certifiedGlobal();
   const accessScope = readBoardBootAuthority()?.scope ?? undefined;
-  const injectedStore = store !== bootSnapshotStore;
-  if ((!accessScope && !injectedStore) || !store || !current || current.etag === persistedEtag) return;
+  const scoped = scopedSnapshotStore(store);
+  if ((!accessScope && scoped) || !store || !current || current.etag === persistedEtag) return;
   let text: string;
   try {
     text = catalogText(current.raw);
@@ -1578,7 +1645,7 @@ function persistFilesSnapshot(): void {
   persistedEtag = current.etag;
   const owner = browserCreationAuthority()?.signature;
   void store.write({ version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: current.etag, text, accessScope },
-    () => (injectedStore || accessScope === readBoardBootAuthority()?.scope) && owner === browserCreationAuthority()?.signature).catch(() => { persistedEtag = null; });
+    () => (!scoped || accessScope === readBoardBootAuthority()?.scope) && owner === browserCreationAuthority()?.signature).catch(() => { persistedEtag = null; });
 }
 
 /** After the first certified load of a document, on idle time: once. Later
@@ -1588,6 +1655,9 @@ function persistAfterFirstLoad(): void {
   persistScheduled = true;
   const run = () => {
     persistScheduled = false;
+    /* The record is saved under the confirmed scope; without one the write
+       waits for the access answer instead of using up the first write. */
+    if (scopedSnapshotStore(snapshotStore) && !readBoardBootAuthority()?.scope) return;
     firstPersistDone = true;
     persistFilesSnapshot();
   };
@@ -1601,12 +1671,14 @@ if (typeof document !== "undefined") {
   });
 }
 
-export function resetFilesClientCacheForTests(store: FilesSnapshotStore | null = null): void {
+export function resetFilesClientCacheForTests(store: FilesSnapshotStore | null = null, scoped = false): void {
   filesClientCache.dispose();
   snapshotStore = store;
+  scopedTestStore = scoped;
   persistedEtag = null;
   persistScheduled = false;
   firstPersistDone = false;
+  savedSnapshot = null;
   filesClientCache = newFilesClientCache();
   snapshotRestore = restoreFilesSnapshot(filesClientCache, store);
 }

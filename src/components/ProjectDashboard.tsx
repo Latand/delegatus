@@ -1,7 +1,7 @@
 "use client";
 
 import { useProjectFirstScreen } from "@/hooks/useProjectFirstScreen";
-import { readBoardBootAuthority } from "@/lib/client/boardBootAuthority";
+import { useBoardBootAuthorityValue } from "@/lib/client/boardBootAuthority";
 import { firstScreenTitle } from "@/lib/client/projectFirstScreen";
 
 import { usePipelineCreationCards } from "@/hooks/useFiles";
@@ -436,10 +436,11 @@ function ProjectDashboardView({
      one this browser remembered, then a readable key. An opaque `repo-`/`dir-`
      key with neither is a placeholder bar until the catalog is certified, and
      "Unnamed project" after. Every other surface takes the string. */
+  const bootAuthority = useBoardBootAuthorityValue();
   const knownProjectName = projectTitle(
     project,
     providedProjectName ?? projectCatalogEntries.find((entry) => entry.project === project)?.displayName,
-    readBoardBootAuthority()?.team ? undefined : cachedProjectName(project),
+    bootAuthority && !bootAuthority.team ? cachedProjectName(project) : undefined,
   );
   /* The surfaces that take the name as a string (the focus view, sheets, the
      seat) say "Unnamed project" only once the catalog is certified; before
@@ -478,8 +479,11 @@ function ProjectDashboardView({
      until the scan and the persisted board arrangement have both loaded, so the
      first painted board already reflects closes, worker-stack collapse and caps
      instead of flashing the raw scan snapshot and culling it. */
-  const bootAuthority = readBoardBootAuthority();
-  const currentBoard = loaded && !cached && board.loaded && board.sync !== "unavailable";
+  /* With a confirmed scope the interactive board waits for fresh files and a
+     finished layout read, as before, and a failed layout read (`unavailable`)
+     still finishes it: the cards and the seat render and the board reports
+     the state. Saved data, the project screen below, fills in until then. */
+  const currentBoard = loaded && !cached && board.loaded;
   const boardReady = bootAuthority?.scope ? currentBoard : boardFirstPaintReady(loaded || cached, board.loaded || board.cached);
   const seatStatus = isMobile ? cachedSeatRead : desktopSeatRead;
   const liveSeat = seatStatus.failed ? null : seatStatus.status;
@@ -1514,7 +1518,8 @@ function ProjectDashboardView({
      oscillation. Runs only after the shared board has loaded, so it replays onto
      the server arrangement. */
   useEffect(() => {
-    if (!board.loaded || board.sync === "unavailable") return;
+    /* A saved catalog is display only: the layout is never rewritten from it. */
+    if (!loaded || !board.loaded || board.sync === "unavailable") return;
     /* A conversation request holds convergence until its file is scanned. A
        lane request (#2129) names a card, never a scanned path, and nothing
        clears it once revealed, so it must not hold anything. */
@@ -1531,7 +1536,7 @@ function ProjectDashboardView({
     );
     /* eslint-disable-next-line react-hooks/exhaustive-deps -- board.mutate is
        delegated to a ref-stable store; manual is read through that ref. */
-  }, [rootGroups, files, projectCatalog, catalogComplete, project, board.loaded, board.sync, focusRequest]);
+  }, [rootGroups, files, projectCatalog, catalogComplete, project, loaded, board.loaded, board.sync, focusRequest]);
 
   /* Durable close of verdict-complete reviewers (#289): a reviewer the owner
      once manually placed keeps a pin that outranks folding; once its terminal
@@ -1543,7 +1548,7 @@ function ProjectDashboardView({
      poll through the store's fence. */
   const autoClosedReviewersRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!board.loaded || board.sync === "unavailable") return;
+    if (!loaded || !board.loaded || board.sync === "unavailable") return;
     const closes = reviewerCloseMutations({
       files,
       flows: deckFlows,
@@ -1558,7 +1563,7 @@ function ProjectDashboardView({
     board.mutate(closes);
     /* eslint-disable-next-line react-hooks/exhaustive-deps -- board.mutate is
        delegated to a ref-stable store; prefs are read through the snapshot ref. */
-  }, [files, deckFlows, project, board.loaded, board.sync, board.explicitManual, board.revision]);
+  }, [files, deckFlows, project, loaded, board.loaded, board.sync, board.explicitManual, board.revision]);
 
   /* Any open lands on the scheme: a card of another project pre-adds its node
      and switches the project; a conversation of this project joins the managed

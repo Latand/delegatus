@@ -8823,7 +8823,8 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
     checks.push(label);
     fs.writeFileSync(reportPath, JSON.stringify(checks, null, 2) + "\n");
   };
-  for (const width of [1440, 390]) for (const locale of ["en", "uk"]) for (const colorScheme of ["light", "dark"] as const) {
+  /* 900 px is the desktop board in tab mode: only the saved active column is drawn. */
+  for (const width of [1440, 900, 390]) for (const locale of ["en", "uk"]) for (const colorScheme of ["light", "dark"] as const) {
     const mobile = width < 500;
     const live = mobile ? phoneBoard : desktopBoard;
     console.log(`board startup safety: ${width} ${locale} ${colorScheme}`);
@@ -8874,8 +8875,24 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
           .map(node => {
             const { left, right, top, bottom, width, height } = node.getBoundingClientRect();
             const column = node.closest(".column, [data-board-first-screen], [data-skeleton-seat]")?.getBoundingClientRect();
-            return { card: node.hasAttribute("data-board-first-card"), left, right, top, bottom, width, height,
-              viewport: innerWidth, viewportHeight: innerHeight, columnLeft: column?.left, columnRight: column?.right };
+            const seat = document.querySelector("[data-skeleton-seat]")?.getBoundingClientRect();
+            const card = node.hasAttribute("data-board-first-card");
+            /* Text ranges, not the element boxes: a clamped title can be cut inside its box. */
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const ink = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0);
+            const inkLeft = Math.min(...ink.map(rect => rect.left));
+            const inkRight = Math.max(...ink.map(rect => rect.right));
+            const inkTop = Math.min(...ink.map(rect => rect.top));
+            const inkBottom = Math.max(...ink.map(rect => rect.bottom));
+            return { card, left, right, top, bottom, width, height,
+              viewport: innerWidth, viewportHeight: innerHeight, columnLeft: column?.left, columnRight: column?.right,
+              inkLeft, inkRight, inkTop, inkBottom, text: node.textContent?.trim().slice(0, 48),
+              seatLeft: seat?.left, seatRight: seat?.right, seatTop: seat?.top, seatBottom: seat?.bottom,
+              /* The seat's own name sits inside the seat; only a card may not touch it. */
+              overlapsSeat: card && seat !== undefined && inkLeft < seat.right && inkRight > seat.left && inkTop < seat.bottom && inkBottom > seat.top,
+              mode: document.querySelector("[data-board-wrap]")?.getAttribute("data-board-wrap") ?? null,
+              active: document.querySelector(".column.active")?.getAttribute("data-status") ?? null };
           }));
         const tag = `${width}-${locale}-${colorScheme}`;
         fs.writeFileSync(path.join(OUT_DIR, `first-screen-${tag}.json`), JSON.stringify(bounds, null, 2) + "\n");
@@ -8883,10 +8900,15 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
         // Scroll mode deliberately places offscreen columns to the right.
         // Text should fit its own column, and a complete card should be visible.
         if (bounds.some(rect => rect.width < 1 || rect.height < 1
-          || (rect.columnLeft !== undefined && rect.left < rect.columnLeft - 1)
-          || (rect.columnRight !== undefined && rect.right > rect.columnRight + 1))
+          || (rect.columnLeft !== undefined && (rect.left < rect.columnLeft - 1 || rect.inkLeft < rect.columnLeft - 1))
+          || (rect.columnRight !== undefined && (rect.right > rect.columnRight + 1 || rect.inkRight > rect.columnRight + 1))
+          || rect.overlapsSeat)
           || !bounds.some(rect => rect.card && rect.left >= 0 && rect.right <= rect.viewport
             && rect.top >= 0 && rect.bottom <= rect.viewportHeight)) throw new Error(`cached text did not fit ${tag}`);
+        /* Tab mode draws one saved column: the one the person had open, with its titles. */
+        if (width === 900 && (bounds.some(rect => rect.mode !== "tabs") || !bounds.some(rect => rect.card && rect.active))) {
+          throw new Error(`the saved active column was not drawn in tab mode at ${tag}`);
+        }
       } finally {
         releaseData();
       }
@@ -8911,8 +8933,10 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
         const confirmed = page.waitForResponse(bootAccess);
         try {
           await page.reload({ waitUntil: "domcontentloaded" });
-          await page.waitForSelector("[data-boot-shell]", { timeout: 10_000 });
-          if (await page.locator(preview).count()) throw new Error("cache displayed before identity");
+          /* The app's own reads start at once and fail here (aborted); nothing saved is drawn without an identity. */
+          await page.waitForSelector("[data-kanban-skeleton], [data-catalog-error=true]", { timeout: 10_000 });
+          await page.waitForTimeout(500);
+          if (await page.locator(preview + ", [data-board-first-seat]").count()) throw new Error("cache displayed before identity");
         } finally { release(); }
         await confirmed;
         await page.waitForTimeout(700);
@@ -9051,13 +9075,43 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
   } finally { await ownerControl.close(); await member.close(); await context.close(); }
 }
 
+/** Claim the fixture server for a team, add one member with a grant on the project, and return that member's cookies. */
+async function joinFixtureMember(browser: Browser, base: string, project: string): Promise<Awaited<ReturnType<import("playwright-core").BrowserContext["cookies"]>>> {
+  const owner = await browser.newContext();
+  const member = await browser.newContext();
+  try {
+    const headers = { origin: base };
+    const claimed = await owner.request.post(base + "/api/team/claim", { headers, data: { name: "Fixture owner" } });
+    if (!claimed.ok()) throw new Error(`synthetic team claim failed with ${claimed.status()}`);
+    const invite = await owner.request.post(base + "/api/team/invites", { headers, data: { name: "Fixture member" } });
+    if (!invite.ok()) throw new Error(`fixture invite failed with ${invite.status()}`);
+    const code = new URL((await invite.json() as { url: string }).url).pathname.split("/").pop();
+    const joined = await member.request.post(base + "/api/team/join/" + code, { headers, data: { name: "Fixture member" } });
+    if (!joined.ok()) throw new Error(`fixture join failed with ${joined.status()}`);
+    const { me } = await joined.json() as { me: { id: string } };
+    const workspace = "w_" + "d".repeat(32);
+    const created = await owner.request.post(base + "/api/team/workspaces", { headers, data: { id: workspace, name: "Fixture room", projects: [project] } });
+    const granted = await owner.request.put(`${base}/api/team/workspaces/${workspace}/members`, { headers, timeout: 15_000, data: { memberId: me.id, role: "member" } });
+    if (!created.ok() || !granted.ok()) throw new Error("fixture workspace grant failed");
+    return await member.cookies();
+  } finally {
+    await owner.close();
+    await member.close();
+  }
+}
+
 /** Timings from the real board in a production build with its normal APIs. */
 async function boardStartupMain(): Promise<void> {
   const { tasks, reviewers } = seedHome();
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  type Mark = { card: number | null; current: number | null; input: number | null; bytes: number | null; files: number | null; board: number | null; cache: string; clock?: number; cutoff?: number; completedBytes?: number | null; wire?: Record<string, { status: number; encoding: string | null; transferred: number }> };
+  type Mark = { card: number | null; current: number | null; input: number | null; bytes: number | null; files: number | null; board: number | null; cache: string; clock?: number; cutoff?: number; completedBytes?: number | null; wire?: Record<string, { status: number; encoding: string | null; transferred: number }>; cardsAfter?: number; shellAfter?: boolean };
   const rows: (Mark & { profile: string; scenario: string; repetition: number })[] = [];
+  /* BOARD_STARTUP_TEAM=1 measures a signed-in member of a team on a team-owned server: the access
+     check is held or failed while a live tab returns from sleep. The team claim cannot be undone,
+     so this is its own run. */
+  const team = process.env.BOARD_STARTUP_TEAM === "1";
+  let memberCookies: Awaited<ReturnType<import("playwright-core").BrowserContext["cookies"]>> = [];
   let server: ChildProcess | null = null;
   let chrome: Awaited<ReturnType<typeof chromium.launchServer>> | null = null;
   let browser: Browser | null = null;
@@ -9065,8 +9119,23 @@ async function boardStartupMain(): Promise<void> {
   const repeats = Number(process.env.BOARD_STARTUP_REPEATS ?? 20);
   const workers = Number(process.env.BOARD_STARTUP_WORKERS ?? 8);
   let layoutBytes = 0;
+  /* Nearest-rank percentiles per profile and scenario, from the rows written beside them. */
+  const summary = () => {
+    const rank = (values: number[], fraction: number) => values.length
+      ? [...values].sort((a, b) => a - b)[Math.ceil(values.length * fraction) - 1]! : null;
+    const groups = new Map<string, typeof rows>();
+    for (const row of rows) groups.set(`${row.profile} / ${row.scenario}`, [...groups.get(`${row.profile} / ${row.scenario}`) ?? [], row]);
+    return Object.fromEntries([...groups].map(([name, group]) => [name, {
+      n: group.length,
+      ...Object.fromEntries((["card", "current", "input", "bytes"] as const).map(key => {
+        const values = group.map(row => row[key]).filter((value): value is number => typeof value === "number");
+        return [key, { n: values.length, p50: rank(values, 0.5), p95: rank(values, 0.95) }];
+      })),
+      ...(group.some(row => row.cardsAfter !== undefined) ? { cardsAfter: { min: Math.min(...group.map(row => row.cardsAfter ?? 0)), shells: group.filter(row => row.shellAfter).length } } : {}),
+    }]));
+  };
   const save = () => fs.writeFileSync(path.join(OUT_DIR, "board-startup.json"), JSON.stringify({
-    commit: captureCommit(), layoutBytes, repeats, workers, profile: process.env.BOARD_STARTUP_PROFILE ?? "both", bytes: "CDP transfer to card, including encoded data from pending requests when reported", rows,
+    commit: captureCommit(), layoutBytes, repeats, workers, team, profile: process.env.BOARD_STARTUP_PROFILE ?? "both", bytes: "CDP transfer to card, including encoded data from pending requests when reported", summary: summary(), rows,
   }, null, 2) + "\n");
   try {
     server = startServer(port);
@@ -9105,11 +9174,13 @@ async function boardStartupMain(): Promise<void> {
     console.log(JSON.stringify({ browserPid: chrome.process().pid, viewerPid: server.pid, layoutBytes }));
     browser = await chromium.connect(chrome.wsEndpoint());
     const url = `${baseUrl}/#p=${encodeURIComponent(project)}`;
+    if (team) memberCookies = await joinFixtureMember(browser, baseUrl, project);
     const run = async (profile: "desktop" | "4g", repetition: number) => {
       const phone = profile === "4g";
       const context = await browser!.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 900 },
         isMobile: phone, hasTouch: phone, locale: "en", reducedMotion: "reduce" });
       try {
+        if (team) await context.addCookies(memberCookies);
         await context.addInitScript(({ project, seatStorage, heightVersion }) => {
           localStorage.setItem("llv_lang", "en");
           localStorage.setItem("llvSound", "0");
@@ -9222,14 +9293,33 @@ async function boardStartupMain(): Promise<void> {
         if (process.env.BOARD_STARTUP_NAV_ONLY === "1") return;
         const visibility = (value: boolean) => page.evaluate(value =>
           (window as unknown as { boardStartupVisibility: (hidden: boolean) => void }).boardStartupVisibility(value), value);
-        for (const seconds of [15, 120]) {
+        const bootAccess = `${baseUrl}/api/team?view=board-access`;
+        const cardTitles = phone ? "[data-phone-card-title]" : "[data-kanban-card] .title";
+        for (const seconds of [15, 120]) for (const check of team ? ["held", "failed"] as const : ["live"] as const) {
+          /* A team member's returning tab asks the server again who it is; the board stays while that is out or fails. */
+          const release = Promise.withResolvers<void>();
+          const answer = check === "live" ? null : async (route: import("playwright-core").Route) => {
+            if (check === "failed") { await route.abort(); return; }
+            await release.promise;
+            await route.continue().catch(() => {});
+          };
+          if (answer) await page.route(bootAccess, answer);
           await visibility(true);
           await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
           await Bun.sleep(seconds * 1000);
           wire.clear();
           await cdp.send("Page.setWebLifecycleState", { state: "active" });
           await visibility(false);
-          await record(`sleep-${seconds}`);
+          await record(team ? `team-sleep-${seconds}-${check}` : `sleep-${seconds}`);
+          if (answer) {
+            release.resolve();
+            await page.waitForTimeout(600);
+            const last = rows.at(-1)!;
+            last.cardsAfter = await page.locator(cardTitles).evaluateAll(nodes => nodes.filter(node => node.getClientRects().length > 0 && (node as HTMLElement).innerText.trim()).length);
+            last.shellAfter = (await page.locator("[data-boot-shell]").count()) > 0;
+            save();
+            await page.unroute(bootAccess, answer);
+          }
         }
       } finally {
         await context.close();

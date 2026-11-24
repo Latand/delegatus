@@ -1,6 +1,6 @@
 "use client";
 
-import { boardBootRetired, boardBootScopeFor, readBoardBootAuthority, recheckBoardBoot } from "@/lib/client/boardBootAuthority";
+import { boardAccessChanged, boardBootRetired, boardBootScopeFor, readBoardBootAuthority, recheckBoardBoot } from "@/lib/client/boardBootAuthority";
 
 import { useEffect, useRef, useState } from "react";
 
@@ -214,9 +214,10 @@ function readPersistedBoards(): Array<[string, BoardProjectStateV1]> {
   try {
     const raw = boardStorage()?.getItem(PERSISTED_BOARDS_KEY);
     const parsed = raw ? JSON.parse(raw) as unknown : null;
+    /* Saved layouts are read only under the scope the server confirmed. */
     const authority = readBoardBootAuthority();
     const scoped = parsed as { scope?: string; boards?: unknown } | null;
-    const boards = authority ? authority.scope && scoped?.scope === authority.scope ? scoped.boards : null : parsed;
+    const boards = authority?.scope && scoped?.scope === authority.scope ? scoped.boards : null;
     if (!Array.isArray(boards)) return [];
     return boards.filter((entry): entry is [string, BoardProjectStateV1] => Array.isArray(entry)
       && typeof entry[0] === "string"
@@ -230,20 +231,19 @@ function readPersistedBoards(): Array<[string, BoardProjectStateV1]> {
 }
 
 export function persistedBoard(project: string): BoardProjectStateV1 | undefined {
-  const authority = readBoardBootAuthority();
-  if (boardBootRetired() || (authority && !boardBootScopeFor(project))) return;
+  if (boardBootRetired() || !boardBootScopeFor(project)) return;
   return readPersistedBoards().find(([key]) => key === project)?.[1];
 }
 
 function persistBoard(project: string, board: BoardProjectStateV1): void {
   const authority = readBoardBootAuthority();
-  if (boardBootRetired() || (authority && !boardBootScopeFor(project))) return;
+  if (boardBootRetired() || !authority?.scope || !boardBootScopeFor(project)) return;
   if (persistedRevisions.get(project) === board.revision) return;
   const store = boardStorage();
   if (!store) return;
   persistedRevisions.set(project, board.revision);
   const entries: Array<[string, BoardProjectStateV1]> = [[project, board] as [string, BoardProjectStateV1], ...readPersistedBoards().filter(([key]) => key !== project)].slice(0, PERSISTED_BOARDS_MAX);
-  const encode = () => JSON.stringify(authority ? { scope: authority.scope, boards: entries } : entries);
+  const encode = () => JSON.stringify({ scope: authority.scope, boards: entries });
   let text = encode();
   while (text.length > PERSISTED_BOARDS_MAX_BYTES && entries.length > 1) {
     entries.pop();
@@ -1132,10 +1132,8 @@ function acquireBoardStore(project: string): BoardStore {
   const store = createBoardStore({ project, fetcher: async (input, init) => {
     const started = readBoardBootAuthority();
     const response = await fetch(input, init);
-    if (started && (response.status === 401 || response.status === 403) && boardBootScopeFor(project)) {
-      void recheckBoardBoot(true);
-    }
-    if (started !== readBoardBootAuthority()) throw new Error("board access changed");
+    if (response.status === 401 || response.status === 403) void recheckBoardBoot();
+    if (boardAccessChanged(started)) throw new Error("board access changed");
     return response;
   }, storage });
   sharedStores.set(project, { store, refs: 1 });

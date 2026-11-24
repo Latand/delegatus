@@ -26,6 +26,9 @@ afterAll(() => {
 });
 
 const { createBoardStore, EMPTY_BOARD_PREFS, PERSISTED_BOARDS_KEY, persistedBoard, resetPendingOpensForTest } = await import("./useBoardState");
+const { setBoardBootAuthorityForTests } = await import("@/lib/client/boardBootAuthority");
+
+const SCOPE = "b".repeat(64);
 
 const settle = async () => {
   for (let i = 0; i < 16; i += 1) await Promise.resolve();
@@ -51,6 +54,7 @@ function newDocument(): void {
 beforeEach(() => {
   resetPendingOpensForTest();
   dom.localStorage.clear();
+  setBoardBootAuthorityForTests({ scope: SCOPE, projects: null, team: false });
 });
 
 test("a confirmed board is kept for the next document, which paints it as cached until its GET confirms", async () => {
@@ -97,7 +101,29 @@ test("only the six most recently confirmed projects are kept", async () => {
     await settle();
     store.dispose();
   }
-  const kept = (JSON.parse(dom.localStorage.getItem(PERSISTED_BOARDS_KEY)!) as Array<[string, unknown]>).map(([project]) => project);
+  const saved = JSON.parse(dom.localStorage.getItem(PERSISTED_BOARDS_KEY)!) as { scope: string; boards: Array<[string, unknown]> };
+  expect(saved.scope).toBe(SCOPE);
+  const kept = saved.boards.map(([project]) => project);
   expect(kept).toEqual(["project-7", "project-6", "project-5", "project-4", "project-3", "project-2"]);
   expect(persistedBoard("project-0")).toBeUndefined();
+});
+
+
+test("a saved layout is neither read nor written before the server names the scope, and never under another one", async () => {
+  const first = createBoardStore({ project: "atlas", fetcher: answering(boardOf(3, ["/sessions/alpha.jsonl"])), storage: null, scheduler: inert });
+  await settle();
+  first.dispose();
+  expect(persistedBoard("atlas")?.revision).toBe(3);
+
+  /* Another person on this browser, and a document that has no answer yet. */
+  setBoardBootAuthorityForTests({ scope: "c".repeat(64), projects: null, team: false });
+  expect(persistedBoard("atlas")).toBeUndefined();
+  setBoardBootAuthorityForTests(null);
+  expect(persistedBoard("atlas")).toBeUndefined();
+  const before = dom.localStorage.getItem(PERSISTED_BOARDS_KEY);
+  newDocument();
+  const late = createBoardStore({ project: "beta", fetcher: answering(boardOf(1)), storage: null, scheduler: inert });
+  await settle();
+  late.dispose();
+  expect(dom.localStorage.getItem(PERSISTED_BOARDS_KEY)).toBe(before);
 });

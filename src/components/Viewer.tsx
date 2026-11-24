@@ -18,7 +18,7 @@ import { WorkLinksProvider } from "@/components/workLinks/workLinksContext";
 import { useFiles } from "@/hooks/useFiles";
 import { ServerReachProvider, useDerivedServerReach } from "@/hooks/serverReach";
 import { publishConversationAvailability } from "@/lib/mcp/availability";
-import { readBoardBootAuthority, useBoardBootAuthority } from "@/lib/client/boardBootAuthority";
+import { useBoardBootAuthority, useBoardBootAuthorityValue } from "@/lib/client/boardBootAuthority";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useViewPresence } from "@/hooks/useViewPresence";
@@ -253,16 +253,18 @@ function writePanelPref(key: string, value: string): void {
 }
 
 export function Viewer() {
-  const { authority, suspended } = useBoardBootAuthority();
-  if (!useMounted() || !authority) return <BootShell />;
-  return <>
-    {suspended ? <BootShell /> : null}
-    <div className={suspended ? "hidden" : "contents"}><ViewerApp /></div>
-  </>;
+  /* The app's own reads authorize themselves and start at once. The access
+     check only decides which saved data this document may show, and ends the
+     document when the server refuses or changes the identity. */
+  const { ended } = useBoardBootAuthority();
+  const mounted = useMounted();
+  return mounted && !ended ? <ViewerApp /> : <BootShell />;
 }
 
 function ViewerApp() {
   const { t, locale } = useLocale();
+  /* Saved project names are shown only after the server names this identity. */
+  const bootAuthority = useBoardBootAuthorityValue();
   /* There is no operator credential to claim: same-origin IS the operator (see
      `operatorAuthority`), and no key, secret, cookie or paste exists anywhere in
      this app. This only erases what earlier rounds left on disk — a stored bearer,
@@ -1912,7 +1914,7 @@ function ViewerApp() {
       {!isMobile && orchestratorOpen && !kanbanFace && project !== OVERVIEW && !relayIdOfChatsProject(project) ? (
         <OrchestratorDock
           project={project}
-          projectName={projectTitle(project, projectDisplayNames[project], readBoardBootAuthority()?.team ? undefined : cachedProjectName(project)) ?? (loaded ? t("dash.projectUnnamed") : "…")}
+          projectName={projectTitle(project, projectDisplayNames[project], bootAuthority && !bootAuthority.team ? cachedProjectName(project) : undefined) ?? (loaded ? t("dash.projectUnnamed") : "…")}
           projectCwd={projectCwds[project]}
           files={files}
           onClose={toggleOrchestrator}

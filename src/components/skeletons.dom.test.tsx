@@ -49,7 +49,7 @@ afterAll(async () => {
   setLocale("en");
 });
 
-const { AccountRowsSkeleton, BoardRowsSkeleton, FeedSkeleton, KanbanSkeleton, PhoneKanbanSkeleton } = await import("./skeletons");
+const { AccountRowsSkeleton, BoardRowsSkeleton, FeedSkeleton, KanbanColumnsSkeleton, KanbanSkeleton, PhoneKanbanSkeleton } = await import("./skeletons");
 const { SEAT_HEIGHT_VERSION, SEAT_STORAGE_KEY } = await import("./kanban/kanbanSeatStore");
 
 let roots: Root[] = [];
@@ -141,6 +141,35 @@ test("the desktop board skeleton is the kanban frame with the four real column h
   expect(host.querySelector(".seat")).not.toBeNull();
   flushSync(() => setLocale("uk"));
   expect(heads()).toEqual([translate("uk", "kanban.status.inbox"), translate("uk", "kanban.status.assigned"), translate("uk", "kanban.status.blocked"), translate("uk", "kanban.status.done")]);
+});
+
+test("the desktop board in tab mode draws the saved active column with its titles, and the strip is inert, in en and uk", () => {
+  /* About 900 px: one column at a time. The one this person had open is drawn. */
+  const layout = {
+    active: "blocked" as const, revision: 4, savedAt: 1,
+    columns: [
+      { status: "inbox" as const, titles: ["Triage the intake queue"] },
+      { status: "assigned" as const, titles: ["Wire the export job"] },
+      { status: "blocked" as const, titles: ["Waiting on the vendor key", "Review the retry budget"] },
+      { status: "done" as const, titles: ["Ship the first slice"] },
+    ],
+  };
+  const host = render(<KanbanColumnsSkeleton mode="tabs" layout={layout} />);
+  const active = host.querySelectorAll(".column.active");
+  expect(active.length).toBe(1);
+  expect(active[0]!.getAttribute("data-status")).toBe("blocked");
+  expect([...active[0]!.querySelectorAll("[data-board-first-card]")].map((node) => node.textContent))
+    .toEqual(["Waiting on the vendor key", "Review the retry budget"]);
+  const strip = () => [...host.querySelectorAll(".tabs-nav button")] as unknown as HTMLButtonElement[];
+  expect(strip().map((button) => button.disabled)).toEqual([true, true, true, true]);
+  expect(strip().map((button) => button.getAttribute("aria-selected"))).toEqual(["false", "false", "true", "false"]);
+  expect(strip()[2]!.textContent).toBe(en["kanban.status.blocked"]);
+  flushSync(() => setLocale("uk"));
+  expect(strip()[2]!.textContent).toBe(translate("uk", "kanban.status.blocked"));
+  expect(host.querySelector(".column.active .col-head h2")!.textContent).toBe(translate("uk", "kanban.status.blocked"));
+  /* A saved layout with no open column opens on Assigned, as the board does. */
+  const fresh = render(<KanbanColumnsSkeleton mode="tabs" layout={{ ...layout, active: undefined }} />);
+  expect(fresh.querySelector(".column.active")!.getAttribute("data-status")).toBe("assigned");
 });
 
 test("the desktop board skeleton sizes and folds the seat as this browser keeps it", () => {

@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { boardBootScopeFor, bootSnapshotStore } from "@/lib/client/boardBootAuthority";
+import { boardBootScopeFor, bootSnapshotStore, useBoardBootAuthorityValue } from "@/lib/client/boardBootAuthority";
 import { FIRST_SCREEN_VERSION, type FirstScreenProjection, type ProjectFirstScreen } from "@/lib/client/projectFirstScreen";
 
 type ScreenParts = Pick<ProjectFirstScreen, "desktop" | "phone" | "seat">;
 
 export function useProjectFirstScreen(project: string, mobile: boolean, revision: number, current: boolean, seatName: string | null | undefined) {
+  /* Nothing saved is read until the server names this identity; the answer
+     arrives after the board's own reads have started. */
+  useBoardBootAuthorityValue();
   const scope = boardBootScopeFor(project);
   const [stored, setStored] = useState<ProjectFirstScreen | null>(null);
   const lastWrite = useRef("");

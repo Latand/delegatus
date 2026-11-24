@@ -4,17 +4,27 @@ import { useEffect, useSyncExternalStore } from "react";
 import { readTeamAuthority, refreshTeamView, subscribeTeamAuthority } from "@/components/team/teamClient";
 import { indexedDbFilesSnapshotStore } from "./filesSnapshotStore";
 
+/*
+ * What this browser may display from its own disk. The server reads of the
+ * Viewer (files, layout, seat) authorize themselves and never wait for this
+ * check. Saved data waits for it: the saved catalog, the saved project screen
+ * and the saved layout are shown only under the scope the server names here.
+ * A failed check shows nothing saved and retries with a short backoff; a
+ * changed or refused identity ends this document.
+ */
 type BoardBootAuthority = { scope: string | null; projects: readonly string[] | null; team: boolean };
-type BoardBootState = { authority: BoardBootAuthority | null; suspended: boolean };
+type BoardBootState = { authority: BoardBootAuthority | null; ended: boolean };
 
 export const bootSnapshotStore = typeof window === "undefined" ? null : indexedDbFilesSnapshotStore();
 const SIGN_OUT = "llv-board-sign-out";
 const SIGN_IN = "llv-board-sign-in";
 const CHECK_MS = 15_000;
-const INITIAL_STATE: BoardBootState = { authority: null, suspended: false };
+const RETRY_MS = [1_000, 2_000, 4_000, 8_000] as const;
+const INITIAL_STATE: BoardBootState = { authority: null, ended: false };
 let state = INITIAL_STATE;
-let ended = false;
 let loading: { cancel: AbortController; done: Promise<void> } | null = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryAttempt = 0;
 const listeners = new Set<() => void>();
 
 export const subscribeBoardBootAuthority = (listener: () => void) => {
@@ -24,22 +34,34 @@ export const subscribeBoardBootAuthority = (listener: () => void) => {
 
 const readState = () => state;
 export const readBoardBootAuthority = () => state.authority;
-export const boardBootRetired = () => ended;
+export const boardBootRetired = () => state.ended;
 export function boardBootScopeFor(project: string): string | null {
   const { authority } = state;
   return authority && (authority.projects === null || authority.projects.includes(project)) ? authority.scope : null;
 }
 
-function publish(authority: BoardBootAuthority | null, suspended = false) {
-  if (state.authority === authority && state.suspended === suspended) return;
-  state = { authority, suspended };
+/** True when the identity this read started under has since been replaced or
+    ended. A read that started before the first answer has no identity to lose. */
+export function boardAccessChanged(started: BoardBootAuthority | null): boolean {
+  return state.ended || (started !== null && started !== state.authority);
+}
+
+function publish(next: BoardBootState) {
+  if (state.authority === next.authority && state.ended === next.ended) return;
+  state = next;
   for (const listener of listeners) listener();
 }
 
+function stopRetry(): void {
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+}
+
 function retire(): void {
-  ended = true;
+  stopRetry();
   loading?.cancel.abort();
-  publish(null);
+  loading = null;
+  publish({ authority: null, ended: true });
 }
 
 async function clearBootData(): Promise<void> {
@@ -74,13 +96,31 @@ function parseAuthority(value: unknown): BoardBootAuthority | null {
   return { scope, projects, team };
 }
 
-export function recheckBoardBoot(suspend = false): Promise<void> {
-  if (ended) return Promise.resolve();
-  const previous = state.authority;
-  if (suspend && previous) {
-    publish(previous, true);
-    // A request sent before an account switch or a hidden interval cannot
-    // confirm the newly visible document.
+const sameAuthority = (left: BoardBootAuthority, right: BoardBootAuthority) =>
+  left.scope === right.scope && left.team === right.team && JSON.stringify(left.projects) === JSON.stringify(right.projects);
+
+/** Until the first answer, a failed check asks again after 1, 2, 4 and then
+    every 8 seconds. Once an identity is confirmed the periodic check owns it. */
+function retryLater(): void {
+  if (retryTimer || state.ended || state.authority) return;
+  const delay = RETRY_MS[Math.min(retryAttempt, RETRY_MS.length - 1)]!;
+  retryAttempt += 1;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (!document.hidden) void recheckBoardBoot();
+  }, delay);
+}
+
+/**
+ * Ask the server who this document is. `fresh` drops a request that started
+ * before a page restore, a hidden interval or an account switch, because its
+ * answer cannot confirm the document now visible. A failed check changes
+ * nothing that is on screen: only a refusal or a different identity ends the
+ * document.
+ */
+export function recheckBoardBoot(fresh = false): Promise<void> {
+  if (state.ended) return Promise.resolve();
+  if (fresh) {
     loading?.cancel.abort();
     loading = null;
   }
@@ -98,37 +138,46 @@ export function recheckBoardBoot(suspend = false): Promise<void> {
         void refreshTeamView();
         return;
       }
-      if (!response.ok) return;
+      if (!response.ok) { retryLater(); return; }
       const next = parseAuthority(await response.json());
-      if (!next || cancel.signal.aborted) return;
-      if (previous && (previous.scope !== next.scope || previous.team !== next.team
-        || JSON.stringify(previous.projects) !== JSON.stringify(next.projects))) {
+      if (cancel.signal.aborted) return;
+      if (!next) { retryLater(); return; }
+      const previous = state.authority;
+      if (previous && !sameAuthority(previous, next)) {
         // The Viewer also has document-scoped files, layout and seat stores.
         // A new document starts all three under the replacement authority.
         retire();
         window.location.reload();
         return;
       }
-      publish(previous ?? next);
-    } catch { /* retry on visibility or the next check */ }
+      stopRetry();
+      retryAttempt = 0;
+      publish({ authority: previous ?? next, ended: false });
+    } catch {
+      if (!cancel.signal.aborted) retryLater();
+    }
   })().finally(() => { if (loading?.cancel === cancel) loading = null; });
   loading = { cancel, done };
   return done;
 }
 
+/** The identity this document may display saved data for. Subscription only. */
+export function useBoardBootAuthorityValue(): BoardBootAuthority | null {
+  return useSyncExternalStore(subscribeBoardBootAuthority, readBoardBootAuthority, () => null);
+}
+
+/** Runs the check for the document and reports whether it has ended. */
 export function useBoardBootAuthority(): BoardBootState {
   useEffect(() => {
     const check = () => {
-      if (!document.hidden && (!state.authority || state.authority.team || state.suspended)) void recheckBoardBoot();
-    };
-    const hideTeamBoard = () => {
-      if (!state.authority?.team) return;
-      loading?.cancel.abort();
-      loading = null;
-      publish(state.authority, true);
+      if (document.hidden || state.ended) return;
+      if (!state.authority || state.authority.team) void recheckBoardBoot();
     };
     const onVisibility = () => {
-      if (document.hidden) hideTeamBoard();
+      if (document.hidden || state.ended) return;
+      // A request sent before the tab was hidden cannot vouch for the account
+      // now in this browser; the board stays on screen while the answer comes.
+      if (state.authority?.team) void recheckBoardBoot(true);
       else check();
     };
     const onPageShow = (event: PageTransitionEvent) => {
@@ -136,7 +185,7 @@ export function useBoardBootAuthority(): BoardBootState {
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key === SIGN_IN) {
-        if (ended) window.location.reload();
+        if (state.ended) window.location.reload();
         else void recheckBoardBoot(true);
       }
       if (event.key === SIGN_OUT) {
@@ -145,24 +194,39 @@ export function useBoardBootAuthority(): BoardBootState {
       }
     };
     const unsubscribe = subscribeTeamAuthority(() => {
-      if (ended || !readTeamAuthority().signInRequired) return;
+      if (state.ended || !readTeamAuthority().signInRequired) return;
       retire();
       void clearBootData();
     });
     check();
     const timer = setInterval(check, CHECK_MS);
     document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("pagehide", hideTeamBoard);
     window.addEventListener("pageshow", onPageShow);
     window.addEventListener("storage", onStorage);
     return () => {
       unsubscribe();
       clearInterval(timer);
+      stopRetry();
       document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("pagehide", hideTeamBoard);
       window.removeEventListener("pageshow", onPageShow);
       window.removeEventListener("storage", onStorage);
     };
   }, []);
   return useSyncExternalStore(subscribeBoardBootAuthority, readState, () => INITIAL_STATE);
+}
+
+/** Test seam: the identity a test document has already confirmed. */
+export function setBoardBootAuthorityForTests(authority: BoardBootAuthority | null): void {
+  state = { authority, ended: false };
+  for (const listener of listeners) listener();
+}
+
+/** Test seam: a new document starts with no answer and no retired state. */
+export function resetBoardBootAuthorityForTests(): void {
+  stopRetry();
+  loading?.cancel.abort();
+  loading = null;
+  retryAttempt = 0;
+  state = INITIAL_STATE;
+  for (const listener of listeners) listener();
 }
