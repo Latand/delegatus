@@ -8861,12 +8861,21 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
         const bounds = await page.locator(`${preview}, [data-board-first-seat]`).evaluateAll(nodes => nodes
           .filter(node => node.getClientRects().length > 0)
           .map(node => {
-            const { x, y, width, height } = node.getBoundingClientRect();
-            return { x, y, width, height, viewport: innerWidth };
+            const { left, right, top, bottom, width, height } = node.getBoundingClientRect();
+            const column = node.closest(".column, [data-board-first-screen], [data-skeleton-seat]")?.getBoundingClientRect();
+            return { card: node.hasAttribute("data-board-first-card"), left, right, top, bottom, width, height,
+              viewport: innerWidth, viewportHeight: innerHeight, columnLeft: column?.left, columnRight: column?.right };
           }));
-        if (!bounds.length || bounds.some(rect => rect.x < -1 || rect.x + rect.width > rect.viewport + 1
-          || rect.width < 1 || rect.height < 1)) throw new Error("cached text is clipped horizontally");
-        await page.screenshot({ path: path.join(OUT_DIR, `first-screen-${width}-${locale}-${colorScheme}.png`) });
+        const tag = `${width}-${locale}-${colorScheme}`;
+        fs.writeFileSync(path.join(OUT_DIR, `first-screen-${tag}.json`), JSON.stringify(bounds, null, 2) + "\n");
+        await page.screenshot({ path: path.join(OUT_DIR, `first-screen-${tag}.png`) });
+        // Scroll mode deliberately places offscreen columns to the right.
+        // Text should fit its own column, and a complete card should be visible.
+        if (bounds.some(rect => rect.width < 1 || rect.height < 1
+          || (rect.columnLeft !== undefined && rect.left < rect.columnLeft - 1)
+          || (rect.columnRight !== undefined && rect.right > rect.columnRight + 1))
+          || !bounds.some(rect => rect.card && rect.left >= 0 && rect.right <= rect.viewport
+            && rect.top >= 0 && rect.bottom <= rect.viewportHeight)) throw new Error(`cached text did not fit ${tag}`);
       } finally {
         releaseData();
       }
