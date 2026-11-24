@@ -394,6 +394,8 @@ body {
 :root[data-composer-focused] [data-attention-pulse][data-attention-pulse],
 :root[data-composer-focused] .mglyph[data-live="1"]::before,
 :root[data-composer-focused] .mglyph[data-live="1"] *,
+:root[data-composer-focused] .emark-neon[data-live="1"]::before,
+:root[data-composer-focused] .emark-neon[data-live="1"] *,
 :root[data-composer-focused] .animate-pulse {
   animation-play-state: paused;
 }

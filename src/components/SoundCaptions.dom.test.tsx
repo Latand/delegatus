@@ -180,6 +180,17 @@ describe("what a click does", () => {
     expect(soundCaptionsSnapshot()).toEqual([]);
   });
 
+  test("a toast that names only a project hands that target back", async () => {
+    const opened: CaptionTarget[] = [];
+    const view = await mount({ onOpen: (target) => opened.push(target) });
+    const project: CaptionTarget = { kind: "project", project: "proj" };
+    await push([{ what: "attention", subject: "Look here", target: project }], "your-move");
+    const [toast] = view.toasts();
+    expect(toast!.tagName).toBe("BUTTON");
+    await act(async () => { toast!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event); });
+    expect(opened).toEqual([project]);
+  });
+
   test("a toast without a target is plain text, not a control", async () => {
     const view = await mount();
     await push([{ what: "released", subject: "Release", target: null }], "released");

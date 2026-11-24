@@ -21,7 +21,7 @@ export function currentObservation(observation: DurableQuotaObservation | undefi
 
 export function currentLiveObservation(observation: DurableQuotaObservation | undefined, now: number): boolean {
   return (observation?.provenance.source === "live"
-    || (observation?.engine === "copilot" && observation.provenance.source === "transcript"))
+    || ((observation?.engine === "copilot" || observation?.engine === "antigravity") && observation.provenance.source === "transcript"))
     && currentObservation(observation, now);
 }
 

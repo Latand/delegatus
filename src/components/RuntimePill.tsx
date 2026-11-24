@@ -171,7 +171,7 @@ export function RuntimePill({
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
-  const engine = file.engine === "claude" || file.engine === "codex" || file.engine === "copilot" ? file.engine : null;
+  const engine = file.engine === "claude" || file.engine === "codex" || file.engine === "copilot" || file.engine === "antigravity" ? file.engine : null;
   /* Any pipeline's conversation changes speed through its stage, never the conversation's own speed action. */
   const stageBound = Boolean(file.durableLineage?.memberships.some((item) => item.kind === "pipeline"));
   const pillSurface: PillSurface | null =
@@ -808,7 +808,7 @@ export function RuntimePill({
     pillRef.current?.focus();
   }, []);
 
-  const accountChoice: AccountChoice | null = pillSurface === "structured" && engine !== "copilot"
+  const accountChoice: AccountChoice | null = pillSurface === "structured" && engine !== "copilot" && engine !== "antigravity"
     ? {
         runsOn: runsOnAccount,
         next: nextAccount,
@@ -1336,7 +1336,7 @@ export function RuntimePopover({
           {/* Which account the conversation runs on (#1795). The desktop card
               carries the badge in its header; the popover is where the runtime
               is chosen, so it says it here too. */}
-          {(engine !== "copilot" || accountStart) && (error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)) ? (
+          {(engine !== "copilot" && engine !== "antigravity" || accountStart) && (error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)) ? (
             <div className={`px-2 pb-1 pt-1.5 text-label ${error ? "break-words text-danger" : "text-muted"}`} data-runtime-popover-account>
               {error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)}
             </div>
@@ -1469,7 +1469,7 @@ function buildRows({
       ? options
       : [{ id: accountChoice.runsOn, label: nameOf(accountChoice.runsOn) }, ...options];
     const tint = engineTintOf(engine).color;
-    const weeklies = listed.map((option) => engine === "copilot" ? null : accountWeeklyLeft(option.limits, now, tint));
+    const weeklies = listed.map((option) => engine === "copilot" || engine === "antigravity" ? null : accountWeeklyLeft(option.limits, now, tint));
     const weeklyColumn = weeklies.some(Boolean);
     return [
       back(t("mobile2.composer.accountGroup")),

@@ -122,7 +122,10 @@ its recorded cause and pushes nothing; a gate exits 69; a workflow parks with
 it before its setup starts; a release install or build fails its update step
 with it as the step's last line and starts no child. Operator hosts never wait
 on CPU placement and run without it, with a one-time warning. On macOS and
-inside a container CPU placement does not apply and nothing is refused.
+inside a container CPU placement does not apply and nothing is refused. On macOS
+and Windows the one-line note that placement is off is information, not a
+warning, because the platform has no cgroups; on Linux, containers included, it
+stays a warning (`src/lib/runtime/platformLimit.ts`).
 
 | Setting | Default | Effect |
 |---|---|---|
