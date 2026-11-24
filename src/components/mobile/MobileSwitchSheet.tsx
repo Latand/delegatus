@@ -145,7 +145,7 @@ function SwitchRow({ t, entry, current, nowMs, onPick }: { t: TFunction; entry: 
             <>
               <span className={`shrink-0 ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
               <span aria-hidden className="text-muted">·</span>
-              {entry.file ? <ChatEngineMark file={entry.file} /> : null}
+              {entry.file ? <ChatEngineMark file={entry.file} working={bits.key === "working"} /> : null}
               <span className="min-w-0 truncate">{(entry.file ? fileModelLabel(entry.file) : null) ?? badge?.label}</span>
             </>
           ) : (
