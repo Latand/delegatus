@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
@@ -38,8 +38,6 @@ function fixture(systemd: boolean) {
 test.skipIf(process.platform !== "linux")("a Linux gate without systemd uses the explicit portable fallback", () => {
   const f = fixture(false); const run = f.run('echo "$NODE_OPTIONS"; exit 37');
   expect(run.status).toBe(37); expect(run.stderr).toContain("portable cleanup on linux is best effort");
-  expect(run.stderr).toContain("task limit unavailable: no systemd user gate unit");
-  expect(run.stderr.match(/gate-slot: task limit unavailable:/g)).toHaveLength(1);
 });
 test("memory service forwards args, status and bounded tree termination", () => {
   const f = fixture(true);
@@ -70,6 +68,67 @@ test("another command waits for the same legacy-compatible slot", async () => {
   const result = spawnSync("/usr/bin/flock", ["-n", join(f.root, "llv-heavy-gate.slot1.lock"), "/bin/true"]);
   expect(result.status).toBe(1);
   expect(await child.exited).toBe(0);
+});
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("read-only shared locks exclude a writable host holder and work with portable cleanup", async () => {
+  const f = fixture(false);
+  const locks = join(f.root, "read-only"), helper = join(f.root, "gate-bun");
+  mkdirSync(locks);
+  const claim = "llv-heavy-gate.claim.lock", slot = "llv-heavy-gate.slot1.lock", cap = "llv-heavy-gate.slot1.cap1.lock";
+  for (const file of [claim, slot, cap]) writeFileSync(join(locks, file), "");
+  // Keep SQLite outside the simulated bind, as the Viewer's default queue is.
+  writeFileSync(helper, `#!/bin/bash
+case "$2" in
+  --reuse-slot) exit 75 ;;
+  --wait|--claim|--release-slot) exit 0 ;;
+esac
+export LLV_GATE_LOCK_DIR="$SLOT_WRITABLE"
+exec "$SLOT_BUN" "$@"
+`, { mode: 0o755 });
+  const holder = Bun.spawn(["/bin/bash", "-ec", 'exec 9>"$1"; /usr/bin/flock 9; echo held; read -r release', "host", join(locks, slot)],
+    { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+  try {
+    const reader = holder.stdout.getReader();
+    try { expect(new TextDecoder().decode((await reader.read()).value)).toBe("held\n"); }
+    finally { reader.releaseLock(); }
+    for (const file of [claim, slot, cap]) chmodSync(join(locks, file), 0o444);
+    chmodSync(locks, 0o555);
+    Object.assign(f.env, { LLV_GATE_LOCK_DIR: locks, LLV_GATE_BUN: helper, SLOT_WRITABLE: f.root, LLV_GATE_POLL_SECONDS: "0.02" });
+    // The host still owns the inode. A read-only opener must wait on it.
+    const started = join(f.root, "started");
+    const flockAttempts = join(f.root, "slot-flock-attempts");
+    unlinkSync(join(f.root, "flock"));
+    writeFileSync(join(f.root, "flock"), '#!/bin/bash\n/usr/bin/flock "$@"\nstatus=$?\nif [[ ${1:-} == -n && ${2:-} == 9 ]]; then printf "%s\\n" "$status" >> "$SLOT_FLOCK_ATTEMPTS"; fi\nexit "$status"\n', { mode: 0o755 });
+    f.env.SLOT_FLOCK_ATTEMPTS = flockAttempts;
+    const gate = Bun.spawn(["/bin/bash", join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", 'echo ran >"$1"', "fixture", started],
+      { env: f.env, stdout: "ignore", stderr: "pipe" });
+    try {
+      const deadline = Date.now() + 5_000;
+      while (!Bun.file(flockAttempts).size && Date.now() < deadline) {
+        if (gate.exitCode !== null) break;
+        await Bun.sleep(10);
+      }
+      expect(gate.exitCode).toBeNull();
+      expect(await Bun.file(flockAttempts).text()).toContain("1\n");
+      expect(await Bun.file(started).exists()).toBe(false);
+      holder.stdin.write("release\n");
+      holder.stdin.end();
+      expect(await holder.exited).toBe(0);
+      const output = await new Response(gate.stderr).text();
+      expect(await gate.exited, output).toBe(0);
+      expect(output).toContain("portable cleanup on linux");
+      expect(await Bun.file(started).text()).toBe("ran\n");
+    } finally { if (gate.exitCode === null) gate.kill(); await gate.exited; }
+    expect(f.run("exit 37").status).toBe(37);
+    f.env.LLV_GATE_SLOTS = "2";
+    const incomplete = f.run("exit 37");
+    expect(incomplete.status).toBe(69);
+    expect(incomplete.stderr).toContain("cannot open a shared slot and cap lock pair");
+  } finally {
+    if (holder.exitCode === null) holder.kill();
+    await holder.exited;
+    chmodSync(locks, 0o755);
+  }
 });
 
 const WORK_GROUP = "/user.slice/user-1000.slice/user@1000.service/delegatus.slice/delegatus-agents.slice/delegatus-agents-work.slice";

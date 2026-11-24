@@ -34,6 +34,7 @@ export function createHookFixture(root: string, roots: string[], realLint = fals
   copyFileSync(path.join(import.meta.dir, "fixture-write-path.ts"), writablePath("scripts/fixture-write-path.ts"));
   symlinkSync(path.join(root, "scripts/local-gate.ts"), writablePath("scripts/local-gate.ts"));
   copyFileSync(path.join(root, "scripts/local-gate-capabilities.json"), writablePath("scripts/local-gate-capabilities.json"));
+  copyFileSync(path.join(root, "scripts/privacy-known-value-fingerprints.json"), writablePath("scripts/privacy-known-value-fingerprints.json"));
   if (realLint) {
     symlinkSync(path.join(root, "scripts/eslint-changes.ts"), writablePath("scripts/eslint-changes.ts"));
     symlinkSync(path.join(root, "eslint.config.mjs"), writablePath("eslint.config.mjs"));
