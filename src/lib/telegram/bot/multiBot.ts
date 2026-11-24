@@ -190,7 +190,7 @@ export class BotSelector {
     ).get(chatId)?.assigned_bot);
   }
 
-  private orderedBots(chat: ChatRow, connected: PostingBot[], assigned?: string | null, retryBot?: string | null) {
+  private orderedBots(chat: ChatRow, connected: PostingBot[], assigned: string | null | undefined, retryBot?: string | null) {
     return connected.filter(bot => chat.type !== "private" || bot.receiving)
       .sort((a, b) => Number(b.id === retryBot) - Number(a.id === retryBot) || Number(b.id === assigned) - Number(a.id === assigned));
   }
@@ -201,7 +201,7 @@ export class BotSelector {
     authorize();
     const connected = this.bots();
     if (!connected.length) throw new TelegramBotError("bot_not_connected", "no Telegram Bot API bot is connected");
-    const candidates = this.orderedBots(chat, connected).map(bot => ({ bot, checked: false }));
+    const candidates = this.orderedBots(chat, connected, assigned).map(bot => ({ bot, checked: false }));
     let firstRefusal: TelegramBotError | undefined;
     for (const { bot, checked } of candidates) {
       authorize();
