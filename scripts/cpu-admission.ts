@@ -390,7 +390,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       if (fs.readFileSync(path.join(hook, "cgroup"), "utf8") !== child.scope) return undefined;
       const parent = path.join(proc, readStat(hook)[1]!);
       const ticket = queuedHookTicket(hook, parent, membership);
-      return ticket?.ticket === child.ticket && ticket.identity === identity && ticket.scope === child.scope ? ticket : undefined;
+      return ticket && ticket.ticket === child.ticket && ticket.identity === identity && ticket.scope === child.scope ? ticket : undefined;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return undefined;
@@ -640,7 +640,7 @@ async function serveQueue(queue: CpuAdmissionQueue) {
           const scope = fs.readFileSync(`/proc/${pid}/cgroup`, "utf8");
           if (phase.version === 1 && phase.recorder?.pid === parent?.pid &&
             phase.recorder?.startIdentity === parent?.startIdentity && cpuOwnerStatus(phase.recorder) === "alive" &&
-            identity.pid === Number(pid) && identity.startIdentity.startsWith(`${pid}:`)) {
+            identity.pid === Number(pid) && typeof identity.startIdentity === "string" && identity.startIdentity.startsWith(`${pid}:`)) {
             const updated = { ...phase, child: { ticket: key, identity, scope } };
             const temp = `${file}.${process.pid}.tmp`;
             fs.writeFileSync(temp, JSON.stringify(updated), { mode: 0o600, flag: "wx" });
