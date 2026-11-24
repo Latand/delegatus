@@ -33,6 +33,11 @@ export function deferredTaskPage() {
     omissions: ["taskPage", ...COUNTS], retryHint: "Retry the same filters without a cursor after the task index is available." };
 }
 
+function deferredDeadlineTaskPage(cursor?: string) {
+  return { ...deferredTaskPage(), ...(cursor ? { hasMore: true, nextCursor: cursor } : {}),
+    retryHint: "The task page time budget was exhausted; retry the same filters and cursor." };
+}
+
 /** Membership is maintained by the state store's fenced schema and triggers,
  * including writes that bypass the current process or change journal. */
 export function taskListLinks(filename: string) {
@@ -65,7 +70,7 @@ export function withTaskReferenceBudget<T>(filename: string, ids: readonly strin
 export async function indexedTaskPage<Row>(
   source: Source<BoardTask>, scope: BoardScope, cursor: unknown, limit: number,
   project: (task: BoardTask) => Row,
-  { checkpoint, deadline, matchesReference, signal }: { checkpoint: () => void; deadline: number; matchesReference?: TaskReferenceMatcher; signal?: AbortSignal },
+  { checkpoint, deadline, matchesReference, signal, now = () => performance.now() }: { checkpoint: () => void; deadline: number; matchesReference?: TaskReferenceMatcher; signal?: AbortSignal; now?: () => number },
 ) {
   const hash = scopeKey(scope);
   let boundary: Position | undefined, cursorReset = false;
@@ -76,7 +81,7 @@ export async function indexedTaskPage<Row>(
   } catch { cursorReset = true; }
   if (scope.ids.length > SCAN_LIMIT) return { ...deferredTaskPage(), retryHint: "Request at most 256 task ids at a time." };
   const identity = databaseFileIdentity(source.filename);
-  const expired = () => performance.now() >= deadline;
+  const expired = () => now() >= deadline;
   const statuses = (scope.statuses?.length ? scope.statuses : STATUSES).filter(status => !scope.openOnly || status !== "done");
   const projects = scope.project
     ? [scope.project, ...Object.keys(projectAliasSnapshot().aliases).filter(key => key !== scope.project && canonicalProject(key) === scope.project)]
@@ -92,12 +97,12 @@ export async function indexedTaskPage<Row>(
     && (!scope.priorities?.length || scope.priorities.includes(taskPriority(task)))
     && task.updatedAt >= scope.updatedSince && matchesText(task);
 
-  let started = performance.now();
+  let started = now();
   const pause = async () => {
-    if (performance.now() - started < 8) return;
+    if (now() - started < 8) return;
     await yieldToRuntime(signal);
     checkpoint();
-    started = performance.now();
+    started = now();
   };
   const { project: storedProject, status, time } = taskListFields;
   const scan = async (after: Position | undefined) => {
@@ -118,6 +123,7 @@ export async function indexedTaskPage<Row>(
         const previous = found.get(row.id);
         if (!previous || compare(row, previous) < 0) found.set(row.id, row);
       }
+      if (expired()) return null;
       await pause();
     }
     const ordered = [...found.values()].sort(compare);
@@ -146,7 +152,7 @@ export async function indexedTaskPage<Row>(
   let scanned;
   if (scope.ids.length) {
     for (const id of scope.ids) {
-      if (expired()) return deferredTaskPage();
+      if (expired()) return deferredDeadlineTaskPage(boundary && typeof cursor === "string" ? cursor : undefined);
       const task = source.read(id);
       const matches = task ? matchesTask(task) : false;
       if (matches === undefined) referenceDeferred = true;
@@ -162,14 +168,15 @@ export async function indexedTaskPage<Row>(
     const definition = db.query<{ sql: string }, [string]>("SELECT sql FROM sqlite_master WHERE type='index' AND name=?").get(index)?.sql;
     if (!taskListIndexCurrent(index, definition)) return deferredTaskPage();
     scanned = await scan(boundary);
-    if (!scanned) return deferredTaskPage();
+    if (!scanned) return deferredDeadlineTaskPage(boundary && typeof cursor === "string" ? cursor : undefined);
   }
 
   const rows: Row[] = [];
-  let last: Position | undefined, bytes = 2, visited = 0, skipped = false;
+  let last: Position | undefined, bytes = 2, visited = 0, skipped = false, deadlineHit = false, pageDeadlineHit = false;
   const matches = (candidate: Candidate) => scope.ids.length ? true : matchCandidate(candidate);
   for (const candidate of scanned.candidates) {
-    if (rows.length === limit || expired()) break;
+    if (rows.length === limit) break;
+    if (expired()) { deadlineHit = true; pageDeadlineHit = true; break; }
     const match = matches(candidate);
     if (match === undefined) referenceDeferred = true;
     if (match) {
@@ -194,7 +201,7 @@ export async function indexedTaskPage<Row>(
   const count = async (candidates: Candidate[], from = 0) => {
     let n = 0;
     for (let i = from; i < candidates.length; i++) {
-      if (expired()) return undefined;
+      if (expired()) { deadlineHit = true; return undefined; }
       const match = matches(candidates[i]!);
       if (match === undefined) { referenceDeferred = true; return undefined; }
       if (match) n++;
@@ -209,21 +216,23 @@ export async function indexedTaskPage<Row>(
     if (!boundary) total = rows.length + remainingCount;
     else {
       const head = await scan(undefined);
-      if (head?.complete) total = await count(head.candidates);
+      if (!head && expired()) deadlineHit = true;
+      else if (head?.complete) total = await count(head.candidates);
     }
   }
   const hasMore = remainingCount === undefined ? visited < scanned.candidates.length || !scanned.complete : remainingCount > 0;
   const nextCursor = hasMore && last ? Buffer.from(JSON.stringify({ scope: hash, id: last.id, time: last.time })).toString("base64url") : null;
   if (databaseFileIdentity(source.filename) !== identity || databaseSwapInProgress(source.filename)) return deferredTaskPage();
   checkpoint();
-  const omissions = [...(total === undefined ? ["total"] : []), ...(remainingCount === undefined ? ["remainingCount"] : []),
+  const omissions = [...(pageDeadlineHit ? ["taskPage"] : []), ...(total === undefined ? ["total"] : []), ...(remainingCount === undefined ? ["remainingCount"] : []),
     ...(total === undefined ? ["omittedCount"] : []), ...(referenceDeferred || hasMore && !last ? ["taskPage"] : [])];
   return {
     rows, count: rows.length, hasMore, nextCursor, cursorReset,
     ...(total === undefined ? {} : { total, omittedCount: total - rows.length }),
     ...(remainingCount === undefined ? {} : { remainingCount }),
     ...(omissions.length ? { partial: true, omissions } : {}),
-    ...(referenceDeferred ? { retryHint: "Look up the PR association on the relevant task or pipeline by id." }
+    ...(deadlineHit ? { retryHint: "The task page time budget was exhausted; retry the same filters and cursor." }
+      : referenceDeferred ? { retryHint: "Look up the PR association on the relevant task or pipeline by id." }
       : hasMore && !nextCursor ? { retryHint: "Retry this page with the same filters." } : {}),
   };
 }

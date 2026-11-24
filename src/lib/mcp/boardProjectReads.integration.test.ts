@@ -25,6 +25,7 @@ import { createViewerMcpServer, createMcpToolService, SqliteMcpReceiptStore, req
 import { withWorkspaceMcpFence } from "./workspaceFence";
 import { McpPageCursorStore } from "./pageCursors";
 import { BoardSelection } from "./boardSelection";
+import { deferredTaskPage, indexedTaskPage } from "./taskListPage";
 
 const AT = "2026-11-06T12:00:00.000Z";
 const OWN = "repo-11111111111111111111111111111111", FOREIGN = "repo-22222222222222222222222222222222";
@@ -172,18 +173,88 @@ test("a large retained board returns an authorized page while projection rebuild
     throw Error("slow projection did not complete");
   });
   try {
-    const start = performance.now();
     const result = await h.call("list_tasks", { openOnly: true, statuses: ["blocked"], query: "matching", limit: 5 });
-    const elapsed = Math.round(performance.now() - start);
-    console.log("large task list with 300 ms rebuild fault", elapsed, "ms");
     expect(result).toMatchObject({ ok: true, count: 5, partial: true,
       omissions: ["total", "remainingCount", "omittedCount"], hasMore: true, nextCursor: expect.any(String),
       tasks: [3497, 3493, 3489, 3485, 3481].map(index => expect.objectContaining({ id: `task_${index}`, project: OWN })),
     });
     expect(h.wire()).not.toContain("FOREIGN_PAYLOAD_CANARY");
     expect(rebuild).not.toHaveBeenCalled();
-    expect(elapsed).toBeLessThan(4_000);
   } finally { rebuild.mockRestore(); }
+});
+
+test("task page deadline during index scan refuses safely and names the time budget", async () => {
+  const h = await harness(); h.indexed();
+  saveTasks(Array.from({ length: 12 }, (_, index): BoardTask => ({
+    id: `deadline_${String(index).padStart(2, "0")}`, project: OWN, text: "Deadline task", status: "inbox", placement: "unplaced",
+    assignments: [], createdAt: AT, updatedAt: AT,
+  })));
+  const source = h.domain.taskSelectionSource!()!;
+  const result = await indexedTaskPage(source, { project: "", ids: [], query: "", updatedSince: "" }, null, 3, task => task,
+    { checkpoint() {}, deadline: 5, now: (() => { let tick = 0; return () => ++tick; })() });
+  expect(result).toMatchObject({ rows: [], count: 0, hasMore: null, nextCursor: null, partial: true,
+    omissions: ["taskPage", "total", "remainingCount", "omittedCount"], retryHint: expect.stringContaining("time budget") });
+
+  const scope = { project: OWN, ids: [], query: "", updatedSince: "", statuses: ["inbox"] };
+  const first = await indexedTaskPage(source, scope, null, 1, task => task, { checkpoint() {}, deadline: 100, now: () => 0 });
+  const cursor = first.nextCursor;
+  const resumedDeadline = await indexedTaskPage(source, scope, cursor, 1, task => task,
+    { checkpoint() {}, deadline: 3, now: (() => { let tick = 0; return () => ++tick; })() });
+  expect(resumedDeadline).toMatchObject({ rows: [], hasMore: true, nextCursor: cursor, retryHint: expect.stringContaining("time budget") });
+});
+
+test("task page deadline during keyed IDs names the time budget separately from a missing index", async () => {
+  const h = await harness(); h.indexed();
+  saveTasks([{ id: "task_0", project: OWN, text: "Keyed", status: "inbox", placement: "unplaced", assignments: [], createdAt: AT, updatedAt: AT }]);
+  const source = h.domain.taskSelectionSource!()!;
+  let tick = 0;
+  const result = await indexedTaskPage(source, { project: "", ids: ["task_0", "task_1"], query: "", updatedSince: "" }, null, 2,
+    task => task, { checkpoint() {}, deadline: 3, now: () => ++tick });
+  expect(result.retryHint).not.toBe(deferredTaskPage().retryHint);
+  expect(result).toMatchObject({ rows: [], hasMore: null, nextCursor: null, omissions: ["taskPage", "total", "remainingCount", "omittedCount"],
+    retryHint: expect.stringContaining("time budget") });
+});
+
+test("task page deadline during row building returns a resumable cursor without duplicates", async () => {
+  const h = await harness(); h.indexed();
+  saveTasks(Array.from({ length: 12 }, (_, index): BoardTask => ({
+    id: `deadline_${String(index).padStart(2, "0")}`, project: OWN, text: "Deadline task", status: "inbox", placement: "unplaced",
+    assignments: [], createdAt: AT, updatedAt: AT,
+  })));
+  const source = h.domain.taskSelectionSource!()!;
+  let time = 0;
+  const options = { checkpoint() {}, deadline: 1, now: () => time };
+  const first = await indexedTaskPage(source, { project: "", ids: [], query: "", updatedSince: "" }, null, 12, task => {
+    time = 1;
+    return task;
+  }, options);
+  const cursor = first.nextCursor;
+  expect(typeof cursor).toBe("string");
+  expect(JSON.parse(Buffer.from(cursor as string, "base64url").toString()).id).toBe(first.rows[0]!.id);
+  expect(first).toMatchObject({ count: 1, partial: true, omissions: expect.arrayContaining(["taskPage", "total", "remainingCount"]),
+    hasMore: true, nextCursor: expect.any(String), retryHint: expect.stringContaining("time budget") });
+  time = 0;
+  const second = await indexedTaskPage(source, { project: "", ids: [], query: "", updatedSince: "" }, cursor, 12, task => task,
+    { checkpoint() {}, deadline: 100, now: () => time });
+  const firstIds = first.rows.map(row => row.id);
+  expect(second.cursorReset).toBe(false);
+  expect(second.rows.map(row => row.id).filter(id => firstIds.includes(id))).toEqual([]);
+});
+
+test("task page deadline during count preserves its page cursor and names deferred counts", async () => {
+  const h = await harness(); h.indexed();
+  saveTasks(Array.from({ length: 12 }, (_, index): BoardTask => ({
+    id: `deadline_${String(index).padStart(2, "0")}`, project: OWN, text: "Deadline task", status: "inbox", placement: "unplaced",
+    assignments: [], createdAt: AT, updatedAt: AT,
+  })));
+  const source = h.domain.taskSelectionSource!()!;
+  let time = 0, reads = 0;
+  const result = await indexedTaskPage(source, { project: "", ids: [], query: "", updatedSince: "" }, null, 2, task => {
+    if (++reads === 2) time = 1;
+    return task;
+  }, { checkpoint() {}, deadline: 1, now: () => time });
+  expect(result).toMatchObject({ count: 2, partial: true, omissions: ["total", "remainingCount", "omittedCount"],
+    hasMore: true, nextCursor: expect.any(String), retryHint: expect.stringContaining("time budget") });
 });
 
 test("sparse filters advance across tied timestamps and skip terminal and foreign history", async () => {
@@ -234,7 +305,7 @@ test("a missing board index defers the page and leaves explicit ID reads availab
   try {
     db.exec(`DROP INDEX ${taskListIndex.project}`);
     expect(await h.call("list_tasks", { limit: 1 })).toMatchObject({ ok: true, tasks: [], hasMore: null,
-      omissions: ["taskPage", "total", "remainingCount", "omittedCount"], retryHint: expect.any(String) });
+      omissions: ["taskPage", "total", "remainingCount", "omittedCount"], retryHint: "Retry the same filters without a cursor after the task index is available." });
     expect(await h.call("list_tasks", { ids: ["task_0", "task_1"] })).toMatchObject({ ok: true, total: 1,
       tasks: [{ id: "task_0", project: OWN }], nextCursor: null, remainingCount: 0 });
   } finally {

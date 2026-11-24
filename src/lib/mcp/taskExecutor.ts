@@ -175,6 +175,7 @@ export class McpTaskExecutor {
   private nextId = 0;
   private idle?: ReturnType<typeof setTimeout>;
   private watchdog?: ReturnType<typeof setTimeout>;
+  private cancelWatchdog?: () => void;
   private channel?: string;
   private workerManagesIdle = false;
   private replies?: TaskExecutorReplies;
@@ -284,9 +285,11 @@ export class McpTaskExecutor {
     this.child = child;
     this.workerManagesIdle = false;
     const heartbeat = () => {
-      clearTimeout(this.watchdog);
-      this.watchdog = setTimeout(() => this.retire(child, "stopped its heartbeat"), 31_000);
-      this.watchdog.unref();
+      this.cancelWatchdog?.(); this.cancelWatchdog = undefined;
+      clearTimeout(this.watchdog); this.watchdog = undefined;
+      const retire = () => this.retire(child, "stopped its heartbeat");
+      if (this.runtime.schedule) this.cancelWatchdog = this.runtime.schedule(retire, 31_000);
+      else { this.watchdog = setTimeout(retire, 31_000); this.watchdog.unref(); }
     };
     this.replies = new TaskExecutorReplies(child.stdout!, reply => {
       if (reply.id === 0) {
@@ -390,7 +393,7 @@ export class McpTaskExecutor {
       detail: reason, role: blockingWaitRole(), pendingCalls: this.pending.size,
       pendingClaims: [...this.pending.values()].map(job => ({ tool: job.tool, claim: job.claim })) });
     this.replies?.close(); this.replies = undefined;
-    this.child = null; clearTimeout(this.idle); clearTimeout(this.watchdog);
+    this.child = null; clearTimeout(this.idle); clearTimeout(this.watchdog); this.cancelWatchdog?.(); this.cancelWatchdog = undefined;
     this.channel = undefined; this.workerManagesIdle = false;
     const preparation = this.preparation?.child === child ? this.preparation : undefined;
     preparation?.abort.abort(new Error("task preparation generation retired"));
