@@ -364,7 +364,7 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const snapshot = lanes();
       const saved = snapshot.find(id);
       const lane = saved ? snapshot.resolve(saved) : null;
-      return lane ? { state: lane.state, merged: lane.merge?.state === "merged",
+      return lane ? { state: lane.state, merged: lane.merge?.state === "merged", mergeBy: lane.merge?.by,
         mergeActive: !!lane.delivery?.active || !!lane.merge && (["queued", "checking", "waiting-checks", "updating", "merging", "refreshing"].includes(lane.merge.state)),
         mergeCancelled: lane.merge?.state === "cancelled",
         mergeStopReason: lane.merge?.state === "blocked" && lane.merge.reason === "the PR was closed" ? lane.merge.reason : null,

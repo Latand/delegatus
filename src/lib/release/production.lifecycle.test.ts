@@ -270,16 +270,31 @@ async function forgeRecovery(scenario: string) {
   write("package.json", '{"name":"package-example","version":"1.0.0"}\n');
   const cut = await commit("Frozen cut");
   await git("tag", "v1.0.0");
-  await git("checkout", "-b", "release");
-  write("CHANGELOG.md", "Reviewed release notes\n");
   let reviewed: string;
-  if (scenario === "rebase-range" || scenario === "rebase-range-mismatch") {
-    await commit("Reviewed changelog");
-    write("package.json", '{"name":"package-example","version":"1.1.0"}\n');
-    reviewed = await commit("Reviewed version bump");
-  } else {
+  if (scenario === "earlier-main-content") {
+    await git("checkout", "-b", "reviewed-release");
+    write("CHANGELOG.md", "Reviewed release notes\n");
     write("package.json", '{"name":"package-example","version":"1.1.0"}\n');
     reviewed = await commit("Reviewed release");
+    await git("checkout", "main");
+    write("package.json", '{"name":"package-example","version":"1.1.0"}\n');
+    write("CHANGELOG.md", "Reviewed release notes\n");
+    write("temporary.txt", "temporary content\n");
+    await commit("Unrelated main content");
+    await git("checkout", "-b", "release");
+    await git("rm", "temporary.txt");
+    await commit("Remove temporary file");
+  } else {
+    await git("checkout", "-b", "release");
+    write("CHANGELOG.md", "Reviewed release notes\n");
+    if (scenario === "rebase-range" || scenario === "rebase-range-mismatch") {
+      await commit("Reviewed changelog");
+      write("package.json", '{"name":"package-example","version":"1.1.0"}\n');
+      reviewed = await commit("Reviewed version bump");
+    } else {
+      write("package.json", '{"name":"package-example","version":"1.1.0"}\n');
+      reviewed = await commit("Reviewed release");
+    }
   }
   await git("checkout", "main");
   write("product.txt", "Later product change\n");
@@ -315,7 +330,9 @@ async function forgeRecovery(scenario: string) {
   if (scenario === "blocked-mismatch") {
     preparation.merge = { ...merge("blocked"), prNumber: 23, reviewedHead: reviewed, reason: "the PR was closed" };
   }
-  if (scenario === "moved-head-outside-receipt") preparation.merge = { ...merge("merged"), by: "outside", prNumber: 23,
+  if (scenario === "moved-head-outside-receipt" || scenario === "outside-receipt") preparation.merge = { ...merge("merged"), by: "outside", prNumber: 23,
+    repository: "example/release", mergeCommit: integrated };
+  if (scenario === "engine-receipt") preparation.merge = { ...merge("merged"), by: "auto-merge", prNumber: 23,
     repository: "example/release", mergeCommit: integrated };
   if (scenario === "closed-reviewed") preparation.state = "closed";
   const archived = [];
@@ -361,7 +378,7 @@ test.each(["batch", "exact", "rebase-range", "same-title", "closed-reviewed", "s
   expect(result.policy.live).toBe(false);
 });
 
-test.each(["changed-landing", "blocked-mismatch", "moved-head", "moved-head-outside-receipt", "rebase-range-mismatch", "unreviewed-preparation", "wrong-cut", "missing-cut", "conflicting-cut",
+test.each(["changed-landing", "blocked-mismatch", "moved-head", "moved-head-outside-receipt", "rebase-range-mismatch", "earlier-main-content", "unreviewed-preparation", "wrong-cut", "missing-cut", "conflicting-cut",
   "wrong-branch", "wrong-repository", "wrong-number", "fork", "foreign-successor", "stale-successor"])(
   "%s cannot supply release merge proof", async scenario => {
     const h = await forgeRecovery(scenario);
@@ -369,7 +386,7 @@ test.each(["changed-landing", "blocked-mismatch", "moved-head", "moved-head-outs
     expect(result.recovery).toEqual({ commit: h.integrated, pr: 23, cut: null });
   });
 
-test.each(["batch", "changed-landing", "proof-withdrawn"])("a live preparation hands off only proven %s content", async scenario => {
+test.each(["batch", "outside-receipt", "engine-receipt", "changed-landing", "moved-head-outside-receipt", "proof-withdrawn"])("a live preparation hands off only proven %s content", async scenario => {
   const h = await forgeRecovery(scenario);
   mutateReleaseProject(project, row => ({
     ...row, history: [], live: { ...row.history[0], request: {
@@ -383,13 +400,15 @@ test.each(["batch", "changed-landing", "proof-withdrawn"])("a live preparation h
     const observed = await result.productionObserve(...args);
     const withdrawProof = ++observations === 2 && scenario === "proof-withdrawn";
     return observed && { ...observed, ...(withdrawProof ? { recovery: null } : {}),
-      policy: { ...observed.policy, tickEnabled: true, mergeEnabled: true,
+      policy: { ...observed.policy, ...(scenario === "engine-receipt" ? { minChanges: 0, minGapHours: 0,
+        lastTag: { ...observed.policy.lastTag, at: Date.parse(at) - 24 * 3_600_000 } } : {}),
+      tickEnabled: true, mergeEnabled: true,
       deployments: [{ revision: h.cut, at: Date.parse(at) - 8 * 3_600_000 }] } };
   };
   const admitted: CreatePipelineRequest[] = [];
   result.ports.create = async request => { admitted.push(request); return "forge-publisher"; };
   const reconciled = await result.withForge(() => result.controller.reconcile(project));
-  if (scenario === "batch") {
+  if (scenario === "batch" || scenario === "outside-receipt" || scenario === "engine-receipt") {
     expect(reconciled).toBe("release: launched");
     expect(admitted).toHaveLength(1);
     expect(admitted[0]).toMatchObject({ baseRef: h.integrated });

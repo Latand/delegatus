@@ -17,7 +17,7 @@ export interface ReleasePorts {
   task: (project: string, run: ReleaseRun, adopted?: string) => string;
   create: (request: CreatePipelineRequest, key: string) => Promise<string>;
   lookup?: (key: string) => string | null;
-  pipeline: (id: string) => { state: string; merged: boolean; declined: boolean; mergeActive?: boolean; mergeCancelled?: boolean; mergeStopReason?: string | null; mergeCommit?: string | null; pr?: number | null } | null;
+  pipeline: (id: string) => { state: string; merged: boolean; declined: boolean; mergeBy?: "auto-merge" | "outside" | null; mergeActive?: boolean; mergeCancelled?: boolean; mergeStopReason?: string | null; mergeCommit?: string | null; pr?: number | null } | null;
 }
 export interface ReleaseController {
   reconcile: (project: string) => Promise<string | null>;
@@ -166,7 +166,10 @@ async function reconcileRun(project: string, ports: ReleasePorts): Promise<strin
     const reason = lane.mergeCancelled ? "release-merge-cancelled" : `release-merge-stopped: ${lane.mergeStopReason}`;
     return settle(project, ports, run, "failed", reason) ? `release: ${reason}` : null;
   }
-  let landing = lane?.state === "completed" && lane.merged ? { commit: lane.mergeCommit, pr: lane.pr } : null;
+  // A watcher receipt only says GitHub merged something. It needs the
+  // observer's PR-content proof before publication can be admitted.
+  let landing = lane?.state === "completed" && lane.merged && lane.mergeBy !== "outside"
+    ? { commit: lane.mergeCommit, pr: lane.pr } : null;
   if (!landing && lane?.state === "completed" && !lane.mergeActive && run.phase !== "publish"
     && run.request && ports.settings(project)?.enabled) {
     const observed = await ports.observe(project, run.cut);
@@ -191,7 +194,7 @@ async function reconcileRun(project: string, ports: ReleasePorts): Promise<strin
     const transitioned = mutateReleaseProject(project, current => current.live?.key === claim.key && current.live.cut === claim.cut
       && current.live.taskId === claim.taskId && current.live.pipelineId === claim.pipelineId && current.live.phase !== "publish"
       ? { ...current, live: { ...current.live, key: `${claim.key}:publish`, phase: "publish", releasePipelineId: claim.pipelineId!, pipelineId: null, request,
-          trigger: lane?.merged ? claim.trigger : "recovery" } } : current);
+          trigger: lane?.merged && lane.mergeBy !== "outside" ? claim.trigger : "recovery" } } : current);
     if (transitioned.live?.key !== `${claim.key}:publish`) return null;
     return admit(project, ports);
   }
