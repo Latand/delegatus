@@ -186,6 +186,92 @@ test("the checkout release starts a leased worker and consumes a cold shared gra
   }
 }), 18_000);
 
+test("a held payload scan expires under the sealed-graph step and adopts without another add", () =>
+  withControllerAuditState(async () => {
+    const { h, git, repo, root } = await realWorktreeLane("held-sealed-graph-scan", BUILD_ONLY as never);
+    const { prepareLockedDependencies } = await import("./lockedDependencies");
+    const { recordWorktreeProvenance } = await import("./worktreeProvenance");
+    const { settleProvisioningJobsForTests } = await import("./provisioningJob");
+    const diagnostics = spyOn(await import("./controllerJobs"), "reportProvisioningPhase");
+    const release = latch();
+    let supply: (() => Promise<void>) | undefined;
+    let wall = Date.now(), monotonic = 0, scans = 0, children = 0;
+    const timers = new Set<{ at: number; run: () => void }>();
+    const advance = (by: number) => {
+      wall += by;
+      monotonic += by;
+      for (const timer of [...timers]) if (timer.at <= monotonic) {
+        timers.delete(timer);
+        timer.run();
+      }
+    };
+    try {
+      supply = await seedProvisioningPackage(repo, root, process.env, process.execPath);
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "fixture inputs for the sealed graph");
+      await git(repo, "push", "origin", "main");
+      const sha = await git(repo, "rev-parse", "HEAD");
+      delete h.ports.provisionExec;
+      h.ports.now = () => new Date(wall).toISOString();
+      h.ports.provisionClock = {
+        wallMs: () => wall, monotonicMs: () => monotonic,
+        arm(delay, run) {
+          const timer = { at: monotonic + delay, run };
+          timers.add(timer);
+          return () => { timers.delete(timer); };
+        },
+      };
+      const lane = (await createPipelineFromRequest({ task: "Recover the sealed graph after a lost scan",
+        repoDir: repo, baseRef: sha, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      await git(repo, "worktree", "add", "-b", lane.branch, lane.worktreeDir, sha);
+      expect(recordWorktreeProvenance(lane.worktreeDir, { creator: "pipeline", id: lane.id })).toBe(true);
+      expect(await prepareLockedDependencies(lane.worktreeDir, { repository: repo })).toBe(true);
+      const graph = fs.realpathSync(path.join(lane.worktreeDir, "node_modules"));
+      const spawn = h.ports.spawnAgent;
+      h.ports.spawnAgent = async (input, reserve) => {
+        const result = await spawn(input, reserve);
+        if (input.cwd === lane.worktreeDir) {
+          const child = Bun.spawn([process.execPath, "-e", "process.exit(0)"], {
+            cwd: input.cwd, stdout: "ignore", stderr: "ignore", timeout: 3_000,
+          });
+          expect(await child.exited).toBe(0);
+          children++;
+        }
+        return result;
+      };
+      h.ports.provisionToolchainReply = async (id, type) => {
+        if (id === lane.id && type === "payloadScanComplete" && ++scans === 1) await release.promise;
+      };
+      await driveProvisioning(h.ports, async () => scans === 1);
+      const before = (await findControllerPipeline(lane.id))!;
+      expect(before.provisioningJob).toMatchObject({ step: "validatingSealedGraph", status: "running" });
+      expect(before.runs[0]?.attempts).toHaveLength(0);
+      advance(before.provisioningJob!.deadlineAt - wall - 1);
+      await tickPipelinesController([], h.ports);
+      expect((await findControllerPipeline(lane.id))?.provisioningJob?.token).toBe(before.provisioningJob?.token);
+      advance(1);
+      await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.provisioningJob?.status === "waiting");
+      const waiting = (await findControllerPipeline(lane.id))!.provisioningJob!;
+      expect(waiting.interruption).toMatchObject({ step: "validatingSealedGraph", reason: "provision-step-timeout" });
+      advance(waiting.retryAt! - wall);
+      await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.runs[0]?.attempts[0]?.state === "running");
+      release.resolve();
+      expect((await findControllerPipeline(lane.id))?.runs[0]?.attempts).toHaveLength(1);
+      expect(children).toBe(1);
+      expect(fs.realpathSync(path.join(lane.worktreeDir, "node_modules"))).toBe(graph);
+      expect(diagnostics.mock.calls.filter(([id, event]) =>
+        id === lane.id && event.phase === "git-started" && event.step === "worktree-add")).toHaveLength(0);
+    } finally {
+      diagnostics.mockRestore();
+      release.resolve();
+      await settleProvisioningJobsForTests();
+      await supply?.();
+      await settlePipelineControllerJobs();
+      await settlePipelineStopReadLanes();
+      await removeProvisioningFixture(root);
+    }
+  }), 24_000);
+
 test("the leased worker borrows matching source tools without an install lockfile", () => withControllerAuditState(async () => {
   const { h, git, repo, root } = await realWorktreeLane("matching-private-source", BUILD_ONLY as never);
   try {
@@ -972,6 +1058,105 @@ test.skipIf(process.platform !== "linux")("a successor does not renew a live for
       await removeProvisioningFixture(root);
     }
   }), 24_000);
+
+test.skipIf(process.platform !== "linux").each(["release before cutoff", "busy at cutoff"] as const)(
+  "an unclaimed cache fence survives restart and observes %s",
+  atCut => withControllerAuditState(async () => {
+    const { h, git, repo, root } = await realWorktreeLane("foreign-cache-bound", BUILD_ONLY as never);
+    const { settleProvisioningJobsForTests } = await import("./provisioningJob");
+    const { patchPipeline } = await import("./engine");
+    const fence = path.join(repo, ".git", "delegatus-dependencies", "v4", "owner.lock");
+    const wallFile = path.join(root, "successor-clock"), end = path.join(root, "successor-end");
+    const launches = path.join(root, "first-children");
+    let supply: (() => Promise<void>) | undefined;
+    let holder: ReturnType<typeof Bun.spawn<"pipe", "pipe", "ignore">> | undefined;
+    let successor: ReturnType<typeof Bun.spawn<"ignore", "pipe", "pipe">> | undefined;
+    let output: Promise<string[]> | undefined;
+    let now = Date.now();
+    const probe = () => Bun.spawnSync(["flock", "-n", fence, "true"]).exitCode;
+    try {
+      supply = await seedProvisioningPackage(repo, root, process.env, process.execPath);
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "fixture inputs for cache custody");
+      await git(repo, "push", "origin", "main");
+      fs.mkdirSync(path.dirname(fence), { recursive: true });
+      holder = Bun.spawn(["flock", "-n", fence, "sh", "-c", 'printf "locked\\n"; read -r release'], {
+        stdin: "pipe", stdout: "pipe", stderr: "ignore", timeout: 24_000,
+      });
+      const reader = holder.stdout.getReader();
+      try {
+        await until(reader.read().then(frame => expect(new TextDecoder().decode(frame.value)).toBe("locked\n")));
+      } finally { reader.releaseLock(); }
+      delete h.ports.provisionExec;
+      h.ports.now = () => new Date(now).toISOString();
+      const lane = (await createPipelineFromRequest({ task: "Observe the unclaimed dependency fence across restart",
+        repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.provisioningJob?.step === "waitingForCache");
+      const before = (await findControllerPipeline(lane.id))!.provisioningJob!;
+      expect(before.waitReason).toBe("cache-holder-unclaimed");
+      expect(before.deadlineAt - before.since).toBe(180_000);
+      const inode = fs.statSync(lane.worktreeDir, { bigint: true }).ino;
+      await settleProvisioningJobsForTests();
+      const halfway = before.since + 90_000;
+      fs.writeFileSync(wallFile, new Date(halfway).toISOString());
+      successor = Bun.spawn([process.execPath, "--no-env-file", path.join(import.meta.dir, "fixtures", "provisionControllerProcess.ts")], {
+        env: { ...process.env, LLV_PROVISION_PROCESS_FIXTURE: JSON.stringify({
+          lane: lane.id, state: process.env.LLV_STATE_DIR, launches, end, wallFile,
+        }) }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 18_000,
+      });
+      output = Promise.all([new Response(successor.stdout).text(), new Response(successor.stderr).text()]);
+      const stop = performance.now() + 7_000;
+      for (;;) {
+        const current = (await findControllerPipeline(lane.id))?.provisioningJob;
+        if (current?.step === "waitingForCache" && current.retryAt === halfway + 5_000) {
+          expect(current).toMatchObject({ since: before.since, deadlineAt: before.deadlineAt, cacheWaitIdentity: before.cacheWaitIdentity });
+          break;
+        }
+        if (performance.now() >= stop) throw new Error("successor did not persist a new probe with the old cache cutoff");
+        await Bun.sleep(15);
+      }
+      expect(probe()).toBe(1);
+      expect(fs.existsSync(launches)).toBe(false);
+      fs.writeFileSync(end, "");
+      const exit = await successor.exited;
+      expect(exit, (await output).join("\n")).toBe(0);
+      const early = atCut === "release before cutoff";
+      now = before.deadlineAt - (early ? 1 : 0);
+      if (!early) {
+        await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.state === "needs_decision");
+        const parked = (await findControllerPipeline(lane.id))!;
+        expect(parked.provisioningJob).toMatchObject({
+          step: "waitingForCache", since: before.since, deadlineAt: before.deadlineAt, status: "parked", waitReason: "cache-holder-unclaimed",
+        });
+        expect(parked.runs[0]?.attempts).toHaveLength(0);
+        expect(probe()).toBe(1);
+      }
+      holder.stdin.write("release\n");
+      holder.stdin.end();
+      expect(await holder.exited).toBe(0);
+      if (!early) {
+        const retry = await patchPipeline(lane.id, { action: "retry-stage" }, h.ports);
+        expect(retry.pipeline?.state).toBe("provisioning");
+      }
+      await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.runs[0]?.attempts[0]?.state === "running");
+      expect(fs.statSync(lane.worktreeDir, { bigint: true }).ino).toBe(inode);
+      expect((await findControllerPipeline(lane.id))?.runs[0]?.attempts).toHaveLength(1);
+    } finally {
+      fs.writeFileSync(end, "");
+      if (holder && holder.exitCode === null && holder.signalCode === null) {
+        holder.stdin.write("release\n");
+        holder.stdin.end();
+      }
+      await holder?.exited;
+      await successor?.exited;
+      await output;
+      await settleProvisioningJobsForTests();
+      await supply?.();
+      await settlePipelineControllerJobs();
+      await settlePipelineStopReadLanes();
+      await removeProvisioningFixture(root);
+    }
+  }), 34_000);
 
 test.skipIf(process.platform !== "linux").each(["missing guardian", "early EOF"] as const)(
   "the source supervisor recovers from %s before the toolchain ready frame",

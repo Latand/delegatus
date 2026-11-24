@@ -136,7 +136,8 @@ class JobRevoked extends Error {}
 class StepDeadline extends Error {}
 class Deferred extends Error {
   constructor(readonly step: ProvisionStep, readonly since: number, readonly deadline: number, readonly reason: string, readonly resource?: string,
-    readonly cache?: { identity: string; holderDeadline?: number }, readonly legacyWriter?: ProvisioningRecord["legacyWriter"]) { super(reason); }
+    readonly cache?: { identity: string; metadataRemainingMs: number; holderDeadline?: number },
+    readonly legacyWriter?: ProvisioningRecord["legacyWriter"]) { super(reason); }
 }
 
 function schedule(pool: Pool, at: number, clock: ProvisionClock, ports: ProvisionPorts) {
@@ -380,6 +381,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     delete slot.privateIntent;
     delete slot.cacheWaitSince;
     delete slot.cacheWaitIdentity;
+    delete slot.cacheMetadataRemainingMs;
   }
   let changed = false;
   let stopAt = clock.monotonicMs() + PROVISION_STEPS.resolvingRepository;
@@ -453,7 +455,10 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     read();
     if (slot.step === name) return;
     const now = clock.wallMs(), monotonic = clock.monotonicMs();
-    if (name === "startingToolchain") metadataStop = monotonic + PROVISION_STEPS.startingToolchain;
+    if (name === "startingToolchain") {
+      const remaining = slot.cacheMetadataRemainingMs ?? PROVISION_STEPS.startingToolchain;
+      metadataStop = monotonic + remaining;
+    }
     const bound = Math.min(executionStop, monotonic + PROVISION_STEPS[name], METADATA_STEPS.has(name) ? metadataStop : Infinity);
     let cutoff = bound;
     if (name === "applyingCheckout" && previous?.status === "awaitingApply") {
@@ -486,7 +491,8 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     await write(current => { current.stateDetail = `provisioning wait: ${error.reason}`; },
       { ...slot, step: error.step, since: error.since, deadlineAt: error.deadline, status: "waiting", retryAt: at,
       resource: error.resource, waitReason: error.reason,
-      ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity } : {}),
+      ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity,
+        cacheMetadataRemainingMs: error.cache.metadataRemainingMs } : {}),
       ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since, legacyWriter: error.legacyWriter } : {}) }, false, true);
     schedule(pool, at, clock, ports);
   };
@@ -653,7 +659,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
         cacheAcquired: async fence => {
           const worker = slot.worker;
           const cacheOwner = worker && await provesProvisionCacheHolder(worker, fence, signal) ? fence : undefined;
-          await write(() => {}, { ...slot, cacheWaitSince: undefined, cacheWaitIdentity: undefined, cacheOwner });
+          await write(() => {}, { ...slot, cacheWaitSince: undefined, cacheWaitIdentity: undefined, cacheMetadataRemainingMs: undefined, cacheOwner });
         },
         cacheBusy: async identity => {
           const now = clock.wallMs();
@@ -675,8 +681,9 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
           const cutoff = since + PROVISION_STEPS.waitingForCache;
           const reason = holderDeadline === undefined ? "cache-holder-unclaimed"
             : now >= cutoff ? "cache-wait-expired" : "waiting-for-cache-holder";
+          const metadataRemainingMs = Math.ceil(Math.max(0, metadataStop - clock.monotonicMs()));
           throw new Deferred("waitingForCache", since, cutoff, reason, undefined,
-            { identity, holderDeadline: holderDeadline !== undefined && holderDeadline > now ? holderDeadline : undefined });
+            { identity, metadataRemainingMs, holderDeadline: holderDeadline !== undefined && holderDeadline > now ? holderDeadline : undefined });
         },
         legacyWriter: deferLegacyWriter, track: child => { handle.child = child; },
       }); else {
@@ -731,7 +738,8 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     if (error instanceof Deferred) {
       if (error.step !== "waitingForTurn" && clock.wallMs() >= error.deadline) {
         await write(() => {}, { ...slot, step: error.step, since: error.since, deadlineAt: error.deadline, waitReason: error.reason,
-          ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity } : {}),
+          ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity,
+            cacheMetadataRemainingMs: error.cache.metadataRemainingMs } : {}),
           ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since, legacyWriter: error.legacyWriter } : {}),
         }, false, true);
         await park(error.reason);

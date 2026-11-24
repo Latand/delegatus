@@ -825,6 +825,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
 
       const validateForLink = async () => {
         enter("validation", existing ? "fenced graph" : "new graph seal");
+        if (existing) await options.onStep?.("validatingSealedGraph");
         let checked = await inspectGraph(graph, plan, remaining, scan, true);
         if (!checked) throw new Error("incomplete shared dependency entry; preserve it for inspection");
         if (checked.reseal) {
@@ -921,6 +922,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
         assertWriter();
         const assertAnchors = await validateForLink();
         enter("commit", "worktree link");
+        if (existing) await options.onStep?.("preparingToolchain");
         await options.beforeEffect?.("link-cache");
         assertWriter();
         assertInputsNow(plan);

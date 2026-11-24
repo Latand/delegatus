@@ -13,6 +13,7 @@ const input = JSON.parse(process.env.LLV_PROVISION_PROCESS_FIXTURE ?? "null") as
   lane: string; state: string; launches: string; end: string;
   applyBarrier?: { entered: string; release: string };
   pauseAndClose?: true;
+  wallFile?: string;
 } | null;
 if (!input || input.state !== process.env.LLV_STATE_DIR || process.env.NODE_ENV !== "test") {
   throw new Error("provisioning subprocess requires isolated fixture state");
@@ -20,6 +21,10 @@ if (!input || input.state !== process.env.LLV_STATE_DIR || process.env.NODE_ENV 
 const unregister = registerPipelineTick(async () => {});
 const ports = defaultPipelinePorts();
 ports.scheduleTick = () => {};
+if (input.wallFile) {
+  const file = input.wallFile;
+  ports.now = () => fs.readFileSync(file, "utf8");
+}
 if (input.pauseAndClose) {
   const pause = await patchPipeline(input.lane, { action: "pause", reason: "Hold the fixture lane before close" }, ports);
   if (pause.pipeline?.state !== "paused") throw new Error("fixture pause refused");

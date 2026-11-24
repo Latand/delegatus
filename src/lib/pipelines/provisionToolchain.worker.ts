@@ -78,7 +78,12 @@ async function prepare(): Promise<void> {
     return containedDependencyExec(command === "bun" ? process.execPath : command, argv, cwd, env, options);
   };
   const completed = await prepareLockedDependencies(checkout, {
-    exec, payloadExec: containedDependencyExec, repository, budgetMs,
+    exec, repository, budgetMs,
+    payloadExec: async (...context) => {
+      const result = await containedDependencyExec(...context);
+      if (result.code === 0) await request("payloadScanComplete");
+      return result;
+    },
     onStep: async step => { await request("step", { step }); },
     beforeEffect: async effect => { await request("dispatch", { effect }); },
     onWriterWait: async identity => { await request("cacheBusy", { identity }); },

@@ -48,6 +48,7 @@ export type ProvisioningRecord = {
   resource?: string;
   cacheWaitSince?: number;
   cacheWaitIdentity?: string;
+  cacheMetadataRemainingMs?: number;
   cacheOwner?: DependencyCacheFence;
   legacyWaitSince?: number;
   legacyWriter?: { pid: number; start: string };
@@ -94,6 +95,8 @@ export function validProvisioningRecord(value: unknown): value is ProvisioningRe
     || (value.resource !== undefined && (!text(value.resource, 32) || !/^(?:checkout|repo):[0-9]{1,3}$/.test(value.resource)))
     || (value.cacheWaitSince !== undefined && !timestamp(value.cacheWaitSince))
     || (value.cacheWaitIdentity !== undefined && !validCacheIdentity(value.cacheWaitIdentity))
+    || (value.cacheMetadataRemainingMs !== undefined && (!timestamp(value.cacheMetadataRemainingMs)
+      || value.cacheMetadataRemainingMs > PROVISION_STEPS.startingToolchain))
     || (value.cacheOwner !== undefined && (!value.worker || !validCacheFence(value.cacheOwner)))
     || (value.legacyWaitSince !== undefined && !timestamp(value.legacyWaitSince))
     || (value.legacyWriter !== undefined && (!object(value.legacyWriter) || !timestamp(value.legacyWriter.pid)

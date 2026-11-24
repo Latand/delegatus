@@ -134,7 +134,7 @@ export async function runProvisionToolchain(request: ToolchainRequest): Promise<
         if (frame.outcome === "verified") return;
         if (frame.outcome === "private-install-unverified") throw new ProvisionToolchainFailure(frame.outcome);
         throw new Error("invalid provisioning result");
-      } else throw new Error("invalid provisioning worker request");
+      } else if (frame.type !== "payloadScanComplete") throw new Error("invalid provisioning worker request");
       await request.observeReply?.(String(frame.type),
         typeof frame.effect === "string" ? frame.effect : typeof frame.step === "string" ? frame.step : undefined);
       await send(go);

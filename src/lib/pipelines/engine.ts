@@ -17837,7 +17837,7 @@ async function applyPipelinePatch(
         pipeline.state = "provisioning";
         pipeline.pausedState = null;
         pipeline.stateDetail = PIPELINE_BASE_UNRESOLVED_DETAIL;
-        pipeline.provisioningJob = { ...job, status: "waiting", retryAt: undefined, cacheWaitSince: undefined, legacyWaitSince: undefined };
+        pipeline.provisioningJob = { ...job, status: "waiting", retryAt: undefined, cacheWaitSince: undefined, cacheMetadataRemainingMs: undefined, legacyWaitSince: undefined };
         if (job.admittedAdd) delete pipeline.provisioningJob.admittedAdd?.previousWait;
         else delete pipeline.provisioningWait;
         await persist();
