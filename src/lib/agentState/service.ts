@@ -19,7 +19,7 @@ import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { AGENT_STATE_POLICY, evaluateAgentState, fact, unknown, type AgentFacts, type AgentProjection, type Evidence, type NativeTurn } from "./model";
 import { AgentTranscriptCache, fileSignature, transcriptVersionMatches } from "./transcript";
 import { acknowledgeAgentProjection, artifactRevision, commitAgentObservation, conversationRevision, entryRevision,
-  readAgentProjection, readAgentStateMetrics, subjectId, copyAgentStateRow, recordAgentProcessEnded, pruneTerminalAgentProjection } from "./store";
+  readAgentProjection, readAgentStateMetrics, readAgentStatesPage, readAntigravityAgentProjection, subjectId, copyAgentStateRow, recordAgentProcessEnded, pruneTerminalAgentProjection } from "./store";
 
 const digest = (v: unknown) => crypto.createHash("sha256").update(JSON.stringify(v)).digest("hex");
 export const AGENT_STATE_INTERVAL_MS = AGENT_STATE_POLICY.reconcileMs;
@@ -186,8 +186,7 @@ export class AgentStateService {
     }
     if (!allowed()) return;
     const maintenanceAfter = registry.agentStateRead(file => file.agentStateMetrics.maintenance?.afterKey ?? "");
-    const maintenance = registry.agentStateRead(file => registryCollectionPage(file, "agentStates", maintenanceAfter, 32)
-      .map(key => copyAgentStateRow(file.agentStates[key]!)));
+    const maintenance = readAgentStatesPage(registry, maintenanceAfter, 32);
     for (const row of maintenance) {
       if (!allowed()) return;
       const identity = row.facts.process.determined ? row.facts.process.value.identity : null;
@@ -450,7 +449,9 @@ export class AgentStateService {
         // connection can write between publication checks and must be seen.
         const row = registry.agentStateRead(file => {
           const current = file.entries[committed.entryKey];
-          if (file.agentStates[committed.subject]?.revision !== committed.revision || !current
+          const stored = file.agentStates[committed.subject]
+            ?? (committed.facts.engine === "antigravity" ? readAntigravityAgentProjection(registry.filename, committed.subject) : null);
+          if (stored?.revision !== committed.revision || !current
             || entryRevision(current) !== committed.facts.revision || this.ports.process(process) !== processStatus) return null;
           if (claimIdentity && this.ports.process(claimIdentity) !== claimStatus) return null;
           const source = snapshotFacts(file, current);

@@ -104,5 +104,78 @@ describe("Antigravity agentState integration", () => {
       determined: true,
       value: { state: "closed", promptOrdinal: 1 },
     });
+
+    // Rollback compatibility: the shared SQLite `agentStates` collection and JSON
+    // snapshot MUST NEVER hold `facts.engine === "antigravity"` rows (which prior
+    // releases reject with `invalid agent-state row`), while a second AgentRegistry
+    // still resolves the durable Antigravity projection via `readAgentProjection`.
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(path.join(root, "registry.sqlite"), { readonly: true });
+    try {
+      const rawStates = db.query<{ value_json: string }, []>(
+        "SELECT value_json FROM registry_rows WHERE collection = 'agentStates'",
+      ).all();
+      expect(rawStates.every((row) => (JSON.parse(row.value_json) as { facts?: { engine?: string } }).facts?.engine !== "antigravity")).toBe(true);
+    } finally {
+      db.close();
+    }
+    const exported = await registry.prepareReadOnlySnapshot();
+    expect(Object.values(exported.agentStates).some((row) => row.facts.engine === "antigravity")).toBe(false);
+
+    const reader = new AgentRegistry(filename, undefined, undefined, {
+      sqliteMode: "sqlite",
+      sqliteFilename: path.join(root, "registry.sqlite"),
+    });
+    registries.push(reader);
+    expect(readAgentProjection(reader, subjectId(entry))?.facts.engine).toBe("antigravity");
+  });
+
+  it("keeps host-retirement-cursor.json strictly v1 legacy-valid after sweeping an Antigravity host", async () => {
+    const { normalizeRegistry } = await import("@/lib/agent/registry");
+    const { runStructuredHostRetirementSweep } = await import("@/lib/runtime/structuredHostRetirement");
+    const prevState = process.env.LLV_STATE_DIR;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ag-cursor-"));
+    roots.push(root);
+    process.env.LLV_STATE_DIR = root;
+    try {
+      const seed = fixtureRegistry(root, "antigravity", captureProcessIdentity(process.pid), null);
+      const file = normalizeRegistry(seed);
+      const sweepOpts = {
+        snapshot: () => file,
+        publicationState: () => "ready" as const,
+        owned: () => true,
+        record: () => {},
+        handoffRows: () => ({ determined: true as const, value: [] }),
+        pidAlive: () => ({ determined: false as const, why: "fixture" }),
+        ownerProcess: () => "unverified" as const,
+        processIdentity: () => ({ determined: false as const, why: "fixture" }),
+        reconcileGone: async () => ({ status: "changed" as const, reason: "fixture" }),
+        terminate: async () => { throw new Error("unexpected terminate"); },
+      };
+
+      const report1 = await runStructuredHostRetirementSweep(sweepOpts);
+      expect(report1.progress?.afterKey).toBe(`antigravity:${FIXTURE_SESSION}`);
+      const v1Path = path.join(root, "host-retirement-cursor.json");
+      const v2Path = path.join(root, "host-retirement-cursor-v2.json");
+      const v1 = JSON.parse(fs.readFileSync(v1Path, "utf8")) as { version: number; afterKey: string | null };
+      // Strict legacy 3-engine v1 validator accepts `{ version: 1, afterKey: null }` cleanly on rollback.
+      expect(v1).toEqual({ version: 1, afterKey: null });
+      const v2 = JSON.parse(fs.readFileSync(v2Path, "utf8")) as { version: number; afterKey: string };
+      expect(v2.version).toBe(2);
+      expect(v2.afterKey).toBe(`antigravity:${FIXTURE_SESSION}`);
+
+      // Next candidate sweep resumes from the v2 Antigravity cursor.
+      const report2 = await runStructuredHostRetirementSweep(sweepOpts);
+      expect(report2.progress?.beforeKey).toBe(`antigravity:${FIXTURE_SESSION}`);
+
+      // If a rolled-back prior release writes a legacy Claude cursor to v1, candidate follows v1.
+      const claudeKey = `claude:${FIXTURE_SESSION}`;
+      fs.writeFileSync(v1Path, `${JSON.stringify({ version: 1, afterKey: claudeKey })}\n`);
+      const report3 = await runStructuredHostRetirementSweep(sweepOpts);
+      expect(report3.progress?.beforeKey).toBe(claudeKey);
+    } finally {
+      if (prevState === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = prevState;
+    }
   });
 });

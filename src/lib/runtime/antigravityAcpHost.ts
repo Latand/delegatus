@@ -278,6 +278,17 @@ function statLedgerFingerprint(ledgerPath: string): { exists: true; fingerprint:
   }
 }
 
+function sameLedgerFingerprint(left: LedgerFileFingerprint | null, right: LedgerFileFingerprint | null): boolean {
+  if (!left || !right) return false;
+  return left.ledgerPath === right.ledgerPath
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.fileSize === right.fileSize
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+    && left.tailSha256 === right.tailSha256;
+}
+
 function rememberLedgerAntigravityHome(ledgerPath: string, antigravityHome: string): void {
   const canonicalLedger = canonicalizeFilePath(ledgerPath);
   const canonicalHome = canonicalizeFilePath(antigravityHome);
@@ -587,6 +598,12 @@ class AntigravityDeliveryIndex {
         );
       }
     })();
+  }
+
+  clearFingerprint(sessionId: string): void {
+    try {
+      this.db.query("DELETE FROM antigravity_delivery_ledger_fingerprint WHERE session_id = ?").run(sessionId);
+    } catch { /* best effort */ }
   }
 
   close(): void {
@@ -974,6 +991,7 @@ export class AntigravityAcpHost implements EngineHost {
   private deliveryMutationSeq = 0;
   private deliveryIndex: AntigravityDeliveryIndex | null = null;
   private deliveryIndexHealthy = false;
+  private lastLedgerFingerprint: LedgerFileFingerprint | null = null;
   private readonly stateListeners = new Set<(state: HostState) => void>();
   private readonly stdoutDecoder = new StringDecoder("utf8");
   private readonly launchFlags: readonly string[];
@@ -1875,6 +1893,12 @@ export class AntigravityAcpHost implements EngineHost {
     if (!deliveryId) {
       return { state: "absent", reason: "Antigravity delivery id is empty" };
     }
+    if (this.lastLedgerFingerprint !== null) {
+      const currentFp = this.currentLedgerFingerprint();
+      if (!sameLedgerFingerprint(this.lastLedgerFingerprint, currentFp)) {
+        this.reconcileExternallyModifiedLedger(currentFp);
+      }
+    }
     let acceptance = this.deliveryAcceptance.get(deliveryId);
     if (!acceptance && this.deliveryAcceptanceEvicted) {
       const lookedUp = await this.lookupDurableDeliveryAcceptance(deliveryId);
@@ -2041,12 +2065,15 @@ export class AntigravityAcpHost implements EngineHost {
         const ledgerFp = this.currentLedgerFingerprint();
         this.deliveryIndex.syncSession(this.identity.sessionId, durableTailSeq, restoredAcceptance, maxDeliverySeq, ledgerFp);
         if (ledgerFp) rememberLedgerAntigravityHome(ledgerFp.ledgerPath, this.options.antigravityHome);
+        this.lastLedgerFingerprint = ledgerFp;
         this.deliveryIndexHealthy = true;
       } else {
+        this.lastLedgerFingerprint = null;
         this.deliveryIndexHealthy = false;
       }
     } catch (error) {
       this.deliveryIndexHealthy = false;
+      this.lastLedgerFingerprint = null;
       this.closeDeliveryIndex();
       console.warn("[antigravity] delivery acceptance index unavailable; falling back to ledger lookup", safeError(error));
     }
@@ -2071,6 +2098,44 @@ export class AntigravityAcpHost implements EngineHost {
     return stat.exists ? stat.fingerprint : null;
   }
 
+  private reconcileExternallyModifiedLedger(afterFp: LedgerFileFingerprint | null): void {
+    this.deliveryIndex?.clearFingerprint(this.identity.sessionId);
+    try {
+      const canonical = this.eventStore.load(this.identity.sessionId);
+      const rebuilt = new Map<string, { record: DeliveryAcceptanceRecord; seq: number }>();
+      let maxDeliverySeq = 0;
+      for (const ev of canonical) {
+        if (ev.kind === "item" && reduceDeliveryAcceptanceIntoMap(rebuilt, ev)) {
+          maxDeliverySeq = ev.seq;
+        }
+      }
+      this.deliveryAcceptance.clear();
+      this.sentEntries.clear();
+      this.deliveryAcceptanceEvicted = rebuilt.size > ANTIGRAVITY_SENT_ENTRY_MEMORY;
+      for (const [entryId, entry] of rebuilt) {
+        this.recordDeliveryAcceptance(entryId, entry.record, false);
+        if (entry.record.state === "accepted") {
+          this.recordSentEntry(entryId, entry.record.turnId || `restored:${entryId}`);
+        }
+      }
+      const tailSeq = canonical.at(-1)?.seq ?? 0;
+      if (this.deliveryIndex) {
+        this.deliveryIndex.syncSession(this.identity.sessionId, tailSeq, rebuilt, maxDeliverySeq, afterFp);
+        if (afterFp) rememberLedgerAntigravityHome(afterFp.ledgerPath, this.options.antigravityHome);
+        this.lastLedgerFingerprint = afterFp;
+        this.deliveryIndexHealthy = true;
+      } else {
+        this.lastLedgerFingerprint = null;
+        this.deliveryIndexHealthy = false;
+      }
+    } catch (error) {
+      this.deliveryIndex?.clearFingerprint(this.identity.sessionId);
+      this.deliveryIndexHealthy = false;
+      this.lastLedgerFingerprint = null;
+      console.warn("[antigravity] externally modified ledger reconciliation failed; falling back to ledger lookup", safeError(error));
+    }
+  }
+
   private emit(event: UnsequencedEvent): boolean {
     this.turnSilence?.observe(event);
     if (this.ledgerFailed || this.identity.sessionId === "pending") return false;
@@ -2082,6 +2147,14 @@ export class AntigravityAcpHost implements EngineHost {
       this.fail(new Error(safeError(error)));
       return false;
     }
+    const beforeFp = this.currentLedgerFingerprint();
+    const externallyModified = this.lastLedgerFingerprint !== null
+      && !sameLedgerFingerprint(this.lastLedgerFingerprint, beforeFp);
+    if (externallyModified) {
+      // Never allow stale indexed rows to remain trusted if the canonical file
+      // was replaced or modified out-of-band before this append.
+      this.deliveryIndex?.clearFingerprint(this.identity.sessionId);
+    }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
     try {
@@ -2092,13 +2165,18 @@ export class AntigravityAcpHost implements EngineHost {
       this.fail(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return false;
     }
-    if (this.deliveryIndex && this.deliveryIndexHealthy) {
+    const afterFp = this.currentLedgerFingerprint();
+    if (externallyModified) {
+      this.reconcileExternallyModifiedLedger(afterFp);
+    } else if (this.deliveryIndex && this.deliveryIndexHealthy) {
       try {
-        const ledgerFp = this.currentLedgerFingerprint();
-        this.deliveryIndex.applyEvent(this.identity.sessionId, sequenced, ledgerFp);
-        if (ledgerFp) rememberLedgerAntigravityHome(ledgerFp.ledgerPath, this.options.antigravityHome);
+        this.deliveryIndex.applyEvent(this.identity.sessionId, sequenced, afterFp);
+        if (afterFp) rememberLedgerAntigravityHome(afterFp.ledgerPath, this.options.antigravityHome);
+        this.lastLedgerFingerprint = afterFp;
       } catch (error) {
+        this.deliveryIndex.clearFingerprint(this.identity.sessionId);
         this.deliveryIndexHealthy = false;
+        this.lastLedgerFingerprint = null;
         console.warn("[antigravity] delivery acceptance index update failed; falling back to ledger lookup", safeError(error));
       }
     }

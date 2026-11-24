@@ -1,10 +1,54 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type { AgentRegistry, AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { registryCollectionPage, registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { AGENT_STATE_POLICY, emptyAgentStateMetrics, evaluateAgentState, fact, validAgentFacts, validAgentEvidence, type AgentFacts, type AgentProjection, type AgentStateJournal, type AgentStateMetrics, type AgentStateMetricsRow } from "./model";
 
 export function copyAgentStateRow<T>(row: T): T { return JSON.parse(JSON.stringify(row)) as T; }
+
+/** Sidecar file for Antigravity projections so `agent-registry.sqlite` and
+    `agent-registry.json` never contain `facts.engine = "antigravity"` rows in
+    the legacy `agentStates` collection, preserving rollback to prior releases. */
+export function antigravityAgentStatesFile(registryFilename: string): string {
+  return path.join(path.dirname(registryFilename), "antigravity-agent-states.json");
+}
+
+export function readAntigravityAgentStates(registryFilename: string): Record<string, AgentProjection> {
+  const filename = antigravityAgentStatesFile(registryFilename);
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filename, "utf8")) as unknown;
+    const rows = normalizeAgentStateRows(parsed, "projection");
+    const result: Record<string, AgentProjection> = {};
+    for (const [key, row] of Object.entries(rows)) {
+      if (row.facts.engine === "antigravity") result[key] = row;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+export function readAntigravityAgentProjection(registryFilename: string, subject: string): AgentProjection | null {
+  const row = readAntigravityAgentStates(registryFilename)[subject];
+  return row ? copyAgentStateRow(row) : null;
+}
+
+function writeAntigravityAgentStates(registryFilename: string, rows: Record<string, AgentProjection>): void {
+  const filename = antigravityAgentStatesFile(registryFilename);
+  const keys = Object.keys(rows);
+  if (keys.length === 0) {
+    try { fs.unlinkSync(filename); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return;
+  }
+  fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const temp = `${filename}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify(rows)}\n`, { mode: 0o600 });
+  fs.renameSync(temp, filename);
+}
 const hash = (v: unknown) => crypto.createHash("sha256").update(JSON.stringify(v)).digest("hex");
 export function subjectId(entry: AgentRegistryEntry): string {
   return hash([sessionKeyId(entry.key), entry.structuredHost?.process ?? entry.structuredHost?.exitProcess ?? entry.hostExitProcess]).slice(0, 48);
@@ -83,7 +127,13 @@ function contribution(row?: AgentProjection): Record<"unownedHosts" | "unownedRs
     subjectsObserved: Number(Boolean(row)), subjectsUnverified: Number(Boolean(row && row.verdict.missing.length)),
     pendingProjectionPublications: Number(row?.pendingPublication ?? false), registryTranscriptDivergencesCurrent: Number(Boolean(row?.divergence)) };
 }
-function changeMetrics(file: RegistryFile, metrics: AgentStateMetrics, old: AgentProjection | undefined, next: AgentProjection): void {
+function changeMetrics(
+  file: RegistryFile,
+  metrics: AgentStateMetrics,
+  old: AgentProjection | undefined,
+  next: AgentProjection,
+  extraStates: Readonly<Record<string, AgentProjection>> = {},
+): void {
   const before = contribution(old), after = contribution(next);
   for (const key of ["subjectsObserved", "subjectsUnverified", "pendingProjectionPublications", "registryTranscriptDivergencesCurrent"] as const)
     metrics[key] = Math.max(0, metrics[key] + after[key] - before[key]);
@@ -93,7 +143,7 @@ function changeMetrics(file: RegistryFile, metrics: AgentStateMetrics, old: Agen
   const prior = file.agentStateMetrics[key] ?? emptyAgentStateMetrics();
   const members = [...new Set([...(prior.physicalSubjects ?? []), next.subject])];
   const rows = members.flatMap(id => {
-    const row = id === next.subject ? next : file.agentStates[id];
+    const row = id === next.subject ? next : file.agentStates[id] ?? extraStates[id];
     return row?.facts.process.determined && row.facts.process.value.status === "alive" ? [row] : [];
   });
   const physical = emptyAgentStateMetrics();
@@ -160,12 +210,17 @@ function boardFacts(row: AgentProjection): string {
 
 /** The repair, conversation axis, journal and totals have one commit boundary. */
 export function commitAgentObservation(registry: AgentRegistry, observation: StateObservation, guard: () => boolean): AgentProjection | null {
-  return registry.agentStateWrite((file, readMetrics) => {
+  const isAntigravity = observation.projection.facts.engine === "antigravity";
+  let pendingAntigravityStates: Record<string, AgentProjection> | null = null;
+  const committed = registry.agentStateWrite((file, readMetrics) => {
     const key = sessionKeyId(observation.entry.key);
     const current = file.entries[key];
     if (!current || entryRevision(current) !== entryRevision(observation.entry)
       || conversationRevision(file, current) !== observation.conversationRevision || !guard()) return null;
-    const old = file.agentStates[observation.projection.subject];
+    const antigravityStates = readAntigravityAgentStates(registry.filename);
+    const old = isAntigravity
+      ? antigravityStates[observation.projection.subject] ?? file.agentStates[observation.projection.subject]
+      : file.agentStates[observation.projection.subject];
     const next = copyAgentStateRow(observation.projection);
     const open = next.facts.turn.determined && next.facts.turn.value.state === "open";
     if (observation.repair) {
@@ -219,18 +274,51 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
       }
       if (journal.divergence && old?.divergenceKey !== next.divergenceKey) metrics.registryTranscriptDivergencesTotal++;
     }
-    changeMetrics(file, metrics, old, next);
-    file.agentStates[next.subject] = next;
+    changeMetrics(file, metrics, old, next, antigravityStates);
+    if (isAntigravity) {
+      // Keep Antigravity projections out of the shared `agentStates` collection
+      // so rollback to a prior release never fails strict engine validation.
+      if (file.agentStates[next.subject]) delete file.agentStates[next.subject];
+      antigravityStates[next.subject] = next;
+      pendingAntigravityStates = antigravityStates;
+    } else {
+      file.agentStates[next.subject] = next;
+    }
     file.agentStateMetrics.current = metrics;
     return copyAgentStateRow(next);
   });
+  if (committed && pendingAntigravityStates) {
+    writeAntigravityAgentStates(registry.filename, pendingAntigravityStates);
+  }
+  return committed;
 }
 
 export function readAgentStateMetrics(registry: AgentRegistry): AgentStateMetrics {
   return registry.agentStateMetricsRead();
 }
 export function readAgentProjection(registry: AgentRegistry, subject: string): AgentProjection | null {
-  return registry.agentStateRead(file => copyAgentStateRow(file.agentStates[subject] ?? null));
+  return registry.agentStateRead(file => {
+    const row = file.agentStates[subject] ?? readAntigravityAgentStates(registry.filename)[subject] ?? null;
+    return row ? copyAgentStateRow(row) : null;
+  });
+}
+export function readAgentStatesPage(registry: AgentRegistry, after = "", limit = 32): AgentProjection[] {
+  return registry.agentStateRead(file => {
+    const primaryKeys = registryCollectionPage(file, "agentStates", after, limit);
+    const antigravityStates = readAntigravityAgentStates(registry.filename);
+    const combined = new Map<string, AgentProjection>();
+    for (const key of primaryKeys) {
+      const row = file.agentStates[key];
+      if (row) combined.set(key, copyAgentStateRow(row));
+    }
+    for (const [key, row] of Object.entries(antigravityStates)) {
+      if (key > after) combined.set(key, copyAgentStateRow(row));
+    }
+    return [...combined.entries()]
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .slice(0, limit)
+      .map(([, row]) => row);
+  });
 }
 export function readAgentStatePage(registry: AgentRegistry, collection: "agentStateJournal" | "agentStateMetrics", after = "", limit = 32) {
   const currentMetrics = collection === "agentStateMetrics" ? registry.agentStateMetricsRead() : null;
@@ -243,30 +331,58 @@ export function readAgentStatePage(registry: AgentRegistry, collection: "agentSt
 }
 /** A status transition noticed at the runtime owner must survive a failed files publication. */
 export function requireAgentFilesRevision(registry: AgentRegistry, subject: string, revision: number): boolean {
-  return registry.agentStateWrite(file => {
-    const row = file.agentStates[subject];
+  let pendingAntigravityStates: Record<string, AgentProjection> | null = null;
+  const updated = registry.agentStateWrite(file => {
+    const primary = file.agentStates[subject];
+    if (primary) {
+      if (primary.revision !== revision || !primary.pendingPublication) return false;
+      primary.pendingFilesRevision = true;
+      return true;
+    }
+    const antigravityStates = readAntigravityAgentStates(registry.filename);
+    const row = antigravityStates[subject];
     if (!row || row.revision !== revision || !row.pendingPublication) return false;
     row.pendingFilesRevision = true;
+    pendingAntigravityStates = antigravityStates;
     return true;
   });
+  if (updated && pendingAntigravityStates) {
+    writeAntigravityAgentStates(registry.filename, pendingAntigravityStates);
+  }
+  return updated;
 }
 
 export function acknowledgeAgentProjection(registry: AgentRegistry, subject: string, revision: number, at = Date.now()): boolean {
-  return registry.agentStateWrite(file => {
-    const row = file.agentStates[subject];
+  let pendingAntigravityStates: Record<string, AgentProjection> | null = null;
+  const updated = registry.agentStateWrite(file => {
+    const primary = file.agentStates[subject];
+    let row = primary;
+    let antigravityStates: Record<string, AgentProjection> | null = null;
+    if (!row) {
+      antigravityStates = readAntigravityAgentStates(registry.filename);
+      row = antigravityStates[subject];
+    }
     if (!row || row.revision !== revision || !row.pendingPublication) return false;
     row.pendingPublication = false;
     row.pendingFilesRevision = false;
     const metrics = file.agentStateMetrics.current;
     if (metrics) { metrics.pendingProjectionPublications = Math.max(0, metrics.pendingProjectionPublications - 1); metrics.revision++; metrics.at = at; }
+    if (antigravityStates) pendingAntigravityStates = antigravityStates;
     return true;
   });
+  if (updated && pendingAntigravityStates) {
+    writeAntigravityAgentStates(registry.filename, pendingAntigravityStates);
+  }
+  return updated;
 }
 
 /** Ending one physical identity never mutates a replacement's registry row. */
 export function recordAgentProcessEnded(registry: AgentRegistry, observed: AgentProjection, journal: AgentStateJournal, guard: () => boolean): boolean {
-  return registry.agentStateWrite((file, readMetrics) => {
-    const row = file.agentStates[observed.subject];
+  let pendingAntigravityStates: Record<string, AgentProjection> | null = null;
+  const updated = registry.agentStateWrite((file, readMetrics) => {
+    const antigravityStates = readAntigravityAgentStates(registry.filename);
+    const primary = file.agentStates[observed.subject];
+    const row = primary ?? antigravityStates[observed.subject];
     if (!row || row.revision !== observed.revision || row.verdict.state === "dead" || !row.facts.process.determined || !guard()) return false;
     const metrics = readMetrics();
     const before = copyAgentStateRow(row);
@@ -279,16 +395,24 @@ export function recordAgentProcessEnded(registry: AgentRegistry, observed: Agent
     row.pendingPublication = false;
     file.agentStateJournal[journal.id] = { ...journal, from: before.verdict.state, to: "dead" };
     metrics.journalRows++;
-    changeMetrics(file, metrics, before, row);
+    changeMetrics(file, metrics, before, row, antigravityStates);
     file.agentStateMetrics.current = metrics;
+    if (!primary) pendingAntigravityStates = antigravityStates;
     return true;
   });
+  if (updated && pendingAntigravityStates) {
+    writeAntigravityAgentStates(registry.filename, pendingAntigravityStates);
+  }
+  return updated;
 }
 
 /** Terminal diagnostics are disposable only after registry custody settled. */
 export function pruneTerminalAgentProjection(registry: AgentRegistry, subject: string, at: number, guard: () => boolean): void {
+  let pendingAntigravityStates: Record<string, AgentProjection> | null = null;
   registry.agentStateWrite((file, readMetrics) => {
-    const row = file.agentStates[subject];
+    const antigravityStates = readAntigravityAgentStates(registry.filename);
+    const primary = file.agentStates[subject];
+    const row = primary ?? antigravityStates[subject];
     if (!row || row.verdict.state !== "dead" || row.pendingPublication || !guard()) return;
     const entry = file.entries[row.entryKey];
     if (entry?.structuredHost?.process || entry?.structuredHost?.scope || entry?.structuredHost?.memory?.unit
@@ -302,8 +426,13 @@ export function pruneTerminalAgentProjection(registry: AgentRegistry, subject: s
       metrics.subjectsUnverified = Math.max(0, metrics.subjectsUnverified - old.subjectsUnverified);
       metrics.registryTranscriptDivergencesCurrent = Math.max(0, metrics.registryTranscriptDivergencesCurrent - old.registryTranscriptDivergencesCurrent);
       metrics.terminalSubjects = Math.max(0, metrics.terminalSubjects - 1);
-      delete file.agentStates[subject];
+      if (primary) delete file.agentStates[subject];
+      else delete antigravityStates[subject];
     }
+    if (!primary) pendingAntigravityStates = antigravityStates;
     file.agentStateMetrics.current = metrics;
   });
+  if (pendingAntigravityStates) {
+    writeAntigravityAgentStates(registry.filename, pendingAntigravityStates);
+  }
 }

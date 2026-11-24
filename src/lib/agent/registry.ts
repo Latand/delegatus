@@ -5268,6 +5268,9 @@ function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string
     _jsonStoreId: value._jsonStoreId,
     ...value,
     ...(sqliteRevision === undefined ? {} : { _sqliteRevision: sqliteRevision }),
+    agentStates: Object.fromEntries(
+      Object.entries(value.agentStates).filter(([, row]) => row?.facts?.engine !== "antigravity"),
+    ),
     entries: Object.fromEntries(Object.entries(value.entries).map(([id, entry]) => [id, {
       ...entry,
       ...(entry.launchProfile ? { launchProfile: compactLaunchProfile(entry.launchProfile) } : {}),

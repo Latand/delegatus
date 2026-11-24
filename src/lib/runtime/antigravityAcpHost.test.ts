@@ -1093,7 +1093,34 @@ describe("AntigravityAcpHost", () => {
     const echoesForFirst = baseEventStore.load(retentionSessionId)
       .filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === firstEntry.id);
     expect(echoesForFirst).toHaveLength(1);
+
+    // Replacing the canonical JSONL with a same-length alternate-ID file while the
+    // host is alive MUST invalidate both FileRuntimeEventStore's cache and the
+    // derived SQLite delivery index before host.release() appends `session-status`.
+    const canonicalLedger = path.join(stateDir, "runtime-events-edge", `${retentionSessionId}.jsonl`);
+    const altId = `X${firstEntry.id.slice(1)}`;
+    const beforeBytes = fs.readFileSync(canonicalLedger, "utf8");
+    const replacedBytes = beforeBytes.replaceAll(firstEntry.id, altId);
+    expect(replacedBytes.length).toBe(beforeBytes.length);
+    expect(replacedBytes).not.toBe(beforeBytes);
+    fs.writeFileSync(`${canonicalLedger}.replace`, replacedBytes);
+    fs.renameSync(`${canonicalLedger}.replace`, canonicalLedger);
+
+    expect(await readAntigravityConfirmedDelivery(retentionSessionId, firstEntry.id, { eventStore: baseEventStore, antigravityHome })).toBeNull();
+    expect((await readAntigravityConfirmedDelivery(retentionSessionId, altId, { eventStore: baseEventStore, antigravityHome }))?.turnId).toBe(firstTurnId);
+
     await host.release();
+
+    // After release appends session-status, BOTH the in-process eventStore cache AND
+    // cold/same-process confirmed-delivery readers MUST agree with the physical file.
+    const postReleaseEvents = baseEventStore.load(retentionSessionId);
+    expect(postReleaseEvents.filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === firstEntry.id)).toHaveLength(0);
+    expect(postReleaseEvents.filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === altId)).toHaveLength(1);
+    expect(await readAntigravityConfirmedDelivery(retentionSessionId, firstEntry.id, { eventStore: baseEventStore, antigravityHome })).toBeNull();
+    expect((await readAntigravityConfirmedDelivery(retentionSessionId, altId, { eventStore: baseEventStore, antigravityHome }))?.turnId).toBe(firstTurnId);
+    const coldEventStore = new FileRuntimeEventStore(path.join(stateDir, "runtime-events-edge"));
+    expect(await readAntigravityConfirmedDelivery(retentionSessionId, firstEntry.id, { eventStore: coldEventStore, antigravityHome })).toBeNull();
+    expect((await readAntigravityConfirmedDelivery(retentionSessionId, altId, { eventStore: coldEventStore, antigravityHome }))?.turnId).toBe(firstTurnId);
 
     // External ledger append after release invalidates the stored fingerprint and forces
     // canonical JSONL fallback so the newly appended acceptance is observed accurately.
@@ -1101,7 +1128,7 @@ describe("AntigravityAcpHost", () => {
     const externalTurn = "antigravity:external-turn";
     const latestSeq = baseEventStore.load(retentionSessionId).at(-1)!.seq;
     fs.appendFileSync(
-      path.join(stateDir, "runtime-events-edge", `${retentionSessionId}.jsonl`),
+      canonicalLedger,
       `${JSON.stringify({
         seq: latestSeq + 1,
         kind: "item",
