@@ -1284,7 +1284,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           const actionable = ["tick_budget", "protection_checkpoint", "ledger_busy", "admission_busy"].includes(last.reasonCode)
             || last.reasonCode === "root_budget" && AttemptProtectionInventory.exists(owner.directory);
           const quarantined = !fs.existsSync(owner.directory) && fs.existsSync(attemptTempJournalPath(owner.directory));
-          const fullProofWithoutProgress = last.reasonCode === "checkout_budget" || last.reasonCode === "root_budget";
+          const fullProofWithoutProgress = last.reasonCode === "checkout_budget" || last.reasonCode === "namespace_budget"
+            || last.reasonCode === "root_budget";
           const retryMs = last.disposition !== "deferred" ? EXPIRED_HOLD_RETRY_MS
             : !quarantined && !actionable && (options.scheduledOnly && !pressure || pressure && fullProofWithoutProgress)
               ? EXPIRED_PROOF_RETRY_MS : 0;

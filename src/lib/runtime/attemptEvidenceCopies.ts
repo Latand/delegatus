@@ -121,13 +121,14 @@ export function attributeCopyBeforeRootRetirement(store: AttemptTempStore, origi
   if (store.copy(destination)) return 0;
 
   // A sealed discovery cursor may never have seen this legacy destination.
-  // Bind it from its verified manifest while the source owner still exists.
+  // Record its verified source for reporting while the owner still exists.
+  // Legacy attribution alone never grants authority to remove the destination.
   const owner = store.owner(original);
   if (!owner || owner.identity !== identity) return 0;
-  store.registerCopy({ destination, pipelineId: owner.pipelineId, launchId: owner.launchId,
-    kind: owner.pipelineId ? "lane" : "agent", createdAt: owner.createdAt, expiresAt: null,
+  store.registerCopy({ destination, pipelineId: null, launchId: "legacy",
+    kind: "unattributed", createdAt: owner.createdAt, expiresAt: null,
     checkedAt: Date.now() + HOUR, bytes: 0 });
-  return 0;
+  return store.attributeCopySource(destination);
 }
 
 /** Old ledgers can have sealed discovery before this source was registered.

@@ -13,6 +13,7 @@ import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { runTempSweep, scanProcesses, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { statePath } from "@/lib/configDir";
+import * as attemptTempFilesystem from "./attemptTempFilesystem";
 import { attemptReferencesClear, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { holdFinishedRoot, finishedLane, nameInReport } from "./attemptTempRetention.testSupport";
 import { ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, attemptScratchExpiry } from "./attemptScratchPolicy";
@@ -810,10 +811,41 @@ test.each([false, true])("a verified legacy copy is bound before its source reti
     writeEnvelope(path.join(copy, "manifest.json"), { original, identity });
     store.checkpointCopies("", sealed);
     const report = await runAttemptTempSweep({ ...workPorts, references }, workMode);
-    expect(report).toMatchObject({ removed: 1, copies: { removed: 0, unattributed: { count: 0, bytes: 0 } } });
+    expect(report).toMatchObject({ removed: 1, copies: { removed: 0, sourceAttributed: 1, unattributed: { count: 0, bytes: 0 } } });
     expect(fs.existsSync(original!)).toBeFalse();
     expect(fs.existsSync(copy)).toBeTrue();
-    expect(store.copy(copy)).toMatchObject({ pipelineId: "oldest-lane", launchId: "fixture-launch-0", kind: "lane" });
+    expect(store.copy(copy)).toMatchObject({ pipelineId: null, launchId: "legacy", kind: "unattributed" });
+    expect(store.dueCopies(WORK_TICK + 2 * 3600000, 10)).toEqual([]);
+  } finally { clock.mockRestore(); store.close(); }
+});
+
+test.each(["report-linked payload", "replaced destination"] as const)("an attributed legacy copy preserves %s after its source retires", async control => {
+  const { store, directories: [original] } = workScratchFixture(1, 1);
+  let now = WORK_TICK;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const { identity } = store.owner(original!)!;
+    const name = createHash("sha256").update(original!).update("\0").update(identity).digest("hex");
+    const copy = statePath("evidence", "attempt-temp", name);
+    fs.mkdirSync(copy, { recursive: true });
+    const payload = path.join(copy, "frame.png");
+    fs.writeFileSync(payload, "legacy payload");
+    writeEnvelope(path.join(copy, "manifest.json"), { original, identity });
+    store.checkpointCopies("", true);
+    if (control === "report-linked payload") nameInReport(payload);
+    expect(await runAttemptTempSweep({ ...workPorts, references }, workMode)).toMatchObject({ removed: 1 });
+    expect(fs.existsSync(original!)).toBeFalse();
+    expect(store.copy(copy)?.kind).toBe("unattributed");
+    if (control === "replaced destination") {
+      fs.renameSync(copy, copy + "-previous");
+      fs.mkdirSync(copy);
+      fs.writeFileSync(path.join(copy, "frame.png"), "replacement inode");
+    }
+    now += 60 * 60_000;
+    await runAttemptTempSweep({ ...workPorts, references }, workMode);
+    expect(fs.readFileSync(path.join(copy, "frame.png"), "utf8"))
+      .toBe(control === "replaced destination" ? "replacement inode" : "legacy payload");
+    expect(fs.existsSync(original!)).toBeFalse();
   } finally { clock.mockRestore(); store.close(); }
 });
 
@@ -865,6 +897,40 @@ test("a failed full proof under cap pressure waits between minute ticks and retr
     expect(await tick(retryAt, false)).toMatchObject({ checked: 1, removed: 1, errors: 0 });
     expect(fs.existsSync(directory!)).toBeFalse();
   } finally {
+    if (previousCap === undefined) delete process.env.LLV_ATTEMPT_TEMP_CAP_BYTES;
+    else process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = previousCap;
+    store.close();
+  }
+}, 15_000);
+
+test("a full namespace proof failure under cap pressure persists its retry across ticks", async () => {
+  const { store, directories: [directory] } = workScratchFixture(1, 1);
+  const previousCap = process.env.LLV_ATTEMPT_TEMP_CAP_BYTES;
+  process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "1";
+  let now = WORK_TICK, failProof = true;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const remove = attemptTempFilesystem.removeAttemptTree;
+  const injected = spyOn(attemptTempFilesystem, "removeAttemptTree").mockImplementation(async (...args) => {
+    if (failProof) {
+      failProof = false;
+      throw new AttemptTempBudgetDeferred("attempt namespace time budget exhausted");
+    }
+    return remove(...args);
+  });
+  try {
+    const retryAt = WORK_TICK + 15 * 60_000;
+    const failed = await runAttemptTempSweep({ ...workPorts, references }, workMode);
+    expect(failed).toMatchObject({ checked: 1, deferred: 1, removed: 0,
+      outcomes: [expect.objectContaining({ reasonCode: "namespace_budget", retryAt })] });
+    expect(store.owner(directory!)?.checkedAt).toBe(retryAt);
+    now = WORK_TICK + 60_000;
+    expect(await runAttemptTempSweep({ ...workPorts, references }, workMode)).toMatchObject({ checked: 0, removed: 0 });
+    expect(fs.readFileSync(path.join(directory!, "payload"), "utf8")).toBe("fixture");
+    now = retryAt;
+    expect(await runAttemptTempSweep({ ...workPorts, references }, workMode)).toMatchObject({ checked: 1, removed: 1 });
+    expect(fs.existsSync(directory!)).toBeFalse();
+  } finally {
+    injected.mockRestore(); clock.mockRestore();
     if (previousCap === undefined) delete process.env.LLV_ATTEMPT_TEMP_CAP_BYTES;
     else process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = previousCap;
     store.close();
@@ -1542,6 +1608,7 @@ test.each(["passed", "failed", "needs_decision", "skipped", "committing"] as con
 
 
 test.each([false, true])("production access gives managed scratch and durable evidence (restricted=%s)", async restricted => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "production-managed-scratch-")); roots.push(root); isolateState(root);
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
   const { structuredHostAccessPolicy } = await import("./structuredSpawn");
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
