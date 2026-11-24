@@ -713,3 +713,24 @@ test("Codex lines are unchanged: each account names its weekly window", async ()
     { id: "codex-c", name: "Codex C", value: "no data yet", active: false },
   ]);
 });
+
+test("AntigravityFooterRow expires reset-less exhaustion at observedAt + 5h without refresh", async () => {
+  const { AntigravityFooterRow } = await import("./AntigravityFooterRow");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const shown = (at: number, reset: number | null) => renderToStaticMarkup(
+    <AntigravityFooterRow
+      limits={{ session: { usedPercent: 100, observedAt: NOW, resetsAt: reset, windowMinutes: 300 }, weekly: null, plan: null, capturedAt: NOW }}
+      limitsAccountId="default"
+      now={at}
+      density="line"
+    />,
+  ).includes('data-engine-limits="antigravity"');
+
+  expect(shown(NOW + 17_999, NOW + 18_000)).toBe(true);
+  expect(shown(NOW + 18_000, NOW + 18_000)).toBe(false);
+  expect(shown(NOW + 18_001, NOW + 18_000)).toBe(false);
+
+  expect(shown(NOW + 17_999, null)).toBe(true);
+  expect(shown(NOW + 18_000, null)).toBe(false);
+  expect(shown(NOW + 18_001, null)).toBe(false);
+});

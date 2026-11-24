@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   ANTIGRAVITY_QUOTA_WINDOW_MINUTES,
   antigravityLimitsFromExhaustion,
+  isAntigravitySessionWindowActive,
   parseAntigravityQuotaError,
   redactAntigravityQuotaMessage,
 } from "./antigravityQuota";
@@ -10,7 +11,7 @@ import {
 const BASE_MS = Date.parse("2026-11-24T01:00:00.000Z");
 const BASE_SEC = Math.floor(BASE_MS / 1000);
 
-test("parses RESOURCE_EXHAUSTED and Individual quota reached messages across all reset duration formats", () => {
+test("parses explicit individual quota messages across spaced and compact reset duration formats", () => {
   const full = parseAntigravityQuotaError(
     "RESOURCE_EXHAUSTED: Individual quota reached for gemini-4-neon. Resets in 4h 12m 30s",
     BASE_MS,
@@ -24,16 +25,32 @@ test("parses RESOURCE_EXHAUSTED and Individual quota reached messages across all
     message: "RESOURCE_EXHAUSTED: Individual quota reached for gemini-4-neon. Resets in 4h 12m 30s",
   });
 
+  const compact = parseAntigravityQuotaError(
+    "Individual quota reached. Resets in 2h15m30s",
+    BASE_MS,
+  );
+  expect(compact?.resetsAt).toBe(BASE_SEC + 2 * 3600 + 15 * 60 + 30);
+
+  const spaced = parseAntigravityQuotaError(
+    "Individual quota reached. Resets in 2h 15m 30s",
+    BASE_MS,
+  );
+  expect(spaced?.resetsAt).toBe(compact?.resetsAt);
+
+  // Malformed partial intervals MUST be rejected (`resetsAt: null`) instead of taking only the tail `30s`.
+  expect(parseAntigravityQuotaError("Individual quota reached. Resets in 2h15x30s", BASE_MS)?.resetsAt).toBeNull();
+  expect(parseAntigravityQuotaError("Individual quota reached. Resets in 2h 15x 30s", BASE_MS)?.resetsAt).toBeNull();
+
   const hoursMins = parseAntigravityQuotaError(
     "Individual quota reached for gemini-3.8-flash. Resets in 2h 15m",
     BASE_MS,
   );
   expect(hoursMins?.resetsAt).toBe(BASE_SEC + 2 * 3600 + 15 * 60);
 
-  const minsOnly = parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Resets in 45m", BASE_MS);
+  const minsOnly = parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Individual quota reached. Resets in 45m", BASE_MS);
   expect(minsOnly?.resetsAt).toBe(BASE_SEC + 45 * 60);
 
-  const secsOnly = parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Resets in 90s", BASE_MS);
+  const secsOnly = parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Individual quota reached. Resets in 90s", BASE_MS);
   expect(secsOnly?.resetsAt).toBe(BASE_SEC + 90);
 
   const verboseWords = parseAntigravityQuotaError(
@@ -58,7 +75,13 @@ test("parses RESOURCE_EXHAUSTED and Individual quota reached messages across all
   });
 });
 
-test("ignores non-quota errors and redacts emails, tokens, and home paths from quota messages", () => {
+test("rejects transient per-minute rate limits and non-quota errors, and redacts PII", () => {
+  expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: requests per minute exceeded; retry after 10 seconds", BASE_MS)).toBeNull();
+  expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: tokens per minute limit reached; retry after 15 seconds", BASE_MS)).toBeNull();
+  expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Rate limit exceeded; retry after 10 seconds", BASE_MS)).toBeNull();
+  expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Too many requests", BASE_MS)).toBeNull();
+  expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED", BASE_MS)).toBeNull();
+  expect(parseAntigravityQuotaError("UNAVAILABLE: retry after 10 seconds", BASE_MS)).toBeNull();
   expect(parseAntigravityQuotaError("ETIMEDOUT connecting to upstream", BASE_MS)).toBeNull();
   expect(parseAntigravityQuotaError("JSON-RPC -32602 invalid params", BASE_MS)).toBeNull();
   expect(parseAntigravityQuotaError("permission denied", BASE_MS)).toBeNull();
@@ -78,7 +101,7 @@ test("ignores non-quota errors and redacts emails, tokens, and home paths from q
   expect(redacted).toContain("[redacted-path]");
 });
 
-test("maps active exhaustion onto a 5h session window, expires cleanly at resetsAt, and isolates caller mutations", () => {
+test("maps active exhaustion onto a 5h session window, expires identically at resetsAt and observedAt+5h, and isolates caller mutations", () => {
   const exhaustion = parseAntigravityQuotaError(
     "RESOURCE_EXHAUSTED: Individual quota reached. Resets in 2h 0m",
     BASE_MS,
@@ -110,12 +133,16 @@ test("maps active exhaustion onto a 5h session window, expires cleanly at resets
   const atReset = antigravityLimitsFromExhaustion(exhaustion, { nowMs: (BASE_SEC + 7200) * 1000 });
   expect(atReset).toEqual({ limits: null, active: false, expired: true });
 
-  // Reset-less exhaustion expires after one 5-hour window.
+  // Reset-less exhaustion expires after one 5-hour window (18,000s) under the shared predicate.
   const withoutReset = parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Individual quota reached", BASE_MS)!;
-  expect(antigravityLimitsFromExhaustion(withoutReset, { nowMs: BASE_MS + 60_000 }).active).toBe(true);
-  expect(antigravityLimitsFromExhaustion(withoutReset, { nowMs: BASE_MS + 300 * 60_000 })).toEqual({
+  expect(antigravityLimitsFromExhaustion(withoutReset, { nowMs: BASE_MS + 17_999 * 1000 }).active).toBe(true);
+  expect(antigravityLimitsFromExhaustion(withoutReset, { nowMs: BASE_MS + 18_000 * 1000 })).toEqual({
     limits: null,
     active: false,
     expired: true,
   });
+  const unknownWindow = { resetsAt: null, observedAt: BASE_SEC, windowMinutes: 300 };
+  expect(isAntigravitySessionWindowActive(unknownWindow, BASE_SEC + 17_999)).toBe(true);
+  expect(isAntigravitySessionWindowActive(unknownWindow, BASE_SEC + 18_000)).toBe(false);
+  expect(isAntigravitySessionWindowActive(unknownWindow, BASE_SEC + 18_001)).toBe(false);
 });

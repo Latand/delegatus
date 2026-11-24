@@ -25,6 +25,7 @@ import {
   parseAntigravityQuotaError,
   type AntigravityQuotaExhaustion,
 } from "@/lib/limits/antigravityQuota";
+import { noteAntigravitySessionActivity } from "@/lib/limits/antigravityTranscriptLimits";
 import {
   resolveClaudeMcpServers,
   viewerMcpHttpUrl,
@@ -1865,6 +1866,7 @@ export class AntigravityAcpHost implements EngineHost {
               },
             });
             this.recordQuotaExhaustion(quota);
+            noteAntigravitySessionActivity(path.join(this.options.antigravityHome, "sessions"), this.identity.path);
           } else {
             this.appendTranscriptRecord("session.error", {
               turnId,

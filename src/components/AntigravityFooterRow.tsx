@@ -1,6 +1,7 @@
 "use client";
 
 import { useLocale } from "@/lib/i18n";
+import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import type { EngineLimits, LimitsProvenance } from "@/lib/types";
 
 import { barColor, LimitWindowLine, quotaAsOfHint } from "./LimitRow";
@@ -25,7 +26,7 @@ export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance,
   const { t, locale } = useLocale();
   const session = limits?.session ?? null;
   if (!session || !limitsAccountId) return null;
-  if (session.resetsAt !== null && session.resetsAt <= now) return null;
+  if (!isAntigravitySessionWindowActive(session, now)) return null;
 
   const tint = engineTintOf("antigravity");
   const left = Math.max(0, Math.min(100, 100 - session.usedPercent));

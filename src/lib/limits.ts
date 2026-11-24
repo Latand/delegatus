@@ -13,6 +13,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { activeAntigravityAccountId, listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
+import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import { readAntigravityTranscriptLimits } from "@/lib/limits/antigravityTranscriptLimits";
 import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
@@ -441,18 +442,20 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
   const copilotRead = copilotAccount ? readCopilotTranscriptLimits(copilotAccount.sessionStateDir) : null;
   const antigravityAccountId = activeAntigravityAccountId();
   const antigravityAccount = listAntigravityAccounts().find((account) => account.id === antigravityAccountId) ?? null;
-  const antigravityTranscriptRead = antigravityAccount
-    ? readAntigravityTranscriptLimits(antigravityAccount.sessionsDir, now, { tierName: antigravityAccount.tierName })
-    : null;
+  const antigravityTranscriptRead: LimitRead | null = (() => {
+    if (!antigravityAccount) return null;
+    try {
+      return readAntigravityTranscriptLimits(antigravityAccount.sessionsDir, now, { tierName: antigravityAccount.tierName });
+    } catch {
+      return { data: null, reason: "antigravity transcript read error", source: "unavailable" };
+    }
+  })();
   const antigravityObserved = (() => {
     if (!antigravityAccount) return null;
     try {
-      const obs = agentRegistry().readOnlySnapshot().quotaObservations.antigravity[antigravityAccount.id];
+      const obs = agentRegistry().quotaObservations("antigravity").find((row) => row.accountId === antigravityAccount.id);
       const session = obs?.limits?.session;
-      if (!obs?.limits || !session) return null;
-      const nowSec = Math.floor(now / 1000);
-      if (session.resetsAt !== null && session.resetsAt <= nowSec) return null;
-      if (session.resetsAt === null && session.observedAt != null && nowSec >= session.observedAt + (session.windowMinutes ?? 300) * 60) return null;
+      if (!obs?.limits || !isAntigravitySessionWindowActive(session, Math.floor(now / 1000))) return null;
       return obs;
     } catch {
       return null;

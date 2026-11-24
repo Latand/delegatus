@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { liveFreshObservation } from "@/lib/accounts/accountProjection";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import type { AccountProjectBinding } from "@/lib/accounts/projectBindings";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import type { AgentLivenessRecord, AgentLivenessSnapshot } from "@/lib/lifecycle/liveness";
@@ -406,11 +407,9 @@ export function accountLimitRows(input: AccountLimitsInput) {
       .map((account) => {
         const observation = observationMap[account.accountId];
         const rawLimits = observation?.limits ?? null;
-        const antigravityExpired = engine === "antigravity" && rawLimits?.session != null && (
-          rawLimits.session.resetsAt !== null
-            ? rawLimits.session.resetsAt <= nowSec
-            : rawLimits.session.observedAt != null && nowSec >= rawLimits.session.observedAt + (rawLimits.session.windowMinutes ?? 300) * 60
-        );
+        const antigravityExpired = engine === "antigravity"
+          && rawLimits?.session != null
+          && !isAntigravitySessionWindowActive(rawLimits.session, nowSec);
         const limits = antigravityExpired ? null : rawLimits;
         return {
           engine,

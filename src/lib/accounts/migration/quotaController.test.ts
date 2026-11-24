@@ -199,6 +199,162 @@ test("Antigravity quota probe reads transcript exhaustion with zero process spaw
   }
 });
 
+test("Antigravity EIO isolation preserves auth & HTTP 200, keeps host exhaustion past 5 newer files/older events, aligns 5h cutoff, and avoids readOnlySnapshot", async () => {
+  const { setSystemTime } = await import("bun:test");
+  const { GET } = await import("@/app/api/limits/route");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const { antigravityDefaultSessionsDir, recordAntigravityAuthState } = await import("@/lib/accounts/antigravity");
+  const { accountLimitRows } = await import("@/lib/mcp/compactAnswers");
+  const { liveQuotaProbe } = await import("./quotaController");
+
+  const root = fs.mkdtempSync(path.join(QUOTA_SANDBOX, "ag-hardening-"));
+  const prevStateDir = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite",
+    sqliteFilename: path.join(root, "registry.sqlite"),
+  });
+  setAgentRegistryForTests(registry);
+
+  const at = Date.parse("2026-11-24T01:00:00.000Z");
+  const atSec = Math.floor(at / 1000);
+  let clock = at + 60_000;
+  setSystemTime(new Date(clock));
+  recordAntigravityAuthState({ authenticated: true, checkedAt: new Date(at).toISOString(), tierName: "Pro", tierId: null });
+
+  const sessionsDir = antigravityDefaultSessionsDir();
+  const primaryDir = path.join(sessionsDir, "fixture-primary");
+  fs.mkdirSync(primaryDir, { recursive: true });
+  const primaryFile = path.join(primaryDir, "events.jsonl");
+
+  const hostObs = {
+    engine: "antigravity" as const,
+    accountId: "default",
+    authenticated: true,
+    authCheckedAt: new Date(at).toISOString(),
+    observedAt: new Date(at).toISOString(),
+    bootId: "antigravity-acp-host",
+    provenance: { source: "transcript" as const, reason: null, staleSince: null },
+    limits: {
+      session: { usedPercent: 100, resetsAt: atSec + 12_000, windowMinutes: 300, observedAt: atSec, source: "account" as const },
+      weekly: null,
+      tiers: [],
+      plan: "Pro",
+      capturedAt: atSec,
+    },
+    resetCredits: null,
+    limitReached: true,
+  };
+  const controller = new QuotaController(registry, liveQuotaProbe, "ag-hardening", () => clock);
+
+  try {
+    // 1. Neither GET /api/limits nor accountManager.status("antigravity", "default") calls readOnlySnapshot().
+    registry.recordQuotaObservation(hostObs);
+    fs.writeFileSync(primaryFile, "{}\n");
+    let snapshots = 0;
+    const origSnap = registry.readOnlySnapshot.bind(registry);
+    registry.readOnlySnapshot = function () { snapshots += 1; return origSnap(); };
+    try {
+      const resp = await GET();
+      expect(resp.status).toBe(200);
+      expect(snapshots).toBe(0);
+      await accountManager.status("antigravity", "default", false);
+      expect(snapshots).toBe(0);
+    } finally {
+      registry.readOnlySnapshot = origSnap;
+    }
+
+    // 2. Five newer-mtime session files with an OLDER expired event MUST NOT erase an active host exhaustion.
+    fs.utimesSync(primaryFile, 1, 1);
+    for (let i = 0; i < 5; i += 1) {
+      const d = path.join(sessionsDir, `recent-${i}`);
+      fs.mkdirSync(d, { recursive: true });
+      const f = path.join(d, "events.jsonl");
+      const oldMs = at - 7_200_000;
+      const line = i === 0
+        ? { type: "session.quota_exhausted", timestamp: new Date(oldMs).toISOString(), data: { message: "Individual quota reached", resetsAt: atSec - 10, observedAt: Math.floor(oldMs / 1000), windowMinutes: 300 } }
+        : { type: "session.start", data: {} };
+      fs.writeFileSync(f, `${JSON.stringify(line)}\n`);
+      fs.utimesSync(f, 10 + i, 10 + i);
+    }
+    await controller.tick("antigravity");
+    const afterSixth = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterSixth?.limitReached).toBe(true);
+    expect(afterSixth?.limits?.session?.usedPercent).toBe(100);
+    const httpSixth = await (await GET()).json() as { antigravity?: { session?: { usedPercent: number } } | null };
+    expect(httpSixth.antigravity?.session?.usedPercent).toBe(100);
+
+    // 3. EIO on one transcript MUST NOT fail GET /api/limits or flip stored authenticated=true to false.
+    registry.recordQuotaObservation({ ...hostObs, limits: null, limitReached: false });
+    const recent0 = path.join(sessionsDir, "recent-0", "events.jsonl");
+    fs.appendFileSync(recent0, "{}\n");
+    const r0Stat = fs.statSync(recent0);
+    const origRead = fs.readSync;
+    fs.readSync = function (fd: number, ...args: unknown[]) {
+      const s = fs.fstatSync(fd);
+      if (s.ino === r0Stat.ino && s.dev === r0Stat.dev) {
+        throw Object.assign(new Error("fixture quota read"), { code: "EIO" });
+      }
+      return (origRead as (...a: unknown[]) => number).call(fs, fd, ...args);
+    } as typeof fs.readSync;
+    try {
+      const res = await GET();
+      expect(res.status).toBe(200);
+      await controller.tick("antigravity");
+    } finally {
+      fs.readSync = origRead;
+    }
+    const afterIo = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterIo?.authenticated).toBe(true);
+
+    // 4. Unified 5-hour cutoff when resetsAt is null across GET /api/limits, MCP account_limits, and accountManager.status
+    //    (including after a failing probe a day later).
+    const noResetObs = {
+      ...hostObs,
+      limits: { ...hostObs.limits, session: { ...hostObs.limits.session, resetsAt: null } },
+    };
+    registry.recordQuotaObservation(noResetObs);
+    for (const [deltaSec, expected] of [[17_999, 100], [18_000, null], [18_001, null]] as const) {
+      clock = at + deltaSec * 1000;
+      setSystemTime(new Date(clock));
+      const apiBody = await (await GET()).json() as { antigravity?: { session?: { usedPercent: number } } | null };
+      const statusSummary = await accountManager.status("antigravity", "default", false);
+      const obsRow = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+      const mcpRows = accountLimitRows({
+        engine: "antigravity",
+        accounts: { claude: [], codex: [], copilot: [], antigravity: [{ accountId: "default", authPresent: true }] },
+        active: { claude: null, codex: null, copilot: null, antigravity: "default" },
+        observations: { claude: {}, codex: {}, copilot: {}, antigravity: obsRow ? { default: obsRow } : {} },
+        now: clock,
+      });
+      expect(apiBody.antigravity?.session?.usedPercent ?? null).toBe(expected);
+      expect(statusSummary.limits.session?.usedPercent ?? null).toBe(expected);
+      expect(mcpRows[0]?.session?.usedPercent ?? null).toBe(expected);
+    }
+
+    // Even a day later with a failing probe, accountManager.status and GET /api/limits still clear the expired window.
+    clock = at + 86_400_000;
+    setSystemTime(new Date(clock));
+    const failingController = new QuotaController(
+      registry,
+      { ...liveQuotaProbe, probe: async () => { throw new Error("test disk error"); } },
+      "ag-hardening-fail",
+      () => clock,
+    );
+    await failingController.tick("antigravity");
+    expect(((await (await GET()).json()) as { antigravity?: unknown }).antigravity ?? null).toBeNull();
+    expect((await accountManager.status("antigravity", "default", false)).limits.session).toBeNull();
+  } finally {
+    setSystemTime();
+    setAgentRegistryForTests(null);
+    registry.close();
+    if (prevStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevStateDir;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("quota visibility remains fresh when automatic balancing is disabled", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-controller-"));
   try {

@@ -20,6 +20,7 @@ import { statePath } from "@/lib/configDir";
 import { logQuotaEvent } from "@/lib/events";
 import { adoptClaudeLimitsSnapshot, readClaudeAccountLimits, readCodexLimits } from "@/lib/limits";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
+import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import { readAntigravityTranscriptLimits } from "@/lib/limits/antigravityTranscriptLimits";
 import { recordLimitSamples } from "@/lib/limitsHistoryStore";
 
@@ -316,6 +317,21 @@ export class QuotaController {
         observedAt: Date.parse(previous.observedAt) || now,
         envelope: null,
         resetCredits: previous.resetCredits ?? null,
+        ...(previous.limitReached === undefined ? {} : { limitReached: previous.limitReached }),
+      };
+    }
+    if (previous) {
+      return {
+        engine,
+        accountId,
+        authenticated: previous.authenticated,
+        authCheckedAt: Date.parse(previous.authCheckedAt) || now,
+        limits: null,
+        provenance: { source: "unavailable", reason, staleSince: previous.provenance.staleSince ?? null },
+        observedAt: Date.parse(previous.observedAt) || now,
+        envelope: null,
+        resetCredits: previous.resetCredits ?? null,
+        ...(previous.limitReached === undefined ? {} : { limitReached: previous.limitReached }),
       };
     }
     return {
@@ -389,18 +405,10 @@ export class QuotaController {
         }
         const providerWithUnknownLimits = engine === "claude" && "provider" in account && Boolean(account.provider);
         const previousAntigravityActive = engine === "antigravity"
-          && Boolean(previous?.limits?.session)
-          && (() => {
-            const session = previous!.limits!.session!;
-            const nowSec = Math.floor(now / 1000);
-            if (session.resetsAt !== null) return session.resetsAt > nowSec;
-            if (session.observedAt != null) return nowSec < session.observedAt + (session.windowMinutes ?? 300) * 60;
-            return false;
-          })();
+          && isAntigravitySessionWindowActive(previous?.limits?.session, Math.floor(now / 1000));
         if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot" && engine !== "antigravity" && !providerWithUnknownLimits
-          || (engine !== "antigravity" && previous?.limits && Date.parse(previous.observedAt) > observation.observedAt)
-          || (engine === "antigravity" && !observation.limits && previousAntigravityActive
-            && observation.provenance.reason !== "antigravity quota reset window elapsed")))) {
+          || (previous?.limits && (engine !== "antigravity" || previousAntigravityActive) && Date.parse(previous.observedAt) > observation.observedAt)
+          || (engine === "antigravity" && !observation.limits && previousAntigravityActive)))) {
           observations.push(this.carryForward(engine, account.id, result.reason ?? observation?.provenance.reason ?? (observation?.limits ? "quota-probe-older" : "quota-probe-empty"), now));
         } else {
           observations.push(observation);

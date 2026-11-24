@@ -6,6 +6,7 @@ import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountListed, clau
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "./claudeLogin";
 import { managedCodexRuntime } from "./codexRuntime";
 import { activeAntigravityAccountId, antigravityAccountContext, antigravityAccountForSpawn, antigravityAuthCheckedAt, antigravityHomeOwningSessionPath, listAntigravityAccounts } from "./antigravity";
+import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, copilotConfigCheckedAt, copilotHomeOwningSessionPath, copilotLoginCommand, copilotSignedInUser, createManagedCopilotAccount, listCopilotAccounts, setActiveCopilotAccount, UnknownCopilotAccountError } from "./copilot";
 import { copilotLoginSupervisor } from "./copilotLogin";
 import type { AccountContext, AccountEngineName, AccountManager, AccountSummary, CopilotAccountSummary, ProjectSpawnRequest, ProjectSpawnResolution } from "./contracts";
@@ -529,13 +530,13 @@ function copilotSummary(id: string): CopilotAccountSummary {
 function antigravitySummary(id: string): AccountSummary {
   const account = listAntigravityAccounts().find((item) => item.id === id);
   if (!account) throw new Error(`unknown antigravity account: ${id}`);
-  const observation = agentRegistry().readOnlySnapshot().quotaObservations.antigravity[id];
+  const observation = agentRegistry().quotaObservations("antigravity").find((row) => row.accountId === id);
   const observedMs = observation ? Date.parse(observation.observedAt) : Number.NaN;
   const nowSec = Math.floor(Date.now() / 1000);
   const session = observation?.limits?.session ?? null;
   const activeLimit = Boolean(
     observation?.limits
-    && (!session || session.resetsAt === null || session.resetsAt > nowSec),
+    && isAntigravitySessionWindowActive(session, nowSec),
   );
   const fresh = observation?.authenticated === true
     && Number.isFinite(observedMs)

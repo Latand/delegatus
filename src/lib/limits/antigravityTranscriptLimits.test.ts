@@ -192,3 +192,88 @@ test("remains consistent beside a concurrent transcript writer and across two SQ
     readerReg.close();
   }
 });
+
+test("isolates per-file EIO errors and bounds warm directory scan stat calls across 256 sessions", () => {
+  // 1. Per-file EIO isolation: unreadable file never throws and never hides another readable session.
+  const eioDir = path.join(root, "eio-isolation");
+  fs.mkdirSync(eioDir, { recursive: true });
+  const t0 = "2026-11-24T04:00:00.000Z";
+  const resetAt = Math.floor(Date.parse(t0) / 1000) + 3600;
+  const broken = writeSession(eioDir, "broken-session", "{}\n", 2000);
+  const brokenStat = fs.statSync(broken);
+
+  const origReadSync = fs.readSync;
+  fs.readSync = function (fd: number, ...rest: unknown[]) {
+    const fdStat = fs.fstatSync(fd);
+    if (fdStat.ino === brokenStat.ino && fdStat.dev === brokenStat.dev) {
+      throw Object.assign(new Error("synthetic EIO"), { code: "EIO" });
+    }
+    return (origReadSync as (...args: unknown[]) => number).call(fs, fd, ...rest);
+  } as typeof fs.readSync;
+  try {
+    const onlyBroken = readAntigravityTranscriptLimits(eioDir, Date.parse(t0) + 10_000);
+    expect(onlyBroken).toEqual({
+      data: null,
+      source: "unavailable",
+      reason: "antigravity transcript read error",
+    });
+
+    // Adding a readable session with active exhaustion is discovered despite the broken sibling.
+    writeSession(eioDir, "healthy-session", exhaustionLine(t0, "Individual quota reached. Resets in 1h", resetAt), 1900);
+    const withHealthy = readAntigravityTranscriptLimits(eioDir, Date.parse(t0) + 10_000);
+    expect(withHealthy.source).toBe("transcript");
+    expect(withHealthy.data?.session?.usedPercent).toBe(100);
+    expect(withHealthy.data?.session?.resetsAt).toBe(resetAt);
+  } finally {
+    fs.readSync = origReadSync;
+  }
+
+  // 2. Bounded warm metadata polling: 256 sessions do <= 5 file stats and 0 opens/reads on warm polls.
+  const scaleDir = path.join(root, "scale-256");
+  fs.mkdirSync(scaleDir, { recursive: true });
+  const padLine = `${JSON.stringify({ type: "assistant.message", data: { content: "x".repeat(960) } })}\n`;
+  for (let i = 0; i < 256; i += 1) {
+    writeSession(scaleDir, `fixture-${i}`, i < 251 ? padLine : padLine.repeat(100), 1000 + i);
+  }
+
+  const origStatSync = fs.statSync;
+  const origOpenSync = fs.openSync;
+  let stats = 0;
+  let opens = 0;
+  let bytes = 0;
+  fs.statSync = function (file: fs.PathLike, ...rest: unknown[]) {
+    if (String(file).startsWith(`${scaleDir}/`)) stats += 1;
+    return (origStatSync as (...args: unknown[]) => fs.Stats).call(fs, file, ...rest);
+  } as typeof fs.statSync;
+  fs.openSync = function (file: fs.PathLike, ...rest: unknown[]) {
+    if (String(file).startsWith(`${scaleDir}/`)) opens += 1;
+    return (origOpenSync as (...args: unknown[]) => number).call(fs, file, ...rest);
+  } as typeof fs.openSync;
+  fs.readSync = function (...args: unknown[]) {
+    const read = (origReadSync as (...a: unknown[]) => number).apply(fs, args);
+    bytes += read;
+    return read;
+  } as typeof fs.readSync;
+  try {
+    readAntigravityTranscriptLimits(scaleDir);
+    expect(opens).toBeLessThanOrEqual(5);
+
+    stats = 0;
+    opens = 0;
+    bytes = 0;
+    readAntigravityTranscriptLimits(scaleDir);
+    expect(stats).toBeLessThanOrEqual(5);
+    expect(opens).toBe(0);
+    expect(bytes).toBe(0);
+
+    // Creating a new session subdirectory invalidates the dir cache immediately (nlink/mtime change).
+    writeSession(scaleDir, "fixture-newest-after-warm", exhaustionLine(t0, "Individual quota reached. Resets in 1h", resetAt), 5000);
+    const afterNewDir = readAntigravityTranscriptLimits(scaleDir, Date.parse(t0) + 10_000);
+    expect(afterNewDir.source).toBe("transcript");
+    expect(afterNewDir.data?.session?.usedPercent).toBe(100);
+  } finally {
+    fs.statSync = origStatSync;
+    fs.openSync = origOpenSync;
+    fs.readSync = origReadSync;
+  }
+});

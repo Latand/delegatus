@@ -1761,4 +1761,75 @@ describe("AntigravityAcpHost", () => {
       await host.release();
     }
   });
+
+  it("treats transient per-minute RESOURCE_EXHAUSTED rate limits as session.error without recording 5-hour quota exhaustion", async () => {
+    const { readAntigravityTranscriptLimits } = await import("@/lib/limits/antigravityTranscriptLimits");
+    const sessionId = `ag_rpm_${crypto.randomUUID().slice(0, 8)}`;
+    const isolatedHome = path.join(stateDir, "ag-home-transient");
+    fs.mkdirSync(isolatedHome, { recursive: true });
+    const eventStore = new FileRuntimeEventStore(path.join(stateDir, "runtime-events-transient"));
+    const recorded: import("@/lib/accounts/migration/contracts").DurableQuotaObservation[] = [];
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+
+    const host = await AntigravityAcpHost.start({
+      cwd,
+      antigravityHome: isolatedHome,
+      accountId: "default",
+      model: "gemini-4-neon",
+      effort: "high",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore,
+      shutdownGraceMs: 40,
+      processIdentity: () => "start-transient",
+      signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+      recordQuotaObservation: (obs) => { recorded.push(obs); },
+      spawnProcess: () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          } else if (method === "session/new") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+          } else if (method === "session/set_config_option" || method === "session/close") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          } else if (method === "session/prompt" && id !== undefined) {
+            api.sendToHost({
+              jsonrpc: "2.0",
+              id,
+              error: {
+                code: -32000,
+                message: "RESOURCE_EXHAUSTED: requests per minute exceeded; retry after 10 seconds",
+              },
+            });
+          }
+        });
+        return fake.child;
+      },
+    });
+
+    try {
+      const receipt = await host.send({ id: "rpm-delivery-1", text: "trigger rpm throttle" });
+      expect(receipt.outcome).toBe("turn-started");
+      await new Promise((r) => setTimeout(r, 40));
+
+      const events = eventStore.load(sessionId);
+      expect(events.some((event) => event.kind === "limits")).toBe(false);
+      expect(recorded).toHaveLength(0);
+
+      const transcriptRecords = fs.readFileSync(host.identity.path, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type: string; data: Record<string, unknown> });
+      expect(transcriptRecords.some((row) => row.type === "session.quota_exhausted")).toBe(false);
+      expect(transcriptRecords.some((row) => row.type === "session.error")).toBe(true);
+
+      const read = readAntigravityTranscriptLimits(path.join(isolatedHome, "sessions"));
+      expect(read.source).toBe("unavailable");
+      expect(read.data).toBeNull();
+    } finally {
+      await host.release();
+    }
+  });
 });

@@ -1,4 +1,4 @@
-import type { EngineLimits } from "@/lib/types";
+import type { EngineLimits, LimitWindow } from "@/lib/types";
 
 /** Antigravity CLI (`agy`) enforces a 5-hour (300-minute) rolling quota window. */
 export const ANTIGRAVITY_QUOTA_WINDOW_MINUTES = 300;
@@ -25,15 +25,28 @@ export interface AntigravityLimitsMapping {
   expired: boolean;
 }
 
-const QUOTA_ERROR_PATTERNS: readonly RegExp[] = [
-  /\bRESOURCE_EXHAUSTED\b/i,
-  /\bIndividual quota reached\b/i,
-  /\bquota\s+(?:has\s+been\s+)?(?:exhausted|reached|exceeded)\b/i,
-  /\bexhausted\s+your\s+capacity\b/i,
+/** Transient burst/throughput throttles (e.g. RPM/TPM 429s) that can be retried
+ * after seconds and MUST NOT be misclassified as 5-hour account quota exhaustion. */
+const TRANSIENT_RATE_LIMIT_PATTERNS: readonly RegExp[] = [
+  /\b(?:requests?|tokens?|queries)\s+per\s+(?:minute|second)\b/i,
+  /\b(?:rpm|tpm|qpm|qps)\b/i,
+  /\brate[\s_-]*limit(?:ed|s)?\b/i,
+  /\btoo\s+many\s+requests\b/i,
 ];
 
-const RESET_DURATION_PHRASE = /\b(?:resets?|try again|available)\s+in\s+([^.\n,;]+)/i;
-const DURATION_TOKEN = /(\d+)\s*(?:(h(?:ours?|rs?)?)|(m(?:in(?:ute)?s?)?)|(s(?:ec(?:ond)?s?)?))\b/gi;
+/** Explicit individual/account quota exhaustion messages from Antigravity (`agy`).
+ * Bare `RESOURCE_EXHAUSTED` alone is insufficient because Google APIs also use
+ * that gRPC status for transient per-minute rate limits. */
+const QUOTA_ERROR_PATTERNS: readonly RegExp[] = [
+  /\bIndividual\s+quota\s+reached\b/i,
+  /\bquota\s+(?:has\s+been\s+)?(?:exhausted|reached|exceeded)\b/i,
+  /\bexhausted\s+your\s+(?:capacity|quota)\b/i,
+  /\byour\s+quota\s+will\s+reset\b/i,
+];
+
+const RESET_DURATION_PHRASE = /\b(?:(?:resets?|try\s+again|available)\s+in|reset\s+after)\s+([^.\n,;]+)/i;
+const DURATION_SEQUENCE = /^(?:(?:about|approximately)\s+)?((?:\d+\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])(?:\s*(?:and\s+)?)?)+)(.*)$/i;
+const DURATION_UNIT_TOKEN = /(\d+)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])/gi;
 const ISO_TIMESTAMP_PATTERN = /\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\b/;
 
 const EMAIL_REDACTION_PATTERN = new RegExp("\\b[A-Za-z0-9._%+-]+" + "@" + "[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b", "g");
@@ -50,24 +63,52 @@ export function redactAntigravityQuotaMessage(raw: string): string {
   return cleaned.length > MAX_MESSAGE_CHARS ? `${cleaned.slice(0, MAX_MESSAGE_CHARS - 1)}…` : cleaned;
 }
 
+/** Parses a complete reset duration (`2h 15m 30s`, `2h15m30s`, `1 hour 5 minutes`).
+ * Rejects malformed or partially parsed intervals instead of returning only a tail component. */
 function parseDurationMs(segment: string): number | null {
+  const trimmed = segment.trim();
+  if (!trimmed) return null;
+  const seq = DURATION_SEQUENCE.exec(trimmed);
+  if (!seq?.[1]) return null;
+  const matchedSpan = seq[1];
+  const remainder = seq[2] ?? "";
+  // Trailing text must either be empty or whitespace-separated prose containing no digits
+  // (e.g. " for gemini-4-neon"), never an unparsed duration chunk like "15x30s".
+  if (remainder.length > 0 && (!/^[\s)\]]/.test(remainder) || /\d/.test(remainder))) {
+    return null;
+  }
+
   let totalMs = 0;
   let matchedAny = false;
-  DURATION_TOKEN.lastIndex = 0;
+  let lastIndex = 0;
+  const seenUnits = new Set<string>();
+  DURATION_UNIT_TOKEN.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = DURATION_TOKEN.exec(segment)) !== null) {
+  while ((match = DURATION_UNIT_TOKEN.exec(matchedSpan)) !== null) {
+    const gap = matchedSpan.slice(lastIndex, match.index);
+    if (gap.length > 0 && !/^\s*(?:and\s+)?$/i.test(gap)) return null;
     const amount = Number(match[1]);
-    if (!Number.isFinite(amount) || amount < 0) return null;
+    const unitRaw = match[2]!.toLowerCase();
+    const unit = unitRaw.startsWith("d") ? "d"
+      : unitRaw.startsWith("h") ? "h"
+        : unitRaw.startsWith("m") ? "m"
+          : "s";
+    if (!Number.isFinite(amount) || amount < 0 || seenUnits.has(unit)) return null;
+    seenUnits.add(unit);
     matchedAny = true;
-    if (match[2]) totalMs += amount * 60 * 60 * 1000;
-    else if (match[3]) totalMs += amount * 60 * 1000;
-    else if (match[4]) totalMs += amount * 1000;
+    if (unit === "d") totalMs += amount * 24 * 60 * 60 * 1000;
+    else if (unit === "h") totalMs += amount * 60 * 60 * 1000;
+    else if (unit === "m") totalMs += amount * 60 * 1000;
+    else totalMs += amount * 1000;
+    lastIndex = match.index + match[0].length;
   }
+  const trailingInSpan = matchedSpan.slice(lastIndex);
+  if (trailingInSpan.length > 0 && !/^\s*$/.test(trailingInSpan)) return null;
   if (!matchedAny || totalMs <= 0 || totalMs > MAX_RESET_DURATION_MS) return null;
   return totalMs;
 }
 
-function parseResetSeconds(message: string, observedAtMs: number): number | null {
+export function parseAntigravityResetSeconds(message: string, observedAtMs: number): number | null {
   const phraseMatch = RESET_DURATION_PHRASE.exec(message);
   if (phraseMatch?.[1]) {
     const durationMs = parseDurationMs(phraseMatch[1]);
@@ -86,24 +127,57 @@ function parseResetSeconds(message: string, observedAtMs: number): number | null
 }
 
 /**
- * Pure parser for Antigravity CLI `RESOURCE_EXHAUSTED` / `"Individual quota reached"` errors.
- * Returns null for non-quota errors so transient network/RPC errors are never misclassified.
+ * Pure parser for explicit Antigravity CLI individual/account quota exhaustion errors.
+ * Returns null for transient per-minute/burst rate limits and non-quota RPC/network errors.
  */
 export function parseAntigravityQuotaError(
   message: string,
   observedAtMs = Date.now(),
 ): AntigravityQuotaExhaustion | null {
   if (typeof message !== "string" || !message.trim()) return null;
+  if (TRANSIENT_RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(message))) return null;
   if (!QUOTA_ERROR_PATTERNS.some((pattern) => pattern.test(message))) return null;
   const safeObservedMs = Number.isFinite(observedAtMs) && observedAtMs > 0 ? observedAtMs : Date.now();
   return {
     exhausted: true,
-    resetsAt: parseResetSeconds(message, safeObservedMs),
+    resetsAt: parseAntigravityResetSeconds(message, safeObservedMs),
     windowMinutes: ANTIGRAVITY_QUOTA_WINDOW_MINUTES,
     usedPercent: 100,
     observedAt: Math.floor(safeObservedMs / 1000),
     message: redactAntigravityQuotaMessage(message),
   };
+}
+
+/** Unix-second expiry cutoff for an Antigravity session quota window.
+ * Uses explicit `resetsAt` when available; otherwise `observedAt + windowMinutes * 60`
+ * (defaulting to the 5-hour / 300-minute window). */
+export function antigravitySessionWindowExpiresAt(
+  session: Pick<LimitWindow, "resetsAt" | "observedAt" | "windowMinutes">,
+): number | null {
+  if (session.resetsAt !== null && Number.isFinite(session.resetsAt)) {
+    return Math.floor(session.resetsAt);
+  }
+  if (session.observedAt != null && Number.isFinite(session.observedAt)) {
+    const windowMinutes = typeof session.windowMinutes === "number"
+      && Number.isFinite(session.windowMinutes)
+      && session.windowMinutes > 0
+      ? Math.round(session.windowMinutes)
+      : ANTIGRAVITY_QUOTA_WINDOW_MINUTES;
+    return Math.floor(session.observedAt) + windowMinutes * 60;
+  }
+  return null;
+}
+
+/** Shared active-window check across `/api/limits`, `QuotaController`, `accountManager.status`,
+ * MCP `account_limits`, and `AntigravityFooterRow` so every surface expires identically. */
+export function isAntigravitySessionWindowActive(
+  session: Pick<LimitWindow, "resetsAt" | "observedAt" | "windowMinutes"> | null | undefined,
+  nowSec: number,
+): boolean {
+  if (!session) return false;
+  const expiresAt = antigravitySessionWindowExpiresAt(session);
+  if (expiresAt === null) return false;
+  return nowSec < expiresAt;
 }
 
 /**
@@ -125,7 +199,7 @@ export function antigravityLimitsFromExhaustion(
   const resetsAt = exhaustion.resetsAt !== null && Number.isFinite(exhaustion.resetsAt)
     ? Math.floor(exhaustion.resetsAt)
     : null;
-  const expirySec = resetsAt !== null ? resetsAt : observedAt + ANTIGRAVITY_QUOTA_WINDOW_SECONDS;
+  const expirySec = resetsAt !== null ? resetsAt : observedAt + (windowMinutes > 0 ? windowMinutes * 60 : ANTIGRAVITY_QUOTA_WINDOW_SECONDS);
   if (nowSec >= expirySec) {
     return { limits: null, active: false, expired: true };
   }
