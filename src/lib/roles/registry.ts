@@ -194,7 +194,7 @@ export function configForParams(definition: RoleDefinition, params: RoleParamVal
 
 function resolveConfig(definition: RoleDefinition, params: RoleParamValues, explicit: ExplicitRoleConfig): { ok: true; value: RoleConfig } | { ok: false; error: string } {
   const config = { ...configForParams(definition, params), ...explicit };
-  if (config.engine !== "claude" && config.engine !== "codex") return { ok: false, error: "engine must be claude or codex" };
+  if (config.engine !== "claude" && config.engine !== "codex" && config.engine !== "antigravity") return { ok: false, error: "engine must be claude, codex or antigravity" };
   const locked = roleEngineRefusal(definition.id, config.engine);
   if (locked) return { ok: false, error: locked };
   const model = validateLaunchModel(config.engine, config.model);
@@ -238,7 +238,7 @@ export function resolveSpawnRole(body: { role?: unknown; roleParams?: unknown; c
   if (!base.ok) return base;
   const explicit: ExplicitRoleConfig = {};
   if (body.engine !== undefined) {
-    if (body.engine !== "claude" && body.engine !== "codex") return { ok: false, error: "engine must be claude or codex" };
+    if (body.engine !== "claude" && body.engine !== "codex" && body.engine !== "antigravity") return { ok: false, error: "engine must be claude, codex or antigravity" };
     if (body.engine !== base.value.config.engine && body.model === undefined) return { ok: false, error: "model is required when overriding a role engine" };
     explicit.engine = body.engine;
   }

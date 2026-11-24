@@ -861,6 +861,10 @@ board card and no wake item: a pass every few hours would flood both.
 
 ### 3.8 What the window shows (slice C)
 
+> Superseded on 2026-11-20 by the levels-left, rules-right layout of
+> [the S7 build brief](redesign-2026-11/s7-build-brief.md); the role picker
+> below became one level row per role scope. The text stays as history.
+
 The existing window and the card line, with one new control.
 
 - **The Role section** keeps its role picker and shows the chosen role's

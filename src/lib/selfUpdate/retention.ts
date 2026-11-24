@@ -23,7 +23,7 @@ export type RetentionInputs = {
   inFlight?: string[];
 };
 export type RetentionReport = {
-  at: string; removed: { dir: string; sha: string; bytes: number }[];
+  at: string; runId?: string; removed: { dir: string; sha: string; bytes: number }[];
   cursor?: { age: number; dir: string };
   recoveryCursor?: string;
   reclaimedCacheBytes: number; kept: { dir: string; reason: string; bytes: number }[]; errors: string[];
@@ -71,7 +71,9 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   try {
   const now = ports.now ?? Date.now;
   const run = ports.git ?? runGit;
-  const report: RetentionReport = { at: new Date(now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [] };
+  const report: RetentionReport = { at: new Date(now()).toISOString(),
+    ...(typeof ports.env?.LLV_RETENTION_RUN_ID === "string" && { runId: ports.env.LLV_RETENTION_RUN_ID }),
+    removed: [], reclaimedCacheBytes: 0, kept: [], errors: [] };
   const reportFile = ports.reportFile ?? statePath("self-update", "retention.json");
   fs.mkdirSync(path.dirname(reportFile), { recursive: true });
   const previousTrash = fs.readdirSync(path.dirname(reportFile)).sort();

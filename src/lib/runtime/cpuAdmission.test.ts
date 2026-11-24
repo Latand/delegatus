@@ -29,7 +29,7 @@ function fixture(unpolledMs = Number.POSITIVE_INFINITY) {
 }
 const FOREIGN = `stage:${"b".repeat(64)}:895e3de4:plan:1`, LIVE = `stage:${"0".repeat(64)}:762633d8:build:1`;
 
-test("heavy gate readiness and claims keep the pressure fence across process restart and the fairness bound", () => {
+test("heavy gate readiness and claims use the durable pressure bound across process restarts", () => {
   const f = fixture(), owner = captureProcessIdentity(process.pid);
   const script = `const { CpuAdmissionQueue } = await import(process.argv[1]); const q = new CpuAdmissionQueue(process.argv[2], () => Number(process.argv[3])); try { process.stdout.write(JSON.stringify(q.check("command:heavy", process.argv[4] === "low", JSON.parse(process.argv[5]), process.argv[6] === "claim", undefined, true))); } finally { q.close(); }`;
   const check = (at: number, low: boolean, claim: boolean) => {
@@ -38,11 +38,101 @@ test("heavy gate readiness and claims keep the pressure fence across process res
     return JSON.parse(result.stdout);
   };
   expect(check(0, false, false)).toMatchObject({ position: 1, since: 0 });
-  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, false, false)).toMatchObject({ position: 1, since: 0 });
-  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, false)).toBeNull();
+  const before = CPU_QUEUE_MAX_WAIT_MS - 1;
+  expect(check(before, false, false)).toMatchObject({ position: 1, since: 0, waitedMs: before, heldBy: "pressure" });
+  expect(check(before, true, false)).toBeNull();
   // Pressure can rise between readiness and the shell acquiring its slot.
-  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, false, true)).toMatchObject({ position: 1, since: 0 });
-  expect(check(CPU_QUEUE_MAX_WAIT_MS + 1, true, true)).toBeNull();
+  expect(check(before, false, true)).toMatchObject({ position: 1, since: 0, heldBy: "pressure" });
+  expect(check(CPU_QUEUE_MAX_WAIT_MS, false, false)).toBeNull();
+  expect(check(CPU_QUEUE_MAX_WAIT_MS, false, true)).toBeNull();
+});
+
+test("low pressure admits a newly queued heavy gate immediately", () => {
+  const f = fixture(), queue = f.open(), owner = captureProcessIdentity(process.pid);
+  expect(queue.check("command:gate", true, owner, false, undefined, true)).toBeNull();
+  expect(queue.check("command:gate", true, owner, true, undefined, true)).toBeNull();
+});
+
+test.skipIf(process.platform !== "linux")("legacy retirements survive reopen and incomplete coverage starts a new observation", () => {
+  const f = fixture(), owner = cpuOwnerIdentity(process.pid), q = f.open();
+  const key = `command:${owner.pid}:1:2`;
+  const retire = () => {
+    q.check(key, false, owner, false);
+    q.cancel(key);
+  };
+  retire();
+  expect(f.open().legacyGateHistory(owner.bootEpoch!).retirements).toEqual(new Set([owner.startIdentity!]));
+  // The historical cancel and claim both retire their ticket. Overflow must
+  // preserve uncertainty about every process already running at the boundary.
+  for (let index = 0; index < 128; index++) retire();
+  const restarted = f.open().legacyGateHistory(owner.bootEpoch!);
+  expect(restarted.cutover.boot).toBe(owner.bootEpoch!);
+  expect(restarted.cutover.uptime).toBeGreaterThan(0);
+  expect(restarted.retirements.size).toBe(0);
+  retire();
+  const later = f.open().legacyGateHistory(owner.bootEpoch!);
+  expect(later.cutover).toEqual(restarted.cutover);
+  expect(later.retirements.has(owner.startIdentity!)).toBe(true);
+});
+
+test("legacy observation preserves the admission boundary used to classify pre-cutover hooks", () => {
+  const f = fixture(), owner = cpuOwnerIdentity(process.pid), q = f.open();
+  f.at(100);
+  expect(q.check("command:prior", true, owner, true, undefined, true)).toBeNull();
+  const prior = q.lastAdmission();
+  expect(prior).toBe(100);
+  const old = new Database(f.file);
+  old.exec("DROP TRIGGER legacy_gate_retired; DROP TABLE legacy_gate_cutover; DROP TABLE legacy_gate_retirements");
+  old.close();
+  f.at(200);
+  const opened = f.open(), history = opened.legacyGateHistory(owner.bootEpoch!);
+  expect(history.cutover.admission).toBe(prior);
+  f.at(prior! + CPU_QUEUE_SPACING_MS);
+  expect(opened.check("command:later", true, owner, true, undefined, true)).toBeNull();
+  expect(opened.legacyGateHistory(owner.bootEpoch!).cutover.admission).toBe(prior);
+});
+
+test("a slot observation made before another admission cannot consume a ready gate", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), gate = f.open(), peer = f.open();
+  const key = "command:bounded:probe";
+  expect(gate.check(key, true, owner, false, undefined, true)).toBeNull();
+  const lastBeforeProbe = gate.lastAdmission();
+  expect(peer.check("stage:peer", true)).toBeNull();
+  f.at(CPU_QUEUE_SPACING_MS);
+  expect(gate.check(key, true, owner, true, undefined, true, { lastBeforeProbe, slot: 1, cap: 1 })).toMatchObject({ since: 0, heldBy: "queue" });
+  expect(gate.lastAdmission()).toBe(0);
+  expect(gate.check(key, true, owner, true, undefined, true, { lastBeforeProbe: gate.lastAdmission(), slot: 1, cap: 1 })).toBeNull();
+  expect(gate.lastAdmission()).toBe(CPU_QUEUE_SPACING_MS);
+  f.at(2 * CPU_QUEUE_SPACING_MS);
+  // The live reservation affects the old command lane only.
+  expect(peer.check("stage:next", true)).toBeNull();
+});
+
+test.each([[1, 2], [2, 1]] as const)("portable final claims enforce the minimum of holder cap %i and entrant cap %i", (holderCap, entrantCap) => {
+  const f = fixture(), holder = f.open(), owner = captureProcessIdentity(process.pid);
+  expect(holder.check("command:bounded:holder", true, owner, true, undefined, true, { lastBeforeProbe: null, slot: null, cap: holderCap })).toBeNull();
+  const entrant = f.open(), key = "command:bounded:entrant";
+  expect(entrant.check(key, false, owner, false, undefined, true)).toMatchObject({ since: 0, position: 1 });
+  f.at(CPU_QUEUE_MAX_WAIT_MS);
+  const claim = () => entrant.check(key, false, owner, true, undefined, true, { lastBeforeProbe: entrant.lastAdmission(), slot: null, cap: entrantCap });
+  expect(claim()).toMatchObject({ since: 0, position: 1, heldBy: "queue" });
+  expect(entrant.lastAdmission()).toBe(0);
+  const [lease] = entrant.activeGateSlots();
+  entrant.releaseGateSlot(lease!.key, "a different owner");
+  expect(claim()).toMatchObject({ since: 0, heldBy: "queue" });
+  holder.releaseGateSlot(lease!.key, lease!.owner);
+  expect(claim()).toBeNull();
+  expect(entrant.lastAdmission()).toBe(CPU_QUEUE_MAX_WAIT_MS);
+});
+
+test("a bounded gate outwaits a legacy pressure-only head even with a different pressure setting", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), queue = f.open();
+  const legacy = "command:legacy", key = "command:bounded:current";
+  expect(queue.check(legacy, false, owner, false, undefined, true)).toMatchObject({ position: 1, heldBy: "pressure" });
+  expect(queue.check(key, true, owner, false, undefined, true)).toMatchObject({ position: 2, heldBy: "queue" });
+  f.at(CPU_QUEUE_MAX_WAIT_MS);
+  expect(queue.check(key, true, owner, true, undefined, true)).toBeNull();
+  expect(queue.check(legacy, false, owner, false, undefined, true)).toMatchObject({ since: 0, position: 1 });
 });
 
 test.each(["stage", "workflow"])("a gate held for pressure at the head lets a %s start at its own bound; gates keep FIFO", prefix => {
@@ -56,24 +146,20 @@ test.each(["stage", "workflow"])("a gate held for pressure at the head lets a %s
   f.at(2_000);
   expect(gate("command:later")).toMatchObject({ position: 2 });
   // Before its own bound the start lane is held by its pressure check.
-  f.at(1_000 + CPU_QUEUE_MAX_WAIT_MS - 1);
+  f.at(CPU_QUEUE_MAX_WAIT_MS - 1);
   expect(gate("command:gate")).toMatchObject({ position: 1 });
   expect(stages.check(key, false)).toMatchObject({ position: 1 });
   f.at(1_000 + CPU_QUEUE_MAX_WAIT_MS);
   expect(stages.check(key, false)).toBeNull();
-  // The gate still waits under pressure, and the later gate stays behind it.
-  for (const minute of [30, 60]) {
-    f.at(minute * 60_000);
-    expect(gate("command:gate")).toMatchObject({ since: 0, position: 1 });
-    expect(gate("command:later")).toMatchObject({ position: 2 });
-  }
-  // Low pressure admits the gates in order, spaced.
-  f.at(60 * 60_000 + 1);
-  expect(gate("command:later", true)).toMatchObject({ position: 2 });
-  expect(gate("command:gate", true)).toBeNull();
-  expect(gate("command:later", true)).toMatchObject({ position: 1, heldBy: "queue" });
-  f.at(60 * 60_000 + 1 + CPU_QUEUE_SPACING_MS);
-  expect(gate("command:later", true)).toBeNull();
+  expect(gate("command:gate")).toMatchObject({ since: 0, position: 1, heldBy: "queue" });
+  const firstClaim = 1_000 + CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS;
+  f.at(firstClaim);
+  expect(gate("command:later")).toMatchObject({ position: 2, heldBy: "queue" });
+  expect(gate("command:gate")).toBeNull();
+  f.at(firstClaim + CPU_QUEUE_SPACING_MS - 1);
+  expect(gate("command:later")).toMatchObject({ position: 1, heldBy: "queue" });
+  f.at(firstClaim + CPU_QUEUE_SPACING_MS);
+  expect(gate("command:later")).toBeNull();
 });
 
 test("a stage past its bound under pressure still waits for spacing and for an older stage ahead of a held gate", () => {
@@ -771,7 +857,7 @@ test("releases racing to open an older queue describe it once and keep its live 
   // Every racer queued behind the command in its lane, none in its place.
   expect(waits.sort()).toEqual([2, 3, 4, 5, 6, 7]);
   expect(m.row(LIVE)).toEqual(first);
-  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 7 }]);
+  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 8 }]);
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
 });
 
@@ -789,7 +875,7 @@ test("a queue the first cut of this change left half-described keeps its live ti
   expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
   expect(m.row(LIVE)).toEqual(first);
   expect(m.read("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")).toEqual(
-    ["suspended_hold", "suspended_keep", "suspended_release", "tickets_fifo", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
+    ["legacy_gate_retired", "suspended_hold", "suspended_keep", "suspended_release", "tickets_fifo", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
   m.at(2 * CPU_QUEUE_ABANDONED_MS + CPU_QUEUE_UNPOLLED_MS + 1);
   expect(q.check("stage:later", true)).toBeNull();
 });

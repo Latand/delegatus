@@ -1,3 +1,4 @@
+import { settlementDeadlineForRow } from "./sendSettlement";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
@@ -63,7 +64,7 @@ import {
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
 import type { DeliveryWaitReason } from "./deliveryWaitReason";
-import { admissionRecordStanding, recordAdmissionWait, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
+import { switchWaitReason, admissionRecordStanding, recordAdmissionWait, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
@@ -89,6 +90,9 @@ export interface StructuredMessageRequest {
   admissionGuardAsync?: () => Promise<void>;
   /** The autonomous caller's authority fence during replacement host publication. */
   recoveryAuthorityGuard?: () => void;
+  /** A persisted checkout cut carries a unique, one-time admission proof for
+      its deterministic recovery key, including on legacy conversation rows. */
+  freshCheckoutCutAdmission?: true;
   path: string;
   conversationId?: string | null;
   clientMessageId?: string | null;
@@ -135,7 +139,7 @@ export type StructuredMessageResult =
      operation id — so it answers with that id like every other accepted send.
      Without it a hold was the one acceptance a caller could never ask about
      afterwards, which put `queued` back at the end of the story. */
-  | { ok: true; structured: true; target: string | null; outcome: "held"; operationId: string; spawned?: boolean }
+  | { ok: true; structured: true; target: string | null; outcome: "held"; operationId: string; spawned?: boolean; waitReason?: string; detail?: string; deadlineAt?: string }
   | { ok: false; structured: true; outcome: "failed"; error: string; status: number; operationId?: string; receipt?: RuntimeOperationReceipt; successorConversationId?: string; transportUncertain?: true; code?: string; seatConversationId?: string; admission?: "refused" };
 
 export interface StructuredMessageDependencies {
@@ -215,7 +219,7 @@ function settleRecord(progress: DeliveryProgressPort | null, operationId: string
  */
 export function payloadRefusal(
   capability: RuntimeImageCapability,
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   refs: readonly StructuredImageRef[],
   wantsImages = refs.length > 0,
 ): { error: string; status: number } | null {
@@ -256,7 +260,7 @@ async function endReservationForRequest(
   return { ended: true, error };
 }
 
-function acceptedHeld(operationId: string, target: string | null = null, spawned = false): StructuredMessageResult {
+function acceptedHeld(operationId: string, target: string | null = null, spawned = false): Extract<StructuredMessageResult, { outcome: "held" }> {
   return { ok: true, structured: true, target, outcome: "held", operationId, ...(spawned ? { spawned: true } : {}) };
 }
 
@@ -1545,7 +1549,8 @@ export async function enqueueStructuredMessage(
         return continuationRefused("runtime session is not the conversation's current generation");
       }
       const key = request.clientMessageId?.trim();
-      if (key && registry.deliveryAdmissionForKey(owner.conversation.id, key).outcome !== "not-executed") {
+      if (key && registry.deliveryAdmissionForKey(owner.conversation.id, key).outcome !== "not-executed"
+        && !(request.freshCheckoutCutAdmission && request.operationId?.startsWith("checkout_merger_"))) {
         return continuationRefused("an earlier continuation admission must be reconciled before host recovery");
       }
       const overlong = key ? refusedIdempotencyKey(key) : null;
@@ -2062,7 +2067,13 @@ export async function enqueueStructuredMessage(
       recordWait(progress, registry, reservation, { reason: "switching-accounts" });
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
       requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
-      return acceptedHeld(reservation.command.operationId, recoveredHost ? null : conversation.id, recoveredHost);
+      const waitReason = switchWaitReason(registry, reservation.conversationId);
+      const deadline = settlementDeadlineForRow(registry, { delivery: reservation });
+      return { ...acceptedHeld(reservation.command.operationId, recoveredHost ? null : conversation.id, recoveredHost),
+        waitReason, detail: waitReason === "switch-after-turn" || Boolean(activeSession.activeTurnId)
+          ? "Delivery waits until the current turn ends and the account switch completes; the wait is renewed while the target is working."
+          : "Delivery waits for the account switch; it fails when its settlement deadline expires.",
+        ...(deadline ? { deadlineAt: deadline.deadlineAt } : {}) };
     }
     if (reservation.state === "delivered") {
       return deliveredReservationReplay(

@@ -4,17 +4,18 @@ import type { AgentRegistryType, DurableQuotaObservation, PipelinePorts } from "
 test("an internal terminal pass an older build left waiting on publication closes without the network (#1692)", async () => {
   const h = harness();
   await create(h.ports, [{ id: "build", kind: "run", prompt: "build", next: null }] as never, REMOTE_BRANCH);
-  /* The base fetch is the controller's since #1799; the publication attempts
-     this test counts are everything after it. */
+  await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   const { remoteCalls } = networkDown(h);
-  await tickPipelines([], h.ports);
-  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
   const waiting = loadPipelines()[0]!;
-  expect(waiting.state).toBe("running");
-  expect(waiting.stateDetail).toStartWith("passed but unpublished: ");
-  const publishAttempts = remoteCalls.length;
-  expect(publishAttempts).toBeGreaterThan(0);
+  const accepted = waiting.lastPassedCommit!;
+  const at = h.ports.now();
+  Object.assign(waiting.runs[0]!.attempts[0]!, { state: "passed", verdict: { status: "pass", findings: [] }, completedAt: at });
+  waiting.cursor!.state = "committing";
+  waiting.stateDetail = "passed but unpublished: the delivery remote is unavailable";
+  const delivery = waiting.delivery!;
+  delivery.operation = { id: "legacy-publication", epoch: delivery.epoch, sha: accepted, state: "settled",
+    passedStage: true, result: { ok: true, remote: "unavailable", sha: accepted } };
 
   /* An explicitly internal lane can settle a previously waiting pass locally. */
   waiting.publication = "internal";
@@ -24,7 +25,7 @@ test("an internal terminal pass an older build left waiting on publication close
   const completed = loadPipelines()[0]!;
   expect(completed.state).toBe("completed");
   expect(completed.runs[0]!.attempts[0]).toMatchObject({ state: "passed", error: null });
-  expect(remoteCalls).toHaveLength(publishAttempts);
+  expect(remoteCalls).toEqual([]);
 });
 
 test("an internal pipeline pinned to a baseRef is created and provisioned with the network unreachable (#1692)", async () => {

@@ -10,7 +10,7 @@ import path from "node:path";
 import { isDismissedBy } from "@/lib/attention/dismissalTypes";
 import { effortScale } from "@/lib/agent/efforts";
 import { validAgentMemoryMax, normalizeAgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
-import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
+import { normalizeClaudeLaunchModel, validateLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/limits";
 import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_RESULT_CHARS } from "./limits";
 import { isLegacyReviewLoopStage, legacyReviewLoopReachable, legacyReviewLoopShapeValid, MAX_LEGACY_REVIEW_CONVERSIONS } from "./legacyReviewShape";
@@ -25,13 +25,14 @@ export const PIPELINE_ROLE_IDS = ["orchestrator", "reviewer", "verifier", "build
 export function isEffectiveRole(value: unknown): value is EffectivePipelineRole {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const role = value as Partial<EffectivePipelineRole>;
-  if (role.engine !== "claude" && role.engine !== "codex") return false;
+  if (role.engine !== "claude" && role.engine !== "codex" && role.engine !== "antigravity") return false;
   if (role.serviceTier !== undefined && (role.engine !== "codex" || typeof role.serviceTier !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(role.serviceTier))) return false;
   if (role.preferredServiceTier !== undefined && (role.engine !== "codex" || typeof role.preferredServiceTier !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(role.preferredServiceTier))) return false;
   if (role.serviceTierSource !== undefined && role.serviceTierSource !== "explicit" && role.serviceTierSource !== "role-default") return false;
   if (role.model !== null && typeof role.model !== "string") return false;
   if (role.model && role.engine === "claude" && !normalizeClaudeLaunchModel(role.model)) return false;
   if (role.model && role.engine === "codex" && (role.model.length > 128 || !role.model.startsWith("gpt-") || /[\u0000-\u001f\u007f]/.test(role.model))) return false;
+  if (role.model && role.engine === "antigravity" && "error" in validateLaunchModel("antigravity", role.model)) return false;
   if (role.effort !== null && (typeof role.effort !== "string" || !effortScale(role.engine, role.model)!.includes(role.effort))) return false;
   return (
     (role.roleId === null || PIPELINE_ROLE_IDS.includes(role.roleId as typeof PIPELINE_ROLE_IDS[number])) &&
@@ -137,6 +138,7 @@ function isProviderWait(value: unknown): boolean {
     && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)
     && (wait.actionAt === undefined || dated(wait.actionAt))
     && (wait.continuationRequestedAt === undefined || dated(wait.continuationRequestedAt))
+    && (wait.receiptWaitStartedAt === undefined || dated(wait.receiptWaitStartedAt))
     && (wait.capacityProbes === undefined || Number.isSafeInteger(wait.capacityProbes) && Number(wait.capacityProbes) >= 0)
     && (wait.retryCancelled === undefined || typeof wait.retryCancelled === "boolean")
     && (wait.stageRetry === undefined || (
@@ -163,7 +165,7 @@ function isRuntimeSwitches(value: unknown): boolean {
   if (value === undefined) return true;
   if (!Array.isArray(value) || value.length > 8) return false;
   const textOrNull = (item: unknown) => item === null || typeof item === "string";
-  const seat = (item: Record<string, unknown> | undefined) => !!item && ["claude", "codex"].includes(String(item.engine))
+  const seat = (item: Record<string, unknown> | undefined) => !!item && ["claude", "codex", "antigravity"].includes(String(item.engine))
     && textOrNull(item.model) && textOrNull(item.effort) && textOrNull(item.serviceTier) && textOrNull(item.accountId);
   let open = 0;
   return value.every((item, index) => item && typeof item.id === "string" && item.id.length > 0 && Number.isSafeInteger(item.seq) && item.seq > 0
@@ -307,7 +309,7 @@ function isAttempt(value: unknown, index: number): boolean {
         && !Array.isArray(limited)
         && typeof limited.accountId === "string"
         && limited.accountId.length > 0
-        && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex")
+        && (limited.engine === undefined || limited.engine === "claude" || limited.engine === "codex" || limited.engine === "antigravity")
         && (limited.resetsAt === null || (Number.isSafeInteger(limited.resetsAt) && limited.resetsAt >= 0))
         && (limited.limitedAt === undefined || limited.limitedAt === null || isEvidenceTimestamp(limited.limitedAt))
         && (limited.turnId === undefined || (typeof limited.turnId === "string" && limited.turnId.length > 0 && limited.turnId.length <= 100))
@@ -321,7 +323,7 @@ function isAttempt(value: unknown, index: number): boolean {
       && Number.isSafeInteger((attempt.providerRecoveryBudget as Record<string, unknown>).tries)
       && Number((attempt.providerRecoveryBudget as Record<string, unknown>).tries) >= 0
       && ((attempt.providerRecoveryBudget as Record<string, unknown>).engine === undefined
-        || ["claude", "codex", "copilot"].includes(String((attempt.providerRecoveryBudget as Record<string, unknown>).engine)))
+        || ["claude", "codex", "copilot", "antigravity"].includes(String((attempt.providerRecoveryBudget as Record<string, unknown>).engine)))
       && ((attempt.providerRecoveryBudget as Record<string, unknown>).triedAccounts === undefined
         || isStringList((attempt.providerRecoveryBudget as Record<string, unknown>).triedAccounts))
       && ((attempt.providerRecoveryBudget as Record<string, unknown>).failedAccounts === undefined
@@ -713,7 +715,7 @@ function isStage(value: unknown): value is PipelineStage {
     (stage.next === null || typeof stage.next === "string") &&
     isFailEdge(stage.onFail) &&
     (role === undefined || Boolean(role && typeof role === "object" && !Array.isArray(role) && (PIPELINE_ROLE_IDS as readonly unknown[]).includes((role as { roleId?: unknown }).roleId))) &&
-    (stage.engine === undefined || stage.engine === "claude" || stage.engine === "codex") &&
+    (stage.engine === undefined || stage.engine === "claude" || stage.engine === "codex" || stage.engine === "antigravity") &&
     (stage.model === undefined || stage.model === null || typeof stage.model === "string") &&
     (stage.effort === undefined || stage.effort === null || typeof stage.effort === "string") &&
     (stage.serviceTier == null || typeof stage.serviceTier === "string") &&

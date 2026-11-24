@@ -23,7 +23,7 @@ import type { RuntimeAdmissionLookup } from "@/hooks/useRuntime";
 import { useComposer } from "@/hooks/useComposer";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useCodexRealtime } from "@/hooks/useCodexRealtime";
-import { interruptRuntime, useRuntimeBusState, type CommandResult, type RuntimeSessionView } from "@/hooks/useRuntime";
+import { interruptRuntime, useRuntimeSelector, type CommandResult, type RuntimeSessionView } from "@/hooks/useRuntime";
 import { parseSelectedContextRef, stripTaskReferenceLines, taskReferencePrelude, taskReferencesFromText, withSelectedTasks, type SelectedContextRef } from "@/lib/selection/selectedContext";
 import { composerSelectedContext } from "@/lib/selection/viewerSelectedContext";
 import { useComposerBox } from "@/hooks/useComposerBox";
@@ -1986,6 +1986,7 @@ export function structuredComposerSession(runtimeSession: RuntimeSessionView | n
   if (!runtimeSession?.structuredControlsEnabled) return null;
   return runtimeSession.session.hostKind === "codex-app-server" || runtimeSession.session.hostKind === "claude-broker"
     || runtimeSession.session.hostKind === "copilot-acp"
+    || runtimeSession.session.hostKind === "antigravity-acp"
     ? runtimeSession
     : null;
 }
@@ -2342,8 +2343,7 @@ export const ConversationComposerCore = memo(function ConversationComposerCore({
   /* The runtime's own connection, for the phone's Queue slot (§4.2): while the
      bus is off this reads inert, so nothing changes on the landing-disabled
      path. */
-  const runtimeBus = useRuntimeBusState(viewActive);
-  const runtimeOffline = runtimeBus.enabled && runtimeBus.connection === "offline";
+  const runtimeOffline = useRuntimeSelector(state => state.enabled && state.connection === "offline", false, Object.is, viewActive);
   /* Context has no outbox to wait in: an insertion is either answered now or
      left unconfirmed, so with the runtime offline it is refused before
      anything is filed and the draft stays in the field. */

@@ -10,6 +10,10 @@ import { pipelineRoleLookup } from "@/lib/pipelines/roles";
 import { loadPipelines, pipelineDeliveryLookup } from "@/lib/pipelines/store";
 import { releaseStages } from "./stages";
 import { releaseRequestDigest, ReleaseValidationRefusal } from "./run";
+import { mutateReleaseProject, readReleaseProject } from "./store";
+import { defaultSeatTickSettings, effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
+import type { SeatTickCheckInput } from "@/lib/monitor/types";
 import type { CreatePipelineRequest } from "@/lib/pipelines/types";
 import { releaseState } from "./policy";
 import { ready } from "./policy.fixture";
@@ -17,10 +21,11 @@ import { ready } from "./policy.fixture";
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
 
-async function repository() {
+async function repository(packageDir = "") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-tags-test-"));
   directories.push(root);
   const repo = path.join(root, "repo"); fs.mkdirSync(repo);
+  if (packageDir) fs.mkdirSync(path.join(repo, packageDir));
   const remote = path.join(root, "origin.git");
   const env = { ...process.env, GIT_AUTHOR_NAME: "Release fixture", GIT_AUTHOR_EMAIL: "noreply@example.test",
     GIT_COMMITTER_NAME: "Release fixture", GIT_COMMITTER_EMAIL: "noreply@example.test",
@@ -31,7 +36,7 @@ async function repository() {
   let sequence = 0;
   const commit = async (subject: string) => {
     fs.writeFileSync(path.join(repo, "component.ts"), `export const value = ${sequence++};\n`);
-    fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ name: "release-fixture", version: "1.15.0" }));
+    fs.writeFileSync(path.join(repo, packageDir, "package.json"), JSON.stringify({ name: "release-fixture", version: "1.15.0" }));
     await git("add", "."); await git("commit", "-m", subject);
     return git("rev-parse", "HEAD");
   };
@@ -52,15 +57,64 @@ async function repository() {
   return { repo, git, cut, released, next };
 }
 
+test("a queued request skips every repository read while releases are off, then reports a nested workspace as inapplicable", async () => {
+  const h = await repository("web");
+  const project = "nested-release-fixture";
+  const at = "2026-10-22T23:30:00Z";
+  const now = Date.parse(at);
+  const actor = { kind: "gateway" as const, project, conversationId: null, seatEpoch: null };
+  const release = { enabled: false, askBeforePublish: true, minChanges: 30, minGapHours: 12, updatedAt: at, setBy: actor, why: null };
+  const settings = { ...defaultSeatTickSettings(project), release };
+  const seat = { conversationId: "conversation_seat", seatEpoch: 1 };
+  let repositoryReads = 0;
+  const controller = releaseControllerForSources({
+    now: () => now, settings: () => settings, seatFor: () => ({ active: seat }),
+    registry: () => ({ conversation: () => ({ generations: [{ path: "fixture-seat" }] }) }),
+    pipelines: () => { repositoryReads++; return [{ project, repoDir: h.repo, createdAt: at }]; },
+  } as unknown as SeatTickSources);
+  const input = { project, seat, settings: effectiveSeatTickSettings(settings, now, 60_000) } as SeatTickCheckInput;
+  const request = { at: "2026-10-21T00:00:00Z", by: actor, why: "queued release" };
+  mutateReleaseProject(project, row => ({ ...row, request }));
+
+  expect(await controller.reconcile(project)).toBeNull();
+  expect(await controller.launchIfDue(input)).toBeNull();
+  expect(repositoryReads).toBe(0);
+  expect(readReleaseProject(project).request).toEqual(request);
+
+  release.enabled = true;
+  expect(await controller.launchIfDue(input)).toBe("release: not applicable (origin/main has no root package.json)");
+  expect(repositoryReads).toBe(1);
+  expect(readReleaseProject(project)).toMatchObject({ request, live: null });
+});
+
 test("the newest stable real tag supplies both lastTag and the visible change range", async () => {
   const h = await repository();
   const tag = await latestReleaseTag(h.repo);
-  expect(tag).toEqual({ name: "v1.15.0", version: "1.15.0", at: Date.parse("2026-10-20T00:00:00Z") });
+  expect(tag).toEqual({ name: "v1.15.0", version: "1.15.0", at: Date.parse("2026-10-20T00:00:00Z"), boundary: null });
   const changes = await changesSinceRelease(h.repo, tag.name, h.next);
   expect(changes.map(change => change.subject)).toEqual(["Next fix (#5)", "Next feature (#4)"]);
   const policy = { ...ready(), now: Date.parse("2026-10-22T23:30:00Z"), mainVersion: tag.version,
     lastTag: tag, changes, minChanges: 2, deployments: [{ revision: h.next, at: Date.parse("2026-10-21T00:00:00Z") }] };
   expect(await releaseState(policy)).toMatchObject({ state: "due", count: 2 });
+});
+
+test("a squash-integrated release keeps post-cut product PRs in the next changelog", async () => {
+  const h = await repository();
+  await h.git("tag", "-a", "v1.16.0", h.next, "-m", "Delegatus 1.16.0", "-m", `Release-Cut: ${h.released}`);
+  await h.git("push", "origin", "refs/tags/v1.16.0");
+  const tag = await latestReleaseTag(h.repo);
+  expect(tag).toMatchObject({ name: "v1.16.0", boundary: h.released });
+  const changes = await changesSinceRelease(h.repo, tag.name, h.next, undefined, tag.boundary);
+  expect(changes.map(change => change.subject)).toEqual(["Next fix (#5)", "Next feature (#4)"]);
+});
+
+test("a local-only failed-push version cannot replace the last remote release tag", async () => {
+  const h = await repository();
+  await h.git("tag", "-a", "v9.9.9", h.next, "-m", "Delegatus 9.9.9");
+  const remoteRelease = await latestReleaseTag(h.repo);
+  expect(remoteRelease).toMatchObject({ name: "v1.15.0", version: "1.15.0" });
+  expect((await changesSinceRelease(h.repo, remoteRelease.name, h.next, undefined, remoteRelease.boundary)).map(change => change.subject))
+    .toEqual(["Next fix (#5)", "Next feature (#4)"]);
 });
 
 test("a manually pushed and published tag covers an older frozen cut", async () => {
@@ -75,7 +129,7 @@ test("review: an unpublished higher tag does not hide a published covering relea
   const checked: string[] = [];
   expect(await supersedingReleaseTag(h.repo, { cut: h.cut, lastTag: "v1.13.0" }, undefined,
     async (_name, version) => { checked.push(version); return version === "1.15.0"; })).toBe("v1.15.0");
-  expect(checked).toEqual(["1.16.0", "1.15.0"]);
+  expect(checked).toEqual(["1.15.0"]);
 });
 
 test("a tag before the cut and an unpublished tag cannot supersede a release", async () => {
@@ -101,8 +155,8 @@ test("an unrelated cut is retained and unreadable ancestry or publication is rep
 test.each(["fetch", "tags", "empty"])("%s tag evidence is never treated as a superseding release", async failure => {
   await expect(latestReleaseTag("repo", async (_file, args) => {
     if (args[0] === "fetch") { if (failure === "fetch") throw new Error("fetch unreadable"); return ""; }
-    if (failure === "tags") throw new Error("tags unreadable");
-    return "v2.0.0-rc.1 1\nv-invalid 2";
+    if (args[0] === "ls-remote") { if (failure === "tags") throw new Error("tags unreadable"); return ""; }
+    return "";
   })).rejects.toThrow(failure === "empty" ? "existing version tag" : `${failure} unreadable`);
 });
 

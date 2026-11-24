@@ -15,14 +15,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -30,43 +22,57 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 254.984375,
-            "right": 265.21875,
-            "top": 391,
-            "bottom": 403
+            "left": 903.921875,
+            "right": 914.15625,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 265.21875,
-            "right": 419.25,
-            "top": 391,
-            "bottom": 403
+            "left": 914.15625,
+            "right": 995.34375,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 914.15625,
+            "right": 995.34375,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 995.34375,
+            "right": 1005.578125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1005.578125,
+            "right": 1068.21875,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 995.34375,
+            "right": 1005.578125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1005.578125,
+            "right": 1068.21875,
+            "top": 242,
+            "bottom": 254
           }
         ],
         "body": {
-          "left": 200,
-          "right": 480.65625,
-          "top": 337,
-          "bottom": 405
+          "left": 567,
+          "right": 1068.21875,
+          "top": 221,
+          "bottom": 256
         },
-        "removeLeft": 488.65625
+        "removeLeft": 1239
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 282
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -86,14 +92,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -101,43 +99,57 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 254.984375,
-            "right": 265.21875,
-            "top": 391,
-            "bottom": 403
+            "left": 903.921875,
+            "right": 914.15625,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 265.21875,
-            "right": 419.25,
-            "top": 391,
-            "bottom": 403
+            "left": 914.15625,
+            "right": 995.34375,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 914.15625,
+            "right": 995.34375,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 995.34375,
+            "right": 1005.578125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1005.578125,
+            "right": 1068.21875,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 995.34375,
+            "right": 1005.578125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1005.578125,
+            "right": 1068.21875,
+            "top": 242,
+            "bottom": 254
           }
         ],
         "body": {
-          "left": 200,
-          "right": 480.65625,
-          "top": 337,
-          "bottom": 405
+          "left": 567,
+          "right": 1068.21875,
+          "top": 221,
+          "bottom": 256
         },
-        "removeLeft": 488.65625
+        "removeLeft": 1239
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 282
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -157,14 +169,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -172,49 +176,69 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 180.375,
-            "right": 190.609375,
-            "top": 391,
-            "bottom": 403
+            "left": 767.921875,
+            "right": 778.15625,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 190.609375,
-            "right": 278.828125,
-            "top": 391,
-            "bottom": 403
+            "left": 778.15625,
+            "right": 859.34375,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 64,
-            "right": 126.640625,
-            "top": 407,
-            "bottom": 419
+            "left": 778.15625,
+            "right": 859.34375,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 859.34375,
+            "right": 869.578125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 869.578125,
+            "right": 902.171875,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 431,
+            "right": 457.84375,
+            "top": 258,
+            "bottom": 270
+          },
+          {
+            "left": 859.34375,
+            "right": 869.578125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 869.578125,
+            "right": 902.171875,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 431,
+            "right": 457.84375,
+            "top": 258,
+            "bottom": 270
           }
         ],
         "body": {
-          "left": 64,
-          "right": 288.65625,
-          "top": 337,
-          "bottom": 421
+          "left": 431,
+          "right": 927,
+          "top": 221,
+          "bottom": 272
         },
-        "removeLeft": 296.65625
+        "removeLeft": 935
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 298
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -234,14 +258,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -249,49 +265,69 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 180.375,
-            "right": 190.609375,
-            "top": 391,
-            "bottom": 403
+            "left": 767.921875,
+            "right": 778.15625,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 190.609375,
-            "right": 278.828125,
-            "top": 391,
-            "bottom": 403
+            "left": 778.15625,
+            "right": 859.34375,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 64,
-            "right": 126.640625,
-            "top": 407,
-            "bottom": 419
+            "left": 778.15625,
+            "right": 859.34375,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 859.34375,
+            "right": 869.578125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 869.578125,
+            "right": 902.171875,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 431,
+            "right": 457.84375,
+            "top": 258,
+            "bottom": 270
+          },
+          {
+            "left": 859.34375,
+            "right": 869.578125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 869.578125,
+            "right": 902.171875,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 431,
+            "right": 457.84375,
+            "top": 258,
+            "bottom": 270
           }
         ],
         "body": {
-          "left": 64,
-          "right": 288.65625,
-          "top": 337,
-          "bottom": 421
+          "left": 431,
+          "right": 927,
+          "top": 221,
+          "bottom": 272
         },
-        "removeLeft": 296.65625
+        "removeLeft": 935
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 298
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -311,14 +347,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -326,43 +354,57 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 93.984375,
-            "right": 104.21875,
-            "top": 373,
-            "bottom": 385
+            "left": 61.8125,
+            "right": 72.046875,
+            "top": 295.5,
+            "bottom": 307.5
           },
           {
-            "left": 104.21875,
-            "right": 258.25,
-            "top": 373,
-            "bottom": 385
+            "left": 72.046875,
+            "right": 153.234375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 72.046875,
+            "right": 153.234375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 153.234375,
+            "right": 163.46875,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 163.46875,
+            "right": 226.109375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 153.234375,
+            "right": 163.46875,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 163.46875,
+            "right": 226.109375,
+            "top": 295.5,
+            "bottom": 307.5
           }
         ],
         "body": {
-          "left": 39,
-          "right": 321,
-          "top": 319,
-          "bottom": 387
+          "left": 26,
+          "right": 334,
+          "top": 241.5,
+          "bottom": 309.5
         },
-        "removeLeft": 329
+        "removeLeft": 342
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -382,14 +424,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -397,43 +431,57 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 93.984375,
-            "right": 104.21875,
-            "top": 373,
-            "bottom": 385
+            "left": 61.8125,
+            "right": 72.046875,
+            "top": 295.5,
+            "bottom": 307.5
           },
           {
-            "left": 104.21875,
-            "right": 258.25,
-            "top": 373,
-            "bottom": 385
+            "left": 72.046875,
+            "right": 153.234375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 72.046875,
+            "right": 153.234375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 153.234375,
+            "right": 163.46875,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 163.46875,
+            "right": 226.109375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 153.234375,
+            "right": 163.46875,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 163.46875,
+            "right": 226.109375,
+            "top": 295.5,
+            "bottom": 307.5
           }
         ],
         "body": {
-          "left": 39,
-          "right": 321,
-          "top": 319,
-          "bottom": 387
+          "left": 26,
+          "right": 334,
+          "top": 241.5,
+          "bottom": 309.5
         },
-        "removeLeft": 329
+        "removeLeft": 342
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -453,14 +501,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -468,43 +508,57 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 316.375,
-            "right": 326.609375,
-            "top": 391,
-            "bottom": 403
+            "left": 909.84375,
+            "right": 920.078125,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 326.609375,
-            "right": 467.71875,
-            "top": 391,
-            "bottom": 403
+            "left": 920.078125,
+            "right": 1002.390625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 920.078125,
+            "right": 1002.390625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1002.390625,
+            "right": 1012.625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1012.625,
+            "right": 1061.203125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1002.390625,
+            "right": 1012.625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1012.625,
+            "right": 1061.203125,
+            "top": 242,
+            "bottom": 254
           }
         ],
         "body": {
-          "left": 200,
-          "right": 480.65625,
-          "top": 337,
-          "bottom": 405
+          "left": 567,
+          "right": 1061.203125,
+          "top": 221,
+          "bottom": 256
         },
-        "removeLeft": 488.65625
+        "removeLeft": 1239
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 282
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -524,14 +578,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -539,43 +585,57 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 316.375,
-            "right": 326.609375,
-            "top": 391,
-            "bottom": 403
+            "left": 909.84375,
+            "right": 920.078125,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 326.609375,
-            "right": 467.71875,
-            "top": 391,
-            "bottom": 403
+            "left": 920.078125,
+            "right": 1002.390625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 920.078125,
+            "right": 1002.390625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1002.390625,
+            "right": 1012.625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1012.625,
+            "right": 1061.203125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1002.390625,
+            "right": 1012.625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 1012.625,
+            "right": 1061.203125,
+            "top": 242,
+            "bottom": 254
           }
         ],
         "body": {
-          "left": 200,
-          "right": 480.65625,
-          "top": 337,
-          "bottom": 405
+          "left": 567,
+          "right": 1061.203125,
+          "top": 221,
+          "bottom": 256
         },
-        "removeLeft": 488.65625
+        "removeLeft": 1239
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 282
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -595,14 +655,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -610,49 +662,57 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 180.375,
-            "right": 190.609375,
-            "top": 391,
-            "bottom": 403
+            "left": 773.84375,
+            "right": 784.078125,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 190.609375,
-            "right": 288.421875,
-            "top": 391,
-            "bottom": 403
+            "left": 784.078125,
+            "right": 866.390625,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 64,
-            "right": 104.109375,
-            "top": 407,
-            "bottom": 419
+            "left": 784.078125,
+            "right": 866.390625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 866.390625,
+            "right": 876.625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 876.625,
+            "right": 925.203125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 866.390625,
+            "right": 876.625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 876.625,
+            "right": 925.203125,
+            "top": 242,
+            "bottom": 254
           }
         ],
         "body": {
-          "left": 64,
-          "right": 288.65625,
-          "top": 337,
-          "bottom": 421
+          "left": 431,
+          "right": 925.203125,
+          "top": 221,
+          "bottom": 256
         },
-        "removeLeft": 296.65625
+        "removeLeft": 935
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 298
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -672,14 +732,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -687,49 +739,57 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 180.375,
-            "right": 190.609375,
-            "top": 391,
-            "bottom": 403
+            "left": 773.84375,
+            "right": 784.078125,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 190.609375,
-            "right": 288.421875,
-            "top": 391,
-            "bottom": 403
+            "left": 784.078125,
+            "right": 866.390625,
+            "top": 242,
+            "bottom": 254
           },
           {
-            "left": 64,
-            "right": 104.109375,
-            "top": 407,
-            "bottom": 419
+            "left": 784.078125,
+            "right": 866.390625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 866.390625,
+            "right": 876.625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 876.625,
+            "right": 925.203125,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 866.390625,
+            "right": 876.625,
+            "top": 242,
+            "bottom": 254
+          },
+          {
+            "left": 876.625,
+            "right": 925.203125,
+            "top": 242,
+            "bottom": 254
           }
         ],
         "body": {
-          "left": 64,
-          "right": 288.65625,
-          "top": 337,
-          "bottom": 421
+          "left": 431,
+          "right": 925.203125,
+          "top": 221,
+          "bottom": 256
         },
-        "removeLeft": 296.65625
+        "removeLeft": 935
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 298
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -749,14 +809,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -764,43 +816,57 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 155.375,
-            "right": 165.609375,
-            "top": 373,
-            "bottom": 385
+            "left": 61.8125,
+            "right": 72.046875,
+            "top": 295.5,
+            "bottom": 307.5
           },
           {
-            "left": 165.609375,
-            "right": 306.71875,
-            "top": 373,
-            "bottom": 385
+            "left": 72.046875,
+            "right": 154.359375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 72.046875,
+            "right": 154.359375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 154.359375,
+            "right": 164.59375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 164.59375,
+            "right": 213.171875,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 154.359375,
+            "right": 164.59375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 164.59375,
+            "right": 213.171875,
+            "top": 295.5,
+            "bottom": 307.5
           }
         ],
         "body": {
-          "left": 39,
-          "right": 321,
-          "top": 319,
-          "bottom": 387
+          "left": 26,
+          "right": 334,
+          "top": 241.5,
+          "bottom": 309.5
         },
-        "removeLeft": 329
+        "removeLeft": 342
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,
@@ -820,14 +886,6 @@
           {
             "kind": "role",
             "overflow": 0
-          },
-          {
-            "kind": "project",
-            "overflow": 0
-          },
-          {
-            "kind": "machine",
-            "overflow": 0
           }
         ]
       },
@@ -835,43 +893,57 @@
         "overflow": 0,
         "textRects": [
           {
-            "left": 155.375,
-            "right": 165.609375,
-            "top": 373,
-            "bottom": 385
+            "left": 61.8125,
+            "right": 72.046875,
+            "top": 295.5,
+            "bottom": 307.5
           },
           {
-            "left": 165.609375,
-            "right": 306.71875,
-            "top": 373,
-            "bottom": 385
+            "left": 72.046875,
+            "right": 154.359375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 72.046875,
+            "right": 154.359375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 154.359375,
+            "right": 164.59375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 164.59375,
+            "right": 213.171875,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 154.359375,
+            "right": 164.59375,
+            "top": 295.5,
+            "bottom": 307.5
+          },
+          {
+            "left": 164.59375,
+            "right": 213.171875,
+            "top": 295.5,
+            "bottom": 307.5
           }
         ],
         "body": {
-          "left": 39,
-          "right": 321,
-          "top": 319,
-          "bottom": 387
+          "left": 26,
+          "right": 334,
+          "top": 241.5,
+          "bottom": 309.5
         },
-        "removeLeft": 329
+        "removeLeft": 342
       },
-      "cards": [
-        {
-          "kind": "role",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "project",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        },
-        {
-          "kind": "machine",
-          "cardScrolls": 0,
-          "bodyScrolls": 0
-        }
-      ],
+      "cards": [],
       "recurringTasks": 3,
       "revertedVersion": true,
       "returnedRule": true,

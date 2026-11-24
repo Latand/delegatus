@@ -6,13 +6,14 @@ import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
-import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { procBackend } from "../src/lib/proc";
+import { captureProcessIdentity, processIdentityMayOwn, processIdentityMayRun, type ProcessIdentity } from "../src/lib/processIdentity";
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
-import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
+import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
-import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, shellStartupFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
@@ -41,7 +42,7 @@ export interface PlanEnvironment {
   lintBase?: string;
   existing: ReadonlySet<string>;
   tests: readonly string[];
-  skippedMedia: readonly string[];
+  privacySelfTests?: readonly string[];
   linux: boolean;
   runtime: boolean;
   native: boolean;
@@ -50,6 +51,7 @@ export interface PlanEnvironment {
   codexVersions: readonly string[];
 }
 const isTest = (file: string) => /\.test\.[cm]?[jt]sx?$/.test(file) && !file.includes(".browser.test.");
+const checkpointTest = /^scripts\/local-gate\.checkpoints(?:\.[^.]+)?\.test\.ts$/;
 const lintable = (file: string) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file);
 /** Prose the compiler never reads. Anything else can change what it checks. */
 const proseOnly = (file: string) => /\.(?:md|mdx|txt)$/i.test(file);
@@ -69,7 +71,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (mode === "pre-commit") steps.push({ name: "staged whitespace", command: ["git", "diff", "--cached", "--check"] });
   if (mode === "pre-push") {
     steps.push({ name: "privacy", command: ["bun", "scripts/privacy-publication-gate.ts", "--base", env.base,
-      "--require-known-values", "--check-commits", "--added-lines", "--defer-unavailable-media"] });
+      "--require-known-values", "--check-commits", "--added-lines"] });
   }
   // A push that changes nothing (a read-only stage, a branch that only trails
   // main) has nothing a test could judge: whatever fails is already on main.
@@ -88,9 +90,10 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   const lintFiles = files.filter(lintable).map(file => `./${file}`);
   if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: mode === "pre-push" || lintFiles.length > 40 });
   if (mode === "pre-commit") return steps;
-  const touched = new Set<string>();
+  const touched = new Set(env.privacySelfTests);
   if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (checkpointTest.test(test)
+      || /^scripts\/(?:local-gate(?:\.(?:receipts|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
   }
   if (changedFiles.some(file => ["scripts/owned-runner.integration.fixture.ts", "scripts/owned-runner.cleanup.ts"].includes(file))) {
     for (const test of env.tests) if (/^scripts\/owned-runner(?:\.[^.]+)+\.test\.ts$/.test(test)) touched.add(test);
@@ -101,8 +104,11 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (changedFiles.includes("scripts/local-gate-tests.fixture.ts")) {
     for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
   }
-  if (changedFiles.includes("scripts/local-gate-tests.ts") && env.tests.includes("scripts/local-gate.checkpoints.test.ts")) {
-    touched.add("scripts/local-gate.checkpoints.test.ts");
+  if (changedFiles.includes("scripts/local-gate-tests.ts")) {
+    for (const test of env.tests) if (checkpointTest.test(test)) touched.add(test);
+  }
+  if (changedFiles.includes("src/lib/pipelines/engine.roleMemoryDispatch.fixture.ts")) {
+    for (const test of env.tests) if (test.startsWith("src/lib/pipelines/engine.roleMemoryDispatch.") && isTest(test)) touched.add(test);
   }
   for (const file of files.filter(isTest)) touched.add(file);
   for (const file of files.filter(lintable)) {
@@ -112,6 +118,8 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (changedFiles.some(file => file.startsWith(".githooks/") || file === "scripts/gate-slot.sh")) {
     for (const file of env.tests) if (/scripts\/(?:local-gate|gate-slot).*\.test\.ts$/.test(file)) touched.add(file);
   }
+  // Both selections run the same per-file comparator against the same base.
+  if (env.linux) for (const file of env.linuxTests) touched.delete(file);
   if (touched.size) steps.push({ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
   if (env.linux) {
     steps.push({ name: "Linux backend", command: ["bun", "scripts/verify-platform-backend.ts", "--expect", "linux"], capped: true, isolated: true });
@@ -152,27 +160,6 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   return steps;
 }
 
-/** Match publication media by extension and magic bytes, including disguised
- * rasters. Read only the header; the privacy gate still performs the inspection.
- */
-export function requiresMediaTools(file: string): boolean {
-  if (/\.(?:bmp|jpe?g|png|tiff?|webp|avi|gif|m4v|mkv|mov|mp4|webm|mp3|wav)$/i.test(file)) return true;
-  const fd = openSync(file, "r");
-  try {
-    const bytes = Buffer.alloc(12);
-    const length = readSync(fd, bytes, 0, 12, 0);
-    const prefix = bytes.subarray(0, length).toString("latin1");
-    return bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))
-      || bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))
-      || prefix.startsWith("GIF87a") || prefix.startsWith("GIF89a") || prefix.startsWith("BM")
-      || bytes.subarray(0, 4).equals(Buffer.from([0x49, 0x49, 0x2a, 0x00]))
-      || bytes.subarray(0, 4).equals(Buffer.from([0x4d, 0x4d, 0x00, 0x2a]))
-      || (prefix.startsWith("RIFF") && ["AVI ", "WEBP"].includes(prefix.slice(8, 12)))
-      || prefix.slice(4, 8) === "ftyp"
-      || bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
-  } finally { closeSync(fd); }
-}
-
 interface Workflow { jobs: Record<string, { steps: Array<{ name?: string; run?: string }>; strategy?: { matrix?: { codex?: string[] } } }> }
 function workflow(root: string, name: string): Workflow {
   return Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows", name), "utf8")) as Workflow;
@@ -187,17 +174,28 @@ function siblingTests(root: string, files: readonly string[]): string[] {
   return [...tests];
 }
 
-export function discover(root: string, base: string, files: readonly string[]): PlanEnvironment {
+export function discover(root: string, base: string, files: readonly string[], mode: Mode = "pre-push"): PlanEnvironment {
   const existing = new Set(files.filter(file => existsSync(path.join(root, file))));
-  const mediaTools = ["tesseract", "ffmpeg", "ffprobe"].every(tool => Bun.which(tool));
-  const skippedMedia = mediaTools ? [] : [...existing].filter(file => requiresMediaTools(path.join(root, file)));
+  const tests = siblingTests(root, [...files, "scripts/local-gate.ts"]);
+  const privacyTests = tests.filter(file => /^scripts\/privacy-.*\.test\.ts$/.test(file));
+  let privacySelfTests: string[] = [];
+  if (mode === "pre-push" && files.length && privacyTests.length) {
+    const directlyChanged = files.some(file => file.startsWith("scripts/privacy-") || file.startsWith("scripts/generate-privacy-") ||
+      file.startsWith("src/lib/privacy/") || [".github/workflows/privacy-publication.yml", ".github/workflows/privacy-tracker-audit.yml", ...ALWAYS_IN_SCOPE].includes(file));
+    // The same import and execution closure as the required hosted check.
+    if (directlyChanged) privacySelfTests = privacyTests;
+    else {
+      const inputs = executedPaths(root, [...privacyTests, "test-preload.ts"]);
+      if (files.some(file => inputs.has(file))) privacySelfTests = privacyTests;
+    }
+  }
   const platformFile = ".github/workflows/platform-tests.yml";
   const platform = workflow(root, "platform-tests.yml");
   const bun = workflow(root, "bun-runtime.yml");
   const runtimeEntries = workflowEntries(jobSource(bun.jobs["bun-runtime"]!));
   const runtimeChanged = files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
   return {
-    base, existing, skippedMedia, tests: siblingTests(root, [...files, "scripts/local-gate.ts"]),
+    base, existing, tests, privacySelfTests,
     // An empty diff is "run" to the CI scope, where skipping must be proven.
     // Here it is proven: nothing changed, so no platform job has a subject.
     linux: process.platform === "linux" && files.length > 0 && platformScope({ root, workflow: platformFile, prefixes: ["src/lib/proc/"], changed: files }).run,
@@ -236,6 +234,9 @@ export function createGateSandbox(
   }
 }
 
+export const ISOLATED_DIRECTORY_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
+  "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"] as const;
+
 /** Everything that might resolve state, including build imports, is sandboxed. */
 export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...inherited };
@@ -252,7 +253,7 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   // Preserve explicit slot/queue overrides through isolation. Leave the
   // default unset: gate-slot keeps its shared /var/tmp locks, while the CPU
   // queue remains in the same writable machine cache as the Viewer.
-  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
+  for (const key of ISOLATED_DIRECTORY_KEYS) {
     env[key] = path.join(root, key.toLowerCase());
     mkdirSync(env[key]!, { recursive: true });
   }
@@ -425,12 +426,9 @@ function cgroupOf(pid: number | "self"): string | null {
   try { return readFileSync(`/proc/${pid}/cgroup`, "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3) ?? null; }
   catch { return null; }
 }
-/** Only ESRCH proves a process gone. /proc, where there is one, also tells a
-    zombie (exited, waiting to be reaped) from a running process; unreadable
-    metadata proves nothing, so the process counts as running. */
 function live(pid: number): boolean {
   try { process.kill(pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
-  try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
+  return process.platform !== "linux" || !procBackend.processExited(pid);
 }
 function procEntries(): number[] | null {
   try { return readdirSync("/proc").filter(name => /^\d+$/.test(name)).map(Number); } catch { return null; }
@@ -453,17 +451,21 @@ function ps(columns: string[], cleanup: Cleanup, environment = false): string[] 
 /** Every process that inherited this step's token, wherever it was reparented;
     null when no process table could be read. */
 function holders(token: string, cleanup: Cleanup): number[] | null {
+  const holds = (environment: string, separator: string) => {
+    const binding = `${separator}${STEP_TOKEN}=`;
+    const at = environment.indexOf(binding);
+    if (at < 0) return false;
+    const start = at + binding.length;
+    const end = environment.indexOf(separator, start);
+    return environment.slice(start, end < 0 ? undefined : end).split(",").includes(token);
+  };
   const entries = procEntries();
   if (!entries) {
-    const mark = ` ${STEP_TOKEN}=${token}`;
-    return ps(["pid", "command"], cleanup, true)?.flatMap(line => {
-      const at = line.indexOf(mark), end = line.charAt(at + mark.length);
-      return at >= 0 && (end === "" || end === " ") ? [Number(line.trim().split(/\s+/)[0])] : [];
-    }) ?? null;
+    return ps(["pid", "command"], cleanup, true)?.flatMap(line =>
+      holds(line, " ") ? [Number(line.trim().split(/\s+/)[0])] : []) ?? null;
   }
-  const mark = `\0${STEP_TOKEN}=${token}\0`;
   return entries.filter(pid => {
-    try { return `\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`.includes(mark); } catch { return false; }
+    try { return holds(`\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`, "\0"); } catch { return false; }
   });
 }
 function scopeMembers(scope: string): number[] {
@@ -506,7 +508,7 @@ function descendants(root: number, cleanup: Cleanup): number[] | null {
   for (let queue = [root]; queue.length;) for (const child of children.get(queue.shift()!) ?? []) { found.push(child); queue.push(child); }
   return found;
 }
-/** Each started step carries a token of its own in its environment. */
+/** Each started step carries its own token and those of its enclosing checks. */
 const STEP_TOKEN = "LLV_GATE_STEP";
 /** Stops the step this hook started: its process tree, every process that
     inherited its token, and every owned service or transient scope those run
@@ -524,6 +526,9 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
   const remember = (member: number) => {
     if (!signalled.has(member)) signalled.set(member, captureProcessIdentity(member));
   };
+  // Linux can prove that every thread has exited even before the parent reaps
+  // the PID. Keep the identity check elsewhere to avoid a per-PID ps probe.
+  const stillRunning = process.platform === "linux" ? processIdentityMayRun : processIdentityMayOwn;
   remember(pid);
   const cleanup: Cleanup = { ends: Date.now() + CLEANUP_MS, late: false };
   let blind = false;
@@ -550,7 +555,7 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
     const inherited = holders(token, cleanup);
     if (!inherited) blind = true;
     for (const member of [...inherited ?? [], ...[...scopes].flatMap(scopeMembers)]) remember(member);
-    return [...signalled.values()].filter(identity => processIdentityStatus(identity) !== "dead").map(identity => identity.pid);
+    return [...signalled.values()].filter(identity => stillRunning(identity)).map(identity => identity.pid);
   };
   let survivors = left();
   for (let attempt = 1; survivors.length && Date.now() < cleanup.ends; attempt++) {
@@ -585,11 +590,12 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   const started = Date.now();
   const fd = log ? openSync(log, "w") : undefined;
   const token = `${process.pid}-${started}-${Math.random().toString(36).slice(2)}`;
+  const ancestry = env[STEP_TOKEN] ? `${env[STEP_TOKEN]},${token}` : token;
   let stopping = false, cancelled = false, stopTimer: (() => void) | undefined, onCancel: (() => void) | undefined;
   const budget = cpuWaitBudget(env);
   try {
     const output = fd ?? (log === null ? "ignore" : "inherit");
-    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: token,
+    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: ancestry,
       ...(Number.isFinite(until) ? { LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(until, env)) } : {}),
     }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
     let stopped!: (leaked: string | null) => void;
@@ -654,6 +660,9 @@ export interface StepPasses { reused(step: Step, until?: number): boolean; passe
 /** The bytes and configuration every local check actually consumes. */
 export function gateInputSnapshot(root: string, base: string, steps: readonly Step[], env: NodeJS.ProcessEnv = process.env) {
   const checkEnv = checkEnvironment(env);
+  // The caller's paths never reach a local step. Its executor allocates them.
+  for (const key of ISOLATED_DIRECTORY_KEYS) delete checkEnv[key];
+  delete checkEnv.LLV_GATE_RUNNER;
   const toolRoot = path.resolve(import.meta.dir, "..");
   const toolFiles = gateToolFiles(toolRoot);
   let unavailableReason = "dirty worktree";
@@ -676,7 +685,7 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
         ...["node_modules/.bun/lock", "node_modules/typescript/package.json", "node_modules/eslint/package.json"].map(file => path.join(root, file))];
       // Hash what the checks receive, never store its values. Execution roots,
       // deadlines and CPU tickets belong to a run, rather than its result.
-      const environment = environmentFingerprint(checkEnv);
+      const environment = fingerprint([environmentFingerprint(checkEnv), shellStartupFingerprint(root, env.BASH_ENV)]);
       const toolchain = [...tools.map(file => file ? fileFingerprint(file) : "missing"), ...toolFiles.map(file => fileFingerprint(path.join(toolRoot, file)))];
       const components = {
         head: fingerprint(head), tree: fingerprint(tree), base: fingerprint(base),
@@ -712,9 +721,10 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
 const PASS_LIMITS = { entries: 8192 };
 export const passStore = (root: string) => new GateCache<PassRecord>(cacheDirectory(root, "passes"), (value): value is PassRecord =>
   !!value && typeof value === "object" && "at" in value && typeof value.at === "string" && Number.isFinite(Date.parse(value.at)), undefined, PASS_LIMITS);
-export function stepPasses(root: string, base: string, steps: readonly Step[], say: (line: string) => void, env: NodeJS.ProcessEnv = process.env): StepPasses {
+export function stepPasses(root: string, base: string, steps: readonly Step[], say: (line: string) => void, env: NodeJS.ProcessEnv = process.env): StepPasses & { allReused(steps: readonly Step[], until?: number): boolean } {
   const store = passStore(root);
   const reusable = (step: Step) => !["privacy", "frozen install", "supply chain", "staged whitespace"].includes(step.name);
+  if (!steps.some(reusable)) return { reused: () => false, passed: () => {}, allReused: requested => requested.length === 0 };
   const { snapshot, reason } = gateInputSnapshot(root, base, steps, env);
   const initial = snapshot();
   const key = (step: Step) => fingerprint([initial?.key, step]);
@@ -725,14 +735,25 @@ export function stepPasses(root: string, base: string, steps: readonly Step[], s
   const runtimeComplete = runtime.every(step => runtimeRecords.get(key(step)));
   if (!initial) say("pre-push: pass reuse disabled: worktree is dirty or inputs could not be fingerprinted (" + reason() + ")");
   const current = () => initial && snapshot()?.key === initial.key;
-  return {
-    reused(step, until = Infinity) {
-      if (Date.now() >= until || !initial || !reusable(step) || (step.lane === "runtime" && !runtimeComplete)) return false;
+  // All skipped steps share the same checkout, tools and environment. Validate
+  // their immutable receipts against one fresh snapshot before skipping the group.
+  const allReused = (requested: readonly Step[], until = Infinity): boolean => {
+    if (!requested.length) return true;
+    if (!initial || Date.now() >= until) return false;
+    const hits: { step: Step; record: PassRecord }[] = [];
+    for (const step of requested) {
+      if (!reusable(step) || (step.lane === "runtime" && !runtimeComplete)) return false;
       const record = step.lane === "runtime" ? runtimeRecords.get(key(step)) : store.read(key(step));
-      if (!record || !current() || Date.now() >= until) return false;
-      say(`pre-push: ${step.name}: reused pass from ${record.at} for tree ${initial.tree.slice(0, 12)} against base ${base.slice(0, 12)}; identical inputs, skipped`);
-      return true;
-    },
+      if (!record) return false;
+      hits.push({ step, record });
+    }
+    if (!current() || Date.now() >= until) return false;
+    for (const { step, record } of hits) say(`pre-push: ${step.name}: reused pass from ${record.at} for tree ${initial.tree.slice(0, 12)} against base ${base.slice(0, 12)}; identical inputs, skipped`);
+    return true;
+  };
+  return {
+    allReused,
+    reused: (step, until) => allReused([step], until),
     passed(step) {
       if (initial && reusable(step) && current()) store.write(key(step), { at: new Date().toISOString() });
     },
@@ -991,9 +1012,13 @@ function publicationPrivacyFiles(env: NodeJS.ProcessEnv): Record<string, string>
     }));
 }
 
-async function main(mode: Mode, admitted = false, publicationPrepare = false): Promise<void> {
+const independentSteps = ["types", "eslint", "touched tests", "Linux backend", "Linux tests"];
+
+async function main(mode: Mode, admitted = false, publicationPrepare = false, requestedStep?: string): Promise<void> {
+  if (requestedStep && (!independentSteps.includes(requestedStep) || publicationPrepare || process.env.LLV_GATE_PUBLICATION_RECEIPT || process.env.LLV_SKIP_HOOKS === "1"))
+    throw new Error("check-step requires an independent publication step and cannot authorize transport");
   if (process.env.LLV_SKIP_HOOKS === "1") return;
-  if (publicationPrepare) {
+  if (publicationPrepare || requestedStep) {
     // Match the native hook's Git isolation before discovery, planning or
     // fingerprinting. The transport's App rewrites never reach a check.
     for (const name of ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR"]) delete process.env[name];
@@ -1009,10 +1034,11 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     }
   };
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
-  if (publicationPrepare && process.env.LLV_GATE_SANDBOX_RECORD) {
+  if ((publicationPrepare || requestedStep) && process.env.LLV_GATE_SANDBOX_RECORD) {
     // Git prepends its exec directory before invoking native hooks. Match it
     // once the cleanup owner is present; the bootstrap re-enters below.
-    process.env.PATH = `${git(root, ["--exec-path"])}${path.delimiter}${process.env.PATH ?? ""}`;
+    const prefix = git(root, ["--exec-path"]) + path.delimiter;
+    if (publicationPrepare || !process.env.PATH?.startsWith(prefix)) process.env.PATH = prefix + (process.env.PATH ?? "");
   }
   let publishedTree: string | undefined;
   if (mode === "pre-push" && process.env.LLV_GATE_PUSH_HEAD && process.env.LLV_GATE_PUSH_HEAD !== git(root, ["rev-parse", "HEAD"])) {
@@ -1043,16 +1069,22 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
       ...git(root, ["diff", "--cached", "--name-only", "-z"]).split("\0"),
       ...git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
     ].filter(Boolean))];
-  const context = discover(root, base, files);
+  const context = discover(root, base, files, mode);
   // Pre-commit privacy retains its staged-only base. ESLint compares against
   // published main history present in the candidate, including a pending merge.
   const privacyBase = mode === "pre-commit" ? "HEAD" : base;
-  for (const file of context.skippedMedia) console.warn(`${mode}: media OCR deferred to required CI (tesseract/ffmpeg/ffprobe unavailable): ${file}`);
   const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });
   const binding = publicationPrepare || transport ? publicationCheckBinding(process.env) : undefined;
   if (mode === "pre-push" && !deadline) {
     const startedAt = Date.now();
     deadline = { startedAt, at: publicationHookDeadline(publicationPushBudgetMs(files), startedAt) };
+  }
+  const selected = requestedStep && steps.find(step => step.name === requestedStep);
+  if (requestedStep && !selected) throw new Error(`the publication plan has no independent "${requestedStep}" step for these changes`);
+  if (requestedStep && !admitted) {
+    await runAdmittedChecks(["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "check-step", requestedStep, "--admitted"],
+      root, { ...process.env, LLV_GATE_RUNNER: "off" }, deadline);
+    return;
   }
   if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
   if (mode === "pre-push" && files.length && files.every(proseOnly)) console.error("pre-push: prose-only diff; types, lint and touched tests skipped because no compiler or executable source input changed");
@@ -1089,7 +1121,6 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     const privacyEnv: NodeJS.ProcessEnv = {
       ...process.env,
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json"),
-      LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
     };
     const prepare = async (step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env) => {
       const command = [...step.command];
@@ -1197,6 +1228,12 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
     const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error) : undefined;
     const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
+    if (selected) {
+      // The normal runner owns cleanup and records exactly this step's pass.
+      // A later push still runs privacy and validates every step in the plan.
+      await runSteps(mode, [selected], options);
+      return;
+    }
     if (transport) {
       // A lesson refresh must not change the data this scan actually uses.
       // Missing inputs stay missing so the scanner retains its own refusal.
@@ -1249,7 +1286,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
       };
       // Validate exact reusable inputs before acquiring a CPU ticket. Fresh
       // install and supply-chain steps still require their own observation.
-      const needsChecks = steps.filter(step => step.name !== "privacy").some(step => !passes!.reused(step, deadline?.at));
+      const needsChecks = !passes!.allReused(steps.filter(step => step.name !== "privacy"), deadline?.at);
       if (needsChecks) {
         if (config) {
           await privacy();
@@ -1277,6 +1314,12 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
 
 if (import.meta.main) {
   const mode = process.argv[2];
-  if (mode !== "pre-commit" && mode !== "pre-push") throw new Error("usage: local-gate.ts pre-commit|pre-push");
-  try { await main(mode, process.argv[3] === "--admitted", process.argv[3] === "--publication-prepare"); } catch (error) { endHook(mode, error); }
+  if (mode === "check-step") {
+    const step = process.argv[3];
+    if (!step || (process.argv.length !== 4 && !(process.argv.length === 5 && process.argv[4] === "--admitted"))) throw new Error("usage: local-gate.ts check-step <step name>");
+    try { await main("pre-push", process.argv[4] === "--admitted", false, step); } catch (error) { endHook("pre-push", error); }
+  } else {
+    if (mode !== "pre-commit" && mode !== "pre-push") throw new Error("usage: local-gate.ts pre-commit|pre-push|check-step");
+    try { await main(mode, process.argv[3] === "--admitted", process.argv[3] === "--publication-prepare"); } catch (error) { endHook(mode, error); }
+  }
 }

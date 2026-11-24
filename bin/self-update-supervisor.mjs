@@ -33,6 +33,7 @@ import { windowsStartIdentity } from "./windows-process-identity.mjs";
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { get as httpGet } from "node:http";
 import { basename, dirname, join } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
@@ -137,7 +138,7 @@ function packageRevision(packageRoot) {
  * package root that moved since was updated by hand (`git pull`, a build), and
  * that newer choice wins over an older self-update release.
  *
- * @returns {{ dir: string, sha: string | null, published: boolean }}
+ * @returns {{ dir: string, sha: string | null, published: boolean, kind?: "package" }}
  */
 export function installedRelease(pointerFile, packageRoot) {
   const rootHead = isGitCheckout(packageRoot) ? headRevision(packageRoot) : null;
@@ -148,7 +149,7 @@ export function installedRelease(pointerFile, packageRoot) {
       const next = JSON.parse(readFileSync(join(parsed.dir, "package.json"), "utf8"));
       if (base.version === parsed.baseVersion && next.version === parsed.version
         && existsSync(join(parsed.dir, "dist", "standalone", "server.js")) && existsSync(join(parsed.dir, "dist", "runtime-host.mjs")))
-        return { dir: parsed.dir, sha: parsed.sha, published: true };
+        return { dir: parsed.dir, sha: parsed.sha, published: true, kind: "package" };
     }
     const sha = typeof parsed?.sha === "string" && /^[0-9a-f]{40}$/.test(parsed.sha) ? parsed.sha : null;
     const dir = typeof parsed?.dir === "string" ? parsed.dir : null;
@@ -403,7 +404,99 @@ function readinessError(error) {
   return kind ? `Viewer readiness probe failed (${kind})` : "Viewer readiness probe failed";
 }
 
-/** @typedef {{ phase: "files" | "page" | "chunk", status: "running" | "ready" | "failed", elapsedMs?: number, detail?: string | null }} ReadinessPhase */
+/** @typedef {{ phase: "files" | "page" | "chunk", status: "running" | "ready" | "failed", elapsedMs?: number, detail?: string | null, httpStatus?: number, error?: string, endpoint?: string }} ReadinessPhase */
+
+const READY_ROUTE = "/api/ready";
+const LEGACY_READY_ROUTE = "/api/files";
+const readinessSleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+/** A package update target is selected by a revision-bearing pointer. Its
+ * executable might be stale, so the route files cannot grant legacy fallback. */
+export function releaseHasRevisionReadiness(release) {
+  if (release?.kind === "package") return true;
+  if (!release?.dir) return false;
+  // Source proves the selected checkout's protocol even when its retained
+  // build output predates that source. Compiled route output covers packaged
+  // releases that omit the source tree.
+  return existsSync(join(release.dir, "src/app/api/ready/route.ts"))
+    || existsSync(join(release.dir, ".next/server/app/api/ready/route.js"))
+    // npm packages execute from dist/standalone. Its compiled route tree is
+    // the protocol declaration for that selected artifact.
+    || existsSync(join(release.dir, "dist/standalone/.next/server/app/api/ready/route.js"));
+}
+
+/** Authorization values must survive both header construction and parsing
+ * byte-for-byte, since the Viewer compares against the stored key verbatim. */
+export function accessKeyCanRoundTrip(value) {
+  return typeof value === "string" && value.length > 0
+    && value.trim() === value && !/[^\t\x20-\x7e]/.test(value);
+}
+
+function probeViewer(port, endpoint, revision, timeoutMs, headers) {
+  return new Promise(resolve => {
+    const suffix = endpoint === READY_ROUTE ? `?revision=${encodeURIComponent(revision)}` : "";
+    const request = httpGet(`http://127.0.0.1:${port}${endpoint}${suffix}`, { headers }, response => {
+      response.resume();
+      resolve({ httpStatus: response.statusCode, revision: response.headers["x-delegatus-viewer-revision"] });
+    });
+    request.on("error", error => resolve({ error: readinessError(error) }));
+    const timer = setTimeout(() => {
+      resolve({ error: "deadline" });
+      request.destroy();
+    }, timeoutMs);
+    request.once("close", () => clearTimeout(timer));
+  }).catch(error => ({ error: readinessError(error) }));
+}
+
+/** The release is fixed for this child's lifetime. A legacy-eligible release
+ * may use the fallback probe within the same budget.
+ * @param {number} port
+ * @param {{ revision: string | null, timeoutMs: number, allowLegacyFallback?: boolean, assertChildRunning?: () => void, probeAccess?: () => { headers: Record<string, string>, accessKeyUnsendable?: boolean }, onPhase?: (event: ReadinessPhase) => void, now?: () => number, sleep?: (ms: number) => Promise<void>, probe?: typeof probeViewer }} options
+ */
+export async function waitForViewerReadiness(port, {
+  revision, timeoutMs, allowLegacyFallback = !revision, assertChildRunning = () => {},
+  probeAccess = () => ({ headers: {}, accessKeyUnsendable: false }), onPhase = () => {},
+  now = () => performance.now(), sleep = readinessSleep, probe = probeViewer,
+}) {
+  if (!revision && !allowLegacyFallback) return false;
+  const deadline = now() + timeoutMs;
+  let endpoint = revision ? READY_ROUTE : LEGACY_READY_ROUTE;
+  while (now() < deadline) {
+    assertChildRunning();
+    // Legacy candidates still pass through their release's access perimeter.
+    // Keep the launcher's probe credentials on the fallback request too.
+    const { headers, accessKeyUnsendable } = probeAccess();
+    if (now() >= deadline) break;
+    onPhase({ phase: "files", status: "running", endpoint });
+    const started = now();
+    const result = started < deadline
+      ? await probe(port, endpoint, revision, Math.max(1, Math.ceil(Math.min(5_000, deadline - started))), headers)
+      : { error: "deadline" };
+    const elapsedMs = now() - started;
+    const { httpStatus } = result;
+    const error = result.error ?? (started + elapsedMs > deadline ? "deadline"
+      : endpoint === READY_ROUTE && httpStatus === 200 && result.revision !== revision ? "revision-mismatch" : undefined);
+    const accessRefused = httpStatus === 401 || httpStatus === 403;
+    // With an unsendable key, the old Viewer can only prove it is listening.
+    // The separate page probe still refuses the replacement and drives rollback.
+    const ready = !error && (endpoint === READY_ROUTE
+      ? httpStatus === 200
+      : (httpStatus >= 200 && httpStatus < 400) || (accessKeyUnsendable && accessRefused));
+    onPhase({ phase: "files", status: ready ? "ready" : "failed", endpoint, httpStatus, error, elapsedMs,
+      detail: error ?? (ready ? null : "http-status") });
+    assertChildRunning();
+    if (ready) return true;
+    // A known legacy build's perimeter can deny an unknown route before Next
+    // returns 404. Both statuses still require legacy eligibility.
+    if (endpoint === READY_ROUTE && allowLegacyFallback && (httpStatus === 404 || accessRefused)) {
+      endpoint = LEGACY_READY_ROUTE;
+      continue;
+    }
+    const remaining = deadline - now();
+    if (remaining > 0) await sleep(Math.min(200, remaining));
+  }
+  return false;
+}
 
 
 /**
@@ -426,23 +519,29 @@ export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}, o
   let phase = "page";
   let started = performance.now();
   let failure = null;
-  const finish = () => onPhase({ phase, status: failure ? "failed" : "ready", elapsedMs: performance.now() - started, detail: failure });
+  let httpStatus;
+  let probeError;
+  const finish = () => onPhase({ phase, status: failure ? "failed" : "ready", elapsedMs: performance.now() - started,
+    detail: failure, httpStatus, error: probeError });
   onPhase({ phase, status: "running" });
   try {
     const page = await fetch(`http://127.0.0.1:${port}/`, { signal, redirect: "manual", headers });
+    httpStatus = page.status;
     const html = page.status === 200 ? await page.text() : (await page.body?.cancel(), "");
     if (page.status !== 200) return failure = `GET / answered ${page.status}`;
     const chunk = /["'](\/_next\/static\/[^"'?#]+\.js)["']/.exec(html)?.[1];
     if (!chunk) return null;
     finish();
     phase = "chunk";
+    httpStatus = undefined;
     started = performance.now();
     onPhase({ phase, status: "running" });
     const asset = await fetch(`http://127.0.0.1:${port}${chunk}`, { signal, redirect: "manual" });
+    httpStatus = asset.status;
     await asset.body?.cancel();
     return failure = asset.status === 200 ? null : `GET ${chunk} answered ${asset.status}`;
   } catch (error) {
-    return failure = readinessError(error);
+    return failure = probeError = readinessError(error);
   } finally {
     finish();
   }
@@ -456,7 +555,7 @@ export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}, o
 export async function waitForPageAndChunk(port, {
   timeoutMs = 90_000, attemptTimeoutMs = 5_000, intervalMs = 200,
   headers = {}, onPhase = () => {}, now = () => performance.now(),
-  sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+  sleep = readinessSleep,
   probe = probePageAndChunk,
 } = {}) {
   const deadline = now() + timeoutMs;
@@ -473,17 +572,21 @@ export async function waitForPageAndChunk(port, {
 
 function readinessReason(detail) {
   if (detail === null || detail === undefined) return null;
-  if (["http-status", "probe-error", "deadline"].includes(detail)) return detail;
+  if (["http-status", "probe-error", "deadline", "revision-mismatch"].includes(detail)) return detail;
   if (detail === "Viewer readiness deadline expired") return "deadline";
+  if (/^(?:The server didn't respond within \d+ seconds|Сервер не відповів за \d+ секунд)\. \[[a-z -]+\]$/i.test(detail)) return "deadline";
   if (/^GET \/ answered [1-5]\d\d$/.test(detail)
     || /^GET \/_next\/static\/[^\s]+\.js answered [1-5]\d\d$/.test(detail)) return "http-status";
   if (/^Viewer readiness probe failed(?: \([A-Za-z][A-Za-z0-9_]{0,39}\))?$/.test(detail)) return "probe-error";
   return "probe-failed";
 }
 
+const startupReceipt = /^\[viewer startup phase\] (http-ingress|access|release-authority|state-compatibility|registry|activation) (running|ready) (\d{1,10})$/;
+const recordLimit = 451; // Immediate answers at 200 ms cadence for 90 s, plus the fallback.
+
 /** A bounded record survives launcher exec, including a rollback's own boot.
- * Each start retains four runs; each phase keeps counters instead of a row
- * per attempt. Callers persist before dispatching any exec or rollback.
+ * Each start retains four runs. The files phase also covers the new probe,
+ * so an older launcher can preserve its observations when it rolls back.
  */
 export function createReadinessJournal(file, { revision, pid }, clock = () => performance.now()) {
   let runs;
@@ -501,10 +604,14 @@ export function createReadinessJournal(file, { revision, pid }, clock = () => pe
     };
   });
   const started = clock();
-  const run = { revision, pid, startedAt: new Date().toISOString(), status: "running", elapsedMs: 0,
+  const run = { revision, pid, startedAt: new Date().toISOString(), status: "running", elapsedMs: 0, startup: {},
     phases: Object.fromEntries(["files", "page", "chunk"].map(phase => [phase, { attempts: 0, elapsedMs: 0, status: "pending" }])) };
   runs.push(run);
   const phaseStarts = new Map();
+  const attemptStarts = new Map();
+  let startupLine = "";
+  let activeStartup = null;
+  let finished = false;
   const save = () => {
     run.elapsedMs = Math.max(0, Math.round(clock() - started));
     const temporary = `${file}.${process.pid}.tmp`;
@@ -520,19 +627,54 @@ export function createReadinessJournal(file, { revision, pid }, clock = () => pe
   save();
   return {
     /** @param {ReadinessPhase} event */
-    observe({ phase, status, detail = null }) {
+    observe({ phase, status, detail = null, elapsedMs, httpStatus, error, endpoint }) {
       const entry = run.phases[phase];
+      const now = clock();
       if (status === "running") {
         entry.attempts += 1;
-        if (!phaseStarts.has(phase)) phaseStarts.set(phase, clock());
+        if (!phaseStarts.has(phase)) phaseStarts.set(phase, now);
+        attemptStarts.set(phase, now);
+      } else {
+        const observation = { status, elapsedMs: Math.max(0, Math.round(elapsedMs ?? (now - attemptStarts.get(phase)))) };
+        if (endpoint) observation.endpoint = endpoint;
+        if (httpStatus !== undefined) observation.httpStatus = httpStatus;
+        if (error) observation.error = readinessReason(error) === "probe-error" ? error : readinessReason(error);
+        entry.observations ??= [];
+        if (entry.observations.length >= recordLimit) entry.observations.shift();
+        entry.observations.push(observation);
       }
       entry.status = status;
-      entry.elapsedMs = Math.max(0, Math.round(clock() - phaseStarts.get(phase)));
+      entry.elapsedMs = Math.max(0, Math.round(now - phaseStarts.get(phase)));
       entry.detail = readinessReason(detail);
       save();
     },
+    observeStartupOutput(chunk) {
+      if (finished) return;
+      const lines = (startupLine + String(chunk)).split("\n");
+      // A long diagnostic line cannot be a receipt. Retain only a sentinel
+      // until its newline so an arbitrary suffix cannot become a receipt.
+      startupLine = lines.pop() ?? "";
+      if (startupLine.length > 120) startupLine = "!";
+      for (const line of lines) {
+        const match = startupReceipt.exec(line.trimEnd());
+        if (!match) continue;
+        const [, name, status, elapsed] = match;
+        run.startup[name] = { status, elapsedMs: Number(elapsed) };
+        if (status === "running") activeStartup = { name, started: clock() };
+        else if (activeStartup?.name === name) activeStartup = null;
+        save();
+      }
+    },
+    pendingStartupPhase() {
+      return activeStartup?.name;
+    },
     /** @param {string | null} [detail] */
     finish(detail = null) {
+      finished = true;
+      if (activeStartup) {
+        const { name, started } = activeStartup;
+        run.startup[name] = { status: detail ? "failed" : "running", elapsedMs: Math.max(0, Math.round(clock() - started)) };
+      }
       run.status = detail ? "failed" : "ready";
       run.detail = readinessReason(detail);
       save();

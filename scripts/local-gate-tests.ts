@@ -1,11 +1,11 @@
-import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
+import { hasActiveGateSandbox, recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 import { gateTaskDiagnostics } from "./gate-tasks";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
-import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment, SUPERVISOR_MARGIN_MS } from "./local-gate";
+import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment, SUPERVISOR_MARGIN_MS } from "./local-gate";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
@@ -44,6 +44,19 @@ const FILE_BUDGET_MS = 5 * 60 * 1000;
 // confirmations after a slow full-file baseline. Bound head work to eight owned
 // runners in the shared CPU work slice; baseline and retries retain three.
 const HEAD_FILE_WORKERS = 8;
+const NESTED_FILE_WORKERS = 2;
+
+const nestedComparisonFile = (file: string): boolean =>
+  /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/"));
+
+/** Multiple gate fixtures can exhaust a service's task limit. Limit that
+ * class while letting ordinary source tests use the remaining file workers. */
+export function comparisonFileWorkers(files: readonly string[], ceiling: number, sharedPortable = false): number {
+  const nested = files.filter(nestedComparisonFile).length;
+  if (nested && sharedPortable) return 1;
+  return Math.min(ceiling, files.length - nested + Math.min(nested, NESTED_FILE_WORKERS));
+}
+
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
 export class BudgetExhausted extends Error {}
@@ -305,26 +318,21 @@ export function testNameFilter(sites: readonly TestSite[]): string[] {
 
 interface TestBudgets { fileMs: number; runMs: number }
 const DEFAULT_TEST_BUDGETS: TestBudgets = { fileMs: FILE_BUDGET_MS, runMs: RUN_BUDGET_MS };
-async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; onFile?: (run: TestRun, cleanupConfirmed: boolean) => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number } = {}): Promise<TestRun> {
+const fileRunnerPath = (env: NodeJS.ProcessEnv) => `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
+const sharesPortableRunner = () => process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0;
+async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; onFile?: (run: TestRun, cleanupConfirmed: boolean) => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number; reserveFileBudget?: boolean } = {}): Promise<TestRun> {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   const now = options.now ?? (() => performance.now());
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
-  const fileWindow = budgets.fileMs + SUPERVISOR_MARGIN_MS;
-  const reserve = label === "head" && budgets.runMs > fileWindow ? fileWindow : 0;
   const results: TestRun[] = new Array(files.length);
-  let next = 0;
-  const workers = await Promise.allSettled(Array.from({ length: Math.min(options.workers ?? 3, files.length) }, async () => {
-  while (next < files.length) {
-    const index = next++, file = files[index]!;
+  const runFile = async (index: number) => {
+    const file = files[index]!;
     const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
     if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
-    // A capacity retry can resume the unstarted head files from checkpoints.
-    // Leave admitted files a full deadline and cleanup window instead of
-    // starting more with a shrinking timeout near the phase deadline.
-    if (remaining < reserve) {
-      throw new BudgetExhausted(`${label}: test run budget leaves too little time to start another file; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
+    if (options.reserveFileBudget && remaining < budgets.fileMs + SUPERVISOR_MARGIN_MS) {
+      throw new BudgetExhausted(`${label}: remaining run budget cannot fit a full file and its cleanup; ${results.filter(run => run?.completed.length).length} of ${files.length} pending files completed`);
     }
     const sites = options.sites?.filter(site => site.file === file);
     const filtered = !!sites && !sites.some(site => site.kind === "error");
@@ -339,7 +347,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     // stage tickets created inside a test belong only to that test's sandbox.
     env.LLV_GATE_LOCK_DIR = path.join(privateRoot, "cpu-gate");
     mkdirSync(env.LLV_GATE_LOCK_DIR, { recursive: true });
-    env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
+    env.PATH = fileRunnerPath(env);
     env.NO_COLOR = "1"; env.FORCE_COLOR = "0";
     const report = path.join(privateRoot, "junit.xml"), log = path.join(privateRoot, "output.log");
     const fd = openSync(log, "w");
@@ -378,8 +386,8 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       }
       // Portable cleanup is best effort and can miss detached descendants.
       // Its result remains observable but cannot certify later file reuse.
-      cleanupConfirmed = process.platform === "linux" && exitCode === 0
-        && !output.includes("portable cleanup") && !survivors;
+      cleanupConfirmed = process.platform === "linux" && exitCode === 0 && !!task.peak && !survivors
+        && !output.includes("portable cleanup") && !output.includes("no reachable systemd user manager");
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
@@ -400,10 +408,26 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2
       ? `; over half the ${budgets.fileMs / 1000} s file budget; split it` : "";
-    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
     results[index] = { failures, passed, completed, elapsedMs: 0 };
     options.onFile?.(results[index]!, cleanupConfirmed);
-  }
+    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
+  };
+  const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharesPortableRunner());
+  const ordinary: number[] = [], nested: number[] = [];
+  files.forEach((file, index) => (nestedComparisonFile(file) ? nested : ordinary).push(index));
+  let nextOrdinary = 0, nextNested = 0, nestedRunning = 0;
+  if (files.length) options.log?.(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
+  const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
+    for (;;) {
+      const ordinaryIndex = ordinary[nextOrdinary];
+      const nestedIndex = nestedRunning < NESTED_FILE_WORKERS ? nested[nextNested] : undefined;
+      if (ordinaryIndex === undefined && nestedIndex === undefined) return;
+      const useNested = nestedIndex !== undefined && (ordinaryIndex === undefined || nestedIndex < ordinaryIndex);
+      const index = useNested ? nested[nextNested++]! : ordinary[nextOrdinary++]!;
+      if (useNested) nestedRunning++;
+      try { await runFile(index); }
+      finally { if (useNested) nestedRunning--; }
+    }
   }));
   // All owned runners have settled. Completed file diagnostics and filtered
   // worker rejections must both veto a capacity retry after budget expiry.
@@ -468,25 +492,77 @@ function isGreenHeadFile(value: unknown): value is TestRun {
  * identity/privacy/network values that a direct comparator call still passes. */
 function headEnvironmentKey(env: NodeJS.ProcessEnv): string {
   const consumed = /^(?:GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)|LLV_PRIVACY_[A-Z0-9_]+|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
-  return fingerprint([environmentFingerprint(env), checkInputEnvironment(env), Object.entries(env)
+  return fingerprint([environmentFingerprint(env), checkInputEnvironment(env), env.XDG_STATE_HOME ?? null, env.XDG_RUNTIME_DIR ?? null, Object.entries(env)
     .filter(([name, value]) => value !== undefined && consumed.test(name)).sort(([a], [b]) => a.localeCompare(b))]);
 }
 
-/** Check the boundary of this invocation before reading or sealing receipts.
- * Portable work keeps its normal fresh execution, even after a service run. */
-function serviceCleanupIdentity(env: NodeJS.ProcessEnv): string | undefined {
-  if (process.platform !== "linux") return;
-  const systemctl = Bun.which("systemctl", { PATH: env.PATH ?? "" });
-  const runner = Bun.which("systemd-run", { PATH: env.PATH ?? "" });
-  if (!systemctl || !runner) return;
+/** Every file gets its own roots. Fold inherited paths proven to come from
+ * the gate allocator, including when the caller declared one as an input. */
+function headCheckpointEnvironment(root: string, sandbox: string, inherited: NodeJS.ProcessEnv) {
+  const temporary = path.dirname(sandbox);
+  const outer = path.dirname(temporary);
+  const owned = /^delegatus-local-gate-[a-zA-Z0-9]{6}$/.test(path.basename(outer))
+    && inherited.TMPDIR === temporary && temporary === path.join(outer, "tmpdir")
+    && inherited.XDG_STATE_HOME === path.join(outer, "xdg_state_home")
+    && inherited.XDG_RUNTIME_DIR === path.join(outer, "xdg_runtime_dir")
+    && hasActiveGateSandbox(outer, inherited.LLV_GATE_SANDBOX_RECORD);
+  const env = { ...inherited };
+  // The Linux owned runner's check-worker-entry.py always issues these
+  // two identities anew before executing a file.
+  delete env.LLV_CHECK_ENTRY_PID;
+  delete env.LLV_CHECK_ENTRY_SUPERVISOR;
+  if (owned) {
+    for (const name of ISOLATED_DIRECTORY_KEYS) {
+      if (env[name] === path.join(outer, name.toLowerCase())) delete env[name];
+    }
+    if (env.CLAUDE_CODE_TMPDIR === temporary) delete env.CLAUDE_CODE_TMPDIR;
+  }
+  const parent = owned ? path.dirname(outer) : temporary;
   try {
-    // Each file gets a new, empty runtime directory. Verify the session bus
-    // reachable independently of that directory before reusing a service run.
-    const managerEnv = { ...env };
-    delete managerEnv.XDG_RUNTIME_DIR;
-    if (spawnSync(systemctl, ["--user", "show-environment"], { env: managerEnv, stdio: "ignore", timeout: 5_000 }).status !== 0) return;
-    return fingerprint([systemctl, fileFingerprint(systemctl), runner, fileFingerprint(runner),
-      env.DBUS_SESSION_BUS_ADDRESS ?? null]);
+    const stat = statSync(parent);
+    const physical = realpathSync(parent);
+    if (owned && (!lstatSync(temporary).isDirectory() || statSync(temporary).dev !== stat.dev
+      || realpathSync(temporary) !== path.join(physical, path.basename(outer), "tmpdir"))) return;
+    // Linked worktrees can share receipts, HEAD, branch and Git configuration.
+    // The checked-out directory is still an input to the test process.
+    const source = statSync(root);
+    const key = fingerprint([[root, realpathSync(root), source.dev, source.ino],
+      [owned, parent, physical, stat.dev, stat.ino], headEnvironmentKey(env)]);
+    return { env, key };
+  } catch { return undefined; }
+}
+
+/** Probe from the worker's fresh runtime directory and fingerprint the actual
+ * local bus, manager connection and cleanup tools. */
+function serviceCleanupIdentity(root: string, isolated: NodeJS.ProcessEnv): string | undefined {
+  if (process.platform !== "linux") return;
+  const PATH = fileRunnerPath(isolated);
+  const env: NodeJS.ProcessEnv = { ...isolated, PATH };
+  const search = { PATH, cwd: root };
+  const systemctl = Bun.which("systemctl", search), runner = Bun.which("systemd-run", search), busctl = Bun.which("busctl", search);
+  const python = Bun.which("python3", search) ?? "/usr/bin/python3";
+  const address = env.DBUS_SESSION_BUS_ADDRESS;
+  const socket = /^unix:path=(\/[\w./-]+)(?:,guid=[a-f0-9]{32})?$/.exec(address ?? "")?.[1];
+  if (!systemctl || !runner || !busctl || !socket) return;
+  try {
+    const runtime = env.XDG_RUNTIME_DIR!;
+    if (lstatSync(path.join(runtime, "systemd"), { throwIfNoEntry: false })) return;
+    const socketIdentity = () => {
+      const stat = statSync(socket);
+      return stat.isSocket() ? fingerprint([realpathSync(socket), stat.dev, stat.ino, stat.ctimeMs]) : undefined;
+    };
+    const endpoint = socketIdentity();
+    if (!endpoint || spawnSync(systemctl, ["--user", "show-environment"], { cwd: root, env, stdio: "ignore", timeout: 5_000 }).status !== 0) return;
+    const busCall = (...method: string[]) => {
+      const result = spawnSync(busctl, [`--address=${address}`, "--auto-start=no", "call", "org.freedesktop.DBus",
+        "/org/freedesktop/DBus", "org.freedesktop.DBus", ...method], { cwd: root, env, encoding: "utf8", timeout: 5_000 });
+      return result.status === 0 ? result.stdout.trim() : "";
+    };
+    const bus = busCall("GetId"), manager = busCall("GetNameOwner", "s", "org.freedesktop.systemd1");
+    if (!/^s "[a-f0-9]{32}"$/.test(bus) || !/^s ":\d+\.\d+"$/.test(manager) || socketIdentity() !== endpoint) return;
+    const tools = [systemctl, runner, busctl, python].map(file => [file, fileFingerprint(file)]);
+    if (tools.some(([, digest]) => digest === "missing")) return;
+    return fingerprint([address, endpoint, bus, manager, tools]);
   } catch { return; }
 }
 
@@ -516,7 +592,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   };
   const env = isolatedEnvironment(sandbox, inherited);
   const git = (...args: string[]) => command(["git", ...args], root, env);
-  let sealHeadSamples: (() => void) | undefined;
+  let verifyHeadReuse: (() => void) | undefined;
   try {
     const base = git("rev-parse", "--verify", `${baseRef}^{commit}`).trim();
     const headCommit = git("rev-parse", "--verify", "HEAD^{commit}").trim();
@@ -527,14 +603,14 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
     // A single file already gets whole-step reuse after passing; partial
     // checkpoints cannot help it, so avoid another input traversal there.
-    const cleanupIdentity = files.length > 1 ? serviceCleanupIdentity(inherited) : undefined;
-    const environmentKey = headEnvironmentKey(inherited);
-    const inputs = cleanupIdentity ? gateInputSnapshot(root, base,
-      [{ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", base, ...files] }], inherited) : undefined;
+    const cleanupIdentity = files.length > 1 ? serviceCleanupIdentity(root, env) : undefined;
+    const checkpointEnvironment = cleanupIdentity ? headCheckpointEnvironment(root, sandbox, inherited) : undefined;
+    const inputs = checkpointEnvironment ? gateInputSnapshot(root, base,
+      [{ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", base, ...files] }], checkpointEnvironment.env) : undefined;
     const initial = inputs?.snapshot();
     const headCache = initial ? headFileCache(root) : undefined;
-    const headKey = (file: string) => fingerprint([3, initial?.key, environmentKey, cleanupIdentity, files, budgets, file]);
-    const reused: TestRun[] = [], pending: string[] = [], freshGreen: TestRun[] = [];
+    const headKey = (file: string) => fingerprint([4, initial?.key, checkpointEnvironment?.key, cleanupIdentity, files, budgets, file]);
+    const reused: TestRun[] = [], pending: string[] = [];
     for (const file of files) {
       const cached = headCache?.read(headKey(file));
       if (cached?.completed[0] === file) {
@@ -542,21 +618,27 @@ export async function touchedTests(root: string, baseRef: string, selected: read
         log(`touched-tests: reused complete green head file ${file}; identical source, selection, toolchain and environment`);
       } else pending.push(file);
     }
-    // Compare inputs only at the invocation boundaries, never once per file.
-    // The caller still gets the aggregate failure, but completed files survive
-    // that failure for a retry of exactly the same inputs. A killed supervisor
-    // or failed cleanup cannot seal a checkpoint.
-    sealHeadSamples = () => {
-      if (!initial || !headCache) return;
-      if (serviceCleanupIdentity(inherited) !== cleanupIdentity || headEnvironmentKey(inherited) !== environmentKey
-        || inputs?.snapshot()?.key !== initial.key) {
-        if (reused.length) throw new Error("head checkpoint inputs changed during this run; fresh checks required");
-        return;
-      }
-      for (const run of freshGreen) headCache.write(headKey(run.completed[0]!), run);
+    let inputsChanged = false;
+    const sameHeadInputs = () => !inputsChanged && (serviceCleanupIdentity(root, env) === cleanupIdentity
+      && headCheckpointEnvironment(root, sandbox, inherited)?.key === checkpointEnvironment?.key
+      && inputs?.snapshot()?.key === initial?.key);
+    if (reused.length) verifyHeadReuse = () => {
+      if (!sameHeadInputs()) throw new Error("head checkpoint inputs changed during this run; fresh checks required");
     };
-    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers: HEAD_FILE_WORKERS,
-      onFile: headCache ? (run, cleanupConfirmed) => { if (cleanupConfirmed && isGreenHeadFile(run)) freshGreen.push(run); } : undefined });
+    const workers = comparisonFileWorkers(files, HEAD_FILE_WORKERS, sharesPortableRunner());
+    // A hook deadline can kill the comparator before its finally runs. Seal
+    // a green file after its runner and sandbox have been cleaned, with the
+    // same inputs verified on both sides of that file's execution.
+    // A checkpointable head can yield between files. Starting one at the end
+    // of the run with a clipped deadline can turn run exhaustion into a file
+    // timeout and interrupt its nested runner during cleanup.
+    const reserveFileBudget = !!headCache && budgets.runMs > budgets.fileMs + SUPERVISOR_MARGIN_MS;
+    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers, reserveFileBudget,
+      onFile: headCache ? (run, cleanupConfirmed) => {
+        if (!cleanupConfirmed || !isGreenHeadFile(run)) return;
+        if (sameHeadInputs()) headCache.write(headKey(run.completed[0]!), run);
+        else inputsChanged = true;
+      } : undefined });
     const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
       completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
@@ -676,7 +758,10 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     logTiming();
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
     return comparison;
-  } finally { budget.close(); releaseGateSandbox(sandbox); sealHeadSamples?.(); }
+  } finally {
+    budget.close();
+    try { verifyHeadReuse?.(); } finally { releaseGateSandbox(sandbox); }
+  }
 }
 
 if (import.meta.main) {

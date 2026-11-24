@@ -1,4 +1,5 @@
 import { MeasuredCache } from "@/lib/cacheTelemetry";
+import { RegistryTransactionError } from "@/lib/agent/registryTransaction";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
@@ -19,7 +20,8 @@ import { enqueueStructuredMessage, idleContinuationDeliveryRetryEvidence, type S
 import { StructuredDispatchDeferredError, StructuredSendRefusedError } from "@/lib/runtime/engineHost";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { SEAT_QUOTA_RECOVERY_ROLE } from "@/lib/runtime/recoveryNotices";
-import { assertSeatTickWork } from "./seatTickWork";
+import { assertSeatTickWork, seatTickWorkRemainingMs, seatTickWorkSignal } from "./seatTickWork";
+import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
 import { effectiveSeatTickSettings, readSeatTickSettings } from "./seatTickSettings";
 
 type Seat = { conversationId: string; seatEpoch: number; designatedAt: string };
@@ -284,7 +286,21 @@ export async function recoverSeatQuota(project: string, ports = defaultSeatQuota
   }
   if (!seat || ports.held(project)) return !!row && open(row);
   let observation: SeatQuotaObservation | null;
-  try { observation = await ports.observe(project, seat, row?.cutAt); }
+  try {
+    observation = await waitForStateLock("SqliteAgentRegistryStore.seat-quota.observe", async () => {
+      assertSeatTickWork();
+      if (!sameSeat(ports.seat(project), seat)) throw new StructuredSendRefusedError("seat rotated during observation retry");
+      try { return await ports.observe(project, seat, row?.cutAt); }
+      catch (error) {
+        // Only this read is repeated. Recovery sends and durable transitions
+        // stay outside the acquisition retry boundary.
+        if (!(error instanceof RegistryTransactionError)) throw error;
+        const deferred = new StateLockDeferredError("SqliteAgentRegistryStore.seat-quota.observe");
+        deferred.cause = error;
+        throw deferred;
+      }
+    }, { waitMs: Math.min(1_000, seatTickWorkRemainingMs() ?? 1_000), signal: seatTickWorkSignal() });
+  }
   catch (error) {
     if (!(error instanceof StructuredSendRefusedError)) throw error;
     if (row && open(row)) await change(project, current => current?.id === row!.id

@@ -15,7 +15,7 @@ import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
  * without a DOM. */
 
 /** The engine a draft can launch — the transcript roots differ per engine. */
-export type DraftEngine = "claude" | "codex" | "copilot";
+export type DraftEngine = "claude" | "codex" | "copilot" | "antigravity";
 
 /** Display phase of a draft card, derived from the durable attempt + timers. */
 export type DraftPhase = "draft" | "launching" | "booting" | "booting-slow" | "confirming" | "confirming-slow" | "attention";
@@ -454,7 +454,7 @@ export function provisionalSpawnFile(
     name: `spawn:${outcome.launchId}`,
     project,
     ...(attempt.request?.cwd ? { cwd: attempt.request.cwd } : {}),
-    title: attempt.engine === "codex" ? "Codex" : attempt.engine === "copilot" ? "Copilot" : "Claude",
+    title: attempt.engine === "codex" ? "Codex" : attempt.engine === "copilot" ? "Copilot" : attempt.engine === "antigravity" ? "Antigravity" : "Claude",
     engine: attempt.engine,
     kind: "session",
     fmt: attempt.engine,

@@ -38,6 +38,10 @@ test("unthreaded answer follows full options in the real owner prompt and servic
   const prompt = ownerRunPrompt(req, owner, 3);
   expect(prompt.indexOf("Which sample?")).toBeLessThan(prompt.indexOf("так, 1"));
   expect(prompt.match(/Report\./g)).toHaveLength(1);
+  const sections = [...prompt.matchAll(/<conversation>\n([^]*?)\n<\/conversation>/g)];
+  expect(sections).toHaveLength(1);
+  const rows = JSON.parse(sections[0]![1]!) as typeof req.input.conversation;
+  expect(rows.map(row => row.id)).toEqual(["anchor", "local_outbound_18", "answer"]);
 });
 
 test("explicit missing parent wins over adjacent questions and preserves operator attribution", async () => {

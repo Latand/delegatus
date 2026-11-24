@@ -41,20 +41,24 @@ export function pageTo(liveEnd: number, hours: number, stageStartMs: number): nu
   return Math.min(liveEnd, stageStartMs + hours * HOUR * (1 - PAGE_MARGIN));
 }
 
-export interface SegmentInput { startedAtMs: number | null; endAtMs: number | null }
+export interface SegmentInput { startedAtMs: number | null; workEndAtMs: number | null; live: boolean }
 export type TimelineSegment =
   | { kind: "span"; startMs: number; endMs: number }
-  /** Started, with no recorded end: only the start is known. */
-  | { kind: "tick"; startMs: number };
+  /** Started, with no evidenced work end: only the start is known. */
+  | { kind: "tick"; startMs: number }
+  /** Working now with no verified start: a fixed-width mark at the clock, never a duration. */
+  | { kind: "live" };
 
 /**
- * Where a stage actually ran, from the attempt's own times. A start and an end
- * make a span (never past the clock); a start alone makes a tick; no start
- * makes nothing, so an unknown time is never drawn as work.
+ * Where work is evidenced, from the attempt's own times. A start and a work
+ * end make a span (never past the clock); a start alone makes a tick; a live
+ * attempt with no start makes the live mark; anything else makes nothing, so an
+ * unknown time is never drawn as work.
  */
 export function attemptSegment(attempt: SegmentInput, nowMs: number): TimelineSegment | null {
-  const { startedAtMs: start, endAtMs: end } = attempt;
-  if (start === null || !Number.isFinite(start) || start > nowMs) return null;
+  const { startedAtMs: start, workEndAtMs: end } = attempt;
+  if (start === null || !Number.isFinite(start)) return attempt.live ? { kind: "live" } : null;
+  if (start > nowMs) return null;
   if (end === null || !Number.isFinite(end)) return { kind: "tick", startMs: start };
   if (end < start) return null;
   return { kind: "span", startMs: start, endMs: Math.min(end, nowMs) };
@@ -109,10 +113,15 @@ export function anchorShift(x: number, laneWidth: number): number {
   return laneWidth > 0 ? Math.max(0, Math.min(100, 100 * x / laneWidth)) : 0;
 }
 
-/** Two days or more in whole days, otherwise hours and minutes: the one rule for every duration the chart writes. */
+/**
+ * Two days or more in whole days, otherwise hours and whole minutes (never
+ * seconds), and "under a minute" below one: the one rule for every duration the chart writes.
+ */
 export function timelineDuration(ms: number, locale: Locale, t: TFunction): string {
   const days = Math.floor(ms / DAY);
-  return days >= DAY_WORDS_FROM_DAYS ? t("mobile2.kanban.ageDays", { count: days }) : humanizeDuration(ms / 1000, locale);
+  if (days >= DAY_WORDS_FROM_DAYS) return t("mobile2.kanban.ageDays", { count: days });
+  const minutes = Math.floor(Math.max(0, ms) / 60_000);
+  return minutes < 1 ? t("timeline.underMinute") : humanizeDuration(minutes * 60, locale);
 }
 
 /**

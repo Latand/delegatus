@@ -635,3 +635,22 @@ test("work timestamps include tool and assistant execution while ignoring user a
   ];
   expect(recentTurnActivityFromRecords(codex, true).lastAgentWorkAt).toBe(5000);
 });
+
+describe("TurnWindowTracker", () => {
+  test("pushing records one at a time gives the windows the batch read gives, open turn included", async () => {
+    const { TurnWindowTracker, recentTurnWindowsFromRecords } = await import("./turnDuration");
+    const stamp = (minutes: number) => new Date(Date.UTC(2026, 10, 21, 9, minutes)).toISOString();
+    const records = [
+      { type: "user", timestamp: stamp(0), message: { role: "user", content: "go" } },
+      { type: "user", timestamp: stamp(1), message: { role: "user", content: [{ type: "text", text: "request interrupted" }] }, interruptedMessageId: "m" },
+      { type: "user", timestamp: stamp(10), message: { role: "user", content: "again" } },
+      { type: "assistant", timestamp: stamp(12), message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "ok" }] } },
+      { type: "user", timestamp: stamp(30), message: { role: "user", content: "third" } },
+    ];
+    const tracker = new TurnWindowTracker(false);
+    for (const record of records) tracker.push(record);
+    expect(tracker.finish()).toEqual(recentTurnWindowsFromRecords(records, false));
+    expect(tracker.finish().at(-1)).toEqual({ startedAt: Date.parse(stamp(30)), endedAt: null });
+    expect(tracker.latestTimestamp).toBe(Date.parse(stamp(30)));
+  });
+});

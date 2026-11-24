@@ -137,11 +137,11 @@ export function speedPatch(tier: SpeedTier): Pick<RuntimeDraft, "fast" | "servic
   return { fast: tier !== "default", serviceTier: tier === ULTRA_TIER ? ULTRA_TIER : null };
 }
 
-function modelShortLabel(engine: "claude" | "codex" | "copilot", modelId: string): string {
+function modelShortLabel(engine: "claude" | "codex" | "copilot" | "antigravity", modelId: string): string {
   return ENGINE_MODELS[engine].find((m) => m.id === modelId)?.shortLabel ?? modelId;
 }
 
-function modelLabel(engine: "claude" | "codex" | "copilot", modelId: string): string {
+function modelLabel(engine: "claude" | "codex" | "copilot" | "antigravity", modelId: string): string {
   return ENGINE_MODELS[engine].find((m) => m.id === modelId)?.label ?? modelId;
 }
 
@@ -1181,7 +1181,7 @@ function accountLine(t: TFunction, account: string, choice: AccountChoice | null
 interface PanelProps {
   accessibleLabel?: string;
   t: TFunction;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   modelOptions: readonly AgentModelOption[];
   /** The account this conversation runs on, which both surfaces name (#1795). */
   account: string;
@@ -1354,7 +1354,7 @@ export function RuntimePopover({
         </>
       ) : (
         <div role="group" aria-label={panel === "model" ? t("composer.modelGroup") : panel === "account" ? t("mobile2.composer.accountGroup") : t("composer.speedGroup")}>
-          {panel === "account" && accountChoice && engine !== "copilot" && !ownAccounts ? <EngineAccountsFeed engine={engine} onAccounts={setAccountOptions} /> : null}
+          {panel === "account" && accountChoice && engine !== "copilot" && engine !== "antigravity" && !ownAccounts ? <EngineAccountsFeed engine={engine} onAccounts={setAccountOptions} /> : null}
           {rows.map((row, index) => (
             <MenuRow key={row.key} row={row} active={index === activeIndex} refFor={(el) => { rowRefs.current[index] = el; }} />
           ))}
@@ -1727,7 +1727,7 @@ export function RuntimeSheet({
           </div>
         </div>
 
-        {engine !== "copilot" ? (
+        {engine !== "copilot" && engine !== "antigravity" ? (
           <AccountSection t={t} engine={engine} account={account} nameOf={nameOf} limit={limit} choice={accountChoice ?? null} start={accountStart} error={error ?? null} listed={ownAccounts} />
         ) : ownAccounts && accountChoice ? (
           <div data-runtime-sheet-accounts>

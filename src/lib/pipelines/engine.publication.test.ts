@@ -409,6 +409,12 @@ type PrivacyPublicationMode = "preparation" | "transport" | "padded-preparation"
 async function controllerPublicationFixture(roots: string[], cleanup: Array<() => void>, privacyMode?: PrivacyPublicationMode) {
   const fixtures = createPublicationFixtures(path.resolve(import.meta.dir, "../../.."), roots);
   const f = fixtures.nativeFixture();
+  // The publisher routes admission from its own environment, as the Viewer
+  // does. Give it the fixture's gate interpreter: the `bun` on the fixture's
+  // PATH only stands in for checks.
+  const inheritedGateBun = process.env.LLV_GATE_BUN;
+  process.env.LLV_GATE_BUN = f.env.LLV_GATE_BUN;
+  cleanup.push(() => { if (inheritedGateBun === undefined) delete process.env.LLV_GATE_BUN; else process.env.LLV_GATE_BUN = inheritedGateBun; });
   // Keep the fixture's Bun shim and use native Git in its isolated children.
   const shim = path.join(f.dir, "shims/bun");
   f.env.PATH = `${path.dirname(shim)}:/usr/bin:/bin:${f.env.PATH}`;

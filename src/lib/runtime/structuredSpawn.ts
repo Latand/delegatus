@@ -33,7 +33,7 @@ import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
-import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
+import { effectiveClaudePermissionMode, resolveAntigravityBinary, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns, type StructuredHostClaimDecision } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
@@ -46,6 +46,7 @@ import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
 import { readHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import { rememberHandoffChild, persistHandoffLineage } from "@/lib/handoffLineage";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
@@ -66,7 +67,8 @@ import { StructuredHostAdoptionCleanupError, StructuredSessionMaterializationErr
 import type { MessageOrigin } from "./messageOrigin";
 import { agentMessageOrigin, delegatusMessageOrigin } from "./agentMessageAuthor";
 import { isStructuredHostKind, runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeOperationResult, type RuntimeSession, type RuntimeSnapshot } from "./contracts";
-import { bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPersistence, stopTerminalStructuredOrphan, type StructuredOrphanStopDependencies } from "./registry";
+import { bindAntigravityHostPersistence, bindClaudeHostPersistence, bindCodexHostPersistence, bindCopilotHostPersistence, stopTerminalStructuredOrphan, type StructuredOrphanStopDependencies } from "./registry";
+import { AntigravityAcpHost, type AntigravityAcpHostOptions } from "./antigravityAcpHost";
 import { CopilotAcpHost, type CopilotAcpHostOptions } from "./copilotAcpHost";
 import { publishStructuredDeliveryHost, releaseStructuredDeliveryHost, structuredDeliveryLastError, structuredDeliveryHostForConversation, retainUnpublishedStructuredLaunchHost, StructuredDeliveryControllerUnavailableError } from "./structuredDeliveryController";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
@@ -80,6 +82,7 @@ import { roleMemoryDeferralReason, RoleMemoryChanged, RoleMemoryPreparationDefer
 import { AttemptTempStore, type AttemptTempOwner } from "./attemptTempRetention";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE } from "@/lib/memory/roleStore";
+import { cleanerAttemptMayStart } from "@/lib/cleaner/store";
 
 export type SpawnedStructuredHost = EngineHost & {
   /** Effective MCP transport when account config constrained the preference. */
@@ -119,14 +122,14 @@ export function queuedPinnedSpawnTitle(locale: "en" | "uk", retryAt: string): st
 }
 
 export async function resolvePinnedSpawnAdmission(
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   account: AccountContext,
   /** The model the pinned launch names, so a tier weekly it does not draw on
       never refuses it (issues #1796, #1431). */
   model?: string | null,
 ): Promise<SpawnAccountAdmission> {
-  /* Neither Codex nor Copilot exposes a pre-launch limit read here. */
-  if (engine === "codex" || engine === "copilot") {
+  /* Codex, Copilot, and Antigravity do not expose a pre-launch limit read here. */
+  if (engine === "codex" || engine === "copilot" || engine === "antigravity") {
     return { kind: "admissible", basis: "current", stale: false, retryAt: null };
   }
   return claudeValidityFromLimitRead(await fetchClaudeLimits(
@@ -156,14 +159,16 @@ export type StructuredHostAccessPolicy = boolean | {
       repository policy is enforced by pipeline settlement. */
   readOnly: boolean;
   sandbox: "full" | "restricted";
+  ownerRelayHandoffOnly?: boolean;
 };
 
-type DurableStructuredHostAccess = Pick<LaunchProfile, "readOnly" | "sandbox"> | null | undefined;
+type DurableStructuredHostAccess = Pick<LaunchProfile, "readOnly" | "sandbox" | "ownerRelayHandoffOnly"> | null | undefined;
 
 /** New pipeline profiles persist both axes. Profiles created before that split
     retain their legacy readOnly-to-sandbox behavior on adoption. */
 export function structuredHostAccessPolicy(profile: DurableStructuredHostAccess): StructuredHostAccessPolicy {
   const sandbox = explicitLaunchProfileSandbox(profile);
+  if (profile?.ownerRelayHandoffOnly === true) return { readOnly: true, sandbox: "restricted", ownerRelayHandoffOnly: true };
   return sandbox
     ? { readOnly: profile?.readOnly === true, sandbox }
     : profile?.readOnly === true;
@@ -202,6 +207,13 @@ export function materializeStructuredHostAccess(
   };
   const explicitAxes = typeof policy !== "boolean";
   const restricted = explicitAxes ? policy.sandbox === "restricted" : policy;
+  const ownerRelayHandoffOnly = explicitAxes && policy.ownerRelayHandoffOnly === true;
+  if (ownerRelayHandoffOnly) {
+    delete baseEnv.GH_CONFIG_DIR;
+    delete baseEnv.GH_TOKEN;
+    delete baseEnv.GITHUB_TOKEN;
+    delete baseEnv.GH_ENTERPRISE_TOKEN;
+  }
 
   const resolvedScratchParent = scratchParent ?? statePath("scratch");
   fs.mkdirSync(resolvedScratchParent, { recursive: true, mode: 0o700 });
@@ -254,7 +266,10 @@ export function materializeStructuredHostAccess(
         cleanup,
       };
     }
-    const codex = explicitAxes
+    const codex = ownerRelayHandoffOnly
+      ? { permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
+          permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
+      : explicitAxes
       ? { sandbox: "workspace-write", permissionProfile: "llv-stage",
           permissionProfileConfig: `permissions.llv-stage={extends=":workspace",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
       : {
@@ -265,11 +280,11 @@ export function materializeStructuredHostAccess(
       env: {
         ...baseEnv,
         TMPDIR: temporaryDirectory,
-        GH_CONFIG_DIR: githubConfigDirectory(sourceEnv),
+        ...(!ownerRelayHandoffOnly ? { GH_CONFIG_DIR: githubConfigDirectory(sourceEnv) } : {}),
       },
       codex,
       host: {
-        forwardGitHubConfig: true,
+        forwardGitHubConfig: !ownerRelayHandoffOnly,
         releaseCleanup: cleanup,
       },
       scratchDirectory,
@@ -453,18 +468,25 @@ async function waitForStructuredSessionMaterialization(
     now: () => number;
     sleep: (ms: number) => Promise<void>;
     timeoutMs: number;
+    requireDeliveryEvidence?: boolean;
   },
 ): Promise<void> {
+  const requireDeliveryEvidence = options.requireDeliveryEvidence === true;
   const deadline = options.now() + options.timeoutMs;
   let lastEvidence: SessionMaterializationEvidence | null = null;
   for (;;) {
     const evidence = host.sessionMaterializationEvidence
       ? await host.sessionMaterializationEvidence(clientMessageId)
-      : { state: "materialized" as const };
+      : requireDeliveryEvidence
+        ? { state: "unavailable" as const, reason: "structured host provides no delivery materialization evidence" }
+        : { state: "materialized" as const };
     if (evidence.state === "failed") throw new StructuredSessionMaterializationError(evidence.reason);
+    if (requireDeliveryEvidence && evidence.state === "unavailable") {
+      throw new StructuredSessionMaterializationError(evidence.reason);
+    }
     lastEvidence = evidence;
     if (evidence.state === "materialized" && structuredTranscriptIsReadable(artifactPath)) return;
-    if (evidence.state === "unavailable" && structuredTranscriptIsReadable(artifactPath)) return;
+    if (!requireDeliveryEvidence && evidence.state === "unavailable" && structuredTranscriptIsReadable(artifactPath)) return;
     const remaining = deadline - options.now();
     if (remaining <= 0) {
       if (lastEvidence.state === "absent") {
@@ -1051,8 +1073,8 @@ export interface StructuredSpawnRecoveryOptions {
   now?: () => number;
   timeoutMs?: number;
   actuationCap?: number;
-  resolveSpawnAccount?: (engine: "claude" | "codex" | "copilot", accountId: string | null) => AccountContext;
-  resolvePinnedSpawnAdmission?: (engine: "claude" | "codex" | "copilot", account: AccountContext) => Promise<SpawnAccountAdmission>;
+  resolveSpawnAccount?: (engine: "claude" | "codex" | "copilot" | "antigravity", accountId: string | null) => AccountContext;
+  resolvePinnedSpawnAdmission?: (engine: "claude" | "codex" | "copilot" | "antigravity", account: AccountContext) => Promise<SpawnAccountAdmission>;
   spawnStructuredConversation?: typeof spawnStructuredConversation;
   publishFilesRevision?: typeof publishFilesRevision;
   /** Recovery-only override for isolated admission fixtures. */
@@ -1094,16 +1116,29 @@ async function actuateQueuedPinnedSpawn(
   options: StructuredSpawnRecoveryOptions,
 ): Promise<SpawnReceipt> {
   const queued = queuedPinnedSpawnForReceipt(receipt);
+  const diskCleaner = receipt.agentRole === "cleaner" && receipt.launchProfile.agentMemoryRoleParams?.mode === "disk";
+  const scheduledCleaner = diskCleaner && typeof receipt.scheduledCleanerRunId === "string";
+  const cleanerAttemptActive = () => scheduledCleaner && typeof receipt.clientAttemptId === "string"
+    && receipt.scheduledCleanerRunId === receipt.clientAttemptId
+    && cleanerAttemptMayStart(receipt.clientAttemptId, (options.now ?? Date.now)());
   const admittedAuthority = readHotStateAuthority(path.dirname(registry.filename));
   const assertActive = () => {
     options.signal?.throwIfAborted();
     options.assertActive?.();
+    if (scheduledCleaner && activeDrain()) throw new Error("disk cleaner launch held by update drain");
+    if (scheduledCleaner && !cleanerAttemptActive()) {
+      throw new Error("disk cleaner run expired before queued host actuation");
+    }
     const authority = readHotStateAuthority(path.dirname(registry.filename));
     if (!viewerReleaseOwnsTraffic() || authority?.mode === "fencing"
       || authority?.epoch !== admittedAuthority?.epoch || authority?.releaseRevision !== admittedAuthority?.releaseRevision) {
       throw new Error("queued launch lost Viewer release authority");
     }
   };
+  if (scheduledCleaner && !cleanerAttemptActive()) {
+    return failQueuedPinnedSpawn(registry, receipt, "disk cleaner run expired before queued host actuation");
+  }
+  if (scheduledCleaner && activeDrain()) return receipt;
   assertActive();
   const currentTime = (options.now ?? Date.now)();
   if (!queued || Date.parse(queued.retryAt) > currentTime) return receipt;
@@ -2086,6 +2121,12 @@ function hostIdentity(engine: AgentEngine, host: SpawnedStructuredHost, input: S
     if (!key || !identity.path) throw new Error("structured Copilot spawn returned no session identity");
     return { key, path: identity.path };
   }
+  if (engine === "antigravity") {
+    const identity = host.identity as { sessionId?: string; path?: string };
+    const key = identity.sessionId ? sessionKey("antigravity", identity.sessionId) : null;
+    if (!key || !identity.path) throw new Error("structured Antigravity spawn returned no session identity");
+    return { key, path: identity.path };
+  }
   const identity = host.identity as { sessionId?: string };
   if (!identity.sessionId) throw new Error("structured Claude spawn returned no session identity");
   const key = sessionKey("claude", identity.sessionId);
@@ -2203,6 +2244,53 @@ export async function startCopilotStructuredHost(
     : await CopilotAcpHost.start(options);
 }
 
+/** Antigravity host options for one launch (docs/design/antigravity-engine.md §3.3). */
+export async function antigravityHostOptions(
+  input: Pick<StructuredSpawnInput, "spec" | "account"> & Partial<Pick<StructuredSpawnInput, "receipt" | "registry">>,
+  access: Pick<StructuredHostAccessMaterialization, "env" | "host">,
+  initialEventCursor?: number,
+): Promise<AntigravityAcpHostOptions> {
+  const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  return {
+    binary: resolveAntigravityBinary(process.env),
+    cwd: input.spec.cwd,
+    antigravityHome: input.account.home,
+    accountId: input.account.accountId,
+    model: profile.model ?? undefined,
+    effort: profile.effort ?? undefined,
+    allowAll: !launchProfileEngineReadOnly(profile) && (profile.permissionMode ?? "bypassPermissions") === "bypassPermissions",
+    appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry
+      ? { engine: "antigravity", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env }
+      : undefined),
+    mcpServers: profile.mcpServers,
+    ...(access.host.releaseCleanup ? { releaseCleanup: access.host.releaseCleanup } : {}),
+    initialEventCursor,
+    env: access.env,
+  };
+}
+
+/** Starts (or, for a resume successor, adopts via `session/resume`) an Antigravity ACP host. */
+export async function startAntigravityStructuredHost(
+  input: StructuredSpawnInput,
+  capability: string,
+  overrides: Partial<AntigravityAcpHostOptions> = {},
+): Promise<AntigravityAcpHost> {
+  const resumeSessionId = structuredResumeSessionId(input);
+  const initialEventCursor = resumeSessionId
+    ? startupHostSnapshot(input.registry, { engine: "antigravity", sessionId: resumeSessionId }).entries[sessionKeyId({ engine: "antigravity", sessionId: resumeSessionId })]?.structuredHost?.eventCursor
+    : undefined;
+  const access = await materializeAttemptAccess(input, capability);
+  const options = {
+    ...(await antigravityHostOptions(input, access, initialEventCursor)),
+    ...overrides,
+    assertCurrent: () => assertMemoryPreparedStartCurrent(input),
+  };
+  await input.authorize?.();
+  return resumeSessionId
+    ? await AntigravityAcpHost.adopt(resumeSessionId, options)
+    : await AntigravityAcpHost.start(options);
+}
+
 /** Production option builder shared by fresh and resumed Claude hosts. */
 export async function claudeStructuredHostOptions(
   input: Pick<StructuredSpawnInput, "spec" | "account"> & Partial<Pick<StructuredSpawnInput, "receipt" | "registry">>,
@@ -2224,6 +2312,7 @@ export async function claudeStructuredHostOptions(
     appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry ? { engine: "claude", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.account.claudeProvider) } : undefined),
     mcpServers: profile.mcpServers,
     validateTelegramGrant,
+    ...(profile.ownerRelayHandoffOnly ? { tools: ["Read"] } : {}),
     readOnly: launchProfileEngineReadOnly(profile),
     restricted: profile.sandbox === "restricted",
     model: input.account.claudeProvider
@@ -2255,7 +2344,7 @@ export function structuredHostCell(registry: AgentRegistry, engine: AgentEngine,
   const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu, memoryScopes: scopes });
   // Reconnecting the same native process keeps its original cgroup. A fresh
   // launch cannot replace this row until that scope has been retired.
-  if (plan && !receipt && (engine === "codex" || engine === "claude" || engine === "copilot")) {
+  if (plan && !receipt && (engine === "codex" || engine === "claude" || engine === "copilot" || engine === "antigravity")) {
     const key: SessionKey = { engine, sessionId: sessionKey.startsWith(`${engine}:`) ? sessionKey.slice(engine.length + 1) : sessionKey };
     const retained = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
     if (retained) {
@@ -2274,6 +2363,7 @@ export async function defaultStartHost(
     claude?: Partial<Pick<ClaudeStreamBrokerHostOptions, "spawnProcess" | "readAuthStatus">>;
     codex?: Partial<Pick<CodexAppServerHostOptions, "spawnProcess" | "readProtocolVersion">>;
     copilot?: Partial<Pick<CopilotAcpHostOptions, "spawnProcess">>;
+    antigravity?: Partial<Pick<AntigravityAcpHostOptions, "spawnProcess">>;
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
@@ -2282,6 +2372,10 @@ export async function defaultStartHost(
   input = admittedStructuredLaunchInput(input);
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability, {
     ...engineProcess.copilot,
+    ...(memoryCell ? { memoryCell } : {}),
+  });
+  if (input.engine === "antigravity") return await startAntigravityStructuredHost(input, capability, {
+    ...engineProcess.antigravity,
     ...(memoryCell ? { memoryCell } : {}),
   });
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
@@ -2311,6 +2405,7 @@ export async function defaultStartHost(
       operatorDecisionForms: operatorDecisionFormsRequired(input.receipt.agentRole, input.receipt.artifactPath ?? input.spec.transcript),
       cleanMemory: profile.cleanMemory === true,
       nativeMemoryEnabled,
+      ...(profile.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
       omitSkillsInstructions: profile.omitSkillsInstructions === true || sessionOriginFor(input.receipt) === "delegated",
       developerInstructions: await learnedRulesForLaunchProfile(profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env, nativeMemoryEnabled }),
       mcpServers: profile.mcpServers,
@@ -2367,6 +2462,9 @@ async function defaultBindHost(
 ): Promise<() => void> {
   if (key.engine === "copilot") {
     return await bindCopilotHostPersistence(registry, key, host as CopilotAcpHost, claimOwner, claimEpoch, releasedStatus);
+  }
+  if (key.engine === "antigravity") {
+    return await bindAntigravityHostPersistence(registry, key, host as AntigravityAcpHost, claimOwner, claimEpoch, releasedStatus);
   }
   return key.engine === "codex"
     ? await bindCodexHostPersistence(registry, key, host as CodexAppServerHost, claimOwner, claimEpoch, releasedStatus)
@@ -3417,6 +3515,7 @@ export async function spawnStructuredConversation(
             now,
             sleep,
             timeoutMs: Math.max(0, durableSetupDeadline - now()),
+            requireDeliveryEvidence: input.receipt.engine === "antigravity",
           },
         ));
       } finally {
@@ -3450,6 +3549,7 @@ export async function spawnStructuredConversation(
     };
   } catch (error) {
     caughtFailure = error;
+    if (error instanceof Error && error.name === "CleanerDrainHold" && !host && !hostStartRequested) throw error;
     try { return await withoutOperationLease(async () => {
         clearDurableSetupTimeout();
         const pending = input.registry.spawnReceipt(operationId) ?? undefined;

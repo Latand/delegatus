@@ -1,5 +1,5 @@
-import { validAgentStateDisplay, agentStateActivity } from "@/lib/agentState/model";
-import { validAgentStateMetrics } from "@/lib/agentState/store";
+import { agentStateMetricsForStorage, validAgentStateDisplay, agentStateActivity } from "@/lib/agentState/model";
+import { normalizeAgentStateMetrics } from "@/lib/agentState/store";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { procBackend } from "@/lib/proc";
 import type { ProcBackend } from "@/lib/proc";
@@ -215,7 +215,7 @@ export interface StructuredHostRecord {
   agentState?: import("./agentState/model").AgentStateDisplay;
   /** Session key id (`<engine>:<sessionId>`), the row's stable target suffix. */
   id: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   sessionId: string | null;
   pid: number;
   /** Kernel start-time token captured with the pid; a recycled pid fails it. */
@@ -253,7 +253,7 @@ export interface StructuredHostKillRef {
   pid: number;
   startIdentity: string;
   bootEpoch: string | null;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   sessionId: string | null;
   conversationId: string | null;
   seat: boolean | null;
@@ -352,7 +352,7 @@ function isoFromUnix(seconds: number): string {
 
 export interface ResourceSnapshotDependencies {
   readFiles(fresh: boolean): Promise<ResourceFileObservation[]>;
-  proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory">;
+  proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory" | "resourceSystemMemory" | "resourcePpidMap" | "resourceProcessMemory">;
   bootEpoch?(): string | null;
   /** Structured-host records the registry holds. The viewer reads them and
       hands them to the collector; nothing here ever opens the registry. */
@@ -542,9 +542,14 @@ export async function buildResourceSnapshot(
   const startedAt = performance.now();
   const phases = emptyResourceBuildPhases();
   try {
-    const system = measureResourcePhase(phases, "systemMemory", () => captureSystemMemory(dependencies.proc));
+    const system = await measureResourcePhaseAsync(phases, "systemMemory", async () => {
+      const captured = dependencies.proc.resourceSystemMemory
+        ? await dependencies.proc.resourceSystemMemory()
+        : dependencies.proc.systemMemory();
+      return captured ? { ...captured, capturedAt: new Date().toISOString() } : null;
+    });
     const files = await measureResourcePhaseAsync(phases, "readFiles", () => dependencies.readFiles(fresh));
-    const ppids = measureResourcePhase(phases, "ppidMap", () => dependencies.proc.ppidMap());
+    const ppids = await measureResourcePhaseAsync(phases, "ppidMap", () => dependencies.proc.resourcePpidMap?.() ?? Promise.resolve(dependencies.proc.ppidMap()));
     const structured = await measureResourcePhaseAsync(phases, "readHosts", () => structuredHostTrees(fresh, ppids, dependencies));
     const sessions: ResourceSession[] = [];
     const byPath = new Map(files.map((entry) => [entry.path, entry]));
@@ -562,7 +567,7 @@ export async function buildResourceSnapshot(
       structuredTrees.push(item);
       for (const pid of item.tree) treePids.add(pid);
     }
-    const memory = measureResourcePhase(phases, "processMemory", () => dependencies.proc.processMemory(treePids));
+    const memory = await measureResourcePhaseAsync(phases, "processMemory", () => dependencies.proc.resourceProcessMemory?.(treePids) ?? Promise.resolve(dependencies.proc.processMemory(treePids)));
     const treeMemory = (tree: number[]) => {
       let rssBytes = 0;
       let swapBytes = 0;
@@ -1099,10 +1104,13 @@ function validResourceSession(value: unknown): boolean {
     && (value.hostConflict === undefined || typeof value.hostConflict === "boolean");
 }
 
-function validResourcesPayload(value: unknown): value is ResourcesPayload {
-  if (!record(value) || !exactKeys(value, ["system", "sessions"], ["agentState"]) || !validResourceSystem(value.system) || !Array.isArray(value.sessions)) return false;
-  if (value.agentState !== undefined && !validAgentStateMetrics(value.agentState)) return false;
-  return value.sessions.length <= RESOURCE_OBSERVATION_MAX_SESSIONS && value.sessions.every(validResourceSession);
+function normalizeResourcesPayload(value: unknown): ResourcesPayload | null {
+  if (!record(value) || !exactKeys(value, ["system", "sessions"], ["agentState"]) || !validResourceSystem(value.system) || !Array.isArray(value.sessions)
+    || value.sessions.length > RESOURCE_OBSERVATION_MAX_SESSIONS || !value.sessions.every(validResourceSession)) return null;
+  const payload = { system: value.system as ResourcesPayload["system"], sessions: value.sessions };
+  if (value.agentState === undefined) return payload;
+  const agentState = normalizeAgentStateMetrics(value.agentState);
+  return agentState ? { ...payload, agentState } : null;
 }
 
 function validResourceDiagnostic(value: unknown): value is ResourceBuildDiagnostic {
@@ -1181,20 +1189,21 @@ function resourceTargetsMatchPayload(
   });
 }
 
-function validCollectedResources(value: unknown): value is CollectedResources {
+function normalizeCollectedResources(value: unknown): CollectedResources | null {
   if (!record(value) || !exactKeys(value, ["payload", "diagnostic", "hostCount", "treeCount", "targets"], ["targetEpoch"])
-    || !validResourcesPayload(value.payload)
     || !validResourceDiagnostic(value.diagnostic)
     || !Number.isSafeInteger(value.hostCount) || (value.hostCount as number) < 0
     || !Number.isSafeInteger(value.treeCount) || (value.treeCount as number) < 0
     || (value.targetEpoch !== undefined && (!Number.isSafeInteger(value.targetEpoch) || (value.targetEpoch as number) < 0))
     || !Array.isArray(value.targets)
     || value.targets.length > RESOURCE_OBSERVATION_MAX_TARGETS
-    || !value.targets.every(validResourceTarget)) return false;
-  return value.diagnostic.status === "complete"
-    && resourceTargetsMatchPayload(value.payload, value.targets)
-    && value.hostCount === value.payload.sessions.length
-    && value.treeCount === value.payload.sessions.reduce((total, session) => total + session.procCount, 0);
+    || !value.targets.every(validResourceTarget)) return null;
+  const payload = normalizeResourcesPayload(value.payload);
+  if (!payload || value.diagnostic.status !== "complete"
+    || !resourceTargetsMatchPayload(payload, value.targets)
+    || value.hostCount !== payload.sessions.length
+    || value.treeCount !== payload.sessions.reduce((total, session) => total + session.procCount, 0)) return null;
+  return { ...value, payload } as CollectedResources;
 }
 
 function resourceWorkerMessage(value: unknown): ResourceWorkerMessage | null {
@@ -1208,13 +1217,13 @@ function resourceWorkerMessage(value: unknown): ResourceWorkerMessage | null {
       : null;
   }
   if (candidate.type !== "observation" || !exactKeys(candidate, ["type", "payload", "diagnostic", "targets"])
-    || !validResourcesPayload(candidate.payload)
     || !validResourceDiagnostic(candidate.diagnostic)
     || !Array.isArray(candidate.targets)
     || candidate.targets.length > RESOURCE_OBSERVATION_MAX_TARGETS
     || !candidate.targets.every(validResourceTarget)) return null;
-  if (candidate.diagnostic.status !== "complete" || !resourceTargetsMatchPayload(candidate.payload, candidate.targets)) return null;
-  return candidate as ResourceWorkerMessage;
+  const payload = normalizeResourcesPayload(candidate.payload);
+  if (!payload || candidate.diagnostic.status !== "complete" || !resourceTargetsMatchPayload(payload, candidate.targets)) return null;
+  return { type: "observation", payload, diagnostic: candidate.diagnostic, targets: candidate.targets };
 }
 
 export function parsePersistedResourceObservation(raw: string): ResourceObservation<CollectedResources> | null {
@@ -1233,9 +1242,9 @@ export function parsePersistedResourceObservation(raw: string): ResourceObservat
       || (observation.degradedReason !== undefined
         && observation.degradedReason !== "collector-busy"
         && observation.degradedReason !== "timeout"
-        && observation.degradedReason !== "collector-crash")
-      || !validCollectedResources(observation.value)) return null;
-    return observation as ResourceObservation<CollectedResources>;
+        && observation.degradedReason !== "collector-crash")) return null;
+    const value = normalizeCollectedResources(observation.value);
+    return value ? { ...observation, value } as ResourceObservation<CollectedResources> : null;
   } catch {
     return null;
   }
@@ -1261,13 +1270,21 @@ export function readCachedResourceSessions(): { sessions: ResourceSession[]; sta
       || observation.value.payload.sessionsStale === true || observation.degradedReason !== undefined };
 }
 
+export function serializeResourceObservationForStorage(observation: ResourceObservation<CollectedResources>): string {
+  const payload = observation.value.payload;
+  const storedObservation = payload.agentState
+    ? { ...observation, value: { ...observation.value, payload: { ...payload, agentState: agentStateMetricsForStorage(payload.agentState) } } }
+    : observation;
+  return JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation: storedObservation }) + "\n";
+}
+
 function persistObservation(observation: ResourceObservation<CollectedResources>): boolean {
   const filename = statePath(RESOURCE_OBSERVATION_FILE);
   let temporary: string | undefined;
   try {
     mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-    const serialized = JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation }) + "\n";
+    const serialized = serializeResourceObservationForStorage(observation);
     if (Buffer.byteLength(serialized) > RESOURCE_OBSERVATION_MAX_BYTES) throw new Error("resource observation exceeded durable size limit");
     writeFileSync(temporary, serialized, { mode: 0o600 });
     fsyncPath(temporary);
@@ -1285,7 +1302,7 @@ function persistObservation(observation: ResourceObservation<CollectedResources>
 }
 
 function validateDurableResourceObservation(observation: ResourceObservation<CollectedResources>): void {
-  const serialized = JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation }) + "\n";
+  const serialized = serializeResourceObservationForStorage(observation);
   if (Buffer.byteLength(serialized) > RESOURCE_OBSERVATION_MAX_BYTES) {
     throw new ResourceCollectorFailureError(
       "collector-crash",
@@ -2436,7 +2453,8 @@ export function createResourcesReader(
     workerProcessRuntime?: ResourceWorkerProcessRuntime;
   } = {},
 ): ResourcesReader {
-  const inProcess = options.inProcess ?? process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS === "1";
+  // The worker requires Linux kernel containment. Other platforms collect in the Viewer.
+  const inProcess = options.inProcess ?? (process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS === "1" || process.platform !== "linux");
   const collectorId = options.collectorId ?? (inProcess
     ? `in-process:${process.pid}:${crypto.randomUUID()}`
     : `worker:${process.pid}:${crypto.randomUUID()}`);

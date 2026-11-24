@@ -86,7 +86,7 @@ Summary (each row condenses the labelled section below it; line numbers are on `
 | C3 | Lane worktrees in this repository | `store.ts:2564` names `<repo>-pipeline-<id>`, `git.ts:248` adds | ~1 GB per lane, tens of lanes per day | worktree sweep, hourly (`worktreeSweep.ts`) | `.artifacts` holds, backup refusals, sweep budget |
 | C4 | Worktrees in other projects' repositories | lanes: same code; others: agents' own `git worktree add` | 397 extra worktrees, 146 GB per path | worktree sweep for lane worktrees; nothing for others | `not-created-by-delegatus`, `uncommitted`, `recent-writes` |
 | C5 | Dependency folders in lane and agent-made worktrees, primary checkouts and one-off folders (subtypes D1–D4) | agents and stages installing packages | 174 folders, 102 GB per path, 26 GB unique | trim of top-level build folders in lane worktrees only (`worktreeSweep.ts:1634`) | trim never looks below the top level; nothing looks outside lane worktrees |
-| C6 | Automatic copies of check evidence | `attemptTempEvidence.ts:14-120` | 49–62 GB stored | copy sweep at lane expiry (`attemptEvidenceCopies.ts`) | legacy copies kept as "unattributed" forever (`attemptEvidenceCopies.ts:69-74`) |
+| C6 | Automatic copies of attempt evidence | `attemptTempEvidence.ts` | 49–62 GB stored at audit time | copy sweep at lane expiry (`attemptEvidenceCopies.ts`) | explicit artifacts and report-linked media are kept. Other media already held as Git blobs can be omitted. Legacy unattributed copies stay. |
 | C7 | Other evidence (`$LLV_EVIDENCE_DIR` per lane, per agent, recorded-check evidence, worktree backups) | `structuredSpawn.ts:204-208`, `recordedChecks/service.ts:309`, `worktreeBackup.ts:94` | ~60 GB | nothing, by design | "never deleted" (design of 2026-11-04) |
 | C8 | Archives and backup refs made by the cleanup passes | the manual passes; product: `git.ts:352` | 21–33 GB per pass; 26,203 refs | nothing | no owner, no lifetime |
 | C9 | Built releases | self-update, one per deploy | ~1 per deploy, ~4 GB each (shared blocks) | release retention (`selfUpdate/retention.ts`) | every release marked uncertain by one unreadable root process |
@@ -212,11 +212,17 @@ Summary (each row condenses the labelled section below it; line numbers are on `
   candidate. D2: the trim takes only sibling lane worktrees with an owner (`:1607-1612`), never
   agent-made ones. D3 and D4: no code looks at them. The last sweep trimmed 0 bytes.
 
-### C6. Automatic copies of check evidence
+### C6. Automatic copies of attempt evidence
 
-- **Creator [O].** Before an early retirement, `preserveAttemptEvidence` copies media and
-  `.artifacts` out of the root into `statePath("evidence","attempt-temp",<hash>)`
-  (`attemptTempEvidence.ts:14-120`, called at `attemptTempRetention.ts:423`).
+- **Creator [O].** Before ordinary retirement, `preserveAttemptEvidence` keeps
+  `.artifacts/` and report-linked media in `statePath("evidence","attempt-temp",<hash>)`.
+  Other media are copied unless a bounded local Git lookup confirms their
+  bytes in the lane's verified primary object store. This covers media in
+  archives and shared-clone exports and preserves generated or edited output
+  with different bytes. A lookup with uncertain provenance falls back to
+  copying. If the preservation deadline runs out, the root stays for retry.
+  The manifest and sweep report record omitted file counts and bytes. When
+  all selected files are omitted, only the sweep report records the totals.
 - **Lifetime [O].** Since #3845 a copy of a lane root expires with the lane
   (`attemptTempRetention.ts:427`, `:446-449`); an agent copy seven days after creation.
   Older copies are adopted page by page; a copy whose manifest names no lane is registered

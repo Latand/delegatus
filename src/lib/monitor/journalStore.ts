@@ -300,14 +300,17 @@ export function sanitizeSeatTickRecord(value: unknown): SeatTickRunRecord | null
  *   r:<project>:<seq>     one check without its timing (the sanitized line),
  *                         plus `i`, the identity of the legacy line it carries
  *   t:<project>:<seq>     that check's phase timing, compacted as on disk
+ *   a:<replayId>          receipt committed with a recovered check
  *
  * `<project>` is the sha256 the legacy file was named by and `<seq>` is
  * zero-padded, so a project's checks are one key range in check order, and the
  * row order across projects is the global check order. A check is kept while
  * it is among the newest 500 of its project or the newest 500 overall, the two
  * legacy rings; an append removes what fell out of both, in the same
- * transaction. A reader of one project's newest checks reads that range only,
- * and the alarm reader leaves the timing rows unread.
+ * transaction. Recovered checks suffix their run and timing keys with
+ * `-<replayId>` so retention can remove the receipt along with the run. A
+ * reader of one project's newest checks reads that range only, and the alarm
+ * reader leaves the timing rows unread.
  *
  * A journal at another path (`LLV_SEAT_TICK_AUDIT_FILE`, or a path a caller
  * passes) is its own collection in the same database, named after the path.
@@ -317,6 +320,7 @@ export const SEAT_TICK_RUNS_COLLECTION = "seat_tick_runs";
 const SEAT_TICK_BUSY = "the seat tick journal is busy";
 const RUN_PREFIX = "r:";
 const TIMING_PREFIX = "t:";
+const REPLAY_PREFIX = "a:";
 const RUN_META_KEY = "meta";
 /** Checks of its own project an append may remove past the bound; one leaves per append. */
 const RETENTION_PAGE = 16;
@@ -342,13 +346,13 @@ function seatTickCollectionName(filePath: string): string {
     : `${SEAT_TICK_RUNS_COLLECTION}:${crypto.createHash("sha256").update(resolved).digest("hex").slice(0, 16)}`;
 }
 
-function seatTickLocation(filePath: string): JournalLocation {
+function seatTickLocation(filePath: string, nonBlockingImport = false): JournalLocation {
   return {
     collection: seatTickCollectionName(filePath),
     database: statePath("state.sqlite"),
     legacyPath: filePath,
     busyMessage: SEAT_TICK_BUSY,
-    importLegacy: (options) => importLegacySeatTickJournal(filePath, options),
+    importLegacy: (options) => importLegacySeatTickJournal(filePath, { ...options, nonBlockingLock: nonBlockingImport }),
   };
 }
 
@@ -416,12 +420,16 @@ function seatTickAppendPatch(
   location: JournalLocation,
   collection: SqliteStateCollection<JournalRow>,
   stored: { run: StoredSeatTickRun; timing: unknown },
+  replayId?: string,
 ): { records: JournalRow[]; deleteKeys: string[] } {
+  const receipt = replayId === undefined ? null : `${REPLAY_PREFIX}${replayId}`;
+  if (receipt && collection.get(receipt)) return { records: [], deleteKeys: [] };
   const meta = collection.get(RUN_META_KEY)?.value as { nextSeq?: unknown } | undefined;
   const seq = Number.isSafeInteger(meta?.nextSeq) && (meta!.nextSeq as number) > 0 ? meta!.nextSeq as number : 1;
   const projectKey = seatTickProjectKey(stored.run.project);
-  const key = runKey(projectKey, seq);
+  const key = runKey(projectKey, seq) + (replayId === undefined ? "" : `-${replayId}`);
   const records: JournalRow[] = [{ key: `${RUN_PREFIX}${key}`, value: stored.run }];
+  if (receipt) records.push({ key: receipt, value: true });
   if (stored.timing) records.push({ key: `${TIMING_PREFIX}${key}`, value: stored.timing });
   records.push({ key: RUN_META_KEY, value: { nextSeq: seq + 1 } });
   /* The new check is the newest of both rings, so 499 committed checks stay
@@ -435,7 +443,10 @@ function seatTickAppendPatch(
     const ownBound = ringOverflow(location, `${RUN_PREFIX}${owner}:`, "key", SEAT_TICK_RUN_HISTORY, 1)[0];
     if (ownBound !== undefined && candidate <= ownBound) doomed.add(candidate);
   }
-  const deleteKeys = [...doomed].flatMap((runRow) => [runRow, `${TIMING_PREFIX}${runRow.slice(RUN_PREFIX.length)}`]);
+  const deleteKeys = [...doomed].flatMap((runRow) => {
+    const [, retiredReplayId] = runRow.split("-");
+    return [runRow, `${TIMING_PREFIX}${runRow.slice(RUN_PREFIX.length)}`, ...(retiredReplayId ? [`${REPLAY_PREFIX}${retiredReplayId}`] : [])];
+  });
   return { records, deleteKeys };
 }
 
@@ -452,27 +463,33 @@ export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatT
   });
 }
 
+export type SeatTickJournalAppendOptions = { replayId?: string; waitMs?: number };
+
 /** The check awaits the append. In the Viewer it runs on the seat tick
  * journal's worker thread (`seatTickJournalWorker.ts`), so the transaction
  * never blocks the Viewer thread; elsewhere it runs here. */
-export async function appendSeatTickRecordAsync(record: SeatTickRunRecord, filePath = seatTickJournalPath()): Promise<void> {
-  const offThread = appendThroughSeatTickJournalWorker(record, filePath);
+export async function appendSeatTickRecordAsync(
+  record: SeatTickRunRecord, filePath = seatTickJournalPath(), options: SeatTickJournalAppendOptions = {},
+): Promise<void> {
+  const offThread = appendThroughSeatTickJournalWorker(record, filePath, options);
   if (offThread) return offThread;
-  return appendSeatTickRecordOnThisThread(record, filePath);
+  return appendSeatTickRecordOnThisThread(record, filePath, options);
 }
 
-/** The append on the calling thread. A busy database is waited for up to a
- * second, as the legacy file lock was, yielding between attempts. The commit
- * survives the process and does not wait for the disk: the legacy rings were
- * appended and trimmed without an fsync. */
-export async function appendSeatTickRecordOnThisThread(record: SeatTickRunRecord, filePath = seatTickJournalPath()): Promise<void> {
+/** The append on the calling thread. The database and lazy legacy import
+ * share the caller's admission wait, yielding between attempts. A replay
+ * makes one attempt this sweep. The commit survives the process and does not
+ * wait for the disk: the legacy rings were appended and trimmed without an fsync. */
+export async function appendSeatTickRecordOnThisThread(
+  record: SeatTickRunRecord, filePath = seatTickJournalPath(), { replayId, waitMs = 1_000 }: SeatTickJournalAppendOptions = {},
+): Promise<void> {
   const stored = storedSeatTickRun(record);
   if (!stored) return;
-  const location = seatTickLocation(filePath);
+  const location = seatTickLocation(filePath, true);
   await waitForStateLock("seat-tick.audit", () => {
     const collection = writableJournal(location);
-    collection.patchSync(() => seatTickAppendPatch(location, collection, stored), { durability: "process" });
-  }, { waitMs: 1_000, subject: location.collection });
+    collection.patchSync(() => seatTickAppendPatch(location, collection, stored, replayId), { durability: "process" });
+  }, { waitMs, subject: location.collection });
 }
 
 function seatTickProjectJournalPath(project: string, filePath: string): string {
@@ -739,9 +756,9 @@ export function seatTickJournalLegacyCollection(filePath = seatTickJournalPath()
     `reconcile: true`; tests drive the crash seams through `hooks`. */
 export function importLegacySeatTickJournal(
   filePath = seatTickJournalPath(),
-  options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true },
+  options: { reconcile: boolean; hooks?: LegacyImportHooks; nonBlockingLock?: boolean } = { reconcile: true },
 ): LegacyImportOutcome {
-  return importLegacyCollection(seatTickJournalLegacyCollection(filePath), options);
+  return importLegacyCollection({ ...seatTickJournalLegacyCollection(filePath), nonBlockingLock: options.nonBlockingLock }, options);
 }
 
 /** Write both rings from SQLite for a rollback release that predates the move. */

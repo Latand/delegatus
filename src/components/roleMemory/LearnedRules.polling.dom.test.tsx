@@ -63,7 +63,7 @@ async function withRulesWindow(project: string, check: (controls: {
       model: "sample", ruleCount: 1, changes: { added: 0, rewritten: 0, removed: 0 },
       overall: cachedProfile ? { scope: "overall", createdAt: "2026-01-01T10:00:00Z", durationMs: 1, model: "sample", promptVersion: 1, stale: false,
         answer: { headline: "Saved project overview", text: "Read the saved overview while the rules arrive.", topics: [{ title: "Saved rule topic", text: "A known rule.", ruleIds: ["r_1234abcd"] }] } } : null,
-      slices: [], stale: false, run: null }));
+      slices: cachedProfile ? [{ scope: `project:${requested}`, kind: "project", roleId: null, acrossProjects: false, count: 1, summary: null }] : [], stale: false, run: null }));
   }) as typeof fetch;
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
@@ -81,16 +81,15 @@ async function withRulesWindow(project: string, check: (controls: {
   }
 }
 
-test("a rules read slower than a poll interval still opens the profile and rules tabs", () => withRulesWindow("slow-rules-poll", async ({ reads, poll }) => {
+test("a rules read slower than a poll interval still draws the selected level", () => withRulesWindow("slow-rules-poll", async ({ reads, poll }) => {
   expect(document.querySelector("[data-rules-window-loading]")).not.toBeNull();
   await poll();
   await act(async () => { reads[0]!.finish(rules("slow-rules-poll")); });
   expect(document.querySelector("[data-rules-window-loading]")).toBeNull();
   expect(document.querySelector("[data-memory-profile]")).not.toBeNull();
   expect(reads).toHaveLength(1);
-  const allRules = [...document.querySelectorAll("button")].find(button => button.textContent === "All rules")!;
-  await act(async () => { allRules.click(); });
-  expect(document.body.textContent).toContain("Retain the first completed rules reading.");
+  /* No tab press: the project level is already open beside the list. */
+  expect(document.querySelector("[data-level-pane]")!.textContent).toContain("Retain the first completed rules reading.");
   await poll(); expect(reads).toHaveLength(2);
   expect(document.querySelector("[data-rules-window-loading]")).toBeNull();
   await act(async () => { reads[1]!.finish(rules("slow-rules-poll")); });
@@ -116,21 +115,27 @@ test("switching projects aborts the old read and immediately reads the new proje
 }));
 
 
-test("a cached profile opens before the first rules response without enabling paid generation or rule drilldown", () => withRulesWindow("cold-rules-profile", async ({ reads, profileReads, posts, poll }) => {
+test("a cached profile opens before the first rules response with its levels and topics held, and without enabling paid generation", () => withRulesWindow("cold-rules-profile", async ({ reads, profileReads, posts, poll }) => {
   expect(reads).toHaveLength(1);
   expect(profileReads).toHaveLength(1);
   expect(document.querySelector("[data-profile-ready]")).not.toBeNull();
   expect(document.body.textContent).toContain("Saved project overview");
   expect(document.querySelector("[data-profile-summarize]")).toBeNull();
-  const topic = [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Saved rule topic"))!;
+  const topic = document.querySelector<HTMLButtonElement>("[data-profile-topic]")!;
+  expect(topic.textContent).toContain("Saved rule topic");
   expect(topic.disabled).toBe(true);
+  const levels = [...document.querySelectorAll<HTMLButtonElement>("[data-profile-level]")];
+  expect(levels.map(level => level.getAttribute("data-profile-level"))).toEqual(["project:cold-rules-profile"]);
+  expect(levels.every(level => level.disabled)).toBe(true);
+  expect(document.querySelector("[data-level-pane]")).toBeNull();
   await poll();
   expect(reads).toHaveLength(1);
   expect(document.body.textContent).toContain("Saved project overview");
   await act(async () => { reads[0]!.finish(rules("cold-rules-profile")); });
   expect(document.querySelector("[data-profile-summarize]")).not.toBeNull();
   expect(topic.disabled).toBe(false);
+  expect(levels.every(level => !level.disabled)).toBe(true);
   await act(async () => { topic.click(); });
-  expect(document.body.textContent).toContain("Retain the first completed rules reading.");
+  expect(document.querySelector('[data-level-pane="topic"]')!.textContent).toContain("Retain the first completed rules reading.");
   expect(posts).toHaveLength(0);
 }, true));

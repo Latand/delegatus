@@ -5,6 +5,14 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureProcess } from "./fixtureProcess";
+import { ownedTestChildIsRunning } from "./testChildren";
+
+test("a kernel-exited child is terminal even while its PID identity remains visible", () => {
+  const identity: ProcessIdentity = { pid: 42, startIdentity: "42:100", bootEpoch: "boot" };
+  expect(ownedTestChildIsRunning(identity, () => "alive", () => true)).toBeFalse();
+  expect(ownedTestChildIsRunning(identity, () => "alive", () => false)).toBeTrue();
+  expect(ownedTestChildIsRunning(identity, () => "dead", () => false)).toBeFalse();
+});
 
 for (const form of ["array", "array-options", "object", "empty-env"] as const) test(`Bun ${form} spawn records ownership and supplies its runner binding before readiness`, async () => {
   const command = [process.execPath, "-e", "console.log(process.env.LLV_FIXTURE_PARENT_IDENTITY)"];

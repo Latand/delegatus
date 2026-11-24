@@ -18,9 +18,8 @@ export { SELECTED_TAIL_MAX_LINES, SELECTED_TAIL_MAX_BYTES } from "./limits";
  * So resolution is TWO bounded steps and nothing else:
  *
  * 1. IDENTITY — one process-scoped map lookup through `ConversationLookup`,
- *    which is a keyed read of the registry snapshot. No path walk, no
- *    `observeFiles()`, no scan coordinator. The resolver is handed the lookup so
- *    a test can supply one whose scan-shaped methods THROW and still see the
+ *    which is a keyed read of the registry snapshot. The resolver receives the
+ *    lookup so a test can supply one whose scan methods throw and still see the
  *    answer come back.
  * 2. CONTENT — an explicit tail read of the named transcript, bounded in both
  *    lines and bytes, with hard ceilings the caller cannot raise. Reading the
@@ -36,7 +35,7 @@ const CONVERSATION_ID = /^conversation_[A-Za-z0-9_-]{1,180}$/;
 
 export interface SelectedConversationRecord {
   conversationId: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   /** Current generation transcript, or null when the conversation has none. */
   path: string | null;
   project: string | null;

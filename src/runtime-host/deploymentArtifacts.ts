@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { DOCKER_NAMES } from "./dockerNames";
 
-function artifactKey(value: string): string {
+export function artifactKey(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 24);
 }
 
@@ -24,4 +24,9 @@ export function viewerComposeSnapshotName(container: string): string {
     credential back out of it (#1511). */
 export function viewerComposeSnapshotPath(stateDir: string, container: string): string {
   return path.join(stateDir, "deployments", "compose", viewerComposeSnapshotName(container));
+}
+
+/** The BuildKit container and its cache volume belong to one managed install. */
+export function releaseBuilderName(state: string): string {
+  return `delegatus-release-${artifactKey(path.resolve(state))}`;
 }

@@ -17,6 +17,13 @@ test.each([true, false])("release template validates with askBeforePublish=%s; r
   expect(stages.at(-1)?.role?.roleId).toBe("builder");
   expect(resolvePipelineRole({ role: { roleId: "deployer" } }, "run").error).toContain("not allowed");
 });
+test("the generated changelog range starts at the previous tag's recorded production cut", () => {
+  const boundary = "a".repeat(40);
+  const stages = releaseStages({ cut: "b".repeat(40), lastTag: "v1.2.0", lastTagBoundary: boundary, changes: [], askBeforePublish: true });
+  const { range } = JSON.parse(stages[0].prompt!.split("\n").at(-1)!);
+  expect(range.from).toBe(boundary);
+  expect(range.command).toContain(`${boundary}..${"b".repeat(40)}`);
+});
 test("a large release validates and its structured Git reference retains every PR and changed path at the exact cut", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "release-range-"));
   try {

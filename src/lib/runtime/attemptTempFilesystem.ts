@@ -1,5 +1,5 @@
 import { attemptTempRemaining, checkAttemptTempDeadline, sweepMonotonicNow } from "./attemptTempDeadline";
-import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
+import { removeTreeWithinAttemptBudget, restoreAttemptTempClaim } from "./attemptTempRemoval";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { reportMediaIndex } from "@/lib/reportMedia/lookup";
 import { recordedRootHeld } from "@/lib/recordedChecks/store";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { attemptPathWatches, type AttemptMutationWatch } from "./attemptMutationFence";
+import { AttemptProtectionInventory } from "./attemptProtectionInventory";
 
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
@@ -75,7 +76,7 @@ function followLinkChain(candidate: string): string[] {
     checkAttemptTempDeadline();
     const name = pending.shift()!;
     if (name === ".") continue;
-    if (name === "..") { reached = path.dirname(reached); continue; }
+    if (name === "..") { places.push(reached); reached = path.dirname(reached); continue; }
     const current = path.join(reached, name);
     let stat: fs.Stats;
     try { stat = fs.lstatSync(current); }
@@ -480,12 +481,50 @@ export async function repositoryReferencesAttemptTemp(repository: string, origin
  * links without descending through them, including currently dangling links.
  * Every checkout that holds a live process is read; there is no count at
  * which the check gives up and holds everything. */
+export function attemptProcessReferencesClear(original: string, current: string, scan: ProcessScan): boolean {
+  const roots = attemptRoots(original, current);
+  const held = referencesRoot(roots);
+  const referenced = (file: string, strict = false) => {
+    if (held(file)) return true;
+    try {
+      // A path can traverse a protected root and finish outside it. Keep
+      // every forwarding hop and each directory climbed by '..', even when
+      // realpath could return a final destination immediately.
+      return followLinkChain(path.isAbsolute(file) ? file : path.resolve(file)).some(held);
+    } catch (error) {
+      if (error instanceof AttemptTempBudgetDeferred) throw error;
+      if (strict) throw error;
+      return true; // An unresolved live input grants no deletion authority.
+    }
+  };
+  return !scan.processes.some(process => process.paths.some(file => referenced(file, true))
+    // An input can be a flag value or an embedded shell argument even if
+    // the command has no file open there yet.
+    || process.references?.some(value => {
+      if (roots.some(root => value.includes(root))) return true;
+      // A cmdline token can be a whole path (including spaces), a flag value
+      // or a shell command containing quoted/embedded absolute inputs. Keep
+      // components in kernel order when expanding relative paths from cwd,
+      // which scanProcesses records first in paths.
+      const assignment = /^--?[^=\s]+=([\s\S]*)$/.exec(value)?.[1];
+      const candidates = [value, ...(assignment === undefined ? [] : [assignment]),
+        ...[...value.matchAll(/["'](\/[^"']+)["']|\/(?:[^\s\x00'"`=;|&<>])+/g)].map(match => match[1] ?? match[0])];
+      return candidates.some(candidate => {
+        if (candidate.length > 4096 || segments(candidate).some(name => Buffer.byteLength(name) > 255)) return false;
+        if (path.isAbsolute(candidate)) return referenced(candidate);
+        const cwd = process.paths[0];
+        return !!cwd && candidate.length > 0 && !candidate.startsWith("-")
+          && (!/\s/.test(candidate) || candidate === assignment)
+          && referenced(cwd + path.sep + candidate);
+      });
+    }));
+}
 export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan,
   containers: (roots: readonly string[]) => Promise<boolean> = containerMountsClear,
   inventory = new RepositoryLinkInventory()): Promise<boolean> {
   const roots = attemptRoots(original, current);
   const referenced = (file: string) => [file, resolvePhysicalPath(file)].some(referencesRoot(roots));
-  if (scan.processes.some(process => process.paths.some(referenced))) return false;
+  if (!attemptProcessReferencesClear(original, current, scan)) return false;
   if (process.platform === "linux") {
     for (const line of fs.readFileSync("/proc/net/unix", "utf8").split("\n").slice(1)) {
       const socket = line.trim().split(/\s+/).slice(7).join(" ");
@@ -563,10 +602,10 @@ async function containerMountsClear(roots: readonly string[], remaining?: () => 
 }
 
 const markers = ["(", "-name", ".delegatus-keep", "-o", "-path", "*/worktrees/*/gitdir",
-  "-o", "-name", ".git", "!", "-type", "d", ")"];
+  "-o", "-name", ".git", ")"];
 const MARKER_LIMIT = 10_000;
 const protectionMarker = (file: string, isDirectory: boolean) => path.basename(file) === ".delegatus-keep"
-  || path.basename(file) === ".git" && !isDirectory
+  || path.basename(file) === ".git"
   || path.basename(file) === "gitdir" && /(?:^|\/)worktrees\/.*\/gitdir$/.test(file.replaceAll(path.sep, "/"));
 function markerContent(file: string): Buffer {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -579,6 +618,9 @@ function markerContent(file: string): Buffer {
 function markerHolds(file: string, directory: string, original: string): boolean {
   if (path.basename(file) === ".delegatus-keep") return true;
   const stat = fs.lstatSync(file);
+  // A real checkout's metadata is a local-only dependency. Its ownership
+  // cannot be inferred from the enclosing attempt's former launch record.
+  if (path.basename(file) === ".git" && stat.isDirectory()) return true;
   if (!stat.isFile() || stat.size > 4096) return true;
   const content = fs.readFileSync(file, "utf8");
   if (path.basename(file) === ".git" && stat.size === 0 && isUvCacheMarker(file)) return false;
@@ -666,12 +708,14 @@ const namespaceSnapshot = "find /attempt -xdev -type d -exec stat -c '%d:%i:%f:%
   + 'LC_ALL=C sort /tmp/directories > /tmp/sorted || exit; '
   + 'sha256sum /tmp/sorted > /tmp/digest || exit; read digest rest < /tmp/digest; ';
 export type AttemptNamespaceProtection = { digest: string };
-type NamespaceBudget = { budgetMs?: number; bytes?: number };
+type NamespaceBudget = { budgetMs?: number; bytes?: number; recordedOnly?: boolean; expectedIdentity?: string; accountCpuSeconds?: (seconds: number) => void; beforeRemoval?: () => void };
 type AttemptRemovalSettings = NamespaceBudget & {
+  closedRoot?: boolean;
   /** Called when native deletion starts or the cleanup namespace reaches its delete command. */
   mutationStarted?: () => void;
   /** Synchronous entry authority; full checkout validation brackets repair. */
   permissionAuthority?: () => boolean;
+  permissionDispatchGuard?: (binding?: () => boolean) => boolean;
   permissionChange?: AttemptProtection["permissionChange"];
   nativeRemove?: (directory: string, mutationStarted: () => void) => Promise<void>;
 };
@@ -713,7 +757,7 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     : operation === "measure" ? 'exec du -skx /attempt'
     : operation === "evidence" ? noEvidence
       : inspection + (requireNoEvidence ? noEvidence : "")
-        + (operation === "remove" ? 'printf "%s\\n" "DELEGATUS_REMOVAL_STARTED"; exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
+        + (operation === "remove" ? 'printf "%s\\n" "DELEGATUS_REMOVAL_STARTED"; { time -p find /attempt -xdev -depth -mindepth 1 -delete; } 2>/tmp/usage; status=$?; awk \'$1=="user"{u=$2}$1=="sys"{s=$2}END{print "DELEGATUS_RM_CPU:"(u+s)}\' /tmp/usage; exit "$status"' : 'exit 0');
   if (protection && !/^[a-f0-9]{64}$/.test(protection.digest)) throw new Error("invalid attempt namespace snapshot");
   const verify = protection ? namespaceSnapshot + `test "$digest" = '${protection.digest}' || exit 75; ` : "";
   const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + linkedEvidence + verify + body;
@@ -747,6 +791,10 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   let failure: unknown;
   const commandTimeout = Math.max(1, remaining() - cleanupReserveMs);
   const commandCutoff = sweepMonotonicNow() + commandTimeout;
+  // Record the baseline and durable intent before the destructive command.
+  // The bind mount pins the admitted directory inode for the container even
+  // if its source pathname is replaced after dispatch.
+  if (operation === "remove") settings.beforeRemoval?.();
   try {
     result = await run("docker", ["run", "--rm", "--name", name, "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
@@ -762,11 +810,6 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
         || String((error as { stderr?: unknown }).stderr ?? "").includes("DELEGATUS_DEADLINE_EXHAUSTED")
         ? Object.assign(new AttemptTempBudgetDeferred("namespace tick deadline exhausted; retry next tick"), { cause: error }) : error;
   }
-  // A completed pre-delete refusal proves no mutation. A deadline or lost
-  // reply proves nothing about the daemon: retain its durable recovery intent.
-  if (operation === "remove" && (failure as { code?: unknown } | undefined)?.code !== "ENOENT"
-    && (Number((failure as { code?: unknown } | undefined)?.code) !== 75
-      || String((failure as { stdout?: unknown } | undefined)?.stdout ?? "").includes("DELEGATUS_REMOVAL_STARTED"))) mutationStarted?.();
   // The name exists before dispatch, so cleanup does not depend on receiving
   // a CID file or command output. The inner absolute cutoff also fences a
   // daemon that receives a delayed run request after this cleanup request.
@@ -777,12 +820,17 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
       throw new Error(`owned cleanup container removal failed: ${attemptTempFailureDetail(cleanupError)}`, { cause: failure ?? cleanupError });
   }
   if (failure) {
+    const output = String((failure as { stdout?: unknown }).stdout ?? "");
+    if (operation === "remove" && !(Number((failure as { code?: unknown }).code) === 75
+      && !output.includes("DELEGATUS_REMOVAL_STARTED"))) mutationStarted?.();
     if (failure instanceof AttemptTempBudgetDeferred) throw failure;
     const code = (failure as NodeJS.ErrnoException & { code?: unknown }).code;
     if (code === "ENOENT" || [125, 126, 127].includes(Number(code))) throw unavailable(attemptTempFailureDetail(failure));
     throw new Error(attemptTempFailureDetail(failure), { cause: failure });
   }
   if (operation === "remove" && result!.stdout.includes("DELEGATUS_REMOVAL_STARTED")) mutationStarted?.();
+  const cpu = /DELEGATUS_RM_CPU:([0-9.]+)/.exec(result!.stdout)?.[1];
+  if (cpu) settings.accountCpuSeconds?.(Number(cpu));
   return { identity, stdout: result!.stdout };
 }
 
@@ -824,17 +872,55 @@ export async function inspectAttemptTree(directory: string, original = directory
   }
 }
 
+/** Traversal slice, retained in SQLite when a root needs another helper tick.
+ * This limits preparation per visit, never the size of a removable tree. */
+export const ATTEMPT_PROTECTION_DIRECTORY_LIMIT = 16_384;
 export type AttemptProtection = {
   current: () => boolean;
   mutationDirectories?: readonly AttemptMutationWatch[];
   namespace?: AttemptNamespaceProtection;
   permissionChange?: (file: string, mode: number, apply: () => void) => void;
 };
+/** Pin the root and the one directory undergoing owner permission repair.
+ * Recursive deletion still requires the independent descendant snapshot. */
+export function closedAttemptProtection(directory: string): AttemptProtection {
+  const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.mtimeNs, stat.ctimeNs].join(":");
+  let rootVersion = signature(fs.lstatSync(directory, { bigint: true }));
+  let permission: { file: string; version: string } | undefined;
+  const watches: AttemptMutationWatch[] = [directory];
+  const current = () => {
+    try {
+      checkAttemptTempDeadline();
+      return signature(fs.lstatSync(directory, { bigint: true })) === rootVersion
+        && (!permission || signature(fs.lstatSync(permission.file, { bigint: true })) === permission.version);
+    } catch { return false; }
+  };
+  return { current, mutationDirectories: watches, permissionChange: (file, mode, apply) => {
+    if (!inside(file, directory) || !current()) throw new AttemptTempBudgetDeferred("closed root changed before permission repair");
+    const before = fs.lstatSync(file, { bigint: true });
+    if (mode !== (Number(before.mode & BigInt(0o7777)) | 0o700))
+      throw new AttemptTempBudgetDeferred("permission repair must preserve current non-owner mode bits");
+    const watchCount = watches.length;
+    permission = { file, version: signature(before) }; watches.push(file, ...attemptPathWatches([file], false));
+    try {
+      if (!current()) throw new AttemptTempBudgetDeferred("closed root changed during permission repair");
+      apply();
+      const after = fs.lstatSync(file, { bigint: true });
+      if (before.dev !== after.dev || before.ino !== after.ino || before.mtimeNs !== after.mtimeNs
+        || before.uid !== after.uid || before.gid !== after.gid || before.nlink !== after.nlink
+        || after.mode !== (before.mode & ~BigInt(0o7777) | BigInt(mode)))
+        throw new AttemptTempBudgetDeferred("directory changed during permission repair");
+      if (file === directory) rootVersion = signature(after);
+      permission.version = signature(after);
+      if (!current()) throw new AttemptTempBudgetDeferred("closed root changed after permission repair");
+    } finally { permission = undefined; watches.length = watchCount; }
+  } };
+}
 /** An independent directory and marker snapshot protects both new markers and
  * in-place rewrites even when expired evidence is deliberately discarded. Native metadata is checked synchronously
  * after awaited observations. Opaque descendants also require their digest
  * to be checked inside the removal namespace. Never follow links. */
-export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000, namespaceRemoval = false, bytes?: number):
+export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000, namespaceRemoval = false, bytes?: number, original = directory):
   Promise<AttemptProtection> {
   const until = performance.now() + attemptTempRemaining(Math.max(0, Math.min(30_000, budgetMs)));
   const directories = new Map<string, string>();
@@ -844,35 +930,98 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
   const pending = [directory];
   const device = fs.lstatSync(directory).dev;
   let inaccessible = false;
-  while (pending.length) {
-    if (attemptTempRemaining(until - performance.now()) <= 0 || directories.size >= 10000) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
-    const current = pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
-    directories.set(current, signature(stat));
-    if (stat.dev !== BigInt(device)) continue;
-    let entries: fs.Dir | undefined;
-    try {
-      entries = fs.opendirSync(current);
-      for (let entry; (entry = entries.readSync());) {
-        if (attemptTempRemaining(until - performance.now()) <= 0 || pending.length + directories.size >= 10000)
-          throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
-        if (entry.isDirectory()) pending.push(path.join(current, entry.name));
-        const file = path.join(current, entry.name);
-        if (protectionMarker(file, entry.isDirectory())) {
-          if (markerFiles.size >= MARKER_LIMIT) throw new AttemptTempBudgetDeferred("attempt protection marker budget exceeded");
-          const marker = fs.lstatSync(file, { bigint: true });
-          markerFiles.set(file, { version: signature(marker),
-            content: marker.isFile() && marker.size <= BigInt(4096) ? markerContent(file) : undefined });
-        }
+  const budget = () => {
+    if (attemptTempRemaining(until - performance.now()) <= 0) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
+  };
+  let inventory = AttemptProtectionInventory.exists(directory, original) || directory !== original && AttemptProtectionInventory.exists(original)
+    ? new AttemptProtectionInventory(directory, signature(fs.lstatSync(directory, { bigint: true })), original, budget) : undefined;
+  let checkpointed = inventory !== undefined;
+  const checkpoint = () => {
+    if (!inventory) {
+      checkpointed = true;
+        inventory = new AttemptProtectionInventory(directory, signature(fs.lstatSync(directory, { bigint: true })), original, budget);
+      inventory.seed(directories, readableDirectories, markerFiles, pending);
+    }
+  };
+  let visited = 0;
+  let active: string | undefined;
+  try {
+    while (inventory ? inventory.pending() !== undefined : pending.length > 0) {
+      if (attemptTempRemaining(until - performance.now()) <= 0 || visited >= ATTEMPT_PROTECTION_DIRECTORY_LIMIT) {
+        checkpoint(); throw new AttemptTempBudgetDeferred("attempt protection inventory checkpointed; retry next tick");
       }
-      // Some runtimes open the directory on the first read. Only a completed
-      // iteration proves this directory can also be watched from the host.
-      readableDirectories.push(current);
-    } catch (error) {
-      if (process.platform !== "linux" || !["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
-      inaccessible = true;
-    } finally { entries?.closeSync(); }
-  }
+      const current = inventory?.pending() ?? pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
+      active = current;
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
+      const version = signature(stat), children: string[] = [], markersHere = new Map<string, { version: string; content?: Buffer }>();
+      visited++;
+      if (stat.dev !== BigInt(device)) {
+        // Watch mount bindings directly; the removal mount guard holds them
+        // without entering a cleanup namespace to inspect their contents.
+        if (inventory) inventory.record(current, version, true, [], markersHere);
+        else { directories.set(current, version); readableDirectories.push(current); }
+        active = undefined;
+        continue;
+      }
+      let entries: fs.Dir | undefined;
+      let readable = false;
+      try {
+        entries = fs.opendirSync(current);
+        for (let entry; (entry = entries.readSync());) {
+          budget();
+          if (entry.isDirectory()) children.push(path.join(current, entry.name));
+          const file = path.join(current, entry.name);
+          if (protectionMarker(file, entry.isDirectory())) {
+            if (markerFiles.size + markersHere.size >= MARKER_LIMIT) throw new AttemptTempBudgetDeferred("attempt protection marker budget exceeded");
+            const marker = fs.lstatSync(file, { bigint: true });
+            markersHere.set(file, { version: signature(marker),
+              content: marker.isFile() && marker.size <= BigInt(4096) ? markerContent(file) : undefined });
+          }
+        }
+        // Some runtimes open the directory on the first read. Only a completed
+        // iteration proves this directory can also be watched from the host.
+        readable = true;
+      } catch (error) {
+        if (process.platform !== "linux" || !["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+        inaccessible = true;
+      } finally { entries?.closeSync(); }
+      if (inventory) inventory.record(current, version, readable, children, markersHere);
+      else {
+        directories.set(current, version); for (const child of children) pending.push(child);
+        if (readable) readableDirectories.push(current);
+        for (const [file, marker] of markersHere) markerFiles.set(file, marker);
+      }
+      active = undefined;
+    }
+    inventory?.load(directories, readableDirectories, markerFiles, budget);
+    inaccessible ||= readableDirectories.length !== directories.size;
+    if (markerFiles.size > MARKER_LIMIT) throw new AttemptTempBudgetDeferred("attempt protection marker budget exceeded");
+    // Checkpointed rows are observations from older helpers. Verify every row
+    // before returning a fresh proof; late descendant pins cannot be absorbed.
+    if (inventory) {
+      let changed = false;
+      for (const [file, version] of directories) { budget(); if (signature(fs.lstatSync(file, { bigint: true })) !== version) { changed = true; break; } }
+      for (const [file, marker] of markerFiles) {
+        budget();
+        if (signature(fs.lstatSync(file, { bigint: true })) !== marker.version
+          || marker.content && !markerContent(file).equals(marker.content)) { changed = true; break; }
+      }
+      if (changed) {
+        inventory.discard(); inventory = undefined;
+        throw new AttemptTempBudgetDeferred("attempt protection inventory changed; retry from a fresh snapshot");
+      }
+    }
+  } catch (error) {
+    if (inventory && !(error instanceof AttemptTempBudgetDeferred)) {
+      inventory.discard(); inventory = undefined;
+      throw new AttemptTempBudgetDeferred(`attempt protection inventory invalidated: ${attemptTempFailureDetail(error)}`);
+    }
+    if (!checkpointed && error instanceof AttemptTempBudgetDeferred) {
+      if (active) pending.push(active);
+      checkpoint();
+    }
+    throw error;
+  } finally { inventory?.close(); }
   let namespace: AttemptNamespaceProtection | undefined;
   if (inaccessible) {
     const result = await containerCommand(directory, "snapshot", directory, undefined, false, undefined,
@@ -887,7 +1036,7 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
     // removal namespace, which rechecks every directory before deletion.
     if (namespace && !namespaceRemoval) return false;
     try {
-      for (const [file, before] of directories) if (signature(fs.lstatSync(file, { bigint: true })) !== before) return false;
+      for (const [file, before] of directories) { checkAttemptTempDeadline(); if (signature(fs.lstatSync(file, { bigint: true })) !== before) return false; }
       for (const [file, before] of markerFiles) {
         if (signature(fs.lstatSync(file, { bigint: true })) !== before.version
           || before.content && !markerContent(file).equals(before.content)) return false;
@@ -928,11 +1077,11 @@ const descriptorMount = (fd: number) => {
   return id;
 };
 
-/** Repair only directories in an admitted, expired tree. Pin each entry without
+/** Repair only directories in an admitted owned tree. Pin each entry without
  * following a symlink, then chmod directory descriptors. O_PATH opens mode 000;
  * the proc descriptor names that inode even if its directory entry changes.
  * All child paths are relative to a held parent, on the root's device. */
-function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"], dispatchGuard?: () => boolean) {
+function repairAttemptPermissions(directory: string, authority: () => boolean, budgetMs: number, permissionChange?: AttemptProtection["permissionChange"], dispatchGuard?: (binding?: () => boolean) => boolean, disposable = false) {
   // Descendant lookup through these pinned descriptors requires Linux procfs.
   // Other platforms keep their existing native removal path.
   if (process.platform !== "linux") return { rollback() {}, release() {} };
@@ -943,8 +1092,11 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
   const physicalRoot = fs.realpathSync(directory);
   assertAttemptMountsClear(physicalRoot);
   let rootMount: string | undefined;
-  const check = () => {
+  const checkBudget = () => {
     if (attemptTempRemaining(until - performance.now()) <= 0) throw new AttemptTempBudgetDeferred("attempt permission repair time budget exhausted");
+  };
+  const check = () => {
+    checkBudget();
     if (!authority()) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
   };
   type Entry = { fd: number; pinned: string; expected: string; identity: string };
@@ -959,7 +1111,7 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
       throw new AttemptTempBudgetDeferred("permission repair entry left its admitted root or mount");
   };
   const enter = (file: string, expected: string, root = false) => {
-    check();
+    if (disposable) checkBudget(); else check();
     // O_PATH is Linux-specific and is intentionally combined with O_NOFOLLOW:
     // a symlink descriptor is classified and closed without touching its target.
     const fd = fs.openSync(file, 0x200000 | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -977,12 +1129,12 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
       const validate = () => {
         // Inventory can be slow. Recheck the pinned binding and authority
         // after it, before granting any permission change.
-        assertAttemptMountsClear(physicalRoot);
+        if (!disposable) assertAttemptMountsClear(physicalRoot);
         for (const parent of stack) bound(parent);
         bound(entry);
         check();
       };
-      validate();
+      if (!disposable || root || mode !== stat.mode) validate();
       if (mode !== stat.mode) {
         validate();
         const apply = () => {
@@ -990,15 +1142,20 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
           // Every permission write uses the same final fence as removal.
           // Complete descriptor/mount/protection observations before it;
           // no filesystem read may follow admission before this write.
-          if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
+          if (dispatchGuard && !dispatchGuard(() => {
+            for (const parent of stack) bound(parent);
+            bound(entry); return true;
+          })) throw new AttemptTempBudgetDeferred("authority changed before permission repair");
           fs.chmodSync(pinned, mode & 0o7777);
-          changed.push({ fd, mode: stat.mode & 0o7777 });
-          retainedFds.add(fd);
+          // Additive owner-bit repairs in disposable scratch survive a budget
+          // cut. The next pass skips repaired directories, with no descriptor
+          // retained per changed entry. Retained trees keep their rollback.
+          if (!disposable) { changed.push({ fd, mode: stat.mode & 0o7777 }); retainedFds.add(fd); }
         };
         if (permissionChange) permissionChange(path.join(directory, path.relative(physicalRoot, expected)), mode & 0o7777, apply);
         else apply();
       }
-      validate();
+      if (!disposable) validate();
       stack.push({ ...entry, entries: fs.opendirSync(pinned) });
       keepDescriptor = true;
     } finally { if (!keepDescriptor && !retainedFds.has(fd)) fs.closeSync(fd); }
@@ -1035,11 +1192,15 @@ function repairAttemptPermissions(directory: string, authority: () => boolean, b
   try {
     enter(directory, physicalRoot, true);
     while (stack.length) {
-      check();
+      if (disposable) checkBudget(); else check();
       const frame = stack[stack.length - 1];
-      for (const parent of stack) bound(parent);
+      if (!disposable) for (const parent of stack) bound(parent);
       const entry = frame.entries.readSync();
-      if (entry) enter(path.join(frame.pinned, entry.name), path.join(frame.expected, entry.name));
+      if (entry) {
+        // Directory write permission authorizes unlink; file modes stay unchanged.
+        // Skip files and links before opening descriptors in the large-tree path.
+        if (!disposable || !entry.isFile() && !entry.isSymbolicLink()) enter(path.join(frame.pinned, entry.name), path.join(frame.expected, entry.name));
+      }
       else close();
     }
   } catch (error) {
@@ -1072,7 +1233,8 @@ export async function removeAttemptTree(directory: string, original = directory,
     }
     if (dispatchGuard && !dispatchGuard()) throw new Error("attempt temp deferred: authority changed before native removal");
     if (discardExpiredEvidence && guard && dispatchGuard && postDeleteGuard) {
-      repair = repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000, settings.permissionChange, dispatchGuard);
+      repair = repairAttemptPermissions(directory, settings.permissionAuthority ?? postDeleteGuard, settings.budgetMs ?? 30_000,
+        settings.permissionChange, settings.permissionDispatchGuard ?? dispatchGuard, settings.closedRoot);
       // Repeat all observations after repair, including checkout references,
       // and reauthorize after the last await.
       if (!await guard() || !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed after permission repair");
@@ -1081,18 +1243,38 @@ export async function removeAttemptTree(directory: string, original = directory,
     // Mount and physical-path reads may observe a changed root or protection.
     // Admit from the final synchronous snapshots immediately before native rm.
     if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before native removal");
-    try { await (settings.nativeRemove ?? removeTreeWithinAttemptBudget)(directory, () => { mutationStarted = true; settings.mutationStarted?.(); }); repair?.release(); }
+    settings.beforeRemoval?.();
+    try {
+      if (settings.nativeRemove) await settings.nativeRemove(directory, () => { mutationStarted = true; settings.mutationStarted?.(); });
+      else await removeTreeWithinAttemptBudget(directory, () => { mutationStarted = true; settings.mutationStarted?.(); }, undefined,
+        settings.expectedIdentity, settings.accountCpuSeconds);
+      repair?.release();
+    }
     catch (error) {
       repair?.release();
       if (error instanceof AttemptTempBudgetDeferred) throw error;
       if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
-      const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection, settings.mutationStarted);
-      removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+      try {
+        const claimedDirectory = typeof (error as { claimedDirectory?: unknown }).claimedDirectory === "string"
+          ? (error as { claimedDirectory: string }).claimedDirectory : undefined;
+        if (claimedDirectory) {
+          const claimedIdentity = (error as { claimedIdentity?: unknown }).claimedIdentity;
+          if (typeof claimedIdentity !== "string" || settings.expectedIdentity && claimedIdentity !== settings.expectedIdentity)
+            throw new Error("attempt removal claim identity unavailable; payload retained");
+          restoreAttemptTempClaim(claimedDirectory, directory, claimedIdentity);
+        }
+        const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection,
+          () => { mutationStarted = true; settings.mutationStarted?.(); });
+        removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
+      } catch (fallbackError) {
+        if (fallbackError instanceof AttemptTempBudgetDeferred) throw fallbackError;
+        throw new Error(`${attemptTempFailureDetail(error)}; cleanup fallback: ${attemptTempFailureDetail(fallbackError)}`, { cause: fallbackError });
+      }
     }
   } catch (error) {
-    // Permission repair changes no data. Until deletion dispatch, restore every
-    // changed directory mode before the quarantine owner restores its path.
-    // Once deletion starts, retain the journal because removal may be partial.
+    // Permission repair changes no data. Retained trees roll back their modes;
+    // disposable closed roots keep additive owner-bit progress across cutoffs.
+    // Once deletion starts, the journal records possible partial removal.
     if (!mutationStarted) repair?.rollback();
     if (error instanceof AttemptTempBudgetDeferred) throw error;
     throw new Error(attemptTempFailureDetail(error), { cause: error });
@@ -1106,6 +1288,10 @@ const kibibytes = (output: string | undefined) => {
 };
 
 export async function measureAttemptAllocation(directory: string, settings: NamespaceBudget = {}): Promise<{ bytes: number; unreadable: boolean }> {
+  if (settings.recordedOnly) {
+    const blocks = fs.lstatSync(directory).blocks;
+    return { bytes: Math.max(settings.bytes ?? 0, Number.isFinite(blocks) ? blocks * 512 : 0), unreadable: false };
+  }
   if (process.platform === "win32") return { bytes: await measureTempBytes(directory), unreadable: false };
   const until = performance.now() + attemptTempRemaining(Math.max(0, Math.min(30_000, settings.budgetMs ?? 30_000)));
   if (attemptTempRemaining(until - performance.now()) <= 0) throw new AttemptTempBudgetDeferred("attempt measurement time budget exhausted");
