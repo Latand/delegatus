@@ -467,7 +467,7 @@ export function DraftAgentPane({
       read: (name) => readField(draftId, name),
       write: (name, value) => writeField(draftId, name, value),
     },
-    initialEngine: srcFile?.engine === "codex" || srcFile?.engine === "copilot" ? srcFile.engine : "claude",
+    initialEngine: srcFile?.engine === "codex" || srcFile?.engine === "copilot" || srcFile?.engine === "antigravity" ? srcFile.engine : "claude",
     onEngineChange: (value) => setSpawnImageNegotiation({ status: "loading", requestKey: `${project}\n${src ?? ""}\n${value}` }),
   });
   const { engine, model, effort, speed } = launch;

@@ -534,7 +534,7 @@ export function journalVerdict(
     The journal's transaction decides whether acknowledgement or discard won;
     a stale status read cannot make that decision in the Viewer. */
 export async function confirmJournalDelivery(client: RuntimeHostClient, operationId: string, evidence?: ConfirmedSendEvidence | null): Promise<{
-  operationId: string; verdict: JournalVerdict;
+  operationId: string; verdict: JournalVerdict; route: DeliveryRoute | null;
 } | null> {
   let result;
   try {
@@ -544,7 +544,7 @@ export async function confirmJournalDelivery(client: RuntimeHostClient, operatio
   }
   const verdict = journalVerdict(result?.receipt.status ?? null, result?.receipt.reason, result?.receipt.primaryFailure);
   return result && verdict && (verdict.state === "delivered" || result.receipt.reason === SEND_DISCARDED_REASON)
-    ? { operationId: result.operationId, verdict } : null;
+    ? { operationId: result.operationId, verdict, route: deliveryRouteOf(result.receipt) } : null;
 }
 
 /**
@@ -1240,7 +1240,7 @@ async function settleSendReceipt(
       ports.assertActive?.();
       if (!decision.readable || !decision.value) return projected;
       const settled = await settleProjection(registry, operationId, projected, decision.value.verdict, "delivery-journal",
-        null, ports.assertActive);
+        decision.value.route, ports.assertActive);
       const durable = sendReceiptFor(registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId);
       if (durable && durable.state !== "in-flight" && durable.state === settled.state && durable.reason === settled.reason) {
         ports.assertActive?.();
@@ -1637,6 +1637,7 @@ async function projectCurrentSend(
     const owner = registry.readOnlySnapshot().deliveryOperationOwners[operationId];
     return { readable: true, value: { ...projected, state: "delivered", reason: null,
       ...(owner?.batchId ? { turnId: owner.batchId } : {}),
+      ...routeFields(arbitration.value?.route),
       duplicateRisk: false, resend: "not-needed", evidence: "delivery-journal" } };
   }
   if (projected.state !== "in-flight") return { readable: true, value: projected };

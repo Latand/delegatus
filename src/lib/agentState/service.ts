@@ -19,7 +19,7 @@ import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { AGENT_STATE_POLICY, evaluateAgentState, fact, unknown, type AgentFacts, type AgentProjection, type Evidence, type NativeTurn } from "./model";
 import { AgentTranscriptCache, fileSignature, transcriptVersionMatches } from "./transcript";
 import { acknowledgeAgentProjection, artifactRevision, commitAgentObservation, conversationRevision, entryRevision,
-  readAgentProjection, readAgentStateMetrics, subjectId, copyAgentStateRow, recordAgentProcessEnded, pruneTerminalAgentProjection } from "./store";
+  readAgentProjection, readAgentStateMetrics, readAgentStatesPage, subjectId, copyAgentStateRow, recordAgentProcessEnded, pruneTerminalAgentProjection } from "./store";
 
 const digest = (v: unknown) => crypto.createHash("sha256").update(JSON.stringify(v)).digest("hex");
 export const AGENT_STATE_INTERVAL_MS = AGENT_STATE_POLICY.reconcileMs;
@@ -186,8 +186,7 @@ export class AgentStateService {
     }
     if (!allowed()) return;
     const maintenanceAfter = registry.agentStateRead(file => file.agentStateMetrics.maintenance?.afterKey ?? "");
-    const maintenance = registry.agentStateRead(file => registryCollectionPage(file, "agentStates", maintenanceAfter, 32)
-      .map(key => copyAgentStateRow(file.agentStates[key]!)));
+    const maintenance = readAgentStatesPage(registry, maintenanceAfter, 32);
     for (const row of maintenance) {
       if (!allowed()) return;
       const identity = row.facts.process.determined ? row.facts.process.value.identity : null;
@@ -306,7 +305,8 @@ export class AgentStateService {
         ?? (previous?.facts.turn.determined && previous.facts.turn.value.localRef === memory.activeTurnRef ? previous.facts.turn.value.at : null)
         ?? Date.parse(entry.updatedAt);
       const nativeOpening = native.turn.determined && native.turn.value.state === "open" && (entry.key.engine === "claude"
-        ? native.turn.value.nativeId === memory.nativeTurnId : entry.key.engine === "copilot" ? native.turn.value.promptOrdinal === memory.promptOrdinal : true);
+        ? native.turn.value.nativeId === memory.nativeTurnId
+        : (entry.key.engine === "copilot" || entry.key.engine === "antigravity") ? native.turn.value.promptOrdinal === memory.promptOrdinal : true);
       const provisional = memory.activeTurnRef !== null && entry.key.engine !== "codex" && !nativeOpening;
       turn = fact({ state: memory.activeTurnRef ? "open" : "closed", nativeId: entry.key.engine === "codex" ? memory.activeTurnRef : memory.nativeTurnId ?? null,
         localRef: memory.activeTurnRef, opening: provisional ? "accepted" : nativeOpening && native.turn.determined ? native.turn.value.opening : null,
@@ -338,7 +338,7 @@ export class AgentStateService {
           && native.turn.value.promptOrdinal === entry.structuredHost!.agentStateNativePromptOrdinal);
     const currentMemoryBoundary = !memory || entry.key.engine === "codex"
       || entry.key.engine === "claude" && (memory.nativeTurnId != null && native.turn.determined && native.turn.value.nativeId === memory.nativeTurnId)
-      || entry.key.engine === "copilot" && (memory.promptOrdinal != null && native.turn.determined && native.turn.value.promptOrdinal === memory.promptOrdinal);
+      || (entry.key.engine === "copilot" || entry.key.engine === "antigravity") && (memory.promptOrdinal != null && native.turn.determined && native.turn.value.promptOrdinal === memory.promptOrdinal);
     // An idle Claude broker clears both turn references. Keep its held-owner
     // evidence alongside the generation-bound native terminal, so retirement
     // can distinguish completion from a memory-only idle observation. Any
@@ -447,9 +447,10 @@ export class AgentStateService {
         if (!allowed() || !publicationSource) return false;
         // Check all registry facts against a single read transaction. A second
         // connection can write between publication checks and must be seen.
-        const row = registry.agentStateRead(file => {
+        const row = registry.agentStateRead((file, antigravityStates) => {
           const current = file.entries[committed.entryKey];
-          if (file.agentStates[committed.subject]?.revision !== committed.revision || !current
+          const stored = file.agentStates[committed.subject] ?? antigravityStates.get(committed.subject);
+          if (stored?.revision !== committed.revision || !current
             || entryRevision(current) !== committed.facts.revision || this.ports.process(process) !== processStatus) return null;
           if (claimIdentity && this.ports.process(claimIdentity) !== claimStatus) return null;
           const source = snapshotFacts(file, current);

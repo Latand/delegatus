@@ -40,7 +40,7 @@ import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leas
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipelineRuntimeReads } from "./runtimeReads";
 import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
-import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL } from "./publication";
+import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL, PUBLICATION_MEMORY_DEFERRAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts } from "./controllerSnapshot";
 import { claimIdleStop, claimWithdrawal, consumeWithdrawalRefusal, hasWithdrawalRefusal, idleStopReceiptMatches, readIdleStop, readWithdrawal, recordWithdrawalRefusal, settleDeadWithdrawal, terminalIdleStopKey, terminalIdleStopOwner, withdrawalSettledDead, type IdleStopBinding, type WithdrawalBinding } from "./stageControlCustody";
@@ -5373,6 +5373,7 @@ function publicationNotLanded(published: RefusedPublication): boolean {
 function publicationDeadlineCause(published: RefusedPublication): string | null {
   if (publicationDependencyValidationDeadline(published)) return "validation of the existing dependency installation reached its deadline";
   if (!published.failure?.retryableDeadline) return null;
+  if (published.failure.memoryAdmissionDeferred) return PUBLICATION_MEMORY_DEFERRAL;
   return published.failure.admissionDeadline ? "the pre-push hook's CPU admission lock-wait budget expired before checks started"
     : "a check reached its execution deadline without a verdict";
 }

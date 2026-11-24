@@ -5,6 +5,7 @@ import { nativeCompaction } from "./compaction";
 
 import { yieldToRuntime } from "@/lib/cooperative";
 import { globalCache } from "@/lib/scanner/caches";
+import { antigravityToolName } from "@/lib/scanner/antigravityNative";
 import type { Engine } from "@/lib/types";
 
 export type SessionRecordKind = "message" | "reasoning" | "tool_call" | "tool_result" | "trace";
@@ -456,6 +457,55 @@ function normalizeCopilotLine(obj: Record<string, unknown>): NormalizedSessionLi
   return records;
 }
 
+/** Antigravity CLI (`agy acp`) host-written `events.jsonl`
+    (docs/design/antigravity-engine.md §3.2 & §3.5). Unknown record types are
+    skipped; Viewer MCP tool prefixes normalize to `mcp__viewer__<tool>`. */
+function normalizeAntigravityLine(obj: Record<string, unknown>): NormalizedSessionLine[] {
+  const records: NormalizedSessionLine[] = [];
+  const add = (record: SessionRecord): void => { records.push({ record }); };
+  const ts = tsOf(obj);
+  const type = str(obj.type);
+  const data = rec(obj.data);
+  if (type === "user.message") {
+    add({ kind: "message", role: "user", ts, text: str(data.content) });
+  } else if (type === "assistant.message") {
+    const content = str(data.content);
+    if (content) add({ kind: "message", role: "assistant", ts, text: content });
+    for (const request of arr(data.toolRequests)) {
+      const name = antigravityToolName(str(request.name) || "tool");
+      add({ kind: "tool_call", role: "assistant", ts, name, text: JSON.stringify(request.arguments ?? {}) });
+    }
+  } else if (type === "tool.execution_start") {
+    const name = antigravityToolName(str(data.toolName) || str(data.kind) || "tool");
+    const callId = str(data.toolCallId);
+    const args = rec(data.arguments);
+    const mcpViewer = name.startsWith("mcp__viewer__") ? { server: "viewer", tool: name.slice("mcp__viewer__".length) } : {};
+    records.push({
+      record: { kind: "tool_call", role: "assistant", ts, name, text: JSON.stringify(data.arguments ?? {}) },
+      ...(callId ? { call: { id: callId, ...mcpViewer, ...(mcpViewer.tool ? {} : { tool: name }), input: args } } : {}),
+    });
+  } else if (type === "tool.execution_complete") {
+    const result = rec(data.result);
+    const rawName = str(data.toolName);
+    const name = rawName ? antigravityToolName(rawName) : undefined;
+    const callId = str(data.toolCallId);
+    const text = str(data.output) || str(result.content) || str(result.detailedContent) || str(data.error) || callId;
+    const status = str(data.status) || undefined;
+    const isError = data.isError === true || data.success === false || status === "failed" || status === "error";
+    records.push({
+      record: { kind: "tool_result", role: "tool", ts, ...(name ? { name } : {}), text },
+      ...(callId ? { call: { id: callId, result: text, ...(status ? { status } : {}), error: isError } } : {}),
+    });
+  } else if (type === "abort") {
+    add({ kind: "trace", role: "system", ts, name: "abort", text: `interrupted (${str(data.reason) || "unknown"})` });
+  } else if (type === "session.quota_exhausted") {
+    add({ kind: "trace", role: "system", ts, name: "session.quota_exhausted", text: str(data.message) || "Antigravity quota reached" });
+  } else if (type === "session.error") {
+    add({ kind: "trace", role: "system", ts, name: "session.error", text: str(data.message) || str(data.error) || "Antigravity turn error" });
+  }
+  return records;
+}
+
 /** Normalize one parsed JSONL object without reading or knowing its path. */
 export function normalizeSessionLine(
   engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">,
@@ -468,7 +518,8 @@ export function normalizeSessionLine(
       text: `Record skipped: JSON nesting exceeds ${MAX_NORMALIZATION_DEPTH} levels`,
     } }];
   }
-  if (engine === "copilot" || engine === "antigravity") return normalizeCopilotLine(obj);
+  if (engine === "antigravity") return normalizeAntigravityLine(obj);
+  if (engine === "copilot") return normalizeCopilotLine(obj);
   return engine === "claude" ? normalizeClaudeLine(obj) : normalizeCodexLine(obj);
 }
 
@@ -480,6 +531,10 @@ function readCopilot(pathname: string, engine: "copilot" | "antigravity" = "copi
   return out;
 }
 
+function readAntigravity(pathname: string): SessionReadResult {
+  return readCopilot(pathname, "antigravity");
+}
+
 function readCodex(pathname: string): SessionReadResult {
   const out: SessionReadResult = { path: pathname, engine: "codex", messages: [], reasoning: [], tools: [], traces: [] };
   for (const obj of readJsonl(pathname)) {
@@ -489,7 +544,8 @@ function readCodex(pathname: string): SessionReadResult {
 }
 
 export function readSession(pathname: string, engine: Extract<Engine, "claude" | "codex" | "copilot" | "antigravity">): SessionReadResult {
-  if (engine === "copilot" || engine === "antigravity") return readCopilot(pathname, engine);
+  if (engine === "antigravity") return readAntigravity(pathname);
+  if (engine === "copilot") return readCopilot(pathname, "copilot");
   return engine === "claude" ? readClaude(pathname) : readCodex(pathname);
 }
 

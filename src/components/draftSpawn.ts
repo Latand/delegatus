@@ -142,7 +142,7 @@ export function hasRecoverableRequest(attempt: SpawnAttempt): attempt is SpawnAt
   const request = attempt.request;
   return Boolean(
     request &&
-    (request.engine === "claude" || request.engine === "codex" || request.engine === "copilot") &&
+    (request.engine === "claude" || request.engine === "codex" || request.engine === "copilot" || request.engine === "antigravity") &&
     request.engine === attempt.engine &&
     (request.title === undefined || (typeof request.title === "string" && durableSemanticTitle(request.title, 120) !== null)) &&
     typeof request.model === "string" &&
@@ -450,7 +450,7 @@ export function provisionalSpawnFile(
   };
   return {
     path: `spawn:${outcome.launchId}`,
-    root: attempt.engine === "codex" ? "codex-sessions" : attempt.engine === "copilot" ? "copilot-sessions" : "claude-projects",
+    root: attempt.engine === "codex" ? "codex-sessions" : attempt.engine === "copilot" ? "copilot-sessions" : attempt.engine === "antigravity" ? "antigravity-sessions" : "claude-projects",
     name: `spawn:${outcome.launchId}`,
     project,
     ...(attempt.request?.cwd ? { cwd: attempt.request.cwd } : {}),
