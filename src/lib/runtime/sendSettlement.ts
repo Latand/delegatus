@@ -764,22 +764,31 @@ interface SettlementSubject {
 function settlementSubjectForRow(
   row: HeldDelivery | DeliveryOperationOwner,
   conversation: RegistryConversation | null | undefined,
+  file: RegistryFile,
+  ports: SendSettlementPorts = {},
 ): SettlementSubject {
+  const reservation = "state" in row ? row : file.heldDeliveries[row.deliveryId];
+  const originalOperationId = reservation?.command.operationId ?? row.command.operationId;
+  const retainedProgress = settlementProgress(ports, originalOperationId);
+  const retainedFailedSwitch = retainedProgress?.waitReason === "switch-failed"
+    || retainedProgress?.deadlinePolicy === "failed-switch";
   const failedSwitch = (row.command.kind === "send" || row.command.kind === "steer")
     && (Boolean(conversation?.switchHold)
-      || ("state" in row && row.state === "held" && conversation?.migration?.phase === "failed-recoverable"));
+      || ("state" in row && row.state === "held" && conversation?.migration?.phase === "failed-recoverable")
+      || retainedFailedSwitch);
   return {
     operationId: row.command.operationId,
     conversationId: row.conversationId,
-    acceptedAt: "state" in row && !failedSwitch ? acceptedAtOf(row) : row.createdAt,
+    acceptedAt: failedSwitch ? reservation?.createdAt ?? row.createdAt
+      : "state" in row ? acceptedAtOf(row) : row.createdAt,
     settleable: "state" in row ? SETTLEABLE_DELIVERY_STATES.has(row.state) : row.terminalState === null,
     failedSwitch,
   };
 }
 
-function settlementSubject(file: RegistryFile, operationId: string): SettlementSubject | null {
+function settlementSubject(file: RegistryFile, operationId: string, ports: SendSettlementPorts = {}): SettlementSubject | null {
   const row = retryAttemptOwner(file, operationId) ?? deliveryForOperation(file, operationId);
-  return row ? settlementSubjectForRow(row, file.conversations[resolveConversationAlias(file, row.conversationId)]) : null;
+  return row ? settlementSubjectForRow(row, file.conversations[resolveConversationAlias(file, row.conversationId)], file, ports) : null;
 }
 
 function failedSwitchDeadlineAt(acceptedAt: number, ports: Pick<SendSettlementPorts, "windowMs" | "absoluteDeadline">): number {
@@ -936,7 +945,7 @@ export async function settleDueSends(
     for (const operationId of operations) {
       await selectionTurn(); checkSelection();
       const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-      const subject = settlementSubject(current, operationId);
+      const subject = settlementSubject(current, operationId, ports);
       if (!subject) continue;
       result.examined += 1;
       // A dead recipient's deadline and this comparison use the same clock
@@ -990,7 +999,7 @@ export async function settleDueSends(
 export function sendSettlementDue(operationId: string, ports: SendSettlementPorts = {}): boolean {
   const registry = ports.registry ?? agentRegistry();
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const subject = settlementSubject(file, operationId);
+  const subject = settlementSubject(file, operationId, ports);
   return subject !== null && pastSettlementDeadline(registry, file, subject, ports);
 }
 
@@ -1006,7 +1015,8 @@ export function settlementDeadlineForRow(
 ): SettlementDeadline | null {
   const source = "owner" in row ? row.owner : row.delivery;
   const conversation = registry.conversation(source.conversationId);
-  const subject = settlementSubjectForRow(source, conversation);
+  const file = registry.deliverySnapshotForOperation(source.command.operationId);
+  const subject = settlementSubjectForRow(source, conversation, file);
   if (!subject.settleable) return null;
   const acceptedAt = parseTime(subject.acceptedAt);
   if (acceptedAt === null) return null;
@@ -1029,7 +1039,7 @@ export function settlementDeadlineForRow(
 export function sendSettlementDeadline(operationId: string, ports: SendSettlementPorts = {}): SettlementDeadline | null {
   const registry = ports.registry ?? agentRegistry();
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const subject = settlementSubject(file, operationId);
+  const subject = settlementSubject(file, operationId, ports);
   return subject ? settlementDeadline(registry, file, subject, ports) : null;
 }
 
@@ -1305,7 +1315,7 @@ async function settleSendReceipt(
   if (verdict) return settleProjection(registry, operationId, projected, verdict, "delivery-journal", deliveryRouteOf(receipt), ports.assertActive);
 
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const subject = settlementSubject(file, operationId);
+  const subject = settlementSubject(file, operationId, ports);
   /* Still in flight: the journal's receipt already says how this send is
      reaching a running turn, recorded when its delivery began. */
   if (!subject) return { ...projected, ...routeFields(receipt) };
@@ -1327,7 +1337,7 @@ async function settleSendReceipt(
   const canExpire = (): boolean => {
     ports.assertActive?.();
     const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-    const currentSubject = settlementSubject(current, operationId);
+    const currentSubject = settlementSubject(current, operationId, ports);
     const forced = ports.absoluteDeadline !== undefined && (ports.now ?? Date.now)() >= ports.absoluteDeadline;
     if (!forced && currentSubject && !recipientProvenDead(registry, current, subject.conversationId)
       && (currentSubject.failedSwitch !== subject.failedSwitch
@@ -1370,7 +1380,7 @@ async function settleSendReceipt(
     if (fenced.acquired && fenced.value) return sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
   }
   const currentFile = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const currentSubject = settlementSubject(currentFile, operationId);
+  const currentSubject = settlementSubject(currentFile, operationId, ports);
   const currentReceipt = sendReceiptFor(currentFile, operationId);
   if (currentReceipt && currentReceipt.state !== "in-flight") return currentReceipt;
   if (!currentSubject || !pastSettlementDeadline(registry, currentFile, currentSubject, ports)) return { ...projected, ...routeFields(receipt) };

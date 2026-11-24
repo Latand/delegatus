@@ -371,7 +371,8 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const current = this.record(operationId);
     if (!current || current.terminal || (current.deadlineAt === deadlineAt && current.deadlinePolicy === policy)) return;
     // A live turn can extend an ordinary wait. A failed switch has its own
-    // fixed bound from admission.
+    // fixed bound from admission and remains authoritative across retries.
+    if (current.deadlinePolicy === "failed-switch" && policy !== "failed-switch") return;
     if (policy !== "failed-switch" && current.deadlinePolicy === "turn-boundary" && current.deadlineAt && deadlineAt
       && Date.parse(current.deadlineAt) > Date.parse(deadlineAt)) return;
     this.put({ ...current, deadlineAt, deadlinePolicy: policy, updatedAt: new Date(this.now()).toISOString() });

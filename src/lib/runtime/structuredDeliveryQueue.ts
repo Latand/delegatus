@@ -2193,6 +2193,15 @@ export class StructuredDeliveryQueue {
         }
         continue;
       }
+      /* A failed-switch wait is a durable dispatch fence. The operator may
+         release the visible hold before the receipt sweep runs, and the
+         queue may have restarted since the switch failed. Its persisted
+         progress record still prevents a possibly-started operation from
+         being claimed by a replacement host. */
+      if (isMessageEffect(effect) && this.port.progress?.get(effect.operationId)?.waitReason === "switch-failed") {
+        this.noteWait(effect, "switch-failed", { detail: "awaiting the original delivery receipt or settlement deadline" });
+        return true;
+      }
       if (effect.kind === "native-queue") {
         const admission = durableStatuses.get(effect.operationId);
         const startsWork = effect.action === "add" || effect.action === "start" || effect.action === "send-now";
