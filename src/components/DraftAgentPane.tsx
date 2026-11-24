@@ -58,7 +58,7 @@ import { draftWorkingDirectory } from "./projectModel";
 import { cleanTitle } from "@/lib/title";
 import { speedBody } from "@/components/ReasoningControls";
 
-type Engine = "claude" | "codex" | "copilot";
+type Engine = "claude" | "codex" | "copilot" | "antigravity";
 
 /* The engine chips are SHARED with the orchestrator panel and the pipeline
    stage placeholder (PRD #976 slice A) — they live in
@@ -98,9 +98,10 @@ function spawnImageNegotiationValue(value: unknown): SpawnImageNegotiation | nul
   const claude = runtimeImageCapabilityValue(imageInput.claude);
   const codex = runtimeImageCapabilityValue(imageInput.codex);
   if (!claude || !codex) return null;
-  /* A server from before Copilot sends no section; nothing is claimed for it. */
+  /* A server from before Copilot or Antigravity sends no section; nothing is claimed for them. */
   const copilot = runtimeImageCapabilityValue(imageInput.copilot) ?? { ...claude, supported: false };
-  return { spawnTransport: candidate.spawnTransport, imageInput: { claude, codex, copilot } };
+  const antigravity = runtimeImageCapabilityValue(imageInput.antigravity) ?? { ...claude, supported: false };
+  return { spawnTransport: candidate.spawnTransport, imageInput: { claude, codex, copilot, antigravity } };
 }
 
 const field = (id: string, name: string) => `llvDraftPane:${id}:${name}`;

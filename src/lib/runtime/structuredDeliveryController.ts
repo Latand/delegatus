@@ -2434,7 +2434,7 @@ export async function bindStructuredDeliveryQueue(
         ? prepared.snapshot : await registry.prepareReadOnlySnapshot();
       assertActive();
       const markerKeys = registryKeysMatching(markerSnapshot, "entries", "structuredHost.kind",
-        ["codex-app-server", "claude-broker", "copilot-acp"]);
+        ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"]);
       await forEachStartupBatch(markerKeys, async key => {
         const selected = performanceSpans.sync("runtime.startup.select", () => markerSnapshot.entries[key]);
         const entry = selected && startupHostSnapshot(registry, selected.key).entries[key];
@@ -2919,8 +2919,8 @@ export async function recordDemotionInterruption(
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
   if (!entry || !conversation || conversation.supersededBy) return true;
   /* Interruption obligations re-drive Claude and Codex turns a release cut;
-     a Copilot turn cut the same way is resumed by the operator (slice 1). */
-  if (conversation.engine === "copilot") return true;
+     Copilot and Antigravity turns cut the same way are resumed by the operator. */
+  if (conversation.engine === "copilot" || conversation.engine === "antigravity") return true;
   const engine = conversation.engine;
   const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
   if (turnRef === null && conversation.turn.state !== "busy" && backgroundTasks.length === 0 && !selfStartedWork) return true;

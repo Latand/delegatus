@@ -25,7 +25,7 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
 }
 
 export interface MemoryEngineStart {
-  engine: "codex" | "claude";
+  engine: "codex" | "claude" | "antigravity";
   conversationId: string;
   attempt?: { pipelineId: string; stageId: string; attempt: number };
   cwd: string;
@@ -73,7 +73,7 @@ async function optionalFile(file: string): Promise<Buffer | null> {
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 async function engineMemory(start: MemoryEngineStart, clean: boolean) {
-  if (engineMemoryOff({ cleanMemory: clean }) || start.nativeMemoryEnabled === false) return [];
+  if (start.engine === "antigravity" || engineMemoryOff({ cleanMemory: clean }) || start.nativeMemoryEnabled === false) return [];
   const home = start.home ?? path.join(start.env?.HOME ?? process.env.HOME ?? os.homedir(), start.engine === "codex" ? ".codex" : ".claude");
   let file: string;
   if (start.engine === "codex") {

@@ -28,7 +28,7 @@ import type { RoleEngine } from "@/lib/roles/types";
 
 export type CliPresence = "found" | "missing" | null;
 
-const ENGINE_NAME: Record<RoleEngine, string> = { claude: "Claude", codex: "Codex" };
+const ENGINE_NAME: Record<RoleEngine, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity" };
 
 /** Signed in, as the launch refusal counts it: a credential is present. */
 export function accountConnected(account: AccountOption): boolean {
@@ -66,7 +66,7 @@ function headerLine(state: EngineAccountsState, connected: boolean, t: TFunction
 }
 
 /** The command row of a card whose tool is missing: a line that says where to paste it, then the command and its copy control. */
-function InstallCommand({ engine }: { engine: RoleEngine }) {
+function InstallCommand({ engine }: { engine: "claude" | "codex" }) {
   const { t } = useLocale();
   const { command, segments } = AGENT_INSTALL_COMMANDS[engine];
   return (
@@ -187,7 +187,7 @@ function CopilotCard({ accounts, recheck }: { accounts: CopilotAccounts; recheck
 export function EnginesStep({ claude, codex, cli, now, onRecheck }: {
   claude: EngineAccountsState;
   codex: EngineAccountsState;
-  cli: Record<RoleEngine, CliPresence>;
+  cli: { claude: CliPresence; codex: CliPresence; antigravity?: CliPresence };
   now: number;
   onRecheck: () => void;
 }) {
