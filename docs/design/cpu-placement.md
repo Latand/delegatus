@@ -735,9 +735,13 @@ callers use the verified host process view. A waiting shell still has its
 ticket. A hook that starts its cleanup runner directly binds the launch to its
 live parent identity and exact command. The ordinary pre-push wrapper records
 its kernel identity when it takes the bypass branch. A unique service unit and
-its live launcher carry that proof into detached cleanup. During cutover, the
-known deployed dispatcher can still establish the direct launch from its live
-parent identity. An older ordinary wrapper also needs its own covered journal
+its live launcher carry that proof into detached cleanup. The publication
+preparer also records its parent, mode and the entry it started. That record
+must agree with the launch, and it lets the preparer start the checkout root's
+copy of the hook. On its own it exempts nothing. During cutover, the known
+deployed dispatchers (the base of this protocol and main after #4376) can
+still establish the direct launch from their live parent identity. An older
+ordinary wrapper from the same releases also needs its own covered journal
 history and service invocation. A nested gate's ticket identifies only the
 nested gate. Possible legacy holders continue to fence the first claim until
 they exit.

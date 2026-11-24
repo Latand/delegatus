@@ -12,12 +12,13 @@ import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openS
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
-import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
+import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget, reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, shellStartupFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
-import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
+import { publicationDeadlineOnly, PUBLICATION_MEMORY_DEFERRAL } from "../src/lib/pipelines/publication";
 import { readSafeRegularFile } from "./privacy-safe-path";
+import { publicationMemoryBytes, samplePublicationRss, waitForPublicationMemory } from "./publication-memory";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -240,6 +241,7 @@ export const ISOLATED_DIRECTORY_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HO
 /** Everything that might resolve state, including build imports, is sandboxed. */
 export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...inherited };
+  if (inherited.LLV_DOCKER_NSENTER_SHIMS === "1" || process.env.LLV_DOCKER_NSENTER_SHIMS === "1") env.LLV_DOCKER_NSENTER_SHIMS = "1";
   // Git exports these to hooks. Keeping them makes a fixture's `git -C`
   // operate on the pushing repository instead of the fixture repository.
   for (const key of [
@@ -1098,8 +1100,18 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   // The outer hook also allocates logs and Cloud input. Acquire its cleanup
   // owner before allocation; admitted children inherit the same journal.
   if (import.meta.main && !process.env.LLV_GATE_SANDBOX_RECORD) {
-    const parent = JSON.stringify(captureProcessIdentity(process.pid));
-    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: parent, LLV_GATE_HOOK_DISPATCH: parent };
+    const parent = captureProcessIdentity(process.pid);
+    const parentProof = JSON.stringify(parent);
+    // The dispatch marker binds this direct cleanup launch to its live parent.
+    // Admission accepts it only beside that exact parent identity.
+    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: parentProof, LLV_GATE_HOOK_DISPATCH: parentProof };
+    const entry = publicationPrepare ? path.join(root, "scripts/local-gate.ts") : import.meta.path;
+    if (publicationPrepare) {
+      // The outer runner owns cleanup while its child queues for checks. Give
+      // admission the live parent evidence it uses to distinguish this runner
+      // from a slotless legacy holder.
+      env.LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP = JSON.stringify({ parent, mode, entry: realpathSync(entry) });
+    }
     if (deadline) {
       const inherited = Number(env.LLV_OWNED_RUN_TIMEOUT_MS);
       const allowance = supervisorTimeoutMs(deadline.at, env);
@@ -1107,13 +1119,15 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       env.LLV_GATE_PUSH_DEADLINE = String(deadline.at);
     }
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "owned-runner.ts"),
-      ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, ...process.execArgv, import.meta.path, ...process.argv.slice(2)],
+      ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, ...process.execArgv, entry, ...process.argv.slice(2)],
       { cwd: root, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     const code = await child.exited;
     if (code !== 0) throw new AdmittedGateFailed(code);
     return;
   }
   const sandbox = createGateSandbox();
+  const imagePreparation = publicationPrepare && process.platform === "linux" && process.env.LLV_DOCKER_NSENTER_SHIMS === "1";
+  const peakRss = imagePreparation ? samplePublicationRss() : undefined;
   let sandboxRetained = false;
   try {
     // Pre-push checks see one canonical environment, so a producer's pass and
@@ -1129,6 +1143,13 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       delete env.LLV_GATE_TYPES_CHECKED;
       delete env.LLV_GATE_FULL_TYPES;
       if (step.name === "privacy") Object.assign(env, privacyEnv);
+      if (path.basename(process.execPath) === "bun-container") {
+        const executable = Bun.which(command[0]!, { PATH: env.PATH ?? "" });
+        if (command[0] === "bun" && executable === "/usr/local/bin/bun") command[0] = process.execPath;
+        // The installed compiler is already in the locked dependency tree.
+        // Use it directly so bunx cannot invoke the image's host shell shim.
+        if (step.name === "types" && executable === "/usr/local/bin/bunx") command.splice(0, 2, "node", "node_modules/typescript/bin/tsc");
+      }
       if (step.pinned) {
         runtime ??= pinnedRuntime(root, cache, until, cancel, env);
         command[0] = await runtime;
@@ -1229,6 +1250,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
     const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error) : undefined;
     const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
+    const checksStarted = performance.now();
     if (selected) {
       // The normal runner owns cleanup and records exactly this step's pass.
       // A later push still runs privacy and validates every step in the plan.
@@ -1254,9 +1276,11 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       console.error("pre-push: verified completed checks for this publication; transport admitted");
     } else if (mode === "pre-push" && !admitted) {
       const privacy = (cancel?: AbortSignal) => runSteps(mode, steps.filter(step => step.name === "privacy"), { ...options, cancel });
+      const memoryBytes = imagePreparation && steps.some(step => step.name === "types" || step.name === "Viewer build")
+        ? String(publicationMemoryBytes(process.env.NODE_OPTIONS)) : undefined;
       const localChecks = (cancel: AbortSignal) => runAdmittedChecks(
         ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
-        { ...process.env, LLV_GATE_RUNNER: "off" }, deadline, cancel);
+        { ...process.env, LLV_GATE_RUNNER: "off", LLV_GATE_PUBLICATION_MEMORY_BYTES: memoryBytes }, deadline, cancel);
       const privacyHead = git(root, ["rev-parse", "HEAD"]);
       const checks = async (cancel: AbortSignal) => {
         if (!config) return localChecks(cancel);
@@ -1295,11 +1319,34 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
         } else await runPushPair(privacy, checks);
       } else await privacy();
     } else {
-      await runSteps(mode, admitted ? steps.filter(step => step.name !== "privacy") : steps, options);
+      let pending = admitted ? steps.filter(step => step.name !== "privacy") : steps;
+      const memoryBudget = process.env.LLV_GATE_PUBLICATION_MEMORY_BYTES;
+      if (admitted && memoryBudget !== undefined) {
+        const memoryBytes = Number(memoryBudget);
+        if (!Number.isSafeInteger(memoryBytes) || memoryBytes <= 0) throw new Error("invalid publication memory admission budget");
+        const admitMemory = async () => {
+          const finishWait = reportCpuWait();
+          try {
+            if (!await waitForPublicationMemory(memoryBytes, console.error)) {
+              throw new AdmittedGateFailed(75, `pre-push: ${PUBLICATION_MEMORY_DEFERRAL}`);
+            }
+          } finally { finishWait(); }
+        };
+        await admitMemory();
+        // The frozen install runs before the parallel group and may change
+        // headroom. Recheck before launching any member of that group.
+        if (pending[0]?.name === "frozen install") {
+          await runSteps(mode, pending.slice(0, 1), options);
+          await admitMemory();
+          pending = pending.slice(1);
+        }
+      }
+      await runSteps(mode, pending, options);
     }
     if (publicationPrepare) {
+      const checksMs = Math.max(0, Math.round(performance.now() - checksStarted));
       assertPublicationInputs("checks");
-      writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents);
+      writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents, checksMs, peakRss?.sample());
     }
   } catch (error) {
     if (error instanceof UnconfirmedStepExit) {
@@ -1309,6 +1356,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     }
     throw error;
   } finally {
+    peakRss?.close();
     if (!sandboxRetained) releaseGateSandbox(sandbox);
   }
 }

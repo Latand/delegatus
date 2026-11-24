@@ -17,6 +17,8 @@ import { createPublicationFixtures, stubOlderPublicationChecks } from "./publica
 
 const systemctl = process.platform === "linux" ? Bun.which("systemctl") : null;
 const hasUserManager = systemctl !== null && Bun.spawnSync([systemctl, "--user", "show-environment"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+// #4376 (`b0de5fb1ef`) is the last main revision of local-gate.ts and gate-slot.sh before this protocol.
+const MAIN_ERA_REVISION = "b0de5fb1ef6b500853e53b587e63a13a91b3e0dd";
 
 test("older publication stubs preserve the tracked files of the checkout used as cwd", () => {
   const cwd = process.cwd(), roots: string[] = [];
@@ -232,8 +234,10 @@ while [[ ! -f "$FIXTURE_RELEASE" ]]; do sleep 0.02; done
   }
 }, 45_000);
 
-for (const [beforeJournal, clockStep, nested] of [[false, 0, false], [true, 0, false], [true, 30_000, false], [true, 0, true], [true, 30_000, true]] as const) test.skipIf(!hasUserManager)(
-  `a same-command pre-commit keeps its legacy grant until it drains (pre-journal: ${beforeJournal}, clock step: ${clockStep} ms, nested waiter: ${nested})`, async () => {
+// The bootstrap record (#4376) agrees with this launch in the last case. It binds
+// a launch to its parent and still cannot exempt a holder on its own.
+for (const [beforeJournal, clockStep, nested, record] of [[false, 0, false, false], [true, 0, false, false], [true, 30_000, false, false], [true, 0, true, false], [true, 30_000, true, false], [true, 0, false, true]] as const) test.skipIf(!hasUserManager)(
+  `a same-command pre-commit keeps its legacy grant until it drains (pre-journal: ${beforeJournal}, clock step: ${clockStep} ms, nested waiter: ${nested}, bootstrap record: ${record})`, async () => {
   const f = fixture(), control = new AbortController(), pending: ReturnType<typeof realExec>[] = [];
   const entered = path.join(f.dir, "entered"), release = path.join(f.dir, "release");
   const openNested = path.join(f.dir, "open-nested");
@@ -269,7 +273,9 @@ if (process.env.FIXTURE_HOOK_CHILD === "1") {
 } else {
   const parent = captureProcessIdentity(process.pid);
   const child = Bun.spawn(["/bin/bash", process.env.FIXTURE_LEGACY_GATE!, process.execPath, import.meta.path, "pre-commit"], {
-    env: { ...process.env, FIXTURE_HOOK_CHILD: "1", LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(parent) },
+    env: { ...process.env, FIXTURE_HOOK_CHILD: "1", LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(parent),
+      ...(process.env.FIXTURE_BOOTSTRAP_RECORD === "1"
+        ? { LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP: JSON.stringify({ parent, mode: "pre-commit", entry: fs.realpathSync(import.meta.path) }) } : {}) },
     stdout: "inherit", stderr: "inherit",
   });
   fs.writeFileSync(process.env.FIXTURE_CLIENT!, String(child.pid));
@@ -311,7 +317,7 @@ exec "$FIXTURE_BUN" "$@"
         FIXTURE_ENTERED: entered, FIXTURE_RELEASE: release, FIXTURE_CLIENT: clientFile,
         FIXTURE_OPEN_NESTED: openNested, FIXTURE_NORMAL_PATH: process.env.PATH, FIXTURE_NESTED_BUN: nestedBun,
         FIXTURE_CURRENT_HELPER: path.resolve("scripts/cpu-admission.ts"), FIXTURE_NESTED_WAIT: nestedWait,
-        FIXTURE_LEGACY_GATE: path.join(legacy, "scripts/gate-slot.sh") }, { timeoutMs: 30_000, signal: control.signal }));
+        FIXTURE_LEGACY_GATE: path.join(legacy, "scripts/gate-slot.sh"), FIXTURE_BOOTSTRAP_RECORD: record ? "1" : "0" }, { timeoutMs: 30_000, signal: control.signal }));
     await until(() => fs.existsSync(entered), 10_000);
     const hookPid = fs.readFileSync(entered, "utf8"), client = fs.readFileSync(clientFile, "utf8");
     const clientArgv = fs.readFileSync(`/proc/${client}/cmdline`, "utf8").split("\0");
@@ -449,12 +455,17 @@ command -p git "$@"
   }
 }, 50_000);
 
-for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "mixed service prepare", "mixed service prepare first-open", "service hooks", "historical service hook", "older helper head"] as const) test.skipIf(
+for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "mixed service prepare", "mixed service prepare first-open", "service hooks", "historical service hook", "older helper head", "main-era service prepare", "main-era service hook"] as const) test.skipIf(
   process.platform !== "linux" || !mode.startsWith("portable") && !hasUserManager
 )(`FIFO publication admits the first check while the peer waits (${mode})`, async () => {
     const useService = !mode.startsWith("portable");
-    const historical = mode === "historical service hook", olderHead = mode === "older helper head";
-    const mixedPrepare = mode.startsWith("mixed service prepare");
+    const historical = mode === "historical service hook" || mode === "main-era service hook", olderHead = mode === "older helper head";
+    const mixedPrepare = mode.startsWith("mixed service prepare") || mode === "main-era service prepare";
+    // Main after #4376 is the release deployed when this queue protocol lands.
+    // Its dispatcher and wrapper carry no launch marker of their own.
+    const mainEra = mode.startsWith("main-era");
+    const deployedRevision = mainEra ? MAIN_ERA_REVISION : "43fab846adb9a443384d30540cf7e318a12a6198";
+    const historicalRevision = mainEra ? MAIN_ERA_REVISION : "c0ceb7ff5eb064b1d9d29a9aef2540edd15d5dd1";
     const ordinary = mode.includes("hooks") || historical || olderHead;
     const firstOpen = mode.endsWith("first-open");
     const f = fixture(), control = new AbortController(), roots: string[] = [];
@@ -537,12 +548,12 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
     try {
       const first = (() => {
         if (!mixedPrepare) return publicationFixture();
-        const deployed = legacyGateTree(f.dir, "43fab846adb9a443384d30540cf7e318a12a6198");
+        const deployed = legacyGateTree(f.dir, deployedRevision);
         execFileSync("git", ["init", "--quiet", deployed], { env: fixtureGitEnv() });
         return createPublicationFixtures(deployed, roots).fixture();
       })();
       const peer = historical
-        ? createPublicationFixtures(legacyGateTree(f.dir, "c0ceb7ff5eb064b1d9d29a9aef2540edd15d5dd1"), roots).fixture()
+        ? createPublicationFixtures(legacyGateTree(f.dir, historicalRevision), roots).fixture()
         : publicationFixture();
       if (mixedPrepare) {
         // The deployed hook supplies only the cleanup owner's parent identity.

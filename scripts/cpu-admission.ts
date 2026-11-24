@@ -106,10 +106,14 @@ const capLock = (slot: number, cap: number) => `llv-heavy-gate.slot${slot}.cap${
 const transitionedGatePrefix = ACTIVE_GATE_PREFIX + "command:bounded:drained:";
 // Byte identities of the unmarked launch paths supported at cutover.
 // New launchers carry their own evidence across exec and into their service.
-const deployedHookDispatcher = "6fbbbb5ef516ac9b829b8fcb20f892b3d89f760a7f689848e957ac67aaa116c3"; // 43fab846ad
+const deployedHookDispatchers = new Set([
+  "6fbbbb5ef516ac9b829b8fcb20f892b3d89f760a7f689848e957ac67aaa116c3", // 43fab846ad
+  "867e4de95599b90771d90670d30ac1ebf94f782c3a26eb5f787975ea5933fd6e", // b0de5fb1ef (#4376)
+]);
 const historicalHookWrappers = new Set([
   "24baa22e8011141f0ab72534742325f8ba127197a5f2bbebcd05d75a5b5cbe49", // c0ceb7ff5
   "9141276f047b2fb690bde40d00871ec04a481ce24fc63a208d7b4e96ba4b66bc", // 43fab846ad
+  "36ddcf5fe4bf51674a36daa9b7b15d231e394ac64ac092e9bb1303443863ba48", // b0de5fb1ef (#4376)
 ]);
 
 let lockFd: ReturnType<typeof nativeSlotLock> | undefined;
@@ -123,7 +127,7 @@ function locked(file: string): boolean {
     throw new Error("could not probe a heavy command slot lock");
   }
   lockFd ??= nativeSlotLock();
-  const fd = fs.openSync(filename, "a");
+  const fd = fs.openSync(filename, "r");
   try { return !lockFd(fd); } finally { fs.closeSync(fd); }
 }
 
@@ -143,6 +147,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       ? [identity.startIdentity] : [];
   }));
   const readArgv = (base: string) => fs.readFileSync(path.join(base, "cmdline")).subarray(0, -1).toString().split("\0");
+  const isBun = (command = "") => /^(?:bun|bun-container|bun\.exe)$/.test(path.basename(command));
   const readCwd = (base: string) => () => fs.readlinkSync(path.join(base, "cwd"));
   const checkoutEntry = (entry: string, directoryName: string, cwd: () => string) => {
     const script = path.isAbsolute(entry) ? entry : path.resolve(cwd(), entry);
@@ -156,7 +161,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       ? command.slice(3) : command;
     // This identifies the hook command. Older wrappers could admit it directly.
     const name = path.basename(argv[0] ?? "");
-    const bunHook = argv.length === 3 && argv[2] === "pre-push" && path.basename(argv[1] ?? "") === "local-gate.ts";
+    const bunHook = isBun(name) && argv.length === 3 && argv[2] === "pre-push" && path.basename(argv[1] ?? "") === "local-gate.ts";
     const shellHook = (name === "bash" || name === "sh") && path.basename(argv[1] ?? "") === "pre-push";
     const directHook = name === "pre-push";
     const entry = bunHook ? argv[1] : shellHook ? argv[1] : directHook ? argv[0] : undefined;
@@ -200,13 +205,23 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const parentStat = readStat(parent);
     if (!hookParentMatches(proof, parent, parentStat)) return;
     const original = hookBootstrap(readArgv(parent), readCwd(parent));
-    if (!original || original.mode !== hook.mode || original.entry !== hook.entry) return;
-    if (fs.realpathSync(path.join(path.dirname(hook.entry), "owned-runner.ts")) !== runner) return false;
+    if (!original || original.mode !== hook.mode) return;
+    // The publication preparer records its parent, mode and the entry it
+    // started (#4376). That record only binds a launch; it never exempts one.
+    const recorded = env("LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP");
+    if (recorded !== undefined) {
+      let record: { parent?: ProcessIdentity; mode?: string; entry?: string } | null;
+      try { record = JSON.parse(recorded); } catch { return false; }
+      if (record?.parent?.pid !== proof.pid || record.parent.startIdentity !== proof.startIdentity ||
+        record.parent.bootEpoch !== proof.bootEpoch || record.mode !== command[2] || record.entry !== hook.entry) return false;
+    } else if (original.entry !== hook.entry) return;
+    // The dispatcher starts the runner beside its own entry.
+    if (fs.realpathSync(path.join(path.dirname(original.entry), "owned-runner.ts")) !== runner) return false;
     if (env("LLV_GATE_HOOK_DISPATCH") === binding) return true;
-    // The deployed dispatcher at the cutover predates the explicit handoff.
+    // A deployed dispatcher at the cutover predates the explicit handoff.
     // Bind its live parent proof to the known dispatcher that spawns this
     // exact client directly. A nested gate ticket cannot prove that launch.
-    return createHash("sha256").update(fs.readFileSync(hook.entry)).digest("hex") === deployedHookDispatcher;
+    return deployedHookDispatchers.has(createHash("sha256").update(fs.readFileSync(original.entry)).digest("hex"));
   };
   const readStat = (base: string) => {
     const stat = fs.readFileSync(path.join(base, "stat"), "utf8");

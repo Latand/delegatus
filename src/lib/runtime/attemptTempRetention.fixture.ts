@@ -40,6 +40,18 @@ if (process.argv[2] === "--load") {
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import { attemptTempAuthority, attemptScratchAuthority, backfillAttemptTempRetention, runAttemptTempSweep } from "./attemptTempProduction";
+import { runTemporaryDataSweep } from "./temporaryDataProduction";
+
+if (process.argv[2] === "--legacy-copy-tick") {
+  Date.now = () => Number(process.argv[3]);
+  const live = process.argv[4];
+  const report = await runTemporaryDataSweep({
+    scan: () => ({ ownNamespace: null, processes: live ? [{ pid: 41, namespace: null, stamped: false, paths: [live] }] : [] }),
+    containerReferences: async () => true,
+  }, { ...process.env, LLV_TEMP_SWEEP: "on" });
+  process.stdout.write(JSON.stringify(report));
+  process.exit(0);
+}
 
 if (process.argv[2] === "--production-report") {
   Date.now = () => Number(process.argv[3]);
