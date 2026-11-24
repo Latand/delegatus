@@ -13,6 +13,13 @@ process.stdin.on("end", async () => {
     await runManagedRetirementGuard(request.stateDirectory, request.revision!, request.owner!);
     return;
   }
+  if (request.operation === "worktree-recovery") {
+    const { withStateMutationActivation } = await import("./state/stateMutationBarrier");
+    const { runWorktreeRecoveryAtStartup } = await import("./projects/worktreeBackfill");
+    const recovery = await withStateMutationActivation(() => runWorktreeRecoveryAtStartup());
+    process.stdout.write(`${JSON.stringify({ outcomes: [], worktreeRecoveryFinished: true, worktreeRecovery: recovery })}\n`);
+    return;
+  }
   const response = request.operation === "checkpoint" ? await (async () => {
     const { checkpointHotStateRollbackMirrorsForDemotion } = await import("./state/checkpointRollbackMirrors");
     const { withStateMutationActivation } = await import("./state/stateMutationBarrier");

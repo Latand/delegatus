@@ -1065,6 +1065,8 @@ export interface RegistryFile {
 export type McpCallerRegistryRows = Pick<RegistryFile, "conversations" | "entries"> & {
   nativeGenerationAmbiguous?: true;
   nativeHostsIncomplete?: true;
+  /** The completed bounded lookup found more host evidence than it can inspect. */
+  nativeHostsLookupLimitExceeded?: true;
   nativeArtifact?: string;
 };
 
@@ -7375,9 +7377,9 @@ export class AgentRegistry {
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
   }
 
-  async prepareNativeCallerArtifacts(): Promise<void> {
+  async prepareNativeCallerArtifacts(signal?: AbortSignal, options?: { waitUntilReady?: boolean }): Promise<void> {
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
-      await this.sqliteStore?.prepareNativeCallerArtifacts();
+      await this.sqliteStore?.prepareNativeCallerArtifacts(signal, options);
     }
   }
 

@@ -22,6 +22,8 @@ import { currentMcpHttpCaller, runWithMcpCallerResolution } from "./callerContex
 
 export const assertWorkspaceMcpCall = assertWorkspaceExecution;
 
+const NATIVE_PREPARATION_MS = 5_000;
+
 function denied(check: string): never {
   throw new McpToolRefusal(`workspace access denied (${check})`, { code: "workspace_forbidden", retryable: false, check });
 }
@@ -58,7 +60,7 @@ export function workspaceGuardedBindings(bindings: McpToolBindings): McpToolBind
 export function withWorkspaceMcpFence(
   service: McpToolService,
   dependencies: ViewerMcpDomainDependencies,
-  prepareNativeCaller?: () => Promise<void>,
+  prepareNativeCaller?: (signal?: AbortSignal) => Promise<void>,
 ): McpToolService {
   return { async callTool(tool, input, context) {
     // The native proof must be in scope before resolving the caller, just as it
@@ -67,8 +69,16 @@ export function withWorkspaceMcpFence(
       const { nativeCallerProof, ...args } = input;
       const caller = currentMcpHttpCaller();
       if (prepareNativeCaller && (!caller || caller.nativePeer)) {
-        try { await prepareNativeCaller(); }
-        catch { /* The verifier will assess whether caller evidence is available. */ }
+        const remaining = context?.deadlineAt === undefined ? Infinity : context.deadlineAt - Date.now();
+        // Leave time for caller verification and a reply before executor expiry.
+        const budget = Math.min(NATIVE_PREPARATION_MS, Math.floor(remaining / 2));
+        if (budget > 0) {
+          const timeout = AbortSignal.timeout(budget);
+          const signal = context?.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+          try { await prepareNativeCaller(signal); }
+          catch { /* The verifier will assess whether caller evidence is available. */ }
+        }
+        context?.signal?.throwIfAborted();
       }
       return runWithNativeCallProof(nativeCallerProof, tool, args, () => this.callTool(tool, args, context));
     }
