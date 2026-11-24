@@ -41,9 +41,9 @@ test.each(["automatic", "publish", "retry-stage", "dirty", "moved", "rollback-pe
     attempt.publicationRepair = { sha: oldSha, baseSha: oldSha, operationId: "old-head-refusal", stageId: "build", attempt: attempt.n,
       refusedAt: now, settledAt: now, requestedAt: now, cleanHead: { sha: oldSha, branch: lane.branch },
       detail: "pre-push: touched tests: failed (1)", parkDetail: refusal,
-      outcome: { status: "rejected", reason: "The producer did not finish in time." } };
-    if (action === "rollback-pending") attempt.publicationRepair.rollback = { index: oldSha, tree: oldSha,
-      afterTree: oldSha, tracked: [], untracked: [], phase: "restore" };
+      outcome: { status: "rejected", reason: "The producer did not finish in time." },
+      ...(action === "rollback-pending" ? { rollback: { index: oldSha, tree: oldSha,
+        afterTree: oldSha, tracked: [], untracked: [], phase: "restore" as const } } : {}) };
     delete lane.publicationRecovery;
     delete attempt.publicationRetry;
     const delivery = lane.delivery!;
@@ -69,7 +69,7 @@ test.each(["automatic", "publish", "retry-stage", "dirty", "moved", "rollback-pe
     const published = loadPipelines()[0]!;
     expect(published).toMatchObject({ state: "running", stateDetail: refusal,
       cursor: { stageId: "build", state: "committing" }, publishedCommit: box.passedSha });
-    const receipt = published.delivery!.operation;
+    const receipt = published.delivery!.operation!;
     const history = published.publicationRecovery;
     expect(history?.[box.passedSha]).toMatchObject({ failures: 6, totalAttempts: 7 });
     checkoutWrites.length = 0;
