@@ -7,7 +7,7 @@ import os from "node:os";
 import * as runModule from "./run";
 import { ready } from "./policy.fixture";
 import { releaseState } from "./policy";
-import { mergedReleasePullRequest, releaseControllerForSources } from "./production";
+import { mergedReleasePullRequests, releaseControllerForSources } from "./production";
 import { releaseStages, releasePublishStages } from "./stages";
 import { RELEASE_DEFAULTS } from "./settings";
 import { mutateReleaseProject, readReleaseProject } from "./store";
@@ -199,15 +199,15 @@ test("a completed release-titled lane without release stages does not hold the i
   expect(await releaseState({ ...ready(), live: policy.live, mainVersion: policy.mainVersion, lastTag: policy.lastTag }))
     .toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
 });
-test("production recovery accepts only one exact merged Release version PR on main", async () => {
+test("production recovery retains all merged Release version PR candidates for proof", async () => {
   const commit = "c".repeat(40);
   const valid = { title: "Release 1.1.0", number: 23, baseRefName: "main", mergedAt: at, mergeCommit: { oid: commit } };
-  const read = async (rows: unknown[]) => mergedReleasePullRequest("example/release", "1.1.0", head,
+  const read = async (rows: unknown[]) => mergedReleasePullRequests("example/release", "1.1.0", head,
     async (...args) => args[0] === "show" ? JSON.stringify({ name: "package-example", version: "1.1.0" }) : "package.json",
     async () => JSON.stringify(rows));
-  expect(await read([valid])).toEqual({ commit, pr: 23, head: undefined, branch: undefined, body: undefined, sameRepository: false });
-  expect(await read([{ ...valid, title: "Release 1.1.1" }])).toBeNull();
-  expect(await read([valid, { ...valid, number: 24 }])).toBeNull();
+  expect(await read([valid])).toEqual([{ commit, pr: 23, head: undefined, branch: undefined, body: undefined, sameRepository: false }]);
+  expect(await read([{ ...valid, title: "Release 1.1.1" }])).toEqual([]);
+  expect(await read([valid, { ...valid, number: 24 }])).toHaveLength(2);
 });
 
 test("production observer and controller recover the closed preparation at its recorded cut despite newer deployments", async () => {
@@ -272,23 +272,35 @@ async function forgeRecovery(scenario: string) {
   await git("tag", "v1.0.0");
   await git("checkout", "-b", "release");
   write("CHANGELOG.md", "Reviewed release notes\n");
-  write("package.json", '{"name":"package-example","version":"1.1.0"}\n');
-  const reviewed = await commit("Reviewed release");
+  let reviewed: string;
+  if (scenario === "rebase-range" || scenario === "rebase-range-mismatch") {
+    await commit("Reviewed changelog");
+    write("package.json", '{"name":"package-example","version":"1.1.0"}\n');
+    reviewed = await commit("Reviewed version bump");
+  } else {
+    write("package.json", '{"name":"package-example","version":"1.1.0"}\n');
+    reviewed = await commit("Reviewed release");
+  }
   await git("checkout", "main");
   write("product.txt", "Later product change\n");
   const companion = await commit("Companion from the batch");
   await git("checkout", "release");
-  if (scenario === "exact") await git("rebase", "main");
+  if (scenario === "exact" || scenario === "rebase-range" || scenario === "rebase-range-mismatch") await git("rebase", "main");
   else await git("merge", "--no-edit", "main");
-  if (scenario === "moved-head") {
+  if (scenario === "rebase-range-mismatch") {
+    write("extra-release.txt", "Unreviewed member\n");
+    await commit("Unreviewed landing member");
+  }
+  if (scenario === "moved-head" || scenario === "moved-head-outside-receipt") {
     write("CHANGELOG.md", "Unreviewed release notes\n");
     await commit("Unreviewed PR update");
   }
   const forgeHead = await git("rev-parse", "HEAD");
   await git("checkout", "main");
-  await git("merge", ...(scenario === "exact" ? ["--ff-only"] : ["--squash"]), "release");
+  await git("merge", ...(["exact", "rebase-range", "rebase-range-mismatch"].includes(scenario) ? ["--ff-only"] : ["--squash"]), "release");
   if (scenario === "changed-landing" || scenario === "blocked-mismatch") write("CHANGELOG.md", "Unreviewed release notes\n");
-  const integrated = scenario === "exact" ? forgeHead : await commit("Land the release patch from the batch");
+  const integrated = ["exact", "rebase-range", "rebase-range-mismatch"].includes(scenario)
+    ? forgeHead : await commit("Land the release patch from the batch");
 
   const preparation = lane("forge-preparation");
   const reviewedHead = scenario === "exact" ? forgeHead : reviewed;
@@ -303,6 +315,8 @@ async function forgeRecovery(scenario: string) {
   if (scenario === "blocked-mismatch") {
     preparation.merge = { ...merge("blocked"), prNumber: 23, reviewedHead: reviewed, reason: "the PR was closed" };
   }
+  if (scenario === "moved-head-outside-receipt") preparation.merge = { ...merge("merged"), by: "outside", prNumber: 23,
+    repository: "example/release", mergeCommit: integrated };
   if (scenario === "closed-reviewed") preparation.state = "closed";
   const archived = [];
   if (scenario === "successor" || scenario === "foreign-successor" || scenario === "stale-successor") {
@@ -330,21 +344,28 @@ async function forgeRecovery(scenario: string) {
   const pr = { title: "Release 1.1.0", number: 23, baseRefName: "main", mergedAt: at,
     mergeCommit: { oid: integrated }, headRefName: scenario === "wrong-branch" ? "another-release" : "release",
     headRefOid: forgeHead, isCrossRepository: scenario === "fork", body };
-  return { preparation, archived, pr, integrated, cut };
+  let unrelated = null;
+  if (scenario === "same-title") {
+    write("README.md", "Unrelated follow-up\n");
+    const unrelatedCommit = await commit("Unrelated README change");
+    unrelated = { ...pr, number: 24, mergeCommit: { oid: unrelatedCommit },
+      headRefName: "unrelated-readme", headRefOid: unrelatedCommit, body: "An unrelated merged PR" };
+  }
+  return { preparation, archived, pr, pullRequests: unrelated ? [pr, unrelated] : [pr], integrated, cut };
 }
 
-test.each(["batch", "exact", "closed-reviewed", "successor"])("the %s forge landing recovers a release without a pipeline merge receipt", async scenario => {
+test.each(["batch", "exact", "rebase-range", "same-title", "closed-reviewed", "successor"])("the %s forge landing recovers a release without a pipeline merge receipt", async scenario => {
   const h = await forgeRecovery(scenario);
-  const result = await observe([h.preparation], h.archived, true, [h.pr], null, undefined, true, true);
+  const result = await observe([h.preparation], h.archived, true, h.pullRequests, null, undefined, true, true);
   expect(result.recovery).toEqual({ commit: h.integrated, pr: 23, cut: h.cut });
   expect(result.policy.live).toBe(false);
 });
 
-test.each(["changed-landing", "blocked-mismatch", "moved-head", "unreviewed-preparation", "wrong-cut", "missing-cut", "conflicting-cut",
+test.each(["changed-landing", "blocked-mismatch", "moved-head", "moved-head-outside-receipt", "rebase-range-mismatch", "unreviewed-preparation", "wrong-cut", "missing-cut", "conflicting-cut",
   "wrong-branch", "wrong-repository", "wrong-number", "fork", "foreign-successor", "stale-successor"])(
   "%s cannot supply release merge proof", async scenario => {
     const h = await forgeRecovery(scenario);
-    const result = await observe([h.preparation], h.archived, true, [h.pr], null, undefined, true, true);
+    const result = await observe([h.preparation], h.archived, true, h.pullRequests, null, undefined, true, true);
     expect(result.recovery).toEqual({ commit: h.integrated, pr: 23, cut: null });
   });
 

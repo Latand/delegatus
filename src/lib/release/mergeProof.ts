@@ -76,19 +76,31 @@ export async function proveForgeRelease(repoDir: string, repo: string, main: str
     await git("merge-base", "--is-ancestor", cut, pr.commit);
     const differentHeads = [...new Set([reviewedHead, pr.head])].filter(head => head !== pr.commit);
     if (!differentHeads.length) return true;
-    const parent = await git("rev-parse", `${pr.commit}^1`);
-    const landedPatch = await releasePatchId(repoDir, parent, pr.commit, signal);
-    if (!landedPatch) return false;
     const tree = await git("rev-parse", `${pr.commit}^{tree}`);
+    const landingBases = (await git("rev-list", "--first-parent", pr.commit)).split("\n").filter(Boolean);
     for (const head of differentHeads) {
       try { await git("cat-file", "-e", `${head}^{commit}`); }
       catch { await git("fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "origin", head); }
       await git("merge-base", "--is-ancestor", cut, head);
-      const base = await git("merge-base", parent, head);
-      if (await releasePatchId(repoDir, base, head, signal) !== landedPatch) return false;
-      // Patch IDs omit line numbers. Replay also verifies the affected locations
-      // and the complete tree on the integrated commit's actual parent.
-      if (await git("merge-tree", "--write-tree", "--no-messages", parent, head) !== tree) return false;
+      let rangeMatched = false;
+      // GitHub's rebase mergeCommit is the new base tip and may have several
+      // rebased commits behind it. Find the first-parent boundary whose whole
+      // landed suffix matches the reviewed PR contribution and replays to the
+      // recorded integrated tree. This also handles a batch landing after a
+      // companion PR already advanced main.
+      for (const base of landingBases) {
+        if (base === pr.commit) continue;
+        try { await git("merge-base", "--is-ancestor", cut, base); }
+        catch { continue; }
+        const landedPatch = await releasePatchId(repoDir, base, pr.commit, signal);
+        const reviewedBase = await git("merge-base", base, head);
+        const reviewedPatch = await releasePatchId(repoDir, reviewedBase, head, signal);
+        if (!landedPatch || !reviewedPatch || landedPatch !== reviewedPatch) continue;
+        if (await git("merge-tree", "--write-tree", "--no-messages", base, head) !== tree) continue;
+        rangeMatched = true;
+        break;
+      }
+      if (!rangeMatched) return false;
     }
     return true;
   } catch { return false; }

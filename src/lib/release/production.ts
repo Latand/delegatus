@@ -68,8 +68,8 @@ async function registryHasRelease(packageName: string, version: string): Promise
   if (!response.ok && response.status !== 404) throw new Error("release registry status is unreadable");
   return response.ok && (await response.json() as { version?: string }).version === version;
 }
-export async function mergedReleasePullRequest(repo: string, version: string, main: string, git: (...args: string[]) => Promise<string>, run: typeof command = command): Promise<MergedReleasePr | null> {
-  if (!/^\d+\.\d+\.\d+$/.test(version)) return null;
+export async function mergedReleasePullRequests(repo: string, version: string, main: string, git: (...args: string[]) => Promise<string>, run: typeof command = command): Promise<MergedReleasePr[]> {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) return [];
   try {
     const rows = JSON.parse(await run("gh", ["pr", "list", "--repo", repo, "--state", "merged", "--base", "main", "--search", `Release ${version}`, "--limit", "100", "--json", "title,number,baseRefName,mergedAt,headRefOid,headRefName,isCrossRepository,mergeCommit,body"])) as {
       title?: string; number?: number; baseRefName?: string; mergedAt?: string | null; headRefOid?: string;
@@ -87,8 +87,8 @@ export async function mergedReleasePullRequest(repo: string, version: string, ma
           branch: row.headRefName, body: row.body, sameRepository: row.isCrossRepository === false });
       } catch { /* A stale or unreadable PR is not recovery evidence. */ }
     }
-    return candidates.length === 1 ? candidates[0]! : null;
-  } catch { return null; }
+    return candidates;
+  } catch { return []; }
 }
 /** A tag alone cannot prove publication, and an unrelated cut cannot supersede this run. */
 export async function supersedingReleaseTag(repoDir: string, saved: { cut: string; lastTag: string }, run: typeof command = command,
@@ -267,35 +267,47 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const registryHasTag = await registryHasRelease(pkg.name, version);
       const repo = await command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], repoDir);
       const snapshot = lanes();
-      const releasePr = pkg.version !== version ? await mergedReleasePullRequest(repo, pkg.version, main, git) : null;
+      const releasePrs = pkg.version !== version ? await mergedReleasePullRequests(repo, pkg.version, main, git) : [];
       let recovery: { commit: string; pr: number; cut: string | null } | null = null;
       let recoveryForPipeline: string | undefined;
-      if (releasePr) {
-        const { commit, pr } = releasePr;
+      if (releasePrs.length) {
         const { live, history } = readReleaseProject(project);
-        recovery = { commit, pr, cut: null };
         const recorded = [live, ...history];
+        const proven: { commit: string; pr: number; cut: string; preparationId: string }[] = [];
         for (const runRecord of recorded) {
           if (!runRecord || runRecord.lastTag !== name || !commitSha.test(runRecord.cut)) continue;
           const preparationId = runRecord.releasePipelineId ?? runRecord.pipelineId;
           const preparation = preparationId && snapshot.find(preparationId);
           if (!preparation || canonicalOrchestratorProject(preparation.project) !== project) continue;
           const receipt = snapshot.resolve(preparation).merge;
-          if (receipt?.state === "merged" && receipt.prNumber === pr && receipt.mergeCommit === commit
-            && receipt.repository?.toLowerCase() === repo.toLowerCase()) {
-            try { await git("merge-base", "--is-ancestor", runRecord.cut, main); }
-            catch { continue; }
-            recovery = { commit, pr, cut: runRecord.cut };
-            break;
+          for (const releasePr of releasePrs) {
+            const directHandoff = receipt?.state === "merged" && receipt.by === "auto-merge"
+              && receipt.prNumber === releasePr.pr && receipt.mergeCommit === releasePr.commit
+              && receipt.repository?.toLowerCase() === repo.toLowerCase();
+            if (directHandoff) {
+              try { await git("merge-base", "--is-ancestor", runRecord.cut, main); }
+              catch { continue; }
+              proven.push({ ...releasePr, cut: runRecord.cut, preparationId: preparation.id });
+              continue;
+            }
+            // Outside-merge receipts are written by the watcher after GitHub
+            // reports MERGED, so they require the same content proof as a
+            // receipt-free batch landing.
+            const owner = snapshot.resolve(preparation, true);
+            if (await proveForgeRelease(repoDir, repo, main, releasePr, runRecord.cut, project, preparation, owner)) {
+              proven.push({ ...releasePr, cut: runRecord.cut, preparationId: preparation.id });
+            }
           }
-          // Delivery ownership covers completed fixes that the merge queue
-          // could not admit. The forge proof still verifies their exact target.
-          const owner = snapshot.resolve(preparation, true);
-          if (await proveForgeRelease(repoDir, repo, main, releasePr, runRecord.cut, project, preparation, owner)) {
-            recovery = { commit, pr, cut: runRecord.cut };
-            recoveryForPipeline = preparation.id;
-            break;
-          }
+        }
+        const unique = [...new Map(proven.map(proof => [`${proof.pr}:${proof.cut}:${proof.preparationId}`, proof])).values()];
+        if (unique.length === 1) {
+          const proof = unique[0]!;
+          recovery = { commit: proof.commit, pr: proof.pr, cut: proof.cut };
+          recoveryForPipeline = proof.preparationId;
+        } else if (releasePrs.length === 1) {
+          // Preserve the named missing-cut blocker when GitHub has a candidate
+          // but no recorded preparation proves it.
+          recovery = { commit: releasePrs[0]!.commit, pr: releasePrs[0]!.pr, cut: null };
         }
       }
       return { repoDir, src, recovery, recoveryForPipeline, policy: { now: sources.now(), enabled: setting.enabled, requested: false,

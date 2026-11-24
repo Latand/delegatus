@@ -262,10 +262,14 @@ same version and frozen production cut. When GitHub records a release PR as
 merged and the preparation has no local merge receipt, the controller binds
 the PR to the preparation's delivery branch, including a completed fix-only
 successor that took ownership. It checks the cut in the PR body against the
-saved release run and verifies that the integrated commit on main has the same
-head or patch as the recorded release work. The publish-only review and the
-usual release checks and approval still apply. The seat can also resume from
-step 4 after verifying the merged PR, frozen cut and integrated commit.
+saved release run and verifies that the full landed commit range on main has
+the same patch and replayed tree as the reviewed release work. A watcher receipt
+for a PR merged outside the engine follows this same content check; the engine's
+own merge handoff remains valid. When several merged PRs share the release title,
+the controller recovers only the unique PR that matches the preparation, cut
+and content. The publish-only review and the usual release checks and approval
+still apply. The seat can also resume from step 4 after verifying the merged
+PR, frozen cut and integrated commit.
 
 If the evidence cannot be recovered, or the version bump was unintended,
 bring a release-metadata correction through the normal review and merge queue
