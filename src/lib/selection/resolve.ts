@@ -35,7 +35,7 @@ const CONVERSATION_ID = /^conversation_[A-Za-z0-9_-]{1,180}$/;
 
 export interface SelectedConversationRecord {
   conversationId: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   /** Current generation transcript, or null when the conversation has none. */
   path: string | null;
   project: string | null;

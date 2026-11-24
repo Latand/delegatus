@@ -8,7 +8,7 @@ const idleStopBinding = z.object({
   kind: z.literal("idle-stop"),
   operationId: z.string().min(1),
   conversationId: z.string().min(1),
-  sessionKey: z.object({ engine: z.enum(["claude", "codex", "copilot"]), sessionId: z.string().min(1) }),
+  sessionKey: z.object({ engine: z.enum(["claude", "codex", "copilot", "antigravity"]), sessionId: z.string().min(1) }),
   transcriptPath: z.string().min(1),
   revision: z.number().int().nonnegative(),
   writerClaim: z.string().min(1),
