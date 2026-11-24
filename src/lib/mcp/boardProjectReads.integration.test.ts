@@ -203,6 +203,37 @@ test("task page deadline during index scan refuses safely and names the time bud
   expect(resumedDeadline).toMatchObject({ rows: [], hasMore: true, nextCursor: cursor, retryHint: expect.stringContaining("time budget") });
 });
 
+test("task page deadline before the first candidate preserves the cursor and unique omissions", async () => {
+  const h = await harness(); h.indexed();
+  saveTasks(Array.from({ length: 12 }, (_, index): BoardTask => ({
+    id: `deadline_${String(index).padStart(2, "0")}`, project: OWN, text: "Deadline task", status: "inbox", placement: "unplaced",
+    assignments: [], createdAt: AT, updatedAt: AT,
+  })));
+  const source = h.domain.taskSelectionSource!()!;
+  const scope = { project: "", statuses: ["inbox"], ids: [], query: "", updatedSince: "" };
+  const first = await indexedTaskPage(source, scope, null, 1, task => task, { checkpoint() {}, deadline: 100, now: () => 0 });
+  const cursor = first.nextCursor;
+  expect(cursor).toEqual(expect.any(String));
+
+  const expireAfterScan = () => {
+    let tick = 0;
+    return () => ++tick >= 5 ? 100 : 0;
+  };
+  const assertDeferred = (result: Awaited<ReturnType<typeof indexedTaskPage>>, expectedCursor: string | null) => {
+    expect(result).toMatchObject({ rows: [], count: 0, hasMore: true, nextCursor: expectedCursor,
+      partial: true, omissions: ["taskPage", "total", "remainingCount", "omittedCount"],
+      retryHint: expect.stringContaining("time budget") });
+    expect(new Set(result.omissions).size).toBe(result.omissions.length);
+  };
+
+  const withoutCursor = await indexedTaskPage(source, scope, null, 1, task => task,
+    { checkpoint() {}, deadline: 50, now: expireAfterScan() });
+  assertDeferred(withoutCursor, null);
+  const withCursor = await indexedTaskPage(source, scope, cursor, 1, task => task,
+    { checkpoint() {}, deadline: 50, now: expireAfterScan() });
+  assertDeferred(withCursor, cursor as string);
+});
+
 test("task page deadline during keyed IDs names the time budget separately from a missing index", async () => {
   const h = await harness(); h.indexed();
   saveTasks([{ id: "task_0", project: OWN, text: "Keyed", status: "inbox", placement: "unplaced", assignments: [], createdAt: AT, updatedAt: AT }]);

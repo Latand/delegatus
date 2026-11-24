@@ -176,7 +176,12 @@ export async function indexedTaskPage<Row>(
   const matches = (candidate: Candidate) => scope.ids.length ? true : matchCandidate(candidate);
   for (const candidate of scanned.candidates) {
     if (rows.length === limit) break;
-    if (expired()) { deadlineHit = true; pageDeadlineHit = true; break; }
+    if (expired()) {
+      deadlineHit = true;
+      if (!visited) return { ...deferredDeadlineTaskPage(boundary && typeof cursor === "string" ? cursor : undefined), hasMore: true };
+      pageDeadlineHit = true;
+      break;
+    }
     const match = matches(candidate);
     if (match === undefined) referenceDeferred = true;
     if (match) {
@@ -224,8 +229,8 @@ export async function indexedTaskPage<Row>(
   const nextCursor = hasMore && last ? Buffer.from(JSON.stringify({ scope: hash, id: last.id, time: last.time })).toString("base64url") : null;
   if (databaseFileIdentity(source.filename) !== identity || databaseSwapInProgress(source.filename)) return deferredTaskPage();
   checkpoint();
-  const omissions = [...(pageDeadlineHit ? ["taskPage"] : []), ...(total === undefined ? ["total"] : []), ...(remainingCount === undefined ? ["remainingCount"] : []),
-    ...(total === undefined ? ["omittedCount"] : []), ...(referenceDeferred || hasMore && !last ? ["taskPage"] : [])];
+  const omissions = [...new Set([...(pageDeadlineHit ? ["taskPage"] : []), ...(total === undefined ? ["total"] : []), ...(remainingCount === undefined ? ["remainingCount"] : []),
+    ...(total === undefined ? ["omittedCount"] : []), ...(referenceDeferred || hasMore && !last ? ["taskPage"] : [])])];
   return {
     rows, count: rows.length, hasMore, nextCursor, cursorReset,
     ...(total === undefined ? {} : { total, omittedCount: total - rows.length }),
