@@ -352,7 +352,7 @@ the liveness projection and the backups are untouched.
 
 **M1 and M2 (failed receipt).** The owner of an entry's spawn marker after
 its launch fails is `failStructuredSpawnInFile`
-(`src/lib/agent/registry.ts:9461-9528`). Factor its entry-side decision into
+(`src/lib/agent/registry.ts`, through `claimStructuredSpawnFailure`). Factor its entry-side decision into
 one function, `settleFailedLaunchEntry(file, receipt)`, and call it from the
 existing path, whose behaviour stays unchanged, and from a new convergence
 for receipts that are already `failed` or `conflicted`. Its two branches
@@ -374,21 +374,25 @@ A narrower "clear the marker only" settlement was considered and rejected. It
 would leave a third terminal shape for a failed launch that no owner path
 produces.
 
-**M3 (`path-pending` receipt of a closed pipeline).** The owner is
-staged-launch recovery (`src/lib/runtime/structuredSpawn.ts:2580-2615`,
-`:2705-2790`). It leaves pipeline members to the engine's probe
-(`:2588`, `:2608`, `:2757`), which never runs for a closed pipeline. Extend that
-gate: a pipeline membership whose pipeline record is closed (state
-`completed`, `closed` or `failed` with `closedAt`, read the way
-`deadStageHostReason` reads it, `structuredRecovery.ts:61-75`) no longer
-reserves the launch. The existing outcomes then apply: transcript evidence
-of a user message leads to `recoverStructuredSpawnFromEvidence`; otherwise
-`failStagedResume` fails the receipt through `failStructuredLaunchAndReap`
-and `failStructuredSpawnOffLoop` (`structuredSpawn.ts:676-684, 2629-2644`),
-which run `failStructuredSpawnInFile` and clear the marker. For a launch of
-a closed pipeline the call passes `announce: false`: the pipeline has
-already closed, and announcing weeks-old failures was not requested. A
-running, paused or unreadable pipeline keeps the reservation.
+**M3 (`path-pending` receipt of a closed pipeline).** Staged-launch recovery
+(`src/lib/runtime/structuredSpawn.ts`, `stagedLaunchRecovery` in
+`src/lib/runtime/stagedRecovery.ts`) leaves pipeline members to the engine's
+probe, which never runs for a closed pipeline. That gate is left unchanged.
+The same convergence that settles M1 and M2 settles M3 instead. A launch
+qualifies only when `closedMarkerPipelines` reads every pipeline that the
+conversation belongs to as closed (state `completed`, `closed`, or `failed`
+with `closedAt`), `stagedLaunchRecovery(receipt)` holds, and the setup started
+longer ago than the stale-spawn bound. A running, paused or unreadable
+pipeline returns `pipeline-reserved` and keeps the reservation. The outcome
+comes from the transcript. When the transcript holds a message the user wrote,
+`recoverStructuredSpawnEvidenceInFile` settles the receipt from that evidence
+(`recovered`). Otherwise `claimStructuredSpawnFailure(file, launchId, …,
+{ announce: false })` fails it (`failed`), and the failure clears the marker
+through `settleFailedLaunchEntry`. The pipeline has already closed, and
+announcing failures that are weeks old was not requested. Every identity the
+row records is already proven dead, so nothing is reaped. A runtime
+delivery receipt of `delivered`, `turn-started` or `steered` without transcript
+evidence leaves the row as `delivery-evidence-unresolved`.
 
 **Effect of settlement.** The rows stop reading "synchronizing" (the durable
 host record is still publishing ownership) in deliverability
@@ -401,29 +405,32 @@ data cleanup stop refusing them for "a pending spawn"
 
 ### 6.2 Safety envelope for this data change
 
-The convergence `settleStaleSpawnMarkers` runs in the reaper's stale-spawn
-step (`reaperRuntime.ts:620-639`, owner `terminalizeStaleStructuredSpawns`,
-`structuredSpawn.ts:1309`) of the serving Viewer. It does not run in the
-inventory sidecar (`reaperRuntime.ts:625-634`). Each requirement and its
-mechanism:
+The convergence `settleStaleSpawnMarkers` (`src/lib/runtime/structuredSpawn.ts`)
+runs as `settleStaleSpawnMarkerBatch` at the start of each structured-host
+retirement sweep (`startStructuredHostRetirement`,
+`src/lib/runtime/structuredHostRetirement.ts`, every five minutes). The sweep
+calls it only when the process's state owner is `viewer` and the process is
+not a test, so it runs in the serving Viewer. The reaper and its inventory
+sidecar do not call it. Every outcome is written by
+`registry.settleStaleSpawnMarker` (`src/lib/agent/registry.ts`) in one registry
+mutation with `deliveryOnly: true`. That mutation skips the pending
+supersedence sweep, and the next ordinary host mutation sweeps every staged
+edge. Each requirement and its mechanism:
 
 | Requirement | Mechanism |
 | --- | --- |
 | owner-only | `assertStateStartupMutation(directory, "registry spawn marker settlement")` at entry, as `archiveInactive` does (`sqliteRegistryStore.ts:3574`). Against the operator's state directory, `apply` also requires the serving Viewer: owner `viewer`, an open release activation, no build phase, no test environment and not the inventory sidecar. A sandboxed state directory, which a test builds for itself, admits the same apply path, so the tests drive it end to end (`src/lib/stateOwnership.ts`). |
 | dry run | the same function with `apply: false` returns the per-row plan without writing. The builder runs it against copies of the newest registry backup, the newest state backup (for pipeline records) and the runtime journal (`VACUUM INTO` from a read-only connection), with an operation-status source that reads the journal copy, in isolated state before release. Every row ends in a `would-*` decision or a named skip, recorded per row in private evidence only. |
 | verified backup of the exact revision | the newest durability backup is verified before publication (`durability.ts:891-899`). A row is settled only if its current `value_json` is byte-identical to its value in that backup, compared inside the write transaction. The backup therefore holds every changed row exactly as it stood at the moment of the write. Otherwise the row is skipped with `changed-since-backup` and retried after the next hourly backup. |
-| restorable | the convergence appends each row's before-image, the backup's name and revision, and the registry revision read in the write transaction to a 0600 settlement journal beside the registry. `restoreSettledSpawnMarkers(journal)` writes a before-image back only while the row still equals its after-image, and reports any other row. |
+| restorable | inside the write transaction, the store records every changed row's before-image and after-image, each changed registry meta value, the backup's name and revision, and the registry revision read in the transaction. It stores them as one JSON value in the registry's own `registry_meta` table under the key `spawn_marker_settlement:<launchId>` (`persistSpawnMarkerRepair`, `src/lib/agent/sqliteRegistryStore.ts`). They commit with the change, appear in every later backup and survive an interrupted writer. A launch that already has a retained settlement refuses a second one. `registry.restoreSettledSpawnMarkers(launchId)` (`src/lib/agent/registry.ts`) restores one launch. It has the same owner assertion and runs inside the release-fence attempt, and in the serving Viewer it also needs the current release. It must be called inside an admitted registry writer, such as `registry.deliveryWriteOrBusy({ label: "spawn.marker-restore" }, …)`, and otherwise throws. It answers `restored` only while every recorded row and meta value still equals its after-image, then writes the before-images back, advances the revisions and deletes the key. It answers `changed-since-settlement` when a later write touched one of them, and `missing-journal` when no settlement is recorded. No operator command or route calls it; a restore is code run inside the serving Viewer's owner. |
 | per-row terminal and liveness proof | receipt `failed` or `conflicted` (M1, M2); key, path and `structuredHostOperationId` match; no process and no claim. Every recorded identity (`hostExitProcess`, `structuredHost.exitProcess`, `pendingHostExits[*]`, `previousHostExit`, survivors) is `processIdentityStatus === "dead"` by PID, start token and boot or PID-namespace epoch. A recorded scope or memory unit is not an active unit; the signal domain is absent or retired. |
 | pending spawns, receipts, deliveries | skip `outstanding-delivery` when the conversation has a held delivery in a non-terminal state or a pending delivery-operation owner. Skip `operation-open` when the runtime host reports the launch operation non-terminal, and `runtime-unavailable` when it cannot answer. Skip `completed-receipt` for a completed receipt; `repairCompletedStructuredSpawnMarkers` owns live ones. |
-| recheck under generation and writer fence | the decision is recomputed inside `registry.deliveryWrite({ label: "spawn.marker-settlement" })` from the current row and receipt. The runtime operation status is read in the same reaper cycle from the current runtime-host client. A refused admission writes nothing. |
+| recheck under generation and writer fence | the decision is recomputed inside the registry writer from the current row and receipt: `registry.deliveryWrite({ label: "spawn.marker-settlement" })`, or `deliveryWriteNow` under `withPipelineStartupAdmission` when the row needs pipeline proof (M3, or a receipt that holds a retry claim). The write runs inside `withHotStateAuthorityAttempt` (the release fence), and the closure rechecks the release authority epoch, the runtime journal identity, the runtime listener generation, the backup file identity, liveness, open operations, the closed pipelines and, for M3, the transcript stamp. The runtime operation status is read in the same sweep from the current runtime-host client. A refused admission writes nothing and reports `writer-busy`, `pipeline-unavailable` or `release-fence-busy`. |
 | resumable bounded batches | at most `STALE_STRUCTURED_SPAWN_ACTUATION_CAP` rows per cycle; each row is idempotent; candidates come from H (markers block archiving), so selection is bounded. |
 | skipped rows with reasons | every skip is logged once per row and reason. The sweep logs the batch's outcomes by class and reason whenever they change. An error keeps a bounded reason code (`authority-lost`, `owner-refused`, `runtime-refused`, `release-fence-busy`, the error's class) and the first line of its message, both for a deferred row and for a failed batch. |
 
-M3 settles through the staged-launch path, which already runs under the
-writer, rechecks with a recovery fence (`structuredSpawn.ts:2748-2753`) and
-runs in the same reaper step. It adds the same owner assertion, the
-before-image journal and the backup equality check on the entry row before
-`failStagedResume` writes.
+M3 settles through the same convergence and the same envelope. Its only
+extra requirement is the pipeline startup admission named above.
 
 ## 7. Outcomes by kind of row
 
@@ -528,7 +535,9 @@ merge base as a recorded run.
   comment at the adoption predicate (`startup.ts:2416`) naming
   `StartupWorkKeys`, and case 4–10 tests fail when a source is missing.
 - The settlement changes 83 rows once. Their before-images stay in the
-  settlement journal and in the verified backup.
+  registry's `spawn_marker_settlement:<launchId>` meta values and in the
+  verified backup. Restoring them needs code in the serving Viewer (§6.2,
+  restorable); no operator command exists.
 - This design makes no claim about attempt 1's 28.9 s until the replay
   measures it. The runtime-evidence refusal that ended attempt 1 is not
   attributed here.

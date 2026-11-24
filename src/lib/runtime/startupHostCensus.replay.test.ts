@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
-import { expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { buildRegistryPerformanceDataset, type RegistryPerformanceDatasetShape } from "@/lib/agent/registryPerformanceDataset";
-import { buildPipeline, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
+import { buildPipeline, loadPipelinesForStartup, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
 import { BACKUP_DIRECTORY, backupDatabase, stateDatabases } from "@/lib/state/durability";
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -45,6 +45,23 @@ const shape: RegistryPerformanceDatasetShape = {
   activeEntries: 0, hotTerminalRows: 0, grantEvery: 50, pendingDeliveries: 0,
   uncertainDeliveries: 0, outstandingReceipts: 0, workers: 0, transcripts: 0, projects: 8,
 };
+
+// The pipeline fixture below is written as legacy pipelines.json, which the
+// store reads only while the state directory holds no state.sqlite. An
+// inherited directory that an earlier test file already migrated would hide
+// the fixture and change the recovery outcomes, so the replay owns its state.
+let inheritedStateDir: string | undefined;
+let privateStateDir = "";
+beforeAll(() => {
+  inheritedStateDir = process.env.LLV_STATE_DIR;
+  privateStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "startup-census-state-"));
+  process.env.LLV_STATE_DIR = privateStateDir;
+});
+afterAll(() => {
+  if (inheritedStateDir === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = inheritedStateDir;
+  fs.rmSync(privateStateDir, { force: true, recursive: true });
+});
 
 async function buildSeed(directory: string) {
   const data = buildRegistryPerformanceDataset(directory, shape, { sessionsRoot: path.join(directory, "sessions") });
@@ -184,8 +201,11 @@ test("replay a retained structured-host registry", async () => {
     pipeline.closedAt = fixtureDate;
     pipeline.cursor = null;
     const unreadable = { ...pipeline, id: "census-read-fenced", stages: [{ id: "build", kind: "future-stage" }] };
-    fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "pipelines.json"),
+    expect(process.env.LLV_STATE_DIR).toBe(privateStateDir);
+    fs.writeFileSync(path.join(privateStateDir, "pipelines.json"),
       JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [pipeline, unreadable] }));
+    // The closed launch owner must be the startup evidence the replay reads.
+    expect(loadPipelinesForStartup().map(candidate => candidate.id)).toEqual(["census-closed-pipeline"]);
 
     const markerCounts: Record<string, number> = {};
     const spawn = await import("./structuredSpawn");
