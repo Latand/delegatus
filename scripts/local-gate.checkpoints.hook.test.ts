@@ -1,20 +1,29 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isolatedEnvironment } from "./local-gate";
 import { createHookFixture } from "./local-gate.fixture";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+let activeHook: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
+afterEach(async () => {
+  const hook = activeHook;
+  activeHook = undefined;
+  if (hook) {
+    // The gate-slot owner stops its services and waits for their cleanup.
+    if (hook.exitCode === null && hook.signalCode === null) hook.kill();
+    await hook.exited;
+  }
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+}, 20_000);
 const serviceTest = test.skipIf(process.platform !== "linux"
   || spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status !== 0);
 
-serviceTest("native pre-push resumes only equivalent green files after its deadline", () => {
+serviceTest("native pre-push resumes only equivalent green files after its deadline", async () => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-hook-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, true, path.join(scratch, "repo"));
+  const f = createHookFixture(project, roots, false, true, "repo");
+  const scratch = f.tempRoot;
   // Match the production hook parent's admission classification.
   mkdirSync(path.join(f.dir, "scripts/gate-runner"));
   const origin = path.join(scratch, "origin.git");
@@ -92,18 +101,26 @@ test("fixture contract", async () => {
   f.git("config", "core.hooksPath", "/dev/null");
   f.git("add", "."); f.git("commit", "-m", "Independent checkpoint fixtures");
   let invocation = 0;
-  const run = (input = "first", deadline = false) => {
+  const run = async (input = "first", deadline = false) => {
     const pool = path.join(scratch, `admission-${++invocation}`);
     mkdirSync(pool);
     const admissionFile = path.join(pool, "check-admission.sqlite");
-    const result = spawnSync("bash", ["scripts/gate-slot.sh", "bash", ".githooks/pre-push"], {
-      cwd: f.dir, encoding: "utf8", timeout: 30_000,
+    // An outer wall timer can interrupt the hook while it is disposing of
+    // nested services. Give the owner a bounded execution budget and join it.
+    const child = activeHook = Bun.spawn(["bash", "scripts/gate-slot.sh", "bash", ".githooks/pre-push"], {
+      cwd: f.dir, stdin: "ignore", stdout: "pipe", stderr: "pipe",
       env: { ...env, CHECKPOINT_STEP_INPUT: input, LLV_GATE_LOCK_DIR: pool,
         ...(deadline ? { LLV_GATE_PUSH_DEADLINE: String(Date.now() + 120_000) } : {}),
+        LLV_OWNED_RUN_TIMEOUT_MS: "60000",
         LLV_CHECK_ADMISSION_FILE: admissionFile, LLV_GATE_CHECK_ADMISSION_FILE: admissionFile },
     });
-    const output = result.stdout + result.stderr;
-    expect(result.status, output).toBe(deadline ? 75 : 1);
+    const [status, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    if (activeHook !== child) throw new Error("checkpoint hook was stopped during fixture cleanup");
+    activeHook = undefined;
+    const output = stdout + stderr;
+    expect(status, output).toBe(deadline ? 75 : 1);
     expect(output).toContain("CPU admission for publication checks");
     if (deadline) expect(output).toMatch(/"touched tests" was still running .* and was stopped/);
     else expect(output).toContain("NEW b.test.ts");
@@ -129,9 +146,9 @@ test("fixture contract", async () => {
     }
   };
   const readHookRoots = () => readFileSync(marker + "-hook", "utf8").trim().split("\n");
-  const expire = () => {
+  const expire = async () => {
     writeFileSync(interrupt, "");
-    const output = run("first", true);
+    const output = await run("first", true);
     rmSync(interrupt);
     rmSync(waiting);
     expect(output).not.toContain(checkpoint);
@@ -140,32 +157,32 @@ test("fixture contract", async () => {
     expect(output).not.toContain("head file b.test.ts:");
     verifyCleanup(readRows().slice(-2), readHookRoots().slice(-2));
   };
-  expire();
+  await expire();
   const [retained] = readdirSync(receiptDir);
   expect(readdirSync(receiptDir)).toEqual([retained!]);
   const bytes = readFileSync(path.join(receiptDir, retained!), "utf8");
   expect(JSON.parse(bytes).value.completed).toEqual(["a.test.ts"]);
-  const warm = run();
+  const warm = await run();
   expect(warm).toContain(checkpoint);
   expect(warm).toContain("head selected 1 files with 1 file workers");
   expect(readdirSync(receiptDir)).toEqual([retained!]);
   expect(readFileSync(path.join(receiptDir, retained!), "utf8")).toBe(bytes);
-  expect(run("second")).not.toContain(checkpoint);
+  expect(await run("second")).not.toContain(checkpoint);
   delegate(runnerShim, runner, "replacement executable bytes");
-  expect(run()).not.toContain(checkpoint);
-  expect(run()).toContain(checkpoint);
+  expect(await run()).not.toContain(checkpoint);
+  expect(await run()).toContain(checkpoint);
   const certified = readdirSync(receiptDir).sort();
   expect(certified).toHaveLength(3);
   // The worker still uses the real manager. An identity probe that cannot
   // verify the manager makes both reads and writes cold.
   writeFileSync(loseManager, "");
-  expect(run()).not.toContain(checkpoint);
+  expect(await run()).not.toContain(checkpoint);
   expect(readdirSync(receiptDir).sort()).toEqual(certified);
   rmSync(loseManager);
   // Keep tool bytes and transport identical while changing the observed
   // manager after the only fresh file starts.
   writeFileSync(trigger, "");
-  const drift = run();
+  const drift = await run();
   expect(drift).toContain(checkpoint);
   expect(drift).toContain("head checkpoint inputs changed during this run; fresh checks required");
   expect(readdirSync(receiptDir).sort()).toEqual(certified);
@@ -174,11 +191,11 @@ test("fixture contract", async () => {
   // result. A deadline during that invocation must leave no reusable receipt.
   rmSync(changedManager);
   rmSync(receiptDir, { recursive: true });
-  expire();
+  await expire();
   expect(existsSync(receiptDir)).toBeFalse();
   rmSync(changedManager);
   rmSync(trigger);
-  expect(run()).not.toContain(checkpoint);
+  expect(await run()).not.toContain(checkpoint);
 
   const rows = readRows();
   expect(rows.filter(row => row.file === "a").map(row => row.input)).toEqual(["first", "second", "first", "first", "first", "first"]);
@@ -186,12 +203,11 @@ test("fixture contract", async () => {
   const hookRoots = readHookRoots();
   expect(hookRoots).toHaveLength(18);
   verifyCleanup(rows, hookRoots);
-}, 120_000);
-
+}, 240_000);
 serviceTest.each(["declared gate variable", "BASH_ENV bytes"])("native pre-push rejects stale step passes after changing %s", input => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-step-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  const f = createHookFixture(project, roots, false, false, "repo");
+  const scratch = f.tempRoot;
   mkdirSync(path.join(f.dir, "scripts/gate-runner"));
   const origin = path.join(scratch, "origin.git");
   f.git("clone", "--bare", "--shared", ".", origin);
@@ -257,8 +273,8 @@ test("fixture contract", () => {
 
 serviceTest("local check-step invalidates warm and cold retries when BASH_ENV bytes change", () => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-bash-env-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  const f = createHookFixture(project, roots, false, false, "repo");
+  const scratch = f.tempRoot;
   const origin = path.join(scratch, "origin.git");
   f.git("clone", "--bare", "--shared", ".", origin);
   f.git("remote", "add", "origin", origin);

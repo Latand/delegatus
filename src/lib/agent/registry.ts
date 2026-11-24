@@ -1072,6 +1072,8 @@ export interface RegistryFile {
 export type McpCallerRegistryRows = Pick<RegistryFile, "conversations" | "entries"> & {
   nativeGenerationAmbiguous?: true;
   nativeHostsIncomplete?: true;
+  /** The completed bounded lookup found more host evidence than it can inspect. */
+  nativeHostsLookupLimitExceeded?: true;
   nativeArtifact?: string;
 };
 
@@ -7523,9 +7525,9 @@ export class AgentRegistry {
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
   }
 
-  async prepareNativeCallerArtifacts(): Promise<void> {
+  async prepareNativeCallerArtifacts(signal?: AbortSignal, options?: { waitUntilReady?: boolean }): Promise<void> {
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
-      await this.sqliteStore?.prepareNativeCallerArtifacts();
+      await this.sqliteStore?.prepareNativeCallerArtifacts(signal, options);
     }
   }
 
@@ -10905,6 +10907,14 @@ export class AgentRegistry {
   withConversationAliases<T>(read: (resolve: (id: string) => string) => T): T {
     return this.readKeyed(file => read(id => resolveConversationAlias(file, id as ViewerConversationId)),
       { skipColdKeyInitialization: true });
+  }
+
+  /** Board disclosure checks use keyed rows and aliases from one registry read. */
+  withBoardCallerLookup<T>(read: (lookup: Pick<ConversationLookup, "conversation" | "canonicalConversationId">) => T): T {
+    return this.readKeyed(file => read({
+      canonicalConversationId: id => resolveConversationAlias(file, id),
+      conversation: id => file.conversations[resolveConversationAlias(file, id)] ?? null,
+    }), { skipColdKeyInitialization: true });
   }
 
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
