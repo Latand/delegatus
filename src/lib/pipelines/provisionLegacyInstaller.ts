@@ -26,7 +26,7 @@ async function observeMacInstaller(checkout: string): Promise<LegacyInstallerObs
     if (performance.now() >= end) return { kind: "incomplete", reason: "expired" };
     const match = /^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(.*)$/.exec(line);
     if (!match) return { kind: "incomplete", reason: "enumeration" };
-    const [, pid, uid, start, args] = match as [string, string, string, string, string];
+    const pid = match[1]!, uid = match[2]!, start = match[3]!, args = match[4]!;
     if (Number(uid) !== process.geteuid?.() && Number(uid) !== process.getuid?.()) continue;
     if (!/(?:^|[\s/])bun(?:-container)?\s+install(?:\s|$)/.test(args)) continue;
     let cwd: string | undefined;

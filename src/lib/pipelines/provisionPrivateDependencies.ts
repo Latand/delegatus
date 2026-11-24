@@ -22,7 +22,8 @@ type PrivateInstallPorts = {
 
 class UnverifiedPrivateInstall extends Error {}
 const requireRuntime = createRequire(import.meta.url);
-const sameDirectory = (left: BigIntStats, right: BigIntStats | null) => right?.isDirectory() && left.dev === right.dev && left.ino === right.ino;
+const sameDirectory = (left: BigIntStats, right: BigIntStats | null) => right !== null && right.isDirectory()
+  && left.dev === right.dev && left.ino === right.ino;
 
 async function entry(file: string): Promise<BigIntStats | null> {
   try { return await fs.lstat(file, { bigint: true }); }

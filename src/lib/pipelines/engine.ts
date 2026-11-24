@@ -151,7 +151,7 @@ import { servingControllerSupports } from "./controllerCapabilities";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
 import { defaultStageFailEdge, FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
-import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, resolveDeliveryRemote, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration } from "./git";
+import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, realProvisionExec, resolveDeliveryRemote, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -14310,7 +14310,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         taskNoteAuthority.set(pipeline, () => assertCurrent(pipeline));
         const lanePorts = controllerSnapshotPorts(admissionPorts, () => assertCurrent(pipeline));
         if (await tickPipeline(pipeline, entries, lanePorts, async () => await persist([pipeline]),
-          ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS, new Map())) {
+          ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS)) {
           await persist([pipeline]);
           admissionChanged = true;
         }

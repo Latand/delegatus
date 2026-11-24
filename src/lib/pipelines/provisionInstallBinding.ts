@@ -9,7 +9,8 @@ const QUERY_ABI = 1;
 const NO_NEW_PRIVILEGES = 38;
 // Write, remove, create, refer and truncate. Reads keep using the checkout's
 // normal path, including workspace members and file dependencies.
-const WRITE_RIGHTS = 0x7ff2n;
+const WRITE_RIGHTS = BigInt(0x7ff2);
+const ZERO = BigInt(0);
 
 /** Restrict the subprocess to already-open directories before any Bun write.
  * A later path replacement cannot inherit rights attached to the old inode. */
@@ -25,11 +26,11 @@ export function restrictInstallWrites(descriptors: readonly number[]): boolean {
     });
     const { syscall, prctl, close } = library.symbols;
     try {
-      if (Number(syscall(CREATE_RULESET, 0n, 0n, BigInt(QUERY_ABI))) < 3) return false;
+      if (Number(syscall(CREATE_RULESET, ZERO, ZERO, BigInt(QUERY_ABI))) < 3) return false;
       if (descriptors.length === 0) return true;
       const rules = Buffer.alloc(8);
       rules.writeBigUInt64LE(WRITE_RIGHTS);
-      const fd = Number(syscall(CREATE_RULESET, BigInt(ffi.ptr(rules)), BigInt(rules.length), 0n));
+      const fd = Number(syscall(CREATE_RULESET, BigInt(ffi.ptr(rules)), BigInt(rules.length), ZERO));
       if (fd < 0) return false;
       try {
         for (const descriptor of descriptors) {
@@ -38,8 +39,8 @@ export function restrictInstallWrites(descriptors: readonly number[]): boolean {
           beneath.writeInt32LE(descriptor, 8);
           if (Number(syscall(ADD_RULE, BigInt(fd), BigInt(RULE_PATH_BENEATH), BigInt(ffi.ptr(beneath)))) !== 0) return false;
         }
-        return prctl(NO_NEW_PRIVILEGES, 1n, 0n, 0n, 0n) === 0
-          && Number(syscall(RESTRICT_SELF, BigInt(fd), 0n, 0n)) === 0;
+        return prctl(NO_NEW_PRIVILEGES, BigInt(1), ZERO, ZERO, ZERO) === 0
+          && Number(syscall(RESTRICT_SELF, BigInt(fd), ZERO, ZERO)) === 0;
       } finally { close(fd); }
     } finally { library.close(); }
   } catch { return false; }

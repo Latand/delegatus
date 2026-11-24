@@ -77,7 +77,7 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
             && isCpuPressureDetail(fresh.stateDetail, "stage start") ? CPU_STAGE_POLL_MS : 30_000);
           const provisionRetry = Date.parse(fresh?.provisioningWait?.retryAfter ?? "");
           if (provisionRetry > now) due = Math.min(due, provisionRetry);
-          const jobDue = fresh && provisioningDueAt(fresh);
+          const jobDue = fresh ? provisioningDueAt(fresh) : undefined;
           if (jobDue !== undefined) due = Math.min(due, jobDue);
           for (const ref of refs) {
             const run = fresh?.runs[ref.run], attempt = run?.attempts[ref.attempt];
