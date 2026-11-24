@@ -646,6 +646,155 @@ test("Antigravity EIO isolation preserves auth & HTTP 200, keeps host exhaustion
   }
 });
 
+test("Antigravity newest quota event decides: a newer confirmed reset overrides an older active window while older expired or empty polls keep it", async () => {
+  const { setSystemTime } = await import("bun:test");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { antigravityDefaultSessionsDir, recordAntigravityAuthState } = await import("@/lib/accounts/antigravity");
+  const { readLimits } = await import("@/lib/limits");
+  const { accountLimitRows } = await import("@/lib/mcp/compactAnswers");
+  const { readAntigravityTranscriptLimits } = await import("@/lib/limits/antigravityTranscriptLimits");
+  const prevStateDir: string | undefined = process.env.LLV_STATE_DIR;
+  try {
+    for (const variant of ["overlap-newer", "overlap-older", "empty-sample"] as const) {
+      const ovRoot = fs.mkdtempSync(path.join(os.tmpdir(), `llv-ag-${variant}-`));
+      const ovState = path.join(ovRoot, "state");
+      fs.mkdirSync(ovState, { recursive: true });
+      const ovReg = new AgentRegistry(path.join(ovState, "registry.json"));
+      process.env.LLV_STATE_DIR = ovState;
+      setAgentRegistryForTests(ovReg);
+      try {
+        const ovSessions = antigravityDefaultSessionsDir();
+        const ovHome = path.dirname(ovSessions);
+        fs.mkdirSync(ovSessions, { recursive: true });
+        fs.writeFileSync(path.join(ovHome, "auth.json"), JSON.stringify({ refresh_token: "fixture" }));
+        const t0 = Math.floor(Date.parse("2026-11-24T10:00:00.000Z") / 1000);
+        const ovClock = (t0 + 240) * 1000;
+        setSystemTime(new Date(ovClock));
+        recordAntigravityAuthState({ authenticated: true, checkedAt: new Date(ovClock).toISOString(), tierName: "Pro", tierId: null });
+        ovReg.recordQuotaObservation({
+          engine: "antigravity",
+          accountId: "default",
+          authenticated: true,
+          authCheckedAt: new Date(t0 * 1000).toISOString(),
+          limits: {
+            session: { usedPercent: 100, resetsAt: t0 + 3700, windowMinutes: 300, observedAt: t0, source: "account" },
+            weekly: null,
+            tiers: [],
+            plan: "Pro",
+            capturedAt: t0,
+          },
+          provenance: { source: "transcript", reason: null, staleSince: null },
+          observedAt: new Date(t0 * 1000).toISOString(),
+          bootId: "boot-active-old",
+          limitReached: true,
+          lastQuotaEventAt: t0,
+        });
+
+        const ovFile = path.join(ovSessions, "sess-overlap", "events.jsonl");
+        fs.mkdirSync(path.dirname(ovFile), { recursive: true });
+        if (variant === "empty-sample") {
+          fs.writeFileSync(ovFile, `${JSON.stringify({ type: "session.start", timestamp: new Date((t0 + 200) * 1000).toISOString(), data: { sessionId: "sess-overlap" } })}\n`);
+          fs.utimesSync(ovFile, t0 + 200, t0 + 200);
+        } else {
+          const evSec = variant === "overlap-newer" ? t0 + 180 : t0 - 180;
+          const resSec = variant === "overlap-newer" ? t0 + 200 : t0 - 160;
+          fs.writeFileSync(
+            ovFile,
+            `${JSON.stringify({
+              type: "session.quota_exhausted",
+              timestamp: new Date(evSec * 1000).toISOString(),
+              data: {
+                code: "RESOURCE_EXHAUSTED",
+                message: "Individual quota reached",
+                resetsAt: resSec,
+                windowMinutes: 300,
+                usedPercent: 100,
+                observedAt: evSec,
+              },
+            })}\n`,
+          );
+          fs.utimesSync(ovFile, evSec, evSec);
+        }
+
+        const ovAccount = {
+          id: "default",
+          label: "Default",
+          kind: "legacy" as const,
+          home: ovHome,
+          sessionsDir: ovSessions,
+          auth: "signed_in" as const,
+          tierName: "Pro",
+          createdAt: 0,
+        };
+        const ovController = new QuotaController(ovReg, {
+          list: () => [ovAccount],
+          active: () => "default",
+          credentialIdentity: () => "stable-ag-overlap",
+          probe: async (_e, acc, now) => {
+            const read = readAntigravityTranscriptLimits(
+              ovAccount.sessionsDir,
+              now,
+              { tierName: ovAccount.tierName },
+            );
+            return {
+              engine: "antigravity",
+              accountId: acc.id,
+              authenticated: true,
+              authCheckedAt: now,
+              limits: read.data,
+              provenance: { source: read.source, reason: read.reason, staleSince: null },
+              observedAt: read.data?.capturedAt ? read.data.capturedAt * 1000 : now,
+              limitReached: read.data !== null,
+              ...(read.lastQuotaEventAt === undefined ? {} : { lastQuotaEventAt: read.lastQuotaEventAt }),
+            };
+          },
+        }, "boot-overlap", () => ovClock);
+
+        const readHttp = () => readLimits({
+          codexLiveReader: async () => { throw new Error("skip-codex-probe"); },
+          now: () => ovClock,
+        });
+        const httpBefore = await readHttp();
+        await ovController.tick("antigravity");
+        const durable = ovReg.quotaObservations("antigravity").find((r) => r.accountId === "default");
+        const httpAfter = await readHttp();
+        const mcpAfter = accountLimitRows({
+          engine: "antigravity",
+          accounts: { claude: [], codex: [], copilot: [], antigravity: [{ accountId: "default", authPresent: true }] },
+          active: { claude: null, codex: null, copilot: null, antigravity: "default" },
+          observations: { claude: {}, codex: {}, copilot: {}, antigravity: durable ? { default: durable } : {} },
+          now: ovClock,
+        });
+
+        if (variant === "overlap-newer") {
+          expect(httpBefore.antigravity).toBeNull();
+          expect(durable?.limitReached).toBe(false);
+          expect(durable?.limits).toBeNull();
+          expect(durable?.lastQuotaEventAt).toBe(t0 + 180);
+          expect(httpAfter.antigravity).toBeNull();
+          expect(mcpAfter[0]?.session ?? null).toBeNull();
+        } else {
+          expect(httpBefore.antigravity?.session?.usedPercent).toBe(100);
+          expect(durable?.limitReached).toBe(true);
+          expect(durable?.limits?.session?.usedPercent).toBe(100);
+          expect(durable?.lastQuotaEventAt).toBe(t0);
+          expect(httpAfter.antigravity?.session?.usedPercent).toBe(100);
+          expect(mcpAfter[0]?.session?.usedPercent).toBe(100);
+        }
+      } finally {
+        ovReg.close();
+        setAgentRegistryForTests(null);
+        fs.rmSync(ovRoot, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    setSystemTime();
+    setAgentRegistryForTests(null);
+    if (prevStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevStateDir;
+  }
+}, 15_000);
+
 test("quota visibility remains fresh when automatic balancing is disabled", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-controller-"));
   try {

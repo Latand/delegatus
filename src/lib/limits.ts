@@ -14,7 +14,7 @@ import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copi
 import { activeAntigravityAccountId, listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
 import { antigravityObservationEventSec, isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
-import { readAntigravityTranscriptLimits } from "@/lib/limits/antigravityTranscriptLimits";
+import { readAntigravityTranscriptLimits, type AntigravityTranscriptLimitRead } from "@/lib/limits/antigravityTranscriptLimits";
 import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
 import { statePath } from "@/lib/configDir";
@@ -442,7 +442,7 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
   const copilotRead = copilotAccount ? readCopilotTranscriptLimits(copilotAccount.sessionStateDir) : null;
   const antigravityAccountId = activeAntigravityAccountId();
   const antigravityAccount = listAntigravityAccounts().find((account) => account.id === antigravityAccountId) ?? null;
-  const antigravityTranscriptRead: LimitRead | null = (() => {
+  const antigravityTranscriptRead: AntigravityTranscriptLimitRead | null = (() => {
     if (!antigravityAccount) return null;
     try {
       return readAntigravityTranscriptLimits(antigravityAccount.sessionsDir, now, { tierName: antigravityAccount.tierName });
@@ -461,9 +461,17 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
   const antigravityRead = (() => {
     const nowSec = Math.floor(now / 1000);
     const transcriptData = antigravityTranscriptRead?.data ?? null;
+    const transcriptEventSec = typeof antigravityTranscriptRead?.lastQuotaEventAt === "number"
+      && Number.isFinite(antigravityTranscriptRead.lastQuotaEventAt)
+      && antigravityTranscriptRead.lastQuotaEventAt > 0
+      ? Math.floor(antigravityTranscriptRead.lastQuotaEventAt)
+      : transcriptData
+        ? (transcriptData.capturedAt ?? transcriptData.session?.observedAt ?? null)
+        : null;
     // Compare by the durable quota-event watermark (`lastQuotaEventAt` / `capturedAt`)
-    // BEFORE checking whether the newer observation's reset window has elapsed,
-    // independently of `provenance.reason` so empty polls never erase the watermark.
+    // BEFORE checking whether either window is still active, independently of
+    // `provenance.reason`, so empty polls never erase a stored active window while
+    // a strictly newer confirmed reset overrides any older stored active window.
     const obsWatermarkSec = antigravityObservationEventSec(antigravityRawObs);
     const obsActive = Boolean(
       antigravityRawObs?.limits
@@ -472,13 +480,16 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
     const observedData = obsActive ? antigravityRawObs!.limits! : null;
 
     if (transcriptData) {
-      const transcriptAt = transcriptData.capturedAt ?? transcriptData.session?.observedAt ?? 0;
+      const transcriptAt = transcriptEventSec ?? 0;
       if (obsWatermarkSec !== null && obsWatermarkSec > transcriptAt) {
         if (observedData) {
           return { data: observedData, source: antigravityRawObs!.provenance.source, reason: antigravityRawObs!.provenance.reason };
         }
         return { data: null, source: "unavailable" as const, reason: "antigravity quota reset window elapsed" };
       }
+      return antigravityTranscriptRead!;
+    }
+    if (transcriptEventSec !== null && (obsWatermarkSec === null || transcriptEventSec > obsWatermarkSec)) {
       return antigravityTranscriptRead!;
     }
     if (observedData) {

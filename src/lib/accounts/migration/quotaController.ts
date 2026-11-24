@@ -421,6 +421,14 @@ export class QuotaController {
           : null;
         const previousAntigravityActive = engine === "antigravity"
           && isAntigravitySessionWindowActive(previous?.limits?.session, Math.floor(now / 1000));
+        // A strictly newer Antigravity event whose reset window has already elapsed
+        // (`!observation.limits` with `incomingEventSec > previousWatermarkSec`)
+        // overrides any older active stored window: the newest event decides.
+        const incomingNewerAntigravityReset = engine === "antigravity"
+          && Boolean(observation?.authenticated)
+          && !observation?.limits
+          && incomingEventSec !== null
+          && (previousWatermarkSec === null || incomingEventSec > previousWatermarkSec);
         // An older Antigravity transcript observation (`incomingEventSec < previousWatermarkSec`)
         // must never override a newer observation or move `observedAt` backwards — even after
         // the newer window has expired AND after intervening empty polls.
@@ -445,7 +453,7 @@ export class QuotaController {
           }
         } else if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot" && engine !== "antigravity" && !providerWithUnknownLimits
           || (previous?.limits && engine !== "antigravity" && Date.parse(previous.observedAt) > observation.observedAt)
-          || (engine === "antigravity" && !observation.limits && previousAntigravityActive)))) {
+          || (engine === "antigravity" && !observation.limits && previousAntigravityActive && !incomingNewerAntigravityReset)))) {
           observations.push(this.carryForward(engine, account.id, result.reason ?? observation?.provenance.reason ?? (observation?.limits ? "quota-probe-older" : "quota-probe-empty"), now));
         } else if (engine === "antigravity") {
           const nextWatermark = incomingEventSec !== null
