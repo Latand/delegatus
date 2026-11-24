@@ -2204,6 +2204,7 @@ async function check(
   // and before ordinary busy-seat suppression; receipt accounting is separate.
   let responseRecovery: (() => Promise<void>) | undefined;
   let responseHeld = false;
+  let responseDetail: string | undefined;
   const responseGuard = () => {
     if (sources.wakeResponse && readState(canonical).wakeResponse) throw new DeliveryAdmissionRefusedError("wake-response-pending");
   };
@@ -2240,7 +2241,7 @@ async function check(
     }
     if (!same()) return;
     const observe = async () => {
-      const evidence = await sources.wakeResponse!(row, canonical);
+      const evidence = await sources.wakeResponse!(readState(canonical).wakeResponse ?? row, canonical);
       if (!same()) return evidence;
       if (evidence.providerFailure) {
         const outcome = await sources.seatTurnOutcome?.(row.conversationId);
@@ -2257,16 +2258,21 @@ async function check(
       const fresh = readState(canonical);
       await seatTickMutation("writeState", () => writeState(canonical, { ...fresh, wakeResponse: response }));
     };
-    const card = (detail: string, resolved = false) => ensureCard(canonical, { ref: "seat-wake-response", kind: "host-recovery",
-      instance: row.clientMessageId, state: resolved ? "resolved" : "open", detail }, new Date(sources.now()).toISOString());
+    const card = (detail: string, resolved = false) => {
+      responseDetail = resolved ? undefined : detail;
+      return ensureCard(canonical, { ref: "seat-wake-response", kind: "host-recovery",
+        instance: row.clientMessageId, state: resolved ? "resolved" : "open", detail }, new Date(sources.now()).toISOString());
+    };
     if (evidence.answered) { card("The delivered wake received a model response.", true); await persist(undefined); return; }
     // Serialize agenda delivery until this obligation is reconciled. Its recent
     // progress cannot authorize a second input whose response would be lost.
     responseHeld = true;
     const progress = evidence.progressAt && Date.parse(evidence.progressAt) <= sources.now()
       && Date.parse(evidence.progressAt) > Date.parse(row.progressAt) ? evidence.progressAt : row.progressAt;
-    if (progress !== row.progressAt || evidence.turnId && evidence.turnId !== row.turnId || evidence.generationId && evidence.generationId !== row.generationId)
-      await persist({ ...row, progressAt: progress, ...(evidence.turnId ? { turnId: evidence.turnId } : {}), ...(evidence.generationId ? { generationId: evidence.generationId } : {}) });
+    if (progress !== row.progressAt || evidence.turnId && evidence.turnId !== row.turnId || evidence.generationId && evidence.generationId !== row.generationId
+      || evidence.scan && JSON.stringify(evidence.scan) !== JSON.stringify(row.scan))
+      await persist({ ...row, progressAt: progress, ...(evidence.turnId ? { turnId: evidence.turnId } : {}), ...(evidence.generationId ? { generationId: evidence.generationId } : {}),
+        ...(evidence.scan ? { scan: evidence.scan } : {}) });
     if (!same() || sources.now() - Date.parse(progress) < row.boundMs) return;
     responseHeld = true;
     let detail = evidence.wait;
@@ -2533,7 +2539,7 @@ async function check(
     const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
       seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
       deferred: 0, eventsThrough: fresh.eventsThrough ?? 0, delivery: null,
-      detail: ["Delivered wake remains unanswered; recovery or its ownership hold is recorded on the board. Ordinary agenda sends remain fenced.", authDetail, autoRotateDetail].filter(Boolean).join("; ") };
+      detail: [responseDetail ?? "Delivered wake remains unanswered. Ordinary agenda sends remain fenced.", authDetail, autoRotateDetail].filter(Boolean).join("; ") };
     appendRecord(record); return record;
   }
   let proposalIssues: readonly ProposalIssue[] = [];
@@ -2713,9 +2719,10 @@ async function check(
       delivery = { clientMessageId, outcome: "refusal-circuit" };
       fenceDetail = seatTickRefusalCircuitSentence(refusals!);
     } else if (commit) {
+      const responseStart = await sources.wakeResponseStart?.(input.seat.conversationId);
       const wake = {
         clientMessageId, conversationId: input.seat.conversationId, seatEpoch: input.seat.seatEpoch,
-        operationId: null, commit, text, preparedAt: at,
+        operationId: null, commit, text, preparedAt: at, ...(responseStart ? { responseStart } : {}),
       };
       const accounting = state.accounting ? tickAccounting(state.accounting.filename, input.project) : null;
       /* One prepared attempt per project, whichever store holds the row. The
