@@ -134,12 +134,17 @@ test.skipIf(process.platform !== "linux")("a held queue writer delays the stamp 
     holder.exec("BEGIN IMMEDIATE");
     const child = live();
     const stamp = stampPublicationPreparer(child.pid, "operation-one", { LLV_GATE_LOCK_DIR: dir });
-    // The event loop keeps running while the writer is held.
-    let ticks = 0;
-    const timer = setInterval(() => ticks++, 5);
-    await Bun.sleep(150);
-    clearInterval(timer);
-    expect(ticks).toBeGreaterThan(5);
+    // The call returned while the writer is still held in this same thread, so
+    // it did not wait for the writer synchronously. One macrotask later the
+    // record is still pending: the retry yields to the event loop instead of
+    // settling (or failing) inside the call.
+    expect(holder.inTransaction).toBe(true);
+    const firstSettled = await Promise.race([
+      stamp.recorded.then(() => "recorded"),
+      new Promise<string>(resolve => setTimeout(() => resolve("macrotask"), 0)),
+    ]);
+    expect(firstSettled).toBe("macrotask");
+    expect(rows(file)).toEqual([]);
     holder.exec("COMMIT");
     await stamp.recorded;
     expect(rows(file)).toEqual([{ identity: JSON.stringify(captureProcessIdentity(child.pid)), operation: "operation-one" }]);
