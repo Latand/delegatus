@@ -22,6 +22,7 @@ import { bindHostExitWriter, recordHostExit, recordHostStop } from "../src/lib/r
 import { AttemptTempStore } from "../src/lib/runtime/attemptTempRetention";
 import { registryRetiredHostRows } from "../src/lib/agent/sqliteRegistryStore";
 import { AgentRegistry } from "../src/lib/agent/registry";
+import { emptyAgentStateMetrics } from "../src/lib/agentState/model";
 
 const TARGET = "a".repeat(40);
 const NOW = "2026-10-29T12:00:00.000Z";
@@ -557,7 +558,7 @@ test("B-2: production transcript description preserves bytes for a newly observe
   expect(sha(statePath("state.sqlite-wal"))).not.toBe(before[1]);
 });
 
-test("B-2: complete census child leaves database, WAL, pending rows and files unchanged", () => {
+test("B-2: deploy census completes with pre-Antigravity metrics and leaves stored bytes unchanged", () => {
   const f = retainedLivenessFixture(12);
   try {
     const root = temporary();
@@ -572,24 +573,34 @@ test("B-2: complete census child leaves database, WAL, pending rows and files un
     fs.writeFileSync(f.worker.transcript, records.map(row => JSON.stringify(row)).join("\n") + "\n");
     const source = new Database(statePath("state.sqlite"));
     source.query("VACUUM INTO ?").run(path.join(root, "state.sqlite")); source.close();
+    const registryFile = path.join(root, "agent-registry.sqlite");
     const registrySource = new Database(f.dataset.filename, { readonly: true });
-    registrySource.query("VACUUM INTO ?").run(path.join(root, "agent-registry.sqlite")); registrySource.close();
-    publishRegistryBackendIdentity(path.join(root, "agent-registry.json"), "sqlite", path.join(root, "agent-registry.sqlite"));
+    registrySource.query("VACUUM INTO ?").run(registryFile); registrySource.close();
+    const registry = new Database(registryFile);
+    try {
+      const row = { ...emptyAgentStateMetrics(), at: Date.parse(NOW), stuckTurns: 1,
+        stuckByEngine: { codex: 1, claude: 0, copilot: 0 } };
+      registry.query("INSERT INTO registry_rows (collection, row_key, value_json, row_order) VALUES ('agentStateMetrics', 'current', ?, 1)")
+        .run(JSON.stringify(row));
+    } finally { registry.close(); }
+    publishRegistryBackendIdentity(path.join(root, "agent-registry.json"), "sqlite", registryFile);
     const db = new Database(path.join(root, "state.sqlite"));
     db.exec("PRAGMA journal_mode=WAL");
     db.query("UPDATE state_rows SET value_json=value_json WHERE collection='pipelines'").run();
     const pending = db.query("SELECT * FROM history_pending ORDER BY collection,row_key").all();
     expect(pending.length).toBeGreaterThan(0);
-    const before = [sha(path.join(root, "state.sqlite")), sha(path.join(root, "state.sqlite-wal"))];
+    const databases = ["state.sqlite", "state.sqlite-wal", "agent-registry.sqlite", "agent-registry.sqlite-wal"];
+    const hashes = () => databases.map(name => sha(path.join(root, name)));
+    const before = hashes();
     const files = fs.readdirSync(root, { recursive: true }).map(String).sort();
-    const env: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_DIR: root, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };
-    delete env.LLV_STATE_OWNER;
-    delete env.LLV_AGENT_REGISTRY_SQLITE;
-    const result = spawnSync(process.execPath, [path.join(ROOT, "scripts/protected-host-census.ts"), TARGET, "30000"], { cwd: ROOT, env, encoding: "utf8", timeout: 10000 });
+    const result = spawnSync("python3", ["-c",
+      "import json,pathlib,runpy,sys; m=runpy.run_path('scripts/deploy-checkout.py'); "
+      + "print(json.dumps(m['complete_census'](m['protected_host_census'](pathlib.Path.cwd(), *sys.argv[1:], timeout=8))))",
+      process.execPath, root, TARGET], { cwd: ROOT, encoding: "utf8", timeout: 10000 });
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout).conversations).toHaveLength(1);
-    expect([sha(path.join(root, "state.sqlite")), sha(path.join(root, "state.sqlite-wal"))]).toEqual(before);
+    expect(JSON.parse(result.stdout)).toHaveLength(1);
+    expect(hashes()).toEqual(before);
     expect(db.query("SELECT * FROM history_pending ORDER BY collection,row_key").all()).toEqual(pending);
     expect(fs.readdirSync(root, { recursive: true }).map(String).filter(name => !name.endsWith("-shm")).sort()).toEqual(files.filter(name => !name.endsWith("-shm")));
     db.close();

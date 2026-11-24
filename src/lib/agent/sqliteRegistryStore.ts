@@ -22,6 +22,7 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, DatabaseReplacedError, openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { agentStateMetricsForStorage, type AgentStateMetricsRow } from "@/lib/agentState/model";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -1199,7 +1200,7 @@ function applyRecordedGrantDecision(
 }
 
 interface RegistryChanges {
-  rows: Map<RowCollection, Set<string>>;
+  rows: Map<RowCollection, Map<string, string | null>>;
   meta: Set<(typeof META_FIELDS)[number]>;
   order: Set<RowCollection>;
 }
@@ -5595,7 +5596,7 @@ export class SqliteAgentRegistryStore {
     }
     if (stamps.after) {
       this.secureFiles();
-      this.updateCachesAfterCommit(current.file, changes, revision, stamps);
+      this.updateCachesAfterCommit(changes, revision, stamps);
       this.rememberRevision(revision);
     }
     const guardChanged = changes.meta.has("quotaObservations") || [...changes.rows.keys(), ...changes.order]
@@ -5682,7 +5683,7 @@ export class SqliteAgentRegistryStore {
            costs nothing measurable, and an account switch interleaves dozens
            of such commits with such readers on the Viewer's main thread
            (2026-10-07: every request stalled 3 to 6 s as a switch started). */
-        this.updateCachesAfterCommit(current.file, changes, revision, stamps);
+        this.updateCachesAfterCommit(changes, revision, stamps);
         this.rememberRevision(revision);
       }
       const guardChanged = changes.meta.has("quotaObservations") || [...changes.rows.keys(), ...changes.order]
@@ -6421,11 +6422,26 @@ export class SqliteAgentRegistryStore {
           const candidates = reorderedCollections.has(collection)
             ? new Set([...baseline.keys(), ...Object.keys(current)])
             : dirtyRows.get(collection)!;
-          const changed = new Set([...candidates].filter((key) => {
-            if (!Object.hasOwn(current, key)) return baseline.has(key);
+          const changed = new Map<string, string | null>();
+          for (const key of candidates) {
             const previous = baseline.get(key);
-            return previous === undefined || JSON.stringify(current[key]) !== previous;
-          }));
+            if (!Object.hasOwn(current, key)) {
+              if (baseline.has(key)) changed.set(key, null);
+              continue;
+            }
+            const row = current[key];
+            let json = JSON.stringify(row);
+            if (json === previous) continue;
+            if (collection === "agentStateMetrics") {
+              json = JSON.stringify(agentStateMetricsForStorage(row as AgentStateMetricsRow));
+              // Keep the original payload when only the in-memory counter
+              // or the representation of a zero bucket changed.
+              if (json === previous || previous != null && json === JSON.stringify(agentStateMetricsForStorage(
+                parseSqliteJson(previous, this.db) as AgentStateMetricsRow,
+              ))) continue;
+            }
+            changed.set(key, json);
+          }
           if (changed.size > 0) changes.rows.set(collection, changed);
           if (reorderedCollections.has(collection)) {
             changes.order.add(collection);
@@ -6463,7 +6479,6 @@ export class SqliteAgentRegistryStore {
   }
 
   private updateCachesAfterCommit(
-    file: RegistryFile,
     changes: RegistryChanges,
     revision: number,
     stamps: { before: string; after: string },
@@ -6471,11 +6486,9 @@ export class SqliteAgentRegistryStore {
     // Both local and external writers use the same durable delta on the next
     // read. Never advance the snapshot cursor past an interleaved writer.
     this.refreshGrantDecisions(revision,stamps.after);
-    for (const [collection,keys] of changes.rows) {
+    for (const [collection, rows] of changes.rows) {
       const cache = this.rowCache.get(collection);
-      const rows = file[collection] as Record<string, unknown>;
-      for (const key of keys) {
-        const valueJson = Object.hasOwn(rows,key) ? JSON.stringify(rows[key]) : null;
+      for (const [key, valueJson] of rows) {
         this.localRows.delete(grantDecisionKey(collection,key));
         this.localRows.set(grantDecisionKey(collection,key),{ dataVersion: stamps.after.split(":")[0]!,valueJson });
         while (this.localRows.size > 128) this.localRows.delete(this.localRows.keys().next().value!);
@@ -6624,7 +6637,7 @@ export class SqliteAgentRegistryStore {
     if (this.changesReady) this.db.exec("DELETE FROM registry_cold");
     for (const collection of ROW_COLLECTIONS) {
       for (const [order, [key, value]] of Object.entries(file[collection]).entries()) {
-        this.upsertRow(collection, key, value, order);
+        this.upsertRow(collection, key, JSON.stringify(value), order);
       }
     }
     for (const field of META_FIELDS) this.setMeta(field, JSON.stringify(file[field]));
@@ -6643,7 +6656,7 @@ export class SqliteAgentRegistryStore {
           continue;
         }
         if (key in previous && isDeepStrictEqual(previous[key], next[key])) continue;
-        this.upsertRow(collection, key, next[key]);
+        this.upsertRow(collection, key, JSON.stringify(next[key]));
       }
       this.persistRowOrder(collection, Object.keys(next));
     }
@@ -6656,11 +6669,10 @@ export class SqliteAgentRegistryStore {
 
   private persistChanges(file: DecidedRegistryFile, changes: RegistryChanges, revision: number): void {
     this.assertDecided(file);
-    for (const [collection, keys] of changes.rows) {
-      const rows = file[collection] as Record<string, unknown>;
-      for (const key of keys) {
-        if (key in rows) this.upsertRow(collection, key, rows[key]);
-        else this.deleteRow(collection,key);
+    for (const [collection, rows] of changes.rows) {
+      for (const [key, valueJson] of rows) {
+        if (valueJson === null) this.deleteRow(collection, key);
+        else this.upsertRow(collection, key, valueJson);
       }
     }
     for (const collection of changes.order) this.persistRowOrder(collection, Object.keys(file[collection]));
@@ -6686,12 +6698,12 @@ export class SqliteAgentRegistryStore {
     if (collection === "conversations") this.db.query("DELETE FROM registry_conversation_paths WHERE conversation_id=?").run(key);
   }
 
-  private upsertRow(collection: RowCollection, key: string, value: unknown, order?: number): void {
+  private upsertRow(collection: RowCollection, key: string, valueJson: string, order?: number): void {
     if (order !== undefined) {
       this.db.query(`
         INSERT INTO registry_rows(collection, row_key, value_json, row_order) VALUES (?, ?, ?, ?)
         ON CONFLICT(collection, row_key) DO UPDATE SET value_json = excluded.value_json, row_order = excluded.row_order
-      `).run(collection, key, JSON.stringify(value), order);
+      `).run(collection, key, valueJson, order);
       return;
     }
     /* The next position comes from the two order indexes. Aggregating over
@@ -6704,7 +6716,7 @@ export class SqliteAgentRegistryStore {
       SELECT ?1, ?2, ?3, COALESCE((SELECT row_order FROM ${this.recordsSource} WHERE collection=?4 AND row_key=?5),
         MAX(COALESCE((SELECT MAX(row_order) FROM registry_rows WHERE collection=?6),-1), COALESCE(${archived},-1)) + 1) WHERE true
       ON CONFLICT(collection, row_key) DO UPDATE SET value_json = excluded.value_json
-    `).run(collection, key, JSON.stringify(value), collection, key, collection);
+    `).run(collection, key, valueJson, collection, key, collection);
   }
 
   private persistRowOrder(collection: RowCollection, keys: string[]): void {
