@@ -1,7 +1,7 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, destructiveTestFile, touchedTests } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, comparisonFileGroups, destructiveTestFile, touchedTests } from "./local-gate-tests";
 
 test("destructive file-system calls stay head-only through direct and renamed imports", () => {
   const f = fixture(source(true));
@@ -386,14 +386,15 @@ test("between-test errors match across private roots without hiding a changed pa
   expect(compareTests(old, run("GHIJKL", "different")).introduced).toHaveLength(1);
 });
 
-test("gate harness selections limit nested workers while ordinary head and baseline files retain their parallelism", () => {
+test("mixed selections retain ordinary parallelism and bound nested harness workers", () => {
   const regular = Array.from({ length: 12 }, (_, n) => "src/example" + n + ".test.ts");
-  expect(comparisonFileWorkers(regular, 8)).toBe(8);
-  expect(comparisonFileWorkers(regular, 3)).toBe(3);
-  for (const nested of ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"]) {
-    expect(comparisonFileWorkers([...regular, nested], 8)).toBe(2);
-    expect(comparisonFileWorkers([nested], 8)).toBe(1);
-    expect(comparisonFileWorkers([...regular, nested], 8, true)).toBe(1);
-    expect(comparisonFileWorkers([...regular, nested], 1)).toBe(1);
-  }
+  const nested = ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"];
+  const mixed = [...nested, ...regular];
+  const workers = (files: string[], ceiling: number, portable = false) =>
+    comparisonFileGroups(files, ceiling, portable).map(group => ({ files: group.indices.map(index => files[index]), workers: group.workers }));
+  expect(workers(regular, 8)).toEqual([{ files: regular, workers: 8 }]);
+  expect(workers(nested.slice(0, 1), 8)).toEqual([{ files: nested.slice(0, 1), workers: 1 }]);
+  expect(workers(mixed, 8)).toEqual([{ files: regular, workers: 8 }, { files: nested, workers: 2 }]);
+  expect(workers(mixed, 3)).toEqual([{ files: regular, workers: 3 }, { files: nested, workers: 2 }]);
+  expect(workers(mixed, 8, true)).toEqual([{ files: regular, workers: 1 }, { files: nested, workers: 1 }]);
 });

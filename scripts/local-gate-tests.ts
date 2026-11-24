@@ -70,14 +70,19 @@ const FILE_BUDGET_MS = 5 * 60 * 1000;
 // runners in the shared CPU work slice; baseline and retries retain three.
 const HEAD_FILE_WORKERS = 8;
 
-/** Gate fixtures start their own suites and supervisors. Eight such files in
- * one real publication exhausted the 768-task service limit before any verdict.
- * Source-only selections keep their head parallelism and confirmation budget. */
-export function comparisonFileWorkers(files: readonly string[], ceiling: number, sharedPortable = false): number {
-  const nested = files.some(file => /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/")));
-  const nestedLimit = sharedPortable ? 1 : 2;
-  const workers = nested ? Math.min(nestedLimit, ceiling) : ceiling;
-  return Math.min(files.length, workers);
+/** Gate fixtures launch their own suites and supervisors. Give them a
+ * separate turn within the run budget so their task limit applies only there. */
+export function comparisonFileGroups(files: readonly string[], ceiling: number, sharedPortable: boolean) {
+  const ordinary: number[] = [], nested: number[] = [];
+  for (const [index, file] of files.entries()) {
+    const launchesChecks = /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/"));
+    (launchesChecks ? nested : ordinary).push(index);
+  }
+  const limit = sharedPortable ? 1 : ceiling;
+  return [
+    { indices: ordinary, workers: Math.min(ordinary.length, limit) },
+    { indices: nested, workers: Math.min(nested.length, limit, 2) },
+  ].filter(group => group.workers > 0);
 }
 
 export const FLAKY_RERUNS = 3;
@@ -348,12 +353,9 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   const now = options.now ?? (() => performance.now());
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const results: TestRun[] = new Array(files.length);
-  let next = 0;
-  const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharesPortableRunner());
-  if (files.length) options.log?.(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
-  const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
-  while (next < files.length) {
-    const index = next++, file = files[index]!;
+  const groups = comparisonFileGroups(files, options.workers ?? 3, sharesPortableRunner());
+  const runFile = async (index: number) => {
+    const file = files[index]!;
     const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
@@ -440,8 +442,17 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     results[index] = { failures, passed, completed, elapsedMs: 0 };
     options.onFile?.(results[index]!, cleanupConfirmed);
     options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
+  };
+  const workers: PromiseSettledResult<void>[] = [];
+  for (const group of groups) {
+    options.log?.(`touched-tests: ${label} selected ${group.indices.length} files with ${group.workers} file workers`);
+    let next = 0;
+    const settled = await Promise.allSettled(Array.from({ length: group.workers }, async () => {
+      while (next < group.indices.length) await runFile(group.indices[next++]!);
+    }));
+    workers.push(...settled);
+    if (settled.some(worker => worker.status === "rejected")) break;
   }
-  }));
   // All owned runners have settled. Completed file diagnostics and filtered
   // worker rejections must both veto a capacity retry after budget expiry.
   const diagnostics = results.flatMap(run => run?.failures.filter(site => site.kind === "error"
@@ -638,11 +649,10 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     if (reused.length) verifyHeadReuse = () => {
       if (!sameHeadInputs()) throw new Error("head checkpoint inputs changed during this run; fresh checks required");
     };
-    const workers = comparisonFileWorkers(files, HEAD_FILE_WORKERS, sharesPortableRunner());
     // A hook deadline can kill the comparator before its finally runs. Seal
     // a green file after its runner and sandbox have been cleaned, with the
     // same inputs verified on both sides of that file's execution.
-    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers,
+    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers: HEAD_FILE_WORKERS,
       onFile: headCache ? (run, cleanupConfirmed) => {
         if (!cleanupConfirmed || !isGreenHeadFile(run)) return;
         if (sameHeadInputs()) headCache.write(headKey(run.completed[0]!), run);
