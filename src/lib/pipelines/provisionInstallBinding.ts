@@ -20,27 +20,27 @@ export function restrictInstallWrites(descriptors: readonly number[]): boolean {
     const ffi = requireRuntime(`bun:${"ffi"}`) as typeof import("bun:ffi");
     const { i32, i64, u64 } = ffi.FFIType;
     const library = ffi.dlopen("libc.so.6", {
-      syscall: { args: [i32, u64, u64, u64], returns: i64 },
+      syscall: { args: [i32, u64, u64, u64, u64], returns: i64 },
       prctl: { args: [i32, u64, u64, u64, u64], returns: i32 },
       close: { args: [i32], returns: i32 },
     });
     const { syscall, prctl, close } = library.symbols;
     try {
-      if (Number(syscall(CREATE_RULESET, ZERO, ZERO, BigInt(QUERY_ABI))) < 3) return false;
+      if (Number(syscall(CREATE_RULESET, ZERO, ZERO, BigInt(QUERY_ABI), ZERO)) < 3) return false;
       if (descriptors.length === 0) return true;
       const rules = Buffer.alloc(8);
       rules.writeBigUInt64LE(WRITE_RIGHTS);
-      const fd = Number(syscall(CREATE_RULESET, BigInt(ffi.ptr(rules)), BigInt(rules.length), ZERO));
+      const fd = Number(syscall(CREATE_RULESET, BigInt(ffi.ptr(rules)), BigInt(rules.length), ZERO, ZERO));
       if (fd < 0) return false;
       try {
         for (const descriptor of descriptors) {
           const beneath = Buffer.alloc(12);
           beneath.writeBigUInt64LE(WRITE_RIGHTS);
           beneath.writeInt32LE(descriptor, 8);
-          if (Number(syscall(ADD_RULE, BigInt(fd), BigInt(RULE_PATH_BENEATH), BigInt(ffi.ptr(beneath)))) !== 0) return false;
+          if (Number(syscall(ADD_RULE, BigInt(fd), BigInt(RULE_PATH_BENEATH), BigInt(ffi.ptr(beneath)), ZERO)) !== 0) return false;
         }
         return prctl(NO_NEW_PRIVILEGES, BigInt(1), ZERO, ZERO, ZERO) === 0
-          && Number(syscall(RESTRICT_SELF, BigInt(fd), ZERO, ZERO)) === 0;
+          && Number(syscall(RESTRICT_SELF, BigInt(fd), ZERO, ZERO, ZERO)) === 0;
       } finally { close(fd); }
     } finally { library.close(); }
   } catch { return false; }

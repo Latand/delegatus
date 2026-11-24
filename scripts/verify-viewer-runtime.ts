@@ -31,7 +31,7 @@
  * Exit status is the verdict; the evidence is printed as JSON.
  */
 
-import { removeProvisioningFixture, verifyProvisioningRelease, verifyProvisioningTrace } from "./verify-provisioning-release.mjs";
+import { provisioningFixtureEnvironment, removeProvisioningFixture, verifyProvisioningRelease, verifyProvisioningTrace } from "./verify-provisioning-release.mjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -404,6 +404,7 @@ export async function verifyBuiltCodexSocket(root: string): Promise<{ ok: boolea
 async function serveOnce(root: string, sandbox: string): Promise<{ status: number; bytes: number; readyMs: number; log: string[]; detail?: string }> {
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
+  const fixtureEnvironment = await provisioningFixtureEnvironment(sandbox, sandboxEnvironment(sandbox));
   const contained = process.platform === "linux" && (Boolean(process.env.LLV_OWNED_TEST_RUN_CGROUP)
     || Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid);
   const command = [process.execPath, "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)];
@@ -413,7 +414,7 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
   const child = spawn(process.execPath, contained ? [path.join(import.meta.dir, "owned-runner.ts"), ...command] : command.slice(1), {
     cwd: root,
     env: {
-      ...sandboxEnvironment(sandbox), PORT: String(port),
+      ...fixtureEnvironment, PORT: String(port),
       ...(contained ? {
         XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
         DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
@@ -456,7 +457,7 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
       const body = await response.text();
       if (response.status === 200 && body.length > 0) {
         await verifyProvisioningTrace(root);
-        const evidence = await verifyProvisioningRelease(origin, sandbox, sandboxEnvironment(sandbox));
+        const evidence = await verifyProvisioningRelease(origin, sandbox, fixtureEnvironment);
         if (!log().some(line => line.includes(`"pipelineId":"${evidence.lane}"`) && line.includes('"phase":"toolchain-ready"'))) {
           throw new Error("provisioning fixture did not report a ready frame");
         }

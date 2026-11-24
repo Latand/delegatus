@@ -27,6 +27,17 @@ export async function removeProvisioningFixture(root) {
   await rm(root, { recursive: true, force: true });
 }
 
+export async function provisioningFixtureEnvironment(sandbox, env) {
+  const home = path.join(sandbox, "fixture-codex");
+  const binary = path.join(sandbox, "fixture-bin", "codex");
+  await mkdir(home, { recursive: true });
+  await mkdir(path.dirname(binary), { recursive: true });
+  // The admission read checks file presence. The fixture has no provider credentials.
+  await writeFile(path.join(home, "auth.json"), "{}\n", { mode: 0o600 });
+  await writeFile(binary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  return { ...env, LLV_CODEX_HOME: home, LLV_CODEX_BINARY: binary, PATH: [path.dirname(binary), env.PATH].filter(Boolean).join(path.delimiter) };
+}
+
 export async function seedProvisioningPackage(checkout, sandbox, env, bun) {
   const directory = await mkdtemp(path.join(sandbox, "provision-package-"));
   await mkdir(path.join(directory, "package"));
@@ -98,12 +109,19 @@ async function verifyFixtureLane(origin, checkout, remote, git) {
   const headers = { cookie, origin, "content-type": "application/json", "sec-fetch-site": "same-origin" };
   const created = await fetch(`${origin}/api/pipelines`, {
     method: "POST", headers, signal: AbortSignal.timeout(8_000),
-    body: JSON.stringify({ task: "Release fixture provisioning", repoDir: checkout, baseRef: planned, publication: "internal",
-      stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Return the fixture verdict.", next: null }] }),
+    body: JSON.stringify({ task: "Release fixture provisioning", repoDir: checkout, baseRef: planned, publication: "internal", autoStart: false,
+      stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", prompt: "Return the fixture verdict.", next: null }] }),
   });
   const accepted = await created.json();
   const laneId = accepted.pipeline?.id;
   if (!created.ok || typeof laneId !== "string") throw new Error(`provisioning fixture creation refused (${created.status})`);
+  const started = await fetch(`${origin}/api/pipelines/${encodeURIComponent(laneId)}`, {
+    method: "PATCH", headers, signal: AbortSignal.timeout(8_000), body: JSON.stringify({ action: "start" }),
+  });
+  const startedBody = await started.json();
+  if (!started.ok || startedBody.pipeline?.state !== "provisioning") {
+    throw new Error(`provisioning fixture draft start refused (${started.status})`);
+  }
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     const response = await fetch(`${origin}/api/pipelines/${encodeURIComponent(laneId)}`, { headers, signal: AbortSignal.timeout(5_000) });
@@ -143,11 +161,11 @@ export async function serveProvisioningFixture({ root, bun, standalone = false, 
   const sandbox = await mkdtemp(path.join(temporaryRoot, "provision-release-"));
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
-  const env = {
+  const env = await provisioningFixtureEnvironment(sandbox, {
     PATH: process.env.PATH, HOME: sandbox, TMPDIR: sandbox, XDG_CONFIG_HOME: path.join(sandbox, "config"),
     LLV_STATE_DIR: path.join(sandbox, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
     LLV_BUN_EXECUTABLE: bun, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", HOSTNAME: "127.0.0.1", PORT: String(port),
-  };
+  });
   const child = spawn(bun, standalone ? ["--no-env-file", "server.js"] :
     ["--no-env-file", "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: root, env, stdio: ["ignore", "pipe", "pipe"],
