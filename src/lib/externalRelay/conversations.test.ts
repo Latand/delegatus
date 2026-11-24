@@ -25,16 +25,14 @@ test("both cleanup paths refuse another parent, traversal spelling and a final s
     const outside = path.join(root, path.basename(minted)); fs.mkdirSync(outside); fs.writeFileSync(outside + "/keep", "owned");
     const traversal = path.dirname(minted) + "/x/../" + path.basename(minted);
     for (const cwd of [outside, traversal]) {
-      let refused = false; try { await remove({ ...record, cwd }); } catch { refused = true; }
-      expect(refused).toBeTrue(); expect(fs.readFileSync(outside + "/keep", "utf8")).toBe("owned");
+      expect(await remove({ ...record, cwd })).toBeFalse(); expect(fs.readFileSync(outside + "/keep", "utf8")).toBe("owned");
     }
     // Only the test-created fake target can be affected if the guard regresses.
     fs.symlinkSync(outside, minted);
-    let refused = false; try { await remove(record); } catch { refused = true; }
-    expect(refused).toBeTrue(); expect(fs.readFileSync(outside + "/keep", "utf8")).toBe("owned");
+    expect(await remove(record)).toBeFalse(); expect(fs.readFileSync(outside + "/keep", "utf8")).toBe("owned");
     fs.unlinkSync(minted); fs.mkdirSync(minted); fs.writeFileSync(minted + "/owned", "fixture");
     expect(fs.realpathSync(minted).startsWith(fs.realpathSync(os.tmpdir()) + path.sep)).toBeTrue();
-    await remove(record); expect(fs.existsSync(minted)).toBeFalse(); releaseConversation(record.id);
+    expect(await remove(record)).toBeTrue(); expect(fs.existsSync(minted)).toBeFalse(); releaseConversation(record.id);
     fs.rmSync(outside, { recursive: true, force: true });
   }
 });
@@ -406,3 +404,45 @@ test("both prompt paths retain at most 200 seen ids after another full window", 
   }
 });
 type RelayConversationForPrompt = import("./conversations").RelayConversation;
+
+for (const asyncSweep of [false, true]) test(`${asyncSweep ? "async" : "sync"} maintenance leaves a record from another temp root on disk and still expires the rest`, async () => {
+  const foreignRoot = fs.mkdtempSync(path.join(root, "previous-tmp-"));
+  const valid = reserveChainConversation(relay, target, request("valid-root"), "member")!;
+  releaseConversation(valid.id, { lastTurnAt: "2026-10-01T00:00:00Z" });
+  const foreign = reserveChainConversation(relay, target, request("foreign-root"), "member")!;
+  const foreignCwd = path.join(foreignRoot, path.basename(foreign.cwd!));
+  releaseConversation(foreign.id, { lastTurnAt: "2026-10-01T00:00:00Z", cwd: foreignCwd });
+  fs.mkdirSync(valid.cwd!, { recursive: true }); fs.writeFileSync(valid.cwd! + "/owned", "fixture");
+  fs.mkdirSync(foreignCwd); fs.writeFileSync(foreignCwd + "/keep", "foreign");
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const now = Date.parse("2026-10-04T00:00:00Z") + 1;
+    if (asyncSweep) await sweepConversationsAsync([relay], now, Date.now() + 5000);
+    else sweepConversations([relay], [], now);
+    expect(readConversations().filter(row => [valid.id, foreign.id].includes(row.id))).toEqual([]);
+    expect(fs.existsSync(valid.cwd!)).toBeFalse();
+    expect(fs.readFileSync(foreignCwd + "/keep", "utf8")).toBe("foreign");
+    expect(warn).toHaveBeenCalled();
+  } finally { warn.mockRestore(); fs.rmSync(foreignRoot, { recursive: true, force: true }); }
+});
+
+for (const asyncReserve of [false, true]) test(`${asyncReserve ? "async" : "sync"} capacity eviction of a record from another temp root still admits the new chain`, async () => {
+  const foreignRoot = fs.mkdtempSync(path.join(root, "previous-tmp-"));
+  const seed = reserveChainConversation(relay, target, request(), "member")!;
+  const rows = Array.from({ length: 300 }, (_, i) => {
+    const id = `00000000-0000-0000-0000-${String(i).padStart(12, "0")}`;
+    return { ...seed, id, anchors: [`cap-${i}`], state: "idle" as const, runningRequestId: null, lastTurnAt: new Date(i * 1000).toISOString(),
+      cwd: i === 0 ? path.join(foreignRoot, `llv-relay-conv-${id}`) : path.join(path.dirname(seed.cwd!), `llv-relay-conv-${id}`) };
+  });
+  fs.mkdirSync(rows[0]!.cwd); fs.writeFileSync(rows[0]!.cwd + "/keep", "foreign");
+  writeRelayFile(path.join(root, "external-relay/conversations.json"), { v: 2, conversations: rows });
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const admitted = asyncReserve
+      ? await reserveChainConversationAsync(relay, target, request("after-cap"), "member", Date.now() + 5000)
+      : reserveChainConversation(relay, target, request("after-cap"), "member");
+    expect(admitted).not.toBeNull();
+    expect(readConversations().some(row => row.id === rows[0]!.id)).toBeFalse();
+    expect(fs.readFileSync(rows[0]!.cwd + "/keep", "utf8")).toBe("foreign");
+  } finally { warn.mockRestore(); fs.rmSync(foreignRoot, { recursive: true, force: true }); }
+});

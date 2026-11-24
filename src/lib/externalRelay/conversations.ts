@@ -232,40 +232,56 @@ function conversationTemporaryRoot() {
   const temporary = path.resolve(os.tmpdir()), home = path.resolve(os.homedir());
   return temporary === home || temporary.startsWith(home + path.sep) ? "/tmp" : temporary;
 }
-function assertConversationDirectory(record: RelayConversation) {
+const mintedConversationDirectory = (id: string) => path.join(conversationTemporaryRoot(), `llv-relay-conv-${id}`);
+/** Whether the record's directory is one this module minted under the current
+    temp root. A record from another root (a TMPDIR or deploy change between
+    releases) or a substituted path is left on disk and logged, never thrown:
+    one stale record must not stop maintenance or a requester's next turn. */
+function ownedConversationDirectory(record: RelayConversation): boolean {
   const cwd = record.cwd;
-  const refuse = (): never => { console.warn("[external relay] refused deletion of an invalid conversation directory"); throw new Error("invalid conversation directory"); };
+  const refuse = () => { console.warn("[external relay] left a conversation directory outside the minting root on disk"); return false; };
   if (!cwd || !/^[0-9a-f-]{36}$/.test(record.id) || path.basename(cwd) !== `llv-relay-conv-${record.id}`
-    || cwd !== path.join(conversationTemporaryRoot(), `llv-relay-conv-${record.id}`)) return refuse();
+    || cwd !== mintedConversationDirectory(record.id)) return refuse();
   // Missing owned directories are already clean. Never follow a substituted
   // final link or a parent that has moved outside the minting root.
   const stat = fs.lstatSync(cwd, { throwIfNoEntry: false });
   if (stat && (!stat.isDirectory() || stat.isSymbolicLink()
-    || fs.realpathSync(path.dirname(cwd)) !== fs.realpathSync(conversationTemporaryRoot()))) refuse();
+    || fs.realpathSync(path.dirname(cwd)) !== fs.realpathSync(conversationTemporaryRoot()))) return refuse();
+  return true;
 }
-export function deleteConversationFiles(record: RelayConversation) {
-  if (elevatedConversationAuthority(record.authority)) return;
+/** Removes the record's files. Returns false when its working directory (and
+    the transcripts named after it) were left in place; the record's own state
+    directory, named by its validated id, is still removed. */
+export function deleteConversationFiles(record: RelayConversation): boolean {
+  if (elevatedConversationAuthority(record.authority)) return true;
   // Only the reserved directories minted by this module may be removed.
-  assertConversationDirectory(record);
+  const owned = ownedConversationDirectory(record);
+  if (/^[0-9a-f-]{36}$/.test(record.id)) fs.rmSync(statePath(`external-relay/conversations/${record.id}`), { recursive: true, force: true });
+  if (!owned) return false;
   fs.rmSync(record.cwd!, { recursive: true, force: true });
-  fs.rmSync(statePath(`external-relay/conversations/${record.id}`), { recursive: true, force: true });
   for (const root of claudeProjectRoots()) fs.rmSync(path.join(root, encodedCwd(record.cwd!)), { recursive: true, force: true });
+  return true;
 }
-export async function deleteConversationFilesAsync(record: RelayConversation): Promise<void> {
-  if (elevatedConversationAuthority(record.authority)) return;
-  assertConversationDirectory(record);
+export async function deleteConversationFilesAsync(record: RelayConversation): Promise<boolean> {
+  if (elevatedConversationAuthority(record.authority)) return true;
+  const owned = ownedConversationDirectory(record);
+  const state = /^[0-9a-f-]{36}$/.test(record.id) ? [fs.promises.rm(statePath(`external-relay/conversations/${record.id}`), { recursive: true, force: true })] : [];
+  if (!owned) { await Promise.all(state); return false; }
   await Promise.all([
     fs.promises.rm(record.cwd!, { recursive: true, force: true }),
-    fs.promises.rm(statePath(`external-relay/conversations/${record.id}`), { recursive: true, force: true }),
+    ...state,
     ...claudeProjectRoots().map(root => fs.promises.rm(path.join(root, encodedCwd(record.cwd!)), { recursive: true, force: true })),
   ]);
+  return true;
 }
+// A refreshed record whose old directory was left behind starts over in a
+// freshly minted one, so its next session never runs in the foreign path.
 function fresh(record: RelayConversation) {
-  deleteConversationFiles(record);
+  if (!deleteConversationFiles(record) && record.cwd) record.cwd = mintedConversationDirectory(record.id);
   resetConversationFields(record);
 }
 async function freshAsync(record: RelayConversation) {
-  await deleteConversationFilesAsync(record);
+  if (!await deleteConversationFilesAsync(record) && record.cwd) record.cwd = mintedConversationDirectory(record.id);
   resetConversationFields(record);
 }
 function resetConversationFields(record: RelayConversation) {
@@ -372,7 +388,7 @@ function reservation(relay: PairedRelay, target: RelayTargetSettings, request: E
       const id = randomUUID(); const now = new Date().toISOString();
       record = { id, relayId: relay.id, targetId: target.id, chatKey: request.chat!.key, requesterKey: request.input.requester!.key,
         authority, anchors: [], conversationId: null, engine: target.engine === "codex-cloud" ? "codex" : target.engine!, sessionId: null, accountId: null,
-        cwd: elevatedConversationAuthority(authority) ? null : path.join(conversationTemporaryRoot(), `llv-relay-conv-${id}`),
+        cwd: elevatedConversationAuthority(authority) ? null : mintedConversationDirectory(id),
         turns: 0, turnsSinceCompaction: 0, createdAt: now, lastTurnAt: now, seen: [], staticDigest: null, lastPromptTokens: null, compactions: 0, state: "idle", runningRequestId: null };
       rows.push(record);
     }
@@ -400,7 +416,7 @@ function reservationAsync(relay: PairedRelay, target: RelayTargetSettings, reque
       const id = randomUUID(); const now = new Date().toISOString();
       record = { id, relayId: relay.id, targetId: target.id, chatKey: request.chat!.key, requesterKey: request.input.requester!.key,
         authority, anchors: [], conversationId: null, engine: target.engine === "codex-cloud" ? "codex" : target.engine!, sessionId: null, accountId: null,
-        cwd: elevatedConversationAuthority(authority) ? null : path.join(conversationTemporaryRoot(), `llv-relay-conv-${id}`),
+        cwd: elevatedConversationAuthority(authority) ? null : mintedConversationDirectory(id),
         turns: 0, turnsSinceCompaction: 0, createdAt: now, lastTurnAt: now, seen: [], staticDigest: null, lastPromptTokens: null, compactions: 0, state: "idle", runningRequestId: null };
       rows.push(record); changed = true;
     }

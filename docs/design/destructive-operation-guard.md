@@ -179,6 +179,14 @@ All entries are stored both as written and as `realpath`; a symlinked entry
 | Service files | `$XDG_CONFIG_HOME/systemd/user` |
 | Projects | every root from `localProjectDirectories()` (`src/lib/scanner/projectDirectories.ts:92`; `knownProjectRoots` caps at 40, so a new uncapped export is needed), the curation store's manual projects, and the `worktreeDir` of every open pipeline |
 
+A project root is sealed only when it is narrower than the places every agent
+legitimately writes: never `/`, a top-level directory, the home or one of its
+ancestors, or a temp root (`/tmp`, `/var/tmp`, the temp directory) or one of its
+ancestors. The catalog records sessions whose working directory was the home,
+and sealing that entry would refuse every delete under the home
+(`sealableProject` in `bin/destructive-guard.mjs`; `readPolicy` applies the same
+filter to a policy file written before it existed).
+
 The agent's own worktree is removed from the project entries for that agent
 only. Ancestors need no list of their own: the evaluator refuses any T that is
 a prefix of a home or sealed entry, which covers `~/.config`, `~/Projects`,
@@ -324,7 +332,13 @@ inspects:
 Words are expanded the way the shell would, as far as the hook can know:
 `~` and `~user`; variables assigned earlier in the same command text; `HOME`,
 `TMPDIR` and `PWD` from the hook's environment; relative paths against the
-input's `cwd` (which Codex sets to the effective `workdir`, section 3).
+input's `cwd` (which Codex sets to the effective `workdir`, section 3), moved
+by literal `cd`, `pushd` and `popd` earlier in the same command list; a
+subshell's directory changes end with it. A directory the hook cannot resolve
+takes its empty-expansion form (an empty unquoted operand is the home, a quoted
+one stays), and a refusal under it is reported as that expansion. ANSI-C
+quoting (`$'…'`) is decoded with its backslash escapes, and `$"…"` is read as
+`"…"`.
 Unquoted glob words are enumerated with the filesystem (at most 10 000
 matches; more is refused as too broad), and each match is evaluated.
 
@@ -444,11 +458,18 @@ Nothing crosses machines for item 2.
 
 The account-file install also guards sessions the operator starts by hand on
 those accounts (the requirement says every account). Such a session has no
-guard environment: its hook evaluates with no own roots, against the policy
-file, and refuses only deletes of the home, structural or sealed entries. The
-operator's own commands in a terminal are untouched: hooks fire on agent tool
-calls and the wrappers exist only in Delegatus launch environments. This keeps
-the owner's manual tier unrestricted.
+guard environment, and an operator terminal launch names no working tree
+(it marks itself with `LLV_DESTRUCTIVE_GUARD_SESSION_ROOT=1`). In both cases
+the hook owns the project the session reports working in: the checkout top
+level of the input's `cwd`, else the deepest recorded project containing it,
+else that directory, never the home, `/` or anything inside a protected
+non-project entry. Everything else is evaluated against the policy file as
+for a launched agent, so another project, account directories and state stay
+refused. The wrappers of a marked terminal launch do the same from their own
+working directory. A launched agent never gains the project its tool call runs
+in. The operator's own commands in a terminal are untouched: hooks fire on
+agent tool calls and the wrappers exist only in Delegatus launch environments.
+This keeps the owner's manual tier unrestricted.
 
 ## 7. Item 3: the nested-command layer
 
@@ -473,6 +494,7 @@ before both.
 | `LLV_DESTRUCTIVE_GUARD_POLICY` | absolute path of `policy.json` |
 | `LLV_DESTRUCTIVE_GUARD_OWN` | own roots, real paths joined by `:` (a root containing `:` is dropped) |
 | `LLV_DESTRUCTIVE_GUARD_FAST` | the own roots that contain no sealed entry (fast path) |
+| `LLV_DESTRUCTIVE_GUARD_SESSION_ROOT` | `1` when the launch named no working tree (section 6.6) |
 | `LLV_DESTRUCTIVE_GUARD_JOURNAL` | absolute path of the refusal journal in the real state directory |
 | `LLV_DESTRUCTIVE_GUARD_CALLER` | sha256 of the launch's spawn capability, when it has one (never the capability itself) |
 | `LLV_DESTRUCTIVE_GUARD_BUN` | the host interpreter for the slow path; the wrapper falls back to `command -v bun`, then `node` |
@@ -718,7 +740,7 @@ reviewer of this lane reads the rendered scaffolds.
 | **High** `scripts/gate-runner/harness.fixture.ts:65,82`: the `ssh` stub runs the received command with `/bin/bash -c` on this host | The stub never hands received text to a shell. It matches the command against the closed set the client sends (`client.ts:175-181` probe, `:734` `serve.ts run`, `:816` `remove`, `:874` `mkdir -p ~/runs/<id> && tar -xf - -C ~/runs/<id>`, `:934` `pack-outputs`), with `<id>` limited to the client's id alphabet, maps `~` to the harness's runner home, and dispatches to a fixed action: `spawn(argv)` without a shell for `serve.ts` from the run directory, `fs.mkdirSync` plus `tar` with an argv for the upload, a probe answer computed by the stub. Anything else is recorded and answered with exit 255. The `systemd-run` branch (`:80-82`) runs the same fixed argv. | Sending `touch <marker>` through the stub leaves no marker and records the refusal; every `scripts/gate-runner/remote*.test.ts` passes |
 | **Medium** `scripts/gateSandboxRecords.ts:31`: without an allocation record, `releaseGateSandbox` removes the directory with no prefix, realpath or symlink check | `recordGateSandbox` always keeps the identity (realpath, dev, ino) in memory and journals it only when `LLV_GATE_SANDBOX_RECORD` is set; `releaseGateSandbox` of a directory with no identity throws and deletes nothing; with one, the existing identity checks (`:35-37`) apply | Releasing a never-recorded directory throws and the directory survives; a recorded directory replaced by a symlink throws and the link target survives; a recorded directory is removed |
 | **Medium** `scripts/gate-runner/serve.ts:390`: production code runs `LLV_GATE_RUNNER_TEST_AFTER_INSTALL` as a shell command | The shell seam is removed. The two tests that need it (`remoteTree.test.ts:22` appends to a file after install; `remoteLifecycle.test.ts:193` holds a lock during install) use a typed seam, `LLV_GATE_RUNNER_TEST_AFTER_INSTALL_ACTION`, a JSON object with exactly one of `{ append: { file, text } }` (file relative, inside the materialised tree) or `{ hold: { lock, mark } }` (both inside the run directory); anything else fails setup with step `manifest` | Setting the old variable to `touch <marker>` creates no marker; an action naming `../x` or an absolute path outside the run directory fails setup; both tests pass with the typed seam |
-| **Low** `src/lib/externalRelay/conversations.ts:227-241`: the recursive delete checks only the basename | Both delete functions also require that `realpath(dirname(cwd))` equals the realpath of a root the module mints under (`os.tmpdir()`, or `/tmp` when the temp root is under home, `:353-356`), that the cwd is exactly one segment below it, and that `lstat(cwd)` is a directory; a record that fails is left on disk and logged | A record whose cwd is `<other dir>/llv-relay-conv-<id>`, or `<tmp>/x/../llv-relay-conv-<id>` resolving elsewhere, or a symlink with the right name, throws and the target survives; a minted directory is removed |
+| **Low** `src/lib/externalRelay/conversations.ts:227-241`: the recursive delete checks only the basename | Both delete functions also require that `realpath(dirname(cwd))` equals the realpath of a root the module mints under (`os.tmpdir()`, or `/tmp` when the temp root is under home, `:353-356`), that the cwd is exactly one segment below it, and that `lstat(cwd)` is a directory; a record that fails is left on disk and logged, and the pass continues: the record is still dropped (or, when refreshed, re-minted under the current root) and its id-named state directory removed | A record whose cwd is `<other dir>/llv-relay-conv-<id>`, or `<tmp>/x/../llv-relay-conv-<id>` resolving elsewhere, or a symlink with the right name, is refused and the target survives; a minted directory is removed; a maintenance pass or a capacity eviction that meets a record from another temp root completes |
 
 ## 12. The safe test harness
 

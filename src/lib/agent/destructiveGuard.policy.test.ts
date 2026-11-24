@@ -1,9 +1,11 @@
 // destructive-code: head-only; every executable target belongs to guardFixture.
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { evaluate, inspectShell, checkCommand, readPolicy, stopMessage } from "../../../bin/destructive-guard.mjs";
 import { guardFixture } from "./destructiveGuard.fixture";
+import { computeDestructivePolicy } from "./destructiveGuard";
 const fixtures: ReturnType<typeof guardFixture>[] = [];
 afterEach(() => { for (const fixture of fixtures.splice(0)) fixture.cleanup(); });
 function fixture() { const value = guardFixture(); fixtures.push(value); return value; }
@@ -196,4 +198,63 @@ test("a container-only interpreter path falls back to the child's available runt
   fs.writeFileSync(f.cwd + "/output", "owned"); f.assertOwned(f.cwd + "/output");
   expect(f.run("rm", ["-f", "output"], env).exitCode).toBe(0);
   expect(fs.existsSync(f.cwd + "/output")).toBeFalse();
+});
+
+test("a catalogued home, its ancestors, top-level directories and temp roots are never sealed as projects", () => {
+  const f = fixture();
+  // The fixture's operator list seals the fake home itself; this case needs the catalog alone.
+  fs.writeFileSync(path.join(f.state, "destructive-guard-protected.json"), "[]");
+  const temporary = fs.realpathSync(os.tmpdir());
+  const projects = [f.home, path.dirname(f.home), "/", "/home", "/tmp", temporary, path.join(f.home, "Projects/a")];
+  const policy = computeDestructivePolicy(f.env, { home: f.home, accounts: [f.env.CODEX_HOME!, f.env.CLAUDE_CONFIG_DIR!], projects });
+  const projectRoots = policy.sealed.filter(entry => entry.kind === "another project").map(entry => entry.path);
+  expect(projectRoots).toEqual([path.join(f.home, "Projects/a")]);
+  const context = { policy, own: [f.cwd, f.tmp], cwd: f.cwd };
+  fs.mkdirSync(path.join(f.home, "notes")); fs.writeFileSync(path.join(f.home, "notes/x"), "owned"); f.assertOwned(path.join(f.home, "notes/x"));
+  for (const command of [`rm '${f.home}/notes/x'`, `mv '${f.home}/notes/x' '${f.home}/notes/y'`, `echo hi > '${f.home}/notes/x'`, `rm -f '${f.home}/Downloads/f.zip'`]) {
+    expect(inspectShell(command, context), command).toBeNull();
+  }
+  for (const target of [f.home, path.join(f.home, ".ssh/id"), path.join(f.home, ".claude/.credentials.json"), path.join(f.state, "state.sqlite"), path.join(f.home, "Projects/a/file"), path.join(f.home, "Projects")]) {
+    expect(evaluate(target, context), target).not.toBeNull();
+  }
+  // A policy file written before the filter is narrowed when it is read.
+  const stale = path.join(f.tmp, "stale-policy.json");
+  fs.writeFileSync(stale, JSON.stringify({ ...policy, sealed: [...policy.sealed, { path: f.home, kind: "another project" }, { path: "/", kind: "another project" }, { path: temporary, kind: "another project" }] }));
+  const narrowed = readPolicy({ LLV_DESTRUCTIVE_GUARD_POLICY: stale });
+  expect(narrowed.sealed).toEqual(policy.sealed);
+  expect(evaluate(path.join(f.home, "notes/x"), { ...context, policy: narrowed })).toBeNull();
+});
+
+test("cd, pushd and popd move the directory relative targets resolve against", () => {
+  const f = fixture(), context = { policy: f.policy, own: [f.cwd, f.tmp], cwd: f.cwd };
+  const claude = path.join(f.home, ".claude");
+  for (const command of [`cd '${claude}' && : > .credentials.json`, `cd '${claude}' && unlink .credentials.json`, `cd '${claude}'; rm -f .credentials.json`,
+    `cd '${f.home}' && cd .claude && cp '${f.cwd}/x' .credentials.json`, `pushd '${f.state}' && rm -f keep`, `cd -P '${f.state}' && truncate -s 0 data`,
+    `builtin cd '${claude}' && shred -u .credentials.json`, `cd '${f.cwd}'; cd '${claude}' && dd if=/dev/zero of=.credentials.json`, `bash -c "cd '${claude}' && rmdir projects"`]) {
+    expect(inspectShell(command, context), command).not.toBeNull();
+  }
+  for (const command of ["cd sub && rm -rf build", `cd '${f.cwd}/sub' && rm -rf ../build`, `(cd '${claude}' && ls) && rm -rf build`, `pushd '${f.state}' && popd && rm -f build`,
+    `cd '${claude}' && cd '${f.cwd}' && rm -rf build`, `cd '${claude}' && cd - && rm -rf build`, `cd '${claude}' && rm -f '${f.cwd}/build'`, `cd '${claude}' && ls > '${f.tmp}/listing'`]) {
+    expect(inspectShell(command, context), command).toBeNull();
+  }
+  // An unresolvable directory uses its empty-expansion form: unquoted empty is the home.
+  const unknown = inspectShell("cd $UNKNOWN && rm -rf *", context, { HOME: f.home });
+  expect(unknown?.rule).toBe("empty-expansion"); expect(unknown?.variables).toEqual(["$UNKNOWN"]);
+  expect(stopMessage(unknown, "cd $UNKNOWN && rm -rf *")).toContain("$UNKNOWN");
+  expect(inspectShell(`cd "$UNKNOWN" && rm -rf build`, context)).toBeNull();
+  expect(inspectShell(`cd "$UNKNOWN"/.claude && : > .credentials.json`, { ...context, cwd: f.home })).toBeNull();
+  expect(inspectShell(`cd "\${UNKNOWN:?}" && rm -rf build`, context)).toBeNull();
+});
+
+test("ANSI-C quoting is lexed with its escapes and never turns into a parse error", () => {
+  const f = fixture(), context = { policy: f.policy, own: [f.cwd, f.tmp], cwd: f.cwd };
+  const credentials = path.join(f.home, ".claude/.credentials.json");
+  for (const command of [`echo $'it\\'s' > '${credentials}'`, `rm -rf '${f.state}'; echo $'it\\'s'`, `rm -rf $'${f.state.replaceAll("/", "\\x2f")}'`,
+    `X=$'${f.state}\\101'; rm -rf "$X"/..`, `printf $'a\\tb\\n' > $"${credentials}"`]) {
+    expect(inspectShell(command, context), command).not.toBeNull();
+  }
+  for (const command of [`printf $'a\\tb\\n'`, `printf $'\\u00e9\\cA\\0\\'"' > out`, `echo $"translated" > out`, `echo "$'" > out`]) {
+    expect(inspectShell(command, context), command).toBeNull();
+  }
+  expect(() => inspectShell("echo $'unterminated", context)).toThrow("unterminated shell quote");
 });

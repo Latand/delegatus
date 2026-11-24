@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { canonical, inside, passwdHome } from "../../../bin/destructive-guard.mjs";
+import { canonical, inside, passwdHome, PROJECT_KIND, sealableProject, temporaryRoots } from "../../../bin/destructive-guard.mjs";
 import { appConfigDir, stateDir } from "@/lib/configDir";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { listClaudeAccounts, legacyClaudeHome, claudeCapabilitiesRoot } from "@/lib/accounts/claude";
@@ -95,7 +95,13 @@ export function computeDestructivePolicy(source: Env, options: { home?: string; 
   add(path.join(config, "gh"), "forge credentials"); add(path.join(config, "systemd/user"), "service files");
   for (const account of options.accounts ?? [...listClaudeAccounts().map(account => account.home), ...listCodexAccounts().map(account => account.home), legacyClaudeHome(), claudeCapabilitiesRoot()]) add(account, "an account's credentials");
   for (const account of [source.CODEX_HOME, source.CLAUDE_CONFIG_DIR, source.LLV_CODEX_HOME, source.LLV_CLAUDE_HOME]) add(account, "an account's credentials");
-  for (const project of options.projects ?? [...knownProjectFileRoots(), ...projectCurationSnapshot().manualProjects.map(project => project.root)]) add(project, "another project");
+  // A catalogued session cwd can be the home, `/` or a temp root. Sealing one
+  // of those as a project would refuse every delete beneath it.
+  const homes = [...new Set([home, canonical(home)])], temporary = temporaryRoots([source.TMPDIR ?? ""]);
+  for (const project of options.projects ?? [...knownProjectFileRoots(), ...projectCurationSnapshot().manualProjects.map(project => project.root)]) {
+    if (!project || !path.isAbsolute(project)) continue;
+    for (const spelling of new Set([project, canonical(project)])) if (sealableProject(spelling, homes, temporary)) entries.push({ path: spelling, kind: PROJECT_KIND });
+  }
   let configured = options.previous?.configured ?? [];
   const file = path.join(state, "destructive-guard-protected.json");
   if (fs.existsSync(file)) {
@@ -109,10 +115,9 @@ export function computeDestructivePolicy(source: Env, options: { home?: string; 
   const protectedPaths = new Map<string, { path: string; kind: string }>();
   for (const entry of entries) {
     const previous = protectedPaths.get(entry.path);
-    if (!previous || previous.kind === "another project" && entry.kind !== "another project") protectedPaths.set(entry.path, entry);
+    if (!previous || previous.kind === PROJECT_KIND && entry.kind !== PROJECT_KIND) protectedPaths.set(entry.path, entry);
   }
   const sealed = [...protectedPaths.values()].sort((a, b) => a.path.localeCompare(b.path));
-  const homes = [...new Set([home, canonical(home)])];
   return { v: 1, digest: sha(JSON.stringify({ home: homes, sealed, configured })), computedAt: new Date().toISOString(), home: homes, sealed, configured };
 }
 function guardOff(reason: string) {
@@ -148,10 +153,13 @@ export function agentDestructiveGuardEnv(source: Env, { cwd }: { cwd: string }):
     // Keep a union in the shared artifact: one launch must never unseal another
     // launch's project. Own roots provide the per-agent exception at evaluation.
     const { policy, fastStamp } = refreshPolicy(source, installed);
-    const checkout = repositoryRootForPath(cwd);
-    const ownCwd = checkout && fs.lstatSync(path.join(checkout, ".git"), { throwIfNoEntry: false })?.isFile() ? checkout : cwd;
+    // `/` means the launch named no working tree (an operator terminal). Its
+    // hook and wrappers then own the project the session reports working in.
+    const sessionRoot = !cwd || cwd === "/";
+    const checkout = sessionRoot ? null : repositoryRootForPath(cwd);
+    const ownCwd = sessionRoot ? undefined : checkout && fs.lstatSync(path.join(checkout, ".git"), { throwIfNoEntry: false })?.isFile() ? checkout : cwd;
     const candidates = [ownCwd, source.TMPDIR, source.LLV_AGENT_SANDBOX_ROOT, source.LLV_EVIDENCE_DIR].filter((value): value is string => !!value && path.isAbsolute(value) && !value.includes(":"));
-    const own = [...new Set(candidates.map(canonical))].filter(root => !policy.home.some(home => home === root || inside(home, root)) && !policy.sealed.some(entry => entry.path === root && entry.kind !== "another project"));
+    const own = [...new Set(candidates.map(canonical))].filter(root => !policy.home.some(home => home === root || inside(home, root)) && !policy.sealed.some(entry => entry.path === root && entry.kind !== PROJECT_KIND));
     const fast = own.filter(root => !policy.sealed.some(entry => inside(entry.path, root)));
     const inheritedPath = (source.PATH || process.env.PATH || "/usr/bin:/bin").split(path.delimiter).filter(entry => !/\/delegatus\/agent-guard\/[^/]+$/.test(entry));
     const boundPath = [installed.directory, ...inheritedPath].join(path.delimiter);
@@ -162,6 +170,7 @@ export function agentDestructiveGuardEnv(source: Env, { cwd }: { cwd: string }):
       BASH_ENV: path.join(installed.directory, "shell-env.sh"), LLV_DESTRUCTIVE_GUARD_PREVIOUS_BASH_ENV: /\/delegatus\/agent-guard\//.test(source.BASH_ENV || "") ? source.LLV_DESTRUCTIVE_GUARD_PREVIOUS_BASH_ENV : source.BASH_ENV,
       LLV_DESTRUCTIVE_GUARD_DIR: installed.directory,
       LLV_DESTRUCTIVE_GUARD_POLICY: installed.policyFile, LLV_DESTRUCTIVE_GUARD_OWN: own.join(":"), LLV_DESTRUCTIVE_GUARD_FAST: fast.join(":"),
+      LLV_DESTRUCTIVE_GUARD_SESSION_ROOT: sessionRoot ? "1" : undefined,
       LLV_DESTRUCTIVE_GUARD_JOURNAL: path.join(source.LLV_STATE_DIR || stateDir(), "destructive-guard/refusals.ndjson"),
       LLV_DESTRUCTIVE_GUARD_CALLER: source.LLV_SPAWN_CAPABILITY ? sha(source.LLV_SPAWN_CAPABILITY) : source.LLV_DESTRUCTIVE_GUARD_CALLER,
       LLV_DESTRUCTIVE_GUARD_BUN: source.LLV_DESTRUCTIVE_GUARD_BUN || (source.LLV_DOCKER_NSENTER_SHIMS === "1" ? "bun" : process.versions.bun ? process.execPath : "bun"), LLV_DESTRUCTIVE_GUARD_NESTED: "on" };

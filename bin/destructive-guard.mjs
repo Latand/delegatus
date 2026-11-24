@@ -54,14 +54,55 @@ export function fallbackPolicy() {
     .map(name => ({ path: path.join(home, name), kind: 'protected account or configuration' }));
   return { v: VERSION, home: [...new Set([home, canonical(home)])], sealed, digest: 'fallback' };
 }
+export const PROJECT_KIND = 'another project';
+/** Temp roots a project entry must never cover: sealing one would refuse
+ * every scratch file on the machine. */
+export function temporaryRoots(extra = []) {
+  const roots = ['/tmp', '/var/tmp', os.tmpdir(), ...extra].filter(value => typeof value === 'string' && path.isAbsolute(value));
+  return [...new Set(roots.flatMap(value => [path.resolve(value), canonical(value)]))];
+}
+/** A recorded project root may be sealed only when it is narrower than the
+ * places every agent legitimately writes: never `/`, a top-level directory,
+ * the home or one of its ancestors, or a temp root or one of its ancestors.
+ * A session started in the home is catalogued as a project; sealing it would
+ * refuse every delete under the home. */
+export function sealableProject(value, homes, temporary = temporaryRoots()) {
+  if (value === '/' || path.dirname(value) === '/') return false;
+  return !homes.some(home => sameOrInside(home, value)) && !temporary.some(root => sameOrInside(root, value));
+}
 /** @param {Readonly<Record<string, string | undefined>>} env */
 export function readPolicy(env = process.env) {
   try {
     const policy = JSON.parse(fs.readFileSync(env.LLV_DESTRUCTIVE_GUARD_POLICY, 'utf8'));
     if (policy.v !== VERSION || typeof policy.digest !== 'string' || !/^[a-f0-9]{64}$/.test(policy.digest) || !Array.isArray(policy.home) || !policy.home.every(p => typeof p === 'string' && path.isAbsolute(p))
       || !Array.isArray(policy.sealed) || !policy.sealed.every(p => typeof p.path === 'string' && path.isAbsolute(p.path) && typeof p.kind === 'string')) throw Error('invalid policy');
+    // A policy file written before this filter existed is narrowed on read.
+    const temporary = temporaryRoots();
+    policy.sealed = policy.sealed.filter(entry => entry.kind !== PROJECT_KIND || sealableProject(entry.path, policy.home, temporary));
     return policy;
   } catch { return fallbackPolicy(); }
+}
+/** The project a session started without a launch working tree is working in:
+ * its checkout top level, else the deepest recorded project containing it,
+ * else the directory itself. Roots that are a home, `/`, or inside a
+ * protected non-project entry are never own. */
+export function sessionOwnRoot(cwd, policy) {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
+  let directory;
+  try { directory = canonical(cwd); } catch { return null; }
+  let root = null;
+  // A dotfiles repository at the home never makes the whole home own.
+  for (let candidate = directory; candidate !== '/' && !policy.home.some(home => sameOrInside(home, candidate)); candidate = path.dirname(candidate)) {
+    let marker; try { marker = fs.lstatSync(path.join(candidate, '.git'), { throwIfNoEntry: false }); } catch { /* unreadable parent */ }
+    if (marker) { root = candidate; break; }
+  }
+  if (!root) {
+    const projects = policy.sealed.filter(entry => entry.kind === PROJECT_KIND && sameOrInside(directory, entry.path)).map(entry => entry.path);
+    root = projects.sort((a, b) => b.length - a.length)[0] ?? directory;
+  }
+  if (root === '/' || path.dirname(root) === '/' || policy.home.some(home => sameOrInside(home, root))) return null;
+  if (policy.sealed.some(entry => entry.kind !== PROJECT_KIND && sameOrInside(root, entry.path))) return null;
+  return root;
 }
 export function resolveTarget(given, cwd, follow = false, parents = new Map()) {
   // path.resolve would erase a symlink/.. before realpath can see it.
@@ -90,7 +131,7 @@ export function evaluate(given, { policy, own = [], cwd = process.cwd(), follow 
     if (inside(home, resolved)) return deny('ancestor', home, 'an ancestor of your home');
   }
   for (const entry of policy.sealed) {
-    if (entry.kind === 'another project' && own.includes(entry.path)) continue;
+    if (entry.kind === PROJECT_KIND && own.includes(entry.path)) continue;
     if (resolved === entry.path || inside(entry.path, resolved)) return deny(resolved === entry.path ? 'sealed' : 'ancestor', entry.path, entry.kind);
   }
   const safeOwn = own.filter(root => root !== '/' && !policy.home.some(home => sameOrInside(home, root))
@@ -249,6 +290,13 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
   if (depth > 24) throw Error('shell nesting limit');
   let words = [], value = '', quote = '', started = false, glob = false, unknown = false, guarded = false, tilde = false, arrayDepth = 0, quotedWord = false, redirect = '';
   const redirects = [], stdinBodies = [];
+  // The working directory follows literal cd/pushd/popd through the command
+  // list; a subshell's changes end with it. A directory the hook cannot
+  // resolve uses its empty-expansion form, and a refusal of a relative target
+  // under it is reported as that expansion.
+  let cwd = context.cwd, oldCwd, cwdUnknown = null;
+  const directoryStack = [], subshells = [];
+  const here = () => ({ ...context, cwd });
   const variables = { HOME: process.env.HOME ?? '', TMPDIR: process.env.TMPDIR ?? '', PWD: context.cwd, ...vars };
   const unresolved = new Map();
   let unknownVariables = [];
@@ -257,7 +305,7 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
   let heredocStart = 0;
   const flush = () => {
     if (started) {
-      const token = { value, glob, unknown, guarded, tilde, unknownVariables };
+      const token = { value, glob, unknown, guarded, tilde, unknownVariables, quoted: quotedWord };
       if (redirect) { redirects.push({ ...token, redirect }); redirect = ''; } else words.push(token);
     }
     value = ''; started = glob = unknown = guarded = tilde = quotedWord = false;
@@ -271,7 +319,7 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
       try { const row = fs.readFileSync('/etc/passwd', 'utf8').split('\n').find(row => row.startsWith(user + ':')); if (row) text = row.split(':')[5] + text.slice(user.length + 1); } catch { /* platform without passwd */ }
     }
     if (!word.glob || !/[*?[]/.test(text)) return [text];
-    const absolute = path.isAbsolute(text) ? text : context.cwd + '/' + text;
+    const absolute = path.isAbsolute(text) ? text : cwd + '/' + text;
     let paths = ['/'];
     for (const part of absolute.split('/').filter(Boolean)) {
       const next = [];
@@ -288,10 +336,58 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
     }
     return paths.length ? paths : [text];
   };
+  const changeDirectory = (tool, args) => {
+    if (tool === 'popd') {
+      if (directoryStack.length) { oldCwd = cwd; ({ cwd, cwdUnknown } = directoryStack.pop()); }
+      return;
+    }
+    let physical = false, noChange = false, options = true; const operands = [];
+    for (const arg of args) {
+      if (options && arg.value === '--') { options = false; continue; }
+      if (options && /^-[LPe@n]+$/.test(arg.value)) { physical ||= arg.value.includes('P'); noChange ||= tool === 'pushd' && arg.value.includes('n'); continue; }
+      operands.push(arg);
+    }
+    if (noChange) return;
+    const previous = { cwd, cwdUnknown };
+    let next, unresolved = null, inherits = true;
+    const word = operands[0];
+    if (!word) {
+      if (tool === 'pushd') { if (!directoryStack.length) return; next = directoryStack.at(-1).cwd; unresolved = directoryStack.at(-1).cwdUnknown; }
+      else next = variables.HOME;
+    } else if (tool === 'pushd' && /^[-+]\d+$/.test(word.value)) {
+      next = cwd; unresolved = ['pushd ' + word.value];
+    } else if (word.value === '-' && !word.quoted) {
+      if (oldCwd === undefined) { unresolved = ['$OLDPWD']; next = cwd; } else next = oldCwd;
+    } else if (word.guarded) {
+      // ${X:?} stops the shell when X is empty; the directory is still unknown.
+      next = cwd; unresolved = ['$' + (word.unknownVariables[0] ?? 'X')];
+    } else {
+      const text = expand(word)[0] ?? '';
+      if (word.unknown || word.glob && /[*?[]/.test(text)) unresolved = word.unknownVariables.length ? word.unknownVariables : [text];
+      // Bash: an empty unquoted operand is `cd` (the home); a quoted one stays.
+      if (text === '') next = word.quoted ? cwd : variables.HOME;
+      else next = path.isAbsolute(text) ? text : cwd + '/' + text;
+      inherits = next !== variables.HOME && !path.isAbsolute(text);
+    }
+    if (!word && tool === 'cd') inherits = false;
+    if (!next || !path.isAbsolute(next)) { next = cwd; unresolved ??= ['cd']; }
+    try { next = physical ? canonical(next) : path.resolve(next); } catch { unresolved ??= [next]; next = path.resolve(next); }
+    if (tool === 'pushd') directoryStack.push(previous);
+    oldCwd = cwd; cwd = next; variables.PWD = next;
+    const base = inherits ? cwdUnknown ?? [] : [];
+    cwdUnknown = unresolved || base.length ? [...new Set([...base, ...(unresolved ?? [])])] : null;
+  };
+  const relativeUnderUnknown = before => {
+    if (!before && refusal && cwdUnknown && refusal.given && (!path.isAbsolute(refusal.given) || sameOrInside(refusal.given, cwd))) refusal = { ...refusal, rule: 'empty-expansion', variables: cwdUnknown };
+  };
   const inspect = () => {
     flush();
     let args = words; words = [];
     if (expansionsOnly) return;
+    const before = refusal;
+    try { inspectWords(args); } finally { relativeUnderUnknown(before); }
+  };
+  const inspectWords = args => {
     while (args.length && (/^[A-Za-z_]\w*=/.test(args[0].value) || ['!', 'if', 'then', 'else', 'do'].includes(args[0].value))) {
       const token = args.shift(), assignment = token.value.match(/^([A-Za-z_]\w*)=(.*)$/s);
       if (assignment) { variables[assignment[1]] = assignment[2]; unresolved.set(assignment[1], token.unknownVariables); }
@@ -299,18 +395,19 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
     for (const word of redirects.splice(0)) {
       if (word.redirect === 'here') stdinBodies.push(word.value);
       if (word.redirect === 'truncate' || word.redirect === 'dup' && !/^(?:\d+|-)$/.test(word.value)) {
-        for (const target of expand(word)) refusal ??= evaluate(target, { ...context, follow: true });
+        for (const target of expand(word)) refusal ??= evaluate(target, { ...here(), follow: true });
         if (refusal && word.unknown) refusal = { ...refusal, rule: 'empty-expansion', variables: word.unknownVariables };
       }
     }
     while (args.length) {
       const tool = path.basename(args.shift().value);
+      if (['cd', 'pushd', 'popd'].includes(tool)) { changeDirectory(tool, args); return; }
       if (['sh', 'bash', 'zsh', 'dash', 'ksh'].includes(tool)) {
         const index = args.findIndex(arg => /^-[^-]*c/.test(arg.value));
-        if (index >= 0) refusal ??= inspectShell(args[index + 1]?.value ?? '', context, variables, depth + 1);
+        if (index >= 0) refusal ??= inspectShell(args[index + 1]?.value ?? '', here(), variables, depth + 1);
         else if (!args.some(arg => !arg.value.startsWith('-') && arg.value !== '-')) {
           for (const document of heredocs.slice(heredocStart)) document.executable = true;
-          for (const body of stdinBodies.splice(0)) refusal ??= inspectShell(body, context, variables, depth + 1);
+          for (const body of stdinBodies.splice(0)) refusal ??= inspectShell(body, here(), variables, depth + 1);
         }
         return;
       }
@@ -330,12 +427,12 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
       if (['rm', 'rmdir', 'unlink', 'shred', 'truncate', 'find', 'rsync', 'mv', 'cp', 'dd'].includes(tool)) {
         if (tool === 'shred' && !args.some(arg => /^--remove|^-[^-]*u/.test(arg.value))) return;
         const expanded = args.flatMap(expand);
-        refusal ??= checkCommand(tool, expanded, context);
+        refusal ??= checkCommand(tool, expanded, here());
         if (tool === 'find') for (const execution of findActions(expanded).executions) {
           const nestedTool = path.basename(execution[0] ?? '');
           if (['rm', 'rmdir', 'unlink', 'shred', 'truncate', 'mv', 'rsync', 'cp', 'dd', 'sh', 'bash', 'zsh', 'dash', 'ksh'].includes(nestedTool)) {
-            refusal ??= inspectShell(execution.map(word => "'" + word.replaceAll("'", "'\\''") + "'").join(' '), context, variables, depth + 1);
-            if (execution.some(word => word.includes('{}'))) refusal ??= checkCommand('find', [...expanded, '-delete'], context);
+            refusal ??= inspectShell(execution.map(word => "'" + word.replaceAll("'", "'\\''") + "'").join(' '), here(), variables, depth + 1);
+            if (execution.some(word => word.includes('{}'))) refusal ??= checkCommand('find', [...expanded, '-delete'], here());
           }
         }
         if (refusal && args.some(arg => arg.unknown)) refusal = { ...refusal, rule: 'empty-expansion', variables: [...new Set(args.flatMap(arg => arg.unknownVariables))] };
@@ -343,10 +440,33 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
       return;
     }
   };
+  // Bash ANSI-C quoting: $'…' with backslash escapes. Returns the index of
+  // the closing quote; the decoded text joins the current word.
+  const ansiC = j => {
+    const simple = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' };
+    for (; j < command.length; j++) {
+      const t = command[j];
+      if (t === "'") return j;
+      if (t !== '\\') { value += t; continue; }
+      const e = command[++j];
+      if (e === undefined) break;
+      let digits;
+      if (e in simple) value += simple[e];
+      else if ((digits = command.slice(j).match(/^[0-7]{1,3}/))) { value += String.fromCharCode(parseInt(digits[0], 8) & 0xff); j += digits[0].length - 1; }
+      else if (e === 'x' && (digits = command.slice(j + 1).match(/^[0-9a-fA-F]{1,2}/))) { value += String.fromCharCode(parseInt(digits[0], 16)); j += digits[0].length; }
+      else if ((e === 'u' || e === 'U') && (digits = command.slice(j + 1).match(e === 'u' ? /^[0-9a-fA-F]{1,4}/ : /^[0-9a-fA-F]{1,8}/))) {
+        const point = parseInt(digits[0], 16); value += point <= 0x10ffff ? String.fromCodePoint(point) : ''; j += digits[0].length;
+      } else if (e === 'c' && j + 1 < command.length) { value += String.fromCharCode(command[++j].toUpperCase().charCodeAt(0) & 0x1f); }
+      else value += '\\' + e;
+    }
+    throw Error('unterminated shell quote');
+  };
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
     if (c === '\\' && quote !== "'") { const next = command[++i]; if (next !== '\n') { value += next ?? ''; started = quotedWord = true; } continue; }
     if (!expansionsOnly && c === quote) { quote = ''; continue; }
+    if (!expansionsOnly && !quote && c === '$' && command[i + 1] === '"') continue; // $"…" is a translated "…"
+    if (!expansionsOnly && !quote && c === '$' && command[i + 1] === "'") { i = ansiC(i + 2); started = quotedWord = true; continue; }
     if (!expansionsOnly && !quote && (c === "'" || c === '"')) { quote = c; started = quotedWord = true; continue; }
     if (quote !== "'" && (c === '`' || c === '$' && command[i + 1] === '(' || !expansionsOnly && !quote && /[<>]/.test(c) && command[i + 1] === '(')) {
       const backtick = c === '`', start = i + (backtick ? 1 : 2);
@@ -359,7 +479,7 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
         if (!innerQuote && t === '(') level++;
         if (!innerQuote && t === ')' && --level === 0) break;
       }
-      refusal ??= inspectShell(command.slice(start, end), context, variables, depth + 1);
+      refusal ??= inspectShell(command.slice(start, end), here(), variables, depth + 1);
       unknownVariables.push(backtick ? '`…`' : '$(…)'); unknown = started = true; i = end; continue;
     }
     if (quote !== "'" && c === '$') {
@@ -412,6 +532,11 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
     if (!quote && c === '#' && !started) { while (i < command.length && command[i] !== '\n') i++; }
     if (!quote && /[;|&\n(){}]/.test(command[i] ?? '')) {
       inspect();
+      if (!expansionsOnly && command[i] === '(') subshells.push({ cwd, cwdUnknown, oldCwd, stack: directoryStack.length });
+      if (!expansionsOnly && command[i] === ')' && subshells.length) {
+        const saved = subshells.pop();
+        ({ cwd, cwdUnknown, oldCwd } = saved); directoryStack.length = Math.min(directoryStack.length, saved.stack); variables.PWD = cwd;
+      }
       if (command[i] === '\n') {
         let offset = i + 1;
         for (const document of heredocs.splice(0)) {
@@ -423,7 +548,7 @@ export function inspectShell(command, context, vars = {}, depth = 0, expansionsO
             if (line === document.delimiter) break;
             body += line + '\n';
           }
-          if (document.executable || !document.literal) refusal ??= inspectShell(body, context, variables, depth + 1, !document.executable);
+          if (document.executable || !document.literal) refusal ??= inspectShell(body, here(), variables, depth + 1, !document.executable);
         }
         if (offset !== i + 1) i = offset - 1;
         heredocStart = 0; stdinBodies.length = 0;
@@ -482,7 +607,15 @@ export function journal(layer, tool, command, cwd, refusal, input = {}, env = pr
 async function main() {
   const [mode, tool, ...rest] = process.argv.slice(2);
   if (mode === 'version') { console.log(VERSION, hash(fs.readFileSync(fileURLToPath(import.meta.url)))); return; }
-  const policy = readPolicy(), own = (process.env.LLV_DESTRUCTIVE_GUARD_OWN ?? '').split(':').filter(Boolean);
+  const policy = readPolicy(), launchOwn = process.env.LLV_DESTRUCTIVE_GUARD_OWN, own = (launchOwn ?? '').split(':').filter(Boolean);
+  // A launch that named no working tree (an operator terminal) marks itself;
+  // an account hook in a manual session has no launch environment at all.
+  // Both own the project the session is working in, as the engine reports it.
+  const sessionRoot = process.env.LLV_DESTRUCTIVE_GUARD_SESSION_ROOT === '1';
+  const ownFor = (directory, manual) => {
+    const root = sessionRoot || manual ? sessionOwnRoot(directory, policy) : null;
+    return root && !own.includes(root) ? [...own, root] : own;
+  };
   let input = {}, command = '', cwd = process.cwd();
   try {
     if (mode === 'hook') {
@@ -496,14 +629,14 @@ async function main() {
       const candidate = input.tool_input?.command ?? input.tool_input?.cmd;
       if (typeof candidate !== 'string') throw Error('invalid hook command');
       command = candidate;
-      const refusal = inspectShell(command, { policy, own, cwd });
+      const refusal = inspectShell(command, { policy, own: ownFor(cwd, launchOwn === undefined), cwd });
       if (refusal) {
         try { journal('hook', input.tool_name ?? 'Bash', command, cwd, refusal, input); } catch (error) { console.error('Delegatus guard journal unavailable:', error.message); }
         console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: stopMessage(refusal, command) } }));
       }
     } else if (mode === 'check') {
       const args = rest[0] === '--' ? rest.slice(1) : rest; command = [tool, ...args].join(' ');
-      const refusal = checkCommand(tool, args, { policy, own, cwd });
+      const refusal = checkCommand(tool, args, { policy, own: ownFor(cwd, false), cwd });
       if (refusal) {
         try { journal('wrapper', tool, command, cwd, refusal); } catch (error) { console.error('Delegatus guard journal unavailable:', error.message); }
         console.error(stopMessage(refusal, command)); process.exitCode = 1;

@@ -744,3 +744,32 @@ test("registered Claude Viewer endpoints do not inherit credentials from the par
     }
   }
 });
+
+test("an operator terminal launch without a working tree owns the project its session works in", () => {
+  const accountHome = home(), root = fs.realpathSync(home());
+  const fakeHome = path.join(root, "home"), project = path.join(fakeHome, "Projects/p"), other = path.join(fakeHome, "Projects/q"), worktree = path.join(root, "worktree");
+  for (const directory of [project + "/.git", other, worktree, fakeHome + "/.ssh"]) fs.mkdirSync(directory, { recursive: true });
+  const terminal = JSON.parse(fs.readFileSync(applyClaudeSpawnPolicy(accountHome, { profileId: "terminal-guard" }).settingsPath, "utf8")).env as Record<string, string>;
+  const launched = JSON.parse(fs.readFileSync(applyClaudeSpawnPolicy(accountHome, { profileId: "launch-guard", cwd: worktree }).settingsPath, "utf8")).env as Record<string, string>;
+  if (process.platform === "win32") return;
+  expect(terminal.LLV_DESTRUCTIVE_GUARD_SESSION_ROOT).toBe("1");
+  expect(terminal.LLV_DESTRUCTIVE_GUARD_OWN.split(":")).not.toContain("/");
+  expect(launched.LLV_DESTRUCTIVE_GUARD_SESSION_ROOT).toBeUndefined();
+  expect(launched.LLV_DESTRUCTIVE_GUARD_OWN.split(":")).toContain(worktree);
+  // Evaluate against a test-owned policy that seals both projects and a secrets directory.
+  const policyFile = path.join(root, "policy.json");
+  fs.writeFileSync(policyFile, JSON.stringify({ v: 1, digest: "a".repeat(64), home: [fakeHome], sealed: [
+    { path: project, kind: "another project" }, { path: other, kind: "another project" }, { path: fakeHome + "/.ssh", kind: "an account or secrets directory" }] }));
+  const decide = (env: Record<string, string>, command: string) => {
+    const input = { session_id: "terminal", cwd: project, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } };
+    const result = Bun.spawnSync([process.execPath, path.join(env.LLV_DESTRUCTIVE_GUARD_DIR!, "destructive-guard.mjs"), "hook"], { cwd: root, stdout: "pipe", stderr: "pipe", stdin: Buffer.from(JSON.stringify(input)),
+      env: { ...env, HOME: fakeHome, LLV_DESTRUCTIVE_GUARD_POLICY: policyFile, LLV_DESTRUCTIVE_GUARD_JOURNAL: path.join(root, "journal.ndjson") } });
+    expect(result.exitCode).toBe(0);
+    return result.stdout.toString() ? "deny" : "allow";
+  };
+  for (const command of ["rm -rf dist", "mv a.txt b.txt", "rm notes.txt", "echo hi > out.txt", "cp a b"]) {
+    expect(decide(terminal, command), command).toBe("allow");
+    expect(decide(launched, command), command).toBe("deny");
+  }
+  for (const command of [`rm -rf '${other}'`, "rm -rf ~/.ssh"]) expect(decide(terminal, command), command).toBe("deny");
+});
