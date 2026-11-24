@@ -248,8 +248,11 @@ not checked in for 60 seconds is passed over, and after 24 hours removed. A
 dead owner is removed as before. Each of these writes one line naming the
 ticket and the reason. A bounded Linux gate waiter also yields its place after 60
 seconds without a poll, even when its wrapper is still alive. Linux helpers
-persist the poll on the shared boot clock. A poll by an older helper clears
-that sample and the next observer starts a fresh interval. A returning waiter
+persist the poll on the host's boot clock, converted out of their own time
+namespace, so pollers in different namespaces age it alike. A helper that
+cannot read its namespace offset uses the poll's wall-clock age. A poll by
+an older helper clears that sample and the next observer starts a fresh
+interval. A returning waiter
 restores its original order and age. Other verified command owners keep their
 places. A start still needs its slot lock and the spacing when a ticket is
 passed over.
@@ -741,8 +744,11 @@ must agree with the launch, and it lets the preparer start the checkout root's
 copy of the hook. On its own it exempts nothing. During cutover, the known
 deployed dispatchers (the base of this protocol and main after #4376) can
 still establish the direct launch from their live parent identity. An older
-ordinary wrapper from the same releases also needs its own covered journal
-history and service invocation. A nested gate's ticket identifies only the
+ordinary wrapper from the same releases takes its bypass for the hook's argv
+and execs the runner in place, on the service and on the portable fallback.
+Where the journal covers that runner it must show no retirement. Before that,
+the runner must not be a child of a live wrapper shell, which is how those
+releases run an admitted command. A nested gate's ticket identifies only the
 nested gate. Possible legacy holders continue to fence the first claim until
 they exit.
 A held slot whose admission already passed the drain check carries that proof

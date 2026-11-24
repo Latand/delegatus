@@ -730,6 +730,83 @@ for (const platform of ["linux", "win32"] as const) test.skipIf(platform === "li
     }
   }, 15_000);
 
+// Each poller converts its boot clock out of its own time namespace, so a
+// silent head ages on one clock however its peers were launched. A boot-clock
+// offset would also shift the start times procfs reports to that poller, so the
+// shifted poller moves only its monotonic clock.
+const timeNamespaces = process.platform === "linux" && spawnSync("unshare",
+  ["--user", "--map-root-user", "--time", "--monotonic", "1", "--fork", "true"], { timeout: 5_000 }).status === 0;
+test.skipIf(!timeNamespaces)("pollers in different time namespaces pass over a silent head at the bound and its next poll restores its place", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cpu-admission-timens-")); directories.push(dir);
+  const file = path.join(dir, "queue.sqlite"), bound = 1_200;
+  const worker = `
+    const [file, key, runtime, identityModule, sandboxModule, bound] = process.argv.slice(1);
+    const { CpuAdmissionQueue } = await import(runtime);
+    const { captureProcessIdentity } = await import(identityModule);
+    const { cpuOwnerStatus, cpuOwnerExited } = await import(sandboxModule);
+    const queue = new CpuAdmissionQueue(file, Date.now, 0, undefined, Number(bound), { status: cpuOwnerStatus, exited: cpuOwnerExited });
+    const owner = captureProcessIdentity(process.pid);
+    console.log(JSON.stringify({ domain: require("node:fs").readlinkSync("/proc/self/ns/time") }));
+    for await (const _ of console) {
+      const wait = queue.check("command:bounded:" + key, true, owner, false, undefined, true);
+      console.log(JSON.stringify({ position: wait?.position ?? 1 }));
+    }
+    queue.close();
+  `;
+  const started: Bun.Subprocess<"pipe", "pipe", "inherit">[] = [];
+  const start = async (key: string, namespace: string[]) => {
+    const child = Bun.spawn([...namespace, process.execPath, "-e", worker, file, key, path.join(import.meta.dir, "cpuAdmission.ts"),
+      path.resolve(import.meta.dir, "../processIdentity.ts"), path.join(import.meta.dir, "signalSandboxContext.ts"), String(bound)],
+    { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+    started.push(child);
+    const reader = child.stdout.getReader(), decoder = new TextDecoder();
+    let buffered = "";
+    const next = async () => {
+      while (!buffered.includes("\n")) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error(`${key} exited`);
+        buffered += decoder.decode(chunk.value, { stream: true });
+      }
+      const line = buffered.slice(0, buffered.indexOf("\n"));
+      buffered = buffered.slice(line.length + 1);
+      return JSON.parse(line);
+    };
+    const { domain } = await next() as { domain: string };
+    return { domain, poll: async () => { child.stdin.write("poll\n"); child.stdin.flush(); return (await next() as { position: number }).position; } };
+  };
+  const unshare = (...extra: string[]) => ["unshare", "--user", "--map-root-user", "--time", ...extra, "--fork"];
+  const passedOver = () => {
+    const db = new Database(file, { readonly: true });
+    try { return db.query<{ key: string }, []>("SELECT key FROM unpolled ORDER BY key").all().map(row => row.key); }
+    finally { db.close(); }
+  };
+  try {
+    const head = await start("head", unshare("--pid", "--mount-proc"));
+    const host = await start("host", []);
+    const shifted = await start("shifted", unshare("--monotonic", "500000"));
+    expect(new Set([head.domain, host.domain, shifted.domain]).size).toBe(3);
+    expect(await head.poll()).toBe(1);
+    const headPolled = performance.now();
+    // Within the bound the silent head keeps its place for both pollers.
+    expect([await host.poll(), await shifted.poll()]).toEqual([2, 3]);
+    expect(passedOver()).toEqual([]);
+    let pair: number[] = [];
+    while (performance.now() - headPolled < bound + 600) {
+      await Bun.sleep(200);
+      pair = [await host.poll(), await shifted.poll()];
+    }
+    expect(pair).toEqual([1, 2]);
+    expect(passedOver()).toEqual(["command:bounded:head"]);
+    // The head's next poll returns it to the front of the queue.
+    expect(await head.poll()).toBe(1);
+    expect(passedOver()).toEqual([]);
+    expect([await host.poll(), await shifted.poll()]).toEqual([2, 3]);
+  } finally {
+    for (const child of started) child.stdin.end();
+    await Promise.all(started.map(child => Promise.race([child.exited, Bun.sleep(3_000).then(() => { child.kill(); return child.exited; })])));
+  }
+}, 20_000);
+
 test("an unverifiable owner silent for a day is removed with one reason line", () => {
   const f = ownerFixture(), q = f.open(), { foreign } = owners();
   q.check("command:foreign", false, foreign);

@@ -455,11 +455,13 @@ command -p git "$@"
   }
 }, 50_000);
 
-for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "mixed service prepare", "mixed service prepare first-open", "service hooks", "historical service hook", "older helper head", "main-era service prepare", "main-era service hook"] as const) test.skipIf(
+for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "mixed service prepare", "mixed service prepare first-open", "service hooks", "historical service hook", "older helper head", "main-era service prepare", "main-era service hook", "main-era service hook first-open", "main-era portable hooks"] as const) test.skipIf(
   process.platform !== "linux" || !mode.startsWith("portable") && !hasUserManager
 )(`FIFO publication admits the first check while the peer waits (${mode})`, async () => {
-    const useService = !mode.startsWith("portable");
-    const historical = mode === "historical service hook" || mode === "main-era service hook", olderHead = mode === "older helper head";
+    const useService = !mode.includes("portable");
+    // An older wrapper takes the same bypass on the portable cleanup fallback,
+    // and its launch can fall on the journal's cutover tick.
+    const historical = mode === "historical service hook" || mode.startsWith("main-era service hook") || mode === "main-era portable hooks", olderHead = mode === "older helper head";
     const mixedPrepare = mode.startsWith("mixed service prepare") || mode === "main-era service prepare";
     // Main after #4376 is the release deployed when this queue protocol lands.
     // Its dispatcher and wrapper carry no launch marker of their own.
@@ -585,7 +587,7 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
       if (!useService) commitFixtureInputs(peer);
       // Start the first hook immediately after a prior grant. Its cleanup
       // runner and original hook are both live before the first queue open.
-      const previous = Date.now() - (firstOpen ? 0 : CPU_QUEUE_SPACING_MS);
+      const previous = Date.now() - (mode === "main-era service hook first-open" ? 8_000 : firstOpen ? 0 : CPU_QUEUE_SPACING_MS);
       f.db.query("UPDATE admission SET last = ?").run(previous);
       f.db.exec("CREATE TABLE grants (at INTEGER); CREATE TRIGGER count_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO grants VALUES (NEW.last); END");
       if (firstOpen) {
@@ -619,11 +621,11 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
       expect(grants()).toEqual([]);
       expect(f.db.query("SELECT 1 FROM sqlite_master WHERE name = 'gate_slots'").get()).toBeNull();
       expect(Bun.spawnSync(["flock", "-n", path.join(f.dir, "llv-heavy-gate.slot1.lock"), "true"]).exitCode).toBe(0);
-      if (mode === "service hooks first-open") {
+      if (mode === "service hooks first-open" || mode === "main-era service hook first-open") {
         const pid = fs.readFileSync(peerRun.env.CPU_SLOT_ROOT_PID!, "utf8").trim();
         const argv = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
         expect(argv[1]).toContain("owned-runner.ts");
-        if (!fs.existsSync("/.dockerenv") && peerRun.env.LLV_DOCKER_NSENTER_SHIMS !== "1") expect(argv).toContain("--in-cpu-scope");
+        if (!historical && !fs.existsSync("/.dockerenv") && peerRun.env.LLV_DOCKER_NSENTER_SHIMS !== "1") expect(argv).toContain("--in-cpu-scope");
         const born = Number(fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1)!.split(" ")[19]);
         const ticks = Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }));
         // Place the journal boundary on the peer's exact kernel birth tick.

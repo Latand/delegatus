@@ -277,22 +277,25 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const explicitlyBypassed = Boolean(hook && wrapperBypassed(base));
     const direct = hookClient(command, cwd, base, runner) && !wasRetired(base);
     let exempt = explicitlyBypassed || direct;
-    // The historical ordinary hook still supported at cutover dispatched
-    // through the wrapper from its own checkout. Only use its journal when
-    // it covers this client, and require the matching service invocation.
-    const historical = !exempt && hook && !readEnvironment(base)("GIT_DIR") &&
+    // A historical wrapper still supported at cutover takes its bypass branch
+    // for this exact hook argv and execs the runner in its own place, on the
+    // service and on the portable fallback alike. Its admitted path holds a
+    // slot lock or runs the runner under its live shell. Use the journal where
+    // it covers this client. Before that, require the in-place launch.
+    const launchedInPlace = () => {
+      const parent = readStat(base)[1];
+      return /^[1-9]\d*$/.test(parent!) && path.basename(readArgv(path.join(proc, parent!))[1] ?? "") !== "gate-slot.sh";
+    };
+    exempt ||= Boolean(hook && !readEnvironment(base)("GIT_DIR") &&
       historicalHookWrappers.has(createHash("sha256")
         .update(fs.readFileSync(path.resolve(cwd(), path.dirname(argv[1]!), "gate-slot.sh"))).digest("hex")) &&
-      skippedAdmission(base);
+      !wasRetired(base) && (skippedAdmission(base) || launchedInPlace()));
     for (const pid of childrenOf(base)) {
       const child = path.join(proc, pid), args = readArgv(child);
       if (readStat(child)[1] !== path.basename(base)) continue;
       if (path.basename(args[0] ?? "") !== "systemd-run" || args.at(-2) !== "--service" || fs.realpathSync(args.at(-3)!) !== runner) continue;
       const unit = args.find(arg => /^--unit=delegatus-gate-[0-9a-f-]+\.service$/.test(arg))?.slice(7);
-      if (unit) {
-        exempt ||= Boolean(historical);
-        serviceClients.set(args.at(-1)!, { unit, runner, exempt });
-      }
+      if (unit) serviceClients.set(args.at(-1)!, { unit, runner, exempt });
     }
     return exempt;
   };

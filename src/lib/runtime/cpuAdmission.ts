@@ -41,19 +41,33 @@ type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner
 const boundedLinuxGateWaiter = (row: Ticket) =>
   process.platform === "linux" && row.low_pressure === 1 && row.key.startsWith(BOUNDED_GATE_PREFIX);
 type LinuxGatePoll = { domain: string; ms: number };
+/** A time namespace shows CLOCK_BOOTTIME plus its own offset. Null when this
+ * process is in a time namespace whose offset cannot be read. */
+function linuxBootOffsetMs(): number | null {
+  try {
+    const offset = /^boottime\s+(-?\d+)\s+(\d+)\s*$/m.exec(fs.readFileSync("/proc/self/timens_offsets", "utf8"));
+    return offset ? Number(offset[1]) * 1000 + Number(offset[2]) / 1_000_000 : null;
+  } catch {
+    // A kernel without time namespaces has neither file and no offset.
+    return fs.existsSync("/proc/self/ns/time") ? null : 0;
+  }
+}
 function openLinuxGateClock(): (() => LinuxGatePoll | null) | null {
   try {
     const epoch = systemBootEpoch()?.split(":")[1];
     const ffi = process.getBuiltinModule?.("bun:ffi") as typeof import("bun:ffi") | undefined;
-    if (!epoch || !ffi) return null;
-    const domain = `${epoch}:${fs.readlinkSync("/proc/self/ns/time")}`;
+    const offset = linuxBootOffsetMs();
+    if (!epoch || !ffi || offset === null) return null;
+    // Samples are kept on the host's boot clock, so helpers in different time
+    // namespaces of one boot age a ticket on the same clock.
+    const domain = `${epoch}:host-boottime`;
     const library = ffi.dlopen("libc.so.6", { clock_gettime: { args: ["i32", "ptr"], returns: "i32" } });
     const time = new BigInt64Array(2);
     return () => {
       // CLOCK_BOOTTIME is shared by the independent helpers and is immune to
       // wall-clock steps. Bun's hrtime starts over in each helper.
       if (library.symbols.clock_gettime(7, ffi.ptr(time)) !== 0) return null;
-      return { domain, ms: Number(time[0]) * 1000 + Number(time[1]) / 1_000_000 };
+      return { domain, ms: Number(time[0]) * 1000 + Number(time[1]) / 1_000_000 - offset };
     };
   } catch { return null; }
 }
@@ -480,9 +494,10 @@ export class CpuAdmissionQueue {
       if (observed?.dead) continue;
       // The calling ticket returns from a hold and refreshes its binding below.
       if (row.key === key) { if (!source && row.source) rank(row.source); continue; }
-      const quiet = boundedLinuxGateWaiter(row) && row.owner !== null
-        ? linuxPollAge(row, preflightClock()) ?? 0
-        : sampledAt - (row.polled ?? (row.owner === null ? sampledAt : row.since));
+      const wallQuiet = sampledAt - (row.polled ?? (row.owner === null ? sampledAt : row.since));
+      // Without a boot clock here, the poll's wall-clock age applies.
+      const quiet = boundedLinuxGateWaiter(row) && row.owner !== null && preflightClock()
+        ? linuxPollAge(row, preflightClock()) ?? 0 : wallQuiet;
       const unverifiable = row.owner === null || observed?.status === "unverified";
       if (quiet > this.unpolledMs && (unverifiable || boundedLinuxGateWaiter(row))
         || quiet > CPU_QUEUE_ABANDONED_MS && unverifiable) continue;
@@ -515,12 +530,12 @@ export class CpuAdmissionQueue {
         // also be alive without making progress on its bounded wait.
         if (row.key === key || status !== "unverified" && !boundedLinuxGateWaiter(row)) continue;
         let quiet = now - (row.polled ?? row.since);
-        if (boundedLinuxGateWaiter(row)) {
-          const sample = clock();
+        const sample = boundedLinuxGateWaiter(row) ? clock() : null;
+        if (sample) {
           const age = linuxPollAge(row, sample);
-          // An older writer, reboot or new clock namespace gets one full
-          // interval from observation. Initialize it under the writer lock.
-          if (age === null && sample) this.db.query("UPDATE tickets SET linux_poll = ? WHERE key = ?").run(linuxPollStamp(sample), row.key);
+          // An older writer or a reboot gets one full interval from
+          // observation. Initialize it under the writer lock.
+          if (age === null) this.db.query("UPDATE tickets SET linux_poll = ? WHERE key = ?").run(linuxPollStamp(sample), row.key);
           quiet = age ?? 0;
         }
         if (status === "unverified" && quiet > CPU_QUEUE_ABANDONED_MS) {
