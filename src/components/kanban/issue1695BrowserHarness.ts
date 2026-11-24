@@ -2089,7 +2089,12 @@ const noPlanAction = async (row: Locator) => {
 const PLAN_FRAMES = [
   planKeys("disconnected", "[data-chatgpt-plan-state='not_connected'] [data-chatgpt-plan-start]"),
   planKeys("connecting", "[data-chatgpt-plan-state='connecting'] button"),
-  planKeys("connected", " [data-keys-menu-item='plan-usage']", row => row.locator("[data-chatgpt-plan-menu]").click()),
+  planKeys("connected", " [data-keys-menu][role=menu]", async row => {
+    await row.locator("[data-chatgpt-plan-menu]").click();
+    const menu = row.getByRole("menu");
+    await menu.locator("[data-keys-menu-item='plan-usage'][role=menuitem]").waitFor();
+    await menu.locator("[data-keys-menu-item='plan-sign-out'][role=menuitem]").waitFor();
+  }),
   planKeys("firstUse", "[data-chatgpt-plan-state='connected'] button"),
   planKeys("missingModel", "[data-chatgpt-plan-state='connected']"),
   planKeys("disabled", "[data-chatgpt-plan-state='plan_disabled'] [data-chatgpt-plan-start]"),
@@ -2282,6 +2287,7 @@ function readSettingsSurface(args: { phone: boolean; defining: string | null; ab
   }
   /* No bordered box in the surface's flow beyond its controls, and no control inside a control. */
   for (const element of scroller.querySelectorAll<HTMLElement>("*")) {
+    if (element.matches("[data-keys-menu][role=menu]")) continue;
     if (element.closest("button, select, input, textarea, a, [data-settings-choice-face], [data-memory-page], [data-header-menu-workers]")) continue;
     const style = getComputedStyle(element);
     if (["Top", "Right", "Bottom", "Left"].every((side) => parseFloat(style.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0) && element.getBoundingClientRect().height > 44) failures.push(`bordered box: ${element.tagName} ${element.className}`);
