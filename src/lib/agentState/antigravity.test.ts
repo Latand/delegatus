@@ -476,4 +476,256 @@ describe("Antigravity agentState integration", () => {
       expect(accountId).toBeNull();
     }
   });
+
+  it("idempotently migrates historical pre-fix Antigravity entries and generations on open across sqlite, dual-write, and off modes", async () => {
+    const { Database } = await import("bun:sqlite");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ag-hist-mig-"));
+    roots.push(root);
+    const seed = fixtureRegistry(root, "antigravity", captureProcessIdentity(process.pid), null);
+    const seedEntry = Object.values(seed.entries)[0]!;
+    const seedConv = Object.values(seed.conversations)[0]!;
+    seedEntry.accountId = "default";
+    seedConv.generations[0]!.accountId = "default";
+    const entryKey = `antigravity:${FIXTURE_SESSION}`;
+
+    // 1. SQLite DB created by an earlier candidate head (raw rows still hold accountId="default").
+    {
+      const sqDir = path.join(root, "sqlite");
+      fs.mkdirSync(sqDir, { recursive: true });
+      const fn = path.join(sqDir, "agent-registry.json");
+      const sq = path.join(sqDir, "agent-registry.sqlite");
+      // Bootstrap valid SQLite schema first, then overwrite raw rows with historical accountId="default".
+      const bootstrap = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: sq });
+      bootstrap.agentStateWrite((file) => {
+        file.entries[entryKey] = structuredClone(seedEntry);
+        file.conversations[seedConv.id] = structuredClone(seedConv);
+      });
+      bootstrap.close();
+
+      const legacyDb = new Database(sq);
+      try {
+        const curEntry = JSON.parse(legacyDb.query<{ value_json: string }, [string]>(
+          "SELECT value_json FROM registry_rows WHERE collection = 'entries' AND row_key = ?",
+        ).get(entryKey)!.value_json) as Record<string, unknown>;
+        curEntry.accountId = "default";
+        delete curEntry.antigravityAccountId;
+        const curConv = JSON.parse(legacyDb.query<{ value_json: string }, [string]>(
+          "SELECT value_json FROM registry_rows WHERE collection = 'conversations' AND row_key = ?",
+        ).get(seedConv.id)!.value_json) as { generations: Array<Record<string, unknown>> };
+        curConv.generations[0]!.accountId = "default";
+        delete curConv.generations[0]!.antigravityAccountId;
+        legacyDb.query("UPDATE registry_rows SET value_json = ? WHERE collection = 'entries' AND row_key = ?").run(JSON.stringify(curEntry), entryKey);
+        legacyDb.query("UPDATE registry_rows SET value_json = ? WHERE collection = 'conversations' AND row_key = ?").run(JSON.stringify(curConv), seedConv.id);
+      } finally {
+        legacyDb.close();
+      }
+
+      // Opening the registry MUST migrate both historical rows automatically without mutating them.
+      const reg1 = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: sq });
+      try {
+        expect(reg1.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })?.accountId).toBe("default");
+        expect(reg1.conversation(seedConv.id)?.generations[0]?.accountId).toBe("default");
+      } finally {
+        reg1.close();
+      }
+
+      const inspectDb = new Database(sq, { readonly: true });
+      let revAfterFirstOpen: number;
+      try {
+        const rawEntry = JSON.parse(inspectDb.query<{ value_json: string }, [string]>(
+          "SELECT value_json FROM registry_rows WHERE collection = 'entries' AND row_key = ?",
+        ).get(entryKey)!.value_json) as { accountId: string | null; antigravityAccountId?: string };
+        const rawConv = JSON.parse(inspectDb.query<{ value_json: string }, [string]>(
+          "SELECT value_json FROM registry_rows WHERE collection = 'conversations' AND row_key = ?",
+        ).get(seedConv.id)!.value_json) as { generations: Array<{ accountId: string | null; antigravityAccountId?: string }> };
+        expect(rawEntry.accountId).toBeNull();
+        expect(rawEntry.antigravityAccountId).toBe("default");
+        expect(rawConv.generations[0]?.accountId).toBeNull();
+        expect(rawConv.generations[0]?.antigravityAccountId).toBe("default");
+        revAfterFirstOpen = Number(inspectDb.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key = 'revision'").get()!.value);
+      } finally {
+        inspectDb.close();
+      }
+
+      // Second open MUST be a no-op (idempotent, zero revision bump).
+      const reg2 = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: sq });
+      reg2.close();
+      const checkDb = new Database(sq, { readonly: true });
+      try {
+        expect(Number(checkDb.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key = 'revision'").get()!.value)).toBe(revAfterFirstOpen);
+      } finally {
+        checkDb.close();
+      }
+    }
+
+    // 2. JSON-backed `off` mode: legacy JSON with accountId="default" is migrated on open.
+    {
+      const offDir = path.join(root, "off");
+      fs.mkdirSync(offDir, { recursive: true });
+      const fn = path.join(offDir, "agent-registry.json");
+      fs.writeFileSync(fn, JSON.stringify(seed));
+      const reg = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "off" });
+      try {
+        expect(reg.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })?.accountId).toBe("default");
+        expect(reg.conversation(seedConv.id)?.generations[0]?.accountId).toBe("default");
+      } finally {
+        reg.close();
+      }
+      const raw = JSON.parse(fs.readFileSync(fn, "utf8")) as {
+        entries: Record<string, { accountId: string | null; antigravityAccountId?: string }>;
+        conversations: Record<string, { generations: Array<{ accountId: string | null; antigravityAccountId?: string }> }>;
+      };
+      expect(raw.entries[entryKey]?.accountId).toBeNull();
+      expect(raw.entries[entryKey]?.antigravityAccountId).toBe("default");
+      expect(raw.conversations[seedConv.id]?.generations[0]?.accountId).toBeNull();
+      expect(raw.conversations[seedConv.id]?.generations[0]?.antigravityAccountId).toBe("default");
+    }
+
+    // 3. `dual-write` mode: legacy SQLite + JSON with accountId="default" both migrate on open.
+    {
+      const dwDir = path.join(root, "dual-write");
+      fs.mkdirSync(dwDir, { recursive: true });
+      const fn = path.join(dwDir, "agent-registry.json");
+      const sq = path.join(dwDir, "agent-registry.sqlite");
+      fs.writeFileSync(fn, JSON.stringify(seed));
+      const seededReg = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "dual-write", sqliteFilename: sq });
+      seededReg.close();
+      // Rewrite both JSON and SQLite back to legacy `accountId: "default"` at the same revision.
+      const legacyJson = JSON.parse(fs.readFileSync(fn, "utf8")) as {
+        entries: Record<string, { accountId: string | null; antigravityAccountId?: string }>;
+        conversations: Record<string, { generations: Array<{ accountId: string | null; antigravityAccountId?: string }> }>;
+      };
+      legacyJson.entries[entryKey]!.accountId = "default";
+      delete legacyJson.entries[entryKey]!.antigravityAccountId;
+      legacyJson.conversations[seedConv.id]!.generations[0]!.accountId = "default";
+      delete legacyJson.conversations[seedConv.id]!.generations[0]!.antigravityAccountId;
+      fs.writeFileSync(fn, `${JSON.stringify(legacyJson)}\n`);
+      const db = new Database(sq);
+      try {
+        db.query("UPDATE registry_rows SET value_json = ? WHERE collection = 'entries' AND row_key = ?")
+          .run(JSON.stringify(legacyJson.entries[entryKey]), entryKey);
+        db.query("UPDATE registry_rows SET value_json = ? WHERE collection = 'conversations' AND row_key = ?")
+          .run(JSON.stringify(legacyJson.conversations[seedConv.id]), seedConv.id);
+      } finally {
+        db.close();
+      }
+      const reg = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "dual-write", sqliteFilename: sq });
+      try {
+        expect(reg.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })?.accountId).toBe("default");
+        expect(reg.conversation(seedConv.id)?.generations[0]?.accountId).toBe("default");
+      } finally {
+        reg.close();
+      }
+      const rawJson = JSON.parse(fs.readFileSync(fn, "utf8")) as {
+        entries: Record<string, { accountId: string | null; antigravityAccountId?: string }>;
+        conversations: Record<string, { generations: Array<{ accountId: string | null; antigravityAccountId?: string }> }>;
+      };
+      expect(rawJson.entries[entryKey]?.accountId).toBeNull();
+      expect(rawJson.entries[entryKey]?.antigravityAccountId).toBe("default");
+      expect(rawJson.conversations[seedConv.id]?.generations[0]?.accountId).toBeNull();
+      expect(rawJson.conversations[seedConv.id]?.generations[0]?.antigravityAccountId).toBe("default");
+      const checkDb = new Database(sq, { readonly: true });
+      try {
+        const rawEntry = JSON.parse(checkDb.query<{ value_json: string }, [string]>(
+          "SELECT value_json FROM registry_rows WHERE collection = 'entries' AND row_key = ?",
+        ).get(entryKey)!.value_json) as { accountId: string | null; antigravityAccountId?: string };
+        const rawConv = JSON.parse(checkDb.query<{ value_json: string }, [string]>(
+          "SELECT value_json FROM registry_rows WHERE collection = 'conversations' AND row_key = ?",
+        ).get(seedConv.id)!.value_json) as { generations: Array<{ accountId: string | null; antigravityAccountId?: string }> };
+        expect(rawEntry.accountId).toBeNull();
+        expect(rawEntry.antigravityAccountId).toBe("default");
+        expect(rawConv.generations[0]?.accountId).toBeNull();
+        expect(rawConv.generations[0]?.antigravityAccountId).toBe("default");
+      } finally {
+        checkDb.close();
+      }
+    }
+  });
+
+  it("preserves single-subject accounting across a downgrade JSON rewrite and re-upgrade in off and dual-write modes", async () => {
+    for (const scenario of [
+      { mode: "off" as const, stripEntryMirror: false },
+      { mode: "off" as const, stripEntryMirror: true },
+      { mode: "dual-write" as const, stripEntryMirror: false },
+    ]) {
+      const { mode, stripEntryMirror } = scenario;
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-ag-json-cycle-${mode}-${stripEntryMirror ? "bare" : "mirror"}-`));
+      roots.push(root);
+      const fn = path.join(root, "agent-registry.json");
+      const sq = path.join(root, "agent-registry.sqlite");
+      fs.writeFileSync(fn, JSON.stringify(fixtureRegistry(root, "antigravity", captureProcessIdentity(process.pid), null)));
+      const rows = fixtureRecords("antigravity");
+      fs.writeFileSync(path.join(root, "native.jsonl"), [...rows.open, ...rows.close].map((row) => JSON.stringify(row)).join("\n") + "\n");
+
+      const measure = () => {
+        const raw = JSON.parse(fs.readFileSync(fn, "utf8")) as {
+          antigravityAgentStates?: Record<string, unknown>;
+          agentStateMetrics?: { current?: { subjectsObserved?: number } };
+          agentStateJournal?: Record<string, unknown>;
+        };
+        return {
+          extra: Object.keys(raw.antigravityAgentStates ?? {}).length,
+          subjects: raw.agentStateMetrics?.current?.subjectsObserved ?? 0,
+          journal: Object.keys(raw.agentStateJournal ?? {}).length,
+        };
+      };
+      const runService = async (reg: AgentRegistry) => {
+        await new AgentStateService({
+          registry: reg,
+          now: () => FIXTURE_NOW + 2000,
+          owns: () => true,
+          process: () => "alive",
+          memory: () => null,
+          release: "fixture",
+          publish: async () => true,
+        }).request();
+      };
+
+      // Phase 1 (candidate): initial observation -> 1/1/1.
+      const regUp = new AgentRegistry(fn, undefined, undefined, { sqliteMode: mode, sqliteFilename: sq });
+      try {
+        await runService(regUp);
+        expect(measure()).toEqual({ extra: 1, subjects: 1, journal: 1 });
+        // In-memory entries never leak the storage-only `antigravityProjection` mirror.
+        const liveEntry = regUp.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION }) as unknown as Record<string, unknown>;
+        expect("antigravityProjection" in liveEntry).toBe(false);
+      } finally {
+        regUp.close();
+      }
+
+      // Phase 2 (prior release rewrite): strips unknown top-level `antigravityAgentStates`
+      // while keeping `agentStateMetrics`, `agentStateJournal`, SQLite's extra table
+      // (in dual-write), and (for current candidate -> prior release in `off`) the
+      // entry-level `antigravityProjection` mirror spread by prior `normalizeEntry`.
+      const downgraded = JSON.parse(fs.readFileSync(fn, "utf8")) as {
+        antigravityAgentStates?: Record<string, unknown>;
+        entries?: Record<string, Record<string, unknown>>;
+      };
+      delete downgraded.antigravityAgentStates;
+      if (stripEntryMirror && downgraded.entries) {
+        for (const entry of Object.values(downgraded.entries)) {
+          delete entry.antigravityProjection;
+        }
+      }
+      fs.writeFileSync(fn, `${JSON.stringify(downgraded)}\n`);
+      expect(measure()).toEqual({ extra: 0, subjects: 1, journal: 1 });
+
+      // Phase 3 (candidate again): restores projection without double-counting subjects or journal.
+      const regAgain = new AgentRegistry(fn, undefined, undefined, { sqliteMode: mode, sqliteFilename: sq });
+      try {
+        if (!stripEntryMirror) {
+          // Both `off` (via entry mirror) and `dual-write` (via SQLite table) restore
+          // top-level `antigravityAgentStates` immediately on startup open.
+          expect(measure()).toEqual({ extra: 1, subjects: 1, journal: 1 });
+        }
+        await runService(regAgain);
+        expect(measure()).toEqual({ extra: 1, subjects: 1, journal: 1 });
+        // Repeated pass stays 1/1/1.
+        await runService(regAgain);
+        expect(measure()).toEqual({ extra: 1, subjects: 1, journal: 1 });
+      } finally {
+        regAgain.close();
+      }
+    }
+  });
 });

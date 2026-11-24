@@ -2038,6 +2038,7 @@ export class SqliteAgentRegistryStore {
     /* The import decides again under its own write lock; an imported
        registry never becomes unimported, so this read spares the lock. */
     if (!this.imported()) this.importFirstBoot(options.initialSnapshot, options.verifyImport);
+    if (options.allowArchiveMigration !== false) this.migrateLegacyAntigravityAccountIds();
     if (options.allowArchiveMigration !== false) {
       this.prepareCallerIndexes();
       if (this.meta("native_caller_artifacts_version") !== NATIVE_CALLER_ARTIFACTS_V1_VERSION
@@ -6829,6 +6830,88 @@ export class SqliteAgentRegistryStore {
     this.setMeta("revision", String(revision));
   }
 
+  /** Reads all persisted Antigravity projections for JSON `dual-write` recovery
+   * when an older release rewrote `agent-registry.json` without top-level
+   * `antigravityAgentStates`. Not called on SQLite hot paths. */
+  readAllAntigravityAgentStates(): Record<string, AgentProjection> {
+    try {
+      if (!this.antigravityAgentStatesTableExists()) return {};
+      const rows = this.db.query<{ subject: string; value_json: string }, []>(
+        "SELECT subject, value_json FROM registry_antigravity_agent_states ORDER BY subject",
+      ).all();
+      const out: Record<string, AgentProjection> = {};
+      for (const row of rows) {
+        out[row.subject] = parseSqliteJson(row.value_json, this.db) as AgentProjection;
+      }
+      return out;
+    } catch {
+      this.antigravityStatesTableReady = undefined;
+      return {};
+    }
+  }
+
+  /** Idempotently converts historical Antigravity `entries` and `conversations`
+   * written with a string `accountId` into `{ accountId: null, antigravityAccountId }`
+   * so rollback to prior 3-engine releases (which index `quotaObservations[engine][accountId]`)
+   * never throws HTTP 500 even for conversations created before this change.
+   * Performs zero write locks when no legacy Antigravity rows exist. */
+  private migrateLegacyAntigravityAccountIds(): void {
+    const tables: Array<"registry_rows" | "registry_archive"> = this.changesReady
+      ? ["registry_rows", "registry_archive"]
+      : ["registry_rows"];
+    const findPending = (table: "registry_rows" | "registry_archive"): Array<{ collection: "entries" | "conversations"; row_key: string; nextJson: string }> => {
+      const candidates = this.db.query<{ collection: "entries" | "conversations"; row_key: string; value_json: string }, []>(`
+        SELECT collection, row_key, value_json FROM ${table}
+        WHERE (collection = 'entries' AND row_key LIKE 'antigravity:%')
+           OR (collection = 'conversations' AND value_json LIKE '%"antigravity"%')
+      `).all();
+      const updates: Array<{ collection: "entries" | "conversations"; row_key: string; nextJson: string }> = [];
+      for (const row of candidates) {
+        let parsed: unknown;
+        try { parsed = parseSqliteJson(row.value_json, this.db); } catch { continue; }
+        const converted = rowForStorage(row.collection, parsed);
+        if (converted === parsed) continue;
+        const nextJson = JSON.stringify(converted);
+        if (nextJson !== row.value_json) {
+          updates.push({ collection: row.collection, row_key: row.row_key, nextJson });
+        }
+      }
+      return updates;
+    };
+
+    try {
+      let anyPending = false;
+      for (const table of tables) {
+        if (findPending(table).length > 0) { anyPending = true; break; }
+      }
+      if (!anyPending) return;
+      beginRegistryTransaction(this.db, true);
+      try {
+        let updated = 0;
+        for (const table of tables) {
+          const pending = findPending(table);
+          if (pending.length === 0) continue;
+          const stmt = this.db.query(`UPDATE ${table} SET value_json = ? WHERE collection = ? AND row_key = ?`);
+          for (const item of pending) {
+            stmt.run(item.nextJson, item.collection, item.row_key);
+            this.rowCache.get(item.collection)?.delete(item.row_key);
+            this.localRows.delete(grantDecisionKey(item.collection, item.row_key));
+            updated += 1;
+          }
+        }
+        this.db.exec("COMMIT");
+        if (updated > 0) this.readOnlyCache = null;
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+        throw error;
+      }
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code;
+      if (code === "SQLITE_READONLY" || code === "SQLITE_READONLY_DBMOVED") return;
+      throw error;
+    }
+  }
+
   private antigravityAgentStatesTableExists(): boolean {
     if (this.antigravityStatesTableReady === true) return true;
     const exists = this.db.query<{ name: string }, []>(
@@ -6849,7 +6932,12 @@ export class SqliteAgentRegistryStore {
   }
 
   private syncAntigravityJsonStatesInTransaction(states: Record<string, AgentProjection> | undefined): void {
-    const entries = states ? Object.entries(states) : [];
+    // Only synchronize when the caller explicitly carries a JSON projection map;
+    // `undefined` means a file read without `antigravityAgentStates` (e.g. after
+    // an older release rewrote `agent-registry.json`), which must never wipe the
+    // preserved SQLite projection rows.
+    if (states === undefined) return;
+    const entries = Object.entries(states);
     if (entries.length === 0) {
       if (this.antigravityAgentStatesTableExists()) {
         this.db.exec("DELETE FROM registry_antigravity_agent_states");

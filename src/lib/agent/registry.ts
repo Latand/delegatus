@@ -2987,7 +2987,7 @@ function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): Age
     && raw.antigravityAccountId.length > 0
     ? raw.antigravityAccountId
     : value.accountId;
-  const normalized: AgentRegistryEntry & { antigravityAccountId?: unknown } = {
+  const normalized: AgentRegistryEntry & { antigravityAccountId?: unknown; antigravityProjection?: unknown } = {
     ...value,
     accountId: restoredAccountId,
     ...(value.launchProfile ? { launchProfile: emptyLaunchProfile(value.launchProfile, policy) } : {}),
@@ -3003,6 +3003,7 @@ function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): Age
     ...(terminationSurvivors === undefined ? {} : { structuredTerminationSurvivors: terminationSurvivors }),
   };
   delete normalized.antigravityAccountId;
+  delete normalized.antigravityProjection;
   return normalized;
 }
 
@@ -5195,12 +5196,22 @@ export function normalizeRegistry(
   });
   const result = deferStoredGrantDecision ? normalized : reboundStoredMcpGrants(normalized, policy);
   const rawAgStates = (parsed as { antigravityAgentStates?: unknown }).antigravityAgentStates;
-  if (rawAgStates !== undefined) {
+  const entryMirroredRaw: Record<string, unknown> = {};
+  for (const rawEntry of Object.values(parsed.entries)) {
+    const mirrored = (rawEntry as { antigravityProjection?: { subject?: unknown } } | null | undefined)?.antigravityProjection;
+    if (mirrored && typeof mirrored === "object" && typeof mirrored.subject === "string" && mirrored.subject.length > 0) {
+      entryMirroredRaw[mirrored.subject] = mirrored;
+    }
+  }
+  const hasEntryMirrors = Object.keys(entryMirroredRaw).length > 0;
+  if (rawAgStates !== undefined || hasEntryMirrors) {
+    const fromEntries = hasEntryMirrors ? normalizeAgentStateRows(entryMirroredRaw, "projection") : {};
+    const fromTopLevel = rawAgStates !== undefined ? normalizeAgentStateRows(rawAgStates, "projection") : {};
     Object.defineProperty(result, ANTIGRAVITY_JSON_STATES, {
       configurable: true,
       enumerable: false,
       writable: true,
-      value: normalizeAgentStateRows(rawAgStates, "projection"),
+      value: { ...fromEntries, ...fromTopLevel },
     });
   }
   return result;
@@ -5303,6 +5314,20 @@ function compactLaunchProfile(profile: LaunchProfile): Partial<LaunchProfile> {
 function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string {
   const agStates = (value as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> })[ANTIGRAVITY_JSON_STATES];
   const hasAgStates = Boolean(agStates && Object.keys(agStates).length > 0);
+  // In pure JSON (`off`) mode (`sqliteRevision === undefined`), also mirror each
+  // Antigravity projection onto its owning entry because prior releases spread
+  // `{ ...value }` in `normalizeEntry`, preserving the projection even when they
+  // drop unknown top-level keys on rewrite. Omit from `entries` in SQLite/dual-write
+  // modes so prior releases' `assertSqliteParity` matches SQLite byte-for-byte
+  // (SQLite preserves projections in `registry_antigravity_agent_states`).
+  const entryProjectionByKey = new Map<string, AgentProjection>();
+  if (sqliteRevision === undefined && hasAgStates && agStates) {
+    for (const projection of Object.values(agStates)) {
+      if (projection && typeof projection.entryKey === "string") {
+        entryProjectionByKey.set(projection.entryKey, projection);
+      }
+    }
+  }
   const storage = {
     _jsonStoreId: value._jsonStoreId,
     ...value,
@@ -5313,9 +5338,11 @@ function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string
     ...(hasAgStates ? { antigravityAgentStates: agStates } : {}),
     entries: Object.fromEntries(Object.entries(value.entries).map(([id, entry]) => {
       const storedEntry = registryEntryForStorage(entry);
+      const mirroredProjection = entryProjectionByKey.get(id);
       return [id, {
         ...storedEntry,
         ...(storedEntry.launchProfile ? { launchProfile: compactLaunchProfile(storedEntry.launchProfile) } : {}),
+        ...(mirroredProjection ? { antigravityProjection: mirroredProjection } : {}),
       }];
     })),
     receipts: Object.fromEntries(Object.entries(value.receipts).map(([id, receipt]) => [id, {
@@ -5690,10 +5717,12 @@ export class AgentRegistry {
     if (this.sqliteMode === "off" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.compactAtStartup();
+      this.migrateLegacyJsonAntigravityAccountIds();
     }
     if (this.sqliteMode === "dual-write" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.synchronizeDualWriteStartup(storage.beforeDualWriteStartupReplace);
+      this.migrateLegacyJsonAntigravityAccountIds();
     }
     if (this.sqliteMode === "read") {
       const sqlite = this.sqliteStore!.snapshot();
@@ -5730,6 +5759,33 @@ export class AgentRegistry {
        install an identity a reader would then trust. */
     if ((backend.source === "environment" || backend.source === "default") && mayRunStartupMaintenance) {
       publishRegistryBackendIdentity(filename, this.sqliteMode, sqliteFilename);
+    }
+  }
+
+  private migrateLegacyJsonAntigravityAccountIds(): void {
+    try {
+      if (!fs.existsSync(this.filename)) return;
+      const rawText = fs.readFileSync(this.filename, "utf8");
+      if (!rawText.includes('"antigravity"')) return;
+      const parsed = JSON.parse(rawText) as {
+        antigravityAgentStates?: Record<string, unknown>;
+        entries?: Record<string, { key?: { engine?: string }; accountId?: unknown; antigravityProjection?: unknown }>;
+        conversations?: Record<string, { engine?: string; generations?: Array<{ accountId?: unknown }> }>;
+      };
+      const needsEntryMigration = Object.values(parsed.entries ?? {}).some(
+        (entry) => entry?.key?.engine === "antigravity" && typeof entry.accountId === "string" && entry.accountId.length > 0,
+      );
+      const needsConvMigration = Object.values(parsed.conversations ?? {}).some(
+        (conv) => conv?.engine === "antigravity" && Array.isArray(conv.generations)
+          && conv.generations.some((gen) => typeof gen?.accountId === "string" && gen.accountId.length > 0),
+      );
+      const needsTopLevelProjectionRestore = this.sqliteMode === "off"
+        && (!parsed.antigravityAgentStates || Object.keys(parsed.antigravityAgentStates).length === 0)
+        && Object.values(parsed.entries ?? {}).some((entry) => entry?.antigravityProjection !== undefined);
+      if (!needsEntryMigration && !needsConvMigration && !needsTopLevelProjectionRestore) return;
+      this.mutate(() => {}, { deliveryOnly: true });
+    } catch {
+      /* Best-effort compatibility rewrite; normal reads/writes still normalize safely. */
     }
   }
 
@@ -6054,6 +6110,17 @@ export class AgentRegistry {
       this.assertSqliteParity(sqlite);
       this.compactAtStartupLocked(sqlite.revision);
       const file = readFile(this.filename, this.mcpGrantPolicy);
+      if (!(ANTIGRAVITY_JSON_STATES in file)) {
+        const recovered = this.sqliteStore!.readAllAntigravityAgentStates();
+        if (Object.keys(recovered).length > 0) {
+          Object.defineProperty(file, ANTIGRAVITY_JSON_STATES, {
+            configurable: true,
+            enumerable: false,
+            writable: true,
+            value: recovered,
+          });
+        }
+      }
       beforeReplace?.();
       const replacement = this.sqliteStore!.replace(file, sqlite.revision, { noWait: accountMutationHeld() });
       if (!replacement.replaced) {
@@ -7536,11 +7603,14 @@ export class AgentRegistry {
   private jsonAntigravityStatesRecord(file: RegistryFile): Record<string, AgentProjection> {
     const tagged = file as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> };
     if (!tagged[ANTIGRAVITY_JSON_STATES]) {
+      const recovered = this.sqliteMode === "dual-write" && this.sqliteStore
+        ? this.sqliteStore.readAllAntigravityAgentStates()
+        : {};
       Object.defineProperty(file, ANTIGRAVITY_JSON_STATES, {
         configurable: true,
         enumerable: false,
         writable: true,
-        value: {},
+        value: recovered,
       });
     }
     return tagged[ANTIGRAVITY_JSON_STATES]!;
@@ -7550,7 +7620,9 @@ export class AgentRegistry {
     return this.readKeyed(file => {
       const sqliteHandle = (file as RegistryFile & { [ANTIGRAVITY_AGENT_STATES_ACCESS]?: AntigravityAgentStatesView })[ANTIGRAVITY_AGENT_STATES_ACCESS];
       if (sqliteHandle) return read(file, sqliteHandle);
-      const jsonRecord = (file as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> })[ANTIGRAVITY_JSON_STATES] ?? {};
+      const tagged = file as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> };
+      const jsonRecord = tagged[ANTIGRAVITY_JSON_STATES]
+        ?? (this.sqliteMode === "dual-write" && this.sqliteStore ? this.sqliteStore.readAllAntigravityAgentStates() : {});
       return read(file, antigravityStatesHandleForRecord(jsonRecord));
     });
   }

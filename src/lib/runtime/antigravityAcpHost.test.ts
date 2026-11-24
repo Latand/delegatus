@@ -1374,6 +1374,62 @@ describe("AntigravityAcpHost", () => {
       expect((await host.sessionMaterializationEvidence(altId)).state).toBe("materialized");
       await host.release();
     }
+
+    // 6. EIO during replaced-ledger check while another prompt is IN-FLIGHT:
+    //    completing the in-flight prompt MUST NOT stamp a fresh fingerprint onto an
+    //    unreconciled empty cache or cause a duplicate dispatch of an accepted ID.
+    for (const withFault of [false, true]) {
+      const { ledgerFile, host } = await seedEvictedSession(withFault ? "inflight-fault" : "inflight-ctrl");
+      const pending = await host.send({ id: "inflight-pending-prompt", text: "normal running prompt" });
+      expect(pending.outcome).toBe("turn-started");
+      await tick();
+
+      const oldId = withFault ? "edge-inflight-fault-later-4095" : "edge-inflight-ctrl-later-4095";
+      const altId = `X${oldId.slice(1)}`;
+      const canonical = fs.readFileSync(ledgerFile, "utf8");
+      const replaced = canonical.replaceAll(oldId, altId);
+      expect(replaced).not.toBe(canonical);
+      fs.writeFileSync(`${ledgerFile}.restore`, replaced);
+      fs.renameSync(`${ledgerFile}.restore`, ledgerFile);
+
+      const origReadFileSync = fs.readFileSync;
+      let faults = 0;
+      if (withFault) {
+        fs.readFileSync = function (filePath: fs.PathOrFileDescriptor, ...rest: unknown[]) {
+          if (String(filePath) === ledgerFile) {
+            faults += 1;
+            throw Object.assign(new Error("fixture temporary read error"), { code: "EIO" });
+          }
+          return (origReadFileSync as (...args: unknown[]) => unknown).call(fs, filePath, ...rest);
+        } as typeof fs.readFileSync;
+      }
+      let duringState: string;
+      try {
+        duringState = (await host.sessionMaterializationEvidence(altId)).state;
+      } finally {
+        fs.readFileSync = origReadFileSync;
+      }
+      if (withFault) {
+        expect(faults).toBeGreaterThan(0);
+        expect(duringState).toBe("unavailable");
+      } else {
+        expect(duringState).toBe("materialized");
+      }
+
+      // Now complete the in-flight prompt cleanly via ACP.
+      fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+      await tick();
+
+      // Accepted ID from the restored ledger MUST still read materialized and MUST NOT resend.
+      expect((await host.sessionMaterializationEvidence(altId)).state).toBe("materialized");
+      const promptsBefore = outboundPrompts.length;
+      const retry = await host.send({ id: altId, text: "original delivery" });
+      await tick();
+      expect(retry.outcome).toBe("turn-started");
+      expect(outboundPrompts.length - promptsBefore).toBe(0);
+      expect(physicalEchoCount(ledgerFile, altId)).toBe(1);
+      await host.release();
+    }
   });
 
   it("bases delivery acceptance on ACP's actual response when interrupt races end_turn, and keeps release-mid-prompt unavailable", async () => {
