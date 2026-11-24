@@ -225,6 +225,11 @@ export function MobileSeatCard({
   const { file, transcriptMissing, transcriptPending, retryTranscript } = useSeatFile({
     project, files, conversationId: seatConversationId, seatPath, currentPath, enabled: seated && sheetOpen,
   });
+  /* `exists: false` may mean the activation path vanished while the current
+     generation still exists. Keep the seat row in its reading state so a tap
+     opens the seat sheet and starts the bounded lookup instead of opening a
+     create draft before that lookup can run. */
+  const awaitingTranscriptResolution = seated && status?.exists === false && file === null && !transcriptMissing;
   const surface = useSeatSurface(file);
   const unboundForMs = useSeatBindingFeedback({
     project,
@@ -255,7 +260,7 @@ export function MobileSeatCard({
     hostLive: !readStale && incumbentHostLive(incumbent),
     unboundForMs,
     transcriptMissing,
-    transcriptPending,
+    transcriptPending: transcriptPending || awaitingTranscriptResolution,
   });
   const view = seatCardView(state, { conversationReady: Boolean(file) });
 
