@@ -588,31 +588,42 @@ function taskCounter(all: readonly RoleMemoryRow[], byId: ReadonlyMap<string, Ro
   };
 }
 
-type AgentRuleChange = { revision: number; at: string };
+type AgentRuleChange = { revision: number; at: string; order: number };
 
 /** Curation records agent edits by rule and keeps the latest scope review. */
 function curationRevisions(history: RoleMemoryScopeRow["history"]) {
   let curator = 0;
   const agent = new Map<string, AgentRuleChange>();
-  const changed = (id: string, { revision, at }: AgentRuleChange) => {
+  const curatorByRule = new Map<string, number>();
+  const changed = (id: string, { revision, at, order }: AgentRuleChange) => {
     const previous = agent.get(id);
-    agent.set(id, { revision: Math.max(previous?.revision ?? 0, revision), at: previous && previous.at > at ? previous.at : at });
+    agent.set(id, { revision: Math.max(previous?.revision ?? 0, revision), at: previous && previous.at > at ? previous.at : at, order });
   };
-  for (const change of history) {
-    if (change.by === "curator" && !change.revertedAt) curator = Math.max(curator, change.revision);
+  for (const [order, change] of history.entries()) {
+    if (change.by === "curator" && !change.revertedAt) {
+      curator = Math.max(curator, change.revision);
+      const reviewed = new Set([
+        ...(change.before ?? []), ...(change.created ?? []),
+        ...change.added, ...change.archived, ...(change.restored ?? []), ...(change.rewritten ?? []).map(row => row.id),
+        ...(change.moved ?? []).map(row => row.id), ...(change.split ?? []).flatMap(row => [row.id, ...row.parts]),
+        ...change.merged.flatMap(row => [row.from, row.into]),
+      ]);
+      for (const id of reviewed) curatorByRule.set(id, order);
+    }
     if (change.by !== "agent") continue;
-    for (const id of change.added) changed(id, change);
-    for (const merge of change.merged) changed(merge.into, change);
-    for (const rewrite of change.rewritten ?? []) changed(rewrite.id, change);
+    for (const id of change.added) changed(id, { ...change, order });
+    for (const merge of change.merged) changed(merge.into, { ...change, order });
+    for (const rewrite of change.rewritten ?? []) changed(rewrite.id, { ...change, order });
   }
-  return { agent, curator };
+  return { agent, curator, curatorByRule };
 }
 
-function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMemoryRule>, tasks: number, agentChange?: AgentRuleChange, curatorRevision = 0): RuleView {
+function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMemoryRule>, tasks: number, agentChange?: AgentRuleChange, curatorRevision = 0, curatorRuleOrder?: number): RuleView {
   const agentRevisedAt = row.revisedBy?.by === "agent" ? row.revisedBy.at : "";
   // Budget archival advances changedAt. Use the rule's own edits and review time.
   const awaitingCuration = !row.curatedAt || (row.operatorCorrection && row.state === "archived" && row.reason === "budget"
-    ? (agentChange?.at ?? "") > row.curatedAt || agentRevisedAt > row.curatedAt
+    ? curatorRuleOrder !== undefined && agentChange ? agentChange.order > curatorRuleOrder
+      : (agentChange?.at ?? "") > row.curatedAt || agentRevisedAt > row.curatedAt
     : row.state === "active" && pendingCorrection(row) || (agentChange?.revision && curatorRevision
       ? agentChange.revision > curatorRevision : agentRevisedAt > row.curatedAt));
   /* A text equal to the one in force is not an earlier text: returning to it would change nothing. */
@@ -790,7 +801,7 @@ function buildProjectView(context: ReturnType<typeof projectViewContext>, now: n
     const left = (leftByScope.get(scope) ?? [])
       .sort((a, b) => b.changedAt.localeCompare(a.changedAt));
     const revisions = curationRevisions(active.length || left.length ? held?.history ?? [] : []);
-    const render = (row: RoleMemoryRule) => view(row, now, rulesById, ruleTasks(row.id), revisions.agent.get(row.id), revisions.curator);
+    const render = (row: RoleMemoryRule) => view(row, now, rulesById, ruleTasks(row.id), revisions.agent.get(row.id), revisions.curator, revisions.curatorByRule.get(row.id));
     return {
       scope, kind: scopeKind(scope), roleId: scopeRole(scope), revision: held?.revision ?? 0,
       chars: scopeChars(active), bound: ROLE_MEMORY_BOUND,

@@ -175,11 +175,13 @@ test("a correction duplicate of a curated rule outlives budget displacement and 
 
 test("a budget-archived correction stays first after an unrelated review until it is restored", async () => {
   const id = leave("departed", "task-departed");
+  const ordinary = leave("ordinary-first", "task-ordinary-first", "When adding translated controls, compare every supported language before accepting the result.");
   const firstPass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
-  applyCuration(firstPass, input({ [scope()]: [id] }), at(20));
-  patchPass(firstPass.id, { state: "succeeded", endedAt: at(30) });
-  const again = request("correction-again", "task-correction-again");
-  leaveLessons({ request: again, source: again, lessons: [{ scope: "role", rule: RULE, why: WHY }], correction: true, none: null, now: at(40) });
+  applyCuration(firstPass, input({ [scope()]: [id, ordinary] }), at(40));
+  patchPass(firstPass.id, { state: "succeeded", endedAt: at(40) });
+  const correctionSource = request("correction-later", "task-correction-later");
+  leaveLessons({ request: correctionSource, source: correctionSource, lessons: [{ scope: "role", rule: RULE, why: WHY }], correction: true, none: null, now: at(40) });
+  expect(row(id)).toMatchObject({ operatorCorrection: true, curatedAt: at(40) });
   // The shape an earlier build left: the budget archived the curated survivor before review.
   roleMemoryCollection(true)!.boundedPatch(4, tx => {
     const held = tx.get(`s:${scope()}`);
@@ -187,7 +189,6 @@ test("a budget-archived correction stays first after an unrelated review until i
     tx.put({ ...row(id), state: "archived", reason: "budget", changedAt: at(50) });
     tx.put({ ...held, active: held.active.filter(entry => entry !== id) });
   });
-  const ordinary = leave("ordinary", "task-ordinary", "When adding translated controls, compare every supported language before accepting the result.");
   const orchestrator = request("orchestrator", "task-orchestrator", "orchestrator");
   leaveLessons({ request: orchestrator, source: orchestrator, lessons: [{ scope: "role", rule: "Before relaying a stage result, read the stage's own conclusion and quote its verdict.", why: WHY }], none: null, now: at(60) });
   const interval = 7 * 60 * 60_000;
@@ -200,7 +201,8 @@ test("a budget-archived correction stays first after an unrelated review until i
   expect(page.rules[0]).toMatchObject({ id, kind: "left", reason: "budget", operatorCorrection: true, awaitingCuration: true });
 
   const archived = row(id);
-  applyCuration(pass, input({ [scope()]: [ordinary] }), at(interval + 10));
+  // The review is later in scope history, while sharing the correction's millisecond.
+  applyCuration(pass, input({ [scope()]: [ordinary] }), at(40));
   patchPass(pass.id, { state: "succeeded", endedAt: at(interval + 20) });
   expect(row(id)).toEqual(archived);
 
