@@ -28,7 +28,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { decisiveRefusal, publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine } from "./publication";
+import { decisiveRefusal, publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine, PUBLICATION_MEMORY_DEFERRAL } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -1653,7 +1653,8 @@ function publicationDiagnosticTail(output: string, limit: number): string {
 
 function publicationFailureDetail(failure: PipelinePublicationFailure): string {
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
-  return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
+  const cause = failure.memoryAdmissionDeferred ? `${PUBLICATION_MEMORY_DEFERRAL}\n` : "";
+  return redactPublicationText(`${cause}${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
 }
 
 /** What stopped a publication, in one line a person can act on. The hook's
@@ -1697,6 +1698,7 @@ export function hookBudgetStop(output: string): { ms: number; check: string } | 
     ended it and which phase the hook had announced. Evidence is absent when
     the Viewer itself died with the push. */
 export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
+  if (failure?.memoryAdmissionDeferred) return PUBLICATION_MEMORY_DEFERRAL;
   if (failure?.privacyConfigurationFault) return "the privacy gate could not read its own configuration (configuration_error) and judged nothing; the push did not reach the remote";
   const phase = failure ? publicationFailurePhase(failure) : null;
   const runner = failure ? runnerNoVerdict(failure.outputTail) : null;
@@ -2175,7 +2177,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         // Redaction may discard a stream containing decisive refusal evidence.
         // Only the classification survives; raw bytes are never persisted.
         const rawOutput = `${executed.stdout}\n${executed.stderr}`;
-        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
+        const classifiedDeadline = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
+        const deadlineKind = classifiedDeadline === "memory" && (!preparingChecks || executed.code !== 75) ? null : classifiedDeadline;
         const rawPhase = preparingDependencies ? null : publicationFailurePhase({ outputTail: rawOutput });
         const privacyConfigurationFault = rawPhase === "privacy" && publicationPrivacyConfigurationFault(rawOutput)
           && !rawOutput.split("\n").some(line => !publicationPrivacyRefusal(line) && decisiveRefusal(line.trim()));
@@ -2210,6 +2213,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: deadlineKind !== null,
           ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
+          ...(deadlineKind === "memory" ? { memoryAdmissionDeferred: true } : {}),
           ...(privacyConfigurationFault ? { privacyConfigurationFault: true } : {}),
           ...(!preparingDependencies && rawPhase !== "privacy" && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
@@ -2244,7 +2248,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       // A hook that stopped at its budget judged nothing: retried like a push
       // its time limit killed, never parked as the stage's own refusal.
       if (!result.ok && failureEvidence.hookBudgetMs && failureEvidence.retryableDeadline) result = { ...result, outcome: "not-landed" };
-      if (!result.ok && failureEvidence.privacyConfigurationFault) result = { ...result, outcome: "not-landed" };
+      if (!result.ok && (failureEvidence.privacyConfigurationFault || failureEvidence.memoryAdmissionDeferred)) result = { ...result, outcome: "not-landed" };
     }
     clearInterval(watch); watch = undefined;
     // Retain the actual child outcome before trying the kernel fence again.
@@ -2281,8 +2285,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (matches(current) && (current.stateDetail === "publication accepted; remote verification pending" || awaitingPass)) current.stateDetail = result.ok
         ? result.remote === "published" ? null : "publication checked; remote is unavailable"
         : result.error;
-      const timing = result.phaseTimings
-        ? `; phases preparation=${result.phaseTimings.preparationMs}ms checks=${result.phaseTimings.checksMs}ms transport=${result.phaseTimings.transportMs}ms` : "";
+      const timing = publicationPhaseDetail(result.phaseTimings);
       deliveryJournal(current, "recovery", `${result.ok ? `publication verified: ${result.remote}` : `publication refused: ${result.error}`}${timing}`);
       if (result.ok && result.remote === "published") current.publishedCommit = result.sha;
       tx.put(current);
@@ -2378,8 +2381,7 @@ async function reconcilePublication(id: string, expectedEpoch: number, exec: Exe
       if (result.ok) current.publishedCommit = operation.sha;
       else if ((current.state === "running" || (current.state === "needs_decision" && publicationPark)) && current.cursor?.state === "committing"
         && current.lastPassedCommit === operation.sha) current.stateDetail = result.error;
-      const timing = result.phaseTimings
-        ? `; phases preparation=${result.phaseTimings.preparationMs}ms checks=${result.phaseTimings.checksMs}ms transport=${result.phaseTimings.transportMs}ms` : "";
+      const timing = publicationPhaseDetail(result.phaseTimings);
       deliveryJournal(current, "recovery", `publisher quiescent; remote reconciled${timing}`, conversationId);
       tx.put(current);
       return null;
@@ -2388,6 +2390,12 @@ async function reconcilePublication(id: string, expectedEpoch: number, exec: Exe
   return reconciled.locked ? reconciled.value : generationRunning
     ? "the recorded publisher generation is still in flight"
     : "publisher child is still in flight or its lock could not be checked";
+}
+
+function publicationPhaseDetail(timing: PipelinePublishResult["phaseTimings"]): string {
+  if (!timing) return "";
+  const peak = timing.peakRssBytes === undefined ? "" : ` peak RSS=${timing.peakRssBytes}B`;
+  return `; phases preparation=${timing.preparationMs}ms checks=${timing.checksMs}ms transport=${timing.transportMs}ms${peak}`;
 }
 
 async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
@@ -2402,6 +2410,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   if (local.sha !== acceptedSha) {
     return { ok: false, error: `the pipeline worktree is at ${shortId(local.sha)}, not the accepted revision ${shortId(acceptedSha)}; nothing was published` };
   }
+  const capability = publicationPreparationVersion(pipeline.worktreeDir);
+  if (capability === 2) return { ok: false, error: "publication capability 2 is retired; update the checkout to current main" };
+  const preparation = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts")) ? capability : undefined;
   if (request.publishedSha && request.publishedSha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
 
   const origin = pipeline.delivery
@@ -2487,15 +2498,12 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // The repository's gate can finish before Git's authenticated discovery.
   // The subsequent native hook verifies this exact operation's consumed
   // inputs and scans fresh privacy data under a separate transport deadline.
-  const preparation = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
-    ? publicationPreparationVersion(pipeline.worktreeDir) : undefined;
   const runtime = preparation === 3 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
   // The installed launcher takes precedence over gate-slot's image detection.
   // Keep its CPU helper and run it under the same Bun as the native hook.
-  const gateRuntime = runtime === "bun" ? {} : { LLV_GATE_BUN: runtime };
   const forgeEnv = engineForgeWriteEnv();
-  const pushEnv: Partial<NodeJS.ProcessEnv> = { ...pipelinePublicationHookEnv(), ...lessons, ...forgeEnv, ...gateRuntime,
-    ...installedGateAdmissionEnv({ ...process.env, ...forgeEnv, ...gateRuntime }),
+  const pushEnv: Partial<NodeJS.ProcessEnv> = { ...pipelinePublicationHookEnv(), ...lessons, ...forgeEnv,
+    ...installedGateAdmissionEnv({ ...process.env, ...forgeEnv }, runtime === "bun" ? undefined : runtime),
     // Only the new operation can supply a receipt to its hook.
     LLV_GATE_PUBLICATION_RECEIPT: undefined,
     // Older branches run their own hook scripts, so supply the gate's current
@@ -2507,7 +2515,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
   const transportBudgetMs = Math.min(budget.ms, PUBLICATION_TRANSPORT_HOOK_MS + PUBLICATION_PACK_MARGIN_MS);
   const receiptFile = preparation ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
-  let phaseTimings = { preparationMs: 0, checksMs: 0, transportMs: 0 };
+  let phaseTimings: NonNullable<PipelinePublishResult["phaseTimings"]> = { preparationMs: 0, checksMs: 0, transportMs: 0 };
   let push: ExecResult;
   try {
     if (receiptFile) {
@@ -2527,7 +2535,8 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
       // An older or failed gate cannot turn an exit code into a check receipt.
       const checkReceipt = readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
       phaseTimings = { preparationMs: Math.max(0, preparationElapsed - (checkReceipt.checksMs ?? preparationElapsed)),
-        checksMs: checkReceipt.checksMs ?? preparationElapsed, transportMs: 0 };
+        checksMs: checkReceipt.checksMs ?? preparationElapsed, transportMs: 0,
+        ...(checkReceipt.peakRssBytes === undefined ? {} : { peakRssBytes: checkReceipt.peakRssBytes }) };
       const current = await currentPipelineBranchHead(pipeline, exec);
       if (!current.ok) return current;
       if (current.sha !== acceptedSha) return { ok: false, error: "the accepted revision changed after publication checks; nothing was published" };

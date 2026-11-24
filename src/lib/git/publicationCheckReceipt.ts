@@ -7,14 +7,13 @@ export const PUBLICATION_TRANSPORT_MS = 60_000;
 const MAX_RECEIPT_BYTES = 4096;
 
 /** Read a declaration without executing an older gate's unknown arguments. */
-export function publicationPreparationVersion(root: string): 1 | 3 | undefined {
+export function publicationPreparationVersion(root: string): 1 | 2 | 3 | undefined {
   try {
     const file = path.join(root, "scripts/local-gate-capabilities.json");
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.size > 1024) return;
     const version = JSON.parse(fs.readFileSync(file, "utf8"))?.publicationPrepare;
-    // Version 2 was also used by the sealed gate, which skips the live scan.
-    if (version === 1 || version === 3) return version;
+    if (version === 1 || version === 2 || version === 3) return version;
   } catch { /* Use the ordinary gated push for an unknown capability. */ }
 }
 export interface PublicationCheckReceipt {
@@ -26,6 +25,12 @@ export interface PublicationCheckReceipt {
   components?: Record<string, string>;
   /** Wall time spent executing the planned checks, excluding gate setup. */
   checksMs?: number;
+  /** Sampled peak of the local preparation process tree, in bytes. */
+  peakRssBytes?: number;
+}
+
+function validPeakRss(value: number | undefined): boolean {
+  return value === undefined || (Number.isSafeInteger(value) && value > 0);
 }
 
 function validateComponents(value: unknown): void {
@@ -56,13 +61,15 @@ export function readPublicationCheckReceipt(file: string, binding: string, now =
     throw new Error("publication check receipt is stale or belongs to another operation");
   }
   validateComponents(value.components);
+  if (!validPeakRss(value.peakRssBytes)) throw new Error("publication check receipt peak RSS is invalid");
   return value;
 }
 
-export function writePublicationCheckReceipt(file: string, binding: string, inputs: string, components?: Record<string, string>, checksMs?: number): void {
+export function writePublicationCheckReceipt(file: string, binding: string, inputs: string, components?: Record<string, string>, checksMs?: number, peakRssBytes?: number): void {
   validateComponents(components);
   if (checksMs !== undefined && (!Number.isSafeInteger(checksMs) || checksMs < 0)) throw new Error("publication check receipt timing is invalid");
-  const value: PublicationCheckReceipt = { version: 1, binding, inputs, completedAt: Date.now(), ...(components ? { components } : {}), ...(checksMs !== undefined ? { checksMs } : {}) };
+  if (!validPeakRss(peakRssBytes)) throw new Error("publication check receipt peak RSS is invalid");
+  const value: PublicationCheckReceipt = { version: 1, binding, inputs, completedAt: Date.now(), components, checksMs, peakRssBytes };
   const contents = JSON.stringify(value);
   if (Buffer.byteLength(contents) > MAX_RECEIPT_BYTES) throw new Error("publication check receipt exceeds size limit");
   fs.writeFileSync(file, contents, { flag: "wx", mode: 0o600 });

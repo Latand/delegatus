@@ -2279,10 +2279,11 @@ test.each(["pure", "assertion", "privacy", "started", "cleanup"] as const)("admi
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
 
-test.each([1, 2, 3] as const)("capability %i uses its own publication path and lands one push", async capability => {
+test.each([1, 3] as const)("capability %i uses its own publication path and lands one push", async capability => {
   const box = await publishSandbox();
   const execPath = process.execPath;
   const inheritedReceipt = process.env.LLV_GATE_PUBLICATION_RECEIPT;
+  const inheritedBun = process.env.LLV_GATE_BUN;
   const containerRuntime = "/usr/local/bin/bun-container";
   try {
     const scripts = path.join(box.subject.worktreeDir, "scripts");
@@ -2295,31 +2296,82 @@ test.each([1, 2, 3] as const)("capability %i uses its own publication path and l
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare") {
         preparations.push(command);
-        if (capability === 3) {
-          expect(gateAdmissionInterpreter(env?.LLV_GATE_BUN) ?? env?.LLV_GATE_BUN).toBe(containerRuntime);
+        if (capability === 3 && process.platform === "linux") {
+          expect(gateAdmissionInterpreter(env?.LLV_GATE_BUN)).toBeNull();
+          expect(fs.readFileSync(env!.LLV_GATE_BUN!, "utf8")).toContain(`exec '${containerRuntime}'`);
         }
-        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(env!), "a".repeat(64), {}, 1);
+        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(env!), "a".repeat(64), {}, 1, 123_456);
         return { code: 0, stdout: "", stderr: "" };
       }
       if (command === "git" && args[0] === "push") {
         pushes.push(options?.timeoutMs ?? 0);
-        if (capability === 2) expect(env?.LLV_GATE_PUBLICATION_RECEIPT).toBeUndefined();
       }
       return realExec(command, args, cwd, env, options);
     };
     process.execPath = containerRuntime;
+    delete process.env.LLV_GATE_BUN;
     process.env.LLV_GATE_PUBLICATION_RECEIPT = path.join(box.root, "inherited.json");
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
-    expect(result).toMatchObject({ ok: true, sha: head, remote: "published" });
-    expect(preparations).toEqual(capability === 2 ? [] : [capability === 3 ? containerRuntime : "bun"]);
-    expect(pushes).toEqual([capability === 2 ? 900_000 : 240_000]);
+    expect(result).toMatchObject({ ok: true, sha: head, remote: "published", phaseTimings: { checksMs: 1, peakRssBytes: 123_456 } });
+    expect(findPipelineRecord(box.subject.id)?.delivery?.journal.at(-1)?.reason).toContain("peak RSS=123456B");
+    expect(preparations).toEqual([capability === 3 ? containerRuntime : "bun"]);
+    expect(pushes).toEqual([240_000]);
     expect(await box.originHead()).toBe(head);
   } finally {
     if (inheritedReceipt === undefined) delete process.env.LLV_GATE_PUBLICATION_RECEIPT;
     else process.env.LLV_GATE_PUBLICATION_RECEIPT = inheritedReceipt;
+    if (inheritedBun === undefined) delete process.env.LLV_GATE_BUN;
+    else process.env.LLV_GATE_BUN = inheritedBun;
     process.execPath = execPath;
     fs.rmSync(box.root, { recursive: true, force: true });
   }
+}, 60_000);
+
+test.each([true, false])("retired publication capability 2 refuses before any transport (gate script present=%s)", async guarded => {
+  const box = await publishSandbox();
+  try {
+    const original = await box.commit("change.txt", "previously published\n");
+    await git(box.subject.worktreeDir, "push", "origin", `HEAD:refs/heads/${box.subject.branch}`);
+    const scripts = path.join(box.subject.worktreeDir, "scripts");
+    fs.mkdirSync(scripts);
+    if (guarded) fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// retired gate fixture\n");
+    const head = await box.commit("scripts/local-gate-capabilities.json", '{"publicationPrepare":2}\n');
+    const unexpected: string[] = [];
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (command !== "git" || ["ls-remote", "fetch", "push"].includes(args[0]!)) unexpected.push([command, ...args].join(" "));
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(result).toEqual({ ok: false, error: "publication capability 2 is retired; update the checkout to current main" });
+    if (result.ok) throw new Error("expected terminal refusal");
+    expect(recoverablePublication(result)).toBeFalse();
+    expect(unexpected).toEqual([]);
+    expect(await box.originHead()).toBe(original);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
+
+test("prepared publication memory deferral retries without opening push transport", async () => {
+  const box = await publishSandbox();
+  try {
+    fs.mkdirSync(path.join(box.subject.worktreeDir, "scripts"));
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "scripts/local-gate.ts"), "// memory deferral fixture\n");
+    const head = await box.commit("scripts/local-gate-capabilities.json", '{"publicationPrepare":3}\n');
+    const pushes: string[][] = [];
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (args.includes("--publication-prepare")) {
+        return { code: 75, stdout: "PRIVACY GATE: PASS\n", stderr: "pre-push: publication memory admission deferred before checks started\nadmitted checks exited 75\n" };
+      }
+      if (args[0] === "push") pushes.push(args);
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(result).toMatchObject({ ok: false, outcome: "not-landed", failure: { code: 75, retryableDeadline: true, memoryAdmissionDeferred: true } });
+    if (result.ok) throw new Error("expected memory deferral");
+    expect(result.error.split("\n")[0]).toBe("publication memory admission deferred before checks started");
+    expect(recoverablePublication(result)).toBeTrue();
+    expect(pushes).toEqual([]);
+    expect(await box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
 
 test.each(["pure", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {

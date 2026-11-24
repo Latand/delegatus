@@ -69,16 +69,20 @@ test("receipt component hashes round trip and malformed component records refuse
   expect(fs.existsSync(refused)).toBeFalse();
 });
 
-test("publication receipt records check duration and rejects invalid timing values", () => {
+test("publication receipt records check duration and peak RSS and rejects invalid values", () => {
   const f = fixture();
   const binding = publicationCheckBinding(f.env);
-  writePublicationCheckReceipt(f.receipt, binding, "a".repeat(64), undefined, 0);
-  expect(readPublicationCheckReceipt(f.receipt, binding).checksMs).toBe(0);
+  writePublicationCheckReceipt(f.receipt, binding, "a".repeat(64), undefined, 0, 4096);
+  expect(readPublicationCheckReceipt(f.receipt, binding)).toMatchObject({ checksMs: 0, peakRssBytes: 4096 });
   fs.rmSync(f.receipt);
   expect(() => writePublicationCheckReceipt(f.receipt, binding, "a".repeat(64), undefined, -1))
     .toThrow("publication check receipt timing is invalid");
+  expect(() => writePublicationCheckReceipt(f.receipt, binding, "a".repeat(64), undefined, 0, -1))
+    .toThrow("publication check receipt peak RSS is invalid");
   fs.writeFileSync(f.receipt, JSON.stringify({ version: 1, binding, inputs: "a".repeat(64), completedAt: Date.now(), checksMs: -1 }), { mode: 0o600 });
   expect(() => readPublicationCheckReceipt(f.receipt, binding)).toThrow("stale or belongs to another operation");
+  fs.writeFileSync(f.receipt, JSON.stringify({ version: 1, binding, inputs: "a".repeat(64), completedAt: Date.now(), checksMs: 0, peakRssBytes: -1 }));
+  expect(() => readPublicationCheckReceipt(f.receipt, binding)).toThrow("publication check receipt peak RSS is invalid");
 });
 
 test("transport input validation retains a named deadline refusal", () => {

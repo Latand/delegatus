@@ -205,13 +205,13 @@ inventory, and C1 and C2 publish content or refs that no check saw.
    `git push` timeout 240 s (never above the publication budget). This replaces
    both main's `max(60 s, 2 × preparation)` formula (up to 24 minutes for a
    25-minute budget) and 4f3c4fff's capability split.
-4. **Capability 3 declares the in-image hook with a fresh privacy scan.** Older
-   worktrees used capability 2 for the sealed gate. They run the ordinary
-   native hook without a preparation receipt. For capability 3, the container
+4. **Capability 3 declares the in-image hook with a fresh privacy scan.** The
+   controller refuses capability 2 before contacting the remote. For capability 3, the container
    controller starts preparation with `bun-container` and binds the installed
    CPU admission launcher's interpreter to it. The preparation and the native
    hook then fingerprint the same runtime and toolchain, and the launcher
-   still routes admission to the installed CPU helper.
+   still routes admission to the installed CPU helper. The image interpreter
+   is a local launcher default. Cloud receives the portable check inputs.
 
 ### Invariant check with numbers
 
@@ -241,7 +241,8 @@ heavy checks never run while the transport is open.
 | 4f3c4fff, capability 2 | publication budget, inside one CPU admission bounded at 60 s | 60 s, no privacy scan | 120 s | 60 s |
 | **B, capability 1** | publication budget (prepared with `bun`) | **180 s** (privacy scan) | **240 s** | 60 s |
 | **B, capability 3** | publication budget (prepared and admitted with `bun-container` in the image) | **180 s** (privacy scan) | **240 s** | 60 s |
-| Capability 2, absent or unknown capability under B | n/a | ordinary hook, full publication budget | budget | n/a |
+| Capability 2 under B | terminal refusal | n/a | n/a | n/a |
+| Absent or unknown capability under B | n/a | ordinary hook, full publication budget | budget | n/a |
 
 The 4f3c4fff regression's own example still holds under B. A capability-1
 checkout with 70 s of preparation had a 140 s hook allowance on main and gets
@@ -272,6 +273,23 @@ Earlier findings from lanes 3730c10f and 9b4c476a:
 | Read-only lock exclusion test can pass before the entrant locks (3730c10f r1, P2) | Kept fix |
 | Interrupted transport loses phase timings (3730c10f r2, P2); exact success assertion breaks on `phaseTimings` (9b4c476a r1–r2, P2) | Kept fixes |
 | The lane's controller never published from the container (3730c10f r1, P1, WRONG-PREMISE) | Explained above: capability 2 under the capability-1 controller. The live proof follows the deploy |
+
+## Decisions after review 2
+
+- Publication marker 2 appeared only in closed lanes for this PR. The
+  controller refuses it before either publication path opens transport, with
+  a terminal message directing the caller to update the checkout to current main.
+- Local prepared types keep the 11,264 MiB V8 heap. The gate waits for that
+  heap plus 2 GiB of memory headroom for native allocations, the runner and
+  concurrent checks. The first shared gate slot serializes cold container
+  plans with types. The gate uses the lower of host `MemAvailable` and finite
+  cgroup headroom. It waits up to 60 seconds after acquiring the slot and
+  defers immediately if total capacity is below budget. A deferral retries
+  publication. The receipt and journal record the sampled concurrent RSS of
+  the local preparation process tree alongside phase timings.
+- The in-image admission interpreter stays local to its launcher. Cloud
+  receives portable check inputs, and a Cloud fallback still runs the local plan.
+- Merge current `origin/main` and keep its privacy files byte for byte.
 
 ## Implementation plan
 
@@ -316,7 +334,7 @@ test that fails without it. Restore everything else to `origin/main`.
 | `scripts/local-gate.ts:238` | `LLV_DOCKER_NSENTER_SHIMS` in isolated checks | 3730c10f r1 P2 |
 | `scripts/local-gate.ts:1148–1154` | under `bun-container`, run `bun` steps with `process.execPath` and types with `node node_modules/typescript/bin/tsc` | the `bun`/`bunx` shim runs `/bin/sh -c 'cd …'` in the host's mount namespace, where a container-only check directory does not exist. The host's `/bin/sh` is bash, which explains the unexplained "sh: line 1: cd: …: No such file or directory" type failure of 2026-11-03 |
 | `scripts/local-gate-capabilities.json` | `publicationPrepare: 3`, with the meaning in Recommendation item 4 | the controller must know which interpreter the hook uses and whether it scans at transport |
-| `src/lib/git/publicationCheckReceipt.ts` | `publicationPreparationVersion` (1 or 3), `checksMs` | capability detection and phase timings |
+| `src/lib/git/publicationCheckReceipt.ts` | capability detection, `checksMs`, and `peakRssBytes` | terminal marker-2 refusal, phase timings and memory evidence |
 | `src/lib/pipelines/git.ts` | `LLV_DOCKER_NSENTER_SHIMS` pass-through (:1731–1733); `preparingChecks` for `process.execPath` (:2116–2117); preparation runtime choice (:2526); `phaseTimings` in results, journal and reconciliation | container fixes; timings for the live proof |
 | `src/lib/pipelines/types.ts` | `phaseTimings` | same |
 | `scripts/local-gate.fixture.ts`, `scripts/publicationHook.fixture.ts` | keep only the parts a remaining test uses | |
@@ -344,8 +362,8 @@ test that fails without it. Restore everything else to `origin/main`.
   The privacy scanner runs twice (preparation and transport), and one RPC
   lands. "Over cap": a transport scan that passes 180 s ends with
   `retryableDeadline: true`, `hookStoppedCheck: "privacy"`, no RPC and an
-  unchanged ref. The ordinary gated-push cases cover the retired marker 2 and
-  an unknown marker.
+  unchanged ref. Terminal refusal for marker 2 leaves the existing remote ref
+  unchanged with and without a preparation script.
 - **T2** `scripts/local-gate.publication.test.ts`: restore main's cases
   "prepared checks are consumed once by a fresh native hook, with fresh privacy
   and no second admission", "a privacy-only refresh retains all reused heavy

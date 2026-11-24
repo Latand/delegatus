@@ -249,6 +249,11 @@ run_claimed() {
   exit "$result"
 }
 queue_key="command:bounded:drained:$$:$RANDOM:$RANDOM"
+slot_search=$slots
+# Prepared types reserve the first shared slot across the headroom check
+# and the whole plan. Two cold container publishers cannot both spend the
+# same memory sample while their compilers are still starting.
+if [[ -n ${LLV_GATE_PUBLICATION_MEMORY_BYTES:-} ]]; then slot_search=1; fi
 while :; do
   "$gate_bun" "$admission" --wait "$queue_key" "$owner_pid"
   if [[ $OSTYPE == msys || $OSTYPE == cygwin ]]; then
@@ -265,7 +270,7 @@ while :; do
     fi
     if try_lock 8; then
       usable=false
-      for ((i=1; i<=slots; i++)); do
+      for ((i=1; i<=slot_search; i++)); do
         slot_file="$lock_dir/llv-heavy-gate.slot$i.lock"
         cap_file="$lock_dir/llv-heavy-gate.slot$i.cap$slots.lock"
         if ! { shared_lock_file "$slot_file" && exec 9<"$slot_file"; } 2>/dev/null; then continue; fi
