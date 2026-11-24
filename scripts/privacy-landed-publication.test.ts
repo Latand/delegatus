@@ -5,8 +5,8 @@ const sha = "1".repeat(40);
 const previous = "2".repeat(40);
 const mailbox = ["noreply", "github.com"].join("@");
 const identity = [sha, "GitHub", mailbox].join("\0");
-const env = { GITHUB_REPOSITORY: "fixture/project", GITHUB_EVENT_NAME: "push",
-  GITHUB_REF: "refs/heads/main", GITHUB_REF_PROTECTED: "true", PRIVACY_DEFAULT_BRANCH: "main", GITHUB_SHA: sha };
+const env = { NODE_ENV: "test", GITHUB_REPOSITORY: "fixture/project", GITHUB_EVENT_NAME: "push",
+  GITHUB_REF: "refs/heads/main", GITHUB_REF_PROTECTED: "true", PRIVACY_DEFAULT_BRANCH: "main", GITHUB_SHA: sha } satisfies NodeJS.ProcessEnv;
 const response = (oid: string, valid: boolean, github: boolean, parentCount = 2) => Response.json({ data: {
   repository: { object: { oid, signature: { isValid: valid, wasSignedByGitHub: github }, parents: { totalCount: parentCount } } },
 } });
