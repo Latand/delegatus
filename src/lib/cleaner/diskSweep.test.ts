@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
 import { pipelineIdentity, savePipelines } from "@/lib/pipelines/store";
@@ -135,6 +136,44 @@ test.skipIf(process.platform !== "linux")("aged evidence is reclaimed while a ta
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("a bare Git evidence repository is preserved while adjacent aged evidence is reclaimed", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-bare-evidence-"));
+  const saved = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, PORT: process.env.PORT, LLV_CLEANER: process.env.LLV_CLEANER };
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; delete process.env.LLV_CLEANER;
+  const now = Date.UTC(2031, 10, 23), closed = new Date(now - 8 * 86400_000).toISOString();
+  const id = createHash("sha256").update("bare evidence fixture").digest("hex").slice(0, 36);
+  try {
+    const lane = finishedLane(root, closed);
+    savePipelines([{ ...lane, ...pipelineIdentity("lane-bare", lane.task, lane.repoDir), id: "lane-bare" },
+      { ...lane, ...pipelineIdentity("lane-capture", lane.task, lane.repoDir), id: "lane-capture" }]);
+    const bare = statePath("evidence", "lane-bare", "git-data");
+    const capture = statePath("evidence", "lane-capture", "capture");
+    fs.mkdirSync(path.dirname(bare), { recursive: true }); fs.mkdirSync(capture, { recursive: true });
+    expect(spawnSync("git", ["init", "--bare", bare], { encoding: "utf8" }).status).toBe(0);
+    const object = spawnSync("git", [`--git-dir=${bare}`, "hash-object", "-w", "--stdin"], { input: "retained object", encoding: "utf8" });
+    expect(object.status).toBe(0); expect(fs.existsSync(path.join(bare, "objects", object.stdout.trim().slice(0, 2), object.stdout.trim().slice(2)))).toBeTrue();
+    fs.writeFileSync(path.join(capture, "screen.txt"), "old capture");
+    const aged = new Date(now - 8 * 86400_000);
+    for (const directory of [bare, capture]) fs.utimesSync(directory, aged, aged);
+    fs.utimesSync(path.join(capture, "screen.txt"), aged, aged);
+    createCleanerJournal(id); writeJsonDurably(diskCleanerStateFile(), { id, startedAt: now, project: "fixture", mode: "on", episode: null, before: [] });
+    const reports = [];
+    for (let i = 0; i < 4; i++) reports.push(await runCleanerSweep({ id, class: "evidence" }, { scan: () => ({ ownNamespace: "fixture", processes: [] }),
+      containerReferences: async () => true, now: () => now + i * 1000 }));
+    expect(reports.reduce((total, report) => total + report.errors, 0), JSON.stringify(reports.flatMap(report => report.kept))).toBe(0);
+    expect(fs.existsSync(path.join(bare, "objects", object.stdout.trim().slice(0, 2), object.stdout.trim().slice(2)))).toBeTrue();
+    expect(fs.existsSync(capture)).toBeFalse();
+    expect(reports.flatMap(report => report.kept)).toContainEqual(expect.objectContaining({ path: bare, reason: expect.stringContaining("git-data") }));
+    const journal = fs.readFileSync(cleanerJournalFile(id), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(journal.filter(row => row.path === capture).map(row => row.phase)).toEqual(["intent", "removed"]);
+    expect(journal.some(row => row.path === bare)).toBeFalse();
+  } finally {
+    closeAgentRegistryForTests();
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 30_000);

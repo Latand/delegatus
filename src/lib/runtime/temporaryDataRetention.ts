@@ -193,6 +193,13 @@ export function temporaryDataProtection(row: TemporaryDataCandidate, target: str
           pending.push(path.join(file, entry.name));
         }
       } finally { stream.closeSync(); }
+      if (names.has("HEAD") && names.has("objects") && names.has("refs")) {
+        const head = fs.lstatSync(path.join(file, "HEAD"), { throwIfNoEntry: false });
+        const objects = fs.lstatSync(path.join(file, "objects"), { throwIfNoEntry: false });
+        const refs = fs.lstatSync(path.join(file, "refs"), { throwIfNoEntry: false });
+        if (head?.isFile() && !head.isSymbolicLink() && objects?.isDirectory() && !objects.isSymbolicLink()
+          && refs?.isDirectory() && !refs.isSymbolicLink()) throw new Error("git-data");
+      }
       listings.set(file, names);
     }
   }
@@ -389,7 +396,8 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
           assertRetentionTestPath(current);
           protection = temporaryDataProtection(row, current, clock, deadline);
           bytes = protection.bytes;
-          if (cleaner && protection.newest > now() - TEMPORARY_DATA_RETENTION_MS) { reason = "evidence touched within seven days"; return true; }
+          if ((row.kind === "lane-evidence" || row.kind === "agent-evidence")
+            && protection.newest > now() - TEMPORARY_DATA_RETENTION_MS) { reason = "evidence touched within seven days"; return true; }
           const clear = await ports.references(row, current, inventory);
           assertRetentionTestPath(current);
           if (!clear) { reason = "live-reference"; return true; }
@@ -441,7 +449,8 @@ export function sweepTemporaryData(store: TemporaryDataStore, ports: TemporaryDa
         }
       } catch (error) {
         if (error instanceof RetentionTestSafetyError) throw error;
-        reason = error instanceof Error ? error.message : "inspection-unavailable"; report.errors++;
+        reason = error instanceof Error ? error.message : "inspection-unavailable";
+        if (reason !== "git-data") report.errors++;
         // Protection and reference inspection can throw before dispatch, even
         // on replay. Return that verified resource to its owner in this call.
         // A native removal error keeps the intent and partial tree in custody.

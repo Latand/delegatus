@@ -6126,6 +6126,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.reason.permissionRequest": "чекає запит дозволу",
   "seatTick.reason.workerAsk": "запитання воркера чекає на оркестратора",
   "seatTick.reason.diskPressure": "мало місця на диску",
+  "seatTick.reason.diskCleaner": "прибирання диска завершено",
   "seatTick.outcome.landed": "доставлено",
   "seatTick.outcome.deferred": "відкладено, спроба в очікуванні",
   "seatTick.outcome.queued": "у черзі",

@@ -3617,7 +3617,7 @@ async function gatherSeatTickInputWork(
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources), ...diskCleanerSignals(canonical)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources), ...await diskCleanerSignals(canonical, state.itemsShown ?? [], seat)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

@@ -45,7 +45,7 @@ test("a standalone watcher anchors daily eligibility once for its whole lifetime
     },
   } as unknown as CleanerController;
   const actions = {
-    active: () => true, project: async () => "repo-test", early: () => {},
+    active: () => true, project: async () => "repo-test",
     card: async () => true, report: async () => true,
   };
   const tick = async () => {
@@ -93,7 +93,7 @@ test("the automatic pass starts on an unmeasured warning and does not overlap th
   try {
     startDiskPressureWatch({ schedule, readPressure: async () => { observations++; return pressure; },
       automatic: async report => { expect(report).toBe(pressure); launches++; await hold; },
-      actions: { active: () => true, project: async () => "repo-fixture", early: () => {},
+      actions: { active: () => true, project: async () => "repo-fixture",
         card: async () => { cards++; return true; }, report: async () => true },
     });
     scheduled.shift()!();

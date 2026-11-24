@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { retainReleases, type RetentionInputs, type RetentionPorts } from "./retention";
+import { readReleasePipelineClaims, retainReleases, type RetentionInputs, type RetentionPorts } from "./retention";
 import { finishTreeTrash, removeTreeViaTrash, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { LauncherRecord } from "./launcher";
 import { runGit } from "./git";
@@ -11,7 +11,9 @@ import { RetentionWorker } from "./retentionWorker";
 import { retentionProcessScan, retentionScanWithObserver, withSelfObservation } from "./retentionInspection";
 import { observePrivilegedReleases, RELEASE_OBSERVER } from "./releaseObserver.worker";
 import { quarantineTree, sealProcessLinks } from "./gatedTrash";
+import { cleanerJournal, createCleanerJournal, cleanerJournalFile } from "@/lib/cleaner/diskJournal";
 import { installStateOwnershipGraph, MODULE_CONSUMER_SOURCE } from "./stateOwnershipGraph.fixture";
+import { buildPipeline, loadPipelinesForList, savePipelines } from "@/lib/pipelines/store";
 
 // Replay fixtures signal started() before interruption so W4 retains quarantine
 // custody. A pre-removal refusal instead restores the original path.
@@ -102,6 +104,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 const EMPTY: ProcessScan = { ownNamespace: "mnt:[fixture]", processes: [] };
+const fixtureCleanerId = (...parts: string[]) => parts.join("-");
 function fixture(count = 8) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "llv-retention-test-"))); roots.push(root);
   const releases = path.join(root, "releases"); fs.mkdirSync(releases);
@@ -586,7 +589,7 @@ test("the cleaner retains the newest 15, the running release and pinned data", a
   fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: running }));
   fs.writeFileSync(path.join(pinned, ".delegatus-keep"), "");
   const journal: Array<{ phase: string; directory: string; bytes: number; proof: string }> = [];
-  h.ports.cleaner = { allowed: () => true, dryRun: false,
+  h.ports.cleaner = { id: fixtureCleanerId("11111111", "1111", "4111", "8111", "111111111111"), allowed: () => true, dryRun: false,
     journal: (phase, directory, bytes, proof) => journal.push({ phase, directory, bytes, proof }) };
   const report = await h.run();
   expect(report.errors).toEqual([]);
@@ -597,6 +600,104 @@ test("the cleaner retains the newest 15, the running release and pinned data", a
   }))));
   for (const dir of [running, pinned, ...h.dirs.slice(-15)]) expect(exists(dir)).toBeTrue();
   expect(exists(path.join(running, ".next/cache/webpack/cache"))).toBeTrue();
+}, 30_000);
+
+test("Cleaner preserves release repositories claimed by a parked pipeline at admission and final owner read", async () => {
+  const h = fixture(20), git = h.ports.git!;
+  h.ports.git = async (args, cwd) => {
+    const result = await git(args, cwd);
+    return args[0] === "worktree" && args[1] === "list" ? { ...result, stdout: `worktree ${h.root}\0HEAD main\0\0${result.stdout}` } : result;
+  };
+  const parkedRepo = h.dirs[3]!;
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(h.root, "pipeline-state");
+  try {
+  const parked = buildPipeline({ id: "parked-release-claim", task: "Retain the paused checkout", project: "fixture", repoDir: parkedRepo,
+    stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+      role: { roleId: "builder", params: { scope: "fixture" } }, outputs: ["evidence"],
+      effectiveRole: { roleId: "builder", engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-only", promptScaffold: "Build {{scope}}" } }],
+    srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00.000Z" });
+  parked.state = "paused"; parked.pausedState = "running"; parked.pausedAt = "2030-01-01T00:00:00.000Z";
+  savePipelines([parked]);
+  const claims = await readReleasePipelineClaims();
+  expect(loadPipelinesForList().find(row => row.id === parked.id)?.state).toBe("paused");
+  expect(claims).toContainEqual({ repoDir: parkedRepo, worktreeDir: parked.worktreeDir });
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] }));
+  h.ports.current = () => ({ record: h.record, inputs: h.inputs, fenced: true, pipelineClaims: claims });
+  const journal: Array<{ phase: string; directory: string }> = [];
+  h.ports.cleaner = { id: fixtureCleanerId("22222222", "2222", "4222", "8222", "222222222222"), allowed: () => true, dryRun: false,
+    journal: (phase, directory) => journal.push({ phase, directory }) };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(exists(parkedRepo)).toBeTrue();
+  expect(exists(h.dirs[0]!)).toBeFalse();
+  expect(h.commands.some(args => args[0] === "worktree" && args[1] === "remove" && args.at(-1) === parkedRepo)).toBeFalse();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: parkedRepo, reason: "pipeline-checkout" }));
+  expect(journal.filter(row => row.directory === parkedRepo)).toEqual([]);
+  expect(journal.filter(row => row.directory === h.dirs[0]!).map(row => row.phase)).toEqual(["intent", "removed"]);
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
+}, 30_000);
+
+test("the final closed-gate owner read restores a release newly claimed by a parked pipeline", async () => {
+  const h = fixture(20), git = h.ports.git!;
+  h.ports.git = async (args, cwd) => {
+    const result = await git(args, cwd);
+    return args[0] === "worktree" && args[1] === "list" ? { ...result, stdout: `worktree ${h.root}\0HEAD main\0\0${result.stdout}` } : result;
+  };
+  const parkedRepo = h.dirs[3]!;
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] }));
+  let observationsAfterQuarantine = 0;
+  h.ports.current = () => {
+    const quarantined = !exists(parkedRepo) && fs.readdirSync(path.dirname(parkedRepo)).some(name => name.startsWith(`.delegatus-trash-${path.basename(parkedRepo)}-`));
+    observationsAfterQuarantine += Number(quarantined);
+    return { record: h.record, inputs: h.inputs, fenced: true,
+      pipelineClaims: observationsAfterQuarantine >= 2 ? [{ repoDir: parkedRepo, worktreeDir: null }] : [] };
+  };
+  const journal: Array<{ phase: string; directory: string }> = [];
+  h.ports.cleaner = { id: fixtureCleanerId("55555555", "5555", "4555", "8555", "555555555555"), allowed: () => true, dryRun: false,
+    journal: (phase, directory) => journal.push({ phase, directory }) };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(observationsAfterQuarantine).toBeGreaterThanOrEqual(2);
+  expect(exists(parkedRepo)).toBeTrue();
+  expect(exists(h.dirs[0]!)).toBeFalse();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: parkedRepo, reason: "pipeline-checkout" }));
+  expect(journal.filter(row => row.directory === parkedRepo).map(row => row.phase)).toEqual(["intent", "refused"]);
+  expect(journal.filter(row => row.directory === h.dirs[0]!).map(row => row.phase)).toEqual(["intent", "removed"]);
+}, 30_000);
+
+test("release retention leaves Cleaner quarantine to Cleaner recovery and restores it with an outcome", async () => {
+  const h = fixture(20), originalPass = fixtureCleanerId("33333333", "3333", "4333", "8333", "333333333333");
+  const state = path.dirname(h.ports.reportFile!);
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  try {
+  fs.mkdirSync(state, { recursive: true });
+  createCleanerJournal(originalPass);
+  const proof = "verified release beyond newest 15 with owner and process checks clear";
+  cleanerJournal(originalPass, "release")("intent", h.dirs[1]!, 4096, proof);
+  const trashJournal = path.join(state, "release-trash-interrupted-cleaner.json");
+  const row = quarantineTree(h.dirs[1]!, trashJournal, { sha: h.shas[1]!, age: h.now - 20 * DAY }, { passId: originalPass, proof });
+  expect(row).not.toBeNull();
+  const first = await h.run();
+  expect(first.errors).toEqual([]);
+  expect(fs.existsSync(h.dirs[1]!)).toBeFalse();
+  expect(fs.existsSync(path.join(row!.trash, ".next/DELEGATUS_RELEASE_READY"))).toBeTrue();
+  h.ports.cleaner = { id: fixtureCleanerId("44444444", "4444", "4444", "8444", "444444444444"), allowed: () => true, dryRun: false,
+    journal: () => {} };
+  const recovered = await h.run();
+  expect(recovered.errors).toEqual([]);
+  expect(fs.existsSync(h.dirs[1]!)).toBeTrue();
+  expect(fs.existsSync(trashJournal)).toBeFalse();
+  const audit = fs.readFileSync(cleanerJournalFile(originalPass), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(audit.map(entry => entry.phase)).toEqual(["intent", "refused"]);
+  expect(audit[1]).toMatchObject({ path: h.dirs[1], class: "release", proof });
+  expect(h.commands.some(args => args[0] === "worktree" && args[1] === "remove" && args.at(-1) === h.dirs[1])).toBeFalse();
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
 }, 30_000);
 
 test.each(["pointer", "listing", "scan", "launcher"])("an unreadable %s removes nothing", async kind => {

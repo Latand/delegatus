@@ -67,7 +67,8 @@ export async function runRetentionPass(record: LauncherRecord, inputs: Retention
                 let fenced: boolean | undefined;
                 try { fenced = claim === undefined ? undefined : options.fence?.(claim) === true; } catch { fenced = false; }
                 void Promise.resolve().then(options.current).then(current => {
-                  if (!settled) input.write(JSON.stringify({ id: message.id, current: { record: current.record, inputs: current.inputs, fenced } }) + "\n");
+                  if (!settled) input.write(JSON.stringify({ id: message.id, current: { record: current.record, inputs: current.inputs,
+                    ...(current.pipelineClaims ? { pipelineClaims: current.pipelineClaims } : {}), fenced } }) + "\n");
                 }, () => { if (!settled) input.write(JSON.stringify({ id: message.id, error: "retention owner unavailable" }) + "\n"); });
               } else if (message.kind === "report" && validReport(message.report)) {
                 settled = true; resolve(message.report);
@@ -104,6 +105,7 @@ export async function serveRetentionPass(inspection?: RetentionInspection): Prom
           // Retention's completion log belongs on stderr beside helper logs.
           console.log = console.error;
           const cleaner = typeof message.cleanerId === "string" ? {
+            id: message.cleanerId,
             allowed: () => diskCleanerAllowed(message.cleanerId),
             journal: cleanerJournal(message.cleanerId, "release"),
             dryRun: readDiskCleanerPass()?.mode !== "on",

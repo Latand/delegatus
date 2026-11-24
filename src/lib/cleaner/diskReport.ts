@@ -5,10 +5,12 @@ import type { SeatTickSignalInput } from "@/lib/monitor/types";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { formatDiskBytes } from "@/lib/state/diskPressure";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
+import { STATE_LOCK_WAIT_MS } from "@/lib/state/lockWait";
 import { diskCleanerReportsFile } from "./diskJournal";
 import type { DiskCleanerPass } from "./diskState";
-
-const REPORT_HISTORY = 24;
+import { seatTickSignalVersion } from "@/lib/monitor/seatTick";
+import type { SeatTickSeatInput } from "@/lib/monitor/types";
 
 function readReports(): DiskCleanerPass[] {
   try { return JSON.parse(fs.readFileSync(diskCleanerReportsFile(), "utf8")); }
@@ -18,14 +20,37 @@ function readReports(): DiskCleanerPass[] {
 /** Called under the pass lease. Keep completed wake items available while
  * the next pass runs, including for seats that are still mid-turn. */
 export function recordDiskCleanerReport(pass: DiskCleanerPass): void {
+  const file = diskCleanerReportsFile();
   const prior = readReports();
-  if (!prior.some(row => row.id === pass.id)) writeJsonDurably(diskCleanerReportsFile(), [...prior, pass].slice(-REPORT_HISTORY));
+  if (!prior.some(row => row.id === pass.id)) writeJsonDurably(file, [...prior, pass]);
 }
 
-export function diskCleanerSignals(project: string): SeatTickSignalInput[] {
+type CleanerReceipts = { acknowledged: string[] };
+function readReceipts(): CleanerReceipts {
+  try { return JSON.parse(fs.readFileSync(`${diskCleanerReportsFile()}.receipts`, "utf8")); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { acknowledged: [] }; throw error; }
+}
+
+export async function diskCleanerSignals(project: string, shown: readonly string[] = [], seat: Pick<SeatTickSeatInput, "conversationId" | "seatEpoch"> | null = null): Promise<SeatTickSignalInput[]> {
   try {
-    return readReports().filter(pass => pass.finished && canonicalOrchestratorProject(pass.project) === project)
-      .map(pass => ({ id: `disk-cleaner:${pass.id}`, actionable: true, label: diskCleanerReport(pass) }));
+    const file = diskCleanerReportsFile();
+    return await withFileTransactionAsync(`${file}.receipts`, "disk cleaner report receipts", () => {
+      const reports = readReports();
+      const receipts = readReceipts();
+      const pending = reports.filter(pass => pass.finished && canonicalOrchestratorProject(pass.project) === project
+        && !receipts.acknowledged.includes(pass.id));
+      const acknowledged = pending.filter(pass => {
+        const signal = { id: `disk-cleaner:${pass.id}`, actionable: true, label: diskCleanerReport(pass) };
+        return seat !== null && shown.includes(seatTickSignalVersion(signal, seat));
+      });
+      if (acknowledged.length) {
+        const ids = new Set(acknowledged.map(pass => pass.id));
+        writeJsonDurably(`${file}.receipts`, { acknowledged: [...new Set([...receipts.acknowledged, ...ids])] });
+      }
+      return pending.filter(pass => !acknowledged.includes(pass)).map(pass => ({
+        id: `disk-cleaner:${pass.id}`, actionable: true, label: diskCleanerReport(pass),
+      }));
+    }, { waitMs: STATE_LOCK_WAIT_MS });
   } catch { return []; }
 }
 

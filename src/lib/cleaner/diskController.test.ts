@@ -32,12 +32,15 @@ test("pressure admission, cooldown, journal and seat report survive Viewer resta
       import { loadTasksForList } from "./src/lib/tasks/store";
       const at = ${at}, free = ${free}, project = ${JSON.stringify(PROJECT)};
       const pressure = { at: new Date(at).toISOString(), episode: null,
-        volumes: [{ roles: ["state"], freeBytes: free, level: ${JSON.stringify(level)} }],
+        volumes: [{ volume: "pressure-mount", roles: ["worktrees"], freeBytes: free, level: ${JSON.stringify(level)} }],
         consumers: [], warningBytes: 0, criticalBytes: 0 };
       let releases = 0, cards = 0;
       const ports = {
         now: () => at, active: () => true, project: async () => project,
-        measure: () => [{ volume: "fixture", roles: ["state"], freeBytes: free + releases * 4096 }],
+        measure: observed => [
+          { volume: "fixture", roles: ["state"], freeBytes: free + releases * 4096 },
+          ...observed.volumes.map(volume => ({ volume: volume.volume!, roles: volume.roles, freeBytes: free + releases * 4096 })),
+        ],
         card: async pass => {
           cards++;
           return ensureSeatTickCard(project, { ref: "seat-disk-pressure", kind: "disk-pressure",
@@ -58,7 +61,7 @@ test("pressure admission, cooldown, journal and seat report survive Viewer resta
       if (pass?.finished) ensureSeatTickCard(project, { ref: "seat-disk-pressure", kind: "disk-pressure",
         instance: pass.id, state: "open", detail: "A stale pressure observation" }, pressure.at);
       console.log(JSON.stringify({ releases, cards, pass: readDiskCleanerPass(),
-        signals: diskCleanerSignals(project), other: diskCleanerSignals("repo-other"), tasks: loadTasksForList() }));
+        signals: await diskCleanerSignals(project), other: await diskCleanerSignals("repo-other"), tasks: loadTasksForList() }));
     `], { env, stdout: "pipe", stderr: "pipe" });
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(code, err).toBe(0);
@@ -73,6 +76,9 @@ test("pressure admission, cooldown, journal and seat report survive Viewer resta
     expect(first.signals).toEqual([expect.objectContaining({
       id: `disk-cleaner:${first.pass.id}`, actionable: true, label: expect.stringContaining("running (0.00 GiB, serving)"),
     })]);
+    expect(first.pass.before).toContainEqual({ volume: "pressure-mount", roles: ["worktrees"], freeBytes: 150e9 - 1 });
+    expect(first.pass.finished.after).toContainEqual({ volume: "pressure-mount", roles: ["worktrees"], freeBytes: 150e9 - 1 + 4096 });
+    expect(first.signals[0].label).toContain("worktrees 139.70 GiB → 139.70 GiB");
     expect(first.tasks[0].text).toContain("Прибирання диска завершено");
     const duringCooldown = await run(NOW + DISK_CLEANER_COOLDOWN_MS, 1e9, "critical");
     expect(duringCooldown).toMatchObject({ releases: 0, cards: 0, pass: { id: first.pass.id } });

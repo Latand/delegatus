@@ -32,9 +32,27 @@ function needsCleaning(pressure: DiskPressure, threshold: number, readings: Clea
     || [...pressure.volumes, ...readings].some(row => row.freeBytes !== null && row.freeBytes < threshold);
 }
 
-function measure(): CleanerSpace[] {
-  return diskVolumes([{ role: "root", directory: "/" }, { role: "state", directory: statePath() },
-    { role: "attempt config", directory: attemptTempConfigParent() }, { role: "checkout", directory: process.cwd() }])
+function measure(pressure?: DiskPressure): CleanerSpace[] {
+  const roots = [{ role: "root", directory: "/" }, { role: "state", directory: statePath() },
+    { role: "attempt config", directory: attemptTempConfigParent() }, { role: "checkout", directory: process.cwd() }];
+  if (pressure?.volumes.length && process.platform === "linux") {
+    const wanted = new Map(pressure.volumes.filter(row => row.volume).map(row => [row.volume!, row.roles.join("/")]));
+    const present = new Set(diskVolumes(roots).map(row => row.volume).filter((volume): volume is string => !!volume));
+    try {
+      for (const line of fs.readFileSync("/proc/self/mountinfo", "utf8").split("\n")) {
+        const fields = line.split(" ");
+        const mount = fields[4]?.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));
+        if (!mount) continue;
+        let volume: string;
+        try { volume = String(fs.statSync(mount).dev); } catch { continue; }
+        const role = wanted.get(volume);
+        if (role && !present.has(volume)) {
+          roots.push({ role, directory: mount }); present.add(volume);
+        }
+      }
+    } catch { /* Fixed path readings remain useful when mount inventory is unavailable. */ }
+  }
+  return diskVolumes(roots)
     .map(row => ({ volume: row.volume ?? `unknown:${row.roles.join("/")}`, roles: row.roles, freeBytes: row.freeBytes }));
 }
 
@@ -68,7 +86,7 @@ type Ports = {
   sweep: (request: CleanerSweepRequest) => Promise<CleanerSweepResult>;
   releases: (id: string) => Promise<CleanerSlice>;
   now?: () => number;
-  measure?: () => CleanerSpace[];
+  measure?: (pressure: DiskPressure) => CleanerSpace[];
   env?: Readonly<NodeJS.ProcessEnv>;
 };
 
@@ -81,7 +99,7 @@ export async function reconcileAutomaticDiskCleaner(pressure: DiskPressure, port
   if (!active()) return;
   const file = diskCleanerStateFile();
   assertRetentionTestPath(file);
-  const readSpace = ports.measure ?? measure;
+  const readSpace = () => ports.measure ? ports.measure(pressure) : measure(pressure);
   const threshold = diskCleanerThreshold(env);
   const existing = readDiskCleanerPass();
   if (existing?.finished && existing.card && now() < existing.finished.at + DISK_CLEANER_COOLDOWN_MS) return;

@@ -873,7 +873,7 @@ export class SelfUpdateService {
     if (existsSync(record.requestFile)) return null;
     this.retaining = true;
     const abort = this.retentionAbort = new AbortController();
-    const current = () => {
+    const current = async () => {
       if (this.stopped || cleanerId && !diskCleanerAllowed(cleanerId)) throw new Error("retention owner stopped");
       const file = this.deps.env[LAUNCHER_RECORD_ENV]?.trim() || launcherControlFile(record.requestFile, "launcher");
       const owner = readLauncherRecord(file);
@@ -887,14 +887,16 @@ export class SelfUpdateService {
           ...(intent && ["building", "ready", "switching", "failed"].includes(intent.state) ? [releaseDirFor(record.releasesDir, intent.target)] : []),
         ],
       };
-      return { record: owner ?? record, inputs };
+      const { readReleasePipelineClaims } = await import("./retention");
+      const pipelineClaims = await readReleasePipelineClaims();
+      return { record: owner ?? record, inputs, pipelineClaims };
     };
     try {
       if (this.deps.prune) await this.deps.prune(record, rollback);
       // The owner's hold fence: while `retaining` is set, reserve() refuses
       // every build, apply, restart and pointer change, and the automatic
       // rollback capture waits on active(), so no hold lands during the pass.
-      else return await runRetentionPass(record, current().inputs, { env: this.deps.env, signal: abort.signal, cleanerId,
+      else return await runRetentionPass(record, (await current()).inputs, { env: this.deps.env, signal: abort.signal, cleanerId,
         reportFile: join(this.deps.dir, "retention.json"), current,
         fence: () => this.retaining && this.retentionAbort === abort && !abort.signal.aborted && !this.stopped });
     } catch (error) {
