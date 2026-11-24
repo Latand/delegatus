@@ -178,25 +178,25 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     // ESLint or the publication checks. An identical command alone can also
     // be run under a legacy grant, so require its original hook process.
     const hook = hookBootstrap(command, cwd);
-    if (!hook) return false;
+    if (!hook) return;
     const proof = readProof();
     const clientStat = readStat(client);
     const parentPid = clientStat[1];
-    if (!epoch || !proof || !parentPid || !/^[1-9]\d*$/.test(parentPid) || ["Z", "X", "x"].includes(clientStat[0]!)) return false;
+    if (!epoch || !proof || !parentPid || !/^[1-9]\d*$/.test(parentPid) || ["Z", "X", "x"].includes(clientStat[0]!)) return;
     const parent = path.join(proc, parentPid);
     const parentStat = readStat(parent);
-    if (!hookParentMatches(proof, parent, parentStat)) return false;
+    if (!hookParentMatches(proof, parent, parentStat)) return;
     const original = hookBootstrap(readArgv(parent), readCwd(parent));
-    if (!original || original.mode !== hook.mode || original.entry !== hook.entry) return false;
+    if (!original || original.mode !== hook.mode || original.entry !== hook.entry) return;
     // A same-command process launched under an older gate has already crossed
     // admission even when its ticket predates the retirement journal. Require
     // the original hook to have a non-gate parent before treating its re-entry
     // as cleanup bootstrap evidence.
     const originalParent = parentStat[1];
-    if (!/^[1-9]\d*$/.test(originalParent)) return false;
+    if (!/^[1-9]\d*$/.test(originalParent)) return;
     const parentArgv = readArgv(path.join(proc, originalParent));
     const parentScript = path.basename(parentArgv[1] ?? "");
-    if (parentScript === "gate-slot.sh" || parentScript === "owned-runner.ts" || parentScript === "test-child-guardian.ts") return false;
+    if (parentScript === "gate-slot.sh" || parentScript === "owned-runner.ts" || parentScript === "test-child-guardian.ts") return;
     return { hook, parent };
   };
   const recordedParent = (identity: ProcessIdentity | undefined) => identity && identity.bootEpoch === epoch &&
