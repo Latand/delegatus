@@ -5,8 +5,9 @@ import path from "node:path";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { fixtureRegistry, FIXTURE_SESSION, FIXTURE_CONVERSATION } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity } from "@/lib/processIdentity";
-import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
-import { normalizeSeatWakeResponse, observeSeatWakeResponse, seatWakeResponseBound, wakeResponseEvidenceFromEvents, wakeResponseRecoveryKey, type SeatWakeResponse } from "./seatWakeResponse";
+import { FileRuntimeEventStore, readRuntimeEventPage } from "@/lib/runtime/eventStore";
+import { statePath } from "@/lib/configDir";
+import { matchingWakeResponseCheckpoint, normalizeSeatWakeResponse, observeSeatWakeResponse, seatWakeResponseBound, wakeResponseEvidenceFromEvents, wakeResponseRecoveryKey, type SeatWakeResponse } from "./seatWakeResponse";
 const row: SeatWakeResponse = { clientMessageId: "wake", operationId: "operation", conversationId: "conversation_fixture", seatEpoch: 7,
   deliveredAt: "2026-11-01T00:00:00Z", progressAt: "2026-11-01T00:00:00Z", boundMs: 900_000, action: "pending" };
 
@@ -22,6 +23,90 @@ test("wake preparation survives serialization while legacy rows retain their mis
   expect(normalizeSeatWakeResponse(JSON.parse(JSON.stringify(row)))).toEqual(row);
   expect(normalizeSeatWakeResponse({ ...row, preparedAt: "invalid" })).toBeUndefined();
   expect(normalizeSeatWakeResponse({ ...row, preparedAt: "2026-11-01T00:01:00Z" })).toBeUndefined();
+});
+test("receipt timeouts preserve replay progress and a new receipt binding reopens the prefix", () => {
+  const checkpoint = { generationId: "generation", identity: "a".repeat(64), binding: "b".repeat(64), fromPreparation: false,
+    nativeTurns: [["native-turn", false] as [string, boolean]],
+    position: { source: "1:2:3", offset: 3_146_040, edge: "c".repeat(64), seq: 20 },
+    reduction: { terminal: false, continuation: false, replied: false, providerFailure: false, inputBound: false, turnId: "turn" } };
+  expect(matchingWakeResponseCheckpoint([checkpoint], "generation", checkpoint.identity, checkpoint.binding, true)).toEqual(checkpoint);
+  expect(matchingWakeResponseCheckpoint([checkpoint], "generation", checkpoint.identity, checkpoint.binding, false)).toEqual(checkpoint);
+  expect(matchingWakeResponseCheckpoint([checkpoint], "generation", checkpoint.identity, "d".repeat(64), false)).toBeUndefined();
+  const partial = { ...checkpoint, nativeTurns: [["original-native-turn", false] as [string, boolean], ["nudge-native-turn", true] as [string, boolean]] };
+  expect(matchingWakeResponseCheckpoint([partial], "generation", partial.identity, "d".repeat(64), true)).toEqual(partial);
+  expect(matchingWakeResponseCheckpoint([checkpoint], "generation", checkpoint.identity, checkpoint.binding, true, ["native-turn", "late-nudge-turn"]))
+    .toBeUndefined();
+  expect(matchingWakeResponseCheckpoint([partial], "generation", partial.identity, "e".repeat(64), false)).toBeUndefined();
+});
+
+test("a temporary event-ledger read failure retains its validated checkpoint and resumes after restore", async () => {
+  const previousState = process.env.LLV_STATE_DIR, previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wake-checkpoint-recovery-"));
+  process.env.LLV_STATE_DIR = root;
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(root, "absent.sock");
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  setAgentRegistryForTests(registry);
+  try {
+    const fixture = fixtureRegistry(root, "codex", captureProcessIdentity(process.pid)!, null);
+    await registry.deliveryWriteOrBusy({ label: "fixture.wake-checkpoint" }, () => registry.agentStateWrite(file => Object.assign(file, fixture)));
+    const events = new FileRuntimeEventStore();
+    const pageBytes = 12 * 1024 * 1024;
+    const prefix = `${JSON.stringify({ kind: "delta", turnId: "earlier", text: "", seq: 1 })}\n`;
+    events.append(FIXTURE_SESSION, { kind: "delta", turnId: "earlier", text: "x".repeat(pageBytes - Buffer.byteLength(prefix)), seq: 1 });
+    events.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "wake-turn", seq: 2 });
+    events.append(FIXTURE_SESSION, { kind: "item", turnId: "wake-turn", phase: "completed",
+      deliveryEcho: { operationId: row.operationId, at: row.deliveredAt }, item: { type: "user" }, seq: 3 });
+    events.append(FIXTURE_SESSION, { kind: "delta", turnId: "wake-turn", text: "answered", seq: 4 });
+    events.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: "wake-turn", status: "completed", seq: 5 });
+    const filename = statePath("structured-host-events", `${encodeURIComponent(FIXTURE_SESSION)}.jsonl`);
+    const hidden = `${filename}.held`;
+    const persisted = { ...row, conversationId: FIXTURE_CONVERSATION, generationId: FIXTURE_SESSION, turnId: "wake-turn" };
+    const prepared = await observeSeatWakeResponse(persisted);
+    expect(prepared).toMatchObject({ answered: false, scan: [{ generationId: FIXTURE_SESSION,
+      position: { offset: 0, skip: 8 * 1024 * 1024 } }] });
+    fs.renameSync(filename, hidden);
+    const missing = await observeSeatWakeResponse({ ...persisted, scan: prepared.scan });
+    expect(missing).toMatchObject({ answered: false, scan: prepared.scan });
+    fs.renameSync(hidden, filename);
+    expect(await readRuntimeEventPage(FIXTURE_SESSION, missing.scan![0]!.position, () => {}, undefined, path.dirname(filename))).not.toBeNull();
+    const resumed = await observeSeatWakeResponse({ ...persisted, scan: missing.scan });
+    expect(resumed).toMatchObject({ answered: true, turnId: "wake-turn" });
+  } finally {
+    setAgentRegistryForTests(null);
+    registry.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a legacy answer beyond the first page releases on its first watchdog tick", async () => {
+  const previousState = process.env.LLV_STATE_DIR, previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wake-legacy-first-tick-"));
+  process.env.LLV_STATE_DIR = root;
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(root, "absent.sock");
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  setAgentRegistryForTests(registry);
+  try {
+    const fixture = fixtureRegistry(root, "codex", captureProcessIdentity(process.pid)!, null);
+    await registry.deliveryWriteOrBusy({ label: "fixture.legacy-wake" }, () => registry.agentStateWrite(file => Object.assign(file, fixture)));
+    const events = new FileRuntimeEventStore();
+    const prefix = `${JSON.stringify({ kind: "delta", turnId: "earlier", text: "", seq: 1 })}\n`;
+    events.append(FIXTURE_SESSION, { kind: "delta", turnId: "earlier", text: "x".repeat(5 * 1024 * 1024 - Buffer.byteLength(prefix)), seq: 1 });
+    events.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "wake-turn", seq: 2 });
+    events.append(FIXTURE_SESSION, { kind: "item", turnId: "wake-turn", phase: "completed",
+      deliveryEcho: { operationId: row.operationId, at: row.deliveredAt }, item: { type: "user" }, seq: 3 });
+    events.append(FIXTURE_SESSION, { kind: "delta", turnId: "wake-turn", text: "answered", seq: 4 });
+    events.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: "wake-turn", status: "completed", seq: 5 });
+    const persisted = { ...row, conversationId: FIXTURE_CONVERSATION, generationId: FIXTURE_SESSION, turnId: "wake-turn" };
+    expect(await observeSeatWakeResponse(persisted)).toMatchObject({ answered: true, turnId: "wake-turn", generationId: FIXTURE_SESSION });
+  } finally {
+    setAgentRegistryForTests(null);
+    registry.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 test("response belongs to the delivered turn; provider failures and unrelated input give no answer", () => {
   const start = { kind: "turn-started", turnId: "operation" };
@@ -39,6 +124,25 @@ test("a joined input and a stable recovery nudge retain their own membership", (
   const key = wakeResponseRecoveryKey(recovering);
   expect(key).toBe(wakeResponseRecoveryKey({ ...row, action: "nudging" }));
   expect(wakeResponseEvidenceFromEvents(recovering, [{ kind: "turn-started", turnId: key }, { kind: "delta", turnId: key, text: "answer" }, { kind: "turn-ended", turnId: key, status: "completed" }], [key]).answered).toBe(true);
+});
+
+test.each(["wake", "nudge"] as const)("joined %s output before its delivery echo cannot settle the response", action => {
+  const recovering = action === "nudge" ? { ...row, action: "nudged" as const } : row;
+  const operationId = action === "nudge" ? wakeResponseRecoveryKey(recovering) : row.operationId;
+  const events = [
+    { kind: "turn-started", turnId: "joined-native-turn" },
+    { kind: "delta", turnId: "joined-native-turn", text: "earlier turn response" },
+    { kind: "item", turnId: "joined-native-turn", phase: "completed", item: { type: "reasoning", text: "x".repeat(200_000) } },
+    { kind: "item", turnId: "joined-native-turn", deliveryEcho: { operationId }, item: { type: "user" } },
+    { kind: "turn-ended", turnId: "joined-native-turn", status: "completed" },
+  ];
+  const continuations = action === "nudge" ? [operationId] : [];
+  const nudgeRecoveryOps = action === "nudge" ? [operationId] : [];
+  expect(wakeResponseEvidenceFromEvents(recovering, events, continuations, "joined-native-turn", action === "nudge", nudgeRecoveryOps))
+    .toMatchObject({ answered: false });
+  events.splice(4, 0, { kind: "delta", turnId: "joined-native-turn", text: "answer after joined input" });
+  expect(wakeResponseEvidenceFromEvents(recovering, events, continuations, "joined-native-turn", action === "nudge", nudgeRecoveryOps))
+    .toMatchObject({ answered: true });
 });
 
 
