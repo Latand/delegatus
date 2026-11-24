@@ -581,6 +581,8 @@ async function getViewerControl(
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
       ...(text(result.check) ? { check: text(result.check) } : {}),
+      ...(pathname.startsWith("/api/telegram/bot/agent?op=reactions&") && typeof result.retryAfterSeconds === "number"
+        ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(requestHealth ? { runtimeHostRequests: requestHealth } : {}),
     });
   }
@@ -6022,7 +6024,7 @@ async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDepend
 
 /*
  * The Telegram bot account (docs/design/telegram-bot-account.md, Decision 6).
- * The Viewer is the only process that holds the bot token, so all three tools
+ * The Viewer is the only process that holds the bot token, so the bot tools
  * reach it through the agent route; none of them carries the token or the
  * bot's id either way. The send forwards the calling session's capability,
  * which is how the route attributes the post to this conversation.
@@ -6039,6 +6041,33 @@ async function telegramBotMessages(args: McpToolArgs, control: ViewerControlDepe
     if (typeof value === "number" || (typeof value === "string" && value !== "")) query.set(field, String(value));
   }
   return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`));
+}
+
+function telegramReactionRefusal(error: unknown): never {
+  if ((error instanceof McpToolRefusal || error instanceof McpDispatchVerdictError) && typeof error.details.code === "string") {
+    const { code, retryAfterSeconds } = error.details;
+    throw new McpToolRefusal(error.message, {
+      code,
+      retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+      ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
+    });
+  }
+  throw error;
+}
+
+async function telegramBotReactions(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const query = new URLSearchParams({ op: "reactions", chat: required(args, "chat") });
+  return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`).catch(telegramReactionRefusal));
+}
+
+async function telegramBotSetReaction(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  return redactPayload(await dispatchControl(control)("/api/telegram/bot/agent", {
+    op: "set_reaction",
+    clientRequestId: requestId(args),
+    chat: required(args, "chat"),
+    messageId: args.messageId,
+    reaction: args.reaction,
+  }, callerCapabilityHeaders()).catch(telegramReactionRefusal));
 }
 
 async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
@@ -9519,6 +9548,8 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_reactions: (args, context) => telegramBotReactions(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_set_reaction: (args, context) => telegramBotSetReaction(args, viewerControlForCall(controlDependencies, context)),
     relay_answer: async (args) => {
       const caller = attributionOf(domainDependencies);
       try {

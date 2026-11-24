@@ -14,7 +14,7 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 const operatorRoute = await import("./route");
 const agentRoute = await import("./agent/route");
 const { TelegramBotService, productionTelegramBotDependencies, setTelegramBotServiceForTests } = await import("@/lib/telegram/bot/service");
-const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
+const { FakeBotTransport, fakeBotToken, ok, refused, unreachable } = await import("@/lib/telegram/bot/fakeTransport");
 const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityHeader");
 const { clonePairing } = await import("@/lib/externalRelay/clone.fixture");
@@ -32,16 +32,19 @@ const TEAM = { id: -1000000000101, type: "supergroup", title: "Team Reports" };
 const HOME = path.join(SANDBOX, "home");
 
 let transport: InstanceType<typeof FakeBotTransport>;
+let sendingTransports: Map<string, InstanceType<typeof FakeBotTransport>>;
 let service: InstanceType<typeof TelegramBotService>;
 
 beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   transport = new FakeBotTransport();
+  sendingTransports = new Map();
   let confirmationSequence = 0;
   service = new TelegramBotService({
     ...productionTelegramBotDependencies(),
-    transportFor: () => transport,
+    transportFor: (token) => sendingTransports.get(token) ?? transport,
     fileConfirmationId: () => `operator-route-fixture-${++confirmationSequence}`,
+    now: () => new Date("2026-01-01T00:00:00Z"),
     sleep: async () => {},
     conversationTitle: () => "Report writer",
     documentEnvironment: () => ({ home: HOME, stateDir: process.env.LLV_STATE_DIR! }),
@@ -76,6 +79,21 @@ async function text(response: Response): Promise<string> {
 
 function leaks(body: string): boolean {
   return body.includes(TOKEN_TAIL) || body.includes(TOKEN) || body.includes(String(BOT_ID));
+}
+
+const THUMBS_UP = { type: "emoji", emoji: "👍" };
+const HEART = { type: "emoji", emoji: "❤" };
+const CUSTOM_REACTION = { type: "custom_emoji", custom_emoji_id: "9007199254740993" };
+const PAID_REACTION = { type: "paid" };
+
+function reactionCatalog(chat = "team-reports", headers = AGENT) {
+  return agentRoute.GET(request(`/api/telegram/bot/agent?op=reactions&${new URLSearchParams({ chat })}`, { headers }));
+}
+
+function setReaction(reaction: unknown, messageId = 5, chat = "team-reports", headers = AGENT) {
+  return agentRoute.POST(request("/api/telegram/bot/agent", {
+    method: "POST", headers, body: { op: "set_reaction", chat, messageId, reaction },
+  }));
 }
 
 async function connected() {
@@ -344,4 +362,146 @@ test("the existing operator surface adds, assigns and removes an extra bot witho
   expect(status.bots).toHaveLength(1);
   expect(status.chats).toHaveLength(1);
   expect(status.chats[0].assignedBot).toBeNull();
+});
+
+test("the agent reaction catalog distinguishes explicit, empty, and standard reactions", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  transport.handlers.getChatMember = () => ok({ status: "administrator" });
+  const reactions = [THUMBS_UP, CUSTOM_REACTION, PAID_REACTION];
+  transport.script("getChat", ok({ ...TEAM, available_reactions: reactions }), ok({ ...TEAM, available_reactions: [] }), ok(TEAM));
+  const catalogs = [{ kind: "explicit", reactions }, { kind: "explicit", reactions: [] }, { kind: "standard" }];
+  for (const catalog of catalogs) {
+    const response = await reactionCatalog(String(TEAM.id));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ chat: "team-reports", chatId: String(TEAM.id), catalog });
+  }
+  expect(transport.callsOf("getChat").map(call => call.params)).toEqual(catalogs.map(() => ({ chat_id: TEAM.id })));
+  expect(transport.callsOf("setMessageReaction")).toEqual([]);
+});
+
+test("the agent sets exactly one reaction on each specified message", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  transport.handlers.getChatMember = () => ok({ status: "administrator" });
+  transport.script("getChat", ok({ ...TEAM, available_reactions: [HEART, CUSTOM_REACTION] }),
+    ok({ ...TEAM, available_reactions: [CUSTOM_REACTION] }), ok(TEAM));
+  transport.script("setMessageReaction", ok(true), ok(true), ok(true));
+  const targets = [[5, { ...HEART, emoji: "❤️" }, HEART], [6, CUSTOM_REACTION, CUSTOM_REACTION], [7, THUMBS_UP, THUMBS_UP]] as const;
+  for (const [messageId, input, reaction] of targets) {
+    const response = await setReaction(input, messageId);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      chat: "team-reports", chatId: String(TEAM.id), messageId, reaction, setBy: { name: "Report Bot", username: "report_test_bot" },
+    });
+  }
+  expect(transport.callsOf("setMessageReaction").map(call => call.params)).toEqual(targets.map(([messageId, , reaction]) => ({
+    chat_id: TEAM.id, message_id: messageId, reaction: [reaction],
+  })));
+});
+
+test("the agent refuses unavailable, paid, custom, and multiple reactions before setting them", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  transport.handlers.getChatMember = () => ok({ status: "administrator" });
+  for (const [input, code] of [
+    [PAID_REACTION, "reaction_paid_unsupported"], [[THUMBS_UP, HEART], "reaction_invalid"],
+  ] as const) {
+    const response = await setReaction(input);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code, retryable: false });
+  }
+  expect(transport.callsOf("getChat")).toEqual([]);
+  transport.script("getChat", ok({ ...TEAM, available_reactions: [HEART] }),
+    ok({ ...TEAM, available_reactions: [THUMBS_UP] }), ok(TEAM), ok({ ...TEAM, available_reactions: [] }));
+  for (const input of [THUMBS_UP, CUSTOM_REACTION, CUSTOM_REACTION, HEART]) {
+    const response = await setReaction(input);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "reaction_not_allowed", retryable: false });
+  }
+  expect(transport.callsOf("setMessageReaction")).toEqual([]);
+});
+
+test("the agent preserves Telegram's reaction refusals and uncertain outcomes", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  transport.handlers.getChatMember = () => ok({ status: "administrator" });
+  transport.handlers.getChat = () => ok(TEAM);
+  transport.script("setMessageReaction", refused(400, "Bad Request: REACTION_INVALID"), unreachable("timed_out"), ok(false));
+  for (const code of ["reaction_not_allowed", "reaction_uncertain", "reaction_uncertain"]) {
+    const response = await setReaction(THUMBS_UP);
+    expect(await response.json()).toMatchObject({ code, retryable: false });
+  }
+  expect(transport.callsOf("setMessageReaction")).toHaveLength(3);
+
+  transport.script("getChat", ok({ ...TEAM, available_reactions: null }), ok({ ...TEAM, id: TEAM.id - 1 }), refused(429, "Too many requests", { retryAfterSeconds: 4 }));
+  for (const expected of [{ code: "telegram_failed" }, { code: "telegram_failed" }, { code: "rate_limited", retryAfterSeconds: 4 }]) {
+    const response = await reactionCatalog();
+    expect(await response.json()).toMatchObject({ ...expected, retryable: true });
+  }
+});
+
+test("both reaction operations require an allowlisted chat and a posting bot", async () => {
+  const disconnected = await reactionCatalog();
+  expect(await disconnected.json()).toMatchObject({ code: "bot_not_connected" });
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", false);
+  const before = transport.calls.length;
+  const crossOrigin = { ...AGENT, origin: "https://foreign.example" };
+  expect((await reactionCatalog("team-reports", crossOrigin)).status).toBe(403);
+  expect((await setReaction(HEART, 5, "team-reports", crossOrigin)).status).toBe(403);
+  for (const response of [await reactionCatalog(), await setReaction(HEART, 5, String(TEAM.id))]) {
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "chat_not_allowed" });
+  }
+  expect(transport.calls).toHaveLength(before);
+
+  service.setChat(String(TEAM.id), "team-reports", true);
+  transport.script("getUpdates", ok([
+    { update_id: 3, my_chat_member: { chat: TEAM, date: 3, new_chat_member: { status: "left" } } },
+  ]));
+  await service.pollOnce(new AbortController().signal);
+  for (const response of [await reactionCatalog(), await setReaction(HEART)]) {
+    expect(await response.json()).toMatchObject({ code: "bot_not_in_chat" });
+  }
+  expect(transport.callsOf("getChat")).toEqual([]);
+  expect(transport.callsOf("setMessageReaction")).toEqual([]);
+});
+
+test("revoking the allowlist during getChat stops the reaction before it is set", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  transport.handlers.getChatMember = () => ok({ status: "administrator" });
+  transport.handlers.getChat = () => {
+    service.setChat(String(TEAM.id), "team-reports", false);
+    return ok(TEAM);
+  };
+  const response = await setReaction(THUMBS_UP);
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({ code: "chat_not_allowed", retryable: false });
+  expect(transport.callsOf("setMessageReaction")).toEqual([]);
+});
+
+test("reactions prefer the assigned bot and fall back when that bot cannot see the chat", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  const extra = new FakeBotTransport();
+  const extraToken = fakeBotToken("5151515");
+  sendingTransports.set(extraToken, extra);
+  extra.handlers.getChatMember = () => ok({ status: "administrator" });
+  extra.script("getMe", ok({ id: 5151515, is_bot: true, first_name: "Second bot", username: "second_fixture_bot" }));
+  await service.addBot(extraToken);
+  await service.assignBot(String(TEAM.id), "second_fixture_bot");
+  extra.script("getChat", ok(TEAM), refused(403, "Forbidden"));
+  extra.script("setMessageReaction", ok(true));
+  transport.script("getChat", ok(TEAM));
+  transport.script("setMessageReaction", ok(true));
+  const assigned = await setReaction(HEART);
+  expect(await assigned.json()).toMatchObject({ setBy: { username: "second_fixture_bot" } });
+  const fallback = await setReaction(HEART, 6);
+  expect(await fallback.json()).toMatchObject({ setBy: { username: "report_test_bot" } });
+  expect(extra.callsOf("getChat")).toHaveLength(2);
+  expect(extra.callsOf("setMessageReaction").map(call => call.params.message_id)).toEqual([5]);
+  expect(transport.callsOf("getChat")).toHaveLength(1);
+  expect(transport.callsOf("setMessageReaction").map(call => call.params.message_id)).toEqual([6]);
 });

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { BotSelector, botRows, publicRefusals, type PostingBot } from "./multiBot";
+import { BotSelector, botRows, publicBot, publicRefusals, type PostingBot } from "./multiBot";
 import { productionClonePosting, type ClonePostingPort } from "./clone";
 import { TelegramBotError, sendFailure } from "./errors";
 export { TelegramBotError } from "./errors";
@@ -50,6 +50,7 @@ import { admitReportReplies, drainReportReplies, productionReportReplyPorts, typ
 import { outboundPostingAllowed, recordOutbound, outboundState, type OutboundMessage, type PublicationTarget } from "./outbound";
 import { OutboundPublication } from "./outboundPublication";
 import { ReviewPollQueue, type ReviewPollInput } from "./reviewPolls";
+import { telegramReactionCatalogSchema, telegramReactionMessageIdSchema, telegramReactionSchema, type TelegramReactionCatalog } from "./reactions";
 import {
   createBotApiTransport,
   removeBotToken,
@@ -64,9 +65,8 @@ import {
  * The Telegram bot account (`docs/design/telegram-bot-account.md`).
  *
  * One service per process, reached through {@link telegramBotService}: the
- * operator route (connect, refresh, allowlist, remove), the agent route the
- * five Viewer MCP tools call (chats, messages, send, send_media,
- * send_document), and the update poller
+ * operator route (connect, refresh, allowlist, remove), the agent route
+ * the Viewer MCP tools call, and the update poller
  * the release that owns traffic starts. It never holds the token itself — only
  * the transport built from it, whose one member is `call`.
  */
@@ -1089,6 +1089,74 @@ export class TelegramBotService {
       throw new TelegramBotError("chat_unknown", `no chat named ${typeof reference === "string" && reference.trim() ? JSON.stringify(reference.trim().slice(0, 64)) : "(empty)"}; list them with telegram_bot_chats`);
     }
     return chat;
+  }
+
+  private async withReactionCatalog<T>(reference: unknown, run: (input: {
+    chat: ChatRow;
+    bot: PostingBot;
+    catalog: TelegramReactionCatalog;
+  }) => Promise<T>): Promise<T> {
+    const store = this.connectedStore();
+    const chat = this.resolveChat(store, reference);
+    const authorize = () => {
+      // The numeric chat ID is also the namespace for the target message.
+      const current = this.connectedStore().chat(chat.chatId);
+      if (!current) throw new TelegramBotError("chat_not_allowed", "the selected chat changed or was removed");
+      const refusal = postRefusal(current);
+      if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
+    };
+    authorize();
+    return this.selector().withNativePostingBot(chat, authorize, async (bot, assertCurrent) => {
+      const found = await bot.transport.call<{ id: number; available_reactions?: unknown }>("getChat", { chat_id: Number(chat.chatId) }, { timeoutMs: 5000 });
+      assertCurrent();
+      if (!found.ok) throw lookupFailure(found);
+      if (found.result?.id !== Number(chat.chatId)) throw new TelegramBotError("telegram_failed", "Telegram did not confirm the selected chat");
+      if (!Object.hasOwn(found.result, "available_reactions")) return run({ chat, bot, catalog: { kind: "standard" } });
+      const parsed = telegramReactionCatalogSchema.safeParse(found.result.available_reactions);
+      if (!parsed.success) throw new TelegramBotError("telegram_failed", "Telegram returned an invalid reaction catalog");
+      return run({ chat, bot, catalog: { kind: "explicit", reactions: parsed.data } });
+    });
+  }
+
+  async readReactions(chat: unknown) {
+    return this.withReactionCatalog(chat, async ({ chat, catalog }) => ({
+      chat: chat.alias ?? chat.chatId, chatId: chat.chatId, catalog,
+    }));
+  }
+
+  async setReaction(input: { chat: unknown; messageId: unknown; reaction: unknown }) {
+    const target = telegramReactionMessageIdSchema.safeParse(input.messageId);
+    if (!target.success) {
+      throw new TelegramBotError("bad_request", "messageId must be a positive Telegram message ID");
+    }
+    const messageId = target.data;
+    const parsed = telegramReactionSchema.safeParse(input.reaction);
+    if (!parsed.success) throw new TelegramBotError("reaction_invalid", "provide one emoji or custom emoji reaction");
+    const requested = parsed.data;
+    if (requested.type === "paid") throw new TelegramBotError("reaction_paid_unsupported", "Telegram bots cannot set paid reactions");
+    return this.withReactionCatalog(input.chat, async ({ chat, bot, catalog }) => {
+      const reaction = catalog.kind === "explicit" ? catalog.reactions.find(candidate =>
+        candidate.type === "emoji" && requested.type === "emoji"
+          ? candidate.emoji.replaceAll("\uFE0F", "") === requested.emoji.replaceAll("\uFE0F", "")
+          : candidate.type === "custom_emoji" && requested.type === "custom_emoji" && candidate.custom_emoji_id === requested.custom_emoji_id,
+      ) : requested.type === "emoji" ? requested : undefined;
+      if (!reaction) throw new TelegramBotError("reaction_not_allowed", "the chat does not allow that reaction");
+      // When Telegram omits the catalog, Telegram validates its standard set.
+      const result = await bot.transport.call<boolean>("setMessageReaction", {
+        chat_id: Number(chat.chatId), message_id: messageId, reaction: [reaction],
+      }, { timeoutMs: 5000 });
+      if (result.ok ? result.result !== true : result.kind === "timed_out" || result.kind === "network_failed") {
+        throw new TelegramBotError("reaction_uncertain", "Telegram did not confirm whether the reaction was set");
+      }
+      if (!result.ok) {
+        if (result.status === 400 && /\bREACTION_(?:INVALID|NOT_ALLOWED)\b/i.test(result.description ?? "")) {
+          throw new TelegramBotError("reaction_not_allowed", "Telegram refused that reaction for the message");
+        }
+        const error = sendFailure(result, chat);
+        throw new TelegramBotError(error.code, "Telegram refused the reaction", error.extra);
+      }
+      return { chat: chat.alias ?? chat.chatId, chatId: chat.chatId, messageId, reaction, setBy: publicBot(bot) };
+    });
   }
 
   readMessages(input: { chat: unknown; limit?: unknown; cursor?: unknown; since?: unknown; maxChars?: unknown }): TelegramBotMessagesAnswer {
