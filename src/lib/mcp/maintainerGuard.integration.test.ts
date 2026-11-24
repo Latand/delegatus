@@ -89,7 +89,7 @@ test("a builder can persist an operator hold that references an open step", asyn
   const at = "2026-11-20T06:47:00.000Z";
   const steps = [{ id: "choose-setting", text: "Choose a setting", state: "open" as const }];
   const hold = { kind: "operator", note: "Choose a setting", ref: steps[0]!.id };
-  mutateTasks(tasks => ({ tasks: [...tasks, withTaskDue({ id: taskId, project, text: "Approve a setting", status: "inbox" as const,
+  mutateTasks(tasks => ({ tasks: [...tasks, withTaskDue({ id: taskId, project, text: "Approve a setting", status: "inbox" as const, dueTz: "UTC",
     placement: "unplaced" as const, assignments: [], createdAt: at, updatedAt: at })], result: undefined }));
   try {
     const updated = await builder.callTool("update_task", { clientRequestId: "builder-operator-step", taskId, hold, steps, full: true });
