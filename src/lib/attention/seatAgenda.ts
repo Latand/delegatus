@@ -13,6 +13,7 @@ import { isWorkingAgent } from "@/components/workingAgents";
 import { waitingRoute, waitingRouteIndex, type HoldPullRequestState } from "@/lib/tasks/waitingRoute";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 
 import { laneNeedKind, laneWaitCleared } from "./routeTypes";
 
@@ -134,7 +135,7 @@ export interface SeatAgendaPauses {
 
 /** Every wait the board routes to this project's seat, oldest first. */
 export function seatAgendaAsks(
-  body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks?: readonly BoardTask[]; pullRequestState?: HoldPullRequestState },
+  body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks?: readonly BoardTask[]; seatDecisions?: readonly PrototypeReviewNotice[]; pullRequestState?: HoldPullRequestState },
   now: number, project: string, pauseWaitingTasks: Map<string, string[]> = new Map(),
   pauses: SeatAgendaPauses = {},
 ): SeatTickWorkerAskInput[] {
@@ -157,7 +158,7 @@ export function seatAgendaAsks(
     const projectTasks = body.tasks.filter(task => canonicalOrchestratorProject(task.project) === canonical);
     const index = waitingRouteIndex(body.tasks, projectLanes, working, {
       quota: new Set(pauses.quotaReadyLaneIds), deploy: new Set(pauses.deployLaneIds),
-    }, body.pullRequestState);
+    }, body.pullRequestState, body.seatDecisions);
     for (const task of projectTasks) {
       if (task.status === "done" || (!task.hold && task.status !== "blocked")) continue;
       const liveMember = task.assignments.some(a => working.has(a.conversationId ?? "") || working.has(a.path ?? ""));

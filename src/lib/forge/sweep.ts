@@ -8,7 +8,7 @@ import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdent
 
 import { emptyRepositoryEntry, forgeCacheFile, clearForgeNudges, pendingForgeNudges, readForgeCache, updateForgeCache, proposalIssueSnapshot, PROPOSAL_ISSUE_LIMIT, type ForgeRepositoryEntry, type ForgeSweepError, type StoredPullRequest } from "./cache";
 import { pipelineRepository, taskRepository } from "./resolve";
-import { githubRepositoryOfRemote, type PullRequestState } from "./workLinks";
+import { githubRepositoryOfRemote, normalizeWorkLinkInput, type PullRequestState } from "./workLinks";
 import { githubReadDiagnostic } from "./githubReadFailure";
 
 /*
@@ -111,9 +111,19 @@ function collectDemand(ports: ForgeSweepPorts): Map<string, Demand> {
     for (const link of pipeline.workLinks ?? []) want(link.repository)?.numbers.add(link.number);
   }
   for (const task of ports.loadTasks()) {
-    if (!task.workLinks?.length) continue;
-    want(taskRepository(task));
-    for (const link of task.workLinks) want(link.repository)?.numbers.add(link.number);
+    const repository = taskRepository(task);
+    if (task.workLinks?.length) want(repository);
+    for (const link of task.workLinks ?? []) want(link.repository)?.numbers.add(link.number);
+    if (task.status !== "done" && task.hold?.kind === "pr" && task.hold.ref) {
+      const hold = normalizeWorkLinkInput(task.hold.ref, { repository, kind: "pr" });
+      if (hold.ok) {
+        const entry = want(hold.link.repository);
+        if (entry) {
+          entry.live = true;
+          entry.numbers.add(hold.link.number);
+        }
+      }
+    }
   }
   let seatProjects: readonly string[] = [];
   try { seatProjects = ports.loadSeatProjects?.() ?? []; }

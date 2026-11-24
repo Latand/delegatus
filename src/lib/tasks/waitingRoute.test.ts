@@ -6,6 +6,7 @@ import type { PrototypeReviewSummary } from "@/lib/prototypeReview/types";
 import { patchTask } from "./commands";
 import { TASK_HOLD_KINDS, type BoardTask, type TaskHold, type TaskHoldKind } from "./types";
 import { waitingRoute, waitingRouteIndex } from "./waitingRoute";
+import { prototypeReviewSummary } from "@/lib/prototypeReview/model";
 
 const NOW = Date.parse("2026-11-20T06:47:00Z");
 const at = (hours: number) => new Date(NOW + hours * 3_600_000).toISOString();
@@ -125,6 +126,43 @@ test("operator forms and provenance take priority, and an answered form goes bac
   const revised = patchTask([answered], answered.id, { hold: { kind: "operator", note: "Supply a different setting" } }, at(0), { actor: "agent" });
   if (!revised.ok) throw new Error(revised.error);
   expect(classify(revised.task)).toEqual({ owner: "operator", rule: "operator-hold" });
+});
+
+test("operator holds route through published seat forms, including their settled state", () => {
+  const row = task("seat-form-hold", "operator", { ref: "seat-round", note: "Choose the release option" });
+  const dismissed = lane(row.id, "needs_decision", { dismissedAt: at(-1) });
+  const notice = { id: "prototype:seat-round", project, taskId: null, reviewId: "seat-round", title: "Choose an option",
+    createdAt: at(-2), target: { kind: "seat-decision", project, reviewId: "seat-round" } } as const;
+  const pendingIndex = waitingRouteIndex([row], [dismissed], new Set(), {}, undefined, [notice]);
+  expect(waitingRoute(row, pendingIndex, NOW)).toEqual({ owner: "operator", rule: "operator-hold" });
+  const settledIndex = waitingRouteIndex([row], [dismissed], new Set(), {}, undefined, [{ ...notice, undelivered: true }]);
+  expect(waitingRoute(row, settledIndex, NOW)).toMatchObject({ owner: "seat", rule: "form-answered", carriedBy: "task" });
+  const foreignIndex = waitingRouteIndex([row], [dismissed], new Set(), {}, undefined, [{ ...notice, project: "another-project" }]);
+  expect(waitingRoute(row, foreignIndex, NOW)).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(waitingRoute(row, waitingRouteIndex([row], [dismissed]), NOW)).toMatchObject({ owner: "seat", rule: "unowned" });
+});
+
+test("a superseded referenced decision round returns to the seat after the replacement is answered", () => {
+  const row = task("retired-round-hold", "operator", { ref: "round-a" });
+  const rounds = [
+    { id: "round-a", title: "First choice", createdAt: at(-3), variants: [], decision: undefined },
+    { id: "round-b", title: "Replacement choice", createdAt: at(-2), variants: [], decision: { chosen: [], comment: "Proceed", at: at(-1), delivery: { state: "sent" } } },
+  ] as never;
+  row.prototypeReview = prototypeReviewSummary(rounds) as never;
+  const dismissed = lane(row.id, "needs_decision", { dismissedAt: at(-1) });
+  const route = waitingRoute(row, waitingRouteIndex([row], [dismissed]), NOW);
+  expect(row.prototypeReview).toMatchObject({ latestReviewId: "round-b", waitingReviewId: null,
+    settledReviewIds: expect.arrayContaining(["round-a", "round-b"]) });
+  expect(route).toMatchObject({ owner: "seat", rule: "form-answered", action: expect.stringContaining("round-a") });
+});
+
+test("an operator hold on an open step clears when its linked lane completes", () => {
+  const row = task("linked-step-hold", "operator", { ref: "step-lane" });
+  row.steps = [{ id: "step-lane", text: "Finish linked work", state: "open", ref: "step-lane" }];
+  const dismissed = lane(row.id, "needs_decision", { dismissedAt: at(-1) });
+  expect(waitingRoute(row, waitingRouteIndex([row], [dismissed]), NOW)).toMatchObject({ owner: "operator", rule: "operator-hold" });
+  const completed = { ...lane("elsewhere", "completed"), id: "step-lane" };
+  expect(waitingRoute(row, waitingRouteIndex([row], [dismissed, completed]), NOW)).toMatchObject({ owner: "seat", rule: "wait-cleared" });
 });
 
 test("changed routing evidence earns a new key while edits to the title or hold note preserve it", () => {

@@ -93,6 +93,31 @@ const entry = () => readForgeCache(file).data.repositories[REPO]!;
 const isSearch = (args: string[]) => args.includes("--search");
 
 describe("the sweep", () => {
+  test("an exact PR hold discovers and refreshes its repository from a cold cache", async () => {
+    const repository = "other/repository";
+    const task = frozen({ id: "held-pr", project: "repo-without-work-links", status: "blocked", workLinks: undefined,
+      hold: { kind: "pr", ref: `https://github.com/${repository}/pull/41`, since: "2026-09-22T00:00:00Z", note: "Wait for this PR", by: "agent" } } as unknown as BoardTask);
+    let state: "OPEN" | "CLOSED" | "MERGED" = "OPEN";
+    const h = harness(args => {
+      if (args[0] !== "pr") throw new Error("unexpected forge request");
+      return [{ ...row({ number: 41, state }), url: `https://github.com/${repository}/pull/41` }];
+    }, { pipelines: [], tasks: [task] });
+
+    expect(await h.sweep()).toEqual([repository]);
+    expect(h.calls[0]).toEqual(expect.arrayContaining(["--repo", repository]));
+    expect(forgeCacheView(file).repository(repository)?.pr(41)?.state).toBe("open");
+
+    state = "CLOSED";
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    expect(forgeCacheView(file).repository(repository)?.pr(41)?.state).toBe("closed");
+
+    state = "MERGED";
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    expect(forgeCacheView(file).repository(repository)?.pr(41)?.state).toBe("merged");
+  });
+
   test("seated repositories without lanes refresh a bounded replaceable proposal page", async () => {
     const project = `repo-${"a".repeat(32)}`;
     recordProjectRemote({ project, canonicalRemote: "github.com/acme/widgets" });

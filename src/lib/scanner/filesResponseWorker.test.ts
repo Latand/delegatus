@@ -1037,7 +1037,7 @@ test("retained lanes share the seat agenda's prerequisite rows and live assignme
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 });
 
-test.each(["task", "pr", "postponed", "limit", "operator-form", "operator-step"] as const)(
+test.each(["task", "pr", "postponed", "limit", "operator-form", "operator-seat-form", "operator-step"] as const)(
   "a dismissed lane leaves the %s wait with its prerequisite until it clears", async kind => {
     const { seatAgendaInWorker } = await import("./filesResponseWorker");
     const { emptyRepositoryEntry, updateForgeCache } = await import("@/lib/forge/cache");
@@ -1064,14 +1064,19 @@ test.each(["task", "pr", "postponed", "limit", "operator-form", "operator-step"]
       hold.ref = "fixture-round";
       held.prototypeReview = { latestReviewId: hold.ref, waitingReviewId: hold.ref, createdAt: since, title: "Choose an option", rounds: 1 };
     }
+    if (kind === "operator-seat-form") hold.ref = "seat-round";
     if (kind === "operator-step") {
       hold.ref = "choose-setting";
-      held.steps = [{ id: hold.ref, text: "Choose a setting", state: "open" }];
+      held.steps = [{ id: hold.ref, text: "Choose a setting", state: "open", ref: "linked-step" }];
     }
     const pipeline = { id: "dismissed-lane", task: "Earlier work", project, taskIds: [held.id],
       state: "needs_decision", stages: [], runs: [], dismissedAt: at(-1), createdAt: since };
+    const seatNotice = { id: "prototype:seat-round", project, taskId: null, reviewId: "seat-round", title: "Choose an option",
+      createdAt: since, target: { kind: "seat-decision", project, reviewId: "seat-round" } } as const;
+    let seatDecisions: import("@/lib/prototypeReview/types").PrototypeReviewNotice[] = kind === "operator-seat-form" ? [seatNotice] : [];
+    let linkedLane = { id: "linked-step", task: "Linked step", project, taskIds: [], state: "running", stages: [], runs: [], createdAt: since };
     const read = (clock: number) => seatAgendaInWorker(JSON.stringify({
-      files: [], tasks: [held, prerequisite], pipelines: [pipeline],
+      files: [], tasks: [held, prerequisite], pipelines: [pipeline, ...(kind === "operator-step" ? [linkedLane] : [])], seatDecisions,
       workLinks: { pipelines: {}, tasks: { [held.id]: { repository, links: [], noPr: false } } },
     }), project, clock / 1000, runtimeFor(state));
     try {
@@ -1090,13 +1095,18 @@ test.each(["task", "pr", "postponed", "limit", "operator-form", "operator-step"]
           id: held.id, label: expect.stringContaining("recorded prerequisite cleared"),
         })]);
         storePr("merged");
+        expect((await read(now)).asks).toEqual([expect.objectContaining({
+          id: held.id, label: expect.stringContaining("recorded prerequisite cleared"),
+        })]);
       }
       if (kind === "operator-form") {
         held.prototypeReview!.waitingReviewId = null;
         held.prototypeReview!.decision = { at: at(1), chosen: [], comment: "", delivery: "sent" };
       }
-      if (kind === "operator-step") held.steps![0]!.state = "done";
-      const reason = kind === "operator-form" ? "answered the task’s decision form" : "recorded prerequisite cleared";
+      if (kind === "operator-seat-form") seatDecisions = [];
+      if (kind === "operator-step") linkedLane = { ...linkedLane, state: "completed" };
+      const reason = kind === "operator-form" ? "answered the task’s decision form"
+        : kind === "operator-seat-form" ? "no longer points to a published form or open step" : "recorded prerequisite cleared";
       expect((await read(now + 120_000)).asks).toEqual([expect.objectContaining({
         id: held.id, waitingTaskIds: [held.id], label: expect.stringContaining(reason),
       })]);

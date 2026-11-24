@@ -183,6 +183,8 @@ export interface PrototypeReviewReplica { summary: PrototypeReviewSummary; round
 export interface PrototypeReviewSummary {
   /** Local attention obligations, including older decided rounds. */
   undelivered?: Array<{ reviewId: string; title: string; at: string }>;
+  /** Exact rounds retired by an answer, including older unanswered rounds. */
+  settledReviewIds?: string[];
   asks?: "questions";
   waitingDismissal?: { at: string; by: import("@/lib/attention/dismissalTypes").DismissedBy };
   latestReviewId: string;

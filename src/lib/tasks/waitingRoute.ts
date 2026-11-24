@@ -3,7 +3,10 @@ import type { PullRequestState } from "@/lib/forge/workLinks";
 import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { pausedByOperator, pauseReminderDue } from "@/lib/pipelines/pauseReminder";
 import type { Pipeline } from "@/lib/pipelines/types";
-import { currentPrototypeSummary, prototypeReviewSummary, prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
+import { deriveTaskSteps } from "./steps";
+import { currentPrototypeSummary, prototypeReviewSummary, prototypeRoundsSuperseded, prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
+import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import type { BoardTask } from "./types";
 
 type SeatRule = "lane-stop" | "lane-dismissed" | "pause-ready" | "wait-cleared" | "unowned" | "form-answered";
@@ -14,7 +17,7 @@ export type WaitingRoute =
     { carriedBy: "task" } | { carriedBy: "lane"; laneId: string })
   | { owner: "agents"; rule: "running" | "dated" | "dependency" | "lane"; action: string };
 
-type WaitingTask = Pick<BoardTask, "id" | "status" | "hold" | "steps" | "prototypeReview" | "prototypeReviews" | "prototypeReviewReplica" | "doneAt" | "updatedAt">;
+type WaitingTask = Pick<BoardTask, "id" | "project" | "status" | "hold" | "steps" | "prototypeReview" | "prototypeReviews" | "prototypeReviewReplica" | "doneAt" | "updatedAt">;
 
 export type HoldPullRequestState = (taskId: string, ref: string) => PullRequestState | undefined;
 
@@ -30,6 +33,7 @@ export function waitingRouteIndex(
   liveAssignments: ReadonlySet<string> = new Set(),
   readyPauses: ReadyPauses = {},
   pullRequestState?: HoldPullRequestState,
+  seatDecisions: readonly PrototypeReviewNotice[] = [],
 ) {
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   const lanesById = new Map<string, Pipeline>();
@@ -63,7 +67,7 @@ export function waitingRouteIndex(
     for (const visited of path) cyclic.set(visited, result);
     return result;
   }
-  return { tasksById, lanesById, lanesByTask, liveAssignments, readyPauses, pullRequestState, hasCircularPrerequisite };
+  return { tasksById, lanesById, lanesByTask, liveAssignments, readyPauses, pullRequestState, seatDecisions, pipelines, hasCircularPrerequisite };
 }
 
 function laneOpen(lane: Pipeline): boolean {
@@ -100,6 +104,12 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
   const open = lanes.filter(laneOpen);
   const routed = open.map(lane => ({ lane, route: laneRouteNow(lane) }));
   const decision = form?.decision ? { id: form.latestReviewId, at: form.decision.at } : null;
+  const history = task.prototypeReviews ?? task.prototypeReviewReplica?.rounds ?? [];
+  const retiredRounds = prototypeRoundsSuperseded(history);
+  const settledReviewIds = new Set([...(form?.settledReviewIds ?? []), ...history.filter(round => round.decision || retiredRounds.has(round.id)).map(round => round.id)]);
+  const heldRound = hold?.kind === "operator" && hold.ref
+    ? history.find(round => round.id === hold.ref)
+    : undefined;
   const seat = (rule: SeatRule, why: string, action: string, lane?: Pipeline): WaitingRoute => {
     const state = lanes.map(lane => [lane.id, lane.state, lane.closedAt, lane.dismissedAt,
       lane.merge?.state, laneRouteNow(lane)?.key, laneRouteNow(lane)?.returnedFrom,
@@ -112,14 +122,28 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
 
   if (prototypeWaitsOnOperator(form, task) || routed.some(({ route }) => route?.owner === "form")) return { owner: "operator", rule: "form" };
   if (hold?.kind === "operator") {
-    if (decision && (hold.ref ? hold.ref === decision.id : Date.parse(decision.at) > Date.parse(hold.since))) {
+    const settledRound = decision && (!hold.ref ? Date.parse(decision.at) > Date.parse(hold.since)
+      : hold.ref === decision.id || settledReviewIds.has(hold.ref) || Boolean(heldRound?.decision));
+    if (settledRound) {
+      const answeredId = hold.ref && settledReviewIds.has(hold.ref) ? hold.ref : decision!.id;
       return seat("form-answered", "the operator answered the task’s decision form",
-        `Read round ${decision.id} with read_prototype_review and carry out the answer. Clear the hold or set a new one naming the operator’s next action.`);
+        `Read round ${answeredId} with read_prototype_review and carry out the answer. Clear the hold or set a new one naming the operator’s next action.`);
     }
     if (hold.ref) {
       if (hold.ref === form?.latestReviewId) return cleared();
+      const published = input.seatDecisions.find(notice => notice.reviewId === hold.ref
+        && canonicalOrchestratorProject(notice.project) === canonicalOrchestratorProject(task.project));
+      if (published) return published.undelivered
+        ? seat("form-answered", "the operator answered the published decision form",
+          `Read round ${hold.ref} with read_prototype_review and carry out the answer. Clear the hold or set a new one naming the operator’s next action.`)
+        : { owner: "operator", rule: "operator-hold" };
       const step = task.steps?.find(step => step.id === hold.ref);
-      if (step) return step.state === "open" ? { owner: "operator", rule: "operator-hold" } : cleared();
+      if (step) {
+        const derived = deriveTaskSteps(task.steps, input.pipelines).steps.find(candidate => candidate.id === step.id);
+        return derived?.effectiveState === "open" ? { owner: "operator", rule: "operator-hold" } : cleared();
+      }
+      return seat("unowned", "its operator hold no longer points to a published form or open step",
+        "Verify the wait now. Resume it or publish a new decision form or name an open step for the operator action.");
     }
     if (!hold.note.trim()) return seat("unowned", "its operator hold names no action", "Review the wait and either move it back to work or name the operator action or publish an outstanding decision form.");
     return { owner: "operator", rule: "operator-hold" };
