@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
+import { measureTempBytes, processPathWithinLimits, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
 import { reportMediaIndex } from "@/lib/reportMedia/lookup";
 import { recordedRootHeld } from "@/lib/recordedChecks/store";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
@@ -510,11 +510,11 @@ export function attemptProcessReferencesClear(original: string, current: string,
       const candidates = [value, ...(assignment === undefined ? [] : [assignment]),
         ...[...value.matchAll(/["'](\/[^"']+)["']|\/(?:[^\s\x00'"`=;|&<>])+/g)].map(match => match[1] ?? match[0])];
       return candidates.some(candidate => {
-        if (candidate.length > 4096 || segments(candidate).some(name => Buffer.byteLength(name) > 255)) return false;
-        if (path.isAbsolute(candidate)) return referenced(candidate);
+        if (path.isAbsolute(candidate)) return processPathWithinLimits(candidate) && referenced(candidate);
         const cwd = process.paths[0];
         return !!cwd && candidate.length > 0 && !candidate.startsWith("-")
           && (!/\s/.test(candidate) || candidate === assignment)
+          && processPathWithinLimits(cwd + path.sep + candidate)
           && referenced(cwd + path.sep + candidate);
       });
     }));

@@ -8,7 +8,7 @@ export const FIXTURE_SESSION = ["01234567", "1234", "4123", "8123", "0123456789a
 export const FIXTURE_CONVERSATION = ["conversation", "central-state-fixture"].join("_") as `conversation_${string}`;
 export const FIXTURE_TURN = "native-turn-one";
 export const at = (offset: number) => new Date(FIXTURE_NOW + offset).toISOString();
-export type FixtureEngine = "codex" | "claude" | "copilot";
+export type FixtureEngine = "codex" | "claude" | "copilot" | "antigravity";
 /** Current session JSONL shape, with invented ids and empty message bodies. */
 export function currentClaudeRecords(rounds = 1) {
   const open: Record<string, unknown>[] = [{ type: "user", uuid: "native-prompt-one", timestamp: at(0),
@@ -65,12 +65,12 @@ export function fixtureRegistry(root: string, engine: FixtureEngine, native: Pro
   return normalizeRegistry({ version: 2, receipts: {},
     entries: { [`${engine}:${FIXTURE_SESSION}`]: { key: { engine, sessionId: FIXTURE_SESSION }, artifactPath, cwd: root,
       status: "live", pendingAction: null, structuredHostOperationId: "historical-launch", updatedAt: at(0), claimOwner: owner ? `structured-host:${JSON.stringify(owner)}` : null, claimEpoch: 1,
-      structuredHost: { kind: engine === "codex" ? "codex-app-server" : engine === "claude" ? "claude-broker" : "copilot-acp",
+      structuredHost: { kind: engine === "codex" ? "codex-app-server" : engine === "claude" ? "claude-broker" : engine === "antigravity" ? "antigravity-acp" : "copilot-acp",
         endpoint: `stdio:${native.pid}`, process: native, eventCursor: 0, writerClaimEpoch: 1,
         activeTurnRef: engine === "codex" ? FIXTURE_TURN : "local-prompt-ref", agentStateTurnStartedAt: FIXTURE_NOW,
         agentStateNativeTurnId: engine === "claude" ? "native-prompt-one" : null,
-        agentStateNativePromptOrdinal: engine === "copilot" ? 1 : null,
-        agentStateNativePromptAnchor: engine === "copilot" ? { device: null, inode: null, offset: 0, edgeHash: crypto.createHash("sha256").digest("hex") } : null, pendingAttention: [], activeFlags: [] } } },
+        agentStateNativePromptOrdinal: (engine === "copilot" || engine === "antigravity") ? 1 : null,
+        agentStateNativePromptAnchor: (engine === "copilot" || engine === "antigravity") ? { device: null, inode: null, offset: 0, edgeHash: crypto.createHash("sha256").digest("hex") } : null, pendingAttention: [], activeFlags: [] } } },
     conversations: { [FIXTURE_CONVERSATION]: { id: FIXTURE_CONVERSATION, engine,
       turn: { state: "busy", source: "lifecycle", terminalAt: null, observedAt: at(0) },
       generations: [{ id: FIXTURE_SESSION, engine, path: artifactPath, launchProfile: { cwd: root } }], updatedAt: at(0) } } });

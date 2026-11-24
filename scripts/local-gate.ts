@@ -1101,7 +1101,10 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   // owner before allocation; admitted children inherit the same journal.
   if (import.meta.main && !process.env.LLV_GATE_SANDBOX_RECORD) {
     const parent = captureProcessIdentity(process.pid);
-    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(parent) };
+    const parentProof = JSON.stringify(parent);
+    // The dispatch marker binds this direct cleanup launch to its live parent.
+    // Admission accepts it only beside that exact parent identity.
+    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: parentProof, LLV_GATE_HOOK_DISPATCH: parentProof };
     const entry = publicationPrepare ? path.join(root, "scripts/local-gate.ts") : import.meta.path;
     if (publicationPrepare) {
       // The outer runner owns cleanup while its child queues for checks. Give

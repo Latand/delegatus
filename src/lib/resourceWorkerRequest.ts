@@ -27,8 +27,8 @@ const HOST_KEYS = [
   "id", "engine", "sessionId", "pid", "startIdentity", "bootEpoch", "cwd", "path", "conversationId",
   "title", "role", "model", "stage", "seat", "turnBusy", "owned",
 ];
-const FILE_ENGINES = new Set(["claude", "codex", "copilot", "shell", "openclaw"]);
-const HOST_ENGINES = new Set(["claude", "codex", "copilot"]);
+const FILE_ENGINES = new Set(["claude", "codex", "copilot", "antigravity", "shell", "openclaw"]);
+const HOST_ENGINES = new Set(["claude", "codex", "copilot", "antigravity"]);
 const ACTIVITIES = new Set(["live", "recent", "stalled", "idle"]);
 
 function record(value: unknown): value is Record<string, unknown> {
