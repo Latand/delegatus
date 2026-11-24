@@ -232,12 +232,12 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
       // Match strictly by exact subject identity (`next.subject`, bound to `(entryKey,
       // processIdentity)`), never by `entryKey` alone: replacing a session's host process
       // produces a distinct subject that MUST get its own first-observation accounting
-      // and journal row rather than reusing the predecessor's.
-      if (inPhysicalSubjects || !identity) {
-        for (const row of Object.values(file.agentStateJournal)) {
-          if (row.subject !== next.subject) continue;
-          if (!latestJournalForSubject || row.at >= latestJournalForSubject.at) latestJournalForSubject = row;
-        }
+      // and journal row, whereas an already-journaled subject (even if its earlier
+      // observation was unverified and therefore absent from `physicalSubjects`) MUST
+      // NOT be counted a second time after a prior JSON release dropped its projection row.
+      for (const row of Object.values(file.agentStateJournal)) {
+        if (row.subject !== next.subject) continue;
+        if (!latestJournalForSubject || row.at >= latestJournalForSubject.at) latestJournalForSubject = row;
       }
       previouslyObservedWithoutRow = inPhysicalSubjects || Boolean(latestJournalForSubject && latestJournalForSubject.to !== "dead");
       if (previouslyObservedWithoutRow && latestJournalForSubject && !observation.repair && !observation.repairConversation) {
@@ -291,7 +291,9 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
       }
       if (journal.divergence && old?.divergenceKey !== next.divergenceKey) metrics.registryTranscriptDivergencesTotal++;
     }
-    changeMetrics(file, metrics, old, next, antigravityStates, previouslyObservedWithoutRow, latestJournalForSubject?.to === null);
+    const previousUnverified = latestJournalForSubject?.to === null
+      || Boolean(latestJournalForSubject?.reason.startsWith("unverified "));
+    changeMetrics(file, metrics, old, next, antigravityStates, previouslyObservedWithoutRow, previousUnverified);
     if (isAntigravity) {
       // Keep Antigravity projections out of the shared `agentStates` collection
       // so rollback to a prior release never fails strict engine validation,

@@ -686,9 +686,10 @@ describe("Antigravity agentState integration", () => {
       try {
         await runService(regUp);
         expect(measure()).toEqual({ extra: 1, subjects: 1, journal: 1 });
-        // In-memory entries never leak the storage-only `antigravityProjection` mirror.
+        // In-memory entries never leak the storage-only projection mirrors.
         const liveEntry = regUp.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION }) as unknown as Record<string, unknown>;
         expect("antigravityProjection" in liveEntry).toBe(false);
+        expect("antigravityProjections" in liveEntry).toBe(false);
       } finally {
         regUp.close();
       }
@@ -696,7 +697,7 @@ describe("Antigravity agentState integration", () => {
       // Phase 2 (prior release rewrite): strips unknown top-level `antigravityAgentStates`
       // while keeping `agentStateMetrics`, `agentStateJournal`, SQLite's extra table
       // (in dual-write), and (for current candidate -> prior release in `off`) the
-      // entry-level `antigravityProjection` mirror spread by prior `normalizeEntry`.
+      // entry-level `antigravityProjections` mirror spread by prior `normalizeEntry`.
       const downgraded = JSON.parse(fs.readFileSync(fn, "utf8")) as {
         antigravityAgentStates?: Record<string, unknown>;
         entries?: Record<string, Record<string, unknown>>;
@@ -705,6 +706,7 @@ describe("Antigravity agentState integration", () => {
       if (stripEntryMirror && downgraded.entries) {
         for (const entry of Object.values(downgraded.entries)) {
           delete entry.antigravityProjection;
+          delete entry.antigravityProjections;
         }
       }
       fs.writeFileSync(fn, `${JSON.stringify(downgraded)}\n`);
@@ -811,6 +813,154 @@ describe("Antigravity agentState integration", () => {
         }
       } finally {
         reg.close();
+      }
+    }
+  });
+
+  it("recovers an unverified journaled subjectId in JSON off mode without double-counting when liveness is first confirmed, and retains all multi-generation projections", async () => {
+    // 1. Exact sequence: 77b8c62e-style JSON (unverified initial observation, no entry mirror,
+    //    not in `physicalSubjects`) -> 9ff79a35 rewrite drops `antigravityAgentStates` ->
+    //    candidate confirms liveness for the first time -> subjectsObserved stays 1,
+    //    subjectsUnverified transitions 1 -> 0, journal has 2 rows for that exact subjectId.
+    {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ag-unverified-recover-"));
+      roots.push(root);
+      const fn = path.join(root, "agent-registry.json");
+      fs.writeFileSync(fn, JSON.stringify(fixtureRegistry(root, "antigravity", captureProcessIdentity(process.pid), null)));
+      const rows = fixtureRecords("antigravity");
+      fs.writeFileSync(path.join(root, "native.jsonl"), [...rows.open, ...rows.close].map((row) => JSON.stringify(row)).join("\n") + "\n");
+
+      const regSeed = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "off" });
+      let id = "";
+      try {
+        id = subjectId(regSeed.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })!);
+        await new AgentStateService({
+          registry: regSeed,
+          now: () => FIXTURE_NOW + 1000,
+          owns: () => true,
+          process: () => "unverified",
+          memory: () => null,
+          release: "fixture",
+          publish: async () => true,
+        }).request();
+        const seededMetrics = readAgentStateMetrics(regSeed);
+        expect(seededMetrics.subjectsObserved).toBe(1);
+        expect(seededMetrics.subjectsUnverified).toBe(1);
+      } finally {
+        regSeed.close();
+      }
+
+      // Simulate `77b8c62e -> 9ff79a35`: drop both top-level `antigravityAgentStates` and entry mirrors.
+      const rewritten = JSON.parse(fs.readFileSync(fn, "utf8")) as {
+        antigravityAgentStates?: Record<string, unknown>;
+        entries?: Record<string, Record<string, unknown>>;
+        agentStateMetrics?: Record<string, { physicalSubjects?: string[] }>;
+      };
+      delete rewritten.antigravityAgentStates;
+      for (const entry of Object.values(rewritten.entries ?? {})) {
+        delete entry.antigravityProjection;
+        delete entry.antigravityProjections;
+      }
+      // Confirm the unverified subject was indeed absent from `physicalSubjects`.
+      expect(Object.values(rewritten.agentStateMetrics ?? {}).some((m) => m.physicalSubjects?.includes(id))).toBe(false);
+      fs.writeFileSync(fn, `${JSON.stringify(rewritten)}\n`);
+
+      const regRecover = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "off" });
+      try {
+        expect(readAgentProjection(regRecover, id)).toBeNull();
+        await new AgentStateService({
+          registry: regRecover,
+          now: () => FIXTURE_NOW + 3000,
+          owns: () => true,
+          process: () => "alive",
+          memory: () => null,
+          release: "fixture",
+          publish: async () => true,
+        }).request();
+
+        const recovered = readAgentProjection(regRecover, id);
+        expect(recovered).not.toBeNull();
+        expect(recovered?.verdict.state).toBe("unowned");
+        const metrics = readAgentStateMetrics(regRecover);
+        expect(metrics.subjectsObserved).toBe(1);
+        expect(metrics.subjectsUnverified).toBe(0);
+        const matchingJournal = (readAgentStatePage(regRecover, "agentStateJournal", "", 16).rows as Array<{ subject?: string; from?: string | null; to?: string | null }>)
+          .filter((row) => row.subject === id);
+        expect(matchingJournal).toHaveLength(2);
+        expect(matchingJournal.map((row) => [row.from, row.to])).toEqual([[null, null], [null, "unowned"]]);
+      } finally {
+        regRecover.close();
+      }
+    }
+
+    // 2. Multiple retained process generations under one session key in `off` mode:
+    //    all 3 projections survive a prior-release JSON rewrite via `entries[key].antigravityProjections`
+    //    and re-observing the first identity keeps subjectsObserved === 3 (never 4).
+    {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ag-retained-3gen-off-"));
+      roots.push(root);
+      const fn = path.join(root, "agent-registry.json");
+      const base = captureProcessIdentity(process.pid);
+      const gens = [
+        base,
+        { ...base, pid: base.pid + 1001, startIdentity: `${base.startIdentity ?? "1"}-g2` },
+        { ...base, pid: base.pid + 1002, startIdentity: `${base.startIdentity ?? "1"}-g3` },
+      ];
+      fs.writeFileSync(fn, JSON.stringify(fixtureRegistry(root, "antigravity", gens[0]!, null)));
+      const rows = fixtureRecords("antigravity");
+      fs.writeFileSync(path.join(root, "native.jsonl"), [...rows.open, ...rows.close].map((row) => JSON.stringify(row)).join("\n") + "\n");
+
+      const entryKey = `antigravity:${FIXTURE_SESSION}`;
+      const regUp = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "off" });
+      try {
+        for (const [idx, proc] of gens.entries()) {
+          if (idx > 0) {
+            regUp.agentStateWrite((file) => {
+              if (file.entries[entryKey]?.structuredHost) file.entries[entryKey]!.structuredHost!.process = proc;
+            });
+          }
+          await new AgentStateService({
+            registry: regUp,
+            now: () => FIXTURE_NOW + 1000 + idx * 1000,
+            owns: () => true,
+            process: () => "alive",
+            memory: () => null,
+            release: "fixture",
+            publish: async () => true,
+          }).request();
+        }
+        expect(readAgentStatesPage(regUp, "", 16)).toHaveLength(3);
+        expect(readAgentStateMetrics(regUp).subjectsObserved).toBe(3);
+      } finally {
+        regUp.close();
+      }
+
+      // Prior release drops top-level `antigravityAgentStates`, preserving `entries[entryKey].antigravityProjections`.
+      const downgraded = JSON.parse(fs.readFileSync(fn, "utf8")) as Record<string, unknown>;
+      delete downgraded.antigravityAgentStates;
+      fs.writeFileSync(fn, `${JSON.stringify(downgraded)}\n`);
+
+      const regBack = new AgentRegistry(fn, undefined, undefined, { sqliteMode: "off" });
+      try {
+        expect(readAgentStatesPage(regBack, "", 16)).toHaveLength(3);
+        expect(readAgentStateMetrics(regBack).subjectsObserved).toBe(3);
+        // Re-observe first identity: stays 3 projections / 3 subjectsObserved.
+        regBack.agentStateWrite((file) => {
+          if (file.entries[entryKey]?.structuredHost) file.entries[entryKey]!.structuredHost!.process = gens[0]!;
+        });
+        await new AgentStateService({
+          registry: regBack,
+          now: () => FIXTURE_NOW + 9000,
+          owns: () => true,
+          process: () => "alive",
+          memory: () => null,
+          release: "fixture",
+          publish: async () => true,
+        }).request();
+        expect(readAgentStatesPage(regBack, "", 16)).toHaveLength(3);
+        expect(readAgentStateMetrics(regBack).subjectsObserved).toBe(3);
+      } finally {
+        regBack.close();
       }
     }
   });

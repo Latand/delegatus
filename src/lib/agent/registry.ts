@@ -2987,7 +2987,11 @@ function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): Age
     && raw.antigravityAccountId.length > 0
     ? raw.antigravityAccountId
     : value.accountId;
-  const normalized: AgentRegistryEntry & { antigravityAccountId?: unknown; antigravityProjection?: unknown } = {
+  const normalized: AgentRegistryEntry & {
+    antigravityAccountId?: unknown;
+    antigravityProjection?: unknown;
+    antigravityProjections?: unknown;
+  } = {
     ...value,
     accountId: restoredAccountId,
     ...(value.launchProfile ? { launchProfile: emptyLaunchProfile(value.launchProfile, policy) } : {}),
@@ -3004,6 +3008,7 @@ function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): Age
   };
   delete normalized.antigravityAccountId;
   delete normalized.antigravityProjection;
+  delete normalized.antigravityProjections;
   return normalized;
 }
 
@@ -5198,9 +5203,23 @@ export function normalizeRegistry(
   const rawAgStates = (parsed as { antigravityAgentStates?: unknown }).antigravityAgentStates;
   const entryMirroredRaw: Record<string, unknown> = {};
   for (const rawEntry of Object.values(parsed.entries)) {
-    const mirrored = (rawEntry as { antigravityProjection?: { subject?: unknown } } | null | undefined)?.antigravityProjection;
-    if (mirrored && typeof mirrored === "object" && typeof mirrored.subject === "string" && mirrored.subject.length > 0) {
-      entryMirroredRaw[mirrored.subject] = mirrored;
+    const entryObj = rawEntry as {
+      antigravityProjection?: { subject?: unknown };
+      antigravityProjections?: Record<string, { subject?: unknown }>;
+    } | null | undefined;
+    const single = entryObj?.antigravityProjection;
+    if (single && typeof single === "object" && typeof single.subject === "string" && single.subject.length > 0) {
+      entryMirroredRaw[single.subject] = single;
+    }
+    const multi = entryObj?.antigravityProjections;
+    if (multi && typeof multi === "object" && !Array.isArray(multi)) {
+      for (const [key, candidate] of Object.entries(multi)) {
+        if (candidate && typeof candidate === "object" && typeof candidate.subject === "string" && candidate.subject.length > 0) {
+          entryMirroredRaw[candidate.subject] = candidate;
+        } else if (key.length > 0 && candidate && typeof candidate === "object") {
+          entryMirroredRaw[key] = candidate;
+        }
+      }
     }
   }
   const hasEntryMirrors = Object.keys(entryMirroredRaw).length > 0;
@@ -5314,17 +5333,23 @@ function compactLaunchProfile(profile: LaunchProfile): Partial<LaunchProfile> {
 function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string {
   const agStates = (value as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> })[ANTIGRAVITY_JSON_STATES];
   const hasAgStates = Boolean(agStates && Object.keys(agStates).length > 0);
-  // In pure JSON (`off`) mode (`sqliteRevision === undefined`), also mirror each
-  // Antigravity projection onto its owning entry because prior releases spread
-  // `{ ...value }` in `normalizeEntry`, preserving the projection even when they
-  // drop unknown top-level keys on rewrite. Omit from `entries` in SQLite/dual-write
-  // modes so prior releases' `assertSqliteParity` matches SQLite byte-for-byte
-  // (SQLite preserves projections in `registry_antigravity_agent_states`).
-  const entryProjectionByKey = new Map<string, AgentProjection>();
+  // In pure JSON (`off`) mode (`sqliteRevision === undefined`), also mirror all
+  // Antigravity projections onto their owning entry (`antigravityProjections`,
+  // keyed by subjectId so multiple retained process generations under one
+  // `entryKey` all survive!) because prior releases spread `{ ...value }` in
+  // `normalizeEntry`, preserving them even when they drop unknown top-level keys.
+  // Omit from `entries` in SQLite/dual-write modes so prior releases'
+  // `assertSqliteParity` matches SQLite byte-for-byte.
+  const entryProjectionsByKey = new Map<string, Record<string, AgentProjection>>();
   if (sqliteRevision === undefined && hasAgStates && agStates) {
-    for (const projection of Object.values(agStates)) {
+    for (const [subject, projection] of Object.entries(agStates)) {
       if (projection && typeof projection.entryKey === "string") {
-        entryProjectionByKey.set(projection.entryKey, projection);
+        let bucket = entryProjectionsByKey.get(projection.entryKey);
+        if (!bucket) {
+          bucket = {};
+          entryProjectionsByKey.set(projection.entryKey, bucket);
+        }
+        bucket[subject] = projection;
       }
     }
   }
@@ -5338,11 +5363,11 @@ function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string
     ...(hasAgStates ? { antigravityAgentStates: agStates } : {}),
     entries: Object.fromEntries(Object.entries(value.entries).map(([id, entry]) => {
       const storedEntry = registryEntryForStorage(entry);
-      const mirroredProjection = entryProjectionByKey.get(id);
+      const mirroredProjections = entryProjectionsByKey.get(id);
       return [id, {
         ...storedEntry,
         ...(storedEntry.launchProfile ? { launchProfile: compactLaunchProfile(storedEntry.launchProfile) } : {}),
-        ...(mirroredProjection ? { antigravityProjection: mirroredProjection } : {}),
+        ...(mirroredProjections ? { antigravityProjections: mirroredProjections } : {}),
       }];
     })),
     receipts: Object.fromEntries(Object.entries(value.receipts).map(([id, receipt]) => [id, {
@@ -5769,7 +5794,12 @@ export class AgentRegistry {
       if (!rawText.includes('"antigravity"')) return;
       const parsed = JSON.parse(rawText) as {
         antigravityAgentStates?: Record<string, unknown>;
-        entries?: Record<string, { key?: { engine?: string }; accountId?: unknown; antigravityProjection?: unknown }>;
+        entries?: Record<string, {
+          key?: { engine?: string };
+          accountId?: unknown;
+          antigravityProjection?: unknown;
+          antigravityProjections?: unknown;
+        }>;
         conversations?: Record<string, { engine?: string; generations?: Array<{ accountId?: unknown }> }>;
       };
       const needsEntryMigration = Object.values(parsed.entries ?? {}).some(
@@ -5781,7 +5811,9 @@ export class AgentRegistry {
       );
       const needsTopLevelProjectionRestore = this.sqliteMode === "off"
         && (!parsed.antigravityAgentStates || Object.keys(parsed.antigravityAgentStates).length === 0)
-        && Object.values(parsed.entries ?? {}).some((entry) => entry?.antigravityProjection !== undefined);
+        && Object.values(parsed.entries ?? {}).some(
+          (entry) => entry?.antigravityProjection !== undefined || entry?.antigravityProjections !== undefined,
+        );
       if (!needsEntryMigration && !needsConvMigration && !needsTopLevelProjectionRestore) return;
       this.mutate(() => {}, { deliveryOnly: true });
     } catch {
