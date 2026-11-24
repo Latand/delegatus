@@ -642,7 +642,9 @@ test("a fresh production SDK reader resolves and reads an archive-only project b
 test("list_pipelines pages through active and archived lanes with one order and byte budget", async () => {
   const h = await harness(); h.indexed();
   const lane = (id: string, now: string, project = OWN, task = `Lane ${id}`) => buildPipeline({ id, project, task, repoDir: h.folder,
-    stages: [], state: "draft", srcPath: null, srcConversationId: null, now, spec: "é".repeat(6500) });
+    stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-write", promptScaffold: null } }],
+    state: "draft", srcPath: null, srcConversationId: null, now, spec: "é".repeat(6500) });
   const newer = lane("z-newer", "2026-11-05T12:00:00.000Z");
   const older = lane("older", "2026-11-02T12:00:00.000Z");
   const archived = lane("a-archived", newer.createdAt, OWN, "Archived lane PR #2800");
@@ -650,6 +652,7 @@ test("list_pipelines pages through active and archived lanes with one order and 
   for (const record of [archived, foreign]) {
     record.state = "completed";
     record.closedAt = AT;
+    record.cursor = null;
   }
   savePipelines([older, foreign, archived, newer]);
   const archiveAt = Date.parse(AT) + 4 * 24 * 60 * 60 * 1000;
@@ -685,6 +688,7 @@ test("list_pipelines pages through active and archived lanes with one order and 
 
   newer.state = "closed";
   newer.closedAt = AT;
+  newer.cursor = null;
   savePipelines([older, newer]);
   expect(await archiveSettledPipelines(archiveAt)).toBe(1);
   expect(await h.call("list_pipelines", { ...filters, full: false, limit: 3 })).toMatchObject({
