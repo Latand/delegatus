@@ -42,10 +42,12 @@ const digest = (value: string | Buffer) => createHash("sha256").update(value).di
 const MIN_PHASE_BUDGET_MS = 15 * 60_000;
 const COMPARISON_BUDGET_MS = 40 * 60_000;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
+const FILE_CLEANUP_MARGIN_MS = 5_000;
 // Engine selections took eleven minutes at six workers, leaving no room for
 // confirmations after a slow full-file baseline. Bound head work to eight owned
 // runners in the shared CPU work slice; baseline and retries retain three.
 const HEAD_FILE_WORKERS = 8;
+const NESTED_FILE_WORKERS = 2;
 
 /** Expand larger selections gradually. Head, baseline and confirmations
  * also share the comparison ceiling. */
@@ -53,14 +55,15 @@ export function comparisonPhaseBudgetMs(fileCount: number): number {
   return Math.min(COMPARISON_BUDGET_MS, MIN_PHASE_BUDGET_MS + Math.ceil(Math.max(0, fileCount - 30) / 4) * 60_000);
 }
 
-/** Gate fixtures start their own suites and supervisors. Eight such files in
- * one real publication exhausted the 768-task service limit before any verdict.
- * Source-only selections keep their head parallelism and confirmation budget. */
+const nestedComparisonFile = (file: string): boolean =>
+  /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/"));
+
+/** Multiple gate fixtures can exhaust a service's task limit. Limit that
+ * class while letting ordinary source tests use the remaining file workers. */
 export function comparisonFileWorkers(files: readonly string[], ceiling: number, sharedPortable = false): number {
-  const nested = files.some(file => /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/")));
-  const nestedLimit = sharedPortable ? 1 : 2;
-  const workers = nested ? Math.min(nestedLimit, ceiling) : ceiling;
-  return Math.min(files.length, workers);
+  const nested = files.filter(nestedComparisonFile).length;
+  if (nested && sharedPortable) return 1;
+  return Math.min(ceiling, files.length - nested + Math.min(nested, NESTED_FILE_WORKERS));
 }
 
 export const FLAKY_RERUNS = 3;
@@ -332,6 +335,7 @@ interface FileRunOptions {
   sites?: readonly TestSite[];
   confirmationDeadline?: number;
   workers?: number;
+  reserveFileBudget?: boolean;
   onFailure?: () => void;
   onFile?: (run: TestRun, cleanupConfirmed: boolean) => void;
 }
@@ -350,16 +354,15 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   const deadline = Math.min(now() + budgets.runMs, options.comparisonDeadline, options.confirmationDeadline ?? Infinity);
   const budgetLabel = deadline === options.comparisonDeadline ? "comparison" : options.confirmationDeadline === undefined ? "phase" : "flaky rerun";
   const results: TestRun[] = new Array(files.length);
-  let next = 0;
-  const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharesPortableRunner());
-  if (files.length) options.log(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
-  const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
-  while (next < files.length) {
-    const index = next++, file = files[index]!;
+  const runFile = async (index: number) => {
+    const file = files[index]!;
     const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(deadline - now());
     if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${budgetLabel} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
+    if (options.reserveFileBudget && remaining < budgets.fileMs + FILE_CLEANUP_MARGIN_MS) {
+      throw new BudgetExhausted(`${label}: remaining run budget cannot fit a full file and its cleanup; ${results.filter(run => run?.completed.length).length} of ${files.length} pending files completed`);
+    }
     const sites = options.sites?.filter(site => site.file === file);
     const filtered = !!sites && !sites.some(site => site.kind === "error");
     const filter = filtered ? testNameFilter(sites) : [];
@@ -386,7 +389,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     let taskPeak: string | null = null;
     let survivors: string | undefined;
     try {
-      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + FILE_CLEANUP_MARGIN_MS), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
         // Keep the independent five-second cleanup allowance, measured as
         // execution time by the outer guard. A fixed wall timeout here would
         // kill a healthy supervisor during a nested CPU queue wait.
@@ -449,7 +452,23 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     results[index] = { failures, passed, completed, elapsedMs: 0 };
     options.onFile?.(results[index]!, cleanupConfirmed);
     options.log(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
-  }
+  };
+  const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharesPortableRunner());
+  const ordinary: number[] = [], nested: number[] = [];
+  files.forEach((file, index) => (nestedComparisonFile(file) ? nested : ordinary).push(index));
+  let nextOrdinary = 0, nextNested = 0, nestedRunning = 0;
+  if (files.length) options.log(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
+  const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
+    for (;;) {
+      const ordinaryIndex = ordinary[nextOrdinary];
+      const nestedIndex = nestedRunning < NESTED_FILE_WORKERS ? nested[nextNested] : undefined;
+      if (ordinaryIndex === undefined && nestedIndex === undefined) return;
+      const useNested = nestedIndex !== undefined && (ordinaryIndex === undefined || nestedIndex < ordinaryIndex);
+      const index = useNested ? nested[nextNested++]! : ordinary[nextOrdinary++]!;
+      if (useNested) nestedRunning++;
+      try { await runFile(index); }
+      finally { if (useNested) nestedRunning--; }
+    }
   }));
   // All owned runners have settled. Completed file diagnostics and filtered
   // worker rejections must both veto a capacity retry after budget expiry.
@@ -658,7 +677,11 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // A hook deadline can kill the comparator before its finally runs. Seal
     // a green file after its runner and sandbox have been cleaned, with the
     // same inputs verified on both sides of that file's execution.
-    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers,
+    // A checkpointable head can yield between files. Starting one at the end
+    // of the run with a clipped deadline can turn run exhaustion into a file
+    // timeout and interrupt its nested runner during cleanup.
+    const reserveFileBudget = !!headCache && budgets.runMs > budgets.fileMs + FILE_CLEANUP_MARGIN_MS;
+    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers, reserveFileBudget,
       onFile: headCache ? (run, cleanupConfirmed) => {
         if (!cleanupConfirmed || !isGreenHeadFile(run)) return;
         if (sameHeadInputs()) headCache.write(headKey(run.completed[0]!), run);

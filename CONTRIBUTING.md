@@ -383,7 +383,11 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests run the branch first. Selections with gate-harness or privacy suites use at most two file workers, or one when Linux portable runners share their parent service. Other selections use up to eight explicit head files, each
+Touched tests run the branch first, with up to eight file workers on the head.
+Gate-harness and privacy files share a limit of two workers because they launch
+nested commands. Ordinary files can use the remaining workers in the same
+selection. When Linux portable runners share their parent service, a selection
+containing gate-harness or privacy files uses one worker. Each file runs
 in its own owned process and isolated roots. A green branch skips the baseline
 entirely. For a red branch, only failing files run on the merge base, filtered
 to failing assertions; runner diagnostics need the whole file. Both kinds share

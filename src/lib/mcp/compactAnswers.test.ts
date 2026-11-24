@@ -636,7 +636,8 @@ test("list_pipelines state open and compact answer small rows for the lanes that
   expect(open.pipelines.map((row) => row.id)).toEqual(expected.map((pipeline) => pipeline.id));
   expect(new Set(open.pipelines.map((row) => row.state))).toEqual(new Set(["running", "needs_decision"]));
   /* #2187 §4.1: a compact row names the merge setting only when it is on. */
-  expect(Object.keys(open.pipelines[0]!).sort()).toEqual(["cursor", "id", "stages", "state", "stateDetail", "task"]);
+  expect(Object.keys(open.pipelines[0]!).sort()).toEqual(["cursor", "dismissedAt", "hiddenFromBoard", "id", "stages", "state", "stateDetail", "task"]);
+  expect(open.pipelines[0]).toMatchObject({ dismissedAt: null, hiddenFromBoard: false });
   expect(open.pipelines[0]!.stages).toEqual([
     { id: "build", latestAttempt: { execution: { requestedRuntime: "local", executionRuntime: "local", reason: null }, n: 6, state: "passed", verdict: "pass" } },
     { id: "review", latestAttempt: { execution: { requestedRuntime: "local", executionRuntime: "local", reason: null }, n: 6, state: "passed", verdict: "pass" } },

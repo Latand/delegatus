@@ -1280,7 +1280,7 @@ async function deliveryRefusalPark() {
   return { h, box, pipeline: parked, id: pipeline.id };
 }
 
-async function interruptedPublication() {
+async function interruptedPublication(beforeInterrupt?: (ports: PipelinePorts) => Promise<void>) {
   const h = harness();
   const box = publishHarness(h, { remoteReadFails: true });
   await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
@@ -1306,7 +1306,10 @@ async function interruptedPublication() {
   box.setRemoteReadFails(false);
   const { publishPipelineBranch } = await import("./git");
   await publishPipelineBranch(pipeline, async (command, args, cwd, env, options) => {
-    if (args[0] === "push") throw new Error("publisher interrupted during the remote write");
+    if (args[0] === "push") {
+      if (beforeInterrupt) await beforeInterrupt(h.ports);
+      throw new Error("publisher interrupted during the remote write");
+    }
     return await h.ports.exec(command, args, cwd, env, options);
   }, { acceptedSha: box.passedSha });
   return { h, box, pipeline: loadPipelines()[0]! };
@@ -1984,7 +1987,8 @@ async function idleStageHostFixture(h: ReturnType<typeof harness>) {
   ] });
   return {
     registry, key, claimOwner, transcriptPath, attempt, host, child, hostPid: identity.pid, termination, signals, row, journal, target, snapshot,
-    bind: (cursorDebounceMs: number) => bindClaudeHostPersistence(registry, key, host as never, claimOwner, 1, "unhosted", { cursorDebounceMs }),
+    bind: (cursorDebounceMs: number, onCheckpoint?: (entry: import("@/lib/agent/registry").AgentRegistryEntry) => void) =>
+      bindClaudeHostPersistence(registry, key, host as never, claimOwner, 1, "unhosted", { cursorDebounceMs, onCheckpoint }),
     end: async () => {
       setAgentRegistryForTests(null);
       await stopFixtureProcess(child);
