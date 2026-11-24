@@ -8805,14 +8805,16 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
   const desktopBoard = "[data-kanban-board] [data-kanban-card] .title";
   const phoneBoard = "[data-phone-kanban] [data-phone-card-title]";
   const preview = "[data-board-first-card]";
-  const hasRecord = () => new Promise<boolean>((resolve, reject) => {
+  const hasRecord = ({ layout, scope }: { layout?: "desktop" | "phone"; scope?: string } = {}) => new Promise<boolean>((resolve, reject) => {
     const open = indexedDB.open("delegatus-boot", 1);
     open.onerror = () => reject(open.error);
     open.onsuccess = () => {
       const db = open.result;
       const tx = db.transaction("snapshot");
       const read = tx.objectStore("snapshot").get("project-first-screens");
-      read.onsuccess = () => resolve(Array.isArray(read.result) && read.result.length > 0);
+      read.onsuccess = () => resolve(Array.isArray(read.result) && read.result.some(row =>
+        (!scope || row?.scope === scope) && (!layout || (row?.seat?.name
+          && row[layout]?.columns?.some((column: { titles: string[] }) => column.titles.length > 0)))));
       read.onerror = () => reject(read.error);
       tx.oncomplete = () => db.close();
     };
@@ -8824,6 +8826,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
   for (const width of [1440, 390]) for (const locale of ["en", "uk"]) for (const colorScheme of ["light", "dark"] as const) {
     const mobile = width < 500;
     const live = mobile ? phoneBoard : desktopBoard;
+    console.log(`board startup safety: ${width} ${locale} ${colorScheme}`);
     const context = await browser.newContext({ viewport: { width, height: mobile ? 844 : 900 }, hasTouch: mobile, isMobile: mobile,
       colorScheme, locale, reducedMotion: "reduce" });
     try {
@@ -8833,7 +8836,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
       await page.goto(url, { waitUntil: "commit" });
       const scope = (await (await auth).json() as { scope: string }).scope;
       await page.waitForSelector(live, { timeout: 45_000 });
-      await page.waitForFunction(hasRecord, undefined, { timeout: 10_000 });
+      await page.waitForFunction(hasRecord, { layout: mobile ? "phone" : "desktop", scope }, { timeout: 10_000 });
       let releaseData!: () => void;
       const dataHeld = new Promise<void>(resolve => { releaseData = resolve; });
       let pendingData = 0;
@@ -8973,12 +8976,14 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
     await context.addCookies(memberCookies);
     const memberBoot = board.waitForResponse(bootAccess);
     await board.reload({ waitUntil: "commit" });
-    if (!(await memberBoot).ok()) throw new Error("second person could not confirm access");
+    const memberAnswer = await memberBoot;
+    if (!memberAnswer.ok()) throw new Error("second person could not confirm access");
+    const { scope: memberScope } = await memberAnswer.json() as { scope: string };
     await board.waitForSelector("[data-kanban-skeleton]", { timeout: 15_000 });
     if (await board.locator(preview).count()) throw new Error("second person saw the first person's cards");
     await board.unroute(dataRoutes, block);
     await board.waitForSelector(desktopBoard, { timeout: 45_000 });
-    await board.waitForFunction(hasRecord, undefined, { timeout: 10_000 });
+    await board.waitForFunction(hasRecord, { scope: memberScope }, { timeout: 10_000 });
     note("a second signed-in member with the same project grant missed the first person's disk record");
 
     await board.route(dataRoutes, block);
