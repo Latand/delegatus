@@ -47,6 +47,8 @@ interface ResponseReduction {
   inputBound: boolean;
 }
 
+const RESPONSE_REPLAY_TICK_BYTES = 8 * 1024 * 1024;
+
 export interface WakeResponseStart {
   generationId: string;
   position: RuntimeEventPosition;
@@ -61,9 +63,10 @@ export interface WakeResponseCheckpoint extends WakeResponseStart {
 }
 
 export function matchingWakeResponseCheckpoint(checkpoints: WakeResponseCheckpoint[] | undefined, generationId: string,
-  identity: string, binding: string, receiptUnavailable: boolean): WakeResponseCheckpoint | undefined {
+  identity: string, binding: string, receiptUnavailable: boolean, nativeTurns?: Iterable<string>): WakeResponseCheckpoint | undefined {
   const prior = checkpoints?.find(entry => entry.generationId === generationId && entry.identity === identity);
-  return prior && (prior.binding === binding || receiptUnavailable) ? prior : undefined;
+  const expanded = prior && nativeTurns && [...nativeTurns].some(turnId => !prior.nativeTurns.some(([known]) => known === turnId));
+  return prior && !expanded && (prior.binding === binding || receiptUnavailable) ? prior : undefined;
 }
 
 export function normalizeWakeResponseStart(value: unknown): WakeResponseStart | undefined {
@@ -202,9 +205,10 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
     // the durable cursor and reducer in that case; a newly observed turn id
     // changes the binding and requires replay from the beginning.
     const missingReceipt = membership.receiptUnavailable;
-    if (missingReceipt && prior) for (const [turnId, continuation] of prior.nativeTurns) membership.nativeTurns.set(turnId, continuation);
+    const learnedTurn = [...membership.nativeTurns.keys()].some(turnId => !prior?.nativeTurns.some(([known]) => known === turnId));
+    if (missingReceipt && prior && !learnedTurn) for (const [turnId, continuation] of prior.nativeTurns) membership.nativeTurns.set(turnId, continuation);
     const binding = crypto.createHash("sha256").update(JSON.stringify([identity, [...membership.nativeTurns].sort()])).digest("hex");
-    const previous = matchingWakeResponseCheckpoint(row.scan, generationId, identity, binding, missingReceipt);
+    const previous = matchingWakeResponseCheckpoint(row.scan, generationId, identity, binding, missingReceipt, membership.nativeTurns.keys());
     const bindingChanged = !!prior && prior.binding !== binding && !missingReceipt;
     const start = !bindingChanged && row.scanFrom?.generationId === generationId ? row.scanFrom.position : undefined;
     let fromPreparation = bindingChanged ? false : previous?.fromPreparation ?? (start !== undefined);
@@ -213,13 +217,28 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
     const visit = (event: Record<string, unknown>) => answered = reduceResponse(row, membership, reduction, event);
     try {
       signal?.throwIfAborted();
-      let page = await readRuntimeEventPage(generationId, previous?.position ?? start, visit, signal);
+      const readBudgeted = async (position: RuntimeEventPosition | undefined) => {
+        let page = await readRuntimeEventPage(generationId, position, visit, signal);
+        const baseOffset = position ? position.offset + (position.skip ?? 0) + Buffer.byteLength(position.pending ?? "", "base64") : 0;
+        let bytesRead = page ? Math.max(0, page.position.offset + (page.position.skip ?? 0)
+          + Buffer.byteLength(page.position.pending ?? "", "base64") - baseOffset) : 0;
+        while (page?.state === "more" && !answered && bytesRead < RESPONSE_REPLAY_TICK_BYTES) {
+          const next = await readRuntimeEventPage(generationId, page.position, visit, signal);
+          if (!next) return null;
+          const before = page.position.offset + (page.position.skip ?? 0) + Buffer.byteLength(page.position.pending ?? "", "base64");
+          const after = next.position.offset + (next.position.skip ?? 0) + Buffer.byteLength(next.position.pending ?? "", "base64");
+          bytesRead += Math.max(0, after - before);
+          page = next;
+        }
+        return page;
+      };
+      let page = await readBudgeted(previous?.position ?? start);
       // An idempotent send can return an older receipt. If the pre-admission
       // suffix has no witness, search the earlier prefix as for a legacy row.
       if (!page || (fromPreparation && page.state === "current" && !reduction.turnId)) {
         fromPreparation = false;
         reduction = emptyReduction();
-        page = await readRuntimeEventPage(generationId, undefined, visit, signal);
+        page = await readBudgeted(undefined);
       }
       if (!page) throw new Error("response ledger position is unavailable");
       scan.push({ generationId, identity, binding: missingReceipt && previous ? previous.binding : binding,

@@ -682,7 +682,8 @@ export function normalizeRuntimeEventPosition(value: unknown): RuntimeEventPosit
 }
 
 const EVENT_PAGE_BYTES = 4 * 1024 * 1024;
-const EVENT_RECORD_BYTES = 256 * 1024;
+// Keep writer-valid medium records inside the bounded page parse budget.
+const EVENT_RECORD_BYTES = 512 * 1024;
 const eventPageSource = (stats: fs.Stats) => `${stats.dev}:${stats.ino}:${Math.trunc(stats.birthtimeMs)}`;
 
 async function readEventBytes(handle: Awaited<ReturnType<typeof open>>, start: number, length: number): Promise<Buffer> {
@@ -758,12 +759,12 @@ export async function readRuntimeEventPage(threadId: string, position: RuntimeEv
     let stopped = false;
     let seq = position?.seq;
     let yieldedAt = performance.now();
-    const resumedSkip = skip > 0;
+    let skipOffset = start;
     if (skip) {
       const newline = added.indexOf(10);
       seq = undefined;
       if (newline < 0) skip += added.length;
-      else { consumed = newline + 1; skip = 0; }
+      else { consumed = newline + 1; skip = 0; skipOffset = start + (position?.skip ?? 0) + consumed; }
     }
     for (let end = bytes.indexOf(10, consumed); !skip && end >= 0; end = bytes.indexOf(10, consumed)) {
       if (end - consumed > EVENT_RECORD_BYTES) { consumed = end + 1; seq = undefined; continue; }
@@ -793,9 +794,13 @@ export async function readRuntimeEventPage(threadId: string, position: RuntimeEv
     const incompleteLine = trailing.length > 0 && trailing.indexOf(10) < 0;
     const carry = incompleteLine && (readStart + added.length < before.size || trailing.length > EVENT_RECORD_BYTES)
       ? trailing : Buffer.alloc(0);
-    if (carry.length > EVENT_RECORD_BYTES) { skip = carry.length; seq = undefined; }
+    if (carry.length > EVENT_RECORD_BYTES) {
+      skip = carry.length;
+      skipOffset = start + (position?.skip ?? 0) + consumed;
+      seq = undefined;
+    }
     const pendingBytes = carry.length > EVENT_RECORD_BYTES ? Buffer.alloc(0) : carry;
-    const offset = skip && resumedSkip ? start : start + (position?.skip ?? 0) + consumed;
+    const offset = skip ? skipOffset : start + (position?.skip ?? 0) + consumed;
     const edge = offset === start && position ? position.edge : await eventPositionEdge(handle, offset, offset === before.size);
     if (!edge) throw new Error("runtime event page ended off its line boundary");
     const size = await verifyEventPageSource(handle, filename, before);

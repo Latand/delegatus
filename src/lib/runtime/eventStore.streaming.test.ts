@@ -196,6 +196,61 @@ test.each(["wake", "nudge"] as const)("oversized records are skipped with bounde
   } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
 });
 
+test.each(["wake", "nudge"] as const)("consecutive large records advance monotonically and release the %s proof", async action => {
+  const f = fixture("");
+  const base = { clientMessageId: "wake", operationId: "operation", conversationId: "conversation_fixture", seatEpoch: 7,
+    deliveredAt: "2026-11-01T00:00:00Z", progressAt: "2026-11-01T00:00:00Z", boundMs: 900_000 };
+  const row = action === "nudge" ? { ...base, action: "nudged" as const,
+    recovery: { text: "continue", origin: { kind: "agent" as const, role: "seat-tick" as const, project: "fixture" } } }
+    : { ...base, action: "pending" as const };
+  const operationId = action === "nudge" ? wakeResponseRecoveryKey(row) : row.operationId;
+  try {
+    const store = new FileRuntimeEventStore(f.directory);
+    store.append("thread", { kind: "item", turnId: "wake-turn", phase: "completed", item: { type: "reasoning", text: "p".repeat(5 * 1024 * 1024) }, seq: 1 });
+    store.append("thread", { kind: "item", turnId: "other-turn", phase: "completed", item: { type: "reasoning", text: "q".repeat(5 * 1024 * 1024) }, seq: 2 });
+    store.append("thread", { kind: "turn-started", turnId: "wake-turn", seq: 3 });
+    store.append("thread", { kind: "item", turnId: "wake-turn", phase: "completed", deliveryEcho: { operationId, at: row.deliveredAt }, item: { type: "user" }, seq: 4 });
+    store.append("thread", { kind: "delta", turnId: "wake-turn", text: "answer", seq: 5 });
+    store.append("thread", { kind: "turn-ended", turnId: "wake-turn", status: "completed", seq: 6 });
+    let position;
+    const replayed: Record<string, unknown>[] = [];
+    let priorOffset = -1;
+    for (let calls = 0; calls < 10; calls++) {
+      const page = await readRuntimeEventPage("thread", position, e => { replayed.push(e); }, undefined, f.directory);
+      if (!page) throw new Error("event page position was refused");
+      const progress = page.position.offset + (page.position.skip ?? 0);
+      expect(progress).toBeGreaterThan(priorOffset);
+      priorOffset = progress;
+      position = page.position;
+      if (page.state === "current") break;
+    }
+    expect(wakeResponseEvidenceFromEvents(row, replayed, action === "nudge" ? [operationId] : []))
+      .toMatchObject({ answered: true, turnId: "wake-turn" });
+  } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test.each(["wake", "nudge"] as const)("a bounded 300 KB response record preserves %s evidence", async action => {
+  const f = fixture("");
+  const base = { clientMessageId: "wake", operationId: "operation", conversationId: "conversation_fixture", seatEpoch: 7,
+    deliveredAt: "2026-11-01T00:00:00Z", progressAt: "2026-11-01T00:00:00Z", boundMs: 900_000 };
+  const row = action === "nudge" ? { ...base, action: "nudged" as const,
+    recovery: { text: "continue", origin: { kind: "agent" as const, role: "seat-tick" as const, project: "fixture" } } }
+    : { ...base, action: "pending" as const };
+  const operationId = action === "nudge" ? wakeResponseRecoveryKey(row) : row.operationId;
+  try {
+    const store = new FileRuntimeEventStore(f.directory);
+    store.append("thread", { kind: "turn-started", turnId: "response-turn", seq: 1 });
+    store.append("thread", { kind: "item", turnId: "response-turn", phase: "completed", deliveryEcho: { operationId, at: row.deliveredAt }, item: { type: "user" }, seq: 2 });
+    store.append("thread", { kind: "delta", turnId: "response-turn", text: "answer" + "x".repeat(300_000), seq: 3 });
+    store.append("thread", { kind: "turn-ended", turnId: "response-turn", status: "completed", seq: 4 });
+    const replayed: Record<string, unknown>[] = [];
+    const page = await readRuntimeEventPage("thread", undefined, e => { replayed.push(e); }, undefined, f.directory);
+    expect(page?.state).toBe("current");
+    expect(wakeResponseEvidenceFromEvents(row, replayed, action === "nudge" ? [operationId] : []))
+      .toMatchObject({ answered: true, turnId: "response-turn" });
+  } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
+});
+
 test.each(["replace", "rewrite", "append", "torn"] as const)("prepared position detects ledger changes: %s", async change => {
   const f = fixture(line(1) + "\n");
   try {
