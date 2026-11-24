@@ -921,13 +921,17 @@ export class MergeBatch {
     // The plan reads immutable reviewed changes and candidate paths. A
     // reviewed blob has authority only when this member changed its file.
     const prs = validation.candidate.prs.map(pr => pr.number);
-    const all: Detector[] = [{ source: "native candidate", corpus: this.treeTests(state, selection.native) },
-      ...selection.reviewed.map(row => ({
+    // Browser files participate in corpus identity and ownership even when
+    // this batch skips the campaign. Restore the planner's path order.
+    const corpus = (files: readonly TreeTestFile[], excluded: readonly TreeTestFile[]) => this.treeTests(state,
+      excluded.length ? [...files, ...excluded].sort((a, b) => a.file < b.file ? -1 : a.file > b.file ? 1 : 0) : files);
+    const all: Detector[] = [{ source: "native candidate", corpus: corpus(selection.native, selection.excluded.native) },
+      ...selection.reviewed.map((row, index) => ({
         source: `#${row.number}@${state.rows.find(member => member.number === row.number)!.head}`, pr: row.number,
-        corpus: this.treeTests(state, row.head),
+        corpus: corpus(row.head, selection.excluded.reviewed[index]!.head),
       }))];
-    const bases = new Map(selection.reviewed.map(row => [row.number, this.treeTests(state, row.base)]));
-    const main = this.treeTests(state, selection.main);
+    const bases = new Map(selection.reviewed.map((row, index) => [row.number, corpus(row.base, selection.excluded.reviewed[index]!.base)]));
+    const main = corpus(selection.main, selection.excluded.main);
     const member = (detector: Detector) => detector.pr === undefined || prs.includes(detector.pr);
     // A changed detector keeps its own assertions, even when another member
     // edited the same file. Clean main-contract updates preserve its patch.
@@ -963,12 +967,11 @@ export class MergeBatch {
       for (const file of Object.keys(unseen(detector))) validation.notApplicable.push({ source: detector.source, file,
         reason: `#${detector.pr} is not in this candidate; its reviewed detector is skipped` });
     }
-    if (!selection.browser) {
-      for (const file of selection.excluded.native) validation.notApplicable.push({ source: "native candidate", file: file.file,
-        reason: "full browser campaign: opt in with gate --browser" });
-      for (const row of selection.excluded.reviewed) for (const entry of row.head) validation.notApplicable.push({
-        source: `#${row.number}@${state.rows.find(member => member.number === row.number)!.head}`, file: entry.file,
-        reason: "full browser campaign: opt in with gate --browser" });
+    if (!selection.browser) for (const detector of active) {
+      for (const file of Object.keys(detector.corpus).filter(isBrowserTest)) {
+        delete detector.corpus[file];
+        validation.notApplicable.push({ source: detector.source, file, reason: "full browser campaign: opt in with gate --browser" });
+      }
     }
     return active.filter(detector => Object.keys(detector.corpus).length);
   }

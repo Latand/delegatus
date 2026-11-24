@@ -7,8 +7,9 @@ import { withoutGateAdmissionLauncher } from "../src/lib/runtime/gateAdmissionLa
 import { gateToolingFiles } from "./gate-tooling";
 
 export const fingerprint = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+export const contentsFingerprint = (contents: Buffer) => createHash("sha256").update(contents).digest("hex");
 export function fileFingerprint(file: string): string {
-  return existsSync(file) && statSync(file).isFile() ? createHash("sha256").update(readFileSync(file)).digest("hex") : "missing";
+  return existsSync(file) && statSync(file).isFile() ? contentsFingerprint(readFileSync(file)) : "missing";
 }
 
 /** The Bash wrappers read this file before launching the gate or comparator.
@@ -25,7 +26,7 @@ export function shellStartupFingerprint(root: string, startup: string | undefine
  * or plugin. Bounded traversal follows package links, including an external
  * dependency directory, while breaking cycles. Hash large files in chunks.
  */
-function treeFingerprint(directory: string, label: string, exclude: (relative: string) => boolean = () => false): string {
+function treeFingerprint(directory: string, label: string, exclude: (relative: string) => boolean = () => false, present = existsSync(directory)): string {
   const hash = createHash("sha256"), seen = new Set<string>();
   let entries = 0, bytes = 0;
   const buffer = Buffer.alloc(1024 * 1024);
@@ -51,12 +52,6 @@ function treeFingerprint(directory: string, label: string, exclude: (relative: s
       finally { closeSync(fd); }
     } else throw new Error("unsupported dependency input");
   };
-  let present = true;
-  try { lstatSync(directory); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") present = false;
-    else throw error;
-  }
   if (present) visit(directory, label);
   return hash.digest("hex");
 }
@@ -71,7 +66,7 @@ export function dependencyTreeFingerprint(root: string, relative: string): strin
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
     throw error;
   }
-  return treeFingerprint(directory, relative);
+  return treeFingerprint(directory, relative, undefined, true);
 }
 
 export function installedFingerprint(root: string): string {

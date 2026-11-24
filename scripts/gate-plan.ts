@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { ALWAYS_IN_SCOPE, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
-import { cacheDirectory, checkEnvironment, dependencyTreeFingerprint, environmentFingerprint, fileFingerprint, fingerprint, GateCache } from "./gate-cache";
+import { cacheDirectory, checkEnvironment, contentsFingerprint, dependencyTreeFingerprint, environmentFingerprint, fileFingerprint, fingerprint, GateCache } from "./gate-cache";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -142,9 +142,8 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
 }
 
 interface Workflow { jobs: Record<string, { steps: Array<{ name?: string; run?: string }>; strategy?: { matrix?: { codex?: string[] } } }> }
-function workflow(root: string, name: string): Workflow {
-  return Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows", name), "utf8")) as Workflow;
-}
+const platformWorkflow = ".github/workflows/platform-tests.yml";
+const runtimeWorkflow = ".github/workflows/bun-runtime.yml";
 const jobSource = (job: Workflow["jobs"][string]) => job.steps.map(step => step.run ?? "").join("\n");
 function siblingTests(root: string, files: readonly string[]): string[] {
   const tests = new Set<string>();
@@ -155,7 +154,7 @@ function siblingTests(root: string, files: readonly string[]): string[] {
   return [...tests];
 }
 
-type DiscoveryClosures = { privacy?: ReadonlySet<string>; platform?: ReadonlySet<string> };
+type DiscoveryClosures = { privacy?: ReadonlySet<string>; platform?: ReadonlySet<string>; platformText?: string; runtimeText?: string };
 export function discover(root: string, base: string, files: readonly string[], mode: Mode = "pre-push",
   tests = siblingTests(root, [...files, "scripts/local-gate.ts"]), closures: DiscoveryClosures = {}): PlanEnvironment {
   const existing = new Set(files.filter(file => existsSync(path.join(root, file))));
@@ -171,9 +170,8 @@ export function discover(root: string, base: string, files: readonly string[], m
       if (files.some(file => inputs.has(file))) privacySelfTests = privacyTests;
     }
   }
-  const platformFile = ".github/workflows/platform-tests.yml";
-  const platform = workflow(root, "platform-tests.yml");
-  const bun = workflow(root, "bun-runtime.yml");
+  const platform = Bun.YAML.parse(closures.platformText ?? readFileSync(path.join(root, platformWorkflow), "utf8")) as Workflow;
+  const bun = Bun.YAML.parse(closures.runtimeText ?? readFileSync(path.join(root, runtimeWorkflow), "utf8")) as Workflow;
   const runtimeEntries = workflowEntries(jobSource(bun.jobs["bun-runtime"]!));
   const runtimeChanged = files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
   return {
@@ -181,8 +179,8 @@ export function discover(root: string, base: string, files: readonly string[], m
     // An empty diff is "run" to the CI scope, where skipping must be proven.
     // Here it is proven: nothing changed, so no platform job has a subject.
     linux: process.platform === "linux" && files.length > 0 && (closures.platform
-      ? files.some(file => file === platformFile || ALWAYS_IN_SCOPE.includes(file) || file.startsWith("src/lib/proc/") || closures.platform!.has(file))
-      : platformScope({ root, workflow: platformFile, prefixes: ["src/lib/proc/"], changed: files }).run),
+      ? files.some(file => file === platformWorkflow || ALWAYS_IN_SCOPE.includes(file) || file.startsWith("src/lib/proc/") || closures.platform!.has(file))
+      : platformScope({ root, workflow: platformWorkflow, prefixes: ["src/lib/proc/"], changed: files }).run),
     runtime: runtimeChanged,
     native: runtimeChanged,
     linuxTests: workflowEntries(platform.jobs["windows-platform"]!.steps.find(step => step.name === "Platform tests")!.run!).filter(isTest),
@@ -391,6 +389,8 @@ function freezePlan(plan: GatePlan): GatePlan {
   }
   Object.freeze(plan.checks);
   Object.freeze(plan.changedPaths);
+  plan.discoveryInputs.forEach(Object.freeze);
+  Object.freeze(plan.discoveryInputs);
   return Object.freeze(plan);
 }
 
@@ -497,9 +497,11 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
   const checkEnv = checkEnvironment({ ...env, NODE_OPTIONS: env.NODE_OPTIONS || "--max-old-space-size=11264" });
   // Empty and prose-only pushes, plus pre-commit whitespace checks, never
   // invoke a compiler. A broken ignored install must not block those plans.
-  const compilerNeeded = batch !== undefined || profile === "pre-push" && files.length > 0 &&
-    !files.every(proseOnly) && !files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
-  const compilerInput = compilerNeeded ? dependencyTreeFingerprint(root, "node_modules/typescript") : "not-selected";
+  const runtime = files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
+  const compilerNeeded = profile === "pre-push" && files.length > 0 && !files.every(proseOnly) && !runtime;
+  // Batch always runs fresh. Its compiler command resolves the installation
+  // produced by the dependencies gate when it runs.
+  const compilerInput = batch ? "after dependencies" : compilerNeeded ? dependencyTreeFingerprint(root, "node_modules/typescript") : "not-selected";
   const tools = [env.PATH, checkEnv.PATH].map(PATH => ["bun", "bunx", "node", "git"].map(tool => Bun.which(tool, { PATH: PATH ?? "" })));
   const runtimeBinding = [process.platform, process.arch, Bun.version, execPath, SUPPORTED_CODEX_VERSIONS,
     environmentFingerprint(checkEnv), compilerInput, tools];
@@ -509,36 +511,49 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
   const cache = new GateCache<GatePlan>(cacheDirectory(root, "plans"), validPlan);
   if (expectedPlanId) {
     const cached = cache.read(expectedPlanId);
-    if (cached && cached.planId === expectedPlanId && cached.profile === profile && cached.requestId === requestId &&
-      cached.discoveryInputs.every(([file, digest]) => fileFingerprint(path.join(root, file)) === digest)) {
-      const { planId: cachedId, requestId: _requestId, discoveryInputs: _discoveryInputs, checks, detectors, ...header } = cached;
-      const cachedKey = fingerprint(header);
-      if (fingerprint([cachedKey, checks, detectors]) === cachedId) return freezePlan(cached);
+    if (cached && cached.planId === expectedPlanId && cached.profile === profile && cached.requestId === requestId) {
+      const { planId: cachedId, requestId, discoveryInputs, checks, detectors, ...header } = cached;
+      if (fingerprint([fingerprint(header), requestId, discoveryInputs, checks, detectors]) === cachedId &&
+        discoveryInputs.every(([file, digest]) => fileFingerprint(path.join(root, file)) === digest)) return freezePlan(cached);
     }
   }
-  const platformWorkflow = ".github/workflows/platform-tests.yml";
-  const traversedBytes = new Map<string, string>();
-  const capture = (file: string, contents: string) => traversedBytes.set(file, fingerprint(contents));
-  const platformInputs = batch ? new Set<string>() : executedPaths(root,
-    workflowEntries(readFileSync(path.join(root, platformWorkflow), "utf8")), capture);
+  const observed = new Map<string, string>();
+  const retry = (file: string) => new Error(`gate plan inputs changed during discovery; retry required (${file})`);
+  const capture = (file: string, contents: Buffer | null) => {
+    const digest = contents === null ? "missing" : contentsFingerprint(contents);
+    if (observed.has(file) && observed.get(file) !== digest) throw retry(file);
+    observed.set(file, digest);
+  };
+  const readSelection = (file: string) => {
+    const contents = readFileSync(path.join(root, file));
+    capture(file, contents);
+    return contents.toString("utf8");
+  };
+  const platformText = batch ? undefined : readSelection(platformWorkflow);
+  const runtimeText = batch ? undefined : readSelection(runtimeWorkflow);
+  const platformInputs = platformText === undefined ? new Set<string>() : executedPaths(root, workflowEntries(platformText), capture);
   const privacyTests = siblings.filter(file => /^scripts\/privacy-.*\.test\.ts$/.test(file));
   const privacyInputs = !batch && profile === "pre-push" && privacyTests.length
     ? executedPaths(root, [...privacyTests, "test-preload.ts"], capture) : new Set<string>();
-  // Bind traversal to the exact bytes it consumed. If a reached helper moved
-  // between reading and planning, refuse this selection before any check runs.
-  for (const [file, digest] of traversedBytes) {
-    let current: string;
-    try { current = fingerprint(readFileSync(path.join(root, file), "utf8")); }
-    catch { current = "missing"; }
-    if (current !== digest) throw new Error(`gate plan inputs changed during discovery; retry required (${file})`);
+  let bunPin: string | undefined;
+  if (!batch && profile === "pre-push" && runtime) {
+    // Keep the required check when pin preparation will report invalid input.
+    const docker = path.join(root, "Dockerfile");
+    if (statSync(docker, { throwIfNoEntry: false })?.isFile()) {
+      const contents = readSelection("Dockerfile");
+      try { bunPin = pinnedBunVersion(contents); } catch { /* Invalid pin. */ }
+    } else capture("Dockerfile", null);
   }
-  const sourceInputs = [...new Set([...dirty.filter(file => batchSource.test(file)), ...platformInputs, ...privacyInputs,
-    ...(batch ? [] : [platformWorkflow]), ".github/workflows/bun-runtime.yml", "Dockerfile", "bun.lock", "package.json",
-    "node_modules/typescript/package.json", "node_modules/eslint/package.json"])]
-    .map(file => [file, fileFingerprint(path.join(root, file))] as const);
+  const sourceInputs = [...new Set([...dirty.filter(file => batchSource.test(file)), ...observed.keys(),
+    "Dockerfile", "bun.lock", "package.json", ...(batch ? [] : ["node_modules/typescript/package.json", "node_modules/eslint/package.json"])])]
+    .map(file => [file, observed.get(file) ?? fileFingerprint(path.join(root, file))] as const);
+  // Validate what selection actually read, including absent candidates.
+  // Publish these captured digests even if a file moves after verification.
+  for (const [file, digest] of observed) {
+    if (fileFingerprint(path.join(root, file)) !== digest) throw retry(file);
+  }
   const bindings = fingerprint([runtimeBinding, sourceInputs]);
   const reviewed = batch?.reviewed?.map(row => ({ number: row.number, base: commit(row.base), head: commit(row.head) }));
-  const runtime = files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
   const changeClass = profile === "pre-commit" ? "staged" : !files.length ? "empty"
     : files.every(proseOnly) ? "prose" : runtime ? "runtime" : "source";
   const inputs: PlanInputs = { version: VERSION, profile, subject, base, tree, changeClass, changedPaths, selector, trustPolicy,
@@ -547,23 +562,19 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
   // An explicitly handed-off address that failed validation is a cache miss;
   // do not let a second alias silently authorize the rejected envelope.
   const stored = expectedPlanId ? undefined : cache.read(key);
-  const planId = (checks: readonly GateCheck[], detectors?: DetectorSelection) => fingerprint([key, checks, detectors]);
+  const planId = (checks: readonly GateCheck[], detectors?: DetectorSelection) => fingerprint([key, requestId, sourceInputs, checks, detectors]);
   if (stored) {
-    const { planId: storedId, checks, detectors, requestId: _requestId, discoveryInputs: _discoveryInputs, ...header } = stored;
-    if ((!expectedPlanId || expectedPlanId === storedId) && storedId === planId(checks, detectors) && fingerprint(header) === key)
+    const { planId: storedId, checks, detectors, requestId: storedRequest, discoveryInputs, ...header } = stored;
+    if (storedRequest === requestId && fingerprint(discoveryInputs) === fingerprint(sourceInputs) &&
+      storedId === planId(checks, detectors) && fingerprint(header) === key)
       return freezePlan(stored);
   }
   const detectorBrowser = reviewed ? batch?.detectorBrowser ?? batch?.browser ?? false : undefined;
   const detectors = reviewed ? selectDetectors(root, base, subject, files, reviewed, batch?.detectorBrowser ?? batch?.browser ?? false) : undefined;
   const steps = batch ? stepsForBatch(base, files, existing, batch.browser ?? false, detectorBrowser)
     : plan(profile as Mode, files, { ...discover(root, base, files, profile as Mode, siblings,
-      { privacy: privacyInputs, platform: platformInputs }),
+      { privacy: privacyInputs, platform: platformInputs, platformText, runtimeText }),
       existing, base: profile === "pre-commit" ? "HEAD" : base, lintBase: base });
-  let bunPin: string | undefined;
-  if (steps.some(step => step.pinned)) {
-    try { bunPin = pinnedBunVersion(readFileSync(path.join(root, "Dockerfile"), "utf8")); }
-    catch { /* Keep the required check. Its runtime preparation reports the error. */ }
-  }
   const checks = identifyChecks(inputs, steps, bindings, compilerInput, env, execPath, detectors, bunPin);
   const built = { ...inputs, requestId, discoveryInputs: sourceInputs, checks, ...(detectors ? { detectors } : {}), planId: planId(checks, detectors) };
   cache.write(key, built);

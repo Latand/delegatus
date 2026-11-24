@@ -815,7 +815,7 @@ function publicationPrivacyFiles(env: NodeJS.ProcessEnv): Record<string, string>
 const independentSteps = ["types", "eslint", "touched tests", "Linux backend", "Linux tests"];
 
 function readGatePlanHandoff(serialized: string | undefined): { planId: string; steps: string[] } | undefined {
-  // The supported direct --admitted entry (including Cloud) has no local parent.
+  // Direct --admitted entry (including Cloud) can plan without a local parent.
   if (serialized === undefined) return;
   try {
     const value = JSON.parse(serialized);
@@ -823,6 +823,17 @@ function readGatePlanHandoff(serialized: string | undefined): { planId: string; 
       Array.isArray(value.steps) && value.steps.every((step: unknown) => typeof step === "string")) return value;
   } catch { /* Refuse a damaged launch envelope before any member starts. */ }
   throw new Error("invalid admitted publication plan envelope");
+}
+
+function publicationWorkerEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const worker: NodeJS.ProcessEnv = { ...env, NODE_OPTIONS: env.NODE_OPTIONS || "--max-old-space-size=11264" };
+  // Fix the worker locale before Python's namespace entry can add LC_CTYPE.
+  // Preserve explicit categories and the caller's effective non-C locale.
+  if (process.platform === "linux" && worker.LC_CTYPE === undefined) {
+    const lang = worker.LANG;
+    worker.LC_CTYPE = worker.LC_ALL || (lang && lang !== "C" && lang !== "POSIX" ? lang : "C.UTF-8");
+  }
+  return worker;
 }
 
 async function main(mode: Mode, admitted = false, publicationPrepare = false, requestedStep?: string): Promise<void> {
@@ -875,8 +886,10 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     const behind = Number(git(root, ["rev-list", "--count", "HEAD..origin/main"]));
     if (behind) console.warn(`pre-push: branch is ${behind} commit(s) behind origin/main; the hosted privacy gate may flag main-only commits. Merge origin/main before pushing.`);
   }
-  const handoff = admitted ? readGatePlanHandoff(process.env.LLV_GATE_PLAN_HANDOFF) : undefined;
-  const graph = gatePlan(root, { profile: mode, publishedTree }, planningEnv, process.execPath, handoff?.planId);
+  const handoff = admitted || process.env.LLV_GATE_SANDBOX_RECORD
+    ? readGatePlanHandoff(process.env.LLV_GATE_PLAN_HANDOFF) : undefined;
+  const workerEnv = mode === "pre-push" ? publicationWorkerEnvironment(planningEnv) : planningEnv;
+  const graph = gatePlan(root, { profile: mode, publishedTree }, workerEnv, process.execPath, handoff?.planId);
   const { base, changedPaths: files } = graph;
   const steps = graph.checks.map(check => check.step);
   const workerSteps = requestedStep ? [requestedStep] : steps.filter(step => step.name !== "privacy").map(step => step.name);
@@ -893,7 +906,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   if (requestedStep && !selected) throw new Error(`the publication plan has no independent "${requestedStep}" step for these changes`);
   if (requestedStep && !admitted) {
     await runAdmittedChecks(["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "check-step", requestedStep, "--admitted"],
-      root, { ...process.env, LLV_GATE_RUNNER: "off", LLV_GATE_PLAN_HANDOFF: planHandoff }, deadline);
+      root, { ...workerEnv, LLV_GATE_RUNNER: "off", LLV_GATE_PLAN_HANDOFF: planHandoff }, deadline);
     return;
   }
   if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
@@ -909,7 +922,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   // owner before allocation; admitted children inherit the same journal.
   if (import.meta.main && !process.env.LLV_GATE_SANDBOX_RECORD) {
     const parent = captureProcessIdentity(process.pid);
-    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(parent) };
+    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(parent), LLV_GATE_PLAN_HANDOFF: planHandoff };
     const entry = publicationPrepare ? path.join(root, "scripts/local-gate.ts") : import.meta.path;
     if (publicationPrepare) {
       // The outer runner owns cleanup while its child queues for checks. Give
@@ -937,14 +950,15 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   try {
     // Pre-push checks see one canonical environment, so a producer's pass and
     // the publication of the same tree share a key (scripts/gate-cache.ts).
-    const isolated = isolatedEnvironment(sandbox, mode === "pre-push" ? checkEnvironment(process.env) : process.env);
+    const isolated = isolatedEnvironment(sandbox, mode === "pre-push" ? checkEnvironment(workerEnv) : process.env);
     const privacyEnv: NodeJS.ProcessEnv = {
       ...process.env,
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json"),
     };
     const prepare = async (step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env) => {
       const command = [...step.command];
-      const env: NodeJS.ProcessEnv = { ...(step.isolated || mode === "pre-push" && !["privacy", "frozen install", "supply chain"].includes(step.name) ? isolated : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
+      const env: NodeJS.ProcessEnv = { ...(step.isolated || mode === "pre-push" && !["privacy", "frozen install", "supply chain"].includes(step.name)
+        ? isolated : admitted ? workerEnv : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
       delete env.LLV_GATE_TYPES_CHECKED;
       delete env.LLV_GATE_FULL_TYPES;
       if (step.name === "privacy") Object.assign(env, privacyEnv);
@@ -1047,7 +1061,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       }
     }
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
-    const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error) : undefined;
+    const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error, workerEnv) : undefined;
     const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
     const checksStarted = performance.now();
     if (selected) {
@@ -1079,7 +1093,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
         ? String(publicationMemoryBytes(process.env.NODE_OPTIONS)) : undefined;
       const localChecks = (cancel: AbortSignal) => runAdmittedChecks(
         ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
-        { ...process.env, LLV_GATE_RUNNER: "off", LLV_GATE_PUBLICATION_MEMORY_BYTES: memoryBytes, LLV_GATE_PLAN_HANDOFF: planHandoff }, deadline, cancel);
+        { ...workerEnv, LLV_GATE_RUNNER: "off", LLV_GATE_PUBLICATION_MEMORY_BYTES: memoryBytes, LLV_GATE_PLAN_HANDOFF: planHandoff }, deadline, cancel);
       const privacyHead = git(root, ["rev-parse", "HEAD"]);
       const checks = async (cancel: AbortSignal) => {
         if (!config) return localChecks(cancel);

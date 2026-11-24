@@ -1,11 +1,12 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, watch, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import * as platformScopeModule from "./ci-platform-scope";
 import { executedPaths, workflowEntries } from "./ci-platform-scope";
 import { fingerprint, GateCache } from "./gate-cache";
+import * as gateCache from "./gate-cache";
 import { gatePlan } from "./gate-plan";
 import { createHookFixture } from "./local-gate.fixture";
 
@@ -235,33 +236,45 @@ test("platform helper bytes invalidate cached discovery without changing the Git
   expect(after.planId).not.toBe(first.planId);
 });
 
-test("a reached helper changed after traversal forces a retry before stale checks are cached", () => {
+test.skipIf(process.platform !== "linux").each(["helper", "missing helper", "workflow"])("a changed %s cannot hand off stale Linux discovery", input => {
   const f = fixture();
-  const workflow = f.writablePath(".github/workflows/platform-tests.yml");
+  const workflowFile = ".github/workflows/platform-tests.yml";
+  const workflow = f.writablePath(workflowFile);
   const helper = "scripts/ignored-platform-helper.sh";
   const source = readFileSync(workflow, "utf8");
   const anchor = "      - name: Platform tests\n";
   const start = source.indexOf("        run: |", source.indexOf(anchor)) + "        run: |\n".length;
-  writeFileSync(workflow, `${source.slice(0, start)}          bash ${helper}\n${source.slice(start)}`);
-  write(f, helper, "#!/bin/sh\nexit 0\n");
+  const withEntry = (file: string) => `${source.slice(0, start)}          bash ${file}\n${source.slice(start)}`;
+  writeFileSync(workflow, withEntry(helper));
+  if (input !== "missing helper") write(f, helper, "#!/bin/sh\nexit 0\n");
   mkdirSync(f.writablePath(".git/info"), { recursive: true });
   writeFileSync(f.writablePath(".git/info/exclude"), `${helper}\n`);
-  write(f, "example.ts"); commit(f);
+  write(f, "scripts/plan-target.ts"); commit(f);
   f.git("update-ref", "refs/remotes/origin/main", "HEAD");
-  write(f, "example.ts", "export const value = 2;\n"); commit(f);
-  const execute = platformScopeModule.executedPaths;
+  write(f, "scripts/plan-target.ts", "export const value = 2;\n"); commit(f);
+  // Keep the Git subject and changed paths stable during the workflow swap.
+  if (input === "workflow") f.git("update-index", "--assume-unchanged", workflowFile);
+  const changedPath = input === "workflow" ? workflow : f.writablePath(helper);
+  const digest = gateCache.fileFingerprint;
   let changed = false;
-  const spy = spyOn(platformScopeModule, "executedPaths").mockImplementation((...args) => {
-    const result = execute(...args);
-    if (!changed && args[1].includes(helper)) {
+  const spy = spyOn(gateCache, "fileFingerprint").mockImplementation(file => {
+    // Swap synchronously at the first filesystem digest after traversal
+    // captured this path, before that digest can reach the handoff.
+    if (!changed && file === changedPath) {
       changed = true;
-      writeFileSync(f.writablePath(helper), "#!/bin/sh\nbun ../src/lib/proc/proc.test.ts\n");
+      writeFileSync(file, input === "workflow" ? withEntry("scripts/plan-target.ts") : '#!/bin/sh\nbun "./plan-target.ts"\n');
     }
-    return result;
+    return digest(file);
   });
+  const request = { profile: "pre-push" } as const;
+  let parent: ReturnType<typeof gatePlan> | undefined;
   try {
-    expect(() => gatePlan(f.dir, { profile: "pre-push" }, f.env)).toThrow(/retry required/);
+    try { parent = gatePlan(f.dir, request, f.env); }
+    catch (error) { expect(String(error)).toContain("retry required"); }
   } finally { spy.mockRestore(); }
+  expect(changed).toBeTrue();
+  const admitted = gatePlan(f.dir, request, f.env, process.execPath, parent?.planId);
+  expect(names(admitted).filter(name => name.startsWith("Linux"))).toEqual(linux);
 });
 
 test("privacy helper bytes invalidate a warm selection and preserve its privacy self-test", () => {
@@ -371,28 +384,82 @@ test("image and host obligations match and name different compiler observations"
   } finally { tool.mockRestore(); }
 });
 
-test("check-step and pre-push share the publication selection and refuse a forged subset on reentry", async () => {
+test.skipIf(process.platform !== "linux").each([
+  { entry: "check-step", change: false, verdict: "reuses the selection in the admitted worker" },
+  { entry: "pre-push", change: false, verdict: "reuses the selection in the admitted worker" },
+  { entry: "pre-push", change: true, verdict: "rebuilds when an ignored discovery input changes" },
+])("$entry discovers once before admission and $verdict", async ({ entry, change }) => {
   const f = fixture();
-  write(f, "example.ts");
+  const preload = f.writablePath(".git/trace-discovery.ts");
+  const traces = f.writablePath(".git/traversals.jsonl");
+  const processes = f.writablePath(".git/processes.jsonl");
+  const helper = "scripts/discovery-probe.sh";
+  const helperPath = f.writablePath(helper);
+  const gateSlot = f.writablePath("scripts/gate-slot.sh");
+  writeFileSync(gateSlot, readFileSync(gateSlot, "utf8").replace("run() {\n",
+    'run() {\n  export LC_CTYPE="${LC_CTYPE:-C.UTF-8}"\n'));
+  writeFileSync(preload, `
+    import fs from "node:fs";
+    const entry = process.argv[1]?.endsWith("/local-gate.ts");
+    if (entry) {
+      const phase = process.argv.includes("--admitted") ? "admitted"
+        : process.env.LLV_GATE_SANDBOX_RECORD ? "owned" : "parent";
+      const locale = process.env.LC_CTYPE ?? null;
+      fs.appendFileSync(${JSON.stringify(processes)}, JSON.stringify({ phase, locale }) + "\\n");
+      if (phase === "admitted" && ${change}) {
+        fs.writeFileSync(${JSON.stringify(helperPath)}, '#!/bin/sh\\nbun "../example.ts"\\n');
+      }
+      const read = fs.readFileSync;
+      fs.readFileSync = (...args) => {
+        if (args[0] === ${JSON.stringify(helperPath)}) {
+          // The traversal reads the entry. Digest verification also reads it
+          // in the fixed planner and is counted separately by its stack.
+          if (new Error().stack.includes("at executedPaths")) {
+            fs.appendFileSync(${JSON.stringify(traces)}, JSON.stringify(phase) + "\\n");
+          }
+        }
+        return read(...args);
+      };
+    }
+  `);
+  const workflow = f.writablePath(".github/workflows/platform-tests.yml");
+  writeFileSync(workflow, readFileSync(workflow, "utf8") + `\n# ${helper}\n`);
+  mkdirSync(f.writablePath(".git/info"), { recursive: true });
+  writeFileSync(f.writablePath(".git/info/exclude"), `${helper}\n`);
+  write(f, helper, "#!/bin/sh\nexit 0\n");
   commit(f);
-  const cache = f.writablePath(".git/delegatus-gate/plans");
-  mkdirSync(cache, { recursive: true });
-  const publications: string[] = [];
-  const monitor = watch(cache, (event, file) => {
-    if (event === "rename" && file?.endsWith(".json")) publications.push(file);
+  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  write(f, "example.ts"); commit(f);
+  const env: NodeJS.ProcessEnv = { ...f.env, LANG: "C", BUN_OPTIONS: `--preload=${preload}` };
+  // Exercise the hook's own bootstrap rather than the test runner's owner.
+  delete env.LLV_GATE_SANDBOX_RECORD;
+  delete env.LC_ALL;
+  delete env.LC_CTYPE;
+  const args = entry === "check-step" ? [entry, "types"] : [entry];
+  const stage = Bun.spawn([process.execPath, "scripts/local-gate.ts", ...args], {
+    cwd: f.dir, env, stderr: "pipe", timeout: 25_000,
   });
-  try {
-    const stage = Bun.spawn([process.execPath, "scripts/local-gate.ts", "check-step", "types"], {
-      cwd: f.dir, env: f.env, stderr: "pipe", timeout: 25_000,
-    });
-    const [code, stderr] = await Promise.all([stage.exited, new Response(stage.stderr).text()]);
-    expect(code, stderr).toBe(0);
-    expect(publications).toHaveLength(2);
-  } finally { monitor.close(); }
-  expect(f.calls().map(call => call.args[0])).toEqual(["tsc"]);
-  const native = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: f.env, encoding: "utf8", timeout: 25_000 });
-  expect(native.status, native.stderr).toBe(0);
-  expect(f.calls().map(call => call.args[0])).toContain("scripts/privacy-publication-gate.ts");
+  const [code, stderr] = await Promise.all([stage.exited, new Response(stage.stderr).text()]);
+  const observed = readFileSync(processes, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(observed[0]).toEqual({ phase: "parent", locale: null });
+  expect(observed.at(-1)).toEqual({ phase: "admitted", locale: "C.UTF-8" });
+  expect(readFileSync(traces, "utf8").trim().split("\n").map(line => JSON.parse(line))).toEqual(change ? ["parent", "admitted"] : ["parent"]);
+  if (change) {
+    expect(code, stderr).not.toBe(0);
+    expect(stderr).toContain("selection is outside the current publication plan");
+    expect(stderr).not.toContain("pre-push: types");
+    return;
+  }
+  expect(code, stderr).toBe(0);
+  expect(f.calls().map(call => call.args[0])).toContain("tsc");
+  if (entry === "pre-push") expect(f.calls().map(call => call.args[0])).toContain("scripts/privacy-publication-gate.ts");
+}, 35_000);
+
+test("an admitted publication refuses a forged subset on reentry", () => {
+  const f = fixture();
+  write(f, "example.ts"); commit(f);
+  const valid = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: f.env, encoding: "utf8", timeout: 25_000 });
+  expect(valid.status, valid.stderr).toBe(0);
   const before = f.calls().length;
   const forged = spawnSync(process.execPath, ["scripts/local-gate.ts", "pre-push", "--admitted"], {
     cwd: f.dir, env: { ...f.env, LLV_GATE_PLAN_HANDOFF: JSON.stringify({ version: 1, planId: "a".repeat(64), steps: ["types"] }) },
@@ -401,4 +468,4 @@ test("check-step and pre-push share the publication selection and refuse a forge
   expect(forged.status).not.toBe(0);
   expect(forged.stderr).toContain("selection is outside");
   expect(f.calls()).toHaveLength(before);
-}, 70_000);
+}, 40_000);
