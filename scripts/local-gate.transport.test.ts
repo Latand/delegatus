@@ -212,9 +212,9 @@ test.each([["short preparation", 70_000], ["long preparation", 600_000]] as cons
   fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts" && process.env.LLV_GATE_PUBLICATION_OBSERVED) require("node:fs").writeFileSync(${JSON.stringify(clock)}, String(Number(process.env.LLV_GATE_PUSH_DEADLINE) + 1));\n`);
   const http = await httpFixture(f), previous = loadPipelines();
   let elapsedMonotonicMs = 0;
-  let preparationCompletedAt = 0;
   const monotonic = spyOn(performance, "now").mockImplementation(() => elapsedMonotonicMs);
-  const date = spyOn(Date, "now").mockImplementation(() => startedAt + elapsedMonotonicMs);
+  // Keep the controller and hook on the same wall clock until the hook runs.
+  const date = spyOn(Date, "now").mockImplementation(() => startedAt);
   try {
     const subject = pipelineCorpus(2, 1)[1]!;
     Object.assign(subject, { project: "fixture", repoDir: path.join(path.dirname(f.dir), "source"), worktreeDir: f.dir, lastPassedCommit: f.head });
@@ -227,11 +227,10 @@ test.each([["short preparation", 70_000], ["long preparation", 600_000]] as cons
       const result = await realExec(command, args, cwd, { ...f.env, ...env }, options);
       if (command === "bun" && args.includes("--publication-prepare") && result.code === 0) {
         elapsedMonotonicMs = preparationMs;
-        preparationCompletedAt = Date.now();
       }
       if (command === "git" && args[0] === "push") {
         expect(options?.timeoutMs).toBe(240_000);
-        expect(Number(env?.LLV_GATE_PUSH_DEADLINE) - preparationCompletedAt).toBe(180_000);
+        expect(Number(env?.LLV_GATE_PUSH_DEADLINE) - startedAt).toBe(180_000);
       }
       return result;
     };
