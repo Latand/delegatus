@@ -271,6 +271,7 @@ test.each(["overlay", "configured user attributes"])("the scanner reads captured
   const f = fixture();
   const attributes = kind === "overlay" ? path.join(f.dir, ".git", "info", "attributes") : path.join(f.dir, ".git", "user-attributes");
   f.git("config", "core.ignoreCase", "true");
+  fs.mkdirSync(path.dirname(attributes), { recursive: true });
   fs.writeFileSync(attributes, "EXAMPLE.ts diff=fixture\n");
   if (kind !== "overlay") f.git("config", "core.attributesFile", attributes);
   fs.appendFileSync(path.join(f.dir, "record.ts"), `
