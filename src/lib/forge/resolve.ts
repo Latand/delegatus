@@ -83,7 +83,7 @@ export function lanePullRequest(pipeline: Pipeline): { repository: string; numbe
   return prs.length === 1 ? { repository: prs[0]!.repository, number: prs[0]!.number } : null;
 }
 
-export function taskWorkLinks(task: BoardTask, pipelines: readonly Pipeline[], cache: ForgeCacheView = forgeCacheView()): ResolvedWorkLinks {
+export function taskWorkLinks(task: Pick<BoardTask, "id" | "project" | "workLinks">, pipelines: readonly Pipeline[], cache: ForgeCacheView = forgeCacheView()): ResolvedWorkLinks {
   const linked = pipelines.filter((pipeline) => pipeline.taskIds?.includes(task.id));
   const carried = linked.map((pipeline) => pipelineWorkLinks(pipeline, cache));
   const repository = taskRepository(task) ?? linked.map((pipeline) => pipelineRepository(pipeline)).find(Boolean) ?? null;

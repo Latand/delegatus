@@ -96,7 +96,7 @@ the Deployer's `mode=release` stage can publish. A moved checkout requires revie
 
 Run `bun scripts/release-verify.ts --preflight --cut <cut-sha> --tag vX.Y.Z --pr <number>`.
 An open PR stops publication. Preflight refreshes `origin/main` and requires the
-merged commit to be an ancestor of main with the reviewed checkout's tree. It
+reviewed checkout to be at the PR's exact integrated commit on main. It
 checks release-only changes against the merge's first parent so inherited main
 changes do not block an older cut. Create the annotated tag on its explicit
 `tagCommit`, then use `git push origin refs/tags/vX.Y.Z`. The native stage guard
@@ -383,7 +383,11 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests run the branch first. Selections with gate-harness or privacy suites use at most two file workers, or one when Linux portable runners share their parent service. Other selections use up to eight explicit head files, each
+Touched tests run the branch first, with up to eight file workers on the head.
+Gate-harness and privacy files share a limit of two workers because they launch
+nested commands. Ordinary files can use the remaining workers in the same
+selection. When Linux portable runners share their parent service, a selection
+containing gate-harness or privacy files uses one worker. Each file runs
 in its own owned process and isolated roots. A green branch skips the baseline
 entirely. For a red branch, only failing files run on the merge base, filtered
 to failing assertions; runner diagnostics need the whole file. Both kinds share

@@ -76,15 +76,16 @@ incomplete file, source/environment/ignored-input invalidation, malformed
 receipts, and an aggregate deadline after eight of twelve files. The second
 invocation executes only the remaining four. The deadline is controlled in the
 parent; the child checks keep their real clocks and execution bounds.
-The native pre-push regression expires the hook after one file completes
-while another is still running. It checks that the services and directories
+`scripts/local-gate.checkpoints.hook.test.ts` expires the native pre-push hook
+after one file completes while another is still running. It checks that the services and directories
 were removed, the retry runs only the interrupted file, and a manager change
 before file completion prevents sealing. It also checks receipt bytes, fresh
 declared directories, input and runner replacement, and manager identity loss
-or drift after reuse. The `check-step "touched tests"` regression covers warm
-and cold retries after changing only the external `BASH_ENV` bytes.
-The native hook also declines stale whole-step receipts after changes to a
-declared variable or the startup file. Warm retries report the same assertion
+or drift after reuse. In `scripts/local-gate.checkpoints.stepPasses.test.ts`,
+the `check-step "touched tests"` regression covers warm and cold retries after
+changing only the external `BASH_ENV` bytes. The native hook also declines
+stale whole-step receipts after changes to a declared variable or the startup
+file. Warm retries report the same assertion
 failure as cold runs and reuse the pass when only private allocations change.
 
 This repairs the Delegatus repository's publication integration. The generic

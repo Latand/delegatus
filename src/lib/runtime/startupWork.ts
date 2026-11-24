@@ -1,6 +1,18 @@
 /** One shared pass budget; host rows and phases never renew it. */
 export const STRUCTURED_STARTUP_PASS_DEADLINE_MS = 300_000;
 
+export type StructuredStartupDeadline =
+  | "startup membership deadline exceeded"
+  | "structured startup read deadline exceeded"
+  | "structured startup pass deadline exceeded";
+
+export class StructuredStartupDeadlineError extends Error {
+  readonly code = "ETIMEDOUT";
+  constructor(readonly deadline: StructuredStartupDeadline, readonly hostKey: string | null = null) {
+    super(deadline);
+  }
+}
+
 /** Bound independent historical I/O and join every started operation before
  * propagating failure. Admission must never outlive an unobserved worker. */
 export async function forEachStartupBatch<T>(

@@ -9,7 +9,7 @@ export interface AgentReconfiguration {
 }
 
 export function reconfigurationFromBody(
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   body: { model?: unknown; effort?: unknown; fast?: unknown; accountId?: unknown },
   copilotModelEfforts?: readonly string[] | null,
 ): { value?: AgentReconfiguration; error?: string } {
@@ -17,10 +17,10 @@ export function reconfigurationFromBody(
   const validModel = engine === "claude" ? claudeCatalogModelId(model)
     : engine === "codex" ? isCodexLaunchModel(model) ? model : null
       : (() => {
-          const result = validateLaunchModel("copilot", model);
+          const result = validateLaunchModel(engine, model);
           return "error" in result ? null : result.model;
         })();
-  const known = engine === "copilot"
+  const known = engine === "copilot" || engine === "antigravity"
     ? validModel !== null
     : validModel !== null && launchModelIds(engine).includes(validModel);
   if (!validModel || !known) return { error: `model is not supported by ${engine}` };

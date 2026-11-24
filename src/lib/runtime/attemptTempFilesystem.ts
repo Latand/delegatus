@@ -1,5 +1,5 @@
 import { attemptTempRemaining, checkAttemptTempDeadline, sweepMonotonicNow } from "./attemptTempDeadline";
-import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
+import { removeTreeWithinAttemptBudget, restoreAttemptTempClaim } from "./attemptTempRemoval";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -602,10 +602,10 @@ async function containerMountsClear(roots: readonly string[], remaining?: () => 
 }
 
 const markers = ["(", "-name", ".delegatus-keep", "-o", "-path", "*/worktrees/*/gitdir",
-  "-o", "-name", ".git", "!", "-type", "d", ")"];
+  "-o", "-name", ".git", ")"];
 const MARKER_LIMIT = 10_000;
 const protectionMarker = (file: string, isDirectory: boolean) => path.basename(file) === ".delegatus-keep"
-  || path.basename(file) === ".git" && !isDirectory
+  || path.basename(file) === ".git"
   || path.basename(file) === "gitdir" && /(?:^|\/)worktrees\/.*\/gitdir$/.test(file.replaceAll(path.sep, "/"));
 function markerContent(file: string): Buffer {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -618,6 +618,9 @@ function markerContent(file: string): Buffer {
 function markerHolds(file: string, directory: string, original: string): boolean {
   if (path.basename(file) === ".delegatus-keep") return true;
   const stat = fs.lstatSync(file);
+  // A real checkout's metadata is a local-only dependency. Its ownership
+  // cannot be inferred from the enclosing attempt's former launch record.
+  if (path.basename(file) === ".git" && stat.isDirectory()) return true;
   if (!stat.isFile() || stat.size > 4096) return true;
   const content = fs.readFileSync(file, "utf8");
   if (path.basename(file) === ".git" && stat.size === 0 && isUvCacheMarker(file)) return false;
@@ -705,7 +708,7 @@ const namespaceSnapshot = "find /attempt -xdev -type d -exec stat -c '%d:%i:%f:%
   + 'LC_ALL=C sort /tmp/directories > /tmp/sorted || exit; '
   + 'sha256sum /tmp/sorted > /tmp/digest || exit; read digest rest < /tmp/digest; ';
 export type AttemptNamespaceProtection = { digest: string };
-type NamespaceBudget = { budgetMs?: number; bytes?: number; recordedOnly?: boolean };
+type NamespaceBudget = { budgetMs?: number; bytes?: number; recordedOnly?: boolean; expectedIdentity?: string; accountCpuSeconds?: (seconds: number) => void; beforeRemoval?: () => void };
 type AttemptRemovalSettings = NamespaceBudget & {
   closedRoot?: boolean;
   /** Called when native deletion starts or the cleanup namespace reaches its delete command. */
@@ -754,7 +757,7 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
     : operation === "measure" ? 'exec du -skx /attempt'
     : operation === "evidence" ? noEvidence
       : inspection + (requireNoEvidence ? noEvidence : "")
-        + (operation === "remove" ? 'printf "%s\\n" "DELEGATUS_REMOVAL_STARTED"; exec find /attempt -xdev -depth -mindepth 1 -delete' : 'exit 0');
+        + (operation === "remove" ? 'printf "%s\\n" "DELEGATUS_REMOVAL_STARTED"; { time -p find /attempt -xdev -depth -mindepth 1 -delete; } 2>/tmp/usage; status=$?; awk \'$1=="user"{u=$2}$1=="sys"{s=$2}END{print "DELEGATUS_RM_CPU:"(u+s)}\' /tmp/usage; exit "$status"' : 'exit 0');
   if (protection && !/^[a-f0-9]{64}$/.test(protection.digest)) throw new Error("invalid attempt namespace snapshot");
   const verify = protection ? namespaceSnapshot + `test "$digest" = '${protection.digest}' || exit 75; ` : "";
   const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + linkedEvidence + verify + body;
@@ -788,6 +791,10 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   let failure: unknown;
   const commandTimeout = Math.max(1, remaining() - cleanupReserveMs);
   const commandCutoff = sweepMonotonicNow() + commandTimeout;
+  // Record the baseline and durable intent before the destructive command.
+  // The bind mount pins the admitted directory inode for the container even
+  // if its source pathname is replaced after dispatch.
+  if (operation === "remove") settings.beforeRemoval?.();
   try {
     result = await run("docker", ["run", "--rm", "--name", name, "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
@@ -803,11 +810,6 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
         || String((error as { stderr?: unknown }).stderr ?? "").includes("DELEGATUS_DEADLINE_EXHAUSTED")
         ? Object.assign(new AttemptTempBudgetDeferred("namespace tick deadline exhausted; retry next tick"), { cause: error }) : error;
   }
-  // A completed pre-delete refusal proves no mutation. A deadline or lost
-  // reply proves nothing about the daemon: retain its durable recovery intent.
-  if (operation === "remove" && (failure as { code?: unknown } | undefined)?.code !== "ENOENT"
-    && (Number((failure as { code?: unknown } | undefined)?.code) !== 75
-      || String((failure as { stdout?: unknown } | undefined)?.stdout ?? "").includes("DELEGATUS_REMOVAL_STARTED"))) mutationStarted?.();
   // The name exists before dispatch, so cleanup does not depend on receiving
   // a CID file or command output. The inner absolute cutoff also fences a
   // daemon that receives a delayed run request after this cleanup request.
@@ -818,12 +820,17 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
       throw new Error(`owned cleanup container removal failed: ${attemptTempFailureDetail(cleanupError)}`, { cause: failure ?? cleanupError });
   }
   if (failure) {
+    const output = String((failure as { stdout?: unknown }).stdout ?? "");
+    if (operation === "remove" && !(Number((failure as { code?: unknown }).code) === 75
+      && !output.includes("DELEGATUS_REMOVAL_STARTED"))) mutationStarted?.();
     if (failure instanceof AttemptTempBudgetDeferred) throw failure;
     const code = (failure as NodeJS.ErrnoException & { code?: unknown }).code;
     if (code === "ENOENT" || [125, 126, 127].includes(Number(code))) throw unavailable(attemptTempFailureDetail(failure));
     throw new Error(attemptTempFailureDetail(failure), { cause: failure });
   }
   if (operation === "remove" && result!.stdout.includes("DELEGATUS_REMOVAL_STARTED")) mutationStarted?.();
+  const cpu = /DELEGATUS_RM_CPU:([0-9.]+)/.exec(result!.stdout)?.[1];
+  if (cpu) settings.accountCpuSeconds?.(Number(cpu));
   return { identity, stdout: result!.stdout };
 }
 
@@ -1236,13 +1243,28 @@ export async function removeAttemptTree(directory: string, original = directory,
     // Mount and physical-path reads may observe a changed root or protection.
     // Admit from the final synchronous snapshots immediately before native rm.
     if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before native removal");
-    try { await (settings.nativeRemove ?? removeTreeWithinAttemptBudget)(directory, () => { mutationStarted = true; settings.mutationStarted?.(); }); repair?.release(); }
+    settings.beforeRemoval?.();
+    try {
+      if (settings.nativeRemove) await settings.nativeRemove(directory, () => { mutationStarted = true; settings.mutationStarted?.(); });
+      else await removeTreeWithinAttemptBudget(directory, () => { mutationStarted = true; settings.mutationStarted?.(); }, undefined,
+        settings.expectedIdentity, settings.accountCpuSeconds);
+      repair?.release();
+    }
     catch (error) {
       repair?.release();
       if (error instanceof AttemptTempBudgetDeferred) throw error;
       if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
       try {
-        const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection, settings.mutationStarted);
+        const claimedDirectory = typeof (error as { claimedDirectory?: unknown }).claimedDirectory === "string"
+          ? (error as { claimedDirectory: string }).claimedDirectory : undefined;
+        if (claimedDirectory) {
+          const claimedIdentity = (error as { claimedIdentity?: unknown }).claimedIdentity;
+          if (typeof claimedIdentity !== "string" || settings.expectedIdentity && claimedIdentity !== settings.expectedIdentity)
+            throw new Error("attempt removal claim identity unavailable; payload retained");
+          restoreAttemptTempClaim(claimedDirectory, directory, claimedIdentity);
+        }
+        const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection,
+          () => { mutationStarted = true; settings.mutationStarted?.(); });
         removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
       } catch (fallbackError) {
         if (fallbackError instanceof AttemptTempBudgetDeferred) throw fallbackError;

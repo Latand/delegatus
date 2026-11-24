@@ -1,10 +1,13 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentRegistry, setAgentRegistryForTests, structuredClaimIdentity } from "@/lib/agent/registry";
+import { AgentStateService } from "@/lib/agentState/service";
+import { observeAgentProcess } from "@/lib/agentState/process";
+import { readAgentProjection, subjectId } from "@/lib/agentState/store";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
 import { fixtureRecords, fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_TURN as FIXTURE_TURN_ID } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
@@ -13,7 +16,8 @@ import { statePath } from "@/lib/configDir";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { determined } from "./determinable";
-import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
+import { durableRuntimeEventTailSeq, FileRuntimeEventStore, hostTurnRecordIdentity } from "./eventStore";
+import { adoptCodexRegistryHosts } from "./registry";
 import type { HandoffRow } from "./handoffQueue";
 import * as control from "./structuredHostControl";
 import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry, type StructuredHostRetirementDependencies } from "./structuredHostRetirement";
@@ -156,8 +160,207 @@ const reconcile = `
     { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
   const service = new AgentStateService({ registry, now: () => Number(process.argv[2]),
     owns: () => true, process: observeAgentProcess, memory: () => null, release: "fixture", publish: async () => true });
-  await service.request(); service.stop(); registry.close();
+  await service.request();
+  console.log(service.cache.counters.payloadBytes);
+  service.stop(); registry.close();
 `;
+
+test.skipIf(process.platform !== "linux")("Codex adoption refuses stale oversized-turn ledger proof with assigned delivery", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-adoption-ledger-race-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const host = start(["--eval", "console.log(process.pid); setInterval(()=>{},1000)"]);
+  await ready(host);
+  const identity = children.get(host)!;
+  const initial = fixtureRegistry(root, "codex", identity, null);
+  const entry = initial.entries[`codex:${FIXTURE_SESSION}`]!;
+  entry.status = "idle";
+  entry.structuredHost!.activeTurnRef = null;
+  entry.structuredHost!.eventCursor = 4;
+  const records = fixtureRecords("codex");
+  fs.writeFileSync(entry.artifactPath!, [...records.open,
+    { type: "response_item", payload: { type: "function_call_output", output: "x".repeat(5 * 1024 * 1024) } },
+    ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(initial));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  registries.push(registry); setAgentRegistryForTests(registry);
+  const delivery = registry.holdDelivery(FIXTURE_CONVERSATION, "accepted fixture delivery", "codex-adoption-ledger-race");
+  expect(delivery.state).toBe("assigned");
+  const ledgerDir = statePath("structured-host-events");
+  const ledger = new FileRuntimeEventStore(ledgerDir);
+  ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: FIXTURE_TURN_ID, seq: 1 });
+  ledger.append(FIXTURE_SESSION, { kind: "item", turnId: FIXTURE_TURN_ID, phase: "completed", item: { output: "x".repeat(256 * 1024) }, seq: 2 });
+  ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: 3 });
+  ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+
+  setSystemTime(new Date(FIXTURE_NOW + 48 * 3_600_000));
+  const service = new AgentStateService({ registry, now: () => FIXTURE_NOW + 48 * 3_600_000,
+    owns: () => true, process: observeAgentProcess, memory: () => null, release: "fixture", publish: async () => true });
+  try {
+    await service.request();
+    const projection = readAgentProjection(registry, subjectId(entry));
+    expect(projection?.facts.turn).toMatchObject({ determined: true, evidence: { source: "operation-ledger" } });
+    expect(projection).toMatchObject({ verdict: { state: "unowned", quality: "verified", missing: [] }, facts: {
+      process: { determined: true, value: { status: "alive", identity } }, owner: { determined: true, value: "absent" },
+      obligations: { determined: true, value: [`delivery:${delivery.state}`, "delivery-owner"] }, transcript: { determined: true },
+    } });
+    const provedLedger = projection!.facts.turn.evidence.ref;
+    const signals: NodeJS.Signals[] = [];
+    let advanced = false;
+    const terminate = control.terminateStructuredHostTree;
+    const stop = spyOn(control, "terminateStructuredHostTree").mockImplementation((ref, dependencies) => terminate(ref, {
+      ...dependencies,
+      terminateOwnedHost: async () => false,
+      graceMs: 20,
+      deadlineMs: 200,
+      persistCapturedTree: async identities => {
+        const captured = await dependencies!.persistCapturedTree!(identities);
+        if (captured && !advanced) {
+          ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "newer-turn", seq: 5 });
+          advanced = true;
+          expect(hostTurnRecordIdentity(FIXTURE_SESSION)).not.toBe(provedLedger);
+        }
+        return captured;
+      },
+      signal: (pid, signal) => {
+        signals.push(signal);
+        process.kill(pid, signal);
+      },
+    }));
+    try {
+      await adoptCodexRegistryHosts(registry, async () => { throw new Error("unexpected adoption"); },
+        { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true);
+    } finally { stop.mockRestore(); }
+    expect(advanced).toBe(true);
+    expect(signals).toEqual([]);
+    expect(processIdentityStatus(identity)).toBe("alive");
+    expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "assigned", generationId: FIXTURE_SESSION });
+  } finally {
+    service.stop();
+    setSystemTime();
+  }
+}, 20_000);
+
+for (const scenario of ["settled", "late-native-flush", "idle-before-terminal", "idle-checkpoint", "historical-active", "newer-active", "ledger-limit", "mismatched-checkpoint", "open", "pending-delivery", "changed-ledger", "changed-after-capture", "retry"] as const) {
+  test.skipIf(process.platform !== "linux")(`retirement of oversized Codex rollout with host ledger: ${scenario}`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-ledger-fixture-")); roots.push(root);
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    const host = start(["--eval", "console.log(process.pid); setInterval(()=>{},1000)"]);
+    await ready(host);
+    const identity = children.get(host)!;
+    const file = fixtureRegistry(root, "codex", identity, null);
+    const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
+    entry.status = "idle";
+    entry.structuredHost!.activeTurnRef = null;
+    const largeLedger = scenario === "idle-checkpoint" || scenario === "ledger-limit" || scenario === "idle-before-terminal" || scenario === "newer-active";
+    entry.structuredHost!.eventCursor = scenario === "idle-checkpoint" || scenario === "idle-before-terminal" || scenario === "historical-active" ? 4 : scenario === "newer-active" ? 5 : 3;
+    const records = fixtureRecords("codex");
+    const open = scenario === "open";
+    const text = [...records.open, ...(open ? [{ type: "event_msg", payload: { type: "task_started", turn_id: "newer-turn" } }] : []),
+      { type: "response_item", payload: { type: "function_call_output", output: "x".repeat(5 * 1024 * 1024) } },
+      ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n";
+    fs.writeFileSync(entry.artifactPath!, text);
+    fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+    fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
+    const ledgerDir = statePath("structured-host-events");
+    const ledgerPath = path.join(ledgerDir, `${FIXTURE_SESSION}.jsonl`);
+    const ledger = new FileRuntimeEventStore(ledgerDir);
+    const writeLedger = () => {
+      ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: FIXTURE_TURN_ID, seq: 1 });
+      if (open) ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "newer-turn", seq: 2 });
+      else if (largeLedger) ledger.append(FIXTURE_SESSION, { kind: "item", turnId: FIXTURE_TURN_ID, phase: "completed",
+        item: { output: "x".repeat(256 * 1024) }, seq: 2 });
+      else if (scenario === "settled" || scenario === "late-native-flush") {
+        ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: 2 });
+        ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 3 });
+      } else if (!largeLedger) ledger.append(FIXTURE_SESSION, { kind: "session-status", status: scenario === "mismatched-checkpoint" || scenario === "historical-active" ? "active" : "idle", seq: 2 });
+      if (scenario === "idle-before-terminal") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 3 });
+      if (scenario !== "settled" && scenario !== "late-native-flush") {
+        ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: scenario === "idle-before-terminal" ? 4 : 3 });
+      }
+      if (scenario === "idle-checkpoint") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+      if (scenario === "historical-active") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+      if (scenario === "newer-active") {
+        ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+        ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "active", seq: 5 });
+      }
+      const stamp = new Date(FIXTURE_NOW + (scenario === "late-native-flush" ? 1000 : 2000));
+      fs.utimesSync(ledgerPath, stamp, stamp);
+      if (scenario === "late-native-flush") {
+        const laterNativeFlush = new Date(FIXTURE_NOW + 2000);
+        fs.utimesSync(entry.artifactPath!, laterNativeFlush, laterNativeFlush);
+      }
+    };
+    if (scenario !== "retry") writeLedger();
+    const now = FIXTURE_NOW + (open || scenario === "late-native-flush" || scenario === "ledger-limit" || scenario === "retry" ? 7 : 1) * 3_600_000;
+    const reconcileOnce = async () => {
+      const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), ""], { stdout: "pipe", stderr: "pipe" });
+      identities.push(captureProcessIdentity(successor.pid));
+      const [exit, stdout, stderr] = await Promise.all([successor.exited, new Response(successor.stdout).text(), new Response(successor.stderr).text()]);
+      expect(stderr).toBe(""); expect(exit).toBe(0);
+      expect(Number(stdout.trim())).toBeGreaterThan(0);
+      expect(Number(stdout.trim())).toBeLessThanOrEqual(4 * 1024 * 1024 + 64);
+    };
+    await reconcileOnce();
+    if (scenario === "historical-active") await reconcileOnce();
+    const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined,
+      { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
+    registries.push(registry); setAgentRegistryForTests(registry);
+    if (scenario === "pending-delivery") registry.holdDelivery(FIXTURE_CONVERSATION, "fixture work", "fixture-held-message");
+    const deps: StructuredHostRetirementDependencies = { snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
+      now: () => now, publicationState: () => "ready", handoffRows: () => determined([]),
+      realtimeBound: () => determined(false), orchestratorSeatConversations: () => determined(new Set<string>()),
+      revokedSeatConversations: () => determined(new Set<string>()), readCursor: () => null, writeCursor: () => {}, graceMs: 50,
+      ppidMap: () => new Map(), processMemory: () => new Map(), treePss: () => ({ bytes: 0, measuredProcesses: 1 }) };
+    const reopenLedger = () => ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "newer-turn", seq: 4 });
+    const signals: number[] = [];
+    const terminate = control.terminateStructuredHostTree;
+    const stop = spyOn(control, "terminateStructuredHostTree").mockImplementation((ref, dependencies) => terminate(ref, {
+      ...dependencies, terminateOwnedHost: async () => false, graceMs: 50, deadlineMs: 2000,
+      persistCapturedTree: async captured => {
+        const accepted = await dependencies!.persistCapturedTree!(captured);
+        if (scenario === "changed-after-capture") reopenLedger();
+        return accepted;
+      },
+      signal: (pid, signal) => { expect(pid).toBe(identity.pid); signals.push(pid); process.kill(pid, signal); },
+    }));
+    try {
+      if (scenario === "retry") {
+        const first = await runStructuredHostRetirementSweep(deps);
+        expect(first.refused).toMatchObject([{ clause: "turn-settled", undetermined: true, reason: "native record exceeds acquisition budget" }]);
+        expect(first.retired).toEqual([]);
+        writeLedger();
+        await reconcileOnce();
+      }
+      if (scenario === "changed-ledger") deps.treePss = async () => {
+        reopenLedger();
+        return { bytes: 0, measuredProcesses: 1 };
+      };
+      const result = await runStructuredHostRetirementSweep(deps);
+      if (scenario === "changed-after-capture") {
+        expect(result.failed).toMatchObject([{ error: "scope retirement target changed: verdict turn-settled: Codex host ledger settlement changed" }]);
+        expect(result.retired).toEqual([]);
+        expect(signals).toEqual([]);
+        expect(processIdentityStatus(identity)).toBe("alive");
+        return;
+      }
+      expect(result.failed).toEqual([]);
+      if (["settled", "late-native-flush", "idle-before-terminal", "idle-checkpoint", "historical-active", "retry"].includes(scenario)) {
+        expect(result.refused).toEqual([]);
+        expect(result.retired).toHaveLength(1);
+        expect(result.retired[0]!.reason).toBeUndefined();
+        expect(signals).toContain(identity.pid);
+        expect(registry.hostEntry(entry.key)?.status).toBe("dead");
+      } else {
+        expect(result.retired).toEqual([]);
+        expect(result.refused).toMatchObject([{ clause: scenario === "pending-delivery" ? "handoff-queue-drained" : "turn-settled" }]);
+        if (scenario === "changed-ledger") expect(result.refused[0]?.changed).toBe(true);
+        expect(signals).toEqual([]);
+        expect(processIdentityStatus(identity)).toBe("alive");
+      }
+    } finally { stop.mockRestore(); }
+  }, 20_000);
+}
 
 for (const scenario of ["closed-hour", "open-62h", "open-76h", "passed-stage-open", "terminal-lane-open", "running-stage-open", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-stale-terminal-abandoned", "oversized-unanchored-terminal", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid", "unflushed-dead-owner", "unflushed-open-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {

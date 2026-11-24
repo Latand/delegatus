@@ -30,6 +30,7 @@ export interface SpeechReadResult {
   status?: string; code?: string; match?: string;
   speech: string; total?: number; shown?: number; more?: number | boolean; nextCursor?: string | null;
   rows?: unknown[]; item?: unknown; truncated: boolean;
+  partial?: true; omissions?: string[];
   repeated?: true; readSecondsAgo?: number;
   coverage?: Record<string, unknown>;
   before?: string | null;
@@ -54,10 +55,20 @@ const pipelineRow = (row: Record<string, unknown>) => ({ handle: row.id ?? row.p
   ...(row.stateDetail ? { detail: short(row.stateDetail,80) } : {}), ...(row.cursor ? { stage: short(object(row.cursor).stageId,32),
     verdict: object(rows(row.stages).find(stage => stage.id === object(row.cursor).stageId)?.latestAttempt).verdict ?? null } : {}) });
 function page(source: Record<string, unknown>, items: Record<string, unknown>[], label: string): SpeechReadResult {
+  const omissions = source.partial === true && Array.isArray(source.omissions)
+    ? source.omissions.filter((value): value is string => typeof value === "string") : [];
   const total = typeof source.total === "number" ? source.total : typeof source.count === "number" ? source.count : items.length;
-  const more = typeof source.remainingCount === "number" ? source.remainingCount : Math.max(source.hasMore === true ? 1 : 0,total-items.length);
-  const result: SpeechReadResult = {total,shown:items.length,more,nextCursor: typeof source.nextCursor === "string" ? source.nextCursor : typeof source.cursor === "string" ? source.cursor : null,
-    rows:items, speech:short(`${total} ${label}. ${items.slice(0,5).map(row => `${row.title ?? row.excerpt ?? "Message"}: ${row.state ?? row.speaker ?? ""}`).join(". ")}`,600), truncated: more > 0 || source.hasMore === true};
+  const more = typeof source.remainingCount === "number" ? source.remainingCount
+    : omissions.includes("remainingCount") ? typeof source.hasMore === "boolean" ? source.hasMore : undefined
+    : Math.max(source.hasMore === true ? 1 : 0,total-items.length);
+  const shownLabel = items.length === 1 && label === "tasks" ? "task" : label;
+  const heading = omissions.includes("taskPage") && !items.length ? "Task page deferred."
+    : omissions.includes("total") ? `Showing ${items.length} ${shownLabel}. Total deferred.` : `${total} ${label}.`;
+  const result: SpeechReadResult = { ...(!omissions.includes("total") ? { total } : {}), shown:items.length, ...(more === undefined ? {} : { more }),
+    ...(omissions.length ? { partial: true, omissions } : {}),
+    nextCursor: typeof source.nextCursor === "string" ? source.nextCursor : typeof source.cursor === "string" ? source.cursor : null,
+    rows:items, speech:short(`${heading} ${items.slice(0,5).map(row => `${row.title ?? row.excerpt ?? "Message"}: ${row.state ?? row.speaker ?? ""}`).join(". ")}`,600),
+    truncated: Boolean(more) || source.hasMore === true || omissions.includes("taskPage") };
   // Upstream cursors are opaque and must survive the speech budget intact.
   if (Buffer.byteLength(JSON.stringify(result)) > 4000) {
     result.rows = items.map(row => Object.fromEntries(Object.entries(row).map(([key,value]) => [key,["handle","time","speaker","state"].includes(key) ? value : typeof value === "string" ? short(value,60) : value])));
