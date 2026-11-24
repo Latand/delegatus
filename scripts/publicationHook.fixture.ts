@@ -5,13 +5,15 @@ import path from "node:path";
 import { createHookFixture } from "./local-gate.fixture";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 
-type StubFixture = Pick<ReturnType<typeof createHookFixture>, "writablePath">;
+type StubFixture = Pick<ReturnType<typeof createHookFixture>, "dir" | "writablePath">;
 
 function stubCheck(f: StubFixture, name: string) {
+  // Runtime checks can execute the stub in an exported copy. The command log
+  // still belongs to the fixture that installed it.
   fs.writeFileSync(f.writablePath(`scripts/${name}.ts`),
-    `import fs from "node:fs"; import path from "node:path";
+    `import fs from "node:fs";
     import { fixtureWritePath } from "./fixture-write-path.ts";
-    fs.appendFileSync(fixtureWritePath(path.dirname(import.meta.dir), process.env.HOOK_LOG ?? ""), JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n`);
+    fs.appendFileSync(fixtureWritePath(${JSON.stringify(f.dir)}, process.env.HOOK_LOG ?? ""), JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n`);
 }
 
 export function stubOlderPublicationChecks(f: StubFixture) {
@@ -116,7 +118,7 @@ async function httpFixture(f: ReturnType<typeof fixture>, expireDuringChecks = t
   f.git("config", "core.hooksPath", "/dev/null"); f.git("add", "record.ts", "credential.ts"); f.git("commit", "-m", "HTTP fixture");
   f.git("config", "core.hooksPath", ".githooks");
   f.head = f.git("rev-parse", "HEAD").toString().trim(); f.env.LLV_GATE_PUSH_HEAD = f.head;
-  Object.assign(f.env, { CREDENTIAL_CLOCK: clock, CREDENTIAL_EVENTS: events,
+  Object.assign(f.env, { CREDENTIAL_CLOCK: clock, CREDENTIAL_EVENTS: events, CREDENTIAL_ADVANCE_MS: expireDuringChecks ? "7200000" : "0",
     LLV_GATE_CHECK_ENV: f.env.LLV_GATE_CHECK_ENV + ",CREDENTIAL_CLOCK,CREDENTIAL_EVENTS" });
   f.git("config", "http.receivepack", "true");
   const bareConfig = spawnSync("git", ["--git-dir", bare, "config", "http.receivepack", "true"], { env: f.env });
