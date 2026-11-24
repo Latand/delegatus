@@ -134,7 +134,17 @@ run() {
   fi
   exec "$gate_bun" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --portable "$@"
 }
-if pre_push_parent "$@"; then run "$@"; fi
+if pre_push_parent "$@"; then
+  # Only this dispatch bypasses a slot. A nested or generic heavy dispatch
+  # must clear the recorder's phase before it can obtain its own grant.
+  export LLV_GATE_RECORD_WAIT_ONLY="${LLV_GATE_RECORD_WAIT_REQUEST:-}"
+  if [[ -n "$LLV_GATE_RECORD_WAIT_ONLY" && -n ${LLV_GATE_RECORD_WAIT_PARENT:-} ]]; then
+    export LLV_OWNED_RUN_PARENT_IDENTITY="$LLV_GATE_RECORD_WAIT_PARENT"
+  fi
+  unset LLV_GATE_RECORD_WAIT_REQUEST LLV_GATE_RECORD_WAIT_PARENT
+  run "$@"
+fi
+unset LLV_GATE_RECORD_WAIT_REQUEST LLV_GATE_RECORD_WAIT_PARENT LLV_GATE_RECORD_WAIT_ONLY
 
 # Keep the ticket until a slot is locked and its admission is committed.
 # CPU waits precede the owned runner's execution deadline.

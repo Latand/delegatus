@@ -361,9 +361,9 @@ export class CpuAdmissionQueue {
       return read();
     }).immediate();
   }
-  waitingGateOwners(): string[] {
-    return this.db.query<{ owner: string }, []>(`SELECT DISTINCT owner FROM tickets
-      WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all().map(row => row.owner);
+  waitingGateTickets(): { key: string; owner: string }[] {
+    return this.db.query<{ key: string; owner: string }, []>(`SELECT key, owner FROM tickets
+      WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all();
   }
   activeGateSlots(): ActiveGateSlot[] {
     if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gate_slots'").get()) return [];

@@ -12,7 +12,10 @@ import { recordWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenanc
 import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
 import { parseReport, testNameFilter, type TestRun, type TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
+import { batchTests, gatePlan, isBrowserTest, reviewedTestReader, selectTreeTests, type GatePlan, type TreeTestFile } from "./gate-plan";
 import { isDeclaredRepository } from "../bin/forge-app-token.mjs";
+
+export { batchTests as touchedTests, isBrowserTest } from "./gate-plan";
 
 // A between-test error, a runner disagreement and a file that produced no
 // usable report are one file-level fault: their messages vary between runs,
@@ -254,17 +257,6 @@ export function batchMessage(number: number, title: string, body: string, author
   return [`${publicationTitle(title, body)} (#${number})`, ...(summary ? [summary] : []), ...(trailers.size ? [[...trailers].sort().join("\n")] : [])].join("\n\n") + "\n";
 }
 
-export function touchedTests(paths: string[], regularFile: (path: string) => boolean): string[] {
-  const result = new Set<string>();
-  for (const path of paths) {
-    if (path.startsWith("-") || path.split("/").includes("..")) throw new Error("Unsafe changed path");
-    const candidates = /\.test\.[cm]?[jt]sx?$/.test(path) ? [path]
-      : /\.[cm]?[jt]sx?$/.test(path) ? [path.replace(/\.[cm]?[jt]sx?$/, ".test.ts"), path.replace(/\.[cm]?[jt]sx?$/, ".test.tsx")] : [];
-    for (const candidate of candidates) if (regularFile(candidate)) result.add(candidate);
-  }
-  return [...result].sort();
-}
-
 type BatchCommit = { number: number; commit: string; paths: string[] };
 const privacyFindingClass = "(?:configuration_error|credential|email_address|home_path|inspection_error|known_value|media_live_source|private_network|provenance_invalid|provenance_missing|resource_identifier|tool_unavailable|transcript_content|unsafe_path)";
 export function noticePrs(log: string, commits: BatchCommit[], lineOwner?: (path: string, line: number) => string | undefined): number[] {
@@ -397,23 +389,15 @@ export const commandRunner: CommandRunner = (cwd, args, env = process.env) => ne
  * merger agent's scope. The copy beside this script is used, so a bisect
  * subject or a trusted base checkout cannot swap it. */
 export const GATE_SLOT = join(import.meta.dir, "gate-slot.sh");
-export const isBrowserTest = (path: string) => path.includes(".browser.test.");
 /** Test processes reach no live Viewer: port 9 (discard) is closed. */
 const CLOSED_VIEWER_CONTROL_URL = "http://127.0.0.1:9";
 
-/** Replace this one function when the CI/local-hooks lane supplies its wrapper. */
+function batchCommands(plan: GatePlan): Gate[] {
+  return plan.checks.flatMap(({ step }) =>
+    ["reviewed detectors", "test attribution"].includes(step.name) ? [] : [{ id: step.name, args: [...step.command] }]);
+}
 export function localGateCommands(cwd: string, base: string, browser = false): Gate[] {
-  const paths = git(cwd, ["diff", "--name-only", "-z", base, "HEAD", "--"]).split("\0").filter(Boolean);
-  const file = (path: string) => existsSync(join(cwd, path)) && statSync(join(cwd, path)).isFile();
-  const tests = touchedTests(paths, file).filter(path => browser || !isBrowserTest(path));
-  const lint = paths.filter((path) => /\.[cm]?[jt]sx?$/.test(path) && file(path));
-  return [
-    { id: "dependencies", args: ["bun", "install", "--frozen-lockfile"] },
-    { id: "tsc", args: ["bunx", "tsc", "--noEmit"] },
-    ...(lint.length ? [{ id: "eslint", args: ["bun", "scripts/eslint-changes.ts", "--base", base, ...lint] }] : []),
-    ...(tests.length ? [{ id: "tests", args: ["bun", "test", ...tests.map((path) => `./${path}`)] }] : []),
-    { id: "privacy", args: ["bun", "scripts/privacy-publication-gate.ts", "--base", base, "--check-commits"] },
-  ];
+  return batchCommands(gatePlan(cwd, { profile: "batch", base, browser }));
 }
 
 function testEnvironment(stateDir: string): NodeJS.ProcessEnv {
@@ -924,40 +908,26 @@ export class MergeBatch {
     } finally { git(state.work, ["worktree", "remove", "--force", work]); }
   }
 
-  private treeTests(state: RunState, revision: string, paths: string[], owned?: ReadonlySet<string>): Record<string, string> {
-    const entries = git(state.work, ["ls-tree", "-r", "-z", revision]).split("\0").filter(Boolean);
-    const tree = new Map(entries.map(entry => {
-      const tab = entry.indexOf("\t");
-      return [entry.slice(tab + 1), entry.slice(0, tab)];
-    }));
+  private treeTests(state: RunState, files: readonly TreeTestFile[]): Record<string, string> {
     const corpus: Record<string, string> = {};
-    for (const file of touchedTests(paths, path => tree.has(path))) {
-      if (owned && !owned.has(file)) continue;
-      const metadata = tree.get(file)!;
-      if (!/^100(?:644|755) blob /.test(metadata)) throw new Error("Test file must be a regular tracked file");
-      const blob = metadata.split(" ")[2]!;
-      corpus[file] = execFileSync("git", ["cat-file", "blob", blob], { cwd: state.work, maxBuffer: 16 * 1024 * 1024 }).toString("base64");
+    for (const { file, mode, blob } of files) {
+      if (!/^100(?:644|755)$/.test(mode) || !blob) throw new Error("Test file must be a regular tracked file");
+      corpus[file] = execFileSync("git", ["--no-replace-objects", "cat-file", "blob", blob], { cwd: state.work, maxBuffer: 16 * 1024 * 1024 }).toString("base64");
     }
     return corpus;
   }
 
-  private detectors(state: RunState, validation: Validation): Detector[] {
-    // Scope comes from immutable reviewed patches plus this candidate's diff.
-    // Never use row.paths: omissions reset them and can restore native tests.
-    const changed = (base: string, head: string) => git(state.work, ["diff", "--name-only", "-z", base, head, "--"]).split("\0").filter(Boolean);
-    const paths = [...new Set([...changed(state.base, state.tip),
-      ...state.rows.flatMap(row => changed(row.reviewBase, row.head))])];
+  private detectors(state: RunState, validation: Validation, selection: NonNullable<GatePlan["detectors"]>): Detector[] {
+    // The plan reads immutable reviewed changes and candidate paths. A
+    // reviewed blob has authority only when this member changed its file.
     const prs = validation.candidate.prs.map(pr => pr.number);
-    const all: Detector[] = [{ source: "native candidate", corpus: this.treeTests(state, state.tip, paths) },
-      ...state.rows.map(row => {
-        const ownPaths = new Set(changed(row.reviewBase, row.head));
-        // Adjacent tests belong to the real merged tree. A reviewed blob has
-        // authority only when this PR actually changed that file.
-        const corpus = this.treeTests(state, row.head, paths, ownPaths);
-        return { source: `#${row.number}@${row.head}`, pr: row.number, corpus };
-      })];
-    const bases = new Map(state.rows.map(row => [row.number, this.treeTests(state, row.reviewBase, paths)]));
-    const main = this.treeTests(state, state.base, paths);
+    const all: Detector[] = [{ source: "native candidate", corpus: this.treeTests(state, selection.native) },
+      ...selection.reviewed.map(row => ({
+        source: `#${row.number}@${state.rows.find(member => member.number === row.number)!.head}`, pr: row.number,
+        corpus: this.treeTests(state, row.head),
+      }))];
+    const bases = new Map(selection.reviewed.map(row => [row.number, this.treeTests(state, row.base)]));
+    const main = this.treeTests(state, selection.main);
     const member = (detector: Detector) => detector.pr === undefined || prs.includes(detector.pr);
     // A changed detector keeps its own assertions, even when another member
     // edited the same file. Clean main-contract updates preserve its patch.
@@ -1040,7 +1010,8 @@ export class MergeBatch {
     // files as well as literal-name matches outside the touched-test scope.
     const changed = state.rows.flatMap(row => git(state.work,
       ["diff", "--name-only", "--no-renames", "-z", row.reviewBase, row.head, "--"]).split("\0").filter(Boolean));
-    const originals = Object.keys(this.treeTests(state, state.base, changed));
+    const originalTests = selectTreeTests(changed, reviewedTestReader(state.work, changed)(state.base));
+    const originals = Object.keys(this.treeTests(state, originalTests));
     let matches = "";
     try {
       matches = git(state.work, ["grep", "-l", "-z", "-F", ...tests.flatMap(site => ["-e", site.name]), state.base, "--",
@@ -1062,7 +1033,7 @@ export class MergeBatch {
     if (!missing.length) return;
     const paths = git(state.work, ["ls-tree", "-r", "--name-only", "-z", state.base]).split("\0").filter(Boolean);
     const tracked = new Set(paths);
-    const remaining = touchedTests(paths, path => tracked.has(path))
+    const remaining = batchTests(paths, path => tracked.has(path))
       .filter(file => (state.browser || !isBrowserTest(file)) && !baseline.completed.includes(file));
     if (remaining.length) {
       const names = [...new Set(missing.map(test => test.name))];
@@ -1124,8 +1095,8 @@ export class MergeBatch {
     return result;
   }
 
-  private async validateTests(state: RunState, validation: Validation): Promise<boolean> {
-    const detectors = this.detectors(state, validation);
+  private async validateTests(state: RunState, validation: Validation, plan: GatePlan): Promise<boolean> {
+    const detectors = this.detectors(state, validation, plan.detectors!);
     const files = [...new Set(detectors.flatMap(detector => Object.keys(detector.corpus)))];
     // Native main only: candidate-only files and assertions have no baseline
     // observations. This sample has no lifetime beyond this candidate tuple.
@@ -1175,7 +1146,9 @@ export class MergeBatch {
       // Nothing from an earlier iteration can certify this tuple. The only
       // durable evidence is a receipt written after every gate completes.
       this.invalidate(state);
-      state.gates = localGateCommands(state.work, state.base);
+      const plan = gatePlan(state.work, { profile: "batch", subject: state.tip, base: state.base, detectorBrowser: state.browser,
+        reviewed: state.rows.map(row => ({ number: row.number, base: row.reviewBase, head: row.head })) });
+      state.gates = batchCommands(plan);
       this.save(state);
       const validation: Validation = { candidate: candidateOf(state), tip: state.tip, members: membershipOf(state), carried: [], decisions: [], notApplicable: [] };
       let retry = false;
@@ -1188,7 +1161,7 @@ export class MergeBatch {
         row.status = "culprit"; row.detail = `${gate.id}: first failing batch commit`;
         retry = true; break;
       }
-      if (retry || !await this.validateTests(state, validation)) {
+      if (retry || !await this.validateTests(state, validation, plan)) {
         this.revalidate(state);
         await this.rebuild(state); continue;
       }

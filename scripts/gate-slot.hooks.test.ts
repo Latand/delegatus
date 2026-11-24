@@ -6,7 +6,7 @@ import path from "node:path";
 import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { redactBounded } from "../src/lib/monitor/redact";
 import { installedGateAdmissionEnv } from "../src/lib/runtime/agentSignalSandbox";
-import { CPU_QUEUE_SPACING_MS } from "../src/lib/runtime/cpuAdmission";
+import { CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CPU_QUEUE_STALE_GRACE_MS } from "../src/lib/runtime/cpuAdmission";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { realExec } from "../src/lib/workflows/provision";
 import { fixture, legacyGateTree, pathWithoutFlock, queuedTickets, until } from "./gate-slot.queue.fixture";
@@ -538,3 +538,177 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
       f.close();
     }
   }, 60_000);
+
+test.skipIf(!hasUserManager).each([
+  { cap: 1, mode: "drain" }, { cap: 2, mode: "drain" }, { cap: 6, mode: "drain" }, { cap: 1, mode: "deadline" },
+])("a recorded native pre-push and competing waiter at cap $cap ($mode)", async ({ cap, mode }) => {
+  const f = fixture(), roots: string[] = [], control = new AbortController();
+  const { fixture: publicationFixture } = createPublicationFixtures(process.cwd(), roots);
+  const hook = publicationFixture();
+  const log = path.join(f.dir, "reviewed-check.log");
+  const phaseFile = `${log}.gate/wait-only.json`;
+  const waiting = () => f.db.query<{ key: string; owner: string; since: number }, []>(`SELECT key, owner, since ${queuedTickets} ORDER BY seq`).all();
+  const slots = () => f.db.query("SELECT 1 FROM sqlite_master WHERE name = 'gate_slots'").get()
+    ? f.db.query("SELECT slot FROM gate_slots").all().length : 0;
+  const wrapper = path.resolve("scripts/gate-slot.sh");
+  const pending: ReturnType<typeof realExec>[] = [];
+  const limit = 42_000;
+  const holderReady = path.join(f.dir, "holder-ready"), releaseHolder = path.join(f.dir, "holder-release");
+  const diag = () => new Error(fs.existsSync(log) ? redactBounded(fs.readFileSync(log, "utf8"), 3_000) : "recorded log is missing");
+  try {
+    fs.mkdirSync(hook.writablePath("scripts/gate-runner"));
+    const env: NodeJS.ProcessEnv = { ...hook.env, ...f.env, PATH: hook.env.PATH, LLV_GATE_BUN: process.execPath,
+      LLV_GATE_SLOTS: String(cap), LLV_GATE_RUNNER: "off", TMPDIR: f.dir,
+      LLV_GATE_PUSH_DEADLINE: undefined, LLV_GATE_PUBLICATION_RECEIPT: undefined, LLV_GATE_SANDBOX_RECORD: undefined };
+    withoutInheritedGate(env, { keepSandbox: true });
+    const legacy = legacyGateTree(f.dir);
+    const bin = pathWithoutFlock(f.dir);
+    fs.rmSync(path.join(bin, "systemctl"), { force: true });
+    const olderEnv = withoutInheritedGate({ ...f.env, PATH: bin, LLV_GATE_BUN: process.execPath,
+      LLV_GATE_SLOTS: "1", LLV_GATE_RUNNER: "off", DELEGATUS_CPU_PRESSURE: "off", READY: holderReady, RELEASE: releaseHolder });
+    pending.push(realExec("bash", ["scripts/gate-slot.sh", "bash", "-c",
+      ': > "$READY"; while [[ ! -f "$RELEASE" ]]; do sleep 0.02; done'], legacy, olderEnv,
+    { timeoutMs: limit, signal: control.signal }));
+    await until(() => fs.existsSync(holderReady), 10_000);
+    pending.push(realExec("bash", [wrapper, "--record", log, ".githooks/pre-push"], hook.dir, env,
+      { timeoutMs: limit, signal: control.signal }));
+    await until(() => waiting().length === 1, 10_000, diag);
+    const first = waiting()[0]!;
+    const child = JSON.parse(first.owner);
+    if (fs.existsSync(phaseFile)) {
+      const proof = JSON.parse(fs.readFileSync(phaseFile, "utf8"));
+      expect(child.pid).not.toBe(proof.recorder.pid);
+      expect(child.pid).not.toBe(proof.wrapper.pid);
+      expect(proof.recorder.pid).not.toBe(proof.wrapper.pid);
+      expect(proof.command).toEqual([".githooks/pre-push"]);
+    }
+    pending.push(realExec("bash", f.command("competing").slice(1), process.cwd(), { ...env, PATH: f.env.PATH },
+      { timeoutMs: limit, signal: control.signal }));
+    await until(() => waiting().length === 2, 10_000, diag);
+    const second = waiting()[1]!;
+    expect(slots()).toBe(0);
+    expect(fs.readdirSync(f.dir).filter(file => /slot\d+\.lock$/.test(file))).toEqual([]);
+    // The observer starts with supervisors already live and within the last
+    // grant's uncertainty window. Require the new proof after the holder exits.
+    const uptime = Number(fs.readFileSync("/proc/uptime", "utf8").split(" ")[0]);
+    f.db.query("UPDATE legacy_gate_cutover SET boot = ?, clock = ?, uptime = ?, admission = ?")
+      .run(child.bootEpoch, fs.readlinkSync("/proc/self/ns/time"), uptime, Date.now());
+    f.db.exec("CREATE TABLE recorded_grants (at INTEGER); CREATE TRIGGER recorded_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO recorded_grants VALUES (NEW.last); END");
+    let peak = 0;
+    const sample = setInterval(() => {
+      peak = Math.max(peak, slots());
+    }, 15);
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+    try {
+      await until(() => fs.readFileSync(log, "utf8").includes("legacy heavy commands to drain"), 8_000, diag);
+      expect(slots()).toBe(0);
+      expect(waiting().map(ticket => ticket.key)).toEqual([first.key, second.key]);
+      if (mode === "deadline") {
+        const receipt = path.join(`${log}.gate`, "completion.json");
+        const original = fs.readFileSync(receipt, "utf8");
+        f.db.query("UPDATE tickets SET since = ? WHERE key = ?")
+          .run(Date.now() - CPU_QUEUE_MAX_WAIT_MS - CPU_QUEUE_STALE_GRACE_MS - 1_000, first.key);
+        expect((await pending[1]!).code, diag().message).toBe(75);
+        expect(fs.readFileSync(`${log}.gate/exit`, "utf8")).toBe("75\n");
+        expect(fs.readFileSync(receipt, "utf8")).toBe(original);
+        expect(diag().message).toContain("legacy heavy-command ownership is unverified");
+        expect(waiting().map(ticket => ticket.key)).toEqual([second.key]);
+        expect(slots()).toBe(0);
+        fs.writeFileSync(releaseHolder, "release");
+        expect((await pending[0]!).code).toBe(0);
+        expect((await pending[2]!).code).toBe(0);
+        return;
+      }
+      const phase = cap === 2 && fs.existsSync(phaseFile) ? fs.readFileSync(phaseFile, "utf8") : null;
+      if (phase) {
+        const stale = JSON.parse(phase);
+        stale.wrapper.startIdentity = `${stale.wrapper.pid}:0`;
+        fs.writeFileSync(phaseFile, JSON.stringify(stale));
+      }
+      fs.writeFileSync(releaseHolder, "release");
+      expect((await pending[0]!).code).toBe(0);
+      if (phase) {
+        const poll = () => f.db.query<{ polled: number }, [string]>("SELECT polled FROM tickets WHERE key = ?").get(first.key)?.polled;
+        const before = poll();
+        await until(() => poll() !== before, 5_000, diag);
+        expect(waiting().map(ticket => ticket.key)).toEqual([first.key, second.key]);
+        fs.writeFileSync(phaseFile, phase);
+      }
+      const opened = performance.now();
+      await until(() => !waiting().some(ticket => ticket.key === first.key), 12_000, diag);
+      const firstWait = Math.round(performance.now() - opened);
+      const queuedMs = Date.now() - first.since;
+      expect(waiting().some(ticket => ticket.key === second.key)).toBe(true);
+      const results = await Promise.all(pending);
+      expect(results.map(result => result.code), diag().message).toEqual([0, 0, 0]);
+      expect(hook.calls().filter(call => call.args[0] === "tsc")).toHaveLength(1);
+      expect(f.db.query("SELECT at FROM recorded_grants ORDER BY rowid").all()).toHaveLength(2);
+      expect(waiting()).toEqual([]);
+      expect(fs.existsSync(phaseFile)).toBe(false);
+      expect(fs.readFileSync(`${log}.gate/exit`, "utf8")).toBe("0\n");
+      expect(peak).toBeLessThanOrEqual(cap);
+      console.log(`recorded hook cap=${cap}: tickets=2, queue wait=${queuedMs} ms, admission after drain=${firstWait} ms, peak sampled workers=${peak}`);
+    } finally { clearInterval(sample); }
+  } finally {
+    fs.writeFileSync(releaseHolder, "release");
+    control.abort();
+    await Promise.allSettled(pending);
+    for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+    f.close();
+  }
+}, 60_000);
+
+test.skipIf(!hasUserManager).each([false, true])("the real publication preparer supplies its bootstrap proof (drop: %s)", async drop => {
+  const f = fixture(), roots: string[] = [], control = new AbortController();
+  const { fixture: publicationFixture } = createPublicationFixtures(process.cwd(), roots);
+  const hook = publicationFixture();
+  const proofPath = hook.writablePath(".git/bootstrap-proof");
+  const preload = hook.writablePath(".git/observe-bootstrap.ts");
+  const stderr = path.join(f.dir, "bootstrap.stderr");
+  let pending: ReturnType<typeof realExec> | undefined;
+  try {
+    fs.mkdirSync(hook.writablePath("scripts/gate-runner"));
+    fs.writeFileSync(preload, `
+      import fs from "node:fs";
+      import { captureProcessIdentity } from ${JSON.stringify(path.resolve("src/lib/processIdentity.ts"))};
+      const spawn = Bun.spawn;
+      Bun.spawn = function (command, options) {
+        if (Array.isArray(command) && command[1]?.endsWith("/owned-runner.ts") && command.includes("--publication-prepare")) {
+          const proof = options.env.LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP;
+          const entry = command.find(arg => arg.endsWith("/local-gate.ts"));
+          const expected = JSON.stringify({ parent: captureProcessIdentity(process.pid), mode: "pre-push", entry: fs.realpathSync(entry) });
+          fs.writeFileSync(${JSON.stringify(proofPath)}, JSON.stringify({ equal: proof === expected }));
+          if (${JSON.stringify(drop)}) delete options.env.LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP;
+          // Observe the real launch, then remove the observer's own CLI
+          // preload from the child that the native classifier will inspect.
+          command = command.filter((arg, index) => arg !== "--preload" && !arg.startsWith("--preload=") && command[index - 1] !== "--preload");
+          delete options.env.BUN_OPTIONS;
+        }
+        return spawn.call(Bun, command, options);
+      };
+    `);
+    const env: NodeJS.ProcessEnv = { ...hook.env, ...f.env, PATH: hook.env.PATH,
+      LLV_GATE_BUN: process.execPath, LLV_GATE_SLOTS: "1", LLV_GATE_RUNNER: "off", LLV_GATE_SANDBOX_RECORD: undefined,
+      LLV_GATE_PUSH_DEADLINE: undefined, BUN_OPTIONS: `--preload=${preload}`, CPU_SLOT_STDERR: stderr };
+    withoutInheritedGate(env, { keepSandbox: true });
+    f.db.query("UPDATE admission SET last = ?").run(Date.now() - CPU_QUEUE_SPACING_MS);
+    pending = realExec("bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "fixture", process.execPath,
+      "scripts/local-gate.ts", "pre-push", "--publication-prepare"], hook.dir, env, { timeoutMs: 25_000, signal: control.signal });
+    await until(() => f.count() === 1 && fs.existsSync(proofPath), 10_000);
+    expect(JSON.parse(fs.readFileSync(proofPath, "utf8"))).toEqual({ equal: true });
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+    if (drop) {
+      await until(() => fs.readFileSync(stderr, "utf8").includes("legacy heavy commands to drain"), 8_000);
+      expect(fs.existsSync(hook.receipt)).toBe(false);
+    } else {
+      const result = await pending;
+      expect(result.code, redactBounded(fs.readFileSync(stderr, "utf8"), 3_000)).toBe(0);
+      expect(readPublicationCheckReceipt(hook.receipt, publicationCheckBinding(env)).completedAt).toBeGreaterThan(0);
+    }
+  } finally {
+    control.abort();
+    if (pending) await Promise.allSettled([pending]);
+    for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+    f.close();
+  }
+}, 55_000);

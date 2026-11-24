@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cpuPressurePolicy } from "../src/lib/runtime/cpuPressure";
 import { GateCpuPressure } from "../src/lib/runtime/gateCpuPressure";
-import { ACTIVE_GATE_PREFIX, inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS } from "../src/lib/runtime/cpuAdmission";
+import { ACTIVE_GATE_PREFIX, inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_STALE_GRACE_MS, CPU_QUEUE_UNPOLLED_MS } from "../src/lib/runtime/cpuAdmission";
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuQueueDetail, ordinal } from "../src/lib/runtime/cpuQueueText";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
@@ -127,12 +127,14 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
   const uid = fs.statSync(path.join(proc, "self")).uid;
   const pool = fs.realpathSync(dir);
   const epoch = sandbox?.hostEpoch ?? owner.bootEpoch;
-  const waiting = new Set(queue.waitingGateOwners().flatMap(data => {
-    const identity = JSON.parse(data);
-    return epoch && identity.bootEpoch === epoch && Number.isSafeInteger(identity.pid) &&
-      typeof identity.startIdentity === "string" && identity.startIdentity.startsWith(`${identity.pid}:`)
-      ? [identity.startIdentity] : [];
-  }));
+  const waiting = new Map<string, string>();
+  for (const ticket of queue.waitingGateTickets()) {
+    const identity = JSON.parse(ticket.owner);
+    if (epoch && identity.bootEpoch === epoch && Number.isSafeInteger(identity.pid) &&
+      typeof identity.startIdentity === "string" && identity.startIdentity.startsWith(`${identity.pid}:`)) {
+      waiting.set(identity.startIdentity, ticket.key);
+    }
+  }
   const readArgv = (base: string) => fs.readFileSync(path.join(base, "cmdline")).subarray(0, -1).toString().split("\0");
   const isBun = (command = "") => /^(?:bun|bun-container|bun\.exe)$/.test(path.basename(command));
   const readCwd = (base: string) => () => fs.readlinkSync(path.join(base, "cwd"));
@@ -251,7 +253,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
   };
   const childrenOf = (base: string) => new Set(fs.readdirSync(path.join(base, "task")).flatMap(thread =>
     fs.readFileSync(path.join(base, "task", thread, "children"), "utf8").split(/\s+/).filter(child => /^[1-9]\d*$/.test(child))));
-  const hookHasQueuedGate = (hook: string, parent: string, membership: string) => {
+  const queuedHookTicket = (hook: string, parent: string, membership: string) => {
     const command = readArgv(hook);
     // An ordinary hook may be wrapped by the service runner while it opens
     // the queue for its own cleanup command. Prove the nested hook argv from
@@ -259,15 +261,17 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const hookCommand = isBun(command[0]) && path.basename(command[1] ?? "") === "owned-runner.ts"
       ? command.slice(2) : command;
     if (!isBun(hookCommand[0]) || !isHookParent(hookCommand, readCwd(hook)) ||
-      readStat(hook)[1] !== path.basename(parent) || fs.readFileSync(path.join(hook, "cgroup"), "utf8") !== membership) return false;
+      readStat(hook)[1] !== path.basename(parent) || fs.readFileSync(path.join(hook, "cgroup"), "utf8") !== membership) return undefined;
     const cwd = readCwd(hook)();
     const env = readEnvironment(hook);
-    if (!samePool(env("LLV_GATE_LOCK_DIR"), cwd) || env("LLV_GATE_SLOT_LEASE") !== undefined) return false;
+    if (!samePool(env("LLV_GATE_LOCK_DIR"), cwd) || env("LLV_GATE_SLOT_LEASE") !== undefined) return undefined;
     const script = fs.realpathSync(path.resolve(cwd, hookCommand[1]!));
     for (const pid of childrenOf(hook)) {
       const gate = path.join(proc, pid);
       const stat = readStat(gate);
-      if (stat[1] !== path.basename(hook) || !waiting.has(`${pid}:${stat[19]}`)) continue;
+      const identity = `${pid}:${stat[19]}`;
+      const ticket = waiting.get(identity);
+      if (stat[1] !== path.basename(hook) || !ticket) continue;
       const rawArgs = readArgv(gate);
       const args = rawArgs.length > 3 && rawArgs[2] === "--in-cpu-scope" && path.basename(rawArgs[1] ?? "") === "gate-slot.sh"
         ? [...rawArgs.slice(0, 2), ...rawArgs.slice(3)] : rawArgs;
@@ -276,13 +280,47 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
         args[4] === "pre-push" && args[5] === "--admitted" &&
         fs.realpathSync(path.resolve(cwd, args[3]!)) === script &&
         path.resolve(cwd, args[1]!) === path.join(path.dirname(path.resolve(cwd, args[3]!)), "gate-slot.sh") &&
-        fs.readFileSync(path.join(gate, "cgroup"), "utf8") === membership) return true;
+        fs.readFileSync(path.join(gate, "cgroup"), "utf8") === membership) return { ticket, identity, scope: membership };
     }
-    return false;
+    return undefined;
   };
   const queuedHookBelow = (parent: string, membership: string) =>
-    [...childrenOf(parent)].some(pid => hookHasQueuedGate(path.join(proc, pid), parent, membership));
-  const serviceClients = new Map<string, { unit: string; runner: string; bootstrap: boolean }>();
+    [...childrenOf(parent)].some(pid => queuedHookTicket(path.join(proc, pid), parent, membership));
+  // A current recorder attests the exact wrapper it spawned. The wrapper
+  // carries this path only after taking gate-slot's pre-push parent branch.
+  // Resolve both identities against the kernel and link the live command to
+  // the original recorded invocation before considering its queued child.
+  const recordedWaitClient = (base: string, command: string[], parentPid?: string): boolean => {
+    const proofPath = readEnvironment(base)("LLV_GATE_RECORD_WAIT_ONLY");
+    if (!proofPath || !path.isAbsolute(proofPath) || path.basename(proofPath) !== "wait-only.json" || !parentPid) return false;
+    try {
+      const file = path.join(base, "root", proofPath);
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.size > 16_384 || stat.uid !== uid || (stat.mode & 0o077) !== 0) return false;
+      const phase = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (phase.version !== 1 || !/^[a-f0-9]{64}$/.test(phase.runId) ||
+        phase.wrapper?.pid !== Number(path.basename(base)) || phase.recorder?.pid !== Number(parentPid) ||
+        recordedParent(phase.wrapper) !== base || cpuOwnerExited(phase.wrapper)) return false;
+      const recorder = recordedParent(phase.recorder);
+      if (!recorder || cpuOwnerExited(phase.recorder) || readStat(base)[1] !== parentPid ||
+        fs.readFileSync(path.join(recorder, "cgroup"), "utf8") !== phase.scope ||
+        fs.readFileSync(path.join(base, "cgroup"), "utf8") !== phase.scope) return false;
+      const argv = readArgv(recorder);
+      if (!isBun(argv[0]) || path.basename(argv[1] ?? "") !== "gate-wait.ts" || argv[2] !== "--record" || !argv[3]) return false;
+      const cwd = readCwd(recorder)();
+      const log = fs.realpathSync(path.join(recorder, "root", path.resolve(cwd, argv[3])));
+      const dir = fs.statSync(path.dirname(file));
+      if (`${dir.dev}:${dir.ino}` !== phase.directoryIdentity || path.dirname(proofPath) !== phase.log + ".gate" ||
+        log !== fs.realpathSync(path.join(recorder, "root", phase.log))) return false;
+      const recordedArgs = argv[4] === "--manifest" && argv[6] === "--" ? argv.slice(7) : argv.slice(4);
+      const hook = command[2] === "--in-cpu-scope" && path.basename(command[1] ?? "") === "gate-slot.sh" ? command.slice(3) : command;
+      if (JSON.stringify(recordedArgs) !== JSON.stringify(hook) || JSON.stringify(hook) !== JSON.stringify(phase.command) ||
+        !isHookParent(hook, readCwd(base)) || !samePool(readEnvironment(base)("LLV_GATE_LOCK_DIR"), readCwd(base)())) return false;
+      if (!epoch || (history ??= queue.legacyGateHistory(epoch)).retirements.has(phase.wrapper.startIdentity)) return false;
+      return true;
+    } catch { return false; }
+  };
+  const serviceClients = new Map<string, { unit: string; runner: string; bootstrap: boolean; recorded: boolean }>();
   const bornAfterPriorGrant = (base: string) => {
     const recordedLast = (history ??= queue.legacyGateHistory(epoch!)).cutover.admission;
     const last = typeof recordedLast === "number" ? recordedLast : Number(recordedLast);
@@ -302,7 +340,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
   };
   const waitingGateInService = (unit: string) => {
     const group = `/${unit}`;
-    for (const identity of waiting) {
+    for (const identity of waiting.keys()) {
       const pid = identity.slice(0, identity.indexOf(":"));
       const base = path.join(proc, pid);
       try {
@@ -328,6 +366,22 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     }
     return false;
   };
+  const recordedGateInService = (unit: string) => {
+    for (const identity of waiting.keys()) {
+      const gate = path.join(proc, identity.split(":")[0]!);
+      try {
+        const hook = path.join(proc, readStat(gate)[1]!);
+        const membership = fs.readFileSync(path.join(hook, "cgroup"), "utf8");
+        if (!membership.split("\n").some(line => line.endsWith(`/${unit}`) || line.includes(`/${unit}/`))) continue;
+        const parent = path.join(proc, readStat(hook)[1]!);
+        const ticket = queuedHookTicket(hook, parent, membership);
+        if (ticket?.identity === identity) return ticket;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return undefined;
+  };
   const isHookRunner = (argv: string[], base: string, parentPid: string | undefined) => {
     const command = argv.slice(argv[2] === "--portable" || argv[2] === "--namespace" ? 3 : 2);
     const cwd = readCwd(base);
@@ -343,9 +397,11 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       if (path.basename(args[0] ?? "") === "systemd-run" && args.at(-2) === "--service" && args.at(-3) === runner) {
         const unit = args.find(arg => arg.startsWith("--unit=delegatus-gate-"))?.slice(7);
         if (unit) {
+          const recorded = ordinary && recordedWaitClient(base, command, parentPid);
           if (samePool(readEnvironment(base)("LLV_GATE_LOCK_DIR"), cwd())) {
-            serviceClients.set(args.at(-1)!, { unit, runner, bootstrap });
+            serviceClients.set(args.at(-1)!, { unit, runner, bootstrap, recorded });
           }
+          if (recorded && recordedGateInService(unit)) return true;
           // This runner was spawned directly by the ordinary hook above.
           // Its waiter in the same service proves that the legacy-looking
           // service is the hook's nested cleanup admission.
@@ -364,7 +420,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
         const membership = fs.readFileSync(path.join(base, "cgroup"), "utf8");
         const queued = [...children].some(pid => {
           const member = path.join(proc, pid);
-          if (hookHasQueuedGate(member, base, membership)) return true;
+          if (queuedHookTicket(member, base, membership)) return true;
           const argv = readArgv(member), command = serviceCommand(argv, runner);
           return command !== argv && isHookParent(command, readCwd(member)) &&
             readStat(member)[1] === path.basename(base) && fs.readFileSync(path.join(member, "cgroup"), "utf8") === membership &&
@@ -389,6 +445,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     // A namespace entry can sit between the service and the hook. The live
     // client, launch file argument and unit tie the queued gate to its bootstrap.
     if (linked && client.bootstrap && waitingGateInService(client.unit)) return false;
+    if (linked && client.recorded && recordedGateInService(client.unit)) return false;
     const children = childrenOf(base);
     if (!children.size) return true;
     return [...children].some(child => {
@@ -417,7 +474,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
         // their hook queues a nested gate after consuming its slotless ticket.
         const invocation = env("INVOCATION_ID");
         return !invocation || !/^[0-9a-f]{32}$/.test(invocation) || invocation !== readEnvironment(base)("INVOCATION_ID") ||
-          !hookHasQueuedGate(member, base, membership);
+          !queuedHookTicket(member, base, membership);
       }
       return !(linked && client.bootstrap && hookBootstrap(command, cwd));
     });
@@ -578,6 +635,12 @@ async function serveQueue(queue: CpuAdmissionQueue) {
         const cap = await lockWait(() => fullSlotLimit(queue));
         if (cap === undefined) break;
         const { waitedMs, stalledMs } = queue.slotWait(key!);
+        if (cap === "legacy-drain" && waitedMs > CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_STALE_GRACE_MS) {
+          await lockWait(() => queue.cancel(key!));
+          console.error("gate-slot: no verdict: legacy heavy-command ownership is unverified; retry after the older gate drains or upgrade its wrapper. This check did not start.");
+          process.exitCode = 75;
+          return;
+        }
         const duration = stalledMs === undefined ? `waited ${Math.floor(waitedMs / 60_000)}` : `stalled for ${Math.floor(stalledMs / 60_000)}`;
         text = cap === "legacy-drain" ? `Waiting for legacy heavy commands to drain · ${duration} min`
           : `Waiting for a heavy command slot · all ${cap} busy · ${duration} min`;
