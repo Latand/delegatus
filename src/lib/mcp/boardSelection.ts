@@ -127,12 +127,14 @@ export class BoardSelection {
   /** Read only association fields in the authorized project. Large prompts,
    * reports and transcripts never enter reference selection. The forge cache
    * is joined at read time, so a cache refresh needs no registry revision. */
-  referenceRecords<T>(source: Source<T>, project: string): T[] {
+  referenceRecords<T>(source: Source<T>, project: string, ids?: readonly string[]): T[] {
+    if (ids && !ids.length) return [];
     const Database = sqliteDatabase();
     const database = source.database ?? observeSqlite(new Database(this.filename, { readonly: true }), "board-selection");
     try {
       const projects = project ? [project, ...Object.keys(this.projects.aliases()).filter(key => this.projects.canonical(key) === project)] : [];
       const where = projects.length ? ` AND json_extract(value_json,'$.project') IN (${projects.map(() => "?").join(",")})` : "";
+      const keys = ids ? ` AND row_key IN (${ids.map(() => "?").join(",")})` : "";
       const pipeline = this.collection === "pipelines";
       const columns = ["id", "project", pipeline ? "task" : "text", "workLinks", ...(pipeline ? ["taskIds", "branch", "createdAt", "closedAt"] : [])];
       const fields = columns.map(key => `'${key}', json_extract(value_json,'$.${key}')`).join(",");
@@ -143,7 +145,8 @@ export class BoardSelection {
         WHERE json_extract(attempt.value,'$.report.provenance.pullRequest.number') IS NOT NULL
       ),'[]'))))` : "";
       return database.query<{ value: string }, SQLQueryBindings[]>(`SELECT json_object(${fields}${provenance}) AS value FROM state_rows
-        WHERE collection=?${this.collection === "tasks" ? " AND row_key GLOB 't:*'" : ""}${where}`).all(this.collection, ...projects).map(row => parseSqliteJson(row.value, database));
+        WHERE collection=?${this.collection === "tasks" ? " AND row_key GLOB 't:*'" : ""}${where}${keys}`)
+        .all(this.collection, ...projects, ...(ids ?? [])).map(row => parseSqliteJson(row.value, database));
     } finally { if (!source.database) database.close(); }
   }
   page<T, Row>(source: Source<T>, scope: BoardScope, cursor: unknown, limit: number, project: (record: T) => Row) {
