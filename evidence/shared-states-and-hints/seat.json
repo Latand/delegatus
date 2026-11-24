@@ -1,0 +1,69 @@
+{
+  "readings": {
+    "desktop-1440-en-light-seat-idle": {
+      "head": "waiting",
+      "header": "waiting · 17m ago",
+      "headerWhole": true,
+      "headerTone": "ch-state tone-neutral",
+      "rail": "Go to Orchestrator: Orchestrator, waiting",
+      "railDot": "or-dot tone-neutral"
+    },
+    "desktop-1440-en-light-seat-running": {
+      "head": "working",
+      "header": "working · 32s ago",
+      "headerWhole": true,
+      "headerTone": "ch-state tone-success",
+      "rail": "Go to Orchestrator: Orchestrator, working",
+      "railDot": "or-dot tone-success live"
+    },
+    "desktop-1440-en-dark-seat-idle": {
+      "head": "waiting",
+      "header": "waiting · 17m ago",
+      "headerWhole": true,
+      "headerTone": "ch-state tone-neutral",
+      "rail": "Go to Orchestrator: Orchestrator, waiting",
+      "railDot": "or-dot tone-neutral"
+    },
+    "desktop-1440-en-dark-seat-running": {
+      "head": "working",
+      "header": "working · 31s ago",
+      "headerWhole": true,
+      "headerTone": "ch-state tone-success",
+      "rail": "Go to Orchestrator: Orchestrator, working",
+      "railDot": "or-dot tone-success live"
+    },
+    "desktop-1440-uk-light-seat-idle": {
+      "head": "чекає",
+      "header": "чекає · 17 хв тому",
+      "headerWhole": true,
+      "headerTone": "ch-state tone-neutral",
+      "rail": "Перейти до Оркестратор: Оркестратор, чекає",
+      "railDot": "or-dot tone-neutral"
+    },
+    "desktop-1440-uk-light-seat-running": {
+      "head": "працює",
+      "header": "працює · 31 с тому",
+      "headerWhole": true,
+      "headerTone": "ch-state tone-success",
+      "rail": "Перейти до Оркестратор: Оркестратор, працює",
+      "railDot": "or-dot tone-success live"
+    },
+    "desktop-1440-uk-dark-seat-idle": {
+      "head": "чекає",
+      "header": "чекає · 17 хв тому",
+      "headerWhole": true,
+      "headerTone": "ch-state tone-neutral",
+      "rail": "Перейти до Оркестратор: Оркестратор, чекає",
+      "railDot": "or-dot tone-neutral"
+    },
+    "desktop-1440-uk-dark-seat-running": {
+      "head": "працює",
+      "header": "працює · 32 с тому",
+      "headerWhole": true,
+      "headerTone": "ch-state tone-success",
+      "rail": "Перейти до Оркестратор: Оркестратор, працює",
+      "railDot": "or-dot tone-success live"
+    }
+  },
+  "failures": []
+}

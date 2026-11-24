@@ -47832,7 +47832,7 @@ describe("one set of hints and one row of controls: priority hints belong to the
               stage: pane.getAttribute("data-stage"), rowHeight: Math.round(rowBox.height * 10) / 10, rowWidth: Math.round(rowBox.width), chipLines: lines,
               menuOnFirstLine: menuBox.top - rowBox.top <= 4, controlsTopFromRow: Math.round((controlsBox.top - rowBox.top) * 10) / 10, menuTopFromRow: Math.round((menuBox.top - rowBox.top) * 10) / 10,
               controlsAtEnd: Math.abs(controlsBox.right - rowBox.right) <= 1, menuInside: menuBox.right <= rowBox.right + 0.5 && menuBox.left >= rowBox.left,
-              ctx: Boolean(row.querySelector("[data-ctx-chip], .ch-ctx, [class*='ctx']")), chipsWidth: Math.round(chips.getBoundingClientRect().width), controlsWidth: Math.round(controlsBox.width),
+              ctx: Boolean(row.querySelector("[data-ctx-chip]")), chipsWidth: Math.round(chips.getBoundingClientRect().width), controlsWidth: Math.round(controlsBox.width),
             }];
           }));
           readings[label] = { rows };
@@ -47856,6 +47856,8 @@ describe("one set of hints and one row of controls: priority hints belong to the
             if (!row.menuOnFirstLine) failures.push(`${label} ${row.stage}: «…» is not on the first line (${JSON.stringify(row)})`);
             if (!row.controlsAtEnd || !row.menuInside) failures.push(`${label} ${row.stage}: the controls leave the row's end (${JSON.stringify(row)})`);
             if (row.chipLines === 1 && row.rowHeight > 32) failures.push(`${label} ${row.stage}: a row whose chips fit is ${row.rowHeight}px tall`);
+            /* Item (d) is defined by a context chip in the row: a started pane without one proves nothing about it. */
+            if (!row.ctx) failures.push(`${label} ${row.stage}: the started pane has no context chip in its identity row`);
           }
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
 
@@ -47940,6 +47942,71 @@ describe("one set of hints and one row of controls: priority hints belong to the
       server.stop();
     }
     fs.writeFileSync(path.join(EVIDENCE, "panes.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+
+  browserTest("the seat reads waiting in its head, its reader header and its open-agents entry while idle with no form open, and working while its turn runs", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/shared-states-and-hints-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of LANGS_HERE) for (const scheme of SCHEMES_HERE) for (const host of ["1044", "running"] as const) {
+        const t = (key: string) => translate(lang, key as never);
+        const label = `desktop-1440-${lang}-${scheme}-seat-${host === "running" ? "running" : "idle"}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seathost=${host}`, VIEWPORT, scheme, lang);
+        try {
+          await page.waitForSelector("[data-kanban-seat] [data-seat-window]", { timeout: 30_000 });
+          await page.waitForSelector("[data-kanban-seat] [data-orchestrator-badge]", { timeout: 30_000 });
+          await page.locator("[data-attention-toast-dismiss]").click({ timeout: 3_000 }).catch(() => { /* No toast on this face. */ });
+          await page.locator("[data-kanban-seat] [data-seat-window]").click();
+          await page.waitForSelector('[data-agent-window] [data-kanban-reader="conversation_orchestrator"] .ch-state', { timeout: 15_000 });
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(700);
+          const read = await page.evaluate(() => {
+            const words = (element: Element | null | undefined) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
+            const whole = (element: HTMLElement | null) => {
+              if (!element) return false;
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const text = range.getBoundingClientRect();
+              const frame = element.getBoundingClientRect();
+              return text.width > 0 && text.left >= frame.left - 0.5 && text.right <= frame.right + 0.5 && element.scrollWidth <= element.clientWidth + 1;
+            };
+            const head = document.querySelector<HTMLElement>("[data-kanban-seat] [data-orchestrator-badge]");
+            const header = document.querySelector<HTMLElement>('[data-agent-window] [data-kanban-reader="conversation_orchestrator"] .ch-state');
+            const rail = document.querySelector<HTMLElement>('[data-agent-window] [data-open-agent="conversation_orchestrator"] [data-open-agent-jump]');
+            return {
+              head: words(head), header: words(header), headerWhole: whole(header), headerTone: header?.className ?? "",
+              rail: rail?.getAttribute("title") ?? "", railDot: rail?.querySelector(".or-dot")?.className ?? "",
+            };
+          });
+          readings[label] = read;
+          await page.locator('[data-agent-window] [data-kanban-reader="conversation_orchestrator"]').first().screenshot({ path: path.join(OUT, `${label}-reader.png`) });
+          await page.locator("[data-kanban-seat] .seat-head").first().screenshot({ path: path.join(OUT, `${label}-head.png`) });
+          const word = host === "running" ? t("orchPanel.badgeWorking") : t("orchPanel.badgeWaiting");
+          const rowWord = word;
+          if (!read.head.includes(word)) failures.push(`${label}: the seat's head reads «${read.head}», «${word}» expected`);
+          if (!read.header.startsWith(rowWord)) failures.push(`${label}: the reader header reads «${read.header}», «${rowWord}» expected`);
+          if (!read.rail.includes(rowWord)) failures.push(`${label}: the open-agents entry reads «${read.rail}», «${rowWord}» expected`);
+          if (host !== "running" && !/\d+\s?(m|хв)/.test(read.header)) failures.push(`${label}: the reader header names no age «${read.header}»`);
+          if (host !== "running" && !read.headerTone.includes("tone-neutral")) failures.push(`${label}: the waiting header is not in the quiet tone (${read.headerTone})`);
+          if (!read.headerWhole) failures.push(`${label}: the reader header's words are cut (${read.header})`);
+          const done = t("kanban.memberState.done");
+          if (read.header.startsWith(done) || read.rail.includes(done)) failures.push(`${label}: a seat surface reads «${done}» (${JSON.stringify(read)})`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "seat.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);

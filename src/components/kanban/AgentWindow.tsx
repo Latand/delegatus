@@ -198,7 +198,7 @@ export function OpenAgentsList({ agents, current, onJump, onClose, onCloseAll }:
       <ol ref={listRef} className="or-list">
         {agents.map((agent, index) => {
           const role = frameRoleName(t, agent.role);
-          const state = agent.stateWord ?? rowStateWord(t, { key: agent.state, activity: agent.activity });
+          const state = agent.stateWord ?? rowStateWord(t, { key: agent.state, activity: agent.activity, badge: agent.badge });
           const label = agent.card ? `${agent.name} · ${agent.card}` : agent.name;
           return (
             <li key={agent.key} className="or-seg" data-role={agent.role} data-open-agent={agent.key} data-current={current === agent.key ? "" : undefined}>

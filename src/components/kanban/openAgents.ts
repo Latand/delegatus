@@ -24,6 +24,7 @@ export interface OpenAgent {
   live: boolean;
   state: MobileRowStateKey;
   activity?: MobileRowState["activity"];
+  badge?: MobileRowState["badge"];
   /** A stage's first message says its state in the words its head uses. */
   stateWord?: string;
 }
@@ -69,7 +70,7 @@ export function openAgents(t: TFunction, views: readonly ReaderView[], open: rea
   return open.flatMap(({ key }) => {
     const view = byKey.get(key);
     if (!view) return [];
-    const row = mobileRowState(view.file, now);
+    const row = mobileRowState(view.file, now, { seatWaiting: view.seat === true && view.seatWaiting === true });
     const { name, card } = readerNames(t, view);
     return [{
       key,
@@ -80,6 +81,7 @@ export function openAgents(t: TFunction, views: readonly ReaderView[], open: rea
       live: row.key === "working",
       state: row.key,
       activity: row.activity,
+      badge: row.badge,
     }];
   });
 }

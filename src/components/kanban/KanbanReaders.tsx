@@ -195,6 +195,9 @@ export interface ReaderView {
   /** The conversation holds the project's orchestrator seat: it reads as the
       orchestrator, the way the seat names it. */
   seat?: boolean;
+  /** The seat is hosted and idle between turns with no form open, read once on
+      the board from the seat state its head reads: the header says «waiting». */
+  seatWaiting?: boolean;
   /** The reader is the agent window's: the conversation's one composer is
       here, even while the seat shows the same conversation. */
   composerPrimary?: boolean;
@@ -241,12 +244,12 @@ export function readerNames(t: TFunction, view: Pick<ReaderView, "file" | "owner
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
-const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = false, owner, seat = false, composerPrimary = false, composerPlaceholder, now, onClose, onLeave, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
+const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = false, owner, seat = false, seatWaiting = false, composerPrimary = false, composerPlaceholder, now, onClose, onLeave, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
   const kill = useProcessKill(file);
-  const row = mobileRowState(file, now);
+  const row = mobileRowState(file, now, { seatWaiting: seat && seatWaiting });
   const stateWord = rowStateWord(t, row);
   const tone = DOT_TONE[row.dot] ?? "tone-neutral";
   const working = row.key === "working";

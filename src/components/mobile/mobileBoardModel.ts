@@ -210,9 +210,11 @@ export function mobileRowState(
     the dot's own words for an agent whose activity the scan knows («idle»,
     «waiting on a check»), the row key's word otherwise. The key's word is the
     phone's word for the same state, so one conversation reads one way on both. */
-export function rowStateWord(t: TFunction, row: { key: string; activity?: MobileRowState["activity"] }): string {
+export function rowStateWord(t: TFunction, row: { key: string; activity?: MobileRowState["activity"]; badge?: MobileRowState["badge"] }): string {
   if (row.activity === "idle") return t("cardStatus.idle");
   if (row.activity === "checking") return t("cardStatus.checking");
+  /* A wait that asks the operator nothing (an idle seat) is «waiting», the word the seat's own head wears; «needs you» is for a wait with a badge. */
+  if (row.key === "waiting" && row.badge === null) return t("orchPanel.badgeWaiting");
   return t(`kanban.memberState.${row.key as MobileRowStateKey}`);
 }
 
