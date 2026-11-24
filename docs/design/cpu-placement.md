@@ -730,13 +730,14 @@ slot lock. The new wrapper waits for that pool to drain before its first
 claim. It checks the kernel's process view for wrappers that have consumed
 their tickets, owned runners and their cleanup supervisors. Signal-sandboxed
 callers use the verified host process view. A waiting shell still has its
-ticket. The pre-commit hook and publication preparer bootstrap an owned copy
-before heavy admission. The runner's recorded parent identity and the live
-process relationship identify the cleanup client and service. Both the client
-and its parent must have an empty retirement history for their identity and
-evidence that its coverage began before their birth or that they were born
-after the last grant before coverage began. This lets them wait for their own
-nested gate while a slotless grant from before the journal still drains.
+ticket. Local hooks can start an owned copy before heavy admission. The
+runner's recorded parent identity must match the live hook process and its
+command. For a client that predates the retirement journal, the cleanup
+runner must belong to the hook's checkout and supervise the matching hook
+with a live gate shell and an unconsumed queue ticket. The shell's step
+ancestry identifies the hook that launched it. A recorded retirement or
+missing evidence keeps a possible holder in the drain check. These checks
+use kernel process identities and queue state across wall-clock changes.
 A held slot whose admission already passed the drain check carries that proof
 forward.
 The same final claim transaction rejects a drain observation if another caller

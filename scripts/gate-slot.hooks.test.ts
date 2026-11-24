@@ -232,8 +232,8 @@ while [[ ! -f "$FIXTURE_RELEASE" ]]; do sleep 0.02; done
   }
 }, 45_000);
 
-for (const beforeJournal of [false, true]) test.skipIf(!hasUserManager)(
-  `a same-command pre-commit keeps its legacy grant until it drains (grant predates journal: ${beforeJournal})`, async () => {
+for (const [beforeJournal, clockStep] of [[false, 0], [true, 0], [true, 30_000]] as const) test.skipIf(!hasUserManager)(
+  `a same-command pre-commit keeps its legacy grant until it drains (pre-journal: ${beforeJournal}, clock step: ${clockStep} ms)`, async () => {
   const f = fixture(), control = new AbortController(), pending: ReturnType<typeof realExec>[] = [];
   const entered = path.join(f.dir, "entered"), release = path.join(f.dir, "release");
   const log = path.join(f.dir, "entrant.stderr"), slot = path.join(f.dir, "llv-heavy-gate.slot1.lock");
@@ -271,8 +271,20 @@ if (process.env.FIXTURE_HOOK_CHILD === "1") {
       DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_PUSH_DEADLINE: undefined, LLV_GATE_SANDBOX_RECORD: undefined });
     f.db.exec("CREATE TABLE grants (at INTEGER); CREATE TRIGGER count_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO grants VALUES (NEW.last); END");
     if (beforeJournal) f.db.exec("DROP TRIGGER legacy_gate_retired; DROP TABLE legacy_gate_cutover; DROP TABLE legacy_gate_retirements");
+    const interpreter = path.join(f.dir, "legacy-bun"), clock = path.join(f.dir, "grant-clock.ts");
+    // Record the legacy claim before a forward wall-clock step. All later
+    // helpers still see the kernel's real wall/boot clock pair.
+    fs.writeFileSync(clock, `const wall = Date.now; Date.now = () => wall() - ${clockStep};
+`);
+    fs.writeFileSync(interpreter, `#!/bin/bash
+if [[ "${"$"}{1##*/}" == cpu-admission.ts && "$2" == --claim ]]; then
+  exec "$FIXTURE_BUN" --preload "$FIXTURE_CLOCK" "$@"
+fi
+exec "$FIXTURE_BUN" "$@"
+`, { mode: 0o700 });
     pending.push(realExec("/bin/bash", ["-c", '"$@"; exit $?', "hook-fixture", process.execPath, entry, "pre-commit"], hook,
-      { ...env, PATH: bin, FIXTURE_ENTERED: entered, FIXTURE_RELEASE: release, FIXTURE_CLIENT: clientFile,
+      { ...env, PATH: bin, LLV_GATE_BUN: interpreter, FIXTURE_BUN: process.execPath, FIXTURE_CLOCK: clock,
+        FIXTURE_ENTERED: entered, FIXTURE_RELEASE: release, FIXTURE_CLIENT: clientFile,
         FIXTURE_LEGACY_GATE: path.join(legacy, "scripts/gate-slot.sh") }, { timeoutMs: 30_000, signal: control.signal }));
     await until(() => fs.existsSync(entered), 10_000);
     const hookPid = fs.readFileSync(entered, "utf8"), client = fs.readFileSync(clientFile, "utf8");
@@ -511,15 +523,14 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
       }\n`);
       commitFixtureInputs(first);
       if (!useService) commitFixtureInputs(peer);
-      // The first-open supervisor must have a clear post-grant birth time;
-      // leave more than the procfs clock's conservative uncertainty window.
-      const previous = Date.now() - (firstOpen ? 5_000 : CPU_QUEUE_SPACING_MS);
+      // Start the first hook immediately after a prior grant. Its cleanup
+      // runner and original hook are both live before the first queue open.
+      const previous = Date.now() - (firstOpen ? 0 : CPU_QUEUE_SPACING_MS);
       f.db.query("UPDATE admission SET last = ?").run(previous);
       f.db.exec("CREATE TABLE grants (at INTEGER); CREATE TRIGGER count_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO grants VALUES (NEW.last); END");
       if (firstOpen) {
-        // Keep the old queue's prior-grant boundary while removing the new
-        // observer metadata. The nested gate installs it after the outer
-        // hook and its cleanup client have already started.
+        // The nested gate installs the journal after the outer hook and its
+        // cleanup client have already started.
         f.db.exec("DROP TRIGGER IF EXISTS legacy_gate_retired; DROP TABLE IF EXISTS legacy_gate_cutover; DROP TABLE IF EXISTS legacy_gate_retirements");
       }
       const grants = () => f.db.query("SELECT at FROM grants ORDER BY rowid").all();
@@ -548,6 +559,7 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
       expect(grants()).toEqual([]);
       expect(f.db.query("SELECT 1 FROM sqlite_master WHERE name = 'gate_slots'").get()).toBeNull();
       expect(Bun.spawnSync(["flock", "-n", path.join(f.dir, "llv-heavy-gate.slot1.lock"), "true"]).exitCode).toBe(0);
+      if (firstOpen) f.age();
       fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
       await firstRun.waitFor("the admitted check starting", () => fs.existsSync(started));
       const admitted = last()!;
