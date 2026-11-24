@@ -201,7 +201,7 @@ export function ConversationRow({ row, quiet, now, onOpen, catalogPath }: {
             <>
               <span aria-hidden className="shrink-0 opacity-60">·</span>
               <span data-mobile2-engine={row.file.engine} className="inline-flex shrink-0">
-                <EngineMark engine={row.file.engine} size={16} />
+                <EngineMark engine={row.file.engine} size={16} working={state.key === "working"} />
               </span>
               <span data-mobile2-model className="shrink-0">{fileModelLabel(row.file)}</span>
             </>
