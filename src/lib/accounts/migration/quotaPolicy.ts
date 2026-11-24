@@ -37,6 +37,9 @@ export interface QuotaObservation {
       limit, spent credits). The windows keep the percentages it read. Absent
       when the reading did not say either way. */
   limitReached?: boolean;
+  /** Unix-second watermark of the newest actual quota exhaustion event ever
+      recorded for this account (Antigravity). */
+  lastQuotaEventAt?: number;
 }
 
 export interface EffectiveRemaining {

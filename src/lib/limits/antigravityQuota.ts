@@ -188,6 +188,39 @@ export function isAntigravitySessionWindowActive(
   return nowSec < expiresAt;
 }
 
+/** Unix-second high-water mark of the newest actual Antigravity quota exhaustion
+ * event recorded on an observation. Survives empty polls and expired-window
+ * clearances independently of `provenance.reason` so older transcripts with a
+ * later reset can never resurrect an already-reset account. */
+export function antigravityObservationEventSec(obs: {
+  lastQuotaEventAt?: number;
+  limits: { capturedAt?: number | null; session?: { observedAt?: number | null } | null } | null;
+  observedAt?: string | number;
+  provenance?: { reason?: string | null };
+} | null | undefined): number | null {
+  if (!obs) return null;
+  let best = -Infinity;
+  if (typeof obs.lastQuotaEventAt === "number" && Number.isFinite(obs.lastQuotaEventAt) && obs.lastQuotaEventAt > 0) {
+    best = Math.max(best, Math.floor(obs.lastQuotaEventAt));
+  }
+  if (obs.limits) {
+    if (typeof obs.limits.capturedAt === "number" && Number.isFinite(obs.limits.capturedAt) && obs.limits.capturedAt > 0) {
+      best = Math.max(best, Math.floor(obs.limits.capturedAt));
+    }
+    if (typeof obs.limits.session?.observedAt === "number" && Number.isFinite(obs.limits.session.observedAt) && obs.limits.session.observedAt > 0) {
+      best = Math.max(best, Math.floor(obs.limits.session.observedAt));
+    }
+    if (obs.observedAt !== undefined) {
+      const ms = typeof obs.observedAt === "number" ? obs.observedAt : Date.parse(obs.observedAt);
+      if (Number.isFinite(ms) && ms > 0) best = Math.max(best, Math.floor(ms / 1000));
+    }
+  } else if (obs.provenance?.reason === "antigravity quota reset window elapsed" && obs.observedAt !== undefined) {
+    const ms = typeof obs.observedAt === "number" ? obs.observedAt : Date.parse(obs.observedAt);
+    if (Number.isFinite(ms) && ms > 0) best = Math.max(best, Math.floor(ms / 1000));
+  }
+  return Number.isFinite(best) && best > 0 ? best : null;
+}
+
 /**
  * Maps an observed Antigravity quota exhaustion onto {@link EngineLimits}.
  * Once `now >= resetsAt` (or one 5-hour window past `observedAt` when `resetsAt`

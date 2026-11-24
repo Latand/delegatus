@@ -361,8 +361,9 @@ test("Antigravity EIO isolation preserves auth & HTTP 200, keeps host exhaustion
 
     const oldSessionDir = path.join(sessionsDir, "older-longer-reset");
     fs.mkdirSync(oldSessionDir, { recursive: true });
+    const oldSessionFile = path.join(oldSessionDir, "events.jsonl");
     fs.writeFileSync(
-      path.join(oldSessionDir, "events.jsonl"),
+      oldSessionFile,
       `${JSON.stringify({
         type: "session.quota_exhausted",
         timestamp: new Date(olderObservedMs).toISOString(),
@@ -376,6 +377,7 @@ test("Antigravity EIO isolation preserves auth & HTTP 200, keeps host exhaustion
         },
       })}\n`,
     );
+    fs.utimesSync(oldSessionFile, olderObservedSec, olderObservedSec);
     registry.recordQuotaObservation({
       engine: "antigravity",
       accountId: "default",
@@ -417,6 +419,54 @@ test("Antigravity EIO isolation preserves auth & HTTP 200, keeps host exhaustion
       now: clock,
     });
     expect(mcpAfterTick[0]?.session ?? null).toBeNull();
+    expect(afterResurrectionTick?.lastQuotaEventAt).toBe(newerObservedSec);
+
+    // 5b. An intervening empty poll (5 newer sessions push the older transcript out of top-5)
+    //     changes provenance.reason to "no quota exhaustion in newest 5 session files"
+    //     WITHOUT clearing `lastQuotaEventAt`, so when the older transcript later re-enters
+    //     top-5, neither GET /api/limits (before tick) nor QuotaController.tick nor MCP
+    //     can resurrect the already-reset account.
+    const fillerDirs: string[] = [];
+    for (let i = 1; i <= 5; i += 1) {
+      const fillerDir = path.join(sessionsDir, `filler-empty-${i}`);
+      fillerDirs.push(fillerDir);
+      fs.mkdirSync(fillerDir, { recursive: true });
+      const fillerFile = path.join(fillerDir, "events.jsonl");
+      fs.writeFileSync(fillerFile, '{"type":"session.start","data":{}}\n');
+      fs.utimesSync(fillerFile, newerResetSec + 100 + i, newerResetSec + 100 + i);
+    }
+    clock = (newerResetSec + 200) * 1000;
+    setSystemTime(new Date(clock));
+    await controller.tick("antigravity");
+    const afterEmptyPoll = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterEmptyPoll?.provenance.reason).toBe("no quota exhaustion in newest 5 session files");
+    expect(afterEmptyPoll?.lastQuotaEventAt).toBe(newerObservedSec);
+    expect(afterEmptyPoll?.limitReached).toBe(false);
+
+    // Remove the 5 fillers so `older-longer-reset` re-enters the top-5 window.
+    for (const fillerDir of fillerDirs) fs.rmSync(fillerDir, { recursive: true, force: true });
+    clock = (newerResetSec + 300) * 1000;
+    setSystemTime(new Date(clock));
+
+    // BEFORE tick: GET /api/limits MUST still return null (not 100% from older transcript).
+    expect(((await (await GET()).json()) as { antigravity?: unknown }).antigravity ?? null).toBeNull();
+
+    // ON tick: durable observation stays cleared, observedAt never moves backwards, watermark preserved.
+    await controller.tick("antigravity");
+    const afterReenter = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterReenter?.limitReached).toBe(false);
+    expect(afterReenter?.limits).toBeNull();
+    expect(afterReenter?.lastQuotaEventAt).toBe(newerObservedSec);
+    expect(Date.parse(afterReenter!.observedAt)).toBeGreaterThanOrEqual(newerObservedMs);
+    expect(((await (await GET()).json()) as { antigravity?: unknown }).antigravity ?? null).toBeNull();
+    const mcpAfterReenter = accountLimitRows({
+      engine: "antigravity",
+      accounts: { claude: [], codex: [], copilot: [], antigravity: [{ accountId: "default", authPresent: true }] },
+      active: { claude: null, codex: null, copilot: null, antigravity: "default" },
+      observations: { claude: {}, codex: {}, copilot: {}, antigravity: afterReenter ? { default: afterReenter } : {} },
+      now: clock,
+    });
+    expect(mcpAfterReenter[0]?.session ?? null).toBeNull();
   } finally {
     setSystemTime();
     setAgentRegistryForTests(null);

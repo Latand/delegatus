@@ -144,10 +144,11 @@ function newestSessionFiles(sessionsDir: string): SessionFileCandidate[] {
     return [];
   }
 
-  // Incremental path: when we already scanned this directory and the directory
-  // changed (e.g. ordinary creation of one or a few new sessions), stat ONLY
-  // the newly appeared sessions plus the <= MAX_FILES cached top files instead
-  // of re-statting every historical session directory.
+  // Incremental path: when we already scanned this directory and ONLY new
+  // sessions were added (no deletions), stat ONLY the newly appeared sessions
+  // plus the <= MAX_FILES cached top files. On ANY deletion, rebuild the top-N
+  // set from disk so a previously 6th-newest session promoted into the top 5
+  // (even alongside an older-mtime import) is never missed.
   if (cached?.knownNames && nowMono - cached.fullScanAtMonoMs < DIR_SCAN_CACHE_TTL_MS) {
     const currentNames = new Set<string>();
     const addedNames: string[] = [];
@@ -156,7 +157,14 @@ function newestSessionFiles(sessionsDir: string): SessionFileCandidate[] {
       currentNames.add(name);
       if (!cached.knownNames.has(name)) addedNames.push(name);
     }
-    if (addedNames.length <= MAX_INCREMENTAL_NEW_DIRS) {
+    let anyDeleted = false;
+    for (const prevName of cached.knownNames) {
+      if (!currentNames.has(prevName)) {
+        anyDeleted = true;
+        break;
+      }
+    }
+    if (!anyDeleted && addedNames.length <= MAX_INCREMENTAL_NEW_DIRS) {
       const seenFiles = new Set<string>();
       const candidates: SessionFileCandidate[] = [];
       let cachedTopIntact = true;
@@ -196,7 +204,7 @@ function newestSessionFiles(sessionsDir: string): SessionFileCandidate[] {
           confirmedNames.delete(name);
         }
       }
-      if (cachedTopIntact || candidates.length >= MAX_FILES || candidates.length >= currentNames.size) {
+      if (cachedTopIntact) {
         const top = sortTopSessionCandidates(candidates);
         cacheDirTopFiles(sessionsDir, dirFp, top.map((entry) => entry.file), confirmedNames, cached.fullScanAtMonoMs);
         return top;

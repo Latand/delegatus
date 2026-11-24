@@ -297,3 +297,38 @@ test("isolates per-file EIO errors and bounds warm directory scan stat calls acr
     fs.readSync = origReadSync;
   }
 });
+
+test("rebuilds top-N on session deletion even when an older-mtime session is imported simultaneously", () => {
+  const dir = path.join(root, "delete-and-import-older");
+  fs.mkdirSync(dir, { recursive: true });
+  const t0 = "2026-11-24T06:00:00.000Z";
+  const resetAt = Math.floor(Date.parse(t0) / 1000) + 3600;
+  const nowMs = Date.parse(t0) + 10_000;
+  const empty = '{"type":"session.start","data":{}}\n';
+
+  // Seed 6 sessions: the 6th-newest holds an active quota exhaustion.
+  writeSession(dir, "s-quota-sixth", exhaustionLine(t0, "Individual quota reached. Resets in 1h", resetAt), 100);
+  for (let i = 1; i <= 5; i += 1) {
+    writeSession(dir, `s-normal-${i}`, empty, 100 + i * 100);
+  }
+
+  // Warm the directory cache: s-quota-sixth is 6th, so warm read sees no exhaustion.
+  expect(readAntigravityTranscriptLimits(dir, nowMs).data).toBeNull();
+
+  // Delete the newest session (s-normal-5) AND import a session with an older mtime (50):
+  // s-quota-sixth is now promoted into #5. Warm read MUST match a cold read (100%).
+  fs.rmSync(path.join(dir, "s-normal-5"), { recursive: true, force: true });
+  writeSession(dir, "s-imported-older", empty, 50);
+
+  const warm = readAntigravityTranscriptLimits(dir, nowMs);
+  expect(warm.source).toBe("transcript");
+  expect(warm.data?.session?.usedPercent).toBe(100);
+  expect(warm.data?.session?.resetsAt).toBe(resetAt);
+
+  // Confirm cold reader on an identical directory copy produces the exact same result.
+  const coldDir = path.join(root, "delete-and-import-older-cold");
+  fs.cpSync(dir, coldDir, { recursive: true });
+  const cold = readAntigravityTranscriptLimits(coldDir, nowMs);
+  expect(cold.data?.session?.usedPercent).toBe(100);
+  expect(cold.data?.session?.resetsAt).toBe(resetAt);
+});

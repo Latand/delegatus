@@ -2547,6 +2547,7 @@ export class AntigravityAcpHost implements EngineHost {
         bootId: "antigravity-acp-host",
         resetCredits: null,
         limitReached: true,
+        lastQuotaEventAt: quota.observedAt,
       };
       if (this.options.recordQuotaObservation) {
         this.options.recordQuotaObservation(observation);

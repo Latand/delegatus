@@ -20,7 +20,7 @@ import { statePath } from "@/lib/configDir";
 import { logQuotaEvent } from "@/lib/events";
 import { adoptClaudeLimitsSnapshot, readClaudeAccountLimits, readCodexLimits } from "@/lib/limits";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
-import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
+import { antigravityObservationEventSec, isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import { readAntigravityTranscriptLimits } from "@/lib/limits/antigravityTranscriptLimits";
 import { recordLimitSamples } from "@/lib/limitsHistoryStore";
 
@@ -95,6 +95,7 @@ export function durableQuotaObservation(observation: QuotaObservation, bootId: s
     bootId,
     resetCredits: observation.resetCredits ?? null,
     ...(observation.limitReached === undefined ? {} : { limitReached: observation.limitReached }),
+    ...(observation.lastQuotaEventAt === undefined ? {} : { lastQuotaEventAt: observation.lastQuotaEventAt }),
   };
 }
 
@@ -302,6 +303,7 @@ export class QuotaController {
      decisions (those require a fresh live observation). */
   private carryForward(engine: QuotaEngine, accountId: string, reason: string, now: number): QuotaObservation {
     const previous = this.registry.quotaObservations(engine).find(row => row.accountId === accountId);
+    const carriedWatermark = engine === "antigravity" ? antigravityObservationEventSec(previous) : null;
     if (previous?.limits) {
       return {
         engine,
@@ -318,6 +320,7 @@ export class QuotaController {
         envelope: null,
         resetCredits: previous.resetCredits ?? null,
         ...(previous.limitReached === undefined ? {} : { limitReached: previous.limitReached }),
+        ...(carriedWatermark === null ? {} : { lastQuotaEventAt: carriedWatermark }),
       };
     }
     if (previous) {
@@ -332,6 +335,7 @@ export class QuotaController {
         envelope: null,
         resetCredits: previous.resetCredits ?? null,
         ...(previous.limitReached === undefined ? {} : { limitReached: previous.limitReached }),
+        ...(carriedWatermark === null ? {} : { lastQuotaEventAt: carriedWatermark }),
       };
     }
     return {
@@ -405,24 +409,17 @@ export class QuotaController {
         }
         const providerWithUnknownLimits = engine === "claude" && "provider" in account && Boolean(account.provider);
         const previousObservedMs = previous ? Date.parse(previous.observedAt) : Number.NaN;
-        const previousCapturedMs = previous?.limits?.capturedAt != null ? previous.limits.capturedAt * 1000 : Number.NaN;
-        const previousAuthoritativeMs = Math.max(
-          Number.isFinite(previousObservedMs) ? previousObservedMs : -Infinity,
-          Number.isFinite(previousCapturedMs) ? previousCapturedMs : -Infinity,
-        );
-        const previousAntigravityAuthoritative = engine === "antigravity"
-          && Boolean(
-            previous
-            && (previous.limits !== null
-              || previous.provenance.reason === "antigravity quota reset window elapsed"),
-          );
+        const previousWatermarkSec = engine === "antigravity" ? antigravityObservationEventSec(previous) : null;
+        const incomingEventSec = engine === "antigravity" && observation?.limits
+          ? antigravityObservationEventSec(observation)
+          : null;
         const previousAntigravityActive = engine === "antigravity"
           && isAntigravitySessionWindowActive(previous?.limits?.session, Math.floor(now / 1000));
-        // An older Antigravity transcript observation (`observation.observedAt < previousAuthoritativeMs`)
+        // An older Antigravity transcript observation (`incomingEventSec < previousWatermarkSec`)
         // must never override a newer observation or move `observedAt` backwards — even after
-        // the newer observation's own reset window has elapsed.
+        // the newer window has expired AND after intervening empty polls.
         if (engine === "antigravity" && observation?.authenticated && observation.limits
-          && previousAntigravityAuthoritative && previousAuthoritativeMs > observation.observedAt) {
+          && previousWatermarkSec !== null && incomingEventSec !== null && previousWatermarkSec > incomingEventSec) {
           if (previousAntigravityActive) {
             observations.push(this.carryForward(engine, account.id, "quota-probe-older", now));
           } else {
@@ -433,16 +430,25 @@ export class QuotaController {
               authCheckedAt: now,
               limits: null,
               provenance: { source: "unavailable", reason: "antigravity quota reset window elapsed", staleSince: null },
-              observedAt: previousAuthoritativeMs,
+              observedAt: Math.max(Number.isFinite(previousObservedMs) ? previousObservedMs : 0, previousWatermarkSec * 1000),
               envelope: null,
               resetCredits: previous?.resetCredits ?? null,
               limitReached: false,
+              lastQuotaEventAt: previousWatermarkSec,
             });
           }
         } else if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot" && engine !== "antigravity" && !providerWithUnknownLimits
           || (previous?.limits && engine !== "antigravity" && Date.parse(previous.observedAt) > observation.observedAt)
           || (engine === "antigravity" && !observation.limits && previousAntigravityActive)))) {
           observations.push(this.carryForward(engine, account.id, result.reason ?? observation?.provenance.reason ?? (observation?.limits ? "quota-probe-older" : "quota-probe-empty"), now));
+        } else if (engine === "antigravity") {
+          const nextWatermark = incomingEventSec !== null
+            ? Math.max(previousWatermarkSec ?? 0, incomingEventSec)
+            : previousWatermarkSec;
+          observations.push({
+            ...observation,
+            ...(nextWatermark === null ? {} : { lastQuotaEventAt: nextWatermark }),
+          });
         } else {
           observations.push(observation);
         }

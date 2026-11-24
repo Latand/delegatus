@@ -13,7 +13,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { activeAntigravityAccountId, listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
-import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
+import { antigravityObservationEventSec, isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import { readAntigravityTranscriptLimits } from "@/lib/limits/antigravityTranscriptLimits";
 import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
@@ -461,21 +461,10 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
   const antigravityRead = (() => {
     const nowSec = Math.floor(now / 1000);
     const transcriptData = antigravityTranscriptRead?.data ?? null;
-    const obsCapturedSec = antigravityRawObs?.limits?.capturedAt ?? null;
-    const obsSessionSec = antigravityRawObs?.limits?.session?.observedAt ?? null;
-    const obsMs = antigravityRawObs ? Date.parse(antigravityRawObs.observedAt) : Number.NaN;
-    const obsIsoSec = Number.isFinite(obsMs) ? Math.floor(obsMs / 1000) : null;
-    // Compare by authoritative event time (`observedAt`/`capturedAt`) BEFORE
-    // checking whether the newer observation's reset window has elapsed, so an
-    // older transcript with a later reset can never resurrect an expired newer window.
-    const hasAuthoritativeObs = Boolean(
-      antigravityRawObs
-      && (antigravityRawObs.limits !== null
-        || antigravityRawObs.provenance.reason === "antigravity quota reset window elapsed"),
-    );
-    const obsEventSec = hasAuthoritativeObs
-      ? Math.max(obsCapturedSec ?? 0, obsSessionSec ?? 0, obsIsoSec ?? 0)
-      : 0;
+    // Compare by the durable quota-event watermark (`lastQuotaEventAt` / `capturedAt`)
+    // BEFORE checking whether the newer observation's reset window has elapsed,
+    // independently of `provenance.reason` so empty polls never erase the watermark.
+    const obsWatermarkSec = antigravityObservationEventSec(antigravityRawObs);
     const obsActive = Boolean(
       antigravityRawObs?.limits
       && isAntigravitySessionWindowActive(antigravityRawObs.limits.session, nowSec),
@@ -484,7 +473,7 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
 
     if (transcriptData) {
       const transcriptAt = transcriptData.capturedAt ?? transcriptData.session?.observedAt ?? 0;
-      if (hasAuthoritativeObs && obsEventSec > transcriptAt) {
+      if (obsWatermarkSec !== null && obsWatermarkSec > transcriptAt) {
         if (observedData) {
           return { data: observedData, source: antigravityRawObs!.provenance.source, reason: antigravityRawObs!.provenance.reason };
         }
