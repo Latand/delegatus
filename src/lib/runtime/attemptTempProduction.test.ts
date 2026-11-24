@@ -687,25 +687,37 @@ test("work-shaped backlog visits beyond four and drains the 279 overdue register
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   try {
     const ticks: { ms: number; cpu: number; checked: number; removed: number }[] = [];
-    const tick = async () => {
+    let firstCheckoutDeferral = true;
+    const tick = async (injectDeferral = false) => {
       const start = performance.now();
-      const report = (await runAttemptTempSweep({ ...workPorts, references }, workMode))!;
+      const report = (await runAttemptTempSweep({ ...workPorts, references: async (original, current, scan) => {
+        if (injectDeferral && original === directories[0] && firstCheckoutDeferral) {
+          firstCheckoutDeferral = false;
+          throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+        }
+        return references(original, current, scan);
+      } }, workMode))!;
       ticks.push({ ms: performance.now() - start, cpu: report.cleanup.sweepCpuSeconds, checked: report.checked, removed: report.removed });
       return report;
     };
-    const first = await tick();
+    const first = await tick(true);
     // Keep the first-tick sample even when the fix is absent on the baseline.
     if (process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK === "1")
       console.log(JSON.stringify({ fixture: "work-drain-first-tick", ...ticks[0] }));
     expect(first.checked).toBeGreaterThan(4);
-    for (let n = 1; n < 20 && store.due(now, 1, true).length; n++) {
-      now += 120_000; // Include the helper deadline and the scheduler delay.
+    expect(first.outcomes).toContainEqual(expect.objectContaining({ directory: directories[0], reasonCode: "checkout_budget" }));
+    const horizon = WORK_TICK + 2 * 60 * 60_000;
+    while (now < horizon && directories.slice(0, 279).some(directory => fs.existsSync(directory))) {
+      const pendingRetries = directories.slice(0, 279).map(directory => store.owner(directory)?.checkedAt ?? now)
+        .filter(retryAt => retryAt > now);
+      now = Math.max(now + 120_000, pendingRetries.length ? Math.min(...pendingRetries) : now + 120_000);
       await tick();
     }
     if (process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK === "1")
       console.log(JSON.stringify({ fixture: "work-drain", ticks: ticks.length, maxMs: Math.max(...ticks.map(tick => tick.ms)),
         cpuSeconds: ticks.reduce((sum, tick) => sum + tick.cpu, 0), removed: ticks.reduce((sum, tick) => sum + tick.removed, 0) }));
     expect(directories.slice(0, 279).filter(directory => fs.existsSync(directory))).toHaveLength(0);
+    expect(firstCheckoutDeferral).toBeFalse();
     expect(directories.slice(279).every(directory => store.has(directory) && fs.existsSync(directory))).toBeTrue();
   } finally { clock.mockRestore(); store.close(); }
 }, 300_000);
