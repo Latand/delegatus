@@ -273,3 +273,29 @@ for (const mode of ["viewer-idle", "worker-idle", "heartbeat", "closed-after-exi
     } finally { await executor.close(); logging.mockRestore(); timing.mockRestore(); }
   }, 10_000);
 }
+
+test("a reply resets the real 31 second worker watchdog", async () => {
+  const worker = path.join(root, "reply-watchdog-worker.ts");
+  fs.writeFileSync(worker, `
+    import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      process.stdout.write(JSON.stringify({ id: 0, control: { ready: null } }) + "\\n");
+      process.stdout.write(JSON.stringify({ id: request.id, result: { conversationId: null } }) + "\\n");
+    });
+  `);
+  const deadlines: Array<{ callback: () => void; cancelled: boolean }> = [];
+  const schedule = (callback: () => void, delayMs: number) => {
+    if (delayMs !== 31_000) return () => {};
+    const entry = { callback, cancelled: false };
+    deadlines.push(entry);
+    return () => { entry.cancelled = true; };
+  };
+  const executor = new McpTaskExecutor({ launch: { executable: process.execPath, workerPath: worker }, schedule,
+    env: { HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root, LLV_STATE_DIR: path.join(root, "state") } });
+  executors.push(executor);
+  await executor.identifyCapability("fixture");
+  expect(deadlines).toHaveLength(2);
+  expect(deadlines[0]!.cancelled).toBe(true);
+  expect(deadlines[1]!.cancelled).toBe(false);
+});

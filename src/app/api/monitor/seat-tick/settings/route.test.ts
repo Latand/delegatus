@@ -809,7 +809,7 @@ test("the closed switch reads persisted state without any panel computation or e
   const expected = await (await get(`?project=${PROJECT}`)).json();
   const curation = await import("@/lib/memory/curation/answer");
   const turbo = await import("@/lib/monitor/turboRuntime");
-  const panel = spyOn(curation, "curationAnswerCooperatively").mockImplementation(async () => { throw Error("panel must stay deferred"); });
+  const panel = spyOn(curation, "readCurationPanel").mockImplementation(async () => { throw Error("panel must stay deferred"); });
   const accounts = spyOn(turbo, "turboAnswer").mockImplementation(async () => { throw Error("accounts must stay deferred"); });
   try {
     const response = await get(`?project=${PROJECT}&view=summary&turboPreview=1`);
