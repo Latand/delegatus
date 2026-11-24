@@ -5,6 +5,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { RuntimeJournal } from "./journal";
 import { RuntimeHost } from "./host";
+import { readStartupPendingOperations } from "@/lib/runtime/deploymentLedger";
 import { runtimeScope, type RuntimeStartupSessionEvidence } from "@/lib/runtime/contracts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-session-read-"));
@@ -204,7 +205,8 @@ test("an event bound to a session revision is recorded only while the row still 
 });
 
 test("startup operation pages retain native work after acknowledgement removes its outbox effect", async () => {
-  const journal = new RuntimeJournal(path.join(root, "startup-native-queue.sqlite"), { structuredHosts: true });
+  const filename = path.join(root, "startup-native-queue.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
   const host = new RuntimeHost(journal, undefined, undefined, true);
   const conversationId = "conversation_startup_native";
   const sessionKey = { engine: "codex" as const, sessionId: "startup-native-session" };
@@ -221,16 +223,19 @@ test("startup operation pages retain native work after acknowledgement removes i
     } });
     const empty = await page();
     const operationId = "startup-native-work";
-    journal.executeOperation({ kind: "native-queue", conversationId, operationId, idempotencyKey: operationId,
-      action: "add", binding: { threadId: sessionKey.sessionId, accountId: null }, text: "Synthetic native work" });
+    journal.executeOperation({ kind: "send", conversationId, operationId, idempotencyKey: operationId,
+      policy: "queue", text: "Synthetic native work" });
     journal.nativeQueueTransition(operationId, { phase: "prepared", input: [{ type: "text", text: "Synthetic native work" }] });
     journal.nativeQueueTransition(operationId, { phase: "observed-queued", submission: {
       id: "synthetic-native", clientUserMessageId: operationId, input: [{ type: "text", text: "Synthetic native work" }],
     } });
     expect(journal.effectBatch(100, ["runtime.native-queue"])).toHaveLength(0);
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
     const pending = await page();
     expect(pending.effectsVersion).not.toBe(empty.effectsVersion);
     expect(pending.pendingOperations).toEqual([expect.objectContaining({ operationId, conversationId, status: "queued" })]);
+    expect(readStartupPendingOperations({ eventSeq: 0, rowId: 0 }, { LLV_RUNTIME_JOURNAL: filename }).pendingOperations)
+      .toEqual(pending.pendingOperations!);
     expect((await page({ eventSeq: journal.publishedSeq(), rowId: Number.MAX_SAFE_INTEGER })).pendingOperations).toEqual([]);
     journal.transitionOperation(operationId, "failed");
     const ended = await page();

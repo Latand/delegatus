@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import asyncFs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -153,6 +154,26 @@ test("replay a retained structured-host registry", async () => {
     fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "pipelines.json"),
       JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [pipeline, unreadable] }));
 
+    const markerCounts: Record<string, number> = {};
+    const spawn = await import("./structuredSpawn");
+    if (typeof spawn.settleStaleSpawnMarkers === "function") {
+      const database = stateDatabases(scratch).find(candidate => candidate.name === "agent-registry.sqlite")!;
+      const backup = backupDatabase({ ...database, filename: sqliteFilename }, {
+        backupDirectory: path.join(scratch, BACKUP_DIRECTORY), freeBytes: () => null,
+      });
+      if (backup.state !== "taken") throw new Error("synthetic replay backup was refused");
+      let afterKey: string | undefined;
+      for (;;) {
+        const batch = await spawn.settleStaleSpawnMarkers(registry, client, { apply: false, journalPath, afterKey });
+        if (batch.length === 0) break;
+        for (const row of batch) {
+          const classAndReason = `${row.group} ${row.reason}`;
+          markerCounts[classAndReason] = (markerCounts[classAndReason] ?? 0) + 1;
+        }
+        afterKey = batch.at(-1)!.key;
+      }
+    }
+
     const view = await registry.prepareReadOnlySnapshot();
     const beforeSelection = entryPayloadReads;
     const selected = await startupStructuredHostEntries(view);
@@ -174,7 +195,8 @@ test("replay a retained structured-host registry", async () => {
       if (value.membership) membershipRows = Math.max(membershipRows, value.membership.completed + value.membership.remaining);
     });
     const startupBoundary = spyOn(registry, "startupHostSnapshot");
-    const retryProbes = spyOn(StartupRowRetries.prototype, "load");
+    const retryFiles = `${registry.filename}.startup-retries${path.sep}`;
+    const retryProbes = spyOn(asyncFs, "readFile");
     cleanups.push(() => retryProbes.mockRestore(), () => startupBoundary.mockRestore(), () => progress.mockRestore());
     const start = performance.now();
     const eligible: string[] = [];
@@ -204,29 +226,10 @@ test("replay a retained structured-host registry", async () => {
       checkoutEndpoint: after.entries[hostKey(2)]?.structuredHost?.endpoint, historicalDeferral,
       nonReleasedArchived: after.entries[hostKey(8)]?.structuredHost?.endpoint,
     };
-    const markerCounts: Record<string, number> = {};
-    const spawn = await import("./structuredSpawn");
-    if (typeof spawn.settleStaleSpawnMarkers === "function") {
-      const database = stateDatabases(scratch).find(candidate => candidate.name === "agent-registry.sqlite")!;
-      const backup = backupDatabase({ ...database, filename: sqliteFilename }, {
-        backupDirectory: path.join(scratch, BACKUP_DIRECTORY), freeBytes: () => null,
-      });
-      if (backup.state !== "taken") throw new Error("synthetic replay backup was refused");
-      let afterKey: string | undefined;
-      for (;;) {
-        const batch = await spawn.settleStaleSpawnMarkers(registry, client, { apply: false, journalPath, afterKey });
-        if (batch.length === 0) break;
-        for (const row of batch) {
-          const classAndReason = `${row.group} ${row.reason}`;
-          markerCounts[classAndReason] = (markerCounts[classAndReason] ?? 0) + 1;
-        }
-        afterKey = batch.at(-1)!.key;
-      }
-    }
     const metrics = {
       selectedRows: selected.length, membershipRows, selectionReads, entryPayloadReads,
       keyedSnapshots: startupBoundary.mock.calls.length,
-      retryFileProbes: retryProbes.mock.calls.reduce((sum, [keys]) => sum + keys.length, 0),
+      retryFileProbes: retryProbes.mock.calls.filter(([filename]) => typeof filename === "string" && filename.startsWith(retryFiles)).length,
       runtimeReads: runtimeIds.size, fallbackReads: fallbackIds.size,
       fallbackAppends: requests.get("append") ?? 0,
       censusMs, fullPassMs, requests: Object.fromEntries(requests),

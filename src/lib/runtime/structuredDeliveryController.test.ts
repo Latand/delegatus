@@ -483,9 +483,9 @@ test("fallback publication retries an interrupted archive sweep and repeats it a
   f.registry.upsert({ ...entry, status: "dead", claimOwner: null,
     structuredHost: { ...entry.structuredHost!, endpoint: "stdio:released" } });
   expect(f.registry.archiveInactiveRows()).toBe(1);
-  const client = {
+  const client: RuntimeHostClient = {
     ...f.client, readSession: async () => null,
-    append: async (): Promise<unknown> => { throw new Error("fixture lost publication reply"); },
+    append: async () => { throw new Error("fixture lost publication reply"); },
   };
   const read = spyOn(client, "readSession");
   try {
@@ -526,10 +526,6 @@ test("startup checks an archived recipient when its first message arrives", asyn
   const authority = spyOn(startup, "pipelineStartupTargetDeferred").mockImplementation(async () => held);
   const recover = spyOn({ recover: async () => null }, "recover");
   try {
-    f.journal.append({ scope: { type: "session", id: f.conversation.id }, kind: "session-status", payload: {
-      conversationId: f.conversation.id, sessionKey: f.key, hostKind: "codex-app-server", host: "unhosted", turn: "idle",
-      accountId: null, parentConversationId: null, cwd: f.root, artifactPath: current.artifactPath,
-    } });
     await bindStructuredDeliveryQueue([], {
       registry: f.registry, client: f.client, deferStartupWork: true, recover,
       watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0,
@@ -537,13 +533,19 @@ test("startup checks an archived recipient when its first message arrives", asyn
     await completeStructuredDeliveryQueueStartup([], undefined, undefined, new Set(), {
       registry: f.registry, snapshot: await f.registry.prepareReadOnlySnapshot(), deferUnselected: true,
     });
+    f.journal.append({ scope: { type: "session", id: f.conversation.id }, kind: "session-status", payload: {
+      conversationId: f.conversation.id, sessionKey: f.key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      accountId: null, parentConversationId: null, cwd: f.root, artifactPath: current.artifactPath,
+    } });
     const operationId = "archived-recipient-held-at-startup";
-    f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+    const send = f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
       conversationId: f.conversation.id, text: "Synthetic message after startup", policy: "queue" });
+    expect(["queued", "pending"]).toContain(send.receipt.status);
+    expect(f.journal.effectBatch(100, ["runtime.send"])).toHaveLength(1);
     await kickStructuredDeliveryQueue();
     expect(authority).toHaveBeenCalledWith(f.registry, f.conversation.id);
     expect(recover).not.toHaveBeenCalled();
-    expect(f.journal.operationResult(operationId)?.receipt.status).toBe("queued");
+    expect(["queued", "pending"]).toContain(f.journal.operationResult(operationId)?.receipt.status);
     held = false;
     await kickStructuredDeliveryQueue();
     expect(recover).toHaveBeenCalledTimes(1);

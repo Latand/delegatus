@@ -5,7 +5,8 @@ import type { Database } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
 
-import type { ViewerDeploymentStatus } from "./contracts";
+import type { RuntimeStartupOperationCursor, ViewerDeploymentStatus } from "./contracts";
+import { startupPendingOperationPage } from "./startupOperationLedger";
 
 export type DeploymentLedgerRead<T> =
   | { state: "ok"; value: T }
@@ -50,6 +51,15 @@ function openLedger(env: NodeJS.ProcessEnv = process.env): Database | null {
        reports that as unreadable rather than as an empty ledger. */
     return null;
   }
+}
+
+/** A successor Viewer can read active operations while the preceding host
+    still serves the session-evidence protocol without operation paging. */
+export function readStartupPendingOperations(after: RuntimeStartupOperationCursor, env = process.env) {
+  const db = openLedger(env);
+  if (!db) throw new Error("runtime journal is unavailable for startup operation evidence");
+  try { return startupPendingOperationPage(db, after); }
+  finally { db.close(); }
 }
 
 function unreadable<T>(): DeploymentLedgerRead<T> {

@@ -31,7 +31,7 @@ import { statePath } from "@/lib/configDir";
 import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation, MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
-import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
+import { hotStateWriterRevision, withHotStateAuthorityAttempt } from "@/lib/state/hotStateAuthority";
 import { assertStateMutationAllowed, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import {
@@ -9588,13 +9588,16 @@ export class AgentRegistry {
   }
 
   restoreSettledSpawnMarkers(launchId: string): ReturnType<SqliteAgentRegistryStore["restoreSettledSpawnMarkers"]> {
-    assertStateStartupMutation(path.dirname(this.filename), "registry spawn marker restore");
-    assertStateMutationAllowed(path.dirname(this.filename));
-    if (process.env.LLV_STATE_OWNER === "viewer" && (!stateMutationActivationOpen() || !viewerReleaseOwnsTraffic())) {
-      throw new Error("spawn marker restore requires the current Viewer release");
-    }
+    const directory = path.dirname(this.filename);
+    assertStateStartupMutation(directory, "registry spawn marker restore");
+    assertStateMutationAllowed(directory);
     if (this.sqliteMode !== "sqlite") return "missing-journal";
-    return this.sqliteStore!.restoreSettledSpawnMarkers(launchId);
+    return withHotStateAuthorityAttempt(directory, () => {
+      if (process.env.LLV_STATE_OWNER === "viewer" && (!stateMutationActivationOpen() || !viewerReleaseOwnsTraffic())) {
+        throw new Error("spawn marker restore requires the current Viewer release");
+      }
+      return this.sqliteStore!.restoreSettledSpawnMarkers(launchId);
+    });
   }
 
   invalidateSpawnHost(launchId: string, error: string): void {

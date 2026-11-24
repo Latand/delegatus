@@ -10,6 +10,7 @@ import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope, startupStructuredHostKeys, startupWorkKeys, withStartupWork, outsideStartupWork, type StartupWorkKeys } from "./startupSnapshot";
+import { readStartupPendingOperations } from "./deploymentLedger";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { orphanedHostNoticeContext, unreachableOrphanedHost } from "./orphanedHost";
@@ -2159,6 +2160,7 @@ async function startupRuntimeReadIsCurrent(
   witness: StartupRuntimeWitness,
   stamps: ReadonlyMap<string, string | number | null>,
   checkEffects: boolean,
+  checkJournalVersion = false,
 ): Promise<boolean> {
   if (witness.generation === null) {
     const current = await startupRuntimeWitness(client, witness.version);
@@ -2176,6 +2178,7 @@ async function startupRuntimeReadIsCurrent(
     assertStartupReadActive();
     if (!current || current.generation !== witness.generation
       || (checkEffects && current.effectsVersion !== witness.effectsVersion)
+      || (checkJournalVersion && current.version !== witness.version)
       || batch.some((id, index) => stamps.get(id) !== current.sessions[index])) return false;
   }
   return true;
@@ -2326,11 +2329,15 @@ export async function structuredStartupSignals(
     const witness = await startupRuntimeWitness(client, checkpoint.effects?.version);
     const effects = await readStartupRuntimeEffects(client, witness, checkpoint);
     const pendingOperations: StartupRuntimeRead["recentOperations"] = [];
+    let readPredecessorJournal = false;
     if (client.startupSessionEvidence && witness?.generation) {
       let after = { eventSeq: 0, rowId: 0 };
       for (;;) {
-        const page = await client.startupSessionEvidence([], { ...startupRuntimeReadOptions(), pendingOperationsAfter: after });
-        if (!page?.pendingOperations) break; // Predecessor protocol.
+        const remote = readPredecessorJournal ? null
+          : await client.startupSessionEvidence([], { ...startupRuntimeReadOptions(), pendingOperationsAfter: after });
+        if (!remote?.pendingOperations && client.startupListenerIdentity) readPredecessorJournal = true;
+        const page = readPredecessorJournal ? readStartupPendingOperations(after) : remote;
+        if (!page?.pendingOperations) break;
         pendingOperations.push(...page.pendingOperations);
         const next = page.pendingOperationsNext;
         if (!next) break;
@@ -2352,7 +2359,7 @@ export async function structuredStartupSignals(
     const admittedMessages = await admittedRuntimeMessages(registry, runtime);
     const selected = selection;
     const evidenceIsCurrent = async () =>
-      (!witness || await startupRuntimeReadIsCurrent(client, witness, read?.stamps ?? new Map(), true))
+      (!witness || await startupRuntimeReadIsCurrent(client, witness, read?.stamps ?? new Map(), true, readPredecessorJournal))
         && registryStartupSelectionUnchanged(selected) !== false;
     if (!await evidenceIsCurrent()) continue;
     assertStartupReadActive();

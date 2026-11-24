@@ -1863,6 +1863,24 @@ test.each(["uncertain", "delivered"] as const)("a staged %s launch stays non-ret
   expect(restarted.snapshot().receipts[receipt.launchId]!.state).toBe("failed");
 });
 
+function stagedTerminalMarker(store: AgentRegistry, attempt: string, index: number) {
+  const receipt = staleStructuredReceipt(store, attempt);
+  const sessionId = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+  const key = { engine: "codex" as const, sessionId };
+  const artifactPath = path.join(path.dirname(store.filename), `rollout-2026-10-01T00-00-00-${sessionId}.jsonl`);
+  const stage = store.stageStructuredSpawn(receipt.launchId, {
+    key, artifactPath, cwd: "/repo", accountId: "work",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo" }),
+    status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn",
+    structuredHost: {
+      kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 0, protocolVersion: "fixture",
+      writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+    },
+  });
+  if (stage.kind !== "settled") throw new Error("terminal fixture could not stage the launch");
+  return { receipt: stage.receipt, key };
+}
+
 test("failed spawn marker dry run, backup comparison and guarded restore", async () => {
   const store = registry("sqlite");
   const directory = path.dirname(store.filename);
@@ -1872,9 +1890,7 @@ test("failed spawn marker dry run, backup comparison and guarded restore", async
   const journal = new RuntimeJournal(journalPath, { structuredHosts: true });
   const client = { ...DEAD_RUNTIME_CLIENT, startupGeneration: async () => "fixture-runtime" };
   try {
-    const { receipt, key } = stagedStructuredReceipt(store, "marker-backup");
-    const row = store.hostEntry(key)!;
-    store.upsert({ ...row, status: "dead", claimOwner: null, structuredHost: { ...row.structuredHost!, process: null } });
+    const { receipt, key } = stagedTerminalMarker(store, "marker-backup", 1);
     const launchId = receipt.launchId;
     await store.failSpawnOffLoop(launchId, "fixture first delivery failed");
     const id = `codex:${key.sessionId}`;
@@ -1933,10 +1949,8 @@ test("a closed stage returns its stale marker to spawn recovery while a running 
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = directory;
   try {
-    const fixtures = ["closed", "running", "paused", "unreadable"].map(name => {
-      const { receipt, key } = stagedStructuredReceipt(store, `pipeline-marker-${name}`);
-      const row = store.hostEntry(key)!;
-      store.upsert({ ...row, status: "dead", claimOwner: null, structuredHost: { ...row.structuredHost!, process: null } });
+    const fixtures = ["closed", "running", "paused", "unreadable"].map((name, index) => {
+      const { receipt, key } = stagedTerminalMarker(store, `pipeline-marker-${name}`, index + 1);
       const pipeline = buildPipeline({ id: `marker-${name}`, task: "Synthetic stage recovery", project: "fixture", repoDir: directory,
         stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
           effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "high", access: "read-write", promptScaffold: null } }],

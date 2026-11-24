@@ -1310,7 +1310,7 @@ function staleSpawnMarkerRefusal(file: RegistryFile, key: string, receipt: Spawn
   if (!entry || entry.pendingAction !== "spawn" || (entry.status !== "dead" && entry.status !== "unhosted")
     || !receipt.key || sessionKeyId(receipt.key) !== key || entry.artifactPath !== receipt.artifactPath
     || entry.structuredHostOperationId !== receipt.launchId || receipt.transport !== "structured") return "owner-changed";
-  if (entry.host || entry.structuredHost?.process || entry.claimOwner || receipt.queuedPinnedSpawn || receipt.retryClaim
+  if (entry.host || entry.structuredHost?.process || entry.claimOwner || receipt.queuedPinnedSpawn
     || receipt.pane || receipt.verifiedHost) return "live-owner";
   if (receipt.hostSetup?.phase === "executing" && !receipt.hostSetup.cleanupConfirmed && !receipt.hostSetup.processes.length) {
     return "unproven-process";
@@ -1336,13 +1336,16 @@ function staleSpawnMarkerRefusal(file: RegistryFile, key: string, receipt: Spawn
 
 function closedMarkerPipelines(file: RegistryFile, receipt: SpawnReceipt): string[] | null {
   const canonical = resolveConversationAlias(file, receipt.conversationId);
-  const ids = [...new Set(conversationIdsResolvingTo(file, canonical).flatMap(id =>
-    (file.memberships[id] ?? []).flatMap(member => member.kind === "pipeline" ? [member.containerId] : [])))];
-  if (!ids.length) return null;
+  const members = conversationIdsResolvingTo(file, canonical)
+    .flatMap(id => (file.memberships[id] ?? []).filter(member => member.kind === "pipeline"));
+  const ids = [...new Set(members.map(member => member.containerId))];
+  if (!ids.length || receipt.retryClaim && !members.some(member =>
+    member.stageId && receipt.retryClaim!.claimId === `${member.containerId}:${member.stageId}:${receipt.launchId}`)) return null;
   try {
     return ids.every(id => {
       const pipeline = findPipelineRecord(id);
-      return pipeline && (pipeline.state === "completed" || pipeline.state === "closed" || pipeline.state === "failed" && pipeline.closedAt);
+      const state = pipeline && String(pipeline.state);
+      return state === "completed" || state === "closed" || state === "failed" && Boolean(pipeline?.closedAt);
     }) ? ids : null;
   } catch { return null; }
 }
@@ -1454,8 +1457,11 @@ export async function settleStaleSpawnMarkers(
             if (await agentScopeCommand(["show", "--value", "-p", "LoadState", unit]) !== "not-found") return "active-unit";
           }
         } catch { return "unproven-unit"; }
-        const pipes = group === "M3" ? closedMarkerPipelines(snapshot, receipt) : null;
-        if (group === "M3" && !pipes) return "pipeline-reserved";
+        // Retry claims remain in the receipt as replay custody. A closed
+        // owner can no longer exercise the claim against this generation.
+        const needsPipelineProof = group === "M3" || receipt.retryClaim !== undefined;
+        const pipes = needsPipelineProof ? closedMarkerPipelines(snapshot, receipt) : null;
+        if (needsPipelineProof && !pipes) return "pipeline-reserved";
         if (group === "M3" && !stagedLaunchRecovery(receipt)) return "staged-recovery-unproven";
         if (group === "M3" && (!Number.isFinite(structuredSetupStartedAt(receipt))
           || now() - structuredSetupStartedAt(receipt) < STALE_STRUCTURED_SPAWN_TIMEOUT_MS)) return "receipt-fresh";
@@ -1484,7 +1490,8 @@ export async function settleStaleSpawnMarkers(
           const reason = staleSpawnMarkerRefusal(file, key, current);
           if (reason) return reason;
           if (recordedOpen(file, current)) return "operation-open";
-          if (group === "M3" && (!closedMarkerPipelines(file, current) || markerTranscriptStamp(pathname) !== stamp)) return "staged-evidence-changed";
+          if (needsPipelineProof && !closedMarkerPipelines(file, current)) return "pipeline-reserved";
+          if (group === "M3" && markerTranscriptStamp(pathname) !== stamp) return "staged-evidence-changed";
           return null;
         };
         const apply = () => {
