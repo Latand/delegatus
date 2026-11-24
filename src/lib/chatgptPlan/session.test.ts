@@ -65,6 +65,28 @@ test("above the refresh window reuses the token and below it serializes independ
   expect(inferences().slice(1).map(row => new Headers(row.init?.headers).get("authorization"))).toEqual(Array(2).fill(`Bearer ${synth("access")}`));
 });
 
+test("a peer's short-lived rotation serves requests already waiting for the previous token", async () => {
+  let readOld!: () => void;
+  const oldRead = new Promise<void>(resolve => { readOld = resolve; });
+  const session = create(async () => {
+    await oldRead;
+    const { id_token: _identity, ...reply } = grant();
+    return Response.json({ ...reply, expires_in: 30 });
+  });
+  expiring(now + 5_000);
+  class PeerStore extends PlanStore {
+    override async credentials() {
+      const row = await super.credentials();
+      readOld();
+      return row;
+    }
+  }
+  const peer = new PlanSession(new PeerStore(() => fixture.directory), fixture.oidc, () => now);
+  await Promise.all([session.respond(body, signal(), owner), peer.respond(body, signal(), owner)]);
+  expect(refreshes()).toHaveLength(1);
+  expect(inferences()).toHaveLength(2);
+});
+
 test("refresh eligibility time uses a still-valid access token, and refuses an expired one", async () => {
   const session = create();
   const row = expiring();

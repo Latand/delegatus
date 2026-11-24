@@ -57,7 +57,7 @@ test.each([[401, "credential_rejected"], [403, "policy_denied"], [503, "retry_la
 });
 
 test("incomplete, early EOF, and oversized data fail without a completed result", async () => {
-  await expect(attempt(() => stream({ type: "response.incomplete" }))).rejects.toThrow("interrupted");
-  await expect(attempt(() => stream({ type: "response.output_text.delta", delta: "Incomplete" }))).rejects.toThrow("interrupted");
+  await expect(attempt(() => stream({ type: "response.incomplete" }))).rejects.toThrow("incomplete");
+  await expect(attempt(() => stream({ type: "response.output_text.delta", delta: "Incomplete" }))).rejects.toThrow("stream_interrupted");
   await expect(attempt(() => new Response("x".repeat(4 * 1024 * 1024 + 1)))).rejects.toThrow("interrupted");
 });

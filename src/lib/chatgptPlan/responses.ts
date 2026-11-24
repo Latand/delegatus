@@ -48,7 +48,7 @@ export async function streamPlanResponse(http: typeof fetch, accessToken: string
         if (line || !data.length) continue;
         const frame = data.join("\n");
         data = [];
-        if (frame === "[DONE]") throw new PlanError("interrupted");
+        if (frame === "[DONE]") throw new PlanError("stream_interrupted");
         const event = object(JSON.parse(frame));
         const result = object(event?.response);
         if (event?.type === "response.completed" && result) {
@@ -56,12 +56,12 @@ export async function streamPlanResponse(http: typeof fetch, accessToken: string
           return result;
         }
         if (event?.type === "response.failed" || event?.type === "error") throw responseError(response.status, result ?? event, requestId, accessToken);
-        if (event?.type === "response.incomplete") throw new PlanError("interrupted");
+        if (event?.type === "response.incomplete") throw new PlanError("incomplete");
         if (event?.type === "response.output_text.delta" && typeof event.delta === "string" && !event.delta.includes(accessToken)) onDelta?.(event.delta);
       }
       if (remainder) partial.push(remainder);
     }
-    throw new PlanError("interrupted");
+    throw new PlanError("stream_interrupted");
   } catch (error) {
     throw error instanceof PlanError ? error : new PlanError("interrupted");
   } finally {

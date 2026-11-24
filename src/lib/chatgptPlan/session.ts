@@ -84,7 +84,10 @@ export class PlanSession {
         if (!owner()) throw new PlanError("plan_disabled");
         signal.throwIfAborted();
         const now = this.now();
-        if (!current.pendingRotation && current.tokens.expiresAt > now + REFRESH_WINDOW) return current.tokens.accessToken;
+        if (!current.pendingRotation && current.tokens.expiresAt > now
+          && (current.tokens.expiresAt > now + REFRESH_WINDOW || current.tokens.refreshToken !== row.tokens.refreshToken)) {
+          return current.tokens.accessToken;
+        }
         const deadline = AbortSignal.timeout(15_000);
         if (!current.pendingRotation) {
           const earliest = current.tokens.earliestRefreshAt ?? 0;

@@ -10,7 +10,7 @@ export type PlanFallback = "plan_limit" | "retry_later" | "not_eligible" | "requ
 
 export type PlanReason = PlanFallback | "declined" | "client_rejected" | "account_mismatch"
   | "registration_incomplete" | "credential_file" | "host_file" | "expired"
-  | "busy" | "invalid_request";
+  | "busy" | "invalid_request" | "incomplete" | "stream_interrupted";
 
 export type PlanStatus = {
   state: PlanState;
