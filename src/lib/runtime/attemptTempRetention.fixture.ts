@@ -41,6 +41,7 @@ import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import { attemptTempAuthority, attemptScratchAuthority, backfillAttemptTempRetention, runAttemptTempSweep } from "./attemptTempProduction";
 import { runTemporaryDataSweep } from "./temporaryDataProduction";
+import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
 
 if (process.argv[2] === "--legacy-copy-tick") {
   Date.now = () => Number(process.argv[3]);
@@ -55,9 +56,13 @@ if (process.argv[2] === "--legacy-copy-tick") {
 
 if (process.argv[2] === "--production-report") {
   Date.now = () => Number(process.argv[3]);
+  const resourceRefused = process.argv.find(arg => arg.startsWith("--checkout-budget-root="))?.split("=")[1];
   const report = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }),
     ...(process.argv.includes("--fixture-container-inventory")
-      ? { references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true) } : {}) },
+      ? { references: (original, current, scan) => {
+        if (path.basename(original) === resourceRefused) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+        return attemptReferencesClear(original, current, scan, async () => true);
+      } } : {}) },
     { ...process.env, LLV_TEMP_SWEEP: "on" });
   process.stdout.write(JSON.stringify(report) + "\n");
   process.exit(0);

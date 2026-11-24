@@ -6,7 +6,7 @@ import { statePath } from "@/lib/configDir";
 import { readEnvelope } from "@/lib/recordedChecks/wire";
 import { attemptTempJournalPath, finishTreeTrash, removeTreeViaTrash } from "@/lib/tempSweep";
 import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, snapshotAttemptProtection, RepositoryLinkInventory } from "./attemptTempFilesystem";
-import { AttemptTempStore, type AttemptTempSweepOptions, type AttemptTempAuthority, type EvidenceCopy } from "./attemptTempRetention";
+import { type AttemptTempStore, type AttemptTempSweepOptions, type AttemptTempAuthority, type EvidenceCopy } from "./attemptTempRetention";
 import { attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
@@ -91,10 +91,56 @@ async function adoptCopies(store: AttemptTempStore, now: () => number, deadline:
   return adopted;
 }
 
+function copyHasRegisteredSource(store: AttemptTempStore, destination: string, proof: ReturnType<typeof copyParentProof>) {
+  if (!proof.exists) return false;
+  let binding: ReturnType<typeof readAttemptEvidenceBinding>;
+  try {
+    copyPath(destination, proof.parent);
+    const stat = fs.lstatSync(destination, { throwIfNoEntry: false });
+    if (!stat?.isDirectory() || stat.isSymbolicLink() || process.getuid && stat.uid !== process.getuid()) return false;
+    binding = readAttemptEvidenceBinding(path.join(destination, "manifest.json"));
+    const name = createHash("sha256").update(binding.original).update("\0").update(binding.identity).digest("hex");
+    const after = fs.lstatSync(destination);
+    if (name !== path.basename(destination) || after.dev !== stat.dev || after.ino !== stat.ino || !proof.current()) return false;
+  } catch { return false; }
+  const owner = store.owner(binding.original);
+  return !!owner && owner.launchId !== "adopted" && owner.identity === binding.identity
+    && (binding.pipelineId == null || binding.pipelineId === owner.pipelineId)
+    && (binding.launchId == null || binding.launchId === owner.launchId);
+}
+
+/** Capture the binding before the root's ledger row can disappear, even if
+ * the independent legacy copy cursor has yet to reach this destination. */
+export function attributeCopyBeforeRootRetirement(store: AttemptTempStore, original: string, identity: string) {
+  const name = createHash("sha256").update(original).update("\0").update(identity).digest("hex");
+  const destination = statePath("evidence", "attempt-temp", name);
+  if (!store.copySourcePending(destination)) return 0;
+  let proof: ReturnType<typeof copyParentProof>;
+  try { proof = copyParentProof(); } catch { return 0; }
+  return copyHasRegisteredSource(store, destination, proof) ? store.attributeCopySource(destination) : 0;
+}
+
+/** Old ledgers can have sealed discovery before this source was registered.
+ * This cursor repairs reporting even when ordinary copy adoption is done. */
+function attributeRegisteredSources(store: AttemptTempStore, remaining: () => boolean) {
+  const position = store.copySourceCursor(), limit = 32;
+  if (position.done || !remaining()) return 0;
+  const proof = copyParentProof();
+  const rows = store.copySourcePage(position.cursor, limit);
+  let attributed = 0, cursor = position.cursor;
+  for (const { destination } of rows) {
+    if (!remaining()) return attributed;
+    attributed += store.checkpointCopySource(destination, false, copyHasRegisteredSource(store, destination, proof));
+    cursor = destination;
+  }
+  if (rows.length < limit) store.checkpointCopySource(cursor, true);
+  return attributed;
+}
+
 /** Runs after root admission is released. Each removal has its own journal;
  * due-row checkpoints, attribution and errors survive a helper restart. */
 export async function sweepEvidenceCopies(store: AttemptTempStore, options: AttemptTempSweepOptions, policy: { agentCopiesManagedSeparately?: boolean } = {}) {
-  if (attemptTempRemaining() <= 0) return { adopted: 0, checked: 0, inspected: 0, removed: 0, removedBytes: 0,
+  if (attemptTempRemaining() <= 0) return { adopted: 0, sourceAttributed: 0, checked: 0, inspected: 0, removed: 0, removedBytes: 0,
     errors: 0, unattributed: store.unattributedCopies() };
   return withFileTransactionAsync(store.filename + ".sweep", "attempt evidence copy admission", () => sweepOwnedCopies(store, options, policy),
     { waitMs: attemptTempRemaining(10_000) });
@@ -102,10 +148,12 @@ export async function sweepEvidenceCopies(store: AttemptTempStore, options: Atte
 
 async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSweepOptions, policy: { agentCopiesManagedSeparately?: boolean }) {
   const now = options.now ?? Date.now, deadline = now() + attemptTempRemaining(10000);
-  const report = { adopted: 0, checked: 0, inspected: 0, removed: 0, removedBytes: 0, errors: 0, unattributed: { count: 0, bytes: 0 } };
+  const report = { adopted: 0, sourceAttributed: 0, checked: 0, inspected: 0, removed: 0, removedBytes: 0, errors: 0,
+    unattributed: { count: 0, bytes: 0 } };
   if (options.mode !== "dry-run") {
     try {
       report.adopted = await adoptCopies(store, now, deadline);
+      report.sourceAttributed = attributeRegisteredSources(store, () => now() < deadline && attemptTempRemaining() > 0);
       store.copyFailure(statePath("evidence", "attempt-temp"), null);
     }
     catch (error) {

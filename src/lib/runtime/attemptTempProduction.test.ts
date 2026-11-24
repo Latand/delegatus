@@ -1,9 +1,10 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import * as attemptRemoval from "./attemptTempRemoval";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { buildPipeline, savePipelines, findPipelineRecord } from "@/lib/pipelines/store";
+import { buildPipeline, savePipelines, findPipelineRecord, pipelineIdentity } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { materializeOwnedStructuredHostAccess, materializeStructuredHostAccess, tempOwnerForConversation } from "./structuredSpawn";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -19,6 +20,11 @@ import { attemptScratchAuthority } from "./attemptTempProduction";
 import { RecordedCheckStore, recordedRootHeld } from "@/lib/recordedChecks/store";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
+import { AttemptTempStore } from "./attemptTempRetention";
+import { runAttemptTempSweep } from "./attemptTempProduction";
+import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
+import { writeEnvelope } from "@/lib/recordedChecks/wire";
+import { realParentPass, restoreEnvironment } from "./attemptTempPressure.testSupport";
 
 test("a production tick schedules a parked terminal failure and retains a passed reopened cursor", async () => {
   const { AttemptTempStore } = await import("./attemptTempRetention");
@@ -641,6 +647,243 @@ test("hourly reclaim model includes sweep duration before the scheduler's minute
 const references = (original: string, current: string, scan: ProcessScan) =>
   attemptReferencesClear(original, current, scan, async () => true);
 
+const WORK_TICK = Date.parse("2026-11-24T17:53:00Z");
+const oldestWorkExpiry = WORK_TICK - 624_407_000;
+const emptyScan = () => ({ ownNamespace: null, processes: [] });
+const workPorts = { scan: emptyScan, availableBytes: () => 412e9 };
+const workMode = { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" };
+
+function workScratchFixture(total: number, overdue: number) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-work-shape-"));
+  roots.push(root);
+  isolateState(root);
+  const store = new AttemptTempStore();
+  const lane = finishedLane(root, new Date(WORK_TICK - 3 * 86400_000).toISOString());
+  const closedLane = (id: string, at: number) => ({
+    ...lane, ...pipelineIdentity(id, lane.task, lane.repoDir), id, closedAt: new Date(at).toISOString(),
+  });
+  const oldestLane = closedLane("oldest-lane", oldestWorkExpiry - ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS);
+  const youngLane = closedLane("young-lane", WORK_TICK - 3_600_000);
+  savePipelines([lane, oldestLane, youngLane]);
+  const scratch = statePath("scratch");
+  fs.mkdirSync(scratch);
+  const directories = Array.from({ length: total }, (_, index) => {
+    const directory = path.join(scratch, `llv-stage-${String(index).padStart(6, "0")}`);
+    fs.mkdirSync(directory, { mode: 0o700 });
+    fs.writeFileSync(path.join(directory, "payload"), "fixture");
+    const owner = index === overdue - 1 ? oldestLane : index < overdue ? lane : youngLane;
+    store.register({ directory, pipelineId: owner.id, launchId: `fixture-launch-${index}`,
+      retainUntilClose: true, createdAt: WORK_TICK - 10 * 86400_000 });
+    store.measure(directory, index === overdue - 1 ? 12_288 : 1_950_000, WORK_TICK);
+    store.retainRoot(directory, Date.parse(owner.closedAt!) + ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS);
+    return directory;
+  });
+  return { store, directories };
+}
+
+test("work-shaped backlog visits beyond four and drains the 279 overdue registered roots", async () => {
+  const { store, directories } = workScratchFixture(812, 279);
+  let now = WORK_TICK;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const ticks: { ms: number; cpu: number; checked: number; removed: number }[] = [];
+    const tick = async () => {
+      const start = performance.now();
+      const report = (await runAttemptTempSweep({ ...workPorts, references }, workMode))!;
+      ticks.push({ ms: performance.now() - start, cpu: report.cleanup.sweepCpuSeconds, checked: report.checked, removed: report.removed });
+      return report;
+    };
+    const first = await tick();
+    // Keep the first-tick sample even when the fix is absent on the baseline.
+    if (process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK === "1")
+      console.log(JSON.stringify({ fixture: "work-drain-first-tick", ...ticks[0] }));
+    expect(first.checked).toBeGreaterThan(4);
+    for (let n = 1; n < 20 && store.due(now, 1, true).length; n++) {
+      now += 120_000; // Include the helper deadline and the scheduler delay.
+      await tick();
+    }
+    if (process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK === "1")
+      console.log(JSON.stringify({ fixture: "work-drain", ticks: ticks.length, maxMs: Math.max(...ticks.map(tick => tick.ms)),
+        cpuSeconds: ticks.reduce((sum, tick) => sum + tick.cpu, 0), removed: ticks.reduce((sum, tick) => sum + tick.removed, 0) }));
+    expect(directories.slice(0, 279).filter(directory => fs.existsSync(directory))).toHaveLength(0);
+    expect(directories.slice(279).every(directory => store.has(directory) && fs.existsSync(directory))).toBeTrue();
+  } finally { clock.mockRestore(); store.close(); }
+}, 300_000);
+
+test("work-shaped zero-reclaim page reaches the root overdue by 624407 seconds", async () => {
+  const { store, directories } = workScratchFixture(5, 5);
+  const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
+  const [first, second, third, fourth, oldest] = directories;
+  try {
+    expect(store.oldestEligibleRootAgeSeconds(WORK_TICK)).toBe(624407);
+    const report = await runAttemptTempSweep({ ...workPorts, references: async original => {
+      if (original === first || original === second) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+      return original !== third && original !== fourth;
+    } }, workMode);
+    expect(report).toMatchObject({ removed: 1, deferred: 2, held: 2 });
+    expect(report?.outcomes.map(row => [row.directory, row.reasonCode])).toEqual([
+      [oldest, "retired"], [first, "checkout_budget"], [second, "checkout_budget"],
+      [third, "reference_observer_hold"], [fourth, "reference_observer_hold"],
+    ]);
+    expect(fs.existsSync(oldest!)).toBeFalse();
+    expect(directories.slice(0, 4).every(directory => fs.existsSync(directory))).toBeTrue();
+  } finally { clock.mockRestore(); store.close(); }
+});
+
+test("work-shaped unattributed copy report recognizes a legacy copy of registered scratch", async () => {
+  const { store, directories: [original] } = workScratchFixture(1, 1);
+  const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
+  try {
+    const { identity } = store.owner(original!)!;
+    const name = createHash("sha256").update(original!).update("\0").update(identity).digest("hex");
+    const copy = statePath("evidence", "attempt-temp", name);
+    fs.mkdirSync(copy, { recursive: true });
+    writeEnvelope(path.join(copy, "manifest.json"), { original, identity });
+    store.registerCopy({ destination: copy, pipelineId: null, launchId: "legacy", kind: "unattributed",
+      createdAt: WORK_TICK - 10 * 86400_000, expiresAt: null, checkedAt: 0, bytes: 4096 });
+    store.checkpointCopies("", true);
+    const otherSource = path.join(path.dirname(original!), "llv-stage-unbound");
+    const otherName = createHash("sha256").update(otherSource).update("\0").update(identity).digest("hex");
+    const other = statePath("evidence", "attempt-temp", otherName);
+    fs.mkdirSync(other);
+    writeEnvelope(path.join(other, "manifest.json"), { original: otherSource, identity });
+    store.registerCopy({ ...store.copy(copy)!, destination: other, bytes: 8192 });
+    const tick = () => runAttemptTempSweep({ ...workPorts, references: async () => false }, workMode);
+    const report = await tick();
+    expect(report).toMatchObject({ held: 1, copies: { adopted: 0, sourceAttributed: 1, removed: 0,
+      unattributed: { count: 1, bytes: 8192 } } });
+    expect(fs.existsSync(copy)).toBeTrue();
+    expect(store.has(original!)).toBeTrue();
+    expect(store.copy(copy)?.kind).toBe("unattributed"); // Attribution gives the legacy copy no removal authority.
+    expect(store.copyLedgerPage("", 10)).toContainEqual({ destination: copy, kind: "unattributed" });
+    expect(store.dueCopies(WORK_TICK, 10)).toEqual([]);
+    expect((await tick())?.copies).toMatchObject({ sourceAttributed: 0, unattributed: { count: 1, bytes: 8192 } });
+    store.forgetCopy(copy);
+    expect(store.unattributedCopies()).toEqual({ count: 1, bytes: 8192 });
+  } finally { clock.mockRestore(); store.close(); }
+});
+
+test("attributing a legacy copy before its registered source retires survives the sealed cursor", async () => {
+  const { store, directories: [original] } = workScratchFixture(1, 1);
+  const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
+  try {
+    const { identity } = store.owner(original!)!;
+    const name = createHash("sha256").update(original!).update("\0").update(identity).digest("hex");
+    const copy = statePath("evidence", "attempt-temp", name);
+    fs.mkdirSync(copy, { recursive: true });
+    writeEnvelope(path.join(copy, "manifest.json"), { original, identity });
+    store.registerCopy({ destination: copy, pipelineId: null, launchId: "legacy", kind: "unattributed",
+      createdAt: WORK_TICK - 10 * 86400_000, expiresAt: null, checkedAt: 0, bytes: 4096 });
+    store.checkpointCopies("", true);
+    store.checkpointCopySource("", true);
+    const report = await runAttemptTempSweep({ ...workPorts, references }, workMode);
+    expect(report).toMatchObject({ removed: 1, copies: { adopted: 0, removed: 0, sourceAttributed: 1,
+      unattributed: { count: 0, bytes: 0 } } });
+    expect(store.has(original!)).toBeFalse();
+    expect(fs.existsSync(original!)).toBeFalse();
+    expect(fs.existsSync(copy)).toBeTrue();
+    expect(store.copy(copy)?.expiresAt).toBeNull();
+    expect(store.dueCopies(WORK_TICK, 10)).toEqual([]);
+  } finally { clock.mockRestore(); store.close(); }
+});
+
+test("expensive expired proofs keep their next retry across fresh helpers", async () => {
+  const { store, directories: [directory] } = workScratchFixture(1, 1);
+  const tick = async (at: number, fail: boolean) => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
+      "--production-report", String(at), "--fixture-container-inventory",
+      ...(fail ? [`--checkout-budget-root=${path.basename(directory!)}`] : [])],
+    { stdout: "pipe", stderr: "pipe" });
+    const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code, errors).toBe(0);
+    return JSON.parse(output.trim().split("\n").at(-1)!);
+  };
+  try {
+    const retryAt = WORK_TICK + 15 * 60_000;
+    expect(await tick(WORK_TICK, true)).toMatchObject({ checked: 1, deferred: 1, removed: 0,
+      outcomes: [expect.objectContaining({ reasonCode: "checkout_budget", retryAt })] });
+    expect(store.owner(directory!)?.checkedAt).toBe(retryAt);
+    expect(store.allocationDue(WORK_TICK + 60_000)).toEqual([]);
+    expect(await tick(WORK_TICK + 60_000, false)).toMatchObject({ checked: 0, removed: 0 });
+    expect(fs.readFileSync(path.join(directory!, "payload"), "utf8")).toBe("fixture");
+    expect(await tick(retryAt, false)).toMatchObject({ checked: 1, removed: 1, errors: 0 });
+    expect(fs.existsSync(directory!)).toBeFalse();
+  } finally { store.close(); }
+}, 15_000);
+
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK !== "1")("work-shaped measurement over one hour of minute ticks", async () => {
+  const { store, directories } = workScratchFixture(812, 4);
+  let now = WORK_TICK;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const samples: { ms: number; cpu: number; checked: number; deferred: number; held: number }[] = [];
+  let last = performance.now(), maxGap = 0;
+  const timer = setInterval(() => {
+    const at = performance.now();
+    maxGap = Math.max(maxGap, at - last);
+    last = at;
+  }, 5);
+  try {
+    const budgetRoots = new Set(directories.slice(0, 2));
+    for (const directory of budgetRoots) {
+      for (let n = 0; n < 384; n++) fs.mkdirSync(path.join(directory, String(n).padStart(4, "0")));
+    }
+    for (let n = 0; n < 692; n++) store.registerCopy({
+      destination: statePath("evidence", "attempt-temp", n.toString(16).padStart(64, "0")), pipelineId: null, launchId: "legacy",
+      kind: "unattributed", createdAt: now, expiresAt: null, checkedAt: now, bytes: 67_052_024,
+    });
+    store.checkpointCopies("", true);
+    last = performance.now();
+    for (let n = 0; n < 60; n++) {
+      now = WORK_TICK + 60_000 * n;
+      const start = performance.now();
+      const report = (await runAttemptTempSweep({ ...workPorts, references: async original => {
+        if (budgetRoots.has(original)) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+        return false;
+      } }, workMode))!;
+      samples.push({ ms: performance.now() - start, cpu: report.cleanup.sweepCpuSeconds, checked: report.checked,
+        deferred: report.deferred, held: report.held });
+      expect(report.removed).toBe(0);
+      expect(report.reclaimedBytes).toBe(0);
+      await Bun.sleep(0);
+    }
+    const times = samples.map(sample => sample.ms).sort((a, b) => a - b);
+    console.log(JSON.stringify({ fixture: "work-no-reclaim", ticks: samples.length, medianMs: times[29],
+      p95Ms: times[56], maxMs: times[59], maxHeartbeatGapMs: maxGap,
+      cpuSeconds: samples.reduce((sum, sample) => sum + sample.cpu, 0),
+      checked: samples.reduce((sum, sample) => sum + sample.checked, 0),
+      deferred: samples.reduce((sum, sample) => sum + sample.deferred, 0), first: samples[0] }));
+  } finally { clearInterval(timer); clock.mockRestore(); store.close(); }
+}, 60_000);
+
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK !== "1")("work-shaped Viewer-side heartbeat during an overdue page", async () => {
+  const { store } = workScratchFixture(812, 279);
+  const env = { ...process.env };
+  const config = statePath("work-heartbeat.json");
+  fs.writeFileSync(config, JSON.stringify({ now: WORK_TICK, freeBytes: 412e9, realClock: true, measureCost: 0 }));
+  process.env.LLV_PRESSURE_FIXTURE = config;
+  process.env.LLV_TEMP_SWEEP = "on";
+  let last = performance.now(), maxGap = 0, beats = 0;
+  const timer = setInterval(() => {
+    const at = performance.now();
+    maxGap = Math.max(maxGap, at - last);
+    last = at;
+    beats++;
+  }, 5);
+  try {
+    const start = performance.now();
+    const report = await realParentPass(true);
+    expect(report.errors).toBe(0);
+    expect(report.checked).toBeGreaterThanOrEqual(4);
+    expect(beats).toBeGreaterThan(0);
+    console.log(JSON.stringify({ fixture: "work-viewer-heartbeat", ms: performance.now() - start,
+      maxHeartbeatGapMs: maxGap, beats, cpuSeconds: report.cleanup.sweepCpuSeconds, checked: report.checked, removed: report.removed }));
+  } finally {
+    clearInterval(timer);
+    store.close();
+    restoreEnvironment(env);
+  }
+}, 45_000);
+
 test.skipIf(process.env.LLV_ATTEMPT_TEMP_BENCHMARK !== "1")("retention benchmark: 727 roots under two CPU writers and one synced disk writer", async () => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
   const { attemptTempState } = await import("./attemptTempProduction");
@@ -1055,8 +1298,15 @@ test.skipIf(process.platform !== "linux").each(["live child", "mount", "linked e
         });
         restore.push(() => replace.mockRestore());
       }
-      const report = await runAttemptTempSweep({ scan, references }, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" });
+      const report = await runAttemptTempSweep({
+        scan, ...(protection === "live child" ? {} : { references }),
+      }, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" });
       expect(report).toMatchObject({ checked: 1, removed: 0, reclaimedBytes: 0 });
+      const reasons = {
+        "live child": "process_reference", mount: "mount_boundary", "linked evidence": "linked_evidence_hold",
+        "broken git pointer": "git_boundary", "unknown checkout": "git_boundary",
+      } as const;
+      if (protection in reasons) expect(report?.outcomes[0]?.reasonCode).toBe(reasons[protection as keyof typeof reasons]);
       expect(fs.readFileSync(preserved, "utf8")).toBe("protected data");
       if (protection === "swap" || protection === "last handoff swap") {
         expect(swapped).toBeTrue();

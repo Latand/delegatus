@@ -33,30 +33,28 @@ check lanes finish. Shared builds remain available to all their consumers.
 
 ## Deadline repair and selection
 
-Release immediately records a finished lane's seven-day deadline. A separate
-128-root metadata page refreshes released ownership on each attempt-temp tick.
-Its primary-key cursor is durable and rotates over open lanes too, so closing
-a lane after release still supplies its deadline. It reads no directory
-contents and tolerates a root already removed by its owner. Per-root authority
-read failures are reported and do not starve later roots. Ownership revisions
-and root bindings are checked again after awaited reads. Schema/index creation
-uses `assertStateStartupMutation`.
+Release and the terminal change feed record a scratch deadline from confirmed
+completion. Stage scratch becomes due strictly after 24 hours, including
+under pressure. Roots marked retain-until-close use the lane's finish clock.
+An independent 128-root metadata audit repairs older ledger entries without
+reading directory contents. Its durable cursor also visits open lanes.
+Ownership revisions and root bindings are checked again after awaited reads.
+Schema and index creation uses `assertStateStartupMutation`.
 
-Ordinary pages order known allocations largest first, retaining a share for
-expired roots. Pressure pages put a bounded largest-due prefix before the
-existing durable cursor traversal; the cursor continues to fund roots outside
-that prefix. Temporary preservation holds suppress the allocation forecast
-while retaining the owner's deadline. That date nominates a future visit;
-identity, live consumers, check custody, keep markers and ownership still fence
-every destructive dispatch. A matching attempt in an open or paused lane stays
-live even after the individual stage has settled.
+The ordinary tick selects up to 32 due roots by recorded expiry. Under
+pressure a durable cursor visits expired roots in allocation order.
+Temporary preservation holds suppress the allocation forecast while
+retaining the owner's deadline. That date nominates a future visit.
+Identity, live consumers, check custody, keep markers and ownership fence
+every destructive dispatch. The report records each visit's reason code
+and any ledger retry time. See [Attempt temp under disk pressure](attempt-temp-pressure.md).
 
 The effective scratch cap is the smaller of its configured cap and half the
 sum of measured scratch allocation and available filesystem space, leaving at
 least the existing 20 GiB working reserve. With 80 GiB of scratch and 75 GiB
-free, the effective cap is 77.5 GiB. Pressure cleanup can retire closed-lane
-scratch before seven days without making another evidence copy. A failed
-free-space observation is reported and preserves the configured cap.
+free, the effective cap is 77.5 GiB. Pressure cleanup can retire expired
+scratch without making another evidence copy. A failed free-space
+observation is reported and preserves the configured cap.
 
 ## Finished host event journals
 
