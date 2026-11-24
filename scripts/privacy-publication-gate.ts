@@ -2628,11 +2628,17 @@ const EMBEDDED_MESSAGE_RULE = /^-{3,}[ \t]*$/;
 
 type MessageParagraph = { end: number; start: number };
 
+/* Git separates paragraphs only at a line holding nothing but its own ASCII
+   whitespace: space, tab and carriage return. `String.trim()` also blanks
+   U+00A0, U+FEFF, vertical tab and form feed, and a line holding one of them
+   would let body prose read as a trailer block git never parses. */
+const GIT_BLANK_LINE = /^[ \t\r]*$/;
+
 function messageParagraphs(lines: string[]): MessageParagraph[] {
   const found: MessageParagraph[] = [];
   let start: number | undefined;
   for (let index = 0; index <= lines.length; index += 1) {
-    if (index < lines.length && lines[index].trim() !== "") {
+    if (index < lines.length && !GIT_BLANK_LINE.test(lines[index])) {
       if (start === undefined) start = index;
       continue;
     }

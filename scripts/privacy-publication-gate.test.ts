@@ -5205,6 +5205,46 @@ describe("mergeBoundaryReview", () => {
     expect(notices).toEqual([`commit_message: ${evidence.tip.slice(0, 12)} message email_address`]);
   });
 
+  test.each([
+    ["an empty line", "", true],
+    ["a line of git whitespace", " \t\r", true],
+    ["a no-break space line", " ", false],
+    ["a byte order mark line", "﻿", false],
+  ])("a recorded trailer after body prose and %s follows git's own trailer parse", async (_case, separator, composed) => {
+    /* Git ends a paragraph only at a line of space, tab or carriage return.
+       Any other invisible line keeps the prose and the trailer one paragraph,
+       which git parses as no trailer at all. */
+    const message = `Squash subject\n\nBody prose\n${separator}\n${squashTrailer}`;
+    const repo = await gitRepo();
+    await commit(repo, message, canonicalIdentity);
+    const evidence = { tip: await head(repo), squashAddresses: [squashAuthor.email] };
+    expect(await identityField(repo, "%(trailers:key=Co-authored-by,valueonly)") !== "").toBe(composed);
+    expect(commitMessageFindings(repo, "main", [], evidence).get("email_address")).toBe(composed ? undefined : 1);
+
+    const gate = await runPrivacyTestProcess({
+      cmd: [process.execPath, "-e", `
+        import { runPublicationGate } from "./scripts/privacy-publication-gate";
+        const [repository, evidence] = process.argv.slice(1);
+        runPublicationGate(["--repository", repository, "--base", "main", "--check-commits"], JSON.parse(evidence));
+      `, repo, JSON.stringify(evidence)],
+      cwd: join(import.meta.dir, ".."), env: process.env, stderr: "pipe", stdout: "pipe",
+    });
+    expect(gate.exitCode).toBe(composed ? 0 : 1);
+    expect(gate.stdout.toString()).not.toContain(squashAuthor.email);
+  });
+
+  test("an invisible non-git separator keeps a machine trailer in body prose", () => {
+    const vendor = ["noreply", "vendor.example.com"].join("@");
+    for (const separator of [" ", "﻿", "\v", "\f"]) {
+      const message = `feat: something\n\nBody prose\n${separator}\nCo-Authored-By: Some Model <${vendor}>`;
+      /* Decoded views drop the invisible line and may also see a block; the
+         raw view attributes it, and one attributing view is a finding. */
+      expect(commitMessageAddressReview(message).attributable).toEqual([vendor]);
+    }
+    expect(commitMessageAddressReview(`feat: something\n\nBody prose\n\nCo-Authored-By: Some Model <${vendor}>`))
+      .toEqual({ attributable: [], exempt: [vendor] });
+  });
+
   test("a role-shaped local part on the forge account host still needs squash evidence", () => {
     const email = ["noreply", forgeAccountDomain].join("@");
     const message = `Squash subject\n\nCo-authored-by: Fixture Contributor <${email}>`;
