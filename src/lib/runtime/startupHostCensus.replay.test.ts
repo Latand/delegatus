@@ -69,11 +69,12 @@ test("replay a retained structured-host registry", async () => {
       .run(JSON.stringify({ journal: databaseFileIdentity(journalPath), archiveId }));
   } finally { db.close(); }
   let entryPayloadReads = 0;
-  const registry = new AgentRegistry(path.join(scratch, "agent-registry.json"), undefined, undefined, {
+  const openRegistry = () => new AgentRegistry(path.join(scratch, "agent-registry.json"), undefined, undefined, {
     sqliteMode: "sqlite", sqliteFilename, onSqliteRowPayloadRead: (collection, count) => {
       if (collection === "entries") entryPayloadReads += count;
     },
   });
+  let registry = openRegistry();
   const backend = new RuntimeHost(journal, undefined, undefined, true);
   const requests = new Map<string, number>();
   const runtimeIds = new Set<string>();
@@ -152,6 +153,18 @@ test("replay a retained structured-host registry", async () => {
     fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "pipelines.json"),
       JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [pipeline, unreadable] }));
 
+    const view = await registry.prepareReadOnlySnapshot();
+    const beforeSelection = entryPayloadReads;
+    const selected = await startupStructuredHostEntries(view);
+    const selectionReads = entryPayloadReads - beforeSelection;
+    const seat = activeSeat("census", 1, conversation(1), row(1).artifactPath);
+
+    // The fixture's writes and the standalone selection probe must not warm
+    // the Viewer reader used by the timed startup pass.
+    registry.close();
+    registry = openRegistry();
+    entryPayloadReads = 0;
+
     let censusMs = -1;
     let phaseStarted = 0;
     let membershipRows = 0;
@@ -163,18 +176,14 @@ test("replay a retained structured-host registry", async () => {
     const startupBoundary = spyOn(registry, "startupHostSnapshot");
     const retryProbes = spyOn(StartupRowRetries.prototype, "load");
     cleanups.push(() => retryProbes.mockRestore(), () => startupBoundary.mockRestore(), () => progress.mockRestore());
-    const view = await registry.prepareReadOnlySnapshot();
-    const beforeSelection = entryPayloadReads;
-    const selected = await startupStructuredHostEntries(view);
-    const selectionReads = entryPayloadReads - beforeSelection;
     const start = performance.now();
     const eligible: string[] = [];
     const adopted = await startup.adoptStructuredHostsAtStartup({
       registry, client, interruptions,
-      orchestratorSeats: () => [activeSeat("census", 1, conversation(1), row(1).artifactPath)],
+      orchestratorSeats: () => [seat],
       refreshTranscriptState: async () => {},
       adopt: async (_registry, _options, _env, filter, _processed, hooks) => {
-        for (const entry of await startupStructuredHostEntries(hooks?.preparedSnapshot ?? view)) {
+        for (const entry of await startupStructuredHostEntries(hooks?.preparedSnapshot ?? registry.readOnlySnapshot())) {
           if (filter?.(entry)) eligible.push(entry.key.sessionId);
         }
         return [];
