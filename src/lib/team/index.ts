@@ -164,6 +164,19 @@ const AUTHOR_SLACK_MS = 10 * 60_000;
  * when none precedes it). Each send names at most one
  * record; a record nothing matches is left unnamed.
  */
+/** Fast check for whether a conversation has any recorded human member sends
+    that could participate in occurrence-based authorship attribution. */
+export function hasConversationMessageAuthors(conversationId: string | null): boolean {
+  if (!conversationId) return false;
+  try {
+    const store = existingTeamStore();
+    if (!store) return false;
+    return store.messageAuthorsForConversation(conversationId).some((row) => Boolean(row.textDigest));
+  } catch {
+    return false;
+  }
+}
+
 export function recordAuthors(
   conversationId: string | null,
   records: ReadonlyArray<{ role: string; ts: string | null; text: string }>,

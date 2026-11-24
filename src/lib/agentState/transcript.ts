@@ -259,7 +259,7 @@ export class AgentTranscriptCache {
       const signature = fileSignature(stat);
       const size = Number(stat.size);
       if (!stat.isFile() || !Number.isSafeInteger(size)) return uncertain("artifact is not a bounded regular file");
-      const anchor = input.engine === "copilot" ? input.anchor : null;
+      const anchor = (input.engine === "copilot" || input.engine === "antigravity") ? input.anchor : null;
       const base = anchor?.offset ?? 0;
       if (base > size || anchor && anchor.device !== null && (String(stat.dev) !== anchor.device || String(stat.ino) !== anchor.inode)) return uncertain("native prompt anchor identity changed");
       const artifact = crypto.createHash("sha256").update(input.path).digest("hex").slice(0, 24);
@@ -349,7 +349,7 @@ export class AgentTranscriptCache {
         const skip = start > base ? buffer.indexOf(10) + 1 : 0;
         if (start > base && skip <= 0) return uncertain("native record exceeds page budget");
         const events = parseBoundaryPage(buffer.subarray(skip), input.engine, input.localRef);
-        if (input.engine === "copilot") cached.promptStarts = (cached.promptStarts ?? 0) + events.filter(event => event.kind === "start").length;
+        if (input.engine === "copilot" || input.engine === "antigravity") cached.promptStarts = (cached.promptStarts ?? 0) + events.filter(event => event.kind === "start").length;
         cached.events = [...events, ...cached.events];
         if (input.engine === "codex") {
           const start = cached.events.findLastIndex(event => event.kind === "start" && event.id !== null);
@@ -357,7 +357,7 @@ export class AgentTranscriptCache {
           cached.events = compactCodexWork(cached.events);
         }
 
-        if (input.engine === "copilot") {
+        if (input.engine === "copilot" || input.engine === "antigravity") {
           const latestStart = cached.events.findLastIndex(event => event.kind === "start");
           if (latestStart > 0) cached.events = cached.events.slice(latestStart);
         }
@@ -369,9 +369,9 @@ export class AgentTranscriptCache {
         const recoveryPending = input.engine === "claude" && cached.events.at(-1)?.release && turn?.state !== "closed";
         cached.complete = cached.before === base || (input.engine === "claude-ledger"
           ? cached.events.some(event => event.type === "host-turn-start")
-          : input.engine !== "copilot" && !recoveryPending && Boolean(turn?.opening)
+          : input.engine !== "copilot" && input.engine !== "antigravity" && !recoveryPending && Boolean(turn?.opening)
             && (input.engine !== "codex" || turn?.nativeId !== null));
-        if (turn && input.engine === "copilot") turn.promptOrdinal = cached.before === base ? cached.promptStarts ?? 0 : null;
+        if (turn && (input.engine === "copilot" || input.engine === "antigravity")) turn.promptOrdinal = cached.before === base ? cached.promptStarts ?? 0 : null;
         cached.turn = turn;
         if (!cached.complete && (cached.events.length > MAX_EVENTS || JSON.stringify(cached.events).length > 256 * 1024)) {
           if (input.engine === "codex") {

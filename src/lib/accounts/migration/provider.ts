@@ -507,13 +507,14 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   try {
     identity = await successorCapability(input, "codex");
     assertAdoptionCurrent();
+    const guard = await stageGitEnvironment(input.registry, input.conversationId, input.receipt.operationId, input.profile.cwd);
     access = await materializeOwnedStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
-      { ...input.target.env, ...await stageGitEnvironment(input.registry, input.conversationId, input.receipt.operationId, input.profile.cwd) },
+      { ...input.target.env, ...guard },
       identity.capability,
       () => {
         assertAdoptionCurrent();
-        return tempOwnerForConversation(input.registry, input.conversationId, input.receipt.nativeId);
+        return tempOwnerForConversation(input.registry, input.conversationId, input.receipt.nativeId, guard.LLV_STAGE_GIT_RECEIPT);
       },
     );
   } catch (error) {
@@ -693,11 +694,12 @@ async function publishClaudeSuccessorHost(
       return async () => {};
     }
     identity = await successorCapability(input, "claude");
+    const guard = await stageGitEnvironment(input.registry, input.conversationId, input.receipt.operationId, input.profile.cwd);
     access = await materializeOwnedStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
-      { ...input.target.env, ...await stageGitEnvironment(input.registry, input.conversationId, input.receipt.operationId, input.profile.cwd) },
+      { ...input.target.env, ...guard },
       identity.capability,
-      () => tempOwnerForConversation(input.registry, input.conversationId, input.receipt.nativeId),
+      () => tempOwnerForConversation(input.registry, input.conversationId, input.receipt.nativeId, guard.LLV_STAGE_GIT_RECEIPT),
     );
     const launchPaths = claudeHostLaunchPaths(input.target);
     const appendSystemPrompt = await learnedRulesForLaunchProfile(input.profile, { engine: "claude", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.target.claudeProvider) });

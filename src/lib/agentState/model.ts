@@ -246,7 +246,7 @@ export function validAgentFacts(value: unknown): value is AgentFacts {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   if (typeof row.subject !== "string" || !/^[a-f0-9]{48}$/.test(row.subject)
-    || !["codex", "claude", "copilot"].includes(row.engine as string) || typeof row.revision !== "string" || row.revision.length > 128) return false;
+    || !["codex", "claude", "copilot", "antigravity"].includes(row.engine as string) || typeof row.revision !== "string" || row.revision.length > 128) return false;
   for (const key of ["process", "owner", "turn", "attention", "transcript", "obligations", "activity"]) {
     const field = row[key] as { determined?: unknown; evidence?: Evidence; value?: unknown; why?: unknown } | undefined;
     if (!field || typeof field.determined !== "boolean" || !field.evidence || !validAgentEvidence(field.evidence)) return false;

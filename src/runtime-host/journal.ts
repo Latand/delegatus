@@ -2722,7 +2722,11 @@ export class RuntimeJournal {
     }
     if (command.kind === "answer" && !command.attentionId.trim()) throw new Error("attentionId is required");
     if ((command.kind === "kill" || command.kind === "compact" || (command.kind === "reconfigure" && command.sessionKey))
-      && ((!command.sessionKey || (command.sessionKey.engine !== "codex" && command.sessionKey.engine !== "claude"))
+      && ((!command.sessionKey
+        || (command.kind === "compact"
+          ? command.sessionKey.engine !== "codex" && command.sessionKey.engine !== "claude"
+          : command.sessionKey.engine !== "codex" && command.sessionKey.engine !== "claude"
+            && command.sessionKey.engine !== "copilot" && command.sessionKey.engine !== "antigravity"))
         || !command.sessionKey.sessionId?.trim())) {
       throw new Error(`${command.kind} sessionKey is invalid`);
     }

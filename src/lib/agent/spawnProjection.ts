@@ -595,7 +595,7 @@ function spawnCard(
   );
   return {
     path: `spawn:${receipt.launchId}`,
-    root: receipt.engine === "codex" ? "codex-sessions" : receipt.engine === "copilot" ? "copilot-sessions" : "claude-projects",
+    root: receipt.engine === "codex" ? "codex-sessions" : receipt.engine === "copilot" ? "copilot-sessions" : receipt.engine === "antigravity" ? "antigravity-sessions" : "claude-projects",
     name: `spawn:${receipt.launchId}`,
     project: attribution.project ?? path.basename(receipt.cwd),
     ...(projectOwnership ? { projectOwnership } : {}),
