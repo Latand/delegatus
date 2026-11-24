@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import vm from "node:vm";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const retentionRunIdEnv = "LLV_RETENTION_RUN_ID";
 
 export function readInstallPrompt(agent, lang = "en", promptRoot = root) {
   const context = { window: { DLG: {} } };
@@ -36,12 +37,28 @@ function publicFixtureText(value, home) {
     .replaceAll(path.dirname(realHome), "<fixture>").replaceAll(path.dirname(home), "<fixture>");
 }
 
+function installedPackageRoot(bunInstall) {
+  return path.join(bunInstall, "install/global/node_modules/delegatus-cli");
+}
+
 export function installedPackageIdentity(bunInstall) {
-  const { name, version, gitHead } = JSON.parse(readFileSync(path.join(bunInstall, "install/global/node_modules/delegatus-cli/package.json"), "utf8"));
+  const { name, version, gitHead } = JSON.parse(readFileSync(path.join(installedPackageRoot(bunInstall), "package.json"), "utf8"));
   if (name !== "delegatus-cli" || typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
     throw new Error("Installed package has no recognized Delegatus version");
   }
   return { version, ...(typeof gitHead === "string" && /^[a-f0-9]{40}$/.test(gitHead) && { revision: gitHead }) };
+}
+
+function requiresRetentionCompletion(bunInstall) {
+  // A checkout tarball can share the npm release's version. Inspect the
+  // installed server, where the run-ID transport can live in a shared chunk.
+  const server = path.join(installedPackageRoot(bunInstall), "dist/standalone/.next/server");
+  // An unknown package layout still requires the terminal marker.
+  if (!lstatSync(server, { throwIfNoEntry: false })) return true;
+  const files = readdirSync(server, { recursive: true, withFileTypes: true }).filter((entry) =>
+    entry.isFile() && entry.name.endsWith(".js"));
+  return files.length === 0 || files.some((entry) =>
+    readFileSync(path.join(entry.parentPath, entry.name), "utf8").includes(retentionRunIdEnv));
 }
 
 function shell(command, env) {
@@ -71,7 +88,7 @@ async function stop(child) {
   }
 }
 
-async function waitForRetention(file, runId, terminal, launcherExited, timeoutMs) {
+async function waitForRetention(file, { runId, launchedAt, terminal, launcherExited, timeoutMs }) {
   const deadline = performance.now() + timeoutMs;
   let report;
   while (performance.now() < deadline) {
@@ -84,15 +101,18 @@ async function waitForRetention(file, runId, terminal, launcherExited, timeoutMs
         || !Number.isFinite(candidate.reclaimedCacheBytes) || candidate.reclaimedCacheBytes < 0) {
         return { status: "unavailable", reason: "invalid retention receipt" };
       }
+      if (!runId && (at < launchedAt || lstatSync(file).mtimeMs < launchedAt)) {
+        return { status: "unavailable", reason: "retention receipt predates launcher" };
+      }
       report = candidate;
     } catch (error) {
       if (error instanceof SyntaxError) return { status: "unavailable", reason: "invalid retention receipt" };
       if (error.code !== "ENOENT") return { status: "unavailable", reason: "cannot read retention receipt" };
     }
-    const completion = terminal();
+    const completion = runId ? terminal() : report && { errorCount: report.errors.length };
     if (completion) {
-      if (completion.runId !== runId) return { status: "unavailable", reason: "retention completion belongs to another launch" };
-      if (!report || report.runId !== runId) return { status: "unavailable", reason: "retention receipt belongs to another launch" };
+      if (runId && completion.runId !== runId) return { status: "unavailable", reason: "retention completion belongs to another launch" };
+      if (runId && report?.runId !== runId) return { status: "unavailable", reason: "retention receipt belongs to another launch" };
       const at = Date.parse(report.at);
       // The receipt may contain absolute paths and raw errors. Publish only
       // the error count and normalized pass timestamp.
@@ -105,15 +125,17 @@ async function waitForRetention(file, runId, terminal, launcherExited, timeoutMs
 
 export async function startCase(label, env, expected, { directory, rows, retentionTimeoutMs = 130_000 }) {
   const receipt = label === "neither-cli" ? path.join(env.LLV_STATE_DIR, "self-update", "retention.json") : null;
-  const runId = receipt ? randomUUID() : undefined;
+  const bunInstall = env.BUN_INSTALL ?? path.join(env.HOME, ".bun");
+  const runId = receipt && requiresRetentionCompletion(bunInstall) ? randomUUID() : undefined;
   const port = await availablePort();
   // The first case owns a fresh profile. Refuse any receipt that predates
   // its launcher, including during a replay with a previously used profile.
   const preexistingReceipt = receipt && lstatSync(receipt, { throwIfNoEntry: false });
   // Run the prompt's installed launcher in the background through a tracked
   // child handle, with an ephemeral port instead of the visitor's stable port.
+  const launchedAt = Date.now();
   const child = spawn(path.join(env.HOME, ".bun/bin/delegatus"), ["--no-open", "--port", String(port)], {
-    env: runId ? { ...env, LLV_RETENTION_RUN_ID: runId } : env, stdio: ["ignore", "pipe", "pipe"], cwd: env.HOME,
+    env: runId ? { ...env, [retentionRunIdEnv]: runId } : env, stdio: ["ignore", "pipe", "pipe"], cwd: env.HOME,
   });
   let output = "";
   let spawnError;
@@ -149,11 +171,15 @@ export async function startCase(label, env, expected, { directory, rows, retenti
     if (receipt) {
       row.retention = preexistingReceipt
         ? { status: "unavailable", reason: "retention receipt predates launcher" }
-        : await waitForRetention(receipt, runId, () => {
-          const matches = [...output.matchAll(/\[self-update\] retention pass ([^ ]+) complete; (\d+) error\(s\)/g)];
-          const match = matches.at(-1);
-          return match ? { runId: match[1], errorCount: Number(match[2]) } : null;
-        }, launcherExited, retentionTimeoutMs);
+        : await waitForRetention(receipt, {
+          runId, launchedAt, launcherExited, timeoutMs: retentionTimeoutMs,
+          terminal: () => {
+            const matches = [...output.matchAll(/\[self-update\] retention pass ([^ ]+) complete; (\d+) error\(s\)/g)];
+            const match = matches.at(-1);
+            return match ? { runId: match[1], errorCount: Number(match[2]) } : null;
+          },
+        });
+      if (!runId) row.retention.completionProtocol = "unavailable";
       row.passed = row.retention.status === "completed" && row.retention.errorCount === 0;
       if (!row.passed) {
         const reason = row.retention.reason ?? `retention completed with ${row.retention.errorCount} error(s)`;
