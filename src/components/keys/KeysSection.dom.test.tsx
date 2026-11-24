@@ -54,6 +54,7 @@ function serve(list: KeysAnswer, extra: (call: Call) => Response | Promise<Respo
     const custom = extra(call);
     if (custom) return custom;
     if (call.url === "/api/keys") return Response.json(list);
+    if (call.url === "/api/chatgpt-plan") return Response.json({ state: "not_connected" });
     const reveal = /^\/api\/keys\/([a-z]+)\/reveal$/.exec(call.url);
     if (reveal) return Response.json({ value: reveal[1] === "openai" ? OPENAI : OPENROUTER });
     return Response.json({ error: "not_found" }, { status: 404 });
@@ -82,11 +83,13 @@ const click = async (element: Element | null) => {
 };
 const row = (host: HTMLElement, id: string) => host.querySelector<HTMLElement>(`[data-keys-row='${id}']`)!;
 
-for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] as const) test(`${lang} ${size}: six rows; a key set by a variable says so on its row and names the variable in its note, and cannot be replaced`, async () => {
+for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] as const) test(`${lang} ${size}: six keys and a ChatGPT plan row; a key set by a variable names its variable and cannot be replaced`, async () => {
   setLocale(lang);
   serve(answer());
   const host = await mount(<KeysMenuPage size={size} onImport={() => {}} />);
-  expect([...host.querySelectorAll("[data-keys-row]")].map((node) => node.getAttribute("data-keys-row"))).toEqual(["openrouter", "openai", "elevenlabs", "soniox", "fishaudio", "telegram"]);
+  expect([...host.querySelectorAll("[data-keys-row]")].map((node) => node.getAttribute("data-keys-row"))).toEqual(["openrouter", "openai", "chatgpt-plan", "elevenlabs", "soniox", "fishaudio", "telegram"]);
+  expect(row(host, "chatgpt-plan").getAttribute("data-chatgpt-plan-state")).toBe("not_connected");
+  expect(row(host, "chatgpt-plan").querySelector("[data-chatgpt-plan-start]")!.textContent).toBe(translate(lang, "chatgptPlan.continue"));
   const env = row(host, "openai");
   expect(env.querySelector("[data-keys-env-tail]")!.textContent).toBe(` · ${translate(lang, "keys.state.envShort")}`);
   expect(row(host, "openrouter").querySelector("[data-keys-env-tail]")).toBeNull();
@@ -392,7 +395,8 @@ test("a list that cannot be read says so with a retry", async () => {
   fail = false;
   await click(host.querySelector("[data-keys-failed] button"));
   expect(host.querySelector("[data-keys-failed]")).toBeNull();
-  expect(host.querySelectorAll("[data-keys-row]")).toHaveLength(6);
+  expect(host.querySelectorAll("[data-keys-source]")).toHaveLength(6);
+  expect(row(host, "chatgpt-plan").getAttribute("data-chatgpt-plan-state")).toBe("not_connected");
 });
 
 for (const lang of ["en", "uk"] as const) test(`${lang}: import shows the pasted lines masked and the server's preview, and Apply confirms exactly the rows shown`, async () => {
