@@ -25,7 +25,7 @@ function read(file: string): string | undefined {
   }
 }
 
-export function publicationHeadroom(env = process.env): Headroom | null {
+export function publicationHeadroom(env: Partial<NodeJS.ProcessEnv> = process.env): Headroom | null {
   try {
     const proc = env.LLV_GATE_PROC_ROOT ?? "/proc";
     const host = parseMeminfo(read(path.join(proc, "meminfo")) ?? "");
