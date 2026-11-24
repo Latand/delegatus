@@ -9,6 +9,7 @@ export type NativeCallerReason =
   | "session-kind" | "process-identity-mismatch" | "domain-mismatch" | "record-predates-process"
   | "session-held-twice" | "session-not-scanned" | "generation-ambiguous"
   | "generation-not-current" | "transcript-outside-home" | "generation-hosted"
+  | "evidence-incomplete"
   | "session-changed" | "session-proof-unavailable" | "approval-waiting" | "approval-refused" | "approval-unavailable";
 export interface NativeCallerRefusal { reason: NativeCallerReason; retryable: boolean }
 export type NativeCallerVerdict =
@@ -44,7 +45,7 @@ export interface NativeCallerSources {
 }
 
 export function nativeCallerRefusal(reason: NativeCallerReason): NativeCallerVerdict & { kind: "refused" } {
-  return { kind: "refused", reason, retryable: reason === "session-not-scanned" };
+  return { kind: "refused", reason, retryable: reason === "session-not-scanned" || reason === "evidence-incomplete" };
 }
 
 export function nativeSessionRecord(value: unknown, pid: number): NativeSessionRecord | null {
@@ -108,7 +109,8 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
     const relative = transcript && projects ? path.relative(projects, transcript) : null;
     if (!transcript || !relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)
       || path.basename(transcript) !== `${record.sessionId}.jsonl`) return refuse("transcript-outside-home");
-    if (snapshot.nativeHostsIncomplete) return refuse("generation-hosted");
+    if (snapshot.nativeHostsLookupLimitExceeded) return { ...refuse("evidence-incomplete"), retryable: false };
+    if (snapshot.nativeHostsIncomplete) return refuse("evidence-incomplete");
     if (snapshot.nativeArtifact !== undefined && snapshot.nativeArtifact !== transcript) return refuse("session-changed");
     for (const entry of Object.values(snapshot.entries)) {
       if (!entry.structuredHost) continue;
@@ -167,8 +169,12 @@ const REASONS: Record<NativeCallerReason, string> = {
   "generation-not-current": "This session is archived, superseded, migrating or no longer current.",
   "transcript-outside-home": "The session transcript is outside the matched account's projects directory.",
   "generation-hosted": "Delegatus already hosts this generation, or its host identity cannot be verified. Continue it there.",
+  "evidence-incomplete": "Delegatus is still preparing native caller evidence. Repeat the same request after preparation finishes.",
 };
 
 export function nativeAdmissionMessage(admission?: NativeCallerRefusal): string {
+  if (admission?.reason === "evidence-incomplete" && !admission.retryable) {
+    return "[evidence-incomplete] The native host lookup exceeded its verification limit. Open the conversation in Delegatus and continue it under its host.";
+  }
   return `${admission ? `[${admission.reason}] ${REASONS[admission.reason]} ` : ""}A Claude Code session started outside Delegatus needs explicit operator approval for its live process and transcript generation. Otherwise open the conversation in Delegatus and continue it there under its host.`;
 }
