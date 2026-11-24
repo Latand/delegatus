@@ -82,9 +82,9 @@ write. Reported completion, cancellation, pause, close and intervening
 checkpoints retain authority. Actual retry exhaustion still parks.
 
 A capacity cut following an earlier quota failure also stays on its source.
-`moveParkedProviderRetry` (`src/lib/pipelines/engine.ts:11371`) hands a new
-capacity chain back to ordinary running recovery. `reopenCapacityRetry`
-(`engine.ts:11393`) replays older saved capacity timers through that same path,
+`moveParkedProviderRetry` (`src/lib/pipelines/engine.ts`) hands a new capacity
+chain back to ordinary running recovery. `reopenSameConversationRetry`
+replays older saved capacity timers through that same path,
 retaining spent retries. A capacity budget that is exhausted parks directly;
 an earlier account's quota-reset timer cannot replenish it or select a new
 account. Confirmed quota and authentication failures keep their existing

@@ -514,6 +514,8 @@ export type PipelineStageAttempt = {
     actionAt?: string;
     /** Persisted before sending; a lost acknowledgment still owes cancellation on control. */
     continuationRequestedAt?: string;
+    /** First bounded receipt reconciliation after a newer provider cut appeared. */
+    receiptWaitStartedAt?: string;
     switchedAccountId?: string;
     failedAccounts?: string[];
     capacityProbes?: number;
