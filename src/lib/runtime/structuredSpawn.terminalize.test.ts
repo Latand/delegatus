@@ -1878,7 +1878,11 @@ function stagedTerminalMarker(store: AgentRegistry, attempt: string, index: numb
     },
   });
   if (stage.kind !== "settled") throw new Error("terminal fixture could not stage the launch");
-  return { receipt: stage.receipt, key };
+  const owner = stage.receipt.admissionOwner;
+  if (!owner) return { receipt: stage.receipt, key };
+  const release = store.releaseStructuredSpawnAdmissionOwner(stage.receipt.launchId, owner);
+  if (!release.released) throw new Error("terminal fixture could not hand back its launch lease");
+  return { receipt: release.receipt, key };
 }
 
 test("failed spawn marker dry run, backup comparison and guarded restore", async () => {

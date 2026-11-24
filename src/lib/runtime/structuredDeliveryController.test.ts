@@ -483,9 +483,11 @@ test("fallback publication retries an interrupted archive sweep and repeats it a
   f.registry.upsert({ ...entry, status: "dead", claimOwner: null,
     structuredHost: { ...entry.structuredHost!, endpoint: "stdio:released" } });
   expect(f.registry.archiveInactiveRows()).toBe(1);
-  const client: RuntimeHostClient = {
+  const client = {
     ...f.client, readSession: async () => null,
-    append: async () => { throw new Error("fixture lost publication reply"); },
+    append: async (_event: Parameters<RuntimeHostClient["append"]>[0]): Promise<unknown> => {
+      throw new Error("fixture lost publication reply");
+    },
   };
   const read = spyOn(client, "readSession");
   try {

@@ -237,7 +237,10 @@ test("startup operation pages retain native work after acknowledgement removes i
     expect(readStartupPendingOperations({ eventSeq: 0, rowId: 0 }, { LLV_RUNTIME_JOURNAL: filename }).pendingOperations)
       .toEqual(pending.pendingOperations!);
     expect((await page({ eventSeq: journal.publishedSeq(), rowId: Number.MAX_SAFE_INTEGER })).pendingOperations).toEqual([]);
-    journal.transitionOperation(operationId, "failed");
+    journal.nativeQueueTransition(operationId, { phase: "proven", proof: {
+      threadId: sessionKey.sessionId, clientUserMessageId: operationId, revision: 1, turnId: "synthetic-turn",
+      itemId: "synthetic-item", input: [{ type: "text", text: "Synthetic native work" }],
+    } });
     const ended = await page();
     expect(ended.effectsVersion).not.toBe(pending.effectsVersion);
     expect(ended.pendingOperations).toEqual([]);
