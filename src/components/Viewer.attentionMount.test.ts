@@ -34,9 +34,11 @@ test("the shell renders the attention host, and does not gate it behind a flag",
   const mounted = code.match(/<AttentionHost\b[^>]*\/>/);
   expect(mounted).not.toBeNull();
   /* Every device that can answer a request has to be able to see one, so the
-     mount takes only the surface it renders on. A condition here would be a
-     device the root agent can address and never reach. */
-  expect(mounted![0]).toBe("<AttentionHost mobile={isMobile} />");
+     mount takes only the surface it renders on and the project alias table the
+     shell already polls (the project boundary compares canonical projects). A
+     condition here would be a device the root agent can address and never
+     reach. */
+  expect(mounted![0]).toBe("<AttentionHost mobile={isMobile} projectAliases={projectAliases} />");
 });
 
 test("the shell registers the navigator half of the handoff", () => {
