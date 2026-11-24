@@ -8099,7 +8099,14 @@ async function requestAttention(
        the answer: two tabs share a device id, and only the named tab may run
        the move. */
     const view = resolveDirectedAttentionView();
-    if (!view && (dependencies.noticeCapableViewOpen ?? noticeCapableViewOpen)()) {
+    /* The project boundary: the operator is in another project than the
+       target's, so the request reaches them as the notification and moves
+       nothing. Both keys are canonical, so an alias of the same project is the
+       same project. A view with no project open (the overview) has none to
+       protect. */
+    const crossesProject = view !== null && view.project !== null
+      && canonicalOrchestratorProject(view.project) !== project;
+    if ((!view && (dependencies.noticeCapableViewOpen ?? noticeCapableViewOpen)()) || crossesProject) {
       dependencies.adoptRootSession();
       const raised = dependencies.raiseAttentionRequest({
         origin: "root-agent",
@@ -8178,6 +8185,10 @@ async function requestAttention(
     timeoutMs: budget,
     ...(context.signal ? { signal: context.signal } : {}),
   });
+  /* The directed view stood down at the project boundary after this call
+     chose it (the operator changed project while the request was in flight):
+     the request is the notice, the view did not move. */
+  if (outcome.kind === "notice") return noticeAnswer(outcome.request, created);
   const deviceId = request.acknowledgedBy ?? null;
   if (outcome.kind === "failed") {
     const messages: Record<typeof outcome.code, string> = {
