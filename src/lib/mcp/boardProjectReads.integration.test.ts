@@ -223,7 +223,8 @@ test("task page deadline before the first candidate preserves the cursor and uni
     expect(result).toMatchObject({ rows: [], count: 0, hasMore: true, nextCursor: expectedCursor,
       partial: true, omissions: ["taskPage", "total", "remainingCount", "omittedCount"],
       retryHint: expect.stringContaining("time budget") });
-    expect(new Set(result.omissions).size).toBe(result.omissions.length);
+    const omissions = result.omissions ?? [];
+    expect(new Set(omissions).size).toBe(omissions.length);
   };
 
   const withoutCursor = await indexedTaskPage(source, scope, null, 1, task => task,
