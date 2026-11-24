@@ -87,16 +87,18 @@ test.each(["automatic", "publish", "retry-stage", "dirty", "moved", "rollback-pe
     await tickPipelinesController([], h.ports);
     await settlePipelineControllerJobs();
     const after = loadPipelines()[0]!;
+    const checkoutRefused = action === "dirty" || action === "moved";
     expect(after.publicationRecovery).toEqual(history);
-    expect(after.delivery!.operation).toEqual(receipt);
+    expect(after.delivery!.operation).toEqual(checkoutRefused ? { ...receipt, passedStage: false } : receipt);
     expect(after.runs[0]!.attempts).toHaveLength(1);
     expect(after.runs[0]!.attempts[0]!.publicationRepair).toEqual(attempt.publicationRepair);
     expect(checkoutWrites).toEqual([]);
     expect(box.order).toEqual(["commit"]);
     expect(box.remoteReadAttempts()).toBe(reads);
-    if (action === "dirty" || action === "moved" || action === "rollback-pending") {
+    if (checkoutRefused || action === "rollback-pending") {
       expect(after.cursor).toMatchObject({ stageId: "build", state: "committing" });
       expect(prCreates).toBe(0);
+      if (checkoutRefused) expect(after.state).toBe("needs_decision");
       if (action === "dirty") expect(after.stateDetail).toContain("uncommitted changes");
       if (action === "moved") expect(after.stateDetail).toContain("the worktree moved");
       return;
