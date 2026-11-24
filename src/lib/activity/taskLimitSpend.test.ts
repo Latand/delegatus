@@ -44,7 +44,7 @@ test("refresh seeds lane and standalone ownership without counting a linked lane
   for (let i = 0; i < 4; i++) await refreshTaskLimitSpend(store, deps);
   const result = readTaskLimitSpend(store.db, ["a"], { canChoose: true }, deps);
   expect(result.tasks.a!.providers).toHaveLength(1);
-  expect(result.tasks.a!.providers[0]).toMatchObject({ engine: "claude", tokens: 240, bound: "norate" });
+  expect(result.tasks.a!.providers[0]).toMatchObject({ engine: "claude", tokens: 240, bound: "tokens" });
   const writes = store.db.query<{ n: number }, []>("SELECT total_changes() AS n").get()!.n;
   await refreshTaskLimitSpend(store, deps);
   expect(store.db.query<{ n: number }, []>("SELECT total_changes() AS n").get()!.n).toBe(writes);
@@ -74,10 +74,10 @@ test("rated, partial, unpriced and unattributed rows retain their bound and wind
   const rows = computeTaskRows(task("a"),[h,{ ...h,model: "unpriced" },{ ...h,account: "unknown" }],rates,observations,now-3*DAY,now);
   const a = rows.find(r=>r.account==="claude:a")!;
   expect(a).toMatchObject({ tokens: 2000000,weekly_pp: 4,window_pp: 4,session_pp: 10,unpriced_tokens: 1000000,floor: null });
-  const put = store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  const put = store.db.query("INSERT INTO task_limit_spend(task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,first_hour,last_hour,floor,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   for (const r of rows) put.run(r.task,r.account,r.engine,r.tokens,r.unpriced_tokens,r.weight,r.rated_weight,r.weekly_pp,r.window_start,r.window_pp,r.session_start,r.session_pp,r.first_hour,r.last_hour,r.floor,now);
   const deps = { ...world([task("a")]),observations: () => observations };
-  expect(readTaskLimitSpend(store.db,["a"],{ canChoose: true },deps).tasks.a!.providers[0]).toMatchObject({ bound: "floor",floor: "uncounted",weeklyPp: 4 });
+  expect(readTaskLimitSpend(store.db,["a"],{ canChoose: true },deps).tasks.a!.providers[0]).toMatchObject({ bound: "approx",floor: null,weeklyPp: 4 });
   expect(readTaskLimitSpend(store.db,["a"],{ canChoose: false },deps).tasks.a!.providers[0]!.accounts).toBeNull();
   expect(computeTaskRows(task("a"),[h],rates,observations,now,now)[0]!.floor).toBe("before-counting");
 });
@@ -184,7 +184,7 @@ test("a held SQLite writer defers asynchronously and the pass recovers after rel
 
 test("read-time weekly and session starts accept five minutes of jitter and refuse reset or overlapping evidence", () => {
   const now=USAGE_NOW, start=now/1000-10000, session=now/1000-2000;
-  const put=store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  const put=store.db.query("INSERT INTO task_limit_spend(task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,first_hour,last_hour,floor,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   put.run("a","claude:a","claude",1000,0,10,10,7,start+299,3,session+299,5,1,Math.floor(now/3600000)-1,null,now);
   let weekly=start, short=session;
   const deps:SpendDependencies={...world([task("a")]),observations:()=>new Map([["claude:a",{session:{usedPercent:20,resetsAt:short+18000},weekly:{usedPercent:40,resetsAt:weekly+604800},plan:"max",capturedAt:now/1000}]])};
@@ -201,7 +201,7 @@ test("read-time weekly and session starts accept five minutes of jitter and refu
 
 test("weekly task spend stays unknown without a usable rate and is zero only before the window", () => {
   const start=USAGE_NOW/1000-3*86400;
-  store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  store.db.query("INSERT INTO task_limit_spend(task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,first_hour,last_hour,floor,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .run("a","claude:a","claude",1_000_000,1_000_000,0,0,null,null,null,null,null,Math.floor(USAGE_NOW/3600000)-1,Math.floor(USAGE_NOW/3600000)-1,null,USAGE_NOW);
   const deps={...world([task("a")]),observations:()=>new Map([["claude:a",{session:null,weekly:{usedPercent:50,resetsAt:USAGE_NOW/1000+4*86400},plan:"max",capturedAt:USAGE_NOW/1000}]])};
   const account=()=>readTaskLimitSpend(store.db,["a"],{canChoose:true},deps).tasks.a!.providers[0]!.accounts![0]!;
@@ -210,7 +210,7 @@ test("weekly task spend stays unknown without a usable rate and is zero only bef
   expect(account().week!.taskPp).toBe(0);
 });
 
-test("incomplete token coverage keeps a priced task total at a lower bound until the tail is ingested", async () => {
+test("incomplete token coverage keeps the counted task estimate approximate as the tail arrives", async () => {
   const tasks=[task("a",["work"])],deps=world(tasks),hour=Math.floor(USAGE_NOW/HOUR)-1,day=new Date(hour*HOUR).toISOString().slice(0,10);
   const ownerKey=`c:${conversationDigest("work")}`;
   store.transaction(()=>{
@@ -219,7 +219,7 @@ test("incomplete token coverage keeps a priced task total at a lower bound until
       .run(hour,conversationDigest("work"),"claude-sonnet-5","standard","claude:a","claude");
     store.db.query("INSERT INTO task_spend_owners VALUES(?,?)").run(ownerKey,"a");
     store.db.query("INSERT INTO limit_spend_dirty VALUES(?,?)").run("t:a",USAGE_NOW);
-    store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)")
+    store.db.query("INSERT INTO usage_limit_rates(account,window,day,rate,rise,weight,source,plan,frozen,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
       .run("claude:a","weekly",day,2,20,10,"own","max",1,USAGE_NOW);
     store.db.query(`UPDATE limit_spend_meta SET seed='done',task_revision=1,task_key='',pipeline_revision=1,pipeline_key='',pipeline_seed='done',
       aggregate_schema=2,rate_schema=${LIMIT_RATE_SCHEMA},rates_hour=?`).run(Math.floor(USAGE_NOW/HOUR));
@@ -227,7 +227,7 @@ test("incomplete token coverage keeps a priced task total at a lower bound until
   deps.observations=()=>new Map([["claude:a",{session:null,weekly:{usedPercent:30,resetsAt:USAGE_NOW/1000+7*86400},plan:"max",capturedAt:USAGE_NOW/1000}]]);
   await refreshTaskLimitSpend(store,deps);
   const partial=readTaskLimitSpend(store.db,["a"],{canChoose:true},deps).tasks.a!.providers[0]!;
-  expect(partial).toMatchObject({weeklyPp:expect.any(Number),bound:"floor",floor:"uncounted"});
+  expect(partial).toMatchObject({weeklyPp:expect.any(Number),bound:"approx",floor:null});
   store.transaction(()=>{
     store.db.query("UPDATE usage_meta SET complete=1,pending_bytes=0 WHERE singleton=1").run();
     store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
@@ -242,7 +242,7 @@ test("a finalized task retains its persisted spend after hourly retention and an
   const oldHour=Math.floor((USAGE_NOW-91*DAY)/HOUR), now=USAGE_NOW+3*DAY, currentHour=Math.floor(now/HOUR);
   const oldTask={...task("old"),createdAt:new Date(USAGE_NOW-95*DAY).toISOString()};
   const deps=world([oldTask]); deps.now=()=>now;
-  const row=store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  const row=store.db.query("INSERT INTO task_limit_spend(task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,first_hour,last_hour,floor,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   row.run("old","claude:a","claude",1_000_000,0,2,2,4,null,null,null,null,oldHour,oldHour,null,USAGE_NOW);
   const ownerKey=`c:${conversationDigest("work")}`;
   store.db.query("INSERT INTO task_spend_owners VALUES(?,?)").run(ownerKey,"old");
@@ -258,7 +258,7 @@ test("a finalized task retains its persisted spend after hourly retention and an
   expect(provider).toMatchObject({weeklyPp:4,tokens:1_000_000,bound:"approx"});
   expect(store.db.query("SELECT * FROM limit_spend_rate_changes").all()).toEqual([]);
   const day=new Date(currentHour*HOUR).toISOString().slice(0,10);
-  store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)").run("claude:a","weekly",day,2,20,10,"own","max",1,now);
+  store.db.query("INSERT INTO usage_limit_rates(account,window,day,rate,rise,weight,source,plan,frozen,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run("claude:a","weekly",day,2,20,10,"own","max",1,now);
   store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
     .run(currentHour,conversationDigest("work"),"claude-sonnet-5","standard","claude:a","claude");
   store.db.query("INSERT INTO limit_spend_dirty VALUES(?,?)").run(ownerKey,now+1);
@@ -273,7 +273,7 @@ test("legacy aggregate rows stay hidden until bounded migration replaces unsuppo
   commit("legacy");
   store.db.query("INSERT INTO task_spend_owners VALUES(?,?)").run(`c:${conversationDigest("work")}`,"a");
   store.db.query("DELETE FROM limit_spend_dirty");
-  store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  store.db.query("INSERT INTO task_limit_spend(task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,first_hour,last_hour,floor,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .run("a","claude:a","claude",120,120,0,0,null,USAGE_NOW/1000-1000,0,null,null,Math.floor(USAGE_NOW/3600000),Math.floor(USAGE_NOW/3600000),null,USAGE_NOW);
   store.db.query("UPDATE limit_spend_meta SET aggregate_schema=1,aggregate_cursor='',seed='done',task_revision=1,task_key='',pipeline_revision=1,pipeline_seed='done',rates_hour=?")
     .run(Math.floor(USAGE_NOW/3600000));
@@ -305,7 +305,7 @@ test("corrected Codex history invalidates frozen rates in bounded pages across r
     { t: (day - 6 * DAY) / 1000, remaining: 90 }, { t: (day + HOUR) / 1000, remaining: 70 },
     { t: day / 1000 + 86400 - 60, remaining: 70 }, { t: now / 1000, remaining: 70 },
   ] } });
-  const put = store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)");
+  const put = store.db.query("INSERT INTO usage_limit_rates(account,window,day,rate,rise,weight,source,plan,frozen,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?)");
   for (let i = 0; i < 201; i++) put.run("codex:retired", "weekly", new Date(now - (10 + i) * DAY).toISOString().slice(0,10), 99, 99, 1, "own", "pro", 1, now);
   put.run("codex:a", "weekly", "2026-10-17", 99, 99, 1, "own", "pro", 1, now);
   put.run("claude:unrelated", "weekly", "2026-01-01", 7, 14, 2, "own", "max", 1, now);
@@ -334,7 +334,7 @@ test("rate correction discards saved partial calculations across restart", async
     .run(hour, conversationDigest("work"), "gpt-6.1-sol", "standard", "codex:a", "codex");
   store.db.query("INSERT INTO task_spend_owners VALUES(?,?)").run(ownerKey, "a");
   store.db.query("INSERT INTO limit_spend_dirty VALUES(?,?)").run("t:a", now);
-  store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)")
+  store.db.query("INSERT INTO usage_limit_rates(account,window,day,rate,rise,weight,source,plan,frozen,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
     .run("codex:a", "weekly", "2026-10-17", 99, 99, 1, "own", "pro", 1, now);
   store.db.query("UPDATE limit_spend_meta SET rate_schema=3,rates_hour=?").run(Math.floor(now / HOUR));
   const oldResult = [{ task: "a", account: "codex:a", engine: "codex", tokens: 50_000_000, unpriced_tokens: 0,
@@ -356,12 +356,12 @@ test("correcting expired Codex rates preserves historical tokens and retires old
   const now = USAGE_NOW, oldHour = Math.floor((now - 100 * DAY) / HOUR), currentHour = Math.floor(now / HOUR);
   const deps = world([task("a", ["work"])]), ownerKey = `c:${conversationDigest("work")}`;
   deps.history = () => ({ series: {} });
-  store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+  store.db.query("INSERT INTO task_limit_spend(task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,first_hour,last_hour,floor,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
     .run("a", "codex:a", "codex", 100, 0, 2, 2, 99, null, 99, null, 99, oldHour, oldHour, null, now);
   store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
     .run(currentHour - 1, conversationDigest("work"), "gpt-6.1-sol", "standard", "codex:a", "codex");
   store.db.query("INSERT INTO task_spend_owners VALUES(?,?)").run(ownerKey, "a");
-  store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)")
+  store.db.query("INSERT INTO usage_limit_rates(account,window,day,rate,rise,weight,source,plan,frozen,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
     .run("codex:a", "weekly", new Date(now - 100 * DAY).toISOString().slice(0, 10), 99, 99, 1, "own", "pro", 1, now);
   store.db.query("UPDATE usage_meta SET complete=1,pending_bytes=0,counted_from=?").run(now - 92 * DAY);
   store.db.query(`UPDATE limit_spend_meta SET seed='done',task_revision=1,task_key='',pipeline_revision=1,pipeline_key='',pipeline_seed='done',
@@ -378,13 +378,13 @@ test("rate correction refreshes a task that borrowed a retired account's rate fr
   store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
     .run(hour, conversationDigest("work"), "gpt-6.1-sol", "standard", "codex:retired", "codex");
   for (let i = 0; i < 4; i++) await refreshTaskLimitSpend(store, deps);
-  store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)")
+  store.db.query("INSERT INTO usage_limit_rates(account,window,day,rate,rise,weight,source,plan,frozen,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
     .run("codex:retired", "weekly", "2026-10-01", 99, 99, 1, "own", "pro", 1, USAGE_NOW);
   store.db.query("UPDATE task_limit_spend SET weekly_pp=99,rated_weight=weight WHERE task='a'").run();
   store.db.query("UPDATE limit_spend_meta SET rate_schema=3 WHERE singleton=1").run();
   await refreshTaskLimitSpend(store, deps);
   const provider = readTaskLimitSpend(store.db, ["a"], { canChoose: true }, deps).tasks.a!.providers[0]!;
-  expect(provider.bound).toBe("norate");
+  expect(provider.bound).toBe("tokens");
   expect(provider.accounts![0]!.weeklyPp).toBeNull();
 });
 
@@ -424,7 +424,7 @@ test("finalizing yesterday's rate recomputes tasks that have no usage today",asy
 
 
 test("provider and account order are stable, with rated accounts before unknown rates",()=>{
-  const put=store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  const put=store.db.query("INSERT INTO task_limit_spend(task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,first_hour,last_hour,floor,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   for(const [account,engine,pp] of [["codex:b","codex",null],["codex:z","codex",2],["codex:a","codex",1],["claude:a","claude",1]] as const) {
     put.run("a",account,engine,100,0,1,pp===null?0:1,pp,null,null,null,null,1,2,null,USAGE_NOW);
   }
@@ -432,7 +432,7 @@ test("provider and account order are stable, with rated accounts before unknown 
   const providers=readTaskLimitSpend(store.db,["a"],{canChoose:true},deps).tasks.a!.providers;
   expect(providers.map(p=>p.engine)).toEqual(["claude","codex"]);
   expect(providers[1]!.accounts!.map(a=>a.label)).toEqual(["Alpha","Zulu","Before"]);
-  expect(providers[1]).toMatchObject({weeklyPp:3,bound:"floor",floor:"uncounted"});
+  expect(providers[1]).toMatchObject({weeklyPp:3,bound:"approx",floor:null});
 });
 
 test("one pass resolves at most 500 dirty owners and task selection uses its due index",async()=>{
@@ -443,4 +443,76 @@ test("one pass resolves at most 500 dirty owners and task selection uses its due
   expect(store.db.query("SELECT key FROM limit_spend_dirty").all()).toEqual([{key:"c:0500"}]);
   const plan=JSON.stringify(store.db.query(`EXPLAIN QUERY PLAN ${TASK_SPEND_DUE_SQL}`).all());
   expect(plan).toContain("limit_spend_dirty_tasks");expect(plan).not.toContain("TEMP B-TREE");
+});
+
+test("an indexed plan fallback prices the unrated days and keeps account metadata owner-only", async () => {
+  const { computeTaskRows } = await import("./taskLimitSpend");
+  const now = USAGE_NOW, hour = Math.floor(now / HOUR);
+  const day = new Date(hour * HOUR).toISOString().slice(0, 10);
+  const account = "claude:a";
+  const metered = {
+    hour, account, conversation: "fixture", model: "claude-opus-5-5", tier: "standard", engine: "claude",
+    pipeline: null, role: "builder", requests: 1, input: 20_000_000, cache_read: 0,
+    cache_write: 0, cache_write_1h: 0, output: 0, reasoning: 0,
+  };
+  const rows = computeTaskRows(task("a"), [metered, { ...metered, hour: hour - 24 }], [{
+    account, day, window: "weekly", rate: 0.125, weight: 80, rise: 10, source: "own", plan: "max", frozen: 0, computed_at: now,
+  }], new Map(), now - 3 * DAY, now);
+  const row = rows[0]!;
+  expect(row).toMatchObject({ tokens: 40_000_000, weekly_pp: 10, weight: 160, rated_weight: 80, api_usd: 160 });
+  store.db.query(`INSERT INTO task_limit_spend
+    (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,
+     first_hour,last_hour,floor,computed_at,api_usd,api_priced_tokens,unpriced_models) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(row.task,row.account,row.engine,row.tokens,row.unpriced_tokens,row.weight,row.rated_weight,row.weekly_pp,row.window_start,row.window_pp,
+      row.session_start,row.session_pp,row.first_hour,row.last_hour,row.floor,row.computed_at,row.api_usd,row.api_priced_tokens,row.unpriced_models);
+  const put = store.db.query(`INSERT INTO usage_limit_rates (account,window,day,rate,rise,weight,source,plan,frozen,computed_at,plan_tier)
+    VALUES(?,'weekly',?,NULL,0,0,'none',?,0,?,?)`);
+  put.run(account, "2026-10-10", "pro", now, null);
+  put.run(account, "2026-10-11", "max", now, "default_claude_max_20x");
+  put.run(account, "2026-10-12", null, now, null);
+  const deps = world([task("a")]);
+  const owner = readTaskLimitSpend(store.db, ["a"], { canChoose: true }, deps).tasks.a!.providers[0]!;
+  expect(owner).toMatchObject({ tokens: 40_000_000, weeklyPp: 15, basis: "mixed", apiUsd: 160, apiPricedTokens: 40_000_000,
+    bound: "approx", floor: null, outsideBudget: true, accounts: [{ key: account, plan: "max", planTier: "default_claude_max_20x" }] });
+  expect(owner.range?.low).toBeCloseTo(7 + 80 / 2300 * 100);
+  expect(owner.range?.high).toBeCloseTo(13 + 80 / 900 * 100);
+  const member = readTaskLimitSpend(store.db, ["a"], { canChoose: false }, deps).tasks.a!.providers[0]!;
+  expect(member).toEqual({ ...owner, accounts: null });
+  const queryPlan = store.db.query(`EXPLAIN QUERY PLAN SELECT plan,plan_tier FROM usage_limit_rates
+    WHERE account=? AND plan IS NOT NULL ORDER BY day DESC,computed_at DESC LIMIT 1`).all(account);
+  expect(JSON.stringify(queryPlan)).toContain("usage_limit_rates_latest_plan");
+});
+
+test("a price version change queues at most 200 stored tasks at a time and reprices retained hours after reopening", async () => {
+  const { ESTIMATE_VERSION } = await import("./subscriptionEstimate");
+  const tasks = Array.from({ length: 201 }, (_, i) => task(`priced-${String(i).padStart(3, "0")}`, ["work"]));
+  const deps = world(tasks);
+  const ownerKey = `c:${conversationDigest("work")}`;
+  const hour = Math.floor(USAGE_NOW / HOUR);
+  store.transaction(() => {
+    store.db.query(`UPDATE limit_spend_meta SET seed='done',task_revision=1,pipeline_revision=1,pipeline_seed='done',
+      aggregate_schema=2,rate_schema=?,rates_hour=?,estimate_version='previous'`).run(LIMIT_RATE_SCHEMA, hour);
+    const put = store.db.query(`INSERT INTO task_limit_spend
+      (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,first_hour,last_hour,floor,computed_at,api_usd,api_priced_tokens)
+      VALUES(?,'claude:a','claude',1000000,0,2,0,?,?,'uncounted',?,99,1000000)`);
+    const own = store.db.query("INSERT INTO task_spend_owners VALUES(?,?)");
+    for (const task of tasks) {
+      put.run(task.id, hour, hour, USAGE_NOW);
+      own.run(ownerKey, task.id);
+    }
+    store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
+      .run(hour, conversationDigest("work"), "claude-sonnet-5-5", "standard", "claude:a", "claude");
+  });
+  const meta = () => store.db.query("SELECT estimate_version,estimate_cursor FROM limit_spend_meta").get();
+  expect((await refreshTaskLimitSpend(store, deps)).tasks).toBe(100);
+  expect(meta()).toEqual({ estimate_version: ESTIMATE_VERSION, estimate_cursor: "priced-199" });
+  const provider = (id: string) => readTaskLimitSpend(store.db, [id], { canChoose: false }, deps).tasks[id]!.providers[0]!;
+  expect(provider("priced-000")).toMatchObject({ tokens: 1_000_000, apiUsd: 2, floor: null, bound: "tokens" });
+  expect(provider("priced-200")).toMatchObject({ tokens: 1_000_000, apiUsd: 99, floor: null, bound: "tokens" });
+  store.close();
+  store = ActivityStore.open(path.join(root, "records.sqlite"));
+  expect((await refreshTaskLimitSpend(store, deps)).tasks).toBe(100);
+  expect(meta()).toEqual({ estimate_version: ESTIMATE_VERSION, estimate_cursor: null });
+  expect((await refreshTaskLimitSpend(store, deps)).tasks).toBe(1);
+  expect(provider("priced-200")).toMatchObject({ tokens: 1_000_000, apiUsd: 2, floor: null, bound: "tokens" });
 });

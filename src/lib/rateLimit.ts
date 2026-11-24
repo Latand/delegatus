@@ -45,6 +45,7 @@ export interface ReconciledQuota {
       the provider meters no distinct tier for this account. */
   tiers: ReconciledTierWindow[];
   plan: string | null;
+  planTier?: string;
 }
 
 export interface AccountQuotaLimits {
@@ -165,7 +166,8 @@ export function reconcileQuotaReadings(left: QuotaReading | null, right: QuotaRe
   const readings = [left, right]
     .filter((reading): reading is QuotaReading => Boolean(reading?.limits?.plan))
     .sort((a, b) => (b.observedAt ?? Number.NEGATIVE_INFINITY) - (a.observedAt ?? Number.NEGATIVE_INFINITY));
-  return { session, weekly, tiers, plan: readings[0]?.limits?.plan ?? null };
+  const selected = readings[0]?.limits;
+  return { session, weekly, tiers, plan: selected?.plan ?? null, ...(selected?.planTier ? { planTier: selected.planTier } : {}) };
 }
 
 /** The window with the least headroom in the account summary.
@@ -201,6 +203,7 @@ export function quotaAsEngineLimits(quota: ReconciledQuota): EngineLimits | null
     weekly: quota.weekly ? { ...quota.weekly.value, observedAt: quota.weekly.observedAt, source: quota.weekly.source } : null,
     tiers: quota.tiers.map((tier) => ({ ...tier.value, observedAt: tier.observedAt, source: tier.source })),
     plan: quota.plan,
+    ...(quota.planTier ? { planTier: quota.planTier } : {}),
     capturedAt: observed.length ? Math.min(...observed) : null,
   };
 }

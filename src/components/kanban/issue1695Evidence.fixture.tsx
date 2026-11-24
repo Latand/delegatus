@@ -3529,16 +3529,24 @@ const ALBUM = params.get("album") === "1";
    member who is not the owner: no account detail. */
 const SPEND = params.get("spend");
 function spendAccount(key: string, label: string, plan: string | null, weeklyPp: number | null, tokens: number, used: number | null, taskPp: number | null, sessionPp: number | null = null): TaskSpendAccount {
-  return { key, label, plan, weeklyPp, tokens, week: used === null ? null : { usedPercent: used, taskPp }, sessionPp };
+  return { key, label, plan, planTier: key === "claude:a" ? "default_claude_max_20x" : null,
+    weeklyPp, tokens, basis: weeklyPp === null ? null : "measured", range: null, budget: null,
+    apiUsd: tokens / 10e6, week: used === null ? null : { usedPercent: used, taskPp }, sessionPp };
 }
 function spendProvider(engine: "claude" | "codex", accounts: TaskSpendAccount[], bound: TaskSpendProvider["bound"] = "approx", floor: TaskSpendProvider["floor"] = null): TaskSpendProvider {
-  return { engine, bound, floor, accounts, weeklyPp: accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0), tokens: accounts.reduce((sum, a) => sum + a.tokens, 0) };
+  const weeklyPp = accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0);
+  const tokens = accounts.reduce((sum, a) => sum + a.tokens, 0);
+  return { engine, bound, floor, accounts, weeklyPp, tokens, apiUsd: tokens / 10e6, apiPricedTokens: tokens,
+    basis: bound === "tokens" ? null : "measured", range: bound === "tokens" ? null : { low: weeklyPp * 0.7, high: weeklyPp * 1.3 },
+    budgets: engine === "claude" && bound !== "tokens" ? [{ low: 900, mid: 1600, high: 2300, grade: "measured" }] : [],
+    outsideBudget: false, unpricedModels: [], unpricedTokens: 0, issues: bound === "tokens" ? ["planMissing"] : [] };
 }
 const SPEND_TASKS: Record<string, TaskSpendSummary> = {
   /* Two providers, the measured lane of the research rounded; Claude's first
      account, named as an operator names one, is in its current 5-hour window. */
   "t-search": { providers: [
-    spendProvider("claude", [spendAccount("claude:a", "Research workstation", "max", 2.1, 132_000_000, 53, 2.1, 12), spendAccount("claude:b", "B", "max", 1, 61_000_000, 31, 1)]),
+    { ...spendProvider("claude", [spendAccount("claude:a", "Research workstation", "max", 2.1, 132_000_000, 53, 2.1, 12),
+      spendAccount("claude:b", "B", "max", 1, 61_000_000, 31, 1)]), basis: "mixed" },
     spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.2, 24_000_000, 47, 1.2), spendAccount("codex:b", "B", "pro", 0.4, 9_000_000, 22, 0.4)]),
   ] },
   /* Several accounts of one provider, and a tiny Claude share. */
@@ -3547,12 +3555,15 @@ const SPEND_TASKS: Record<string, TaskSpendSummary> = {
     spendProvider("codex", [spendAccount("codex:a", "A", "pro", 4.2, 88_000_000, 61, 4.2), spendAccount("codex:b", "B", "plus", 2.1, 12_000_000, 38, 2.1), spendAccount("codex:d", "D", "pro", 1, 19_000_000, 12, 1)]),
   ] },
   /* One provider. */
-  "t-upload": { providers: [spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.1, 23_000_000, 47, 1.1)])] },
+  "t-upload": { providers: [
+    { ...spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.1, 23_000_000, 47, null)]), basis: "plan",
+      budgets: [{ low: 650, mid: 900, high: 1200, grade: "measured" }] },
+  ] },
   /* A tiny spend. */
   "t-links": { providers: [spendProvider("claude", [spendAccount("claude:b", "B", "max", 0.3, 17_000_000, 31, 0.3)])] },
   /* A Claude account with no limit readings: tokens only. */
   "t-disk": { providers: [
-    spendProvider("claude", [spendAccount("claude:c", "C", "max", null, 41_000_000, null, null)], "norate"),
+    spendProvider("claude", [spendAccount("unknown", "unknown", null, null, 41_000_000, null, null)], "tokens"),
     spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1, 21_000_000, 47, 1)]),
   ] },
   /* Still being counted: the task is known and has no rows yet, so the card draws nothing. */

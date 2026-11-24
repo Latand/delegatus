@@ -5,14 +5,6 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 
-/*
- * Task limit spend on the card (docs/design/task-limit-spend.md §7.2): each
- * provider's engine mark and a four-cell scale with no digits, read for the
- * whole board in one request; the popover's estimates read as estimates (≈,
- * ≥, <1%, ±30%), a provider with no limit readings shows its tokens only, and
- * a member who is not the owner gets no account detail.
- */
-
 const dom = new Window({ url: "http://localhost/", width: 1440, height: 900 });
 Object.assign(globalThis, {
   window: dom, document: dom.document, navigator: dom.navigator,
@@ -24,10 +16,16 @@ Object.assign(globalThis, {
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 
-const account = (key: string, label: string, plan: string, weeklyPp: number | null, tokens: number, used: number | null, sessionPp: number | null = null): TaskSpendAccount =>
-  ({ key, label, plan, weeklyPp, tokens, week: used === null ? null : { usedPercent: used, taskPp: weeklyPp }, sessionPp });
-const provider = (engine: "claude" | "codex", accounts: TaskSpendAccount[], bound: TaskSpendProvider["bound"] = "approx", floor: TaskSpendProvider["floor"] = null): TaskSpendProvider =>
-  ({ engine, bound, floor, accounts, weeklyPp: accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0), tokens: accounts.reduce((sum, a) => sum + a.tokens, 0) });
+const account = (key: string, label: string, plan: string | null, weeklyPp: number | null, tokens: number, used: number | null, sessionPp: number | null = null): TaskSpendAccount =>
+  ({ key, label, plan, planTier: null, weeklyPp, tokens, basis: weeklyPp === null ? null : "measured", range: null, budget: null,
+    apiUsd: tokens / 10e6, week: used === null ? null : { usedPercent: used, taskPp: weeklyPp }, sessionPp });
+const provider = (engine: "claude" | "codex", accounts: TaskSpendAccount[], bound: TaskSpendProvider["bound"] = "approx", floor: TaskSpendProvider["floor"] = null): TaskSpendProvider => {
+  const weeklyPp = accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0);
+  const tokens = accounts.reduce((sum, a) => sum + a.tokens, 0);
+  return { engine, bound, floor, accounts, weeklyPp, tokens, basis: bound === "tokens" ? null : "measured",
+    range: bound === "tokens" ? null : { low: weeklyPp * 0.7, high: weeklyPp * 1.3 }, budgets: [], outsideBudget: false,
+    apiUsd: tokens / 10e6, apiPricedTokens: tokens, unpricedModels: [], unpricedTokens: 0, issues: [] };
+};
 
 const TASKS: Record<string, TaskSpendSummary> = {
   two: { providers: [
@@ -39,10 +37,21 @@ const TASKS: Record<string, TaskSpendSummary> = {
     provider("codex", [account("codex:a", "A", "pro", 21.3, 402e6, 74), account("codex:d", "D", "pro", 12.9, 250e6, 40)]),
   ] },
   norate: { providers: [
-    provider("claude", [account("claude:c", "C", "max", null, 41e6, null)], "norate"),
+    { ...provider("claude", [account("unknown", "unknown", null, null, 41e6, null)], "tokens"), issues: ["planMissing"] },
     provider("codex", [account("codex:a", "A", "pro", 1, 21e6, 47)]),
   ] },
   counting: { providers: [] },
+  noFixedLimit: { providers: [
+    { ...provider("claude", [account("claude:enterprise", "C", "enterprise", null, 100e6, null)], "tokens"), issues: ["noFixedLimit"] },
+  ] },
+  unpriced: { providers: [
+    { ...provider("claude", [], "tokens"), tokens: 100e6, apiUsd: null, unpricedTokens: 100e6, unpricedModels: ["fixture-model"] },
+  ] },
+  partial: { providers: [
+    { ...provider("claude", [], "approx"), tokens: 200e6, apiUsd: 10, apiPricedTokens: 100e6, weeklyPp: 1.2,
+      basis: "plan", range: { low: 0.8, high: 2 }, budgets: [{ low: 900, mid: 1600, high: 2300, grade: "measured" }],
+      unpricedTokens: 100e6, unpricedModels: ["fixture-model"] },
+  ] },
   /* Lower bounds just under a band's edge: the scale fills by the floored figure. */
   floor46: { providers: [provider("claude", [account("claude:a", "A", "max", 4.6, 200e6, 50)], "floor", "before-counting")] },
   floor146: { providers: [provider("claude", [account("claude:a", "A", "max", 14.6, 600e6, 60)], "floor", "before-counting")] },
@@ -143,13 +152,13 @@ test("the board's cards ask once for every task, and each provider draws its mar
   expect(spendCalls()).toEqual([["two", "large", "norate", "counting"]]);
   expect(marks(host, "two")).toEqual([["claude", "num", 1], ["codex", "num", 1]]);
   expect(marks(host, "large")).toEqual([["claude", "floor", 2], ["codex", "num", 4]]);
-  expect(marks(host, "norate")).toEqual([["claude", "norate", null], ["codex", "num", 1]]);
+  expect(marks(host, "norate")).toEqual([["claude", "tokens", null], ["codex", "num", 1]]);
   /* Still being counted: nothing at all. */
   expect(host.querySelector("[data-spend='counting']")).toBeNull();
   for (const id of ["two", "large"]) expect(/\d/.test(host.querySelector(`[data-spend='${id}']`)!.textContent!)).toBe(false);
   expect(host.querySelector("[data-spend='large'] .scale-floor")!.textContent).toBe("≥");
-  expect(host.querySelector("[data-spend='norate'] .spend-n")!.textContent).toBe("unknown");
-  expect(host.querySelector("[data-spend='large']")!.getAttribute("aria-label")).toBe("Limit spent: Claude at least 12% of the week, Codex about 34% of the week");
+  expect(host.querySelector("[data-spend='norate'] .spend-n")!.textContent).toBe("41m");
+  expect(host.querySelector("[data-spend='large']")!.getAttribute("aria-label")).toBe("Task usage: Claude at least 12% of the week, Codex about 34% of the week");
   expect(host.querySelector("[data-spend='two']")!.getAttribute("role")).toBe("button");
 });
 
@@ -200,7 +209,7 @@ test("a screen reader reaches the popover's lines: the open marks are described 
   const described = document.getElementById(trigger.getAttribute("aria-describedby")!)!;
   expect(described.getAttribute("role")).toBe("tooltip");
   const text = described.textContent!;
-  for (const line of ["A · Max", "B · Max", "A · Pro", "B · Pro", "week 53%", "Now 12% of A's 5-hour window", "±30%"]) expect(text).toContain(line);
+  for (const line of ["A · Max", "B · Max", "A · Pro", "B · Pro", "account week 53%", "Now 12% of A's 5-hour window", "±30%"]) expect(text).toContain(line);
   await act(async () => trigger.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
   expect(trigger.hasAttribute("aria-describedby")).toBe(false);
 });
@@ -234,13 +243,13 @@ test("the popover reads as an estimate: ≈ per provider, each account beside it
   expect([...pop.querySelectorAll(".meter-label")].map((el) => el.textContent)).toEqual(["A · Max", "B · Max", "A · Pro", "B · Pro"]);
   expect([...pop.querySelectorAll(".meter-num")].map((el) => el.textContent)).toEqual(["2%", "1%", "1%", "0.4%"]);
   expect(pop.querySelector("[data-spend-session='claude:a']")!.textContent).toBe("Now 12% of A's 5-hour window");
-  expect(pop.querySelector(".pop-note")!.textContent).toBe("Estimate, ±30%");
+  expect(pop.querySelector(".pop-note")!.textContent).toBe("226m tokens · ≈ $23 at API prices");
   const trigger = document.querySelector<HTMLElement>("[data-spend='two']")!;
   await act(async () => trigger.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
   expect(document.querySelector("[data-spend-pop='two']")).toBeNull();
 });
 
-test("a lower bound says so; an account with no limit readings shows tokens and no percent — in Ukrainian too", async () => {
+test("a lower bound and an unreported plan have distinct explanations in Ukrainian", async () => {
   setLocale("uk");
   await mount(<><TaskSpendMarks taskId="large" interactive /><TaskSpendMarks taskId="norate" interactive /></>);
   const large = await open("large");
@@ -249,9 +258,12 @@ test("a lower bound says so; an account with no limit readings shows tokens and 
   expect(large.querySelector(".pop-warn")!.textContent).toBe("Нижня межа: роботу до початку обліку не пораховано");
   const norate = await open("norate");
   const claude = norate.querySelector("[data-spend-provider='claude']")!;
-  expect(claude.textContent!.replace(/\s/g, " ")).toBe("Claude — ліміт акаунта невідомийC · Max: 41 млн токенів, показано лише токени");
+  expect(claude.textContent!.replace(/\s/g, " ")).toContain("Claude 41 млн токенів");
+  expect(claude.textContent).toContain("Для оцінки частки потрібен план акаунта");
+  expect(claude.textContent).toContain("Акаунт не визначено");
+  expect(claude.textContent).not.toMatch(/невідом|unknown/);
   expect(/%/.test(claude.textContent!)).toBe(false);
-  expect(norate.querySelector(".pop-note")!.textContent).toBe("Оцінка, ±30%. Для Claude C ще немає показів ліміту");
+  expect(norate.querySelector(".pop-note")!.textContent).toContain("за цінами API");
 });
 
 test("a member who is not the owner sees each provider's figure and no account", async () => {
@@ -259,7 +271,9 @@ test("a member who is not the owner sees each provider's figure and no account",
   await mount(<TaskSpendMarks taskId="two" interactive />);
   const pop = await open("two");
   expect(pop.querySelectorAll(".meter").length).toBe(0);
-  expect(pop.textContent).toBe("Limit spent by this taskClaude ≈3% of the weekCodex ≈2% of the weekEstimate, ±30%");
+  expect(pop.textContent).toContain("Claude ≈3%");
+  expect(pop.textContent).toContain("Codex ≈2%");
+  expect(pop.querySelector(".pop-note")!.textContent).toBe("226m tokens · ≈ $23 at API prices");
 });
 
 test("the phone's face is passive, and its task screen lists the numbers; a refused read draws nothing", async () => {
@@ -267,7 +281,7 @@ test("the phone's face is passive, and its task screen lists the numbers; a refu
   const face = host.querySelector("[data-spend='two']")!;
   expect(face.getAttribute("role")).toBeNull();
   expect(face.getAttribute("aria-hidden")).toBe("true");
-  expect(host.querySelector("[data-phone-task-spend='two'] h2")!.textContent).toBe("Limits");
+  expect(host.querySelector("[data-phone-task-spend='two'] h2")!.textContent).toBe("Task usage");
   expect(host.querySelectorAll("[data-phone-task-spend='two'] .meter").length).toBe(4);
 
   for (const root of roots.splice(0)) act(() => root.unmount());
@@ -275,4 +289,23 @@ test("the phone's face is passive, and its task screen lists the numbers; a refu
   refuse = true;
   const refused = await mount(<TaskSpendMarks taskId="two" interactive />);
   expect(refused.querySelector("[data-spend]")).toBeNull();
+});
+
+test("unpriced models and plans without a fixed limit keep the tokens and explain the missing estimate", async () => {
+  await mount(<><TaskSpendMarks taskId="noFixedLimit" interactive /><TaskSpendMarks taskId="unpriced" interactive /><TaskSpendMarks taskId="partial" interactive /></>);
+  const noLimit = (await open("noFixedLimit")).textContent!;
+  expect(noLimit).toContain("100m tokens");
+  expect(noLimit).toContain("plan has no fixed limit");
+  expect(noLimit).toContain("≈ $10 at API prices");
+  const unpriced = (await open("unpriced")).textContent!;
+  expect(unpriced).toContain("No API price for 100m tokens (fixture-model)");
+  expect(unpriced).toContain("API price unavailable");
+  const partial = (await open("partial")).textContent!;
+  expect(partial).toContain("Claude ≈1%");
+  expect(partial).toContain("(0.8–2%)");
+  expect(partial).toContain("$900–$2,300 (measured)");
+  expect(partial).toContain("≈ $10 at API prices for priced tokens");
+  for (const text of [noLimit, unpriced, partial]) {
+    expect(text).not.toMatch(/unknown|≥/);
+  }
 });

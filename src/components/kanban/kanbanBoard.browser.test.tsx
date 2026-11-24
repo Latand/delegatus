@@ -19682,34 +19682,18 @@ describe("the orchestrator's parallel self in the seat's feed", () => {
 });
 
 describe("task limit spend: a scale on the card's state line, the numbers in its popover", () => {
-  /*
-   * docs/design/task-limit-spend.md §7.2, variant 2 as approved: each provider
-   * that did work on a task draws its engine mark and a four-cell scale at the
-   * end of the card's state line, with no digits; the popover lists each
-   * provider's weekly estimate (≈, ≥, <1%), each account's figure beside its
-   * week so far, the 5-hour share while it lasts and the ±30 % note. The phone's
-   * card face carries the marks passively and reads them into its label; the
-   * task screen lists the numbers as one section. States: one provider, two,
-   * several accounts of one provider, tiny, large with a lower bound, no limit
-   * readings, still counting (nothing drawn), and the answer a non-owner gets.
-   *
-   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'task limit spend'
-   *
-   * Frames go to TASK_SPEND_PNG_DIR (default `.artifacts/task-spend/`) with
-   * `readings.json` beside them; nothing is written into the tree.
-   */
   const CASES = {
-    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/Codex ≈1%/] },
-    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/Claude ≈3%/, /Codex ≈2%/, /0[.,]4%/, /5-(hour|годин)/] },
+    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/Codex ≈1%/, /650.*1.200/, /(published sources|відкритих джерел)/] },
+    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/Claude ≈3%/, /Codex ≈2%/, /0[.,]4%/, /5-(hour|годин)/, /Max 20×/, /(account usage and the plan budget|темпом акаунта й бюджетом плану)/, /900.*2.300/, /226/] },
     "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/Claude <1%/, /Codex ≈7%/, /A · Pro/, /B · Plus/, /D · Pro/] },
     "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/Claude <1%/, /0[.,]3%/] },
     "t-interrupt": { state: "large, lower bound", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/Claude ≥12%/, /Codex ≈34%/, /(task|задача) ≥ ?12%/] },
-    "t-disk": { state: "no limit readings", marks: [["claude", "norate", null], ["codex", "num", 1]], pop: [/Claude — /, /41/, /Codex ≈1%/] },
+    "t-disk": { state: "plan unreported", marks: [["claude", "tokens", null], ["codex", "num", 1]], pop: [/Claude 41/, /(reported account plan is needed|потрібен план акаунта)/, /(Unattributed account|Акаунт не визначено)/, /Codex ≈1%/] },
   } as const;
   const COUNTING = "t-merge-a";
-  const WIDTHS = [1440, 1280, 820, 390] as const;
+  const WIDTHS = [1440, 1280, 820, 390, 320, 360, 440] as const;
 
-  browserTest("every state at 1440, 1280, 820 and 390, en and uk, light and dark", async () => {
+  browserTest("every state at desktop and phone widths, en and uk, light and dark", async () => {
     const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -19746,7 +19730,7 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
       const r = pop.getBoundingClientRect();
       const lines = [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim());
       /* No line is cut: an account label, whatever its length, is printed whole. */
-      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
+      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main, .meter-note, .pop-note")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
       const labels = [...pop.querySelectorAll<HTMLElement>(".meter-label")].map((el) => ({ text: el.textContent ?? "", lines: new Set([...el.getClientRects()].map((b) => Math.round(b.top))).size, height: el.getBoundingClientRect().height }));
       /* Every account line, its label's text, its value and its bar stay inside the bubble. */
       const textRects = [...pop.querySelectorAll<HTMLElement>(".meter-label")].flatMap((el) => { const range = document.createRange(); range.selectNodeContents(el); return [...range.getClientRects()]; });
@@ -19758,7 +19742,7 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
     }, id);
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of WIDTHS) {
-        const phone = width === 390;
+        const phone = width <= 440;
         const label = `${lang}-${theme}-${width}`;
         const height = phone ? 844 : 900;
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?spend=1`, { width, height }, theme, lang, "reduce", phone);
@@ -19789,7 +19773,7 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               if (!marks) { failures.push(`${label} ${id}: no marks`); continue; }
               const got = marks.providers.map((p) => [p.engine, p.kind, p.cells]);
               if (JSON.stringify(got) !== JSON.stringify(expected.marks)) failures.push(`${label} ${id}: marks ${JSON.stringify(got)} ≠ ${JSON.stringify(expected.marks)}`);
-              if (marks.digits) failures.push(`${label} ${id}: the card's marks carry digits`);
+              if (marks.digits !== (id === "t-disk")) failures.push(`${label} ${id}: the card's token mark does not match the expected state`);
               if (marks.overlapsWords) failures.push(`${label} ${id}: the marks overlap the state sentence`);
               if (!marks.insideCard) failures.push(`${label} ${id}: the marks leave the card ${JSON.stringify(marks.own)}`);
               if (marks.role !== "button" || !marks.label) failures.push(`${label} ${id}: the marks are no labelled control`);
@@ -19800,7 +19784,7 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               readings.push({ label, id, popover: pop });
               const text = pop.lines.join("\n");
               for (const want of expected.pop) if (!want.test(text)) failures.push(`${label} ${id}: the popover lacks ${want}:\n${text}`);
-              if (!/±30%/.test(text)) failures.push(`${label} ${id}: no ±30% note`);
+              if (!/(±30%|published sources|відкритих джерел)/.test(text) || !/API/.test(text)) failures.push(`${label} ${id}: missing estimate basis or API total`);
               if (pop.clipped) failures.push(`${label} ${id}: ${pop.clipped} popover lines are cut`);
               if (pop.outside) failures.push(`${label} ${id}: ${pop.outside} account lines or bars leave the bubble`);
               /* The fixture's 80-character label cannot share a line with its figure: it is printed whole, on lines of its own. */
@@ -19837,14 +19821,14 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
                 const got = marks.providers.map((p) => [p.engine, p.kind, p.cells]);
                 if (JSON.stringify(got) !== JSON.stringify(CASES[id].marks)) failures.push(`${label} ${id}: phone marks ${JSON.stringify(got)}`);
                 if (marks.role !== null || marks.hidden !== "true") failures.push(`${label} ${id}: the phone face's marks are not passive`);
-                if (marks.overlapsWords || !marks.insideCard || marks.digits) failures.push(`${label} ${id}: phone marks ${JSON.stringify(marks)}`);
+                if (marks.overlapsWords || !marks.insideCard || marks.digits !== (id === "t-disk")) failures.push(`${label} ${id}: phone marks ${JSON.stringify(marks)}`);
                 if (!faceLabel?.includes(translate(lang, "taskSpend.aria", { parts: "" }).trim())) failures.push(`${label} ${id}: the face's label does not read the spend: ${faceLabel}`);
               }
             }
-            /* The task screen's section, for two tasks: two providers, and the lower bound. */
+            /* The task screen covers two providers, a lower bound and an unreported plan. */
             for (const [tab, id] of [["assigned", "t-search"], ["done", "t-interrupt"], ["assigned", "t-disk"]] as const) {
               await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
-              await page.locator(`[data-phone-card="task:${id}"]`).click();
+              await page.locator(`[data-phone-card="task:${id}"] [data-phone-card-title]`).click();
               const section = page.locator(`[data-phone-task-spend="${id}"]`);
               await section.waitFor({ timeout: 10_000 });
               await section.scrollIntoViewIfNeeded();
@@ -19854,7 +19838,7 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               /* As in the popover: every account label whole, inside the section, and the digits at one x. */
               const fit = await section.evaluate((el) => {
                 const r = el.getBoundingClientRect();
-                const cut = [...el.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
+                const cut = [...el.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main, .meter-note, .pop-note")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
                 const rects = [...el.querySelectorAll<HTMLElement>(".meter-label")].flatMap((node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; });
                 const outside = [...[...el.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((node) => node.getBoundingClientRect()), ...rects].filter((b) => b.left < r.left - 0.5 || b.right > r.right + 0.5).length;
                 const numX = [...el.querySelectorAll<HTMLElement>(".meter-num")].map((node) => Math.round(node.getBoundingClientRect().left));

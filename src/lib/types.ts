@@ -716,6 +716,8 @@ export interface EngineLimits {
   /** Read compatibility for snapshots persisted before tier lists. */
   flagship?: TierLimitWindow | null;
   plan: string | null;
+  /** Provider rate tier when reported separately from the subscription name. */
+  planTier?: string;
   /** Unix seconds of the oldest selected window observation. Null means the
       provider supplied no observation clock. */
   capturedAt: number | null;

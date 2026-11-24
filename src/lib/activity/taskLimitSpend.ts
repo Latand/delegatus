@@ -12,9 +12,11 @@ import { readHistory } from "@/lib/limitsHistoryStore";
 import { ActivityStore, activityStorePath, conversationDigest } from "./store";
 import { countsFromRow, DAY, HOUR, usageMeta } from "./tokenStore";
 import { tokenTotal } from "./tokenUsage";
-import { invalidateUnattributedCodexRates, LIMIT_RATE_SCHEMA, limitWeight, nearestRate, refreshLimitRates, utcDay, type LimitRate, type SpendObservations } from "./limitRates";
+import { invalidateUnattributedCodexRates, LIMIT_RATE_SCHEMA, nearestRate, refreshLimitRates, utcDay, type LimitRate, type SpendObservations } from "./limitRates";
+import { apiCost, ESTIMATE_VERSION, estimateShare, meterCost, planBudget, planWithoutFixedLimit, shareBasis } from "./subscriptionEstimate";
+import { priceTier } from "./tokenPrices";
 import { activityOperation } from "./operation";
-import type { TaskSpendAccount, TaskSpendResponse, SpendEngine } from "./taskLimitSpendTypes";
+import type { TaskSpendAccount, TaskSpendProvider, TaskSpendResponse, SpendEngine } from "./taskLimitSpendTypes";
 
 export interface SpendDependencies {
   now(): number;
@@ -35,12 +37,13 @@ const production: SpendDependencies = {
     ...listCodexAccounts().map(a => [`codex:${a.id}`, a.label] as const)]),
 };
 interface Meta { seed: string; task_revision: number; task_key: string; rates_hour: number;
-  pipeline_revision: number; pipeline_key: string; pipeline_seed: string; aggregate_schema: number; aggregate_cursor: string; rate_schema: number }
+  pipeline_revision: number; pipeline_key: string; pipeline_seed: string; aggregate_schema: number; aggregate_cursor: string; rate_schema: number; estimate_version: string; estimate_cursor: string | null }
 interface Dirty { key: string; at: number }
 export interface SpendRow {
   task: string; account: string; engine: SpendEngine; tokens: number; unpriced_tokens: number; weight: number; rated_weight: number;
   weekly_pp: number | null; window_start: number | null; window_pp: number | null; session_start: number | null; session_pp: number | null;
   first_hour: number; last_hour: number; floor: "before-counting" | "uncounted" | null; computed_at: number;
+  api_usd: number | null; api_priced_tokens: number; unpriced_models: string;
 }
 export type SpendHour = Parameters<typeof countsFromRow>[0] & { hour: number; conversation: string; model: string; tier: string;
   account: string; engine: string; pipeline: string | null; role: string };
@@ -81,10 +84,19 @@ export function windowStart(observation: EngineLimits,
 
 /** Pure page reducer. Previously persisted partials let a large task cross pass and process boundaries. */
 export function computeTaskRows(task: BoardTask, hours: readonly SpendHour[], rates: readonly LimitRate[], observations: SpendObservations,
-  countedFrom: number | null, now: number, previous: SpendRow[] = [], coverageComplete = true): SpendRow[] {
+  countedFrom: number | null, now: number, previous: SpendRow[] = []): SpendRow[] {
   const result = new Map(previous.map(r => [r.account,r]));
-  const byRate = new Map<string, LimitRate[]>();
-  for (const rate of rates) { const key = `${rate.account}|${rate.window}`; const arr = byRate.get(key) ?? []; arr.push(rate); byRate.set(key,arr); }
+  const weeklyRates = new Map<string, LimitRate>();
+  const sessionRates = new Map<string, LimitRate[]>();
+  for (const rate of rates) {
+    if (rate.window === "weekly") {
+      if (rate.source === "own" && rate.rate !== null) weeklyRates.set(`${rate.account}|${rate.day}`, rate);
+    } else {
+      const days = sessionRates.get(rate.account) ?? [];
+      days.push(rate);
+      sessionRates.set(rate.account, days);
+    }
+  }
   for (const h of hours) {
     if (h.engine !== "claude" && h.engine !== "codex") continue;
     // Unknown attribution is kept separate per provider in the aggregate's key.
@@ -96,24 +108,49 @@ export function computeTaskRows(task: BoardTask, hours: readonly SpendHour[], ra
     if (!row) {
       row = { task: task.id, account, engine: h.engine, tokens: 0, unpriced_tokens: 0, weight: 0, rated_weight: 0,
         weekly_pp: null, window_start: week, window_pp: null, session_start: session, session_pp: null,
-        first_hour: h.hour, last_hour: h.hour, floor: Date.parse(task.createdAt) < Math.max(countedFrom ?? now,now-92*DAY)
-          ? "before-counting" : coverageComplete ? null : "uncounted", computed_at: now };
+        first_hour: h.hour, last_hour: h.hour, floor: countedFrom !== null && Date.parse(task.createdAt) < countedFrom
+          ? "before-counting" : null, computed_at: now,
+        api_usd: null, api_priced_tokens: 0, unpriced_models: "[]" };
       result.set(account,row);
     }
-    const counts = countsFromRow(h), tokens = tokenTotal(counts), weight = limitWeight(h.model,h.tier,h.engine,counts);
+    const counts = countsFromRow(h), tokens = tokenTotal(counts);
+    const cost = apiCost(h.model, h.tier, counts);
+    const weight = meterCost(h.model, h.tier, h.engine, counts, cost);
     row.tokens += tokens; row.first_hour = Math.min(row.first_hour,h.hour); row.last_hour = Math.max(row.last_hour,h.hour);
-    if (weight === null) { row.unpriced_tokens += tokens; continue; }
+    if (cost !== null) {
+      row.api_usd = (row.api_usd ?? 0) + cost;
+      row.api_priced_tokens += tokens;
+    } else if (tokens > 0) {
+      row.unpriced_tokens += tokens;
+      // A bounded sample names unpriced models even when a task has many.
+      const models: string[] = JSON.parse(row.unpriced_models);
+      if (models.length < 4 && /^[a-z0-9][a-z0-9._-]{0,119}$/i.test(h.model)
+        && h.model !== "unknown" && !models.includes(h.model)) row.unpriced_models = JSON.stringify([...models, h.model]);
+    }
+    if (weight === null) continue;
     row.weight += weight;
     const day = utcDay(h.hour*HOUR);
-    const weeklyRate = nearestRate(byRate.get(`${account}|weekly`) ?? [],day);
-    if (weeklyRate !== null) {
-      row.rated_weight += weight; row.weekly_pp = (row.weekly_pp ?? 0) + weight*weeklyRate;
-      if (week !== null && h.hour >= Math.floor(week*1000/HOUR)) row.window_pp = (row.window_pp ?? 0) + weight*weeklyRate;
+    const weekly = weeklyRates.get(`${account}|${day}`);
+    if (weekly?.rate != null) {
+      // Older Codex rates were calibrated in API dollars, with Ultrafast
+      // weighted at Fast. Keep their measured contribution in that unit.
+      const calibratedWeight = h.engine === "codex" && weekly.meter_version === null
+        ? apiCost(h.model, priceTier(h.tier) === "ultrafast" ? "fast" : h.tier, counts) : weight;
+      if (calibratedWeight !== null) {
+        const points = calibratedWeight * weekly.rate;
+        row.rated_weight += weight;
+        row.weekly_pp = (row.weekly_pp ?? 0) + points;
+        if (week !== null && h.hour >= Math.floor(week*1000/HOUR)) row.window_pp = (row.window_pp ?? 0) + points;
+      }
     }
-    const sessionRate = nearestRate(byRate.get(`${account}|session`) ?? [],day);
+    const sessionRate = nearestRate(sessionRates.get(account) ?? [],day);
     if (sessionRate !== null && session !== null && h.hour >= Math.floor(session*1000/HOUR)) row.session_pp = (row.session_pp ?? 0) + weight*sessionRate;
   }
   return [...result.values()];
+}
+
+function sumOptional(a: number | null | undefined, b: number | null | undefined): number | null {
+  return a == null && b == null ? null : (a ?? 0) + (b ?? 0);
 }
 
 function retainExpiredContributions(current: SpendRow[], expired: readonly SpendRow[]): SpendRow[] {
@@ -124,10 +161,12 @@ function retainExpiredContributions(current: SpendRow[], expired: readonly Spend
     merged.set(prior.account,{
       ...next, tokens: prior.tokens + next.tokens, unpriced_tokens: prior.unpriced_tokens + next.unpriced_tokens,
       weight: prior.weight + next.weight, rated_weight: prior.rated_weight + next.rated_weight,
-      weekly_pp: prior.weekly_pp === null || next.weekly_pp === null ? null : prior.weekly_pp + next.weekly_pp,
+      weekly_pp: sumOptional(prior.weekly_pp, next.weekly_pp),
+      api_usd: sumOptional(prior.api_usd, next.api_usd),
+      api_priced_tokens: prior.api_priced_tokens + next.api_priced_tokens,
+      unpriced_models: JSON.stringify([...new Set<string>([...JSON.parse(prior.unpriced_models), ...JSON.parse(next.unpriced_models)])].slice(0, 4)),
       first_hour: Math.min(prior.first_hour,next.first_hour), last_hour: Math.max(prior.last_hour,next.last_hour),
-      floor: prior.floor === "before-counting" || next.floor === "before-counting" ? "before-counting"
-        : prior.floor === "uncounted" || next.floor === "uncounted" ? "uncounted" : null,
+      floor: prior.floor === "before-counting" || next.floor === "before-counting" ? "before-counting" : null,
     });
   }
   return [...merged.values()];
@@ -150,12 +189,24 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
     const deps = { ...production,...overrides }, db = store.db, now = deps.now(), source = deps.source(), pipelineSource = deps.pipelineSource?.() ?? null;
     let meta = metaRead(db);
     const hour = Math.floor(now/HOUR);
+    const versionChanged = meta.estimate_version !== ESTIMATE_VERSION;
     if (meta.seed === "done" && !db.query("SELECT 1 FROM limit_spend_dirty LIMIT 1").get()
       && (!source || (source.revision() === meta.task_revision && !meta.task_key))
       && (!pipelineSource || (meta.pipeline_seed === "done" && pipelineSource.revision() === meta.pipeline_revision && !meta.pipeline_key))
-      && meta.aggregate_schema >= 2 && meta.rate_schema >= LIMIT_RATE_SCHEMA && !db.query("SELECT 1 FROM limit_spend_rate_changes LIMIT 1").get() && meta.rates_hour === hour) return { tasks: 0, rows: 0 };
+      && !versionChanged && meta.estimate_cursor === null && meta.aggregate_schema >= 2 && meta.rate_schema >= LIMIT_RATE_SCHEMA && !db.query("SELECT 1 FROM limit_spend_rate_changes LIMIT 1").get() && meta.rates_hour === hour) return { tasks: 0, rows: 0 };
     const write = async (work: () => void) => { await waitForStateLock("activity.limit-spend", () => store.transaction(work)); await yieldLoop(); };
     if (meta.rate_schema < LIMIT_RATE_SCHEMA && !await invalidateUnattributedCodexRates(db, write)) return { tasks: 0, rows: 0 };
+    const estimateCursor = versionChanged ? "" : meta.estimate_cursor;
+    if (estimateCursor !== null) {
+      const rows = db.query<{ task: string }, [string]>(
+        "SELECT DISTINCT task FROM task_limit_spend WHERE task>? ORDER BY task LIMIT 200").all(estimateCursor);
+      await write(() => {
+        for (const row of rows) dirty(db, `t:${row.task}`, now);
+        db.query("UPDATE limit_spend_meta SET estimate_version=?,estimate_cursor=?,rates_hour=CASE WHEN estimate_version<>? THEN -1 ELSE rates_hour END WHERE singleton=1")
+          .run(ESTIMATE_VERSION, rows.length < 200 ? null : rows.at(-1)!.task, ESTIMATE_VERSION);
+      });
+      meta = metaRead(db);
+    }
     if (meta.aggregate_schema < 2 && meta.aggregate_cursor !== "~") {
       const rows=db.query<{task:string},[string]>("SELECT DISTINCT task FROM task_limit_spend WHERE task>? ORDER BY task LIMIT 200").all(meta.aggregate_cursor);
       await write(()=>{
@@ -257,11 +308,9 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
       await yieldLoop();
     }
     const observations = deps.observations(), coverage = usageMeta(db);
-    const coverageComplete = coverage?.complete === 1 && coverage.pending_bytes === 0;
     if (meta.rates_hour !== hour || meta.rate_schema < LIMIT_RATE_SCHEMA) {
-      const coverage = usageMeta(db);
       await refreshLimitRates(db,now,{ history: deps.history,observations,
-        coverageComplete: coverage?.complete === 1 && coverage.pending_bytes === 0, revalidateFrozen: meta.rate_schema < 3 },write);
+        coverageComplete: coverage?.complete === 1 && coverage.pending_bytes === 0, revalidateFrozen: meta.rate_schema < 3, reprice: meta.rates_hour < 0 },write);
       await write(() => { db.query("UPDATE limit_spend_meta SET rates_hour=?,rate_schema=? WHERE singleton=1").run(hour, LIMIT_RATE_SCHEMA); });
       meta = metaRead(db);
     }
@@ -298,18 +347,19 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
     };
     const todo = db.query<Dirty, []>(TASK_SPEND_DUE_SQL).all();
     const tasks = new Map(deps.tasks(new Set(todo.map(d=>d.key.slice(2)))).map(t=>[t.id,t]));
+    const countedFrom = coverage?.counted_from ?? null;
+    const signature = JSON.stringify([hour, meta.rate_schema, ESTIMATE_VERSION, countedFrom,
+      [...observations].sort(([a],[b])=>a.localeCompare(b)).map(([key,o])=>[key,o.weekly?.resetsAt,o.session?.resetsAt])]);
     let visited = 0, completed = 0, ownerBudget = 2000;
     for (const item of todo) {
       if (visited >= 50000 || ownerBudget <= 0) break;
       const id = item.key.slice(2), task = tasks.get(id);
       if (!task) { await write(() => deleteTask(db,id)); continue; }
-      const signature = JSON.stringify([hour,meta.rate_schema,coverageComplete,[...observations].sort(([a],[b])=>a.localeCompare(b)).map(([key,o])=>[key,o.weekly?.resetsAt,o.session?.resetsAt])]);
       const progress = db.query<{ stamp: number; signature: string; owner: string; cursor: string | null; rows: string }, [string]>("SELECT * FROM task_spend_progress WHERE task=?").get(id);
       let owner = "", cursor: SQLQueryBindings[] | null = null, result: SpendRow[] = [];
       if (progress?.stamp === item.at && progress.signature === signature) {
         owner = progress.owner; cursor = progress.cursor ? JSON.parse(progress.cursor) : null; result = JSON.parse(progress.rows);
       }
-      const countedFrom = coverage?.counted_from ?? null;
       let done = false;
       while (visited < 50000 && ownerBudget-- > 0) {
         if (!cursor) owner = db.query<{ owner: string }, [string,string]>("SELECT owner FROM task_spend_owners WHERE task=? AND owner > ? ORDER BY owner LIMIT 1").get(id,owner)?.owner ?? "";
@@ -318,7 +368,7 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
         const hours = db.query<SpendHour,SQLQueryBindings[]>(query.sql).all(...query.binds);
         visited += hours.length;
         const rates = [...new Set(hours.map(h => h.account === "unknown" ? `${h.engine}:unknown` : h.account))].flatMap(accountRates);
-        result = computeTaskRows(task,hours,rates,observations,countedFrom,now,result,coverageComplete);
+        result = computeTaskRows(task,hours,rates,observations,countedFrom,now,result);
         const last = hours.at(-1);
         cursor = hours.length === limit && last ? [last.hour,last.conversation,last.model,last.tier,last.account] : null;
         await yieldLoop();
@@ -333,7 +383,7 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
           const current = db.query<Dirty,[string]>("SELECT key,at FROM limit_spend_dirty WHERE key=?").get(item.key);
           if (current?.at !== item.at) return;
           const currentCoverage = usageMeta(db);
-          if ((currentCoverage?.complete === 1 && currentCoverage.pending_bytes === 0) !== coverageComplete) {
+          if ((currentCoverage?.counted_from ?? null) !== countedFrom) {
             dirty(db,item.key,now); db.query("DELETE FROM task_spend_progress WHERE task=?").run(id); return;
           }
           if (db.query(`SELECT 1 FROM task_spend_owners o JOIN limit_spend_dirty d ON d.key=o.owner WHERE o.task=? LIMIT 1`).get(id)) {
@@ -347,8 +397,12 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
             .all(id,Math.floor((now-92*DAY)/HOUR));
           const finalRows = retainExpiredContributions(result,retained);
           db.query("DELETE FROM task_limit_spend WHERE task=?").run(id);
-          const put = db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
-          for (const r of finalRows) put.run(r.task,r.account,r.engine,r.tokens,r.unpriced_tokens,r.weight,r.rated_weight,r.weekly_pp,r.window_start,r.window_pp,r.session_start,r.session_pp,r.first_hour,r.last_hour,r.floor,now);
+          const put = db.query(`INSERT INTO task_limit_spend
+            (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,
+             first_hour,last_hour,floor,computed_at,api_usd,api_priced_tokens,unpriced_models) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+          for (const r of finalRows) put.run(r.task,r.account,r.engine,r.tokens,r.unpriced_tokens,r.weight,r.rated_weight,r.weekly_pp,
+            r.window_start,r.window_pp,r.session_start,r.session_pp,r.first_hour,r.last_hour,r.floor === "before-counting" ? r.floor : null,
+            now,r.api_usd,r.api_priced_tokens,r.unpriced_models);
           db.query("DELETE FROM task_spend_progress WHERE task=?").run(id); clearDirty(db,item); completed++;
         });
       });
@@ -372,32 +426,82 @@ export function readTaskLimitSpend(db: Database | null, ids: readonly string[], 
   const observations = deps.observations(), labels = viewer.canChoose ? deps.labels() : new Map<string,string>();
   for (const task of known) body.tasks[task.id] = { providers: [] };
   const rows = db.query<SpendRow,SQLQueryBindings[]>(`SELECT * FROM task_limit_spend WHERE task IN (${unique.map(()=>"?").join(",")})`).all(...unique);
+  const planByAccount = new Map<string, { plan: string | null; tier: string | null }>();
+  // Read-only requests can arrive before the background writer adds columns.
+  const lastPlan = metaColumns.has("estimate_version")
+    ? db.query<{ plan: string; plan_tier: string | null }, [string]>(`SELECT plan,plan_tier FROM usage_limit_rates
+      WHERE account=? AND plan IS NOT NULL ORDER BY day DESC, computed_at DESC LIMIT 1`) : null;
+  const accountPlan = (account: string) => {
+    let info = planByAccount.get(account);
+    if (info) return info;
+    const observation = observations.get(account);
+    const prior = observation?.plan && observation.planTier ? null : lastPlan?.get(account);
+    const plan = observation?.plan ?? prior?.plan ?? null;
+    info = { plan, tier: observation?.planTier ?? (prior?.plan === plan ? prior?.plan_tier ?? null : null) };
+    planByAccount.set(account, info);
+    return info;
+  };
+  const contributions = new Map<TaskSpendProvider, { measured: number; planned: number }>();
   for (const row of rows) {
-    const into = body.tasks[row.task]; if (!into) continue;
-    let provider = into.providers.find(p=>p.engine===row.engine);
-    if (!provider) { provider = { engine: row.engine,weeklyPp: 0,tokens: 0,bound: "norate",floor: null,accounts: [] }; into.providers.push(provider); }
-    const rated = row.weekly_pp !== null && row.rated_weight > 0;
-    if (rated && provider.bound === "norate") provider.bound = "approx";
-    provider.weeklyPp += row.weekly_pp ?? 0; provider.tokens += row.tokens;
+    const into = body.tasks[row.task];
+    if (!into || row.tokens <= 0) continue;
+    let provider = into.providers.find(p => p.engine === row.engine);
+    if (!provider) {
+      provider = { engine: row.engine, weeklyPp: 0, tokens: 0, bound: "tokens", floor: null, basis: null, range: null,
+        budgets: [], outsideBudget: false, apiUsd: null, apiPricedTokens: 0, unpricedModels: [], unpricedTokens: 0, issues: [],
+        accounts: viewer.canChoose ? [] : null };
+      into.providers.push(provider);
+      contributions.set(provider, { measured: 0, planned: 0 });
+    }
+    const { plan, tier } = accountPlan(row.account);
+    const budget = planBudget(row.engine, plan, tier);
+    const fixed = !planWithoutFixedLimit(plan);
+    const share = estimateShare(row.weight, fixed ? row.rated_weight : 0, fixed ? row.weekly_pp : null, budget);
+    const weights = contributions.get(provider)!;
+    weights.measured += share.measured;
+    weights.planned += share.planned;
+    if (share.weeklyPp !== null) provider.weeklyPp += share.weeklyPp;
+    if (share.range) {
+      provider.range ??= { low: 0, high: 0 };
+      provider.range.low += share.range.low;
+      provider.range.high += share.range.high;
+    }
+    if (budget && !provider.budgets.some(b => b.low === budget.low && b.high === budget.high && b.grade === budget.grade)) provider.budgets.push(budget);
+    if (share.missingBudget && (row.weight > 0 || row.unpriced_tokens < row.tokens)) {
+      const issue = !fixed ? "noFixedLimit" : plan ? "noPlanBudget" : "planMissing";
+      if (!provider.issues.includes(issue)) provider.issues.push(issue);
+    }
+    provider.outsideBudget ||= share.outsideBudget;
+    provider.tokens += row.tokens;
+    provider.apiUsd = sumOptional(provider.apiUsd, row.api_usd);
+    provider.apiPricedTokens += row.api_priced_tokens ?? 0;
+    provider.unpricedTokens += row.unpriced_tokens;
+    const unpricedModels: string[] = row.unpriced_tokens > 0 ? JSON.parse(row.unpriced_models ?? "[]") : [];
+    for (const model of unpricedModels) {
+      if (provider.unpricedModels.length < 4 && !provider.unpricedModels.includes(model)) provider.unpricedModels.push(model);
+    }
     if (row.floor === "before-counting") provider.floor = "before-counting";
-    else if (row.floor === "uncounted") provider.floor = "uncounted";
-    else if (provider.floor === null && (!rated || row.rated_weight < row.weight || row.unpriced_tokens > 0)) provider.floor = "uncounted";
+    if (!provider.accounts) continue;
     const observation = observations.get(row.account), start = observation ? windowStart(observation,"weekly",now) : null;
     const session = observation ? windowStart(observation,"session",now) : null;
     const same = (a: number | null,b: number | null) => a !== null && b !== null && Math.abs(a-b) <= 300;
-    const account: TaskSpendAccount = { key: row.account.endsWith(":unknown") ? "unknown" : row.account, label: labels.get(row.account) ?? row.account.slice(row.account.indexOf(":")+1), plan: observation?.plan ?? null,
-      weeklyPp: row.weekly_pp, tokens: row.tokens,
+    const account: TaskSpendAccount = {
+      key: row.account.endsWith(":unknown") ? "unknown" : row.account,
+      label: labels.get(row.account) ?? row.account.slice(row.account.indexOf(":")+1),
+      plan, planTier: tier, weeklyPp: share.weeklyPp, basis: share.basis, range: share.range, budget, apiUsd: row.api_usd ?? null, tokens: row.tokens,
       week: observation?.weekly ? { usedPercent: observation.weekly.usedPercent,
         taskPp: start === null ? null : same(start,row.window_start) ? row.window_pp : (row.last_hour+1)*3600 <= start ? 0 : null } : null,
-      sessionPp: row.engine === "claude" && same(session,row.session_start) ? row.session_pp : null };
-    provider.accounts!.push(account);
+      sessionPp: row.engine === "claude" && same(session,row.session_start) ? row.session_pp : null,
+    };
+    provider.accounts.push(account);
   }
   for (const summary of Object.values(body.tasks)) {
     summary.providers.sort((a,b)=>a.engine === b.engine ? 0 : a.engine === "claude" ? -1 : 1);
     for (const p of summary.providers) {
-      if (p.bound !== "norate" && p.floor) p.bound = "floor";
-      p.accounts!.sort((a,b)=>Number(b.weeklyPp !== null)-Number(a.weeklyPp !== null) || a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
-      if (!viewer.canChoose) p.accounts = null;
+      const weights = contributions.get(p)!;
+      p.basis = shareBasis(weights.measured, weights.planned);
+      if (p.basis) p.bound = p.floor ? "floor" : "approx";
+      p.accounts?.sort((a,b)=>Number(b.weeklyPp !== null)-Number(a.weeklyPp !== null) || a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
     }
   }
   return body;
