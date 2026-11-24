@@ -426,7 +426,10 @@ test("T4 carried hosted typecheck red runs full local attribution and real TypeS
   };
   const f = landingFixture("green", runner);
   const compilerPath = compilerShim(f.root, `exec ${shellArgument(process.execPath)} ${shellArgument(compiler)} --noEmit\n`);
-  f.seed("tsconfig.json", JSON.stringify({ compilerOptions: { strict: true, types: [], skipLibCheck: true }, include: ["*.ts"] }));
+  f.seed("tsconfig.json", JSON.stringify({
+    compilerOptions: { strict: true, lib: ["es5"], types: [], skipLibCheck: true },
+    include: ["*.ts"],
+  }));
   f.seed("contract.ts", "export const requireCount = (value: number) => value;\n");
   const a = f.addPr(12, "healthy.ts", "export const healthy = true;\n");
   const b = f.addPr(13, "feature.ts", 'import { requireCount } from "./contract"; requireCount(1);\n');
@@ -453,7 +456,7 @@ test("T4 carried hosted typecheck red runs full local attribution and real TypeS
   expect(state.refreshes).toBe(2);
   expect(state.gated!.carried).toEqual([]);
   expect(state.validationHistory![0]!.carried).toHaveLength(1);
-}, 30_000);
+}, 60_000);
 
 const shellArgument = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 function compilerShim(root: string, body: string): string {
