@@ -59,7 +59,7 @@ export function publicationDeadlineKind(output: string): "execution" | "admissio
     if (phase === "CPU admission for publication checks") admission = true;
     else if (phase && phase !== "privacy" && !phase.startsWith("branch is ")) checksStarted = true;
     if (member) checksStarted = true;
-    if (/^(?:gate-slot: CPU admission queue lock|pre-push: CPU admission) deadline exceeded after \d+ ms; (?:checks|publication tool preparation) did not start$/.test(line)) admissionExpired = true;
+    if (/^gate-slot: CPU admission queue lock deadline exceeded after \d+ ms; checks did not start$/.test(line)) admissionExpired = true;
     if (/^command timed out after \d+ms/.test(line)
       || /^pre-push: no verdict within the push budget of \d+ s:/.test(line)
       || /^owned runner: (?:deadline expired|execution guard expired)$/.test(line)

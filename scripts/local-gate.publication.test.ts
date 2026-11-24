@@ -2,9 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { tmpdir } from "node:os";
 import { createPublicationFixtures } from "./publicationHook.fixture";
-import { executedPaths } from "./ci-platform-scope";
 
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -12,57 +10,17 @@ const nativeTest = test.skipIf(process.platform !== "linux" || !["x64", "arm64"]
 afterEach(() => { for (const dir of roots.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 const { fixture, commitFixtureInputs } = createPublicationFixtures(root, roots);
 
-for (const setting of ["LLV_PRIVACY_KNOWN_VALUES_FILE", "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE"] as const) {
-  test.each(["missing", "unreadable", "directory"])("a configured " + setting + " that is %s refuses before scanning", kind => {
-    const f = fixture();
-    const source = path.join(f.dir, ".git", "catalog");
-    f.env[setting] = source;
-    if (kind === "directory") fs.mkdirSync(source);
-    if (kind === "unreadable") fs.writeFileSync(source, "synthetic catalog\n", { mode: 0o000 });
-    const prepared = f.run(true);
-    expect(prepared.status, prepared.stderr).not.toBe(0);
-    expect(prepared.stderr).toContain(`${kind === "missing" ? "configured source is missing" : "cannot read configured source"}: ${setting}`);
-    expect(fs.existsSync(f.env.HOOK_LOG!)).toBeFalse();
-    expect(fs.existsSync(f.receipt)).toBeFalse();
-    if (kind === "missing") fs.writeFileSync(source, "synthetic catalog\n");
-    expect(f.run(false).status).not.toBe(0);
-    expect(fs.existsSync(f.env.HOOK_LOG!)).toBeFalse();
-  }, 60_000);
-}
-
-test("prepared checks are consumed once by the native hook without a second privacy scan or admission", () => {
+test("prepared checks are consumed once by a fresh native hook, with fresh privacy and no second admission", () => {
   const f = fixture();
   const prepared = f.run(true);
   expect(prepared.status, prepared.stderr).toBe(0);
   const before = f.calls().length;
   const hook = f.run(false);
   expect(hook.status, hook.stderr).toBe(0);
-  expect(f.calls().slice(before).map(call => call.args[0])).toEqual([]);
+  expect(f.calls().slice(before).map(call => call.args[0])).toEqual(["scripts/privacy-publication-gate.ts"]);
   expect(hook.stderr).not.toContain("CPU admission");
   expect(fs.existsSync(f.receipt)).toBeFalse();
   expect(f.run(false).status).not.toBe(0);
-}, 60_000);
-
-test("the real scanner starts from the sealed checkout with its decoder dependency", () => {
-  const f = fixture();
-  for (const file of executedPaths(root, ["scripts/privacy-publication-gate.ts"])) {
-    const source = path.join(root, file);
-    if (!fs.lstatSync(source, { throwIfNoEntry: false })?.isFile()) continue;
-    const destination = path.join(f.dir, file);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.copyFileSync(source, destination);
-  }
-  const shim = path.join(f.dir, "shims", "bun");
-  fs.writeFileSync(shim, fs.readFileSync(shim, "utf8").replace("#!/bin/bash\n",
-    '#!/bin/bash\nif [[ "$1" == scripts/privacy-publication-gate.ts ]]; then exec "$HOOK_BUN" "$@"; fi\n'));
-  commitFixtureInputs(f);
-  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
-  fs.writeFileSync(path.join(f.dir, "release.md"), "Sealed publication fixture.\n");
-  commitFixtureInputs(f);
-  const prepared = f.run(true);
-  expect(prepared.status, prepared.stderr).toBe(0);
-  expect(prepared.stderr).toContain("PRIVACY GATE: PASS");
-  expect(f.run(false).status).toBe(0);
 }, 60_000);
 
 test("prepared checks reach native transport when the caller already has Git's exec path", () => {
@@ -89,12 +47,6 @@ test.each(["during checks", "before transport", "during transport"])("another wr
     commitFixtureInputs(f);
   }
   const prepared = f.run(true);
-  if (when === "during checks") {
-    expect(prepared.status, prepared.stderr).not.toBe(0);
-    expect(prepared.stderr).toContain("privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE)");
-    expect(fs.existsSync(f.receipt)).toBeFalse();
-    return;
-  }
   expect(prepared.status, prepared.stderr).toBe(0);
   if (when === "before transport") {
     const writer = spawnSync(process.execPath, ["-e", refresh], { env: f.env, encoding: "utf8" });
@@ -102,29 +54,23 @@ test.each(["during checks", "before transport", "during transport"])("another wr
   }
   const before = f.calls().length;
   const transported = f.run(false);
-  if (when === "before transport") {
-    expect(transported.status, transported.stderr).not.toBe(0);
-    expect(transported.stderr).toContain("publication inputs changed during transport; changed components: privacy files");
-    expect(f.calls().slice(before)).toHaveLength(0);
-  } else {
-    expect(transported.status, transported.stderr).toBe(0);
-    expect(fs.readFileSync(known, "utf8")).toBe("initial private phrase\n");
-    expect(f.calls().slice(before).map(call => call.args[0])).toEqual([]);
-  }
+  expect(transported.status, transported.stderr).toBe(0);
+  expect(fs.readFileSync(known, "utf8")).toBe("another private phrase\n");
+  expect(f.calls().slice(before).map(call => call.args[0])).toEqual(["scripts/privacy-publication-gate.ts"]);
   expect(fs.existsSync(f.receipt)).toBeFalse();
 }, 60_000);
 
-test("privacy drift refuses its receipt while a fresh preparation reuses heavy checks", () => {
+test("a privacy-only refresh retains all reused heavy checks", () => {
   const f = fixture();
   f.env.LLV_PRIVACY_KNOWN_VALUES_FILE = path.join(f.dir, ".git", "known-values.txt");
   fs.writeFileSync(f.env.LLV_PRIVACY_KNOWN_VALUES_FILE, "initial private phrase\n");
+  const refresh = 'require("node:fs").writeFileSync(process.env.LLV_PRIVACY_KNOWN_VALUES_FILE, "another private phrase\\n");';
+  fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts" && process.env.LLV_GATE_PUBLICATION_ID === "warm-refresh") require("node:child_process").execFileSync(process.env.HOOK_BUN!, ["-e", ${JSON.stringify(refresh)}]);\n`);
+  commitFixtureInputs(f);
   const first = f.run(true);
   expect(first.status, first.stderr).toBe(0);
   expect(f.calls().some(call => call.args[0] === "tsc")).toBeTrue();
-  fs.writeFileSync(f.env.LLV_PRIVACY_KNOWN_VALUES_FILE, "another private phrase\n");
-  const staleHook = f.run(false);
-  expect(staleHook.status).not.toBe(0);
-  expect(staleHook.stderr).toContain("publication inputs changed during transport; changed components: privacy files");
+  expect(f.run(false).status).toBe(0);
   f.env.LLV_GATE_PUBLICATION_ID = "warm-refresh";
   const before = f.calls().length;
   const warm = f.run(true);
@@ -186,10 +132,48 @@ test.each(["unrelated", "newly private", "missing"])("fresh transport privacy ch
   else fs.writeFileSync(known, change === "newly private" ? "A retained publication sample phrase.\n" : "another private phrase\n");
   const before = f.calls().length;
   const transported = f.run(false);
-  expect(transported.status, transported.stderr).not.toBe(0);
-  expect(transported.stderr).toContain("publication inputs changed during transport; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE)");
+  expect(transported.stderr).toContain("pre-push: privacy");
+  if (change === "unrelated") expect(transported.status, transported.stderr).toBe(0);
+  else {
+    expect(transported.status, transported.stderr).not.toBe(0);
+    expect(transported.stderr).toContain(change === "newly private" ? "known_value" : "configuration_error");
+  }
   expect(f.calls()).toHaveLength(before);
   expect(fs.existsSync(f.receipt)).toBeFalse();
+}, 60_000);
+
+test("a value added after preparation refuses the native push before it sends objects", () => {
+  const f = fixture();
+  const remote = path.join(f.dir, ".git", "remote.git");
+  f.git("init", "--bare", remote);
+  const known = path.join(f.dir, ".git", "known-values.txt");
+  fs.writeFileSync(known, "initial synthetic fixture value\n");
+  Object.assign(f.env, {
+    LLV_PRIVACY_KNOWN_VALUES_FILE: known,
+    HOOK_PRIVACY: path.join(root, "scripts/privacy-publication-gate.ts"),
+  });
+  fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts") {
+    require("node:child_process").execFileSync(process.execPath, [process.env.HOOK_PRIVACY, ...process.argv.slice(3)], { stdio: "inherit" });
+  }\n`);
+  const publishedText = "A synthetic phrase for the publication fixture.";
+  fs.writeFileSync(path.join(f.dir, "release.md"), publishedText + "\n");
+  commitFixtureInputs(f);
+  const prepared = f.run(true);
+  expect(prepared.status, prepared.stderr).toBe(0);
+  expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(1);
+  fs.appendFileSync(known, publishedText + "\n");
+
+  const transported = spawnSync("git", ["push", remote, `${f.head}:refs/heads/main`], {
+    cwd: f.dir, env: f.env, encoding: "utf8", timeout: 45_000,
+  });
+  expect(transported.status, transported.stderr).toBe(1);
+  expect(transported.stderr).toContain("PRIVACY GATE: FAIL");
+  expect(transported.stderr).toContain("known_value");
+  expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(2);
+  expect(fs.existsSync(f.receipt)).toBeFalse();
+  expect(f.git("--git-dir", remote, "for-each-ref").toString()).toBe("");
+  const received = spawnSync("git", ["--git-dir", remote, "cat-file", "-e", f.head], { env: f.env });
+  expect(received.status).toBe(1);
 }, 60_000);
 
 nativeTest.each(["leaf", "ancestor"])("fresh transport refuses a known-values %s symlink", kind => {
@@ -223,73 +207,21 @@ nativeTest.each(["leaf", "ancestor"])("fresh transport refuses a known-values %s
   const before = f.calls().length;
   const transported = f.run(false);
   expect(transported.status, transported.stderr).not.toBe(0);
-  expect(transported.stderr).toContain("publication inputs changed during transport; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE)");
+  expect(transported.stderr).toContain("publication privacy inputs cannot be certified");
   expect(f.calls()).toHaveLength(before);
   expect(fs.existsSync(f.receipt)).toBeFalse();
 }, 60_000);
 
-test.each(["normal write", "metadata change"])("a scanner-side %s cannot certify changed snapshot bytes", kind => {
+test("a known-values change inside the fresh privacy scan refuses with its component", () => {
   const f = fixture();
-  const known = path.join(f.dir, ".git", "known-values.txt");
-  f.env.LLV_PRIVACY_KNOWN_VALUES_FILE = known;
-  fs.writeFileSync(known, "first synthetic catalog entry\n");
-  fs.appendFileSync(path.join(f.dir, "record.ts"), `
-    if (process.argv[2] === "scripts/privacy-publication-gate.ts") {
-      const fs = require("node:fs");
-      const file = process.env.LLV_PRIVACY_KNOWN_VALUES_FILE!;
-      const observed = path.join(path.dirname(process.env.HOOK_LOG!), "snapshot-observation");
-      const original = fs.readFileSync(file);
-      let result = "writable";
-      try { fs.writeFileSync(file, original); } catch (error) { result = error.code; }
-      const directoryMode = fs.statSync(path.dirname(file)).mode & 0o777;
-      fs.writeFileSync(observed, result + " " + directoryMode.toString(8));
-      if (${JSON.stringify(kind)} === "metadata change") {
-        fs.chmodSync(file, 0o600);
-        fs.writeFileSync(file, original);
-        fs.chmodSync(file, 0o400);
-      }
-      console.log("PRIVACY GATE: PASS");
-    }
-  `);
-  commitFixtureInputs(f);
-  const prepared = f.run(true);
-  expect(fs.readFileSync(path.join(f.dir, ".git", "snapshot-observation"), "utf8")).toBe("EACCES 500");
-  expect(prepared.stderr).toContain("PRIVACY GATE: PASS");
-  if (kind === "normal write") {
-    expect(prepared.status, prepared.stderr).toBe(0);
-    expect(f.run(false).status).toBe(0);
-  } else {
-    expect(prepared.status, prepared.stderr).not.toBe(0);
-    expect(prepared.stderr).toContain("publication inputs changed during checks; changed components: privacy scan");
-    expect(fs.existsSync(f.receipt)).toBeFalse();
-    expect(f.run(false).status).not.toBe(0);
-  }
-  expect(fs.readFileSync(known, "utf8")).toBe("first synthetic catalog entry\n");
-}, 60_000);
-
-test.each(["overlay", "configured user attributes"])("the scanner reads captured %s and transport refuses a later change", kind => {
-  const f = fixture();
-  const attributes = kind === "overlay" ? path.join(f.dir, ".git", "info", "attributes") : path.join(f.dir, ".git", "user-attributes");
-  f.git("config", "core.ignoreCase", "true");
-  fs.mkdirSync(path.dirname(attributes), { recursive: true });
-  fs.writeFileSync(attributes, "EXAMPLE.ts diff=fixture\n");
-  if (kind !== "overlay") f.git("config", "core.attributesFile", attributes);
-  fs.appendFileSync(path.join(f.dir, "record.ts"), `
-    if (process.argv[2] === "scripts/privacy-publication-gate.ts") {
-      const fs = require("node:fs");
-      const actual = execFileSync("git", ["check-attr", "diff", "--", "example.ts"], { encoding: "utf8" });
-      fs.writeFileSync(path.join(path.dirname(process.env.HOOK_LOG!), "attribute-observation"), actual);
-    }
-  `);
+  f.env.LLV_PRIVACY_KNOWN_VALUES_FILE = path.join(f.dir, ".git", "known-values.txt");
+  fs.writeFileSync(f.env.LLV_PRIVACY_KNOWN_VALUES_FILE, "initial private phrase\n");
+  fs.appendFileSync(path.join(f.dir, "record.ts"), '\nif (process.argv[2] === "scripts/privacy-publication-gate.ts" && process.env.LLV_GATE_PUBLICATION_OBSERVED) require("node:fs").writeFileSync(process.env.LLV_PRIVACY_KNOWN_VALUES_FILE!, "another private phrase\\n");\n');
   commitFixtureInputs(f);
   const prepared = f.run(true);
   expect(prepared.status, prepared.stderr).toBe(0);
-  expect(fs.readFileSync(path.join(f.dir, ".git", "attribute-observation"), "utf8")).toBe("example.ts: diff: fixture\n");
-  fs.writeFileSync(attributes, "EXAMPLE.ts diff=updated\n");
-  const before = f.calls().length;
   const transported = f.run(false);
   expect(transported.status, transported.stderr).not.toBe(0);
-  expect(transported.stderr).toContain("publication inputs changed during transport; changed components: privacy " + (kind === "overlay" ? "attribute overlay" : "user attributes"));
-  expect(f.calls()).toHaveLength(before);
+  expect(transported.stderr).toContain("publication inputs changed during privacy checks; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE)");
   expect(fs.existsSync(f.receipt)).toBeFalse();
 }, 60_000);

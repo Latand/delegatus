@@ -15,6 +15,7 @@ const { nativeFixture, touchedChecks } = createPublicationFixtures(root, roots);
 nativeTest.each(["Codex", "Bun and Codex"])("cold %s cache produces evidence once and warm preparation reuses it", tools => {
   const coldBun = tools === "Bun and Codex";
   const f = nativeFixture(coldBun);
+  f.env.LLV_DOCKER_NSENTER_SHIMS = "1";
   expect(fs.existsSync(f.codex)).toBeFalse();
   const cold = f.run(true);
   expect(cold.status, cold.stderr).toBe(0);
@@ -23,6 +24,12 @@ nativeTest.each(["Codex", "Bun and Codex"])("cold %s cache produces evidence onc
   const installations = () => f.calls().filter(call => call.args[0] === "native-install").map(call => call.args[2]);
   const expected = [...(coldBun ? ["bun@0.0.2"] : []), ...SUPPORTED_CODEX_VERSIONS.map(version => `@openai/codex@${version}`)];
   expect(installations()).toEqual(expected);
+  for (const call of f.calls().filter(call => call.args[0] === "native-install")) {
+    expect(call.names).toContain("LLV_DOCKER_NSENTER_SHIMS");
+    expect(call.home).toBeDefined();
+    expect(path.isAbsolute(call.home ?? "")).toBeTrue();
+    expect(call.home).not.toBe(f.env.HOME);
+  }
   expect(f.run(false).status).toBe(0);
   f.env.LLV_GATE_PUBLICATION_ID = "warm-native-cache";
   const warm = f.run(true);
@@ -31,7 +38,7 @@ nativeTest.each(["Codex", "Bun and Codex"])("cold %s cache produces evidence onc
   expect(installations()).toEqual(expected);
   const before = f.calls().length;
   expect(f.run(false).status).toBe(0);
-  expect(f.calls().slice(before).map(call => call.args[0])).toEqual([]);
+  expect(f.calls().slice(before).map(call => call.args[0])).toEqual(["scripts/privacy-publication-gate.ts"]);
 }, 120_000);
 
 nativeTest.each(["install failure", "deadline", "custody", "during checks", "after checks"])("native preparation retains refusal on %s", change => {
@@ -61,43 +68,6 @@ nativeTest.each(["install failure", "deadline", "custody", "during checks", "aft
     if (change === "custody") expect(f.calls().filter(call => call.args[0] === "native-install")).toHaveLength(0);
     if (change === "deadline") expect(prepared.status).toBe(75);
     expect(fs.existsSync(f.receipt)).toBeFalse();
-  }
-}, 90_000);
-
-nativeTest("cold Codex preparation has bounded shared admission and retries after slot release", async () => {
-  const f = nativeFixture();
-  f.env.LLV_AGENT_CPU = "off";
-  f.env.LLV_GATE_SLOTS = "1";
-  f.env.LLV_DOCKER_NSENTER_SHIMS = "1";
-  f.env.LLV_GATE_TEST_ADMISSION_MS = "150";
-  const slot = path.join(f.env.LLV_GATE_LOCK_DIR!, "llv-heavy-gate.slot1.lock");
-  const ready = path.join(f.dir, ".git", "slot-held");
-  fs.mkdirSync(path.dirname(slot), { recursive: true });
-  fs.writeFileSync(slot, "");
-  const holder = Bun.spawn(["bash", "-c", 'exec 9<>"$1"; flock -n 9; : >"$2"; sleep 30', "gate-test", slot, ready], {
-    env: f.env, stdout: "ignore", stderr: "pipe",
-  });
-  try {
-    const readyBy = Date.now() + 5_000;
-    while (!fs.existsSync(ready) && Date.now() < readyBy) await new Promise(resolve => setTimeout(resolve, 5));
-    expect(fs.existsSync(ready)).toBeTrue();
-    const refused = f.run(true);
-    expect(refused.status).toBe(75);
-    expect(refused.stderr).toContain("pre-push: CPU admission deadline exceeded after 150 ms; publication tool preparation did not start");
-    expect(f.calls().filter(call => call.args[0] === "native-install")).toHaveLength(0);
-    holder.kill("SIGTERM");
-    await holder.exited;
-    f.env.LLV_GATE_TEST_ADMISSION_MS = "60000";
-    const retried = f.run(true);
-    expect(retried.status, retried.stderr).toBe(0);
-    expect(f.calls().filter(call => call.args[0] === "native-install").map(call => call.args[2]))
-      .toEqual(SUPPORTED_CODEX_VERSIONS.map(version => `@openai/codex@${version}`));
-    const installs = f.calls().filter(call => call.args[0] === "native-install");
-    expect(installs.every(call => call.names.includes("LLV_DOCKER_NSENTER_SHIMS"))).toBeTrue();
-    expect(installs.every(call => !!call.home && path.isAbsolute(call.home) && call.home !== f.env.HOME)).toBeTrue();
-    expect(touchedChecks(f)).toHaveLength(1);
-  } finally {
-    if (holder.exitCode === null) { holder.kill("SIGTERM"); await holder.exited; }
   }
 }, 90_000);
 

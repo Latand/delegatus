@@ -578,9 +578,8 @@ settings take precedence. The slot locks live in
 `/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
 share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage starts and gates share a durable FIFO CPU queue. After ten minutes,
 the head can start under sustained pressure, with two seconds between admissions.
-A publication hook allows up to 60 seconds for its outer checks to acquire
-admission. If the wait expires, the hook names CPU admission as the cause
-and stops the queued work. An admitted check still gets its execution budget.
+A prepared push gives its pre-push hook 180 seconds because the remote closes
+an idle SSH push after about 360 seconds.
 
 The Viewer sees the same lock inodes through its read-only `/var/tmp` bind.
 On a new host, provision the claim file and at least one slot and matching

@@ -2278,122 +2278,53 @@ test.each(["pure", "assertion", "privacy", "started", "cleanup"] as const)("admi
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
 
-test.each([
-  { capability: 1, elapsed: 70_000, hook: 140_000, push: 200_000 },
-  { capability: 1, elapsed: 600_000, hook: 840_000, push: 900_000 },
-  { capability: 2, elapsed: 70_000, hook: 60_000, push: 120_000 },
-])("capability $capability with $elapsed ms of preparation uses its exact budget and lands once", async scenario => {
+test.each([1, 2] as const)("capability %i prepares with its hook interpreter and lands one bounded push", async capability => {
   const box = await publishSandbox();
-  const cap = path.join(box.subject.worktreeDir, "scripts"); fs.mkdirSync(cap);
-  fs.writeFileSync(path.join(cap, "local-gate.ts"), "// legacy publication gate fixture\n");
-  fs.writeFileSync(path.join(cap, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: scenario.capability }));
-  const head = await box.commit("change.txt", "accepted work\n");
-  let now = 1_800_000_000_000;
-  const clock = spyOn(Date, "now").mockImplementation(() => now);
-  let elapsed = 0;
-  const monotonic = spyOn(performance, "now").mockImplementation(() => elapsed);
-  let pushes = 0, hookAllowance = 0, pushAllowance = 0;
-  const exec: ExecPort = async (command, args, cwd, env, options) => {
-    if (command === "bun" && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare") {
-      elapsed += scenario.elapsed;
-      writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(env!), "a".repeat(64), {}, 1);
-      return { code: 0, stdout: "", stderr: "" };
-    }
-    if (command === "git" && args[0] === "push") {
-      pushes++;
-      hookAllowance = Number(env!.LLV_GATE_PUSH_DEADLINE) - now;
-      pushAllowance = options?.timeoutMs ?? 0;
-      // Model the legacy native hook's second scan without sleeping.
-      if (scenario.capability === 1) now += 70_001;
-      if (now >= Number(env!.LLV_GATE_PUSH_DEADLINE)) return { code: 1, stdout: "pre-push: privacy: failed (1)", stderr: "" };
-    }
-    return realExec(command, args, cwd, env, options);
-  };
-  try {
-    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
-    expect(result).toMatchObject({ ok: true, sha: head, remote: "published" });
-    expect(hookAllowance).toBe(scenario.hook);
-    expect(pushAllowance).toBe(scenario.push);
-    expect(pushes).toBe(1);
-    expect(await box.originHead()).toBe(head);
-  } finally { monotonic.mockRestore(); clock.mockRestore(); fs.rmSync(box.root, { recursive: true, force: true }); }
-});
-
-const capturedPreparationDrift = [
-  "pre-push: fetch failed; using the last origin/main (base resolution must still succeed)",
-  "pre-push: CPU admission for publication checks",
-  "pre-push: privacy",
-  "pre-push: push checks",
-  "owned test runner: portable cleanup on linux is best effort; a detached descendant can escape between guardian polls",
-  "pre-push: touched tests: passed in 1 s",
-  "pre-push: types: passed in 1 s",
-  "owned test runner: portable cleanup on linux is best effort; a detached descendant can escape between guardian polls",
-  "pre-push: eslint: passed in 1 s",
-  "pre-push: publication inputs changed during checks; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE); gate failed",
-  "pre-push: publication checks CPU wait: 202 ms (excluded from execution budget)",
-  "admitted checks exited 1",
-];
-const capturedTransportDrift = [
-  "Delegatus App push: fresh installation token verified",
-  "pre-push: publication check inputs changed; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE), privacy files (LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE); gate failed",
-];
-
-test.each([
-  { phase: "preparation", decisive: false }, { phase: "transport", decisive: false },
-  { phase: "preparation", decisive: true }, { phase: "transport", decisive: true },
-])("publication settles captured $phase drift with decisive check failure $decisive", async ({ phase, decisive }) => {
-  const box = await publishSandbox();
+  const execPath = process.execPath;
+  const containerRuntime = "/usr/local/bin/bun-container";
   try {
     const scripts = path.join(box.subject.worktreeDir, "scripts");
     fs.mkdirSync(scripts);
-    fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// preparation fixture\n");
-    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), '{"publicationPrepare":2}\n');
+    fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// publication gate fixture\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: capability }));
     const head = await box.commit("change.txt", "accepted work\n");
-    let pushes = 0;
+    const preparations: string[] = [];
+    const pushes: number[] = [];
     const exec: ExecPort = async (command, args, cwd, env, options) => {
-      const inner = command === "systemd-run" ? args.slice(args.indexOf("--") + 1) : [command, ...args];
-      const preparation = inner[1] === "scripts/local-gate.ts" && inner.includes("--publication-prepare");
-      const push = inner[0] === "git" && inner[1] === "push";
-      if (push) pushes++;
-      if (preparation && phase === "transport") {
-        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(env!), "b".repeat(64));
+      if (args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare") {
+        preparations.push(command);
+        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(env!), "a".repeat(64), {}, 1);
         return { code: 0, stdout: "", stderr: "" };
       }
-      if (preparation || push) {
-        const lines = preparation ? capturedPreparationDrift : capturedTransportDrift;
-        return { code: 1, stdout: decisive ? "pre-push: types: failed (1)\n" : "", stderr: "\n" + lines.join("\n") + "\n" };
-      }
+      if (command === "git" && args[0] === "push") pushes.push(options?.timeoutMs ?? 0);
       return realExec(command, args, cwd, env, options);
     };
+    process.execPath = containerRuntime;
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
-    if (result.ok) throw new Error("expected publication refusal");
-    expect(pushes).toBe(phase === "transport" ? 1 : 0);
-    expect(result.failure?.changedFiles).toBeGreaterThan(0);
-    expect(result.failure?.retryablePrivacyDrift).toBe(decisive ? undefined : true);
-    expect(recoverablePublication(result)).toBe(!decisive);
-    expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", sha: head, result });
-    expect(await box.originHead()).toBe("");
-  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+    expect(result).toMatchObject({ ok: true, sha: head, remote: "published" });
+    expect(preparations).toEqual([capability === 2 ? containerRuntime : "bun"]);
+    expect(pushes).toEqual([240_000]);
+    expect(await box.originHead()).toBe(head);
+  } finally {
+    process.execPath = execPath;
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
 }, 60_000);
 
-test.each(["pure", "admission", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {
+test.each(["pure", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {
   const box = await publishSandbox();
   try {
     const head = await box.commit("change.txt", "accepted work\n");
     const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
     const refusal = kind === "assertion" ? "(fail) named assertion" : kind === "cleanup" ? "owned runner: budget cleanup failed: fixture refusal" : "";
-    const timeout = kind === "admission"
-      ? "pre-push: CPU admission for publication checks\npre-push: CPU admission deadline exceeded after 60000 ms; publication tool preparation did not start"
-      : "owned runner: deadline expired\npre-push: no verdict within the push budget of 10 s: \"types\" was still running";
-    fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh\ncat <<'EVIDENCE'\n${refusal}\n${timeout}\nEVIDENCE\nexit 75\n`, { mode: 0o700 });
+    fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh\ncat <<'EVIDENCE'\n${refusal}\nowned runner: deadline expired\npre-push: no verdict within the push budget of 10 s: "types" was still running\nEVIDENCE\nexit 75\n`, { mode: 0o700 });
     await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
     const result = await publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected publication refusal");
-    expect(result.failure?.retryableDeadline).toBe(kind === "pure" || kind === "admission");
-    expect(result.failure?.admissionDeadline).toBe(kind === "admission" ? true : undefined);
+    expect(result.failure?.retryableDeadline).toBe(kind === "pure");
     expect(result.outcome).toBe(kind === "pure" ? "not-landed" : undefined);
-    expect(recoverablePublication(result)).toBe(kind === "pure" || kind === "admission");
+    expect(recoverablePublication(result)).toBe(kind === "pure");
     expect(await box.originHead()).toBe("");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);

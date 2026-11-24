@@ -2,12 +2,6 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { removePublicationScan } from "./publication-scan-inputs";
-
-function removeSandbox(directory: string) {
-  removePublicationScan(directory);
-  fs.rmSync(directory, { recursive: true, force: true });
-}
 
 type SandboxIdentity = { directory: string; dev: number; ino: number; generation?: string };
 const allocations = new Map<string, { identity: SandboxIdentity; journal: string }>();
@@ -61,14 +55,14 @@ export function releaseGateSandbox(directory: string) {
   const allocation = allocations.get(key);
   if (!allocation) {
     if (process.env.LLV_GATE_SANDBOX_RECORD) throw new Error("gate sandbox has no local allocation record");
-    removeSandbox(directory);
+    fs.rmSync(directory, { recursive: true, force: true });
     return;
   }
   const { identity, journal } = allocation;
   const stat = fs.lstatSync(identity.directory, { throwIfNoEntry: false });
   if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== identity.dev || stat.ino !== identity.ino
     || fs.realpathSync(identity.directory) !== identity.directory)) throw new Error("recorded gate sandbox changed identity");
-  if (stat) removeSandbox(identity.directory);
+  if (stat) fs.rmSync(identity.directory, { recursive: true, force: true });
   fs.appendFileSync(journal, JSON.stringify({ ...identity, released: true }) + "\n");
   allocations.delete(key);
 }
@@ -106,7 +100,7 @@ export function ownGateSandboxes() {
         if (!stat) continue;
         if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== row.dev || stat.ino !== row.ino
           || fs.realpathSync(row.directory) !== row.directory) throw new Error("recorded gate sandbox changed identity");
-        removeSandbox(row.directory);
+        fs.rmSync(row.directory, { recursive: true, force: true });
       }
       fs.rmSync(root, { recursive: true, force: true });
     } catch (error) {

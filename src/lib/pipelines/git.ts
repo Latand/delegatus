@@ -5,7 +5,7 @@ import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDep
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
 export { preparePipelineSetup } from "./setupRecipe";
-import { publicationEnvironmentFailure, publicationFailurePhase, publicationPrivacyConfigurationFault, publicationPrivacyDrift, publicationPrivacyRefusal } from "./publicationHistory";
+import { publicationEnvironmentFailure, publicationFailurePhase, publicationPrivacyConfigurationFault, publicationPrivacyRefusal } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -19,7 +19,7 @@ import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/stat
 import { mailboxPattern } from "@/lib/privacy/mailbox";
 import publicationFingerprints from "../../../scripts/privacy-known-value-fingerprints.json";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
-import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, publicationPreparationVersion, readPublicationCheckReceipt } from "@/lib/git/publicationCheckReceipt";
+import { publicationCheckBinding, publicationPreparationVersion, readPublicationCheckReceipt } from "@/lib/git/publicationCheckReceipt";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { procBackend } from "@/lib/proc";
@@ -39,7 +39,7 @@ import { installedGateAdmissionEnv } from "@/lib/runtime/agentSignalSandbox";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
-import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
+import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, PUBLICATION_TRANSPORT_HOOK_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { cpuWaitBudget, cpuWaitElapsed, cpuWaitConfirmedElapsed, CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES, CPU_WAIT_UNKNOWN_RECOVERY_MS } from "@/lib/runtime/cpuAdmissionBudget";
@@ -1664,10 +1664,7 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
   const transport = publicationTransportLine(failure.outputTail);
   if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
-  if (failure.admissionDeadline && failure.retryableDeadline) {
-    const deadline = lines.find(line => /^pre-push: CPU admission deadline exceeded after \d+ ms; (?:checks|publication tool preparation) did not start$/.test(line));
-    return deadline?.slice("pre-push: ".length) ?? "the pre-push hook's CPU admission lock-wait budget expired before checks started";
-  }
+  if (failure.admissionDeadline && failure.retryableDeadline) return "the pre-push hook's CPU admission lock-wait budget expired before checks started";
   const phase = publicationFailurePhase(failure);
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
@@ -2177,12 +2174,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies || preparingChecks)) {
         // Redaction may discard a stream containing decisive refusal evidence.
         // Only the classification survives; raw bytes are never persisted.
-        const rawStreams = [executed.stdout, executed.stderr];
-        const rawOutput = rawStreams.filter(Boolean).join("\n");
+        const rawOutput = `${executed.stdout}\n${executed.stderr}`;
         const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
         const rawPhase = preparingDependencies ? null : publicationFailurePhase({ outputTail: rawOutput });
-        const retryablePrivacyDrift = !preparingDependencies && publicationPrivacyDrift(rawOutput)
-          && !rawStreams.some(stream => stream.split("\n").some(line => decisiveRefusal(line.trim())));
         const privacyConfigurationFault = rawPhase === "privacy" && publicationPrivacyConfigurationFault(rawOutput)
           && !rawOutput.split("\n").some(line => !publicationPrivacyRefusal(line) && decisiveRefusal(line.trim()));
         const dependencyFailure = preparingDependencies || publicationFrozenInstallFailure(rawOutput);
@@ -2216,7 +2210,6 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: deadlineKind !== null,
           ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
-          ...(retryablePrivacyDrift ? { retryablePrivacyDrift: true } : {}),
           ...(privacyConfigurationFault ? { privacyConfigurationFault: true } : {}),
           ...(!preparingDependencies && rawPhase !== "privacy" && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
@@ -2502,10 +2495,10 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
   // The repository's gate can finish before Git's authenticated discovery.
   // The subsequent native hook verifies this exact operation's consumed
-  // inputs under a separate bounded transport deadline.
+  // inputs and scans fresh privacy data under a separate transport deadline.
   const preparation = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
     ? publicationPreparationVersion(pipeline.worktreeDir) : undefined;
-  let transportBudgetMs = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
+  const transportBudgetMs = Math.min(budget.ms, PUBLICATION_TRANSPORT_HOOK_MS + PUBLICATION_PACK_MARGIN_MS);
   const receiptFile = preparation ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
   let phaseTimings = { preparationMs: 0, checksMs: 0, transportMs: 0 };
   let push: ExecResult;
@@ -2526,18 +2519,11 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
       const runtime = preparation === 2 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
       const checked = await exec(runtime, ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
       if (checked.code !== 0) return { ...failure("checking the publication before transport", checked), phaseTimings: { ...phaseTimings, preparationMs: Math.max(0, Math.round(performance.now() - checkStarted)) } };
-      const elapsed = performance.now() - checkStarted;
-      const preparationElapsed = Math.max(0, Math.round(elapsed));
+      const preparationElapsed = Math.max(0, Math.round(performance.now() - checkStarted));
+      // An older or failed gate cannot turn an exit code into a check receipt.
       const checkReceipt = readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
       phaseTimings = { preparationMs: Math.max(0, preparationElapsed - (checkReceipt.checksMs ?? preparationElapsed)),
         checksMs: checkReceipt.checksMs ?? preparationElapsed, transportMs: 0 };
-      // Capability 1 still performs the privacy scan in its native hook. Keep
-      // its established bounded hook/push allowance; capability 2 consumes the
-      // sealed receipt and can use the short fixed transport window.
-      transportBudgetMs = Math.min(budget.ms, (preparation === 1
-        ? Math.max(PUBLICATION_TRANSPORT_MS, Math.ceil(2 * elapsed))
-        : PUBLICATION_TRANSPORT_MS) + PUBLICATION_PACK_MARGIN_MS);
-      // An older or failed gate cannot turn an exit code into a check receipt.
       const current = await currentPipelineBranchHead(pipeline, exec);
       if (!current.ok) return current;
       if (current.sha !== acceptedSha) return { ok: false, error: "the accepted revision changed after publication checks; nothing was published" };

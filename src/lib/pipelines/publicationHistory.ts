@@ -19,28 +19,6 @@ export function publicationPrivacyRefusal(line: string): boolean {
   return /^PRIVACY GATE:[ \t]*FAIL$|^pre-push: privacy:.*(?:failed|refused)/.test(line.trim());
 }
 
-export function publicationPrivacyDrift(output: string): boolean {
-  const lines = output.split("\n").map(line => line.trim()).filter(Boolean);
-  const component = "[a-z][a-z ]{0,63}|privacy files \\(LLV_PRIVACY_(?:KNOWN_VALUES_FILE|KNOWN_VALUE_FINGERPRINTS_FILE)\\)";
-  const drift = new RegExp(`^(?:pre-push: )?publication (?:check inputs changed|inputs changed during (?:checks|transport)); changed components: (?:${component})(?:, (?:${component}))*(?:; gate failed)?$`);
-  return lines.some(line => drift.test(line)) && lines.every(line => drift.test(line)
-    || /^(?:pre-push: (?:privacy|push checks|CPU admission for publication checks|Cloud checks)|PRIVACY GATE: PASS|admitted checks exited 1)$/.test(line)
-    || line === "Delegatus App push: fresh installation token verified"
-    || line === "pre-push: fetch failed; using the last origin/main (base resolution must still succeed)"
-    || line === "pre-push: prose-only diff; types, lint and touched tests skipped because no compiler or executable source input changed"
-    || /^pre-push: nothing changed since [0-9a-f]{12}; checking the pushed commits for privacy only$/.test(line)
-    || /^pre-push: branch is \d+ commit\(s\) behind origin\/main; the hosted privacy gate may flag main-only commits\. Merge origin\/main before pushing\.$/.test(line)
-    || line === "owned test runner: portable cleanup on linux is best effort; a detached descendant can escape between guardian polls"
-    || line === "owned runner: no reachable user systemd manager; using the documented portable cleanup fallback"
-    || /^gate-slot: task limit unavailable: no systemd user gate unit on this host; continuing with existing containment$/.test(line)
-    || /^pre-push: publication checks CPU wait: \d+ ms \(excluded from execution budget\)$/.test(line)
-    || /^pre-push: [^:;]+: (?:passed in \d+(?:\.\d+)? s(?:; tasks peak \d+.*)?|reused pass\b.*)$/.test(line)
-    || /^(?:touched-tests: (?:timing \d+ms wall; \d+ms CPU admission; \d+ms execution|(?:base|reviewed head) commit [0-9a-f]{40}(?: \(head sample runs the working tree\))?|head \d+ms|green head; no baseline checkout or sample needed)|eslint: base skipped for \d+ file\(s\) without head errors)$/.test(line)
-    || /^eslint: native (?:content cache (?:enabled; unchanged content, configuration and dependency inputs reuse head diagnostics; base text stays fresh|unavailable; linting fresh)|cache I\/O failed; repeating head lint without the cache)$/.test(line)
-    || /^0 errors introduced by this change$|^\d+ errors already on the base in files with head errors \(not blocking\)$/.test(line)
-    || /^error: failed to push some refs to '.+'$/.test(line));
-}
-
 /** Every failed scanner report must contain only its configuration fault.
  * Missing or mixed summaries retain the scanner's refusal. */
 export function publicationPrivacyConfigurationFault(output: string): boolean {
@@ -91,7 +69,7 @@ export function publicationRemoteRefusal(failure: PipelinePublicationFailure | u
 
 export function recoverablePublication(result: { error: string; failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded" }): boolean {
   if (result.outcome === "superseded") return false;
-  return result.failure?.retryableApp403 === true || result.failure?.retryableDeadline === true || result.failure?.retryablePrivacyDrift === true || publicationInterrupted(result)
+  return result.failure?.retryableApp403 === true || result.failure?.retryableDeadline === true || publicationInterrupted(result)
     || result.failure?.changedFiles === 0 && publicationFailurePhase(result.failure) !== "privacy" && !publicationRemoteRefusal(result.failure);
 }
 

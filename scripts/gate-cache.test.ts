@@ -77,18 +77,6 @@ test("alias folding preserves the canonical admission transport without keying t
   expect(environmentFingerprint(env)).toBe(environmentFingerprint({ ...env, LLV_CHECK_BROKER: "second" }));
 });
 
-test("gate-slot execution fields stay outside declared check inputs", () => {
-  const names = ["LLV_GATE_PUSH_DEADLINE", "LLV_GATE_SLOT_BROKER", "LLV_GATE_SLOT_LEASE", "LLV_GATE_STEP",
-    "LLV_GATE_WAIT_STARTED", "LLV_GATE_ADMISSION_WAIT_ROOTS", "LLV_CPU_WAIT_ROOTS", "LLV_CPU_WAIT_CONFIRM_ROOT",
-    "LLV_CHECK_BROKER", "LLV_OWNED_RUN_TIMEOUT_MS", "LLV_OWNED_TEST_RUN_CGROUP", "LLV_OWNED_TEST_RUNNER_PID"];
-  const env: NodeJS.ProcessEnv = { PATH: "/usr/bin", NODE_ENV: "test", LLV_GATE_CHECK_ENV: [...names, "LLV_GATE_REVIEW_MODE"].join(","), LLV_GATE_REVIEW_MODE: "same" };
-  const first = { ...env, ...Object.fromEntries(names.map(name => [name, "first"])) };
-  const second = { ...env, ...Object.fromEntries(names.map(name => [name, "second"])) };
-  expect(environmentFingerprint(first)).toBe(environmentFingerprint(second));
-  expect(environmentFingerprint({ ...first, LLV_GATE_REVIEW_MODE: "first" }))
-    .not.toBe(environmentFingerprint({ ...first, LLV_GATE_REVIEW_MODE: "second" }));
-});
-
 test("publication custody never reaches checks, even as a declared input", () => {
   const env = { PATH: "/usr/bin", LLV_GATE_PUBLICATION_RECEIPT: "/fixture/receipt", LLV_GATE_PUBLICATION_ID: "publication",
     LLV_GATE_CHECK_ENV: "LLV_GATE_PUBLICATION_RECEIPT" };

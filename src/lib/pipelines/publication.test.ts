@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test";
-import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFailure, publicationTransportLine, publicationDeadlineKind, pipelinePublishesRemoteBranch } from "./publication";
+import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFailure, publicationTransportLine, pipelinePublishesRemoteBranch } from "./publication";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
-import { publicationPrivacyDrift, recoverablePublication, recordPublicationFailure } from "./publicationHistory";
 
 test.each(["remote: fatal error in commit_refs_rules", "! [remote rejected] HEAD -> lane (pre-receive hook declined)"])(
   "a remote ref refusal retains its diagnostic: %s", async line => {
@@ -31,52 +30,6 @@ async function admissionFailureOutput(): Promise<string> {
 
 test("a production admission lock deadline before checks start is retryable", async () => {
   expect(publicationDeadlineOnly(await admissionFailureOutput())).toBe(true);
-});
-
-test("publication tool preparation admission timeout keeps its capacity retry classification", async () => {
-  const reason = "CPU admission deadline exceeded after 60000 ms; publication tool preparation did not start";
-  const output = `pre-push: CPU admission for publication checks\npre-push: ${reason}`;
-  expect(publicationDeadlineKind(output)).toBe("admission");
-  const { publicationFailureCause } = await import("./git");
-  expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 75, signal: null, durationMs: 60_000,
-    outputTail: output, admissionDeadline: true, retryableDeadline: true })).toBe(reason);
-});
-
-test("external privacy catalog drift is eligible for a fresh preparation on the accepted head", () => {
-  const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 8,
-    outputTail: "pre-push: privacy\npublication check inputs changed; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE)",
-    retryablePrivacyDrift: true as const, changedFiles: 2 };
-  expect(recoverablePublication({ error: "privacy inputs changed", failure })).toBe(true);
-});
-
-test.each(["checks", "transport"] as const)("raw %s catalog drift with a real App mint settles as a bounded retry", phase => {
-  const drift = `publication inputs changed during ${phase}; changed components: privacy files (LLV_PRIVACY_KNOWN_VALUES_FILE)`;
-  const output = `pre-push: privacy\n${FORGE_PUSH_MINT_MARKER}\npre-push: ${drift}; gate failed\nerror: failed to push some refs to 'https://example.invalid/repo.git'`;
-  expect(publicationPrivacyDrift(output)).toBe(true);
-  const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 70_000,
-    outputTail: output, retryablePrivacyDrift: true as const, changedFiles: 1 };
-  expect(recoverablePublication({ error: drift, failure })).toBe(true);
-
-  const subject = { delivery: { operation: { id: `drift-${phase}`, sha: "a".repeat(40), state: "settled", epoch: 1,
-    result: { ok: false, error: drift, failure } } }, publicationRecovery: {} } as unknown as Pipeline;
-  const at = "2026-11-24T10:00:00.000Z";
-  const recorded = recordPublicationFailure(subject, undefined, { operationId: `drift-${phase}`, epoch: 1, at,
-    cause: "check-failure", detail: drift, recoverable: true }, [60_000, 300_000, 900_000]);
-  expect(recorded.retryAt).toBe("2026-11-24T10:01:00.000Z");
-  const decisive = { step: failure.step, code: failure.code, signal: failure.signal, durationMs: failure.durationMs,
-    outputTail: `${output}\npre-push: types: failed (1)`, changedFiles: failure.changedFiles };
-  expect(publicationPrivacyDrift(decisive.outputTail)).toBe(false);
-  expect(recoverablePublication({ error: drift, failure: decisive })).toBe(false);
-});
-
-test("the publication admission deadline retains the hook's reason", async () => {
-  const reason = "CPU admission deadline exceeded after 60000 ms; checks did not start";
-  const outputTail = `pre-push: CPU admission for publication checks\npre-push: ${reason}`;
-  expect(publicationDeadlineOnly(outputTail)).toBe(true);
-  expect(publicationDeadlineOnly(`PRIVACY GATE: FAIL\n${outputTail}`)).toBe(false);
-  const { publicationFailureCause } = await import("./git");
-  expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 75, signal: null, durationMs: 60_000,
-    outputTail, admissionDeadline: true, retryableDeadline: true })).toBe(reason);
 });
 
 test.each(["types", "eslint", "touched tests", "frozen install", "touched tests: failed (1)", "Linux tests: failed (1)"])("a started %s phase prevents an admission retry", async phase => {
