@@ -1,19 +1,19 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isolatedEnvironment } from "./local-gate";
 import { createHookFixture } from "./local-gate.fixture";
 
 const roots: string[] = [];
-let activeHook: { child: Bun.Subprocess<"ignore", "pipe", "pipe">; settled: Promise<unknown> } | undefined;
+let activeHook: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
 afterEach(async () => {
   const hook = activeHook;
   activeHook = undefined;
   if (hook) {
-    if (hook.child.exitCode === null && hook.child.signalCode === null) hook.child.kill("SIGTERM");
-    await hook.settled;
+    // The gate-slot owner stops its services and waits for their cleanup.
+    if (hook.exitCode === null && hook.signalCode === null) hook.kill();
+    await hook.exited;
   }
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 }, 20_000);
@@ -22,8 +22,8 @@ const serviceTest = test.skipIf(process.platform !== "linux"
 
 serviceTest("native pre-push resumes only equivalent green files after its deadline", async () => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-hook-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, true, path.join(scratch, "repo"));
+  const f = createHookFixture(project, roots, false, true, "repo");
+  const scratch = f.tempRoot;
   // Match the production hook parent's admission classification.
   mkdirSync(path.join(f.dir, "scripts/gate-runner"));
   const origin = path.join(scratch, "origin.git");
@@ -105,24 +105,22 @@ test("fixture contract", async () => {
     const pool = path.join(scratch, `admission-${++invocation}`);
     mkdirSync(pool);
     const admissionFile = path.join(pool, "check-admission.sqlite");
-    // Keep the call alive until the gate has returned its cleanup verdict.
-    const child = Bun.spawn(["bash", "scripts/gate-slot.sh", "bash", ".githooks/pre-push"], {
+    // An outer wall timer can interrupt the hook while it is disposing of
+    // nested services. Give the owner a bounded execution budget and join it.
+    const child = activeHook = Bun.spawn(["bash", "scripts/gate-slot.sh", "bash", ".githooks/pre-push"], {
       cwd: f.dir, stdin: "ignore", stdout: "pipe", stderr: "pipe",
       env: { ...env, CHECKPOINT_STEP_INPUT: input, LLV_GATE_LOCK_DIR: pool,
         ...(deadline ? { LLV_GATE_PUSH_DEADLINE: String(Date.now() + 120_000) } : {}),
         LLV_OWNED_RUN_TIMEOUT_MS: "60000",
         LLV_CHECK_ADMISSION_FILE: admissionFile, LLV_GATE_CHECK_ADMISSION_FILE: admissionFile },
     });
-    const settled = Promise.allSettled([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()] as const);
-    const hook = activeHook = { child, settled };
-    const [status, stdout, stderr] = await settled;
-    if (activeHook !== hook) throw new Error("checkpoint hook was stopped during fixture cleanup");
+    const [status, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    if (activeHook !== child) throw new Error("checkpoint hook was stopped during fixture cleanup");
     activeHook = undefined;
-    if (status.status === "rejected") throw status.reason;
-    if (stdout.status === "rejected") throw stdout.reason;
-    if (stderr.status === "rejected") throw stderr.reason;
-    const output = stdout.value + stderr.value;
-    expect(status.value, output).toBe(deadline ? 75 : 1);
+    const output = stdout + stderr;
+    expect(status, output).toBe(deadline ? 75 : 1);
     expect(output).toContain("CPU admission for publication checks");
     if (deadline) expect(output).toMatch(/"touched tests" was still running .* and was stopped/);
     else expect(output).toContain("NEW b.test.ts");
@@ -206,11 +204,10 @@ test("fixture contract", async () => {
   expect(hookRoots).toHaveLength(18);
   verifyCleanup(rows, hookRoots);
 }, 240_000);
-
 serviceTest.each(["declared gate variable", "BASH_ENV bytes"])("native pre-push rejects stale step passes after changing %s", input => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-step-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  const f = createHookFixture(project, roots, false, false, "repo");
+  const scratch = f.tempRoot;
   mkdirSync(path.join(f.dir, "scripts/gate-runner"));
   const origin = path.join(scratch, "origin.git");
   f.git("clone", "--bare", "--shared", ".", origin);
@@ -276,8 +273,8 @@ test("fixture contract", () => {
 
 serviceTest("local check-step invalidates warm and cold retries when BASH_ENV bytes change", () => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-bash-env-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  const f = createHookFixture(project, roots, false, false, "repo");
+  const scratch = f.tempRoot;
   const origin = path.join(scratch, "origin.git");
   f.git("clone", "--bare", "--shared", ".", origin);
   f.git("remote", "add", "origin", origin);

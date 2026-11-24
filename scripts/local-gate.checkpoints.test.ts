@@ -15,7 +15,7 @@ test("shared comparator inputs retain every split test group in publication sele
   const groups = ["scripts/local-gate-tests.test.ts", "scripts/local-gate-tests.retry.test.ts", "scripts/local-gate-tests.recovery.test.ts", "scripts/local-gate-tests.teardown.test.ts",
     "scripts/local-gate-tests.rendezvous.test.ts", "scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate-tests.dependencies.test.ts"];
   const publication = ["scripts/local-gate.runtime.test.ts", "scripts/local-gate.execution.test.ts", "scripts/local-gate.groups.test.ts", "scripts/local-gate.invalidation.test.ts", "scripts/local-gate.git.test.ts", "scripts/local-gate.lint.test.ts", "scripts/local-gate.native.test.ts", "scripts/local-gate.binding.test.ts", "scripts/local-gate.hooks.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.test.ts"];
-  const checkpoints = ["scripts/local-gate.checkpoints.test.ts", "scripts/local-gate.checkpoints.hook.test.ts"];
+  const checkpoints = ["scripts/local-gate.checkpoints.test.ts", "scripts/local-gate.checkpoints.hook.test.ts", "scripts/local-gate.checkpoints.stepPasses.test.ts"];
   const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/local-gate-tests.fixture.ts", "scripts/local-gate-tests.ts", "scripts/gate-cache.ts"]),
     tests: [...groups, ...publication, ...checkpoints, "scripts/unrelated.test.ts"],
     linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
@@ -25,6 +25,17 @@ test("shared comparator inputs retain every split test group in publication sele
     expect(selected(shared)).toEqual([...groups, ...publication, ...checkpoints].map(file => `./${file}`).sort());
   }
   expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, ...checkpoints].map(file => `./${file}`).sort());
+});
+
+test("the shared role-memory dispatch fixture selects every test group", () => {
+  const fixture = "src/lib/pipelines/engine.roleMemoryDispatch.fixture.ts";
+  const tests = ["src/lib/pipelines/engine.roleMemoryDispatch.test.ts", "src/lib/pipelines/engine.roleMemoryDispatch.recovery.test.ts",
+    "src/lib/pipelines/engine.roleMemoryDispatch.custody.test.ts"];
+  const context: PlanEnvironment = { base: "base", existing: new Set([fixture]),
+    tests: [...tests, "src/lib/pipelines/engine.roleMemory.test.ts"],
+    linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
+  const selected = plan("pre-push", [fixture], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
+  expect(selected).toEqual(tests.map(file => `./${file}`).sort());
 });
 
 test("shared compiler fixtures retain every owned launch matrix in publication selection", () => {
@@ -195,7 +206,7 @@ serviceTest("head checkpoints invalidate installed dependency bytes and the merg
   expect(run(head).match(new RegExp(checkpoint, "g"))).toHaveLength(2);
 }, 60_000);
 
-serviceTest("an aggregate deadline preserves completed files without certifying the interrupted run", () => {
+serviceTest("a short run remainder defers unstarted files and preserves the completed files", () => {
   const f = fixture();
   rmSync(path.join(f.repo, "a.test.ts")); rmSync(path.join(f.repo, "b.test.ts"));
   const files = Array.from({ length: 12 }, (_, index) => `sample-${String(index).padStart(2, "0")}.test.ts`);
@@ -207,12 +218,12 @@ serviceTest("an aggregate deadline preserves completed files without certifying 
   writeFileSync(driver, `import * as comparator from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
 import { existsSync, readFileSync } from "node:fs";
 const expires = process.argv.at(-1) === "expire";
-// A deterministic parent clock expires only after the first eight owned
-// children have started. Child checks retain their real clocks and budgets.
+// A deterministic parent clock leaves less than one full file budget after
+// the first eight children start. Their clocks and execution bounds are real.
 Object.defineProperty(performance, "now", { value: () => expires && existsSync(${JSON.stringify(marker)})
-  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? 1000000 : 0 });
+  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? 650000 : 0 });
 try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
-  { budgets: { fileMs: 300000, runMs: 15000 } }); } catch (error) {
+  { budgets: { fileMs: 300000, runMs: 900000 } }); } catch (error) {
   const ending = comparator.comparatorEnding?.(error);
   console.error(ending?.line ?? String(error)); process.exitCode = ending?.code ?? 1;
 }
@@ -221,8 +232,7 @@ try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(
     { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
   const stopped = run("expire");
   expect(stopped.status, stopped.stdout + stopped.stderr).toBe(75);
-  expect(stopped.stderr).toContain("touched-tests: no verdict: head: test run exceeded");
-  expect(stopped.stderr).toContain("test run exceeded");
+  expect(stopped.stderr).toContain("touched-tests: no verdict: head: remaining run budget cannot fit a full file and its cleanup");
   expect(Object.keys(f.samples())).toHaveLength(8);
   const resumed = run("continue");
   expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
@@ -277,41 +287,6 @@ console.log("retryable=" + publicationDeadlineOnly(lines.join("\\n") + "\\nowned
     expect(output).not.toContain("touched-tests: no verdict:");
     expect(Object.keys(f.samples())).toHaveLength(mode === "aggregate" ? 8 : 1);
   }
-}, 60_000);
-
-serviceTest("a nested file waits for a fresh run when the remaining budget would clip its runner", () => {
-  const f = fixture();
-  const nested = "scripts/local-gate.nested.test.ts";
-  mkdirSync(path.join(f.repo, "scripts"));
-  writeFileSync(path.join(f.repo, nested), f.source("nested"));
-  f.git("add", "."); f.git("commit", "-m", "Nested checkpoint fixture");
-  const base = f.git("rev-parse", "origin/main");
-  const driver = path.join(f.root, "nested-budget.ts");
-  writeFileSync(driver, `import { comparatorEnding, touchedTests } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
-let now = 0;
-Object.defineProperty(performance, "now", { value: () => now });
-try {
-  await touchedTests(process.cwd(), ${JSON.stringify(base)}, ${JSON.stringify(["a.test.ts", nested])}, {
-    log(line) {
-      console.log(line);
-      if (process.argv.at(-1) === "defer" && line.startsWith("touched-tests: head file a.test.ts:")) now = 650_000;
-    },
-  });
-} catch (error) {
-  const { line, code } = comparatorEnding(error);
-  console.error(line); process.exitCode = code;
-}
-`);
-  const run = (mode: string) => spawnSync(process.execPath, [driver, mode],
-    { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
-  const deferred = run("defer");
-  expect(deferred.status, deferred.stdout + deferred.stderr).toBe(75);
-  expect(deferred.stderr).toContain(`remaining run budget cannot fit ${nested} and its cleanup`);
-  expect(f.samples()).toEqual({ a: 1 });
-  const resumed = run("resume");
-  expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
-  expect(resumed.stdout).toContain("reused complete green head file a.test.ts");
-  expect(f.samples()).toEqual({ a: 1, nested: 1 });
 }, 60_000);
 
 test("portable file samples remain fresh even when their assertions pass", () => {

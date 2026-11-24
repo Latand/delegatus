@@ -1,7 +1,7 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding, comparisonFileGroups, destructiveTestFile, touchedTests } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, destructiveTestFile, touchedTests } from "./local-gate-tests";
 
 test("destructive file-system calls stay head-only through direct and renamed imports", () => {
   const f = fixture(source(true));
@@ -389,13 +389,44 @@ test("between-test errors match across private roots without hiding a changed pa
 test("mixed selections retain ordinary parallelism and bound nested harness workers", () => {
   const regular = Array.from({ length: 12 }, (_, n) => "src/example" + n + ".test.ts");
   const nested = ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"];
-  const mixed = [...nested, ...regular];
-  const workers = (files: string[], ceiling: number, portable = false) =>
-    comparisonFileGroups(files, ceiling, portable).map(group => ({ files: group.indices.map(index => files[index]), workers: group.workers }));
-  expect(workers(regular, 8)).toEqual([{ files: regular, workers: 8 }]);
-  expect(workers(regular, 8, true)).toEqual([{ files: regular, workers: 8 }]);
-  expect(workers(nested.slice(0, 1), 8)).toEqual([{ files: nested.slice(0, 1), workers: 1 }]);
-  expect(workers(mixed, 8)).toEqual([{ files: regular, workers: 8 }, { files: nested, workers: 2 }]);
-  expect(workers(mixed, 3)).toEqual([{ files: regular, workers: 3 }, { files: nested, workers: 2 }]);
-  expect(workers(mixed, 8, true)).toEqual([{ files: regular, workers: 1 }, { files: nested, workers: 1 }]);
+  expect(comparisonFileWorkers(regular, 8)).toBe(8);
+  expect(comparisonFileWorkers(regular, 3)).toBe(3);
+  expect(comparisonFileWorkers(nested, 8)).toBe(2);
+  expect(comparisonFileWorkers([...nested, regular[0]!], 8)).toBe(3);
+  expect(comparisonFileWorkers([...nested, ...regular], 8)).toBe(8);
+  expect(comparisonFileWorkers([...nested, ...regular], 3)).toBe(3);
+  expect(comparisonFileWorkers([...nested, ...regular], 8, true)).toBe(1);
+  expect(comparisonFileWorkers([...nested, ...regular], 1)).toBe(1);
 });
+
+test.skipIf(process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0)(
+  "ordinary files make progress while the two nested file workers are busy",
+  async () => {
+    const f = fixture(source(true));
+    mkdirSync(path.join(f.dir, "scripts"));
+    const files = ["scripts/privacy-a.test.ts", "scripts/privacy-b.test.ts", "scripts/privacy-c.test.ts", "source.test.ts"];
+    const coordination = `import { existsSync, writeFileSync } from "node:fs";
+import { expect, test } from "bun:test";
+const mark = (name: string) => writeFileSync(${JSON.stringify(f.dir)} + "/" + name, "");
+const marked = (name: string) => existsSync(${JSON.stringify(f.dir)} + "/" + name);
+async function waitFor(marks: string[]) {
+  const deadline = performance.now() + 30_000;
+  while (!marks.every(marked) && performance.now() < deadline) await Bun.sleep(20);
+  expect(marks.filter(marked)).toEqual(marks);
+}`;
+    for (const [index, file] of files.entries()) {
+      const body = index === 3
+        ? 'await waitFor(["a", "b"]); expect(marked("c")).toBe(false); mark("source");'
+        : index === 2
+          ? 'mark("c"); expect(marked("a-done") || marked("b-done")).toBe(true);'
+          : `mark(${JSON.stringify(index === 0 ? "a" : "b")}); await waitFor(["source"]); mark(${JSON.stringify(index === 0 ? "a-done" : "b-done")});`;
+      writeFileSync(path.join(f.dir, file), `${coordination}\ntest("worker coordination", async () => { ${body} });`);
+    }
+    f.git("add", ...files);
+    f.git("commit", "-m", "Mixed worker fixtures");
+    const result = await f.run(files);
+    expect(result.introduced).toEqual([]);
+    expect(f.logs).toContain("touched-tests: head selected 4 files with 3 file workers");
+    expect(f.logs).toContain("touched-tests: green head; no baseline checkout or sample needed");
+  },
+);
