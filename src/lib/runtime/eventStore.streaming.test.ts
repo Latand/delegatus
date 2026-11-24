@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
 import { captureRuntimeEventPosition, FileRuntimeEventStore, readRuntimeEventPage } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
-import { wakeResponseEvidenceFromEvents } from "@/lib/monitor/seatWakeResponse";
+import { wakeResponseEvidenceFromEvents, wakeResponseRecoveryKey } from "@/lib/monitor/seatWakeResponse";
 
 const event = (seq: number): RuntimeEvent => ({ kind: "delta", turnId: "turn", text: "дані 🌱", seq });
 function fixture(contents: string) {
@@ -142,28 +142,57 @@ test("a complete final event without LF supplies terminal proof at stable EOF", 
   } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
 });
 
-test("wake replay reaches an answer after a writer-valid event larger than 32 MiB", async () => {
+test.each(["wake-turn", "nudge-turn"])("visitor termination preserves completed %s proof before an unrelated unterminated suffix", async turnId => {
+  const proof: RuntimeEvent = { kind: "turn-ended", turnId, status: "completed", seq: 1 };
+  const unrelated: RuntimeEvent = { kind: "turn-ended", turnId: "other-turn", status: "completed", seq: 2 };
+  const f = fixture(`${JSON.stringify(proof)}\n${JSON.stringify(unrelated)}`);
+  try {
+    const seen: RuntimeEvent[] = [];
+    let answered = false;
+    const page = await readRuntimeEventPage("thread", undefined, event => {
+      seen.push(event);
+      answered = event.kind === "turn-ended" && event.turnId === turnId && event.status === "completed";
+      return answered;
+    }, undefined, f.directory);
+    expect(seen).toEqual([proof]);
+    expect(answered).toBe(true);
+    expect(page).toMatchObject({ state: "more", position: { seq: 1, offset: Buffer.byteLength(`${JSON.stringify(proof)}\n`) } });
+  } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test.each(["wake", "nudge"] as const)("oversized records are skipped with bounded cursors before %s proof", async action => {
   const f = fixture("");
-  const row = { clientMessageId: "wake", operationId: "operation", conversationId: "conversation_fixture", seatEpoch: 7,
-    deliveredAt: "2026-11-01T00:00:00Z", progressAt: "2026-11-01T00:00:00Z", boundMs: 900_000, action: "pending" as const };
+  const base = { clientMessageId: "wake", operationId: "operation", conversationId: "conversation_fixture", seatEpoch: 7,
+    deliveredAt: "2026-11-01T00:00:00Z", progressAt: "2026-11-01T00:00:00Z", boundMs: 900_000 };
+  const row = action === "nudge" ? { ...base, action: "nudged" as const,
+    recovery: { text: "continue", origin: { kind: "agent" as const, role: "seat-tick" as const, project: "fixture" } } }
+    : { ...base, action: "pending" as const };
+  const operationId = action === "nudge" ? wakeResponseRecoveryKey(row) : row.operationId;
+  const turnId = action === "nudge" ? "nudge-turn" : "wake-turn";
   try {
     const store = new FileRuntimeEventStore(f.directory);
-    store.append("thread", { kind: "delta", turnId: "unrelated", text: "x".repeat(32 * 1024 * 1024 + 1), seq: 1 });
-    store.append("thread", { kind: "turn-started", turnId: "wake-turn", seq: 2 });
-    store.append("thread", { kind: "item", turnId: "wake-turn", phase: "completed",
-      deliveryEcho: { operationId: row.operationId, at: row.deliveredAt }, item: { type: "user" }, seq: 3 });
-    store.append("thread", { kind: "delta", turnId: "wake-turn", text: "answered", seq: 4 });
-    store.append("thread", { kind: "turn-ended", turnId: "wake-turn", status: "completed", seq: 5 });
-
-    const replayed: Record<string, unknown>[] = [];
+    store.append("thread", { kind: "delta", turnId: "unrelated", text: "x".repeat(9 * 1024 * 1024), seq: 1 });
+    store.append("thread", { kind: "turn-started", turnId, seq: 2 });
+    store.append("thread", { kind: "item", turnId, phase: "completed",
+      deliveryEcho: { operationId, at: row.deliveredAt }, item: { type: "user" }, seq: 3 });
+    store.append("thread", { kind: "delta", turnId, text: "answered", seq: 4 });
+    store.append("thread", { kind: "turn-ended", turnId, status: "completed", seq: 5 });
     let position;
+    const replayed: Record<string, unknown>[] = [];
+    let calls = 0;
     do {
+      const priorSkip = position?.skip ?? 0;
       const page = await readRuntimeEventPage("thread", position, event => { replayed.push(event); }, undefined, f.directory);
       if (!page) throw new Error("event page position was refused");
-      position = page.position;
+      calls++;
+      expect(JSON.stringify(page.position).length).toBeLessThan(500);
+      if (page.position.skip !== undefined) expect(page.position.skip - priorSkip).toBeLessThanOrEqual(4 * 1024 * 1024);
+      expect(page.position.pending).toBeUndefined();
+      position = JSON.parse(JSON.stringify(page.position));
       if (page.state === "current") break;
     } while (true);
-    expect(wakeResponseEvidenceFromEvents(row, replayed)).toMatchObject({ answered: true, turnId: "wake-turn" });
+    expect(calls).toBeGreaterThan(2);
+    expect(wakeResponseEvidenceFromEvents(row, replayed, action === "nudge" ? [operationId] : [])).toMatchObject({ answered: true, turnId });
   } finally { fs.rmSync(f.directory, { recursive: true, force: true }); }
 });
 

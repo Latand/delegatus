@@ -172,7 +172,7 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
     if (!generation) { wait = "Delivered input generation evidence is unavailable."; continue; }
     let membership = generations.get(generation.id);
     if (!membership) {
-      membership = { operations: new Map(), nativeTurns: new Map() };
+      membership = { operations: new Map(), nativeTurns: new Map(), receiptUnavailable: false };
       generations.set(generation.id, membership);
     }
     const continuation = recoveryBindings.includes(binding);
@@ -184,7 +184,8 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
       const result = await client?.operationStatus(binding.operationId, { signal });
       if (result?.operationId === binding.operationId && result.receipt.conversationId === row.conversationId
         && ["delivered", "applied", "answered"].includes(result.receipt.status) && result.receipt.turnId) nativeTurnId = result.receipt.turnId;
-    } catch { /* Native event membership remains independently readable. */ }
+      else membership.receiptUnavailable = true;
+    } catch { membership.receiptUnavailable = true; /* Native event membership remains independently readable. */ }
     if (nativeTurnId) membership.nativeTurns.set(nativeTurnId, continuation || membership.nativeTurns.get(nativeTurnId) === true);
   }
   const scan: WakeResponseCheckpoint[] = [];
@@ -200,7 +201,7 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
     // A transient receipt timeout removes optional native-turn evidence. Keep
     // the durable cursor and reducer in that case; a newly observed turn id
     // changes the binding and requires replay from the beginning.
-    const missingReceipt = membership.nativeTurns.size === 0;
+    const missingReceipt = membership.receiptUnavailable;
     if (missingReceipt && prior) for (const [turnId, continuation] of prior.nativeTurns) membership.nativeTurns.set(turnId, continuation);
     const binding = crypto.createHash("sha256").update(JSON.stringify([identity, [...membership.nativeTurns].sort()])).digest("hex");
     const previous = matchingWakeResponseCheckpoint(row.scan, generationId, identity, binding, missingReceipt);
@@ -230,6 +231,7 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
     } catch {
       signal?.throwIfAborted();
       wait = "Delivered wake response evidence is unreadable in the host event log.";
+      if (prior) scan.push(prior);
       continue;
     }
     const evidence = responseEvidence(row, reduction, answered);
@@ -249,6 +251,7 @@ async function readSeatWakeResponse(row: SeatWakeResponse, project?: string): Pr
 interface ResponseMembership {
   operations: Map<string, boolean>;
   nativeTurns: Map<string, boolean>;
+  receiptUnavailable: boolean;
 }
 
 function emptyReduction(): ResponseReduction {
@@ -327,6 +330,7 @@ export function wakeResponseEvidenceFromEvents(row: SeatWakeResponse, events: Re
   const membership: ResponseMembership = {
     operations: new Map([row.operationId, ...continuations].map(id => [id, id !== row.operationId && recoveryOperations.includes(id)])),
     nativeTurns: new Map(turn ? [[turn, nativeContinuation]] : []),
+    receiptUnavailable: false,
   };
   const state = { ...emptyReduction(), ...(turn ? { turnId: turn, continuation: nativeContinuation } : {}) };
   let answered = false;

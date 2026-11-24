@@ -5,7 +5,8 @@ import path from "node:path";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { fixtureRegistry, FIXTURE_SESSION, FIXTURE_CONVERSATION } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity } from "@/lib/processIdentity";
-import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
+import { FileRuntimeEventStore, readRuntimeEventPage } from "@/lib/runtime/eventStore";
+import { statePath } from "@/lib/configDir";
 import { matchingWakeResponseCheckpoint, normalizeSeatWakeResponse, observeSeatWakeResponse, seatWakeResponseBound, wakeResponseEvidenceFromEvents, wakeResponseRecoveryKey, type SeatWakeResponse } from "./seatWakeResponse";
 const row: SeatWakeResponse = { clientMessageId: "wake", operationId: "operation", conversationId: "conversation_fixture", seatEpoch: 7,
   deliveredAt: "2026-11-01T00:00:00Z", progressAt: "2026-11-01T00:00:00Z", boundMs: 900_000, action: "pending" };
@@ -31,6 +32,53 @@ test("receipt timeouts preserve replay progress and a new receipt binding reopen
   expect(matchingWakeResponseCheckpoint([checkpoint], "generation", checkpoint.identity, checkpoint.binding, true)).toEqual(checkpoint);
   expect(matchingWakeResponseCheckpoint([checkpoint], "generation", checkpoint.identity, checkpoint.binding, false)).toEqual(checkpoint);
   expect(matchingWakeResponseCheckpoint([checkpoint], "generation", checkpoint.identity, "d".repeat(64), false)).toBeUndefined();
+  const partial = { ...checkpoint, nativeTurns: [["original-native-turn", false] as [string, boolean], ["nudge-native-turn", true] as [string, boolean]] };
+  expect(matchingWakeResponseCheckpoint([partial], "generation", partial.identity, "d".repeat(64), true)).toEqual(partial);
+  expect(matchingWakeResponseCheckpoint([partial], "generation", partial.identity, "e".repeat(64), false)).toBeUndefined();
+});
+
+test("a temporary event-ledger read failure retains its validated checkpoint and resumes after restore", async () => {
+  const previousState = process.env.LLV_STATE_DIR, previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wake-checkpoint-recovery-"));
+  process.env.LLV_STATE_DIR = root;
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(root, "absent.sock");
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  setAgentRegistryForTests(registry);
+  try {
+    const fixture = fixtureRegistry(root, "codex", captureProcessIdentity(process.pid)!, null);
+    await registry.deliveryWriteOrBusy({ label: "fixture.wake-checkpoint" }, () => registry.agentStateWrite(file => Object.assign(file, fixture)));
+    const events = new FileRuntimeEventStore();
+    const pageBytes = 5 * 1024 * 1024;
+    const prefix = `${JSON.stringify({ kind: "delta", turnId: "earlier", text: "", seq: 1 })}\n`;
+    events.append(FIXTURE_SESSION, { kind: "delta", turnId: "earlier", text: "x".repeat(pageBytes - Buffer.byteLength(prefix)), seq: 1 });
+    events.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "wake-turn", seq: 2 });
+    events.append(FIXTURE_SESSION, { kind: "item", turnId: "wake-turn", phase: "completed",
+      deliveryEcho: { operationId: row.operationId, at: row.deliveredAt }, item: { type: "user" }, seq: 3 });
+    events.append(FIXTURE_SESSION, { kind: "delta", turnId: "wake-turn", text: "answered", seq: 4 });
+    events.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: "wake-turn", status: "completed", seq: 5 });
+    const filename = statePath("structured-host-events", `${encodeURIComponent(FIXTURE_SESSION)}.jsonl`);
+    const hidden = `${filename}.held`;
+    const persisted = { ...row, conversationId: FIXTURE_CONVERSATION, generationId: FIXTURE_SESSION, turnId: "wake-turn" };
+    const prepared = await observeSeatWakeResponse(persisted);
+    expect(prepared).toMatchObject({ answered: false, scan: [{ generationId: FIXTURE_SESSION,
+      position: { offset: 0, skip: 4 * 1024 * 1024 } }] });
+    fs.renameSync(filename, hidden);
+    const missing = await observeSeatWakeResponse({ ...persisted, scan: prepared.scan });
+    expect(missing).toMatchObject({ answered: false, scan: prepared.scan });
+    fs.renameSync(hidden, filename);
+    expect(await readRuntimeEventPage(FIXTURE_SESSION, missing.scan![0]!.position, () => {}, undefined, path.dirname(filename))).not.toBeNull();
+    let resumed = await observeSeatWakeResponse({ ...persisted, scan: missing.scan });
+    for (let attempt = 0; attempt < 8 && !resumed.answered; attempt++) {
+      resumed = await observeSeatWakeResponse({ ...persisted, scan: resumed.scan });
+    }
+    expect(resumed).toMatchObject({ answered: true, turnId: "wake-turn" });
+  } finally {
+    setAgentRegistryForTests(null);
+    registry.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 test("response belongs to the delivered turn; provider failures and unrelated input give no answer", () => {
   const start = { kind: "turn-started", turnId: "operation" };

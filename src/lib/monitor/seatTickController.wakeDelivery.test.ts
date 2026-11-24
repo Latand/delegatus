@@ -8,7 +8,7 @@ import { fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_SESSION } from "@/lib/ag
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import type { RuntimeEvent } from "@/lib/runtime/engineHost";
 
-test.each(["wake", "nudge", "paged", "unknown", "unanswered", "unanswered-growing", "nudge-terminal-growing", "prepared"] as const)("production tail replay reconciles a persisted hold (%s)", async mode => {
+test.each(["wake", "nudge", "paged", "unknown", "unanswered", "unanswered-growing", "nudge-terminal-growing", "prepared"] as const)("production replay reconciles a persisted hold (%s)", async mode => {
   const previous = process.env.LLV_STATE_DIR;
   const root = fs.mkdtempSync(path.join(SANDBOX, "response-tail-replay-"));
   process.env.LLV_STATE_DIR = root;
