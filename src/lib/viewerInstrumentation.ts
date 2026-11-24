@@ -31,8 +31,10 @@ import { openStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { markStructuredHostStartupFailed, markStructuredHostStartupReady, markStructuredHostStartupRetryStarted } from "@/lib/runtime/startupStatus";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
 import { startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
+import type { AgentRegistry } from "@/lib/agent/registry";
 import { readAuto } from "@/lib/selfUpdate/auto";
 import { activeDrain } from "@/lib/selfUpdate/drain";
+import { markViewerHttpReady, viewerStartupPhases } from "@/lib/viewerReadiness";
 
 /*
  * The Viewer's node-side startup runtime. This module (and everything it pulls
@@ -67,8 +69,9 @@ interface ViewerReleaseActivationOptions {
   log?: (...args: unknown[]) => void;
   fenceRequest?: () => HotStateAuthority | null;
   onFenceRequested?: (request: HotStateAuthority) => void | Promise<void>;
-  /** A fence this release acknowledged was withdrawn while it stayed current. */
+  /** A fence this release processed was withdrawn while it stayed current. */
   onFenceWithdrawn?: () => void | Promise<void>;
+  resumeWorktreeRecovery?: () => Promise<void>;
   onDemoted?: (context: { fenced: boolean }) => void | Promise<void>;
 }
 
@@ -132,14 +135,12 @@ interface CurrentReleaseControllerLoaders {
 interface ViewerRuntimeActivationSteps {
   initializeOperatorCapability: () => Promise<void>;
   runIdentityMigration?: () => Promise<void> | void;
-  runWorktreeRecovery?: () => Promise<void>;
   runClaudeLoginRecovery?: () => Promise<void>;
   startDestructiveGuard?: () => Promise<void>;
   startStructuredHosts: (() => void) | null;
   startControllers: () => Promise<void>;
   publishHotStateActivation: () => void;
   publishViewerReleaseReady: () => void;
-  prepareBoard?: () => Promise<void>;
   refineBoard?: () => Promise<unknown>;
 }
 
@@ -241,6 +242,7 @@ export async function activateViewerRuntimeWhenCurrent(
   let started = false;
   let demoted = false;
   let fenceInProgress = false;
+  let fenceObserved = false;
   let fencedEpoch: number | null = null;
   const monitor = () => {
     if (demoted) return;
@@ -253,13 +255,20 @@ export async function activateViewerRuntimeWhenCurrent(
     }
     const fence = started ? options.fenceRequest?.() ?? null : null;
     if (!fence || fence.mode !== "fencing") {
-      if (!fenceInProgress && fencedEpoch !== null) {
+      if (!fenceInProgress && fenceObserved) {
+        fenceObserved = false;
         fencedEpoch = null;
-        void Promise.resolve(options.onFenceWithdrawn?.()).catch((error) => {
+        void (async () => {
+          await options.onFenceWithdrawn?.();
+          if (isCurrent() && options.fenceRequest?.()?.mode !== "fencing") {
+            await options.resumeWorktreeRecovery?.();
+          }
+        })().catch((error) => {
           log("[viewer release] withdrawn fence recovery failed", error);
         });
       }
     } else if (fencedEpoch !== fence.epoch && !fenceInProgress) {
+      fenceObserved = true;
       fenceInProgress = true;
       void Promise.resolve(options.onFenceRequested?.(fence)).then(() => {
         fencedEpoch = fence.epoch;
@@ -422,6 +431,7 @@ export async function startCurrentReleaseControllers(
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
     loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
   },
+  options: { beforeSeatTick?: Promise<unknown> } = {},
 ): Promise<void> {
   /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
      once, by the release that owns traffic, before its controller launches
@@ -521,7 +531,11 @@ export async function startCurrentReleaseControllers(
      durable stamps rather than from a timer that happened to survive. */
   try {
     const seatTick = await loaders.loadSeatTick?.();
-    seatTick?.startSeatTick();
+    if (options.beforeSeatTick) {
+      void options.beforeSeatTick.then(() => seatTick?.startSeatTick()).catch(error => {
+        console.error("[seat tick] project recovery is incomplete; actions remain held", error instanceof Error ? error.name : "unknown");
+      });
+    } else seatTick?.startSeatTick();
   } catch (error) {
     console.error("[seat tick] start failed", error instanceof Error ? error.name : "unknown");
   }
@@ -637,6 +651,32 @@ export async function startCurrentReleaseControllers(
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();
   scheduleAccountMigrationController(startAccountMigrationController, accountControllerDelayMs(env));
+}
+
+/** Keep the seat tick fenced through transient recovery failures. The signal
+ * belongs to this Viewer generation, so a retired release cannot publish a
+ * late success into its successor's gate. */
+export async function retryWorktreeRecoveryUntilCommitted(
+  recover: () => Promise<unknown>, signal: AbortSignal,
+  onFailure: (error: unknown) => void = () => {}, delayMs = 1_000,
+): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      await recover();
+      if (signal.aborted) throw signal.reason ?? new Error("Viewer generation retired during worktree recovery");
+      return;
+    } catch (error) {
+      if (signal.aborted) throw signal.reason ?? error;
+      onFailure(error);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(done, delayMs);
+        function done() { signal.removeEventListener("abort", abort); resolve(); }
+        function abort() { clearTimeout(timer); signal.removeEventListener("abort", abort); reject(signal.reason ?? new Error("Viewer generation retired")); }
+        signal.addEventListener("abort", abort, { once: true });
+      });
+    }
+  }
+  throw signal.reason ?? new Error("Viewer generation retired before worktree recovery committed");
 }
 
 export async function initializeOperatorSpawnCapabilityAtStartup(
@@ -913,19 +953,27 @@ export async function completeViewerRuntimeActivation(
   await steps.runIdentityMigration?.();
   steps.publishHotStateActivation();
   await steps.runClaudeLoginRecovery?.();
-  await steps.runWorktreeRecovery?.();
   const { retireLegacyCodexMemoryHooksAtStartup } = await import("@/lib/memory/hookMigration");
   await retireLegacyCodexMemoryHooksAtStartup();
   await steps.startDestructiveGuard?.();
   steps.startStructuredHosts?.();
-  await steps.prepareBoard?.();
   await steps.startControllers();
   steps.publishViewerReleaseReady();
-  // A saved summary already makes the board readable. Fresh attention facts
-  // refine it afterwards; their scan must not delay the first document.
+  // The board can load its saved summary on demand. Its startup build and
+  // attention refinement may scan the catalog and should run in the background.
   void steps.refineBoard?.().catch(error => {
     console.error("[attention reconcile] startup refinement failed", error instanceof Error ? error.name : "unknown");
   });
+}
+
+/** Registry artifacts are part of first-caller readiness: native caller
+    admission performs one bounded index slice and refuses incomplete proofs. */
+export async function prepareRegistryForNativeCallers(
+  registry: Pick<AgentRegistry, "prepareReadOnlySnapshot" | "prepareNativeCallerArtifacts">,
+  signal: AbortSignal,
+): Promise<void> {
+  await registry.prepareReadOnlySnapshot(signal);
+  await registry.prepareNativeCallerArtifacts(signal, { waitUntilReady: true });
 }
 
 /** Check every state database before a store opens one (#1870 slice 10):
@@ -969,6 +1017,47 @@ export function createViewerStartupBarrier(controller: AbortController) {
   };
 }
 
+/** Keep the seat gate across fence epochs, and give each recovery attempt
+ * its own signal so withdrawal can resume after the fenced worker exits. */
+export function createViewerWorktreeRecovery(
+  recover: (signal: AbortSignal, assertAuthority: () => void) => Promise<{ folded: number; leftAlone: number }>,
+  hasAuthority: () => boolean,
+) {
+  let finish!: () => void;
+  const committed = new Promise<void>(resolve => { finish = resolve; });
+  let done = false;
+  let active: { controller: AbortController; work: Promise<void> } | null = null;
+  return {
+    committed,
+    async start() {
+      if (done) return;
+      if (active) return active.work;
+      const controller = new AbortController();
+      const { signal } = controller;
+      const assertAuthority = () => {
+        signal.throwIfAborted();
+        if (!hasAuthority()) throw new Error("worktree recovery lost release authority");
+      };
+      const work = retryWorktreeRecoveryUntilCommitted(async () => {
+        assertAuthority();
+        await recover(signal, assertAuthority);
+        assertAuthority();
+        done = true;
+        finish();
+      }, signal, error => console.error("[worktree recovery] worker failed; retrying in this Viewer generation",
+        error instanceof Error ? error.name : "unknown")).finally(() => { active = null; });
+      active = { controller, work };
+      return work;
+    },
+    async quiesce(reason: Error) {
+      const attempt = active;
+      if (!attempt) return;
+      attempt.controller.abort(reason);
+      await attempt.work.catch(() => {});
+    },
+  };
+}
+
 /** The full node-runtime startup sequence `src/instrumentation.ts` defers to. */
 /**
  * The remembered phone-access choice gates this process before it serves a
@@ -1005,6 +1094,8 @@ export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
 }
 
 export async function registerViewerRuntime(): Promise<void> {
+  const startup = viewerStartupPhases();
+  startup.begin("http-ingress");
   viewerLoopMonitor.start();
   // The validated persisted catalog is prepared without contacting any server.
   void import("./voiceTools/hub").then(({ voiceToolHub }) => voiceToolHub().store.load())
@@ -1015,37 +1106,34 @@ export async function registerViewerRuntime(): Promise<void> {
   await installServingControlIngress();
   discardUnsupportedApiCredentials();
 
+  startup.begin("access");
   await installSpawnCapabilityResolverAtStartup();
   await gatePhoneAccessBeforeServing();
-  // Next loads the generated App Route separately from its userland module.
-  // Prepare that wrapper too: on a large build requirePage otherwise spends
-  // another second loading chunks on the first board request. The production
-  // launcher's cwd is the build root, as it is for the projection workers.
-  if (process.env.NODE_ENV === "production") {
-    const compiledRoute = path.join(process.cwd(), ".next/server/app/api/files/route.js");
-    // Keep this native require outside webpack's source dependency graph:
-    // the generated route only exists after that graph has been built.
-    const { createRequire } = await import(/* webpackIgnore: true */ "node:module");
-    const compiled = createRequire(path.join(process.cwd(), "package.json"))(compiledRoute) as {
-      routeModule: { ensureUserland(): Promise<void> };
-    };
-    // Next 16 loads App Route userland lazily, even after requirePage returns.
-    await compiled.routeModule.ensureUserland();
-  }
-  // Every candidate prepares the read-only board path before Next can serve
-  // it. Activation starts after the proxy appoints a release, which is too
-  // late to pay the route's module loading on its first board request.
-  const { prepareBoardSummary } = await import("@/app/api/files/operatorProjection");
-  await prepareBoardSummary();
+  startup.begin("release-authority");
   const isCurrent = () => viewerReleaseOwnsTraffic();
   const hotStateDirectory = path.dirname(statePath("state.sqlite"));
   const releaseRevision = () => hotStateWriterRevision(hotStateDirectory);
   let activatedReleaseRevision: string | null = null;
   const startupAbort = new AbortController();
+  const worktreeRecovery = createViewerWorktreeRecovery(async (signal, assertAuthority) => {
+    const { recoverWorktreesInWorker } = await import("@/lib/state/durability");
+    assertAuthority();
+    return recoverWorktreesInWorker(hotStateDirectory, signal);
+  }, () => {
+    const authority = readHotStateAuthority(hotStateDirectory);
+    return isCurrent() && authority?.mode !== "fencing" && (activatedReleaseRevision === null
+      || (authority?.mode === "sqlite" && authority.releaseRevision === activatedReleaseRevision));
+  });
   const startupBarrier = createViewerStartupBarrier(startupAbort);
   const quiesceStartup = async () => {
-    (await import("@/lib/agent/destructiveGuard.refusals")).stopDestructiveRefusalIngest();
-    await startupBarrier.quiesce(new Error("structured startup retired by release handover"));
+    const reason = new Error("structured startup retired by release handover");
+    const quiesced = Promise.all([startupBarrier.quiesce(reason), worktreeRecovery.quiesce(reason)]);
+    try {
+      const { stopDestructiveRefusalIngest } = await import("@/lib/agent/destructiveGuard.refusals");
+      stopDestructiveRefusalIngest();
+    } finally {
+      await quiesced;
+    }
   };
   const assertStartupActive = () => {
     // Observe durable retirement at every phase/batch boundary, including
@@ -1073,6 +1161,7 @@ export async function registerViewerRuntime(): Promise<void> {
     assertStartupActive();
     const { startManagedRetirementGuard } = await import("@/lib/state/managedRetirementGuard");
     await startManagedRetirementGuard(hotStateDirectory, activatedReleaseRevision);
+    startup.begin("state-compatibility");
     const durability = await startupBarrier.run(() => checkStateDatabasesBeforeStores(hotStateDirectory));
     assertStartupActive();
     await startupBarrier.run(async () => {
@@ -1092,13 +1181,17 @@ export async function registerViewerRuntime(): Promise<void> {
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
     await startupBarrier.run(() => settleInterruptedTransfers());
+    startup.begin("registry");
     const { prepareAgentRegistry } = await import("@/lib/agent/registry");
     await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", async () => {
       const registry = await prepareAgentRegistry(startupAbort.signal);
-      await registry.prepareReadOnlySnapshot(startupAbort.signal);
-      await registry.prepareNativeCallerArtifacts();
+      // The snapshot also prepares recovery indexes and backfills endings.
+      // The first authorized native caller needs the complete artifact index;
+      // its synchronous lookup intentionally advances only one bounded batch.
+      await prepareRegistryForNativeCallers(registry, startupAbort.signal);
     }));
     assertStartupActive();
+    startup.begin("activation");
     const { cleanupFinishedWorkAtStartup } = await import("@/lib/attention/finishedWorkCleanup");
     await startupBarrier.run(() => cleanupFinishedWorkAtStartup(undefined, assertStartupActive));
     assertStartupActive();
@@ -1120,10 +1213,6 @@ export async function registerViewerRuntime(): Promise<void> {
         await startDestructiveRefusalIngest(() => isCurrent() && !startupAbort.signal.aborted
           && readHotStateAuthority(hotStateDirectory)?.mode !== "fencing");
       }),
-      runWorktreeRecovery: async () => {
-        const { runWorktreeRecoveryAtStartup } = await import("@/lib/projects/worktreeBackfill");
-        await runWorktreeRecoveryAtStartup();
-      },
       runClaudeLoginRecovery: async () => {
         const { recoverClaudeLoginsAtStartup } = await import("@/lib/accounts/claudeLogin");
         await recoverClaudeLoginsAtStartup();
@@ -1144,19 +1233,26 @@ export async function registerViewerRuntime(): Promise<void> {
             void startup.catch((error) => console.error("[structured hosts] background startup aborted", error));
           }
         : null,
-      prepareBoard: async () => {
-        assertStartupActive();
-        await startupBarrier.run(() => prepareBoardSummary(true));
-        assertStartupActive();
+      refineBoard: async () => {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        // The legacy receipt can arrive after readiness. A withdrawn fence
+        // resumes this work separately from the retired startup phases.
+        startupAbort.signal.throwIfAborted();
+        await worktreeRecovery.start();
+        await startupBarrier.run(async () => {
+          assertStartupActive();
+          const { prepareBoardSummary } = await import("@/app/api/files/operatorProjection");
+          assertStartupActive();
+          await prepareBoardSummary(true);
+        });
+        await startupBarrier.run(() => viewerLoopMonitor.run("attention.reconcile", async () => {
+          const { reconcileAttentionOnce } = await import("@/lib/attention/reconcileController");
+          assertStartupActive();
+          await reconcileAttentionOnce(undefined, assertStartupActive);
+        }));
       },
-      refineBoard: () => startupBarrier.run(() => viewerLoopMonitor.run("attention.reconcile", async () => {
-        const { reconcileAttentionOnce } = await import("@/lib/attention/reconcileController");
-        assertStartupActive();
-        await reconcileAttentionOnce(undefined, assertStartupActive);
-        assertStartupActive();
-      })),
       startControllers: async () => {
-        await startCurrentReleaseControllers();
+        await startCurrentReleaseControllers(process.env, undefined, { beforeSeatTick: worktreeRecovery.committed });
         const { startRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
         await startRecordedCheckObserver();
       },
@@ -1174,10 +1270,17 @@ export async function registerViewerRuntime(): Promise<void> {
       },
     });
     durability.start(isCurrent);
-    const { startInstallPing } = await import("@/lib/telemetry/sender");
-    const { productionModePorts } = await import("@/lib/selfUpdate/mode");
-    const { runtimeHostClient } = await import("@/lib/runtime/client");
-    startInstallPing(productionModePorts(runtimeHostClient()));
+    assertStartupActive();
+    startup.finish();
+    markViewerHttpReady();
+    setImmediate(() => {
+      void Promise.all([
+        import("@/lib/telemetry/sender"), import("@/lib/selfUpdate/mode"), import("@/lib/runtime/client"),
+      ]).then(([{ startInstallPing }, { productionModePorts }, { runtimeHostClient }]) => {
+        assertStartupActive();
+        startInstallPing(productionModePorts(runtimeHostClient()));
+      }).catch(error => console.error("[install ping] startup failed", error instanceof Error ? error.name : "unknown"));
+    });
   }, isCurrent, {
     fenceRequest: () => {
       const revision = releaseRevision();
@@ -1204,8 +1307,10 @@ export async function registerViewerRuntime(): Promise<void> {
       const authority = readHotStateAuthority(hotStateDirectory);
       if (!isCurrent() || revision === null || authority?.mode !== "sqlite" || authority.releaseRevision !== revision) return;
       const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
+      if (!isCurrent() || readHotStateAuthority(hotStateDirectory)?.epoch !== authority.epoch) return;
       await ensureLegacyCollectionsImported();
     },
+    resumeWorktreeRecovery: worktreeRecovery.start,
     onDemoted: async ({ fenced }) => {
       (await import("@/lib/projects/cloudEnvironmentController")).stopCloudEnvironmentController();
       try {

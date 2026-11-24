@@ -1491,7 +1491,6 @@ function trackMutableJson<T>(
 export class SqliteAgentRegistryStore {
   private readonly db: BunDatabase;
   private nativeArtifactRead: NativeArtifactRead | null = null;
-  private nativeArtifactPreparation: Promise<void> | null = null;
   /** One prepared snapshot owner, on its own read connection. The writer's
       keyed transactions remain available while it yields. */
   private preparedReader: SqliteAgentRegistryStore | null = null;
@@ -2109,26 +2108,27 @@ export class SqliteAgentRegistryStore {
 
   /** Preparation is shared by native calls and yields between fixed-size
       batches. The synchronous selector always checks new changes itself. */
-  async prepareNativeCallerArtifacts(): Promise<void> {
+  async prepareNativeCallerArtifacts(signal?: AbortSignal, { waitUntilReady = false } = {}): Promise<void> {
     if (process.platform !== "linux" || this.closed) return;
-    if (this.nativeArtifactPreparation) return this.nativeArtifactPreparation;
-    const work = async () => {
-      const deadline = performance.now() + 5_000;
-      let restarted = false;
-      while (!this.closed && performance.now() < deadline) {
-        try {
-          if (performanceSpans.sync("registry.prepare.slice", () => this.withCallerRead(() => this.advanceNativeArtifacts()))) return;
-        } catch {
-          this.resetNativeArtifacts();
-          if (restarted) return;
-          restarted = true;
+    const deadline = waitUntilReady ? Infinity : performance.now() + 5_000;
+    let restarted = false;
+    // Each slice advances the shared index synchronously. Between slices the
+    // caller keeps its own deadline and can withdraw without ending other work.
+    while (!this.closed && performance.now() < deadline) {
+      signal?.throwIfAborted();
+      try {
+        if (performanceSpans.sync("registry.prepare.slice", () => this.withCallerRead(() => this.advanceNativeArtifacts()))) return;
+      } catch {
+        this.resetNativeArtifacts();
+        if (restarted) {
+          if (waitUntilReady) console.warn("[registry] native caller artifact preparation unavailable");
+          return;
         }
-        await yieldToRuntime();
+        restarted = true;
       }
-    };
-    this.nativeArtifactPreparation = work();
-    try { await this.nativeArtifactPreparation; }
-    finally { this.nativeArtifactPreparation = null; }
+      await yieldToRuntime(signal);
+    }
+    signal?.throwIfAborted();
   }
 
   /** A native Claude generation is engine-qualified. Seek the recorded and
@@ -2166,7 +2166,7 @@ export class SqliteAgentRegistryStore {
       }
       const aliases = this.nativeArtifactRead!.index.aliases(canonical);
       if (aliases && aliases.size > MCP_CALLER_CANDIDATE_LIMIT) {
-        snapshot.nativeHostsIncomplete = true;
+        snapshot.nativeHostsLookupLimitExceeded = true;
         return snapshot;
       }
       const spellings = new Set([artifact, canonical, ...(aliases ?? [])]);
@@ -2181,7 +2181,7 @@ export class SqliteAgentRegistryStore {
         LIMIT ?`).all(JSON.stringify([...spellings]), MCP_CALLER_CANDIDATE_LIMIT + 1);
       this.onRowPayloadRead?.("entries", hosts.length);
       if (hosts.length > MCP_CALLER_CANDIDATE_LIMIT) {
-        snapshot.nativeHostsIncomplete = true;
+        snapshot.nativeHostsLookupLimitExceeded = true;
         return snapshot;
       }
       const entries = Object.fromEntries(hosts.map(row => [row.row_key, this.parseRow("entries", row.row_key, row.value_json, true)]));
