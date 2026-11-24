@@ -115,7 +115,7 @@ export class AttemptTrashRecovery {
     })();
   }
   page(now: () => number, deadline: number, budgetNow = now,
-    discovery: false | { unknown: (scratch: string, name: string) => boolean; complete: () => void } | undefined = undefined) {
+    discovery: false | { unknown: (scratch: string, name: string) => string | undefined; complete: () => void } | undefined = undefined) {
     const result = { entries: 0, manifestEntries: 0, checks: 0, restored: 0, adopted: 0, recoveredDirectory: null as string | null,
       outcomes: [] as Array<{ directory: string; disposition: "held" | "deferred"; bytes: number; reason: string }> };
     if (budgetNow() >= deadline) return result;
@@ -131,9 +131,10 @@ export class AttemptTrashRecovery {
         if (budgetNow() >= deadline) return result; // Revisit this bounded page after interruption.
         if (!/^\.delegatus-sweep-[a-f0-9]{64}\.json$/.test(name)) {
           try {
-            if (discovery?.unknown(this.scratch, name)) {
+            const reason = discovery?.unknown(this.scratch, name);
+            if (reason) {
               result.adopted++;
-              result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason: "owner-unknown" });
+              result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason });
             }
           }
           catch (error) { result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason: `owner-unknown: ${String(error)}` }); }

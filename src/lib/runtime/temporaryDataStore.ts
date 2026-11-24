@@ -5,7 +5,7 @@ import { statePath } from "@/lib/configDir";
 import { assertNotOperatorStateUnderTest } from "@/lib/stateOwnership";
 import { assertRetentionTestPath } from "@/lib/retentionTestSafety";
 
-export type TemporaryDataKind = "lane-evidence" | "agent-evidence" | "journal" | "ownerless-copy";
+export type TemporaryDataKind = "lane-evidence" | "agent-evidence" | "journal" | "ownerless-copy" | "legacy-attempt-copy";
 export type TemporaryDataCandidate = {
   directory: string; scope: string; kind: TemporaryDataKind; owner: string;
   identity: string; adoptedAt: number; checkedAt: number; bytes: number; reason: string;
@@ -48,6 +48,10 @@ export class TemporaryDataStore {
   }
   record(directory: string, checkedAt: number, bytes: number, reason: string) {
     this.db.query("UPDATE candidates SET checkedAt=?,bytes=?,reason=? WHERE directory=?").run(checkedAt, bytes, reason, directory);
+  }
+  revisitUnattributedCopy(directory: string, identity: string) {
+    return this.db.query(`UPDATE candidates SET kind='legacy-attempt-copy',checkedAt=0
+      WHERE directory=? AND identity=? AND kind IN ('ownerless-copy','legacy-attempt-copy')`).run(directory, identity).changes > 0;
   }
   forget(directory: string) { this.db.query("DELETE FROM candidates WHERE directory=?").run(directory); }
   namespace(directory: string, kind: string, owner = "") {

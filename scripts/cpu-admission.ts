@@ -114,7 +114,7 @@ function locked(file: string): boolean {
     throw new Error("could not probe a heavy command slot lock");
   }
   lockFd ??= nativeSlotLock();
-  const fd = fs.openSync(filename, "a");
+  const fd = fs.openSync(filename, "r");
   try { return !lockFd(fd); } finally { fs.closeSync(fd); }
 }
 
@@ -134,6 +134,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       ? [identity.startIdentity] : [];
   }));
   const readArgv = (base: string) => fs.readFileSync(path.join(base, "cmdline")).subarray(0, -1).toString().split("\0");
+  const isBun = (command = "") => /^(?:bun|bun-container|bun\.exe)$/.test(path.basename(command));
   const readCwd = (base: string) => () => fs.readlinkSync(path.join(base, "cwd"));
   const checkoutEntry = (entry: string, directoryName: string, cwd: () => string) => {
     const script = path.isAbsolute(entry) ? entry : path.resolve(cwd(), entry);
@@ -147,7 +148,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       ? command.slice(3) : command;
     // This identifies the hook command. Older wrappers could admit it directly.
     const name = path.basename(argv[0] ?? "");
-    const bunHook = argv.length === 3 && argv[2] === "pre-push" && path.basename(argv[1] ?? "") === "local-gate.ts";
+    const bunHook = isBun(name) && argv.length === 3 && argv[2] === "pre-push" && path.basename(argv[1] ?? "") === "local-gate.ts";
     const shellHook = (name === "bash" || name === "sh") && path.basename(argv[1] ?? "") === "pre-push";
     const directHook = name === "pre-push";
     const entry = bunHook ? argv[1] : shellHook ? argv[1] : directHook ? argv[0] : undefined;
@@ -255,9 +256,9 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     // An ordinary hook may be wrapped by the service runner while it opens
     // the queue for its own cleanup command. Prove the nested hook argv from
     // that live wrapper before accepting the relationship.
-    const hookCommand = path.basename(command[0] ?? "") === "bun" && path.basename(command[1] ?? "") === "owned-runner.ts"
+    const hookCommand = isBun(command[0]) && path.basename(command[1] ?? "") === "owned-runner.ts"
       ? command.slice(2) : command;
-    if (path.basename(hookCommand[0] ?? "") !== "bun" || !isHookParent(hookCommand, readCwd(hook)) ||
+    if (!isBun(hookCommand[0]) || !isHookParent(hookCommand, readCwd(hook)) ||
       readStat(hook)[1] !== path.basename(parent) || fs.readFileSync(path.join(hook, "cgroup"), "utf8") !== membership) return false;
     const cwd = readCwd(hook)();
     const env = readEnvironment(hook);
@@ -271,7 +272,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       const args = rawArgs.length > 3 && rawArgs[2] === "--in-cpu-scope" && path.basename(rawArgs[1] ?? "") === "gate-slot.sh"
         ? [...rawArgs.slice(0, 2), ...rawArgs.slice(3)] : rawArgs;
       const cwd = readCwd(gate)();
-      if (args.length === 6 && path.basename(args[0]!) === "bash" && path.basename(args[2]!) === "bun" &&
+      if (args.length === 6 && path.basename(args[0]!) === "bash" && isBun(args[2]) &&
         args[4] === "pre-push" && args[5] === "--admitted" &&
         fs.realpathSync(path.resolve(cwd, args[3]!)) === script &&
         path.resolve(cwd, args[1]!) === path.join(path.dirname(path.resolve(cwd, args[3]!)), "gate-slot.sh") &&

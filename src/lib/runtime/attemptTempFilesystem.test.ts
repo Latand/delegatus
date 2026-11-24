@@ -16,12 +16,30 @@ import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { KEEP_MARKER, plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { nameInReport } from "./attemptTempRetention.testSupport";
-import type { ProcessScan } from "@/lib/tempSweep";
+import { scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 const exec = promisify(execFile);
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(reportMediaRoot(), { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
+
+test.skipIf(process.platform !== "linux")("a long process command line holds only the attempt it references", async () => {
+  const parent = root(), proc = path.join(parent, "proc"), pid = path.join(proc, "41");
+  const held = path.join(parent, "llv-stage-held"), ended = path.join(parent, "llv-stage-ended");
+  fs.mkdirSync(path.join(pid, "ns"), { recursive: true });
+  fs.symlinkSync("mnt:[41]", path.join(pid, "ns/mnt"));
+  fs.symlinkSync(parent, path.join(pid, "cwd"));
+  fs.mkdirSync(held); fs.mkdirSync(ended);
+  const alias = path.join(parent, "profile alias");
+  fs.symlinkSync(held, alias);
+  const flags = Array.from({ length: 80 }, (_, index) => `--fixture-flag-${index}=off`).join(" ");
+  fs.writeFileSync(path.join(pid, "cmdline"), `${path.join(parent, "chrome")} ${flags} --profile="${alias}"\0`);
+  const scan = () => scanProcesses(proc);
+  expect(await attemptReferencesClear(ended, ended, scan(), async () => true)).toBeTrue();
+  expect(await attemptReferencesClear(held, held, scan(), async () => true)).toBeFalse();
+  fs.writeFileSync(path.join(pid, "cmdline"), `/opt/chrome\0${alias}\0`);
+  expect(await attemptReferencesClear(held, held, scan(), async () => true)).toBeFalse();
+});
 
 test("native recursive removal is awaited, killed at the shared cutoff, and reported as a deferral", async () => {
   const directory = root(); fs.writeFileSync(path.join(directory, "payload"), "owned");

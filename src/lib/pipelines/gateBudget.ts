@@ -2,6 +2,9 @@ export const DEFAULT_PUBLICATION_PUSH_MS = 15 * 60_000;
 export const PIPELINE_PUBLICATION_PUSH_MS = 25 * 60_000;
 export const RUNTIME_PUBLICATION_PUSH_MS = 30 * 60_000;
 export const PUBLICATION_PACK_MARGIN_MS = 60_000;
+// The forge closed idle SSH receive-pack sessions after about 360 s.
+// See docs/design/container-publication-checks.md for the measurements.
+export const PUBLICATION_TRANSPORT_HOOK_MS = 180_000;
 
 /** These changes select the measured engine suites or publication regressions.
  * Keep time for the full head, baseline and paired confirmations. Individual
