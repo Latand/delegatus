@@ -54,8 +54,10 @@ const reviewerFile = {
 
 const ROOT_CALLER: AttentionCallerAuthority = { kind: "root", conversationId: "conversation_root" };
 
-const fastArrival: typeof awaitAttentionArrival = (id, options = {}) =>
-  awaitAttentionArrival(id, { pollMs: 5, timeoutMs: 1_500, ...options });
+/** A wait that is never expected to be reached; reaching it fails the case at once. */
+const unexpectedWait: typeof awaitAttentionArrival = async () => {
+  throw new Error("the call waited for an arrival no view was asked to make");
+};
 
 function service(overrides: Record<string, unknown> = {}) {
   return createMcpToolService(viewerMcpBindings(undefined, undefined, {
@@ -67,7 +69,7 @@ function service(overrides: Record<string, unknown> = {}) {
     adoptRootSession: () => {},
     attentionAuthority: () => ROOT_CALLER,
     raiseAttentionRequest,
-    awaitAttentionArrival: fastArrival,
+    awaitAttentionArrival: unexpectedWait,
     ...overrides,
   } as never), new MemoryMcpReceiptStore());
 }
@@ -100,18 +102,18 @@ function openView(overrides: Partial<PresencePayloadV1> = {}): PresencePayloadV1
   };
 }
 
-/** The browser's half, played against the real record. */
-function browserStandIn(deviceId: string, onAccepted: (request: AttentionRequestV1) => void) {
-  const timer = setInterval(() => {
-    try {
-      for (const request of readAttentionFile().requests) {
-        if (request.state === "accepted" && request.acknowledgedBy === deviceId) onAccepted(request);
-      }
-    } catch {
-      /* mid-write read; the next tick sees the settled file */
-    }
-  }, 10);
-  return () => clearInterval(timer);
+/**
+ * The browser's half, played against the real record and with no clock in it:
+ * when the call starts waiting, the answer the browser would give is applied to
+ * the record synchronously, and the real wait then reads the settled record.
+ * No timer or budget decides the outcome, so a loaded gate cannot change it.
+ */
+function browserAnswers(deviceId: string, onAccepted: (request: AttentionRequestV1) => void): typeof awaitAttentionArrival {
+  return (id, options = {}) => {
+    const request = readAttentionFile().requests.find((candidate) => candidate.id === id);
+    if (request && request.state === "accepted" && request.acknowledgedBy === deviceId) onAccepted(request);
+    return awaitAttentionArrival(id, { ...options, pollMs: 60_000, timeoutMs: 60_000 });
+  };
 }
 
 const arriveOn = (deviceId: string) => (request: AttentionRequestV1) => {
@@ -127,15 +129,11 @@ type Answer = McpToolResult & { delivered?: string; handoff?: unknown; request?:
 
 test("a target in the project the operator is in keeps today's move", async () => {
   upsertPresence(openView({ project: TARGET_PROJECT }));
-  const stop = browserStandIn("device-desktop", arriveOn("device-desktop"));
-  try {
-    const result = await service().callTool("request_attention", ask()) as Answer;
-    expect(result.ok).toBe(true);
-    expect(result.delivered).toBeUndefined();
-    expect(readAttentionFile().requests[0]!.state).toBe("following");
-  } finally {
-    stop();
-  }
+  const result = await service({ awaitAttentionArrival: browserAnswers("device-desktop", arriveOn("device-desktop")) })
+    .callTool("request_attention", ask()) as Answer;
+  expect(result.ok).toBe(true);
+  expect(result.delivered).toBeUndefined();
+  expect(readAttentionFile().requests[0]!.state).toBe("following");
 });
 
 test("a target in another project answers at once as a notice and directs nothing at any view", async () => {
@@ -167,69 +165,52 @@ test("the notice answer replays by clientRequestId without a second record", asy
     adoptRootSession: () => {},
     attentionAuthority: () => ROOT_CALLER,
     raiseAttentionRequest,
-    awaitAttentionArrival: fastArrival,
+    awaitAttentionArrival: unexpectedWait,
   } as never), new MemoryMcpReceiptStore()).callTool("request_attention", ask()) as Answer;
   expect(replay.delivered).toBe("notice");
   expect(replay.request?.id).toBe(first.request?.id);
   expect(readAttentionFile().requests).toHaveLength(1);
 });
 
+const movingBrowser = () => browserAnswers("device-desktop", arriveOn("device-desktop"));
+
 test("a key that moved is the same project: an alias on either side still moves the view", async () => {
   expect(persistProjectAliases([{ source: "repo-old", target: TARGET_PROJECT, displayName: "Target" }])).toBe(true);
 
   upsertPresence(openView({ project: "repo-old" }));
-  let stop = browserStandIn("device-desktop", arriveOn("device-desktop"));
-  try {
-    const viewAlias = await service().callTool("request_attention", ask({ clientRequestId: "alias-view" })) as Answer;
-    expect(viewAlias.delivered).toBeUndefined();
-    expect(readAttentionFile().requests.at(-1)!.state).toBe("following");
-  } finally {
-    stop();
-  }
+  const viewAlias = await service({ awaitAttentionArrival: movingBrowser() }).callTool("request_attention", ask({ clientRequestId: "alias-view" })) as Answer;
+  expect(viewAlias.delivered).toBeUndefined();
+  expect(readAttentionFile().requests.at(-1)!.state).toBe("following");
 
   resetPresenceForTest();
   upsertPresence(openView({ project: TARGET_PROJECT }));
-  stop = browserStandIn("device-desktop", arriveOn("device-desktop"));
-  try {
-    const targetAlias = await service().callTool("request_attention", ask({ clientRequestId: "alias-target", project: "repo-old" })) as Answer;
-    expect(targetAlias.delivered).toBeUndefined();
-    expect(readAttentionFile().requests.at(-1)!.state).toBe("following");
-  } finally {
-    stop();
-  }
+  const targetAlias = await service({ awaitAttentionArrival: movingBrowser() }).callTool("request_attention", ask({ clientRequestId: "alias-target", project: "repo-old" })) as Answer;
+  expect(targetAlias.delivered).toBeUndefined();
+  expect(readAttentionFile().requests.at(-1)!.state).toBe("following");
 });
 
 test("a view with no project open (the overview) keeps today's move", async () => {
   upsertPresence(openView({ project: null, mode: "overview" }));
-  const stop = browserStandIn("device-desktop", arriveOn("device-desktop"));
-  try {
-    const result = await service().callTool("request_attention", ask()) as Answer;
-    expect(result.delivered).toBeUndefined();
-    expect(readAttentionFile().requests[0]!.state).toBe("following");
-  } finally {
-    stop();
-  }
+  const result = await service({ awaitAttentionArrival: movingBrowser() }).callTool("request_attention", ask()) as Answer;
+  expect(result.delivered).toBeUndefined();
+  expect(readAttentionFile().requests[0]!.state).toBe("following");
 });
 
 test("the operator switches project while the move is in flight: the view stands down and the call answers as the notice", async () => {
   upsertPresence(openView({ project: TARGET_PROJECT }));
-  let moved = 0;
-  const stop = browserStandIn("device-desktop", (request) => {
-    /* The browser reads its project at the moment it would move, and the
-       operator is somewhere else now. */
+  let stoodDown = 0;
+  /* The browser reads its project at the moment it would move, and the
+     operator is somewhere else now. */
+  const leaving = browserAnswers("device-desktop", (request) => {
     const stood = answerAttentionRequest(request.id, { kind: "stand-down", deviceId: "device-desktop" });
-    if (!stood.ok) moved += 1;
+    if (stood.ok) stoodDown += 1;
   });
-  try {
-    const result = await service().callTool("request_attention", ask()) as Answer;
-    expect(result.ok).toBe(true);
-    expect(result.delivered).toBe("notice");
-    expect(result.handoff).toBeNull();
-    expect(moved).toBe(0);
-    expect(readAttentionFile().requests[0]).toMatchObject({ state: "pending", delivery: "notice", returnPoints: [] });
-  } finally {
-    stop();
-  }
+  const result = await service({ awaitAttentionArrival: leaving }).callTool("request_attention", ask()) as Answer;
+  expect(result.ok).toBe(true);
+  expect(result.delivered).toBe("notice");
+  expect(result.handoff).toBeNull();
+  expect(stoodDown).toBe(1);
+  expect(readAttentionFile().requests[0]).toMatchObject({ state: "pending", delivery: "notice", returnPoints: [] });
 });
 
 test("no active view stays the explicit NO_ACTIVE_VIEW and records nothing", async () => {

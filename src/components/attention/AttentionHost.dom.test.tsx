@@ -1548,3 +1548,73 @@ test("the operator's own command moves them wherever they are", async () => {
   expect(log.moved).toEqual([LIVE_RECT]);
   expect(record().state).toBe("following");
 });
+
+/** The transport, with a hook that runs when an event of one kind is POSTed. */
+function transportOn(kind: string, before: (attempt: number) => "fail" | void) {
+  const inner = transport();
+  let attempt = 0;
+  return (async (url: string, init?: { body?: string }) => {
+    if (init?.body && (JSON.parse(init.body) as { kind: string }).kind === kind) {
+      attempt += 1;
+      if (before(attempt) === "fail") throw new TypeError("network down");
+    }
+    return inner(url as never, init as never);
+  }) as unknown as typeof fetch;
+}
+
+test("the operator switches project while the accept is in flight: the view does not move, and the record goes back to a notice", async () => {
+  inProject("demo");
+  raiseNotice();
+  answerAttentionRequest("attention_1", { kind: "offer", deviceId: DEVICE }, { now });
+  const draft = typing();
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus, { fetchFn: transportOn("accept", () => { inProject("other-project"); }) });
+  await settle();
+  for (let i = 0; i < 3; i += 1) await poll();
+
+  expect(log.moved).toEqual([]);
+  expect(record()).toMatchObject({ state: "pending", delivery: "notice", returnPoints: [] });
+  expect(readHandoffClaim(tabClaims, "attention_1")).toBeNull();
+  expect(draft.value).toBe("half a sentence being dictated");
+  expect(dom.document.activeElement).toBe(draft);
+  expect(one("[data-testid='focus-return-chip']")).toBeNull();
+  expect(ringsFor("attention_1").length).toBeGreaterThan(0);
+});
+
+test("a stand-down the network swallowed is retried on the next poll, and the call is not left to expire as lost", async () => {
+  inProject("other-project");
+  raiseDirected();
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus, { fetchFn: transportOn("stand-down", (attempt) => (attempt === 1 ? "fail" : undefined)) });
+  await settle();
+
+  /* The first stand-down never reached the record. */
+  expect(record()).toMatchObject({ state: "accepted", acknowledgedBy: DEVICE });
+
+  await poll();
+  expect(log.moved).toEqual([]);
+  expect(record()).toMatchObject({ state: "pending", delivery: "notice", offeredTo: [], returnPoints: [] });
+  expect(record().acknowledgedBy).toBeUndefined();
+});
+
+test("a stand-down the server refused is not retried", async () => {
+  inProject("other-project");
+  raiseDirected();
+  let attempts = 0;
+  const inner = transport();
+  const refusing = (async (url: string, init?: { body?: string }) => {
+    if (init?.body && (JSON.parse(init.body) as { kind: string }).kind === "stand-down") {
+      attempts += 1;
+      return { ok: false, status: 409, json: async () => ({ error: "ILLEGAL_TRANSITION", state: "accepted" }) };
+    }
+    return inner(url as never, init as never);
+  }) as unknown as typeof fetch;
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus, { fetchFn: refusing });
+  await settle();
+  await poll();
+  await poll();
+
+  expect(attempts).toBe(1);
+  expect(log.moved).toEqual([]);
+});

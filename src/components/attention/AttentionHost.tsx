@@ -232,6 +232,12 @@ export function AttentionHost({ mobile, projectAliases = NO_ALIASES, bus = focus
     requestCrossesProject(request, viewBus.getContext().project, (project) => canonicalClientProject(project, aliasesRef.current))
   ), []);
 
+  /* The latch behind "follow an explicit focus event, exactly once" (below),
+     declared here because the stand-down paths release it. */
+  const followed = useRef(new Set<string>());
+  /* Requests whose stand-down never reached the record. */
+  const unstoodDown = useRef(new Set<string>());
+
   const offers = useAttentionOffers({
     deviceId,
     holdsBack: crossesProject,
@@ -325,6 +331,17 @@ export function AttentionHost({ mobile, projectAliases = NO_ALIASES, bus = focus
     }
   }, [offers, bus, deviceId, timing, claimStore, observeView, pulseMs]);
 
+  /* Closing a move that was never made. A refusal is the server having
+     decided, and the record has moved on; a transport failure decided nothing,
+     so the request is released from the once-only latch on the next poll tick,
+     which stands down again, at the poll's pace rather than in a tight loop. Left latched, the record would stay `accepted` by this
+     device until the landing grace expired it as lost, and the agent would be
+     told the operator never arrived while they were simply elsewhere. */
+  const standDownOrRetry = useCallback(async (request: AttentionRequestV1) => {
+    const outcome = await offers.standDown(request);
+    if (!decided(outcome)) unstoodDown.current.add(request.id);
+  }, [offers]);
+
   const onAccept = useCallback(async (request: AttentionRequestV1) => {
     /* The operator may have changed project since this was offered. Nothing is
        accepted, so nothing moves and the record stays as it is; the
@@ -344,13 +361,23 @@ export function AttentionHost({ mobile, projectAliases = NO_ALIASES, bus = focus
       leaving.current.delete(request.id);
       return;
     }
+    /* The accept was a round trip, and the operator may have changed project
+       during it. The boundary is asked again where the move would take effect:
+       nothing is remembered, claimed or moved, and the record, which is now
+       accepted by this device, goes back to a notice. */
+    if (crossesProject(request)) {
+      ringCrossProjectNotice(request);
+      leaving.current.delete(request.id);
+      await standDownOrRetry(request);
+      return;
+    }
     /* Written after the server confirmed ownership, so a rejected device
        never stores a return point it will never use. The claim makes the same
        viewport durable against a remount mid-move. */
     rememberReturnProject(browserStorage(), deviceId, request.id, before.project);
     claimHandoff(claimStore, request.id, () => before);
     await completeHandoff(request);
-  }, [offers, deviceId, completeHandoff, claimStore, crossesProject]);
+  }, [offers, deviceId, completeHandoff, claimStore, crossesProject, standDownOrRetry]);
 
   /**
    * A DIRECTED request (#873): the server already resolved this device as the
@@ -367,7 +394,7 @@ export function AttentionHost({ mobile, projectAliases = NO_ALIASES, bus = focus
     if (crossesProject(request)) {
       ringCrossProjectNotice(request);
       clearHandoffClaim(claimStore, request.id);
-      await offers.standDown(request);
+      await standDownOrRetry(request);
       return;
     }
     /* The same cue the offer path rings when a request first reaches a screen —
@@ -387,7 +414,7 @@ export function AttentionHost({ mobile, projectAliases = NO_ALIASES, bus = focus
        does once the server confirms. */
     rememberReturnProject(browserStorage(), deviceId, request.id, claim.viewport.project);
     await completeHandoff(request, !claim.first);
-  }, [deviceId, completeHandoff, claimStore, crossesProject, offers]);
+  }, [deviceId, completeHandoff, claimStore, crossesProject, standDownOrRetry]);
 
   const onReturn = useCallback(async (request: AttentionRequestV1) => {
     /* Going back is not an arrival: whatever is still lit was marking the
@@ -469,7 +496,6 @@ export function AttentionHost({ mobile, projectAliases = NO_ALIASES, bus = focus
    * Nothing re-opens the latch. A second navigation requires a genuinely new
    * request, which carries its own id.
    */
-  const followed = useRef(new Set<string>());
   const offer = offers.offer;
   const actionableRequestId = offer && offer.status === "actionable" ? offer.request.id : null;
   const actionableRequest = offer && offer.status === "actionable" ? offer.request : null;
@@ -491,12 +517,16 @@ export function AttentionHost({ mobile, projectAliases = NO_ALIASES, bus = focus
     ? offer.request : null;
   const directedRequestId = directedRequest?.id ?? null;
   useEffect(() => {
+    for (const id of unstoodDown.current) followed.current.delete(id);
+    unstoodDown.current.clear();
+  }, [pollGeneration]);
+  useEffect(() => {
     if (!deviceId) return;
     const request = actionableRequest ?? directedRequest;
     if (!request || followed.current.has(request.id)) return;
     followed.current.add(request.id);
     void (actionableRequest ? onAccept(request) : onDirected(request));
-  }, [deviceId, actionableRequestId, actionableRequest, directedRequestId, directedRequest, onAccept, onDirected]);
+  }, [deviceId, pollGeneration, actionableRequestId, actionableRequest, directedRequestId, directedRequest, onAccept, onDirected]);
 
   const onReturnClick = useCallback(() => {
     setArrival(null);
