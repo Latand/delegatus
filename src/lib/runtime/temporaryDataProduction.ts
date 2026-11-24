@@ -12,7 +12,7 @@ import { attemptTempJournalPath, tempSweepMode, type ProcessScan } from "@/lib/t
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { discoverAttemptCopies } from "./attemptCopyDiscovery";
 import { AttemptTempStore } from "./attemptTempRetention";
-import { attemptReferencesClear, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { attemptReferencesClear, ledgerLinkedEvidence, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { TemporaryDataStore, type TemporaryDataCandidate } from "./temporaryDataStore";
 import { PRESERVATION_NAMES, sweepTemporaryData, TEMPORARY_DATA_RETENTION_MS, type TemporaryDataAuthority } from "./temporaryDataRetention";
 import { retentionUnderTest, RetentionTestSafetyError } from "@/lib/retentionTestSafety";
@@ -25,6 +25,7 @@ const ownedName = /^[A-Za-z0-9_-]+$/;
 const agentHash = (launchId: string) => createHash("sha256").update(launchId).digest("hex").slice(0, 32);
 const lifecycleControlName = (name: string) => name.startsWith(".delegatus-trash-")
   || name.startsWith(".delegatus-sweep-") && name.endsWith(".json");
+const isAttemptCopy = (row: TemporaryDataCandidate) => row.kind === "ownerless-copy" || row.kind === "legacy-attempt-copy";
 const stamp = (file: string) => {
   try { const s = fs.lstatSync(file, { bigint: true }); return [s.dev, s.ino, s.mode, s.size, s.mtimeNs, s.ctimeNs].join(":"); }
   catch { return "missing"; }
@@ -32,11 +33,24 @@ const stamp = (file: string) => {
 const held = (reason: string): TemporaryDataAuthority => ({ expiresAt: null, reason, revision: reason, current: () => false });
 export type TemporaryRegistry = Pick<AgentRegistry, "temporaryDataFacts" | "temporaryDataReceiptKeys" | "spawnReceipt" | "spawnReceiptForHost">;
 
-export function laneEvidenceAuthority(pipelineId: string, now: () => number): TemporaryDataAuthority {
+export function laneEvidenceAuthority(pipelineId: string, now: () => number,
+  copy?: { launchId: string; adoptedAt: number }): TemporaryDataAuthority {
   const reader = pipelineRecordReader(pipelineId), version = reader.version(), pipeline = reader.read();
   if (!pipeline) return held("lane-owner-missing");
   const finish = laneFinish(pipeline);
-  return { expiresAt: finish.finished ? finish.expiresAt : null, reason: finish.finished ? "young" : "open-lane",
+  let expiresAt = finish.finished ? finish.expiresAt : null, reason = finish.finished ? "young" : "open-lane";
+  if (copy && expiresAt !== null) {
+    const matches = pipeline.runs.flatMap(run => run.attempts.flatMap(attempt =>
+      attempt.launchId === copy.launchId ? [attempt.completedAt]
+        : (attempt.retiredLaunches ?? []).filter(launch => launch.launchId === copy.launchId).map(launch => launch.retiredAt)));
+    // Only a settled launch can use the lane clock alone. The established
+    // adoption clock still applies to copies that lack this proof.
+    if (matches.length !== 1 || !Number.isFinite(Date.parse(matches[0] ?? ""))) {
+      expiresAt = Math.max(expiresAt, copy.adoptedAt + TEMPORARY_DATA_RETENTION_MS);
+      reason = "adoption-grace";
+    }
+  }
+  return { expiresAt, reason,
     pipelineIds: [pipelineId], revision: version, current: () => Number.isFinite(now()) && reader.version() === version };
 }
 
@@ -125,13 +139,14 @@ export function temporaryDataAuthority(row: TemporaryDataCandidate, registry: Te
   let launchId = row.owner;
   let manifestCurrent = () => true;
   let declaredPipeline: string | null = null;
-  if (row.kind === "ownerless-copy") {
+  if (isAttemptCopy(row)) {
     const file = path.join(target, "manifest.json"), before = stamp(file);
     const manifest = readAttemptEvidenceBinding(file);
     if (typeof manifest.original !== "string" || typeof manifest.identity !== "string"
       || createHash("sha256").update(manifest.original).update("\0").update(manifest.identity).digest("hex") !== path.basename(row.directory)) return held("copy-binding-unknown");
     const source = roots.owner(manifest.original);
     const copy = roots.copy(row.directory);
+    const checkLinkedEvidence = row.kind === "legacy-attempt-copy" || copy?.kind === "unattributed";
     const fromRoot = source?.identity === manifest.identity ? source.pipelineId : null;
     const fromManifest = typeof manifest.pipelineId === "string" ? manifest.pipelineId : null;
     const knownPipelines = [...new Set([fromRoot, fromManifest, copy?.pipelineId].filter((value): value is string => !!value))];
@@ -149,19 +164,20 @@ export function temporaryDataAuthority(row: TemporaryDataCandidate, registry: Te
     launchId = launchBindings[0] ?? "";
     manifestCurrent = () => stamp(path.join(retainedTarget(row), "manifest.json")) === before
       && JSON.stringify(roots.owner(manifest.original as string)) === JSON.stringify(source)
-      && JSON.stringify(roots.copy(row.directory)) === JSON.stringify(copy);
+      && JSON.stringify(roots.copy(row.directory)) === JSON.stringify(copy)
+      && (!checkLinkedEvidence || ledgerLinkedEvidence(row.directory).length === 0);
   }
   const input = { launchId }, facts = launchId ? registry.temporaryDataFacts(input) : null;
   if (facts?.receipt && finishedAgent(facts) === null) return held("live-agent");
   const pipelines = [...new Set([...(facts?.pipelines ?? []), ...(declaredPipeline ? [declaredPipeline] : [])])];
   if (pipelines.length > 1) return held("copy-owner-conflict");
   if (pipelines.length) {
-    const authority = lane(pipelines[0]!, now);
+    const authority = lane(pipelines[0]!, now, row.kind === "legacy-attempt-copy" ? { launchId, adoptedAt: row.adoptedAt } : undefined);
     return { ...authority, current: () => authority.current() && manifestCurrent()
       && (!facts || JSON.stringify(registry.temporaryDataFacts(input)) === JSON.stringify(facts)) };
   }
   if (!facts?.receipt) {
-    if (row.kind !== "ownerless-copy") return held("agent-owner-missing");
+    if (!isAttemptCopy(row)) return held("agent-owner-missing");
     return { expiresAt: row.adoptedAt + TEMPORARY_DATA_RETENTION_MS, reason: "adoption-grace", revision: "ownerless",
       current: () => manifestCurrent() && (!launchId || !registry.spawnReceipt(launchId)) };
   }
@@ -169,6 +185,71 @@ export function temporaryDataAuthority(row: TemporaryDataCandidate, registry: Te
   return { expiresAt: finished === null ? null : finished + TEMPORARY_DATA_RETENTION_MS,
     reason: finished === null ? "live-agent" : "young", revision: JSON.stringify(facts),
     current: () => manifestCurrent() && JSON.stringify(registry.temporaryDataFacts(input)) === JSON.stringify(facts) };
+}
+
+type CopyQueueError = { directory: string; code: string | null; message: string; failures?: number; skipped?: boolean };
+function copyQueueError(directory: string, error: unknown): CopyQueueError {
+  const cause = error as NodeJS.ErrnoException | null;
+  return { directory, code: cause?.code ?? null, message: (cause?.message ?? String(error)).slice(0, 500) };
+}
+
+/** Revisit the old copy ledger once, including entries already deferred by
+ * the normal discovery pass. Checkpoint after enqueueing or after a refusal
+ * reaches its retry limit. The retention owner alone can remove a copy. */
+function queueUnattributedCopies(store: TemporaryDataStore, roots: AttemptTempStore, now: number, remaining: () => number) {
+  const key = "unattributed-copies-v1", failureKey = key + "-failure", limit = 8, maxFailures = 3;
+  const evidence = statePath("evidence"), parent = path.join(evidence, "attempt-temp");
+  const result = { queued: 0, errors: [] as CopyQueueError[] };
+  let directory = parent;
+  try {
+    const cursor = store.meta(key) ?? "";
+    if (cursor === "done" || remaining() <= 0) return result;
+    const page = roots.copyLedgerPage(cursor, limit);
+    const parentStat = fs.lstatSync(parent, { throwIfNoEntry: false });
+    if (parentStat && (!parentStat.isDirectory() || parentStat.isSymbolicLink() || fs.realpathSync(parent) !== parent
+      || process.getuid && parentStat.uid !== process.getuid())) return result;
+    for (const { destination, kind } of page) {
+      if (remaining() <= 0) return result;
+      directory = destination;
+      const name = path.basename(directory);
+      if (kind === "unattributed" && parentStat && path.dirname(directory) === parent && /^[a-f0-9]{64}$/.test(name)) {
+        try {
+          const stat = fs.lstatSync(directory, { throwIfNoEntry: false });
+          const prior = store.get(directory);
+          const pending = fs.existsSync(attemptTempJournalPath(directory));
+          if (prior && pending) {
+            // Let the existing journal owner validate the quarantined identity.
+            if (store.revisitUnattributedCopy(directory, prior.identity)) result.queued++;
+          } else if (stat?.isDirectory() && !stat.isSymbolicLink() && (!process.getuid || stat.uid === process.getuid())) {
+            const identity = `${stat.dev}:${stat.ino}`;
+            if (!prior && !pending) {
+              store.register({ directory, scope: evidence, kind: "legacy-attempt-copy", owner: name,
+                identity, adoptedAt: now, checkedAt: 0, bytes: 0, reason: "legacy-copy" });
+              result.queued++;
+            } else if (prior && store.revisitUnattributedCopy(directory, identity)) result.queued++;
+          }
+        } catch (error) {
+          const detail = copyQueueError(directory, error);
+          result.errors.push(detail);
+          const previous = store.meta(failureKey) ?? "";
+          const separator = previous.indexOf("\n");
+          const sameEntry = separator >= 0 && previous.slice(separator + 1) === directory;
+          const count = sameEntry ? Number(previous.slice(0, separator)) : 0;
+          const failures = (Number.isSafeInteger(count) && count > 0 ? count : 0) + 1;
+          const skipped = failures >= maxFailures || ["EACCES", "EPERM", "ENOTDIR"].includes(detail.code ?? "");
+          detail.failures = failures;
+          detail.skipped = skipped;
+          if (!skipped) {
+            store.setMeta(failureKey, `${failures}\n${directory}`);
+            return result;
+          }
+        }
+      }
+      store.setMeta(key, directory);
+    }
+    if (page.length < limit) store.setMeta(key, "done");
+  } catch (error) { result.errors.push(copyQueueError(directory, error)); }
+  return result;
 }
 
 export function discoverTemporaryData(store: TemporaryDataStore, registry: TemporaryRegistry, now: () => number, deadline: number, clock = () => performance.now(),
@@ -241,7 +322,9 @@ export async function runTemporaryDataSweep(ports: { scan: (directories: string[
   const store = new TemporaryDataStore(), roots = new AttemptTempStore();
   try {
     const registry = agentRegistry();
-    const discovered = discoverTemporaryData(store, registry, Date.now, performance.now() + 1000);
+    const discoveryDeadline = performance.now() + Math.min(1000, Math.max(0, deadline - Date.now()));
+    const queue = mode === "on" ? queueUnattributedCopies(store, roots, Date.now(), () => discoveryDeadline - performance.now()) : null;
+    const discovered = discoverTemporaryData(store, registry, Date.now, discoveryDeadline);
     const report = await sweepTemporaryData(store, {
       mode, checkoutReads, budgetMs: Math.max(0, Math.min(5000, deadline - Date.now())), authority: async row => temporaryDataAuthority(row, registry, roots),
       references: async (row, target, inventory) => {
@@ -249,7 +332,7 @@ export async function runTemporaryDataSweep(ports: { scan: (directories: string[
           throw new RetentionTestSafetyError("retention test refused the default Docker reference observer");
         return attemptReferencesClear(row.directory, target, ports.scan([row.directory, target]), ports.containerReferences, inventory);
       },
-      onRemoved: row => { if (row.kind === "ownerless-copy") roots.forgetCopy(row.directory); },
+      onRemoved: row => { if (isAttemptCopy(row)) roots.forgetCopy(row.directory); },
       claim: async row => {
         const authority = temporaryDataAuthority(row, registry, roots), releases: (() => void)[] = [];
         try { for (const id of [...new Set(authority.pipelineIds)]) releases.push(await claimAttemptRetirement(id, row.directory)); }
@@ -257,7 +340,10 @@ export async function runTemporaryDataSweep(ports: { scan: (directories: string[
         return () => { for (const release of releases.reverse()) release(); };
       },
     }, roots.filename + ".sweep");
-    writeJsonDurably(statePath("temporary-data-report.json"), { at: new Date().toISOString(), discovered, ...report });
+    writeJsonDurably(statePath("temporary-data-report.json"), {
+      at: new Date().toISOString(), discovered, legacyCopiesQueued: queue?.queued ?? 0,
+      legacyCopyQueueError: !!queue?.errors.length, legacyCopyQueueErrors: queue?.errors ?? [], ...report,
+    });
     return report;
   } finally {
     while (checkoutReads.size > 128) checkoutReads.delete(checkoutReads.keys().next().value!);
