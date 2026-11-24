@@ -15,6 +15,8 @@ const NOW = Date.parse("2026-10-12T06:00:00Z");
 const at = (delta = 0) => new Date(NOW + delta).toISOString();
 const WHY = "Review found a missing combination in rendered evidence.";
 const RULE = "For rendered changes, measure every supported width, theme and language before review.";
+// The fixture rules must cross the 125% emergency archive threshold.
+const BUDGET_PRESSURE_LESSONS = 64;
 let root: string;
 let previous: string | undefined;
 beforeEach(() => {
@@ -145,7 +147,7 @@ test("a correction duplicate of a curated rule outlives budget displacement and 
   patchPass(firstPass.id, { state: "succeeded", endedAt: at(30) });
   const again = request("correction-again", "task-correction-again");
   leaveLessons({ request: again, source: again, lessons: [{ scope: "role", rule: RULE, why: WHY }], correction: true, none: null, now: at(40) });
-  for (let lane = 0; lane < 48; lane++) {
+  for (let lane = 0; lane < BUDGET_PRESSURE_LESSONS; lane++) {
     const source = request(`ordinary-${lane}`, `task-ordinary-${lane}`);
     const rule = `For change ${lane} in the settings area, list each control the change adds or moves, render it at every supported width, theme and language, and compare the frames with the previous release before review; a control that moved needs its own frame with focus visible and the label read back from the page, never from source.`;
     leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: WHY }], none: null, now: at(50 + lane) });
@@ -171,7 +173,7 @@ test("a correction duplicate of a curated rule outlives budget displacement and 
   expect(reviewed.scopes.find(entry => entry.scope === scope())).toMatchObject({ corrections: 0 });
 });
 
-test("an unreviewed correction that already left by budget still leads the agenda", async () => {
+test("a budget-archived correction stays first after an unrelated review until it is restored", async () => {
   const id = leave("departed", "task-departed");
   const firstPass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
   applyCuration(firstPass, input({ [scope()]: [id] }), at(20));
@@ -185,15 +187,37 @@ test("an unreviewed correction that already left by budget still leads the agend
     tx.put({ ...row(id), state: "archived", reason: "budget", changedAt: at(50) });
     tx.put({ ...held, active: held.active.filter(entry => entry !== id) });
   });
-  const ordinary = request("ordinary", "task-ordinary", "orchestrator");
-  leaveLessons({ request: ordinary, source: ordinary, lessons: [{ scope: "role", rule: "Before relaying a stage result, read the stage's own conclusion and quote its verdict.", why: WHY }], none: null, now: at(60) });
-  const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 7 * 60 * 60_000 })!;
-  const agenda = await readCuration(pass);
+  const ordinary = leave("ordinary", "task-ordinary", "When adding translated controls, compare every supported language before accepting the result.");
+  const orchestrator = request("orchestrator", "task-orchestrator", "orchestrator");
+  leaveLessons({ request: orchestrator, source: orchestrator, lessons: [{ scope: "role", rule: "Before relaying a stage result, read the stage's own conclusion and quote its verdict.", why: WHY }], none: null, now: at(60) });
+  const interval = 7 * 60 * 60_000;
+  const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + interval })!;
+  const agenda = await readCuration(pass, undefined, undefined, NOW + interval);
   expect(agenda.scopes.map(entry => entry.scope)).toContain(roleScope(PROJECT, "orchestrator"));
   expect(agenda.scopes[0]).toMatchObject({ scope: scope(), corrections: 1 });
-  const page = await readCuration(pass, scope());
+  const page = await readCuration(pass, scope(), undefined, NOW + interval);
   if (!("rules" in page)) throw Error("scope page expected");
   expect(page.rules[0]).toMatchObject({ id, kind: "left", reason: "budget", operatorCorrection: true, awaitingCuration: true });
+
+  const archived = row(id);
+  applyCuration(pass, input({ [scope()]: [ordinary] }), at(interval + 10));
+  patchPass(pass.id, { state: "succeeded", endedAt: at(interval + 20) });
+  expect(row(id)).toEqual(archived);
+
+  const nextTime = NOW + 2 * interval;
+  const nextPass = claimPass({ project: PROJECT, repoDir: root, now: nextTime })!;
+  const nextAgenda = await readCuration(nextPass, undefined, undefined, nextTime);
+  const nextPage = await readCuration(nextPass, scope(), undefined, nextTime);
+  if (!("rules" in nextPage)) throw Error("scope page expected");
+  expect({ agenda: nextAgenda.scopes[0], firstRule: nextPage.rules[0] }).toMatchObject({
+    agenda: { scope: scope(), corrections: 1 },
+    firstRule: { id, kind: "left", reason: "budget", operatorCorrection: true, awaitingCuration: true },
+  });
+
+  applyCuration(nextPass, input({ [scope()]: [id, ordinary] }, { restore: [id] }), at(2 * interval + 10));
+  expect(row(id)).toMatchObject({ state: "active", curatedAt: at(2 * interval + 10) });
+  const reviewed = await readCuration(nextPass, undefined, undefined, nextTime + 10);
+  expect(reviewed.scopes.find(entry => entry.scope === scope())).toMatchObject({ corrections: 0 });
 });
 
 test("a project succession keeps a duplicate's unreviewed correction leading the agenda and safe from the budget", async () => {
@@ -221,7 +245,7 @@ test("a project succession keeps a duplicate's unreviewed correction leading the
   expect(survivor).toMatchObject({ operatorCorrection: true, awaitingCuration: true });
   const orchestrator = request("orchestrator", "task-orchestrator", "orchestrator");
   leaveLessons({ request: orchestrator, source: orchestrator, lessons: [{ scope: "role", rule: "Before relaying a stage result, read the stage's own conclusion and quote its verdict.", why: WHY }], none: null, now: at(100) });
-  for (let lane = 0; lane < 48; lane++) {
+  for (let lane = 0; lane < BUDGET_PRESSURE_LESSONS; lane++) {
     const source = request(`ordinary-${lane}`, `task-ordinary-${lane}`);
     const rule = `For change ${lane} in the settings area, list each control the change adds or moves, render it at every supported width, theme and language, and compare the frames with the previous release before review; a control that moved needs its own frame with focus visible and the label read back from the page, never from source.`;
     leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: WHY }], none: null, now: at(110 + lane) });
@@ -262,20 +286,25 @@ test("a project succession keeps an unreviewed correction pending when its dupli
   expect(agenda.scopes[0]).toMatchObject({ scope: scope(), corrections: 1 });
 });
 
-test("a reviewed correction that later leaves by budget no longer counts in the agenda", async () => {
+test("a reviewed correction that later leaves by budget stays below active rules", async () => {
   const source = request("reviewed", "task-reviewed");
   const id = leaveLessons({ request: source, source, correction: true, lessons: [{ scope: "role", rule: RULE, why: WHY }], none: null, now: at() }).left[0].id;
   const firstPass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
   applyCuration(firstPass, input({ [scope()]: [id] }), at(20));
   patchPass(firstPass.id, { state: "succeeded", endedAt: at(30) });
-  for (let lane = 0; lane < 48; lane++) {
+  for (let lane = 0; lane < BUDGET_PRESSURE_LESSONS; lane++) {
     const ordinary = request(`ordinary-${lane}`, `task-ordinary-${lane}`);
     const rule = `For change ${lane} in the settings area, list each control the change adds or moves, render it at every supported width, theme and language, and compare the frames with the previous release before review; a control that moved needs its own frame with focus visible and the label read back from the page, never from source.`;
     leaveLessons({ request: ordinary, source: ordinary, lessons: [{ scope: "role", rule, why: WHY }], none: null, now: at(40 + lane) });
   }
   expect(row(id)).toMatchObject({ state: "archived", reason: "budget", operatorCorrection: true });
-  const agenda = await readCuration(claimPass({ project: PROJECT, repoDir: root, now: NOW + 7 * 60 * 60_000 })!);
+  const now = NOW + 7 * 60 * 60_000;
+  const pass = claimPass({ project: PROJECT, repoDir: root, now })!;
+  const agenda = await readCuration(pass, undefined, undefined, now);
   expect(agenda.scopes.find(entry => entry.scope === scope())).toMatchObject({ corrections: 0 });
+  const page = await readCuration(pass, scope(), undefined, now);
+  if (!("rules" in page)) throw Error("scope page expected");
+  expect(page.rules[0]).toMatchObject({ kind: "active" });
 });
 
 for (const decision of ["integrate", "rewrite", "drop"] as const) test(`a correction's ${decision} decision uses reversible curation history`, () => {
