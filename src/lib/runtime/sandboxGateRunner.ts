@@ -168,7 +168,7 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     producerReport("namespace", commandIdentity);
     let commandExit: number | null = null, commandSignal: string | null = null;
     const finished = new Promise<number>(resolve => {
-      child!.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(code ?? (signal === "SIGTERM" ? 143 : 137)); });
+      child!.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(code ?? 128 + (signal ? os.constants.signals[signal] : 9)); });
       child!.once("error", () => resolve(1));
     });
     let interrupted = 0;

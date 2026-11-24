@@ -161,7 +161,7 @@ if (args[0] === "--namespace-guardian") {
   producerReport("portable", commandIdentity);
   let commandExit: number | null = null, commandSignal: string | null = null;
   const close = new Promise<number>(resolve => {
-    child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(code ?? (signal === "SIGTERM" ? 143 : 137)); });
+    child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(code ?? 128 + (signal ? os.constants.signals[signal] : 9)); });
     child.once("error", () => resolve(1));
   });
   let interrupted = 0;
@@ -304,7 +304,7 @@ if (args[0] === "--namespace-guardian") {
     process.exit(survivors.length && code === 0 ? 1 : code);
   };
   child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); void finish(1); });
-  child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; void finish(code ?? (signal === "SIGTERM" ? 143 : 137)); });
+  child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; void finish(code ?? 128 + (signal ? os.constants.signals[signal] : 9)); });
   // Reading counters needs no new task, including when fork/clone is refused.
   const taskTimer = setInterval(() => {
     try { if (tasks.sample().denied > 0) void finish(GATE_TASK_LIMIT_EXIT); }
