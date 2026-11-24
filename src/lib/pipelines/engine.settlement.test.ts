@@ -40,7 +40,7 @@ test.each(["automatic", "publish", "retry-stage", "dirty", "moved", "rollback-pe
     const now = h.ports.now();
     attempt.publicationRepair = { sha: oldSha, baseSha: oldSha, operationId: "old-head-refusal", stageId: "build", attempt: attempt.n,
       refusedAt: now, settledAt: now, requestedAt: now, cleanHead: { sha: oldSha, branch: lane.branch },
-      detail: "pre-push: touched tests: failed (1)", parkDetail: refusal,
+      detail: "pre-push: touched tests: failed (1)", parkDetail: refusal, paths: [], messageTs: null,
       outcome: { status: "rejected", reason: "The producer did not finish in time." },
       ...(action === "rollback-pending" ? { rollback: { index: oldSha, tree: oldSha,
         afterTree: oldSha, tracked: [], untracked: [], phase: "restore" as const } } : {}) };
