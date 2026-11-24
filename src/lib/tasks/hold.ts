@@ -52,3 +52,20 @@ export function storedTaskHold(value: unknown, notes?: string[]): TaskHold | und
   if (!since || !["operator", "agent", "migration"].includes(raw.by)) return undefined;
   return readTaskHold(raw, since, raw.by, undefined, sentence(raw.conversationId) || undefined, notes);
 }
+
+const HOLD_REF_KINDS: readonly TaskHoldKind[] = ["operator", "task", "pr", "issue", "external"];
+const HOLD_UNTIL_KINDS: readonly TaskHoldKind[] = ["limit", "postponed"];
+
+/** The ref and date a hold editor shows for a kind: the stored hold's own while
+    its kind is unchanged, nothing once the kind moves, so a PR number never
+    outlives a switch to another kind. */
+export function holdEditorDraft(original: TaskHold | undefined, kind: TaskHoldKind): { ref: string; until: string } {
+  return original?.kind === kind ? { ref: original.ref ?? "", until: original.until ?? "" } : { ref: "", until: "" };
+}
+
+/** What the editor submits: a ref only for kinds that store one (an operator
+    hold keeps its form or step ref unseen), a date only for kinds that carry one. */
+export function holdEditorPatch(draft: { kind: TaskHoldKind; note: string; ref: string; until: string }): Partial<TaskHold> {
+  const { kind, note, ref, until } = draft;
+  return { kind, note, ...(ref && HOLD_REF_KINDS.includes(kind) ? { ref } : {}), ...(until && HOLD_UNTIL_KINDS.includes(kind) ? { until } : {}) };
+}

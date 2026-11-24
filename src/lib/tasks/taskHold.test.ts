@@ -5,6 +5,7 @@ import { loadTasks, mutateTasks, saveTasks } from "./store";
 import { taskRevision } from "./revision";
 import { expect, test } from "bun:test";
 import { createTask, patchTask } from "./commands";
+import { holdEditorDraft, holdEditorPatch } from "./hold";
 import { TASK_HOLD_KINDS, type BoardTask, type TaskHold } from "./types";
 
 const NOW = "2026-10-02T10:00:00.000Z";
@@ -266,3 +267,23 @@ for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], [" Operator 
     expect(updated.task.hold?.since).toBe(NOW);
   });
 }
+
+test("the hold editor submits no stale ref after a kind change and keeps an operator hold's exact ref", () => {
+  const prHold = ok(patchTask([task()], "hold-task", { hold: { kind: "pr", note: "Wait for the change", ref: "41" } }, NOW, { actor: "operator" })).task;
+  // Switching a PR hold to an operator hold clears the number the input no longer shows.
+  const draft = holdEditorDraft(prHold.hold, "operator");
+  expect(draft).toEqual({ ref: "", until: "" });
+  const switched = ok(patchTask([prHold], prHold.id, { hold: holdEditorPatch({ kind: "operator", note: "Choose a setting", ...draft }) }, LATER, { actor: "operator" })).task;
+  expect(switched.hold).toMatchObject({ kind: "operator", note: "Choose a setting" });
+  expect(switched.hold).not.toHaveProperty("ref");
+  // Editing the note of an existing operator hold leaves its exact ref in place.
+  const operatorHold = ok(patchTask([task()], "hold-task", { hold: { kind: "operator", note: "Choose a setting", ref: "fixture-round" } }, NOW, { actor: "operator" })).task;
+  const same = holdEditorDraft(operatorHold.hold, "operator");
+  expect(same.ref).toBe("fixture-round");
+  const renamed = ok(patchTask([operatorHold], operatorHold.id, { hold: holdEditorPatch({ kind: "operator", note: "Choose another setting", ...same }) }, LATER, { actor: "operator" })).task;
+  expect(renamed.hold).toMatchObject({ kind: "operator", note: "Choose another setting", ref: "fixture-round" });
+  // A date or ref belongs only to the kinds that store one.
+  expect(holdEditorPatch({ kind: "task", note: "n", ref: "aabbccdd", until: "2026-10-03T10:00:00.000Z" })).toEqual({ kind: "task", note: "n", ref: "aabbccdd" });
+  expect(holdEditorPatch({ kind: "postponed", note: "n", ref: "41", until: "2026-10-03T10:00:00.000Z" })).toEqual({ kind: "postponed", note: "n", until: "2026-10-03T10:00:00.000Z" });
+  expect(holdEditorDraft(prHold.hold, "pr").ref).toBe("41");
+});

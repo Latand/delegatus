@@ -118,6 +118,23 @@ describe("the sweep", () => {
     expect(forgeCacheView(file).repository(repository)?.pr(41)?.state).toBe("merged");
   });
 
+  test("a numbered PR hold takes its repository from the lane carrying the task through an open-to-closed transition", async () => {
+    const task = frozen({ id: "held-number", project: "repo-without-remote", status: "blocked",
+      hold: { kind: "pr", ref: "41", since: "2026-09-22T00:00:00Z", note: "Wait for this PR", by: "agent" } } as unknown as BoardTask);
+    let state: "OPEN" | "CLOSED" = "OPEN";
+    const h = harness(args => {
+      if (args[0] !== "pr") throw new Error("unexpected forge request");
+      return [row({ number: 41, state })];
+    }, { pipelines: [lane({ state: "closed", taskIds: [task.id] })], tasks: [task] });
+
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(forgeCacheView(file).repository(REPO)?.pr(41)?.state).toBe("open");
+    state = "CLOSED";
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    expect(forgeCacheView(file).repository(REPO)?.pr(41)?.state).toBe("closed");
+  });
+
   test("seated repositories without lanes refresh a bounded replaceable proposal page", async () => {
     const project = `repo-${"a".repeat(32)}`;
     recordProjectRemote({ project, canonicalRemote: "github.com/acme/widgets" });

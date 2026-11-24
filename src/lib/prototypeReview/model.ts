@@ -48,11 +48,8 @@ type SummaryRound = Pick<PrototypeReviewRound, "id" | "title" | "createdAt" | "q
 export function prototypeReviewSummary(rounds: readonly SummaryRound[]): PrototypeReviewSummary | undefined {
   const latest = rounds.at(-1);
   if (!latest) return undefined;
-  const settledReviewIds = new Set(rounds.filter(round => round.decision).map(round => round.id));
-  for (const id of prototypeRoundsSuperseded(rounds).keys()) settledReviewIds.add(id);
   return { latestReviewId: latest.id, waitingReviewId: latest.decision ? null : latest.id, title: latest.title,
-    rounds: rounds.length, createdAt: latest.createdAt, ...(settledReviewIds.size ? { settledReviewIds: [...settledReviewIds] } : {}),
-    ...(latest.questions?.length ? { asks: "questions" as const } : {}),
+    rounds: rounds.length, createdAt: latest.createdAt, ...(latest.questions?.length ? { asks: "questions" as const } : {}),
     ...(latest.decision ? { decision: { ...(latest.decision.rejected ? { rejected: true as const } : {}), ...(latest.questions?.length || latest.decision.originalReply !== undefined ? { answered: true as const } : {}), chosen: latest.variants.filter(v => latest.decision!.chosen.includes(v.number)).map(v => ({ number: v.number, name: v.name })),
       comment: latest.decision.comment, at: latest.decision.at, delivery: latest.decision.delivery.state } } : {}) };
 }

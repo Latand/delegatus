@@ -1074,7 +1074,7 @@ test.each(["task", "pr", "postponed", "limit", "operator-form", "operator-seat-f
     const seatNotice = { id: "prototype:seat-round", project, taskId: null, reviewId: "seat-round", title: "Choose an option",
       createdAt: since, target: { kind: "seat-decision", project, reviewId: "seat-round" } } as const;
     let seatDecisions: import("@/lib/prototypeReview/types").PrototypeReviewNotice[] = kind === "operator-seat-form" ? [seatNotice] : [];
-    let linkedLane = { id: "linked-step", task: "Linked step", project, taskIds: [], state: "running", stages: [], runs: [], createdAt: since };
+    let linkedLane = { id: "linked-step", task: "Linked step", project, taskIds: [held.id], state: "running", stages: [], runs: [], createdAt: since };
     const read = (clock: number) => seatAgendaInWorker(JSON.stringify({
       files: [], tasks: [held, prerequisite], pipelines: [pipeline, ...(kind === "operator-step" ? [linkedLane] : [])], seatDecisions,
       workLinks: { pipelines: {}, tasks: { [held.id]: { repository, links: [], noPr: false } } },

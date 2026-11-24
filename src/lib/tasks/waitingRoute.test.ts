@@ -5,7 +5,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { PrototypeReviewSummary } from "@/lib/prototypeReview/types";
 import { patchTask } from "./commands";
 import { TASK_HOLD_KINDS, type BoardTask, type TaskHold, type TaskHoldKind } from "./types";
-import { waitingRoute, waitingRouteIndex } from "./waitingRoute";
+import { waitingRoute, waitingRouteIndex, type HoldPullRequestState, type PublishedRound } from "./waitingRoute";
 import { prototypeReviewSummary } from "@/lib/prototypeReview/model";
 
 const NOW = Date.parse("2026-11-20T06:47:00Z");
@@ -128,41 +128,98 @@ test("operator forms and provenance take priority, and an answered form goes bac
   expect(classify(revised.task)).toEqual({ owner: "operator", rule: "operator-hold" });
 });
 
-test("operator holds route through published seat forms, including their settled state", () => {
+const roundRows = (...rows: Array<[string, boolean]>) => rows.map(([id, decided], index) => ({ id, title: id, createdAt: at(-10 + index), variants: [],
+  ...(decided ? { decision: { chosen: [], comment: "Proceed", at: at(-5 + index), delivery: { state: "sent" } } } : {}) })) as never;
+
+test("operator holds route through published seat forms by their stored state", () => {
   const row = task("seat-form-hold", "operator", { ref: "seat-round", note: "Choose the release option" });
   const dismissed = lane(row.id, "needs_decision", { dismissedAt: at(-1) });
-  const notice = { id: "prototype:seat-round", project, taskId: null, reviewId: "seat-round", title: "Choose an option",
-    createdAt: at(-2), target: { kind: "seat-decision", project, reviewId: "seat-round" } } as const;
-  const pendingIndex = waitingRouteIndex([row], [dismissed], new Set(), {}, undefined, [notice]);
-  expect(waitingRoute(row, pendingIndex, NOW)).toEqual({ owner: "operator", rule: "operator-hold" });
-  const settledIndex = waitingRouteIndex([row], [dismissed], new Set(), {}, undefined, [{ ...notice, undelivered: true }]);
-  expect(waitingRoute(row, settledIndex, NOW)).toMatchObject({ owner: "seat", rule: "form-answered", carriedBy: "task" });
-  const foreignIndex = waitingRouteIndex([row], [dismissed], new Set(), {}, undefined, [{ ...notice, project: "another-project" }]);
-  expect(waitingRoute(row, foreignIndex, NOW)).toMatchObject({ owner: "seat", rule: "unowned" });
-  expect(waitingRoute(row, waitingRouteIndex([row], [dismissed]), NOW)).toMatchObject({ owner: "seat", rule: "unowned" });
+  const routeWith = (round: PublishedRound | undefined) =>
+    waitingRoute(row, waitingRouteIndex([row], [dismissed], new Set(), {}, undefined, id => id === "seat-round" ? round : undefined), NOW);
+  expect(routeWith({ project, open: true })).toEqual({ owner: "operator", rule: "operator-hold" });
+  expect(routeWith({ project, open: false, answeredBy: "seat-round" })).toMatchObject({ owner: "seat", rule: "form-answered", carriedBy: "task", action: expect.stringContaining("seat-round") });
+  expect(routeWith({ project: "another-project", open: true })).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(routeWith(undefined)).toMatchObject({ owner: "seat", rule: "unowned" });
 });
 
-test("a superseded referenced decision round returns to the seat after the replacement is answered", () => {
-  const row = task("retired-round-hold", "operator", { ref: "round-a" });
-  const rounds = [
-    { id: "round-a", title: "First choice", createdAt: at(-3), variants: [], decision: undefined },
-    { id: "round-b", title: "Replacement choice", createdAt: at(-2), variants: [], decision: { chosen: [], comment: "Proceed", at: at(-1), delivery: { state: "sent" } } },
-  ] as never;
-  row.prototypeReview = prototypeReviewSummary(rounds) as never;
+test("a pending form on another task of the same project carries the hold; an absent or foreign round does not", () => {
+  const holder = task("round-holder", "operator", { ref: "round-elsewhere", note: "Choose the option" });
+  const owner = { ...task("round-owner", null), status: "assigned" as const, prototypeReview: { latestReviewId: "round-elsewhere", waitingReviewId: "round-elsewhere",
+    createdAt: at(-3), title: "Choose", rounds: 1 } };
+  const dismissed = lane(holder.id, "needs_decision", { dismissedAt: at(-1) });
+  const route = (rows: BoardTask[]) => waitingRoute(holder, waitingRouteIndex(rows, [dismissed]), NOW);
+  expect(route([holder, owner])).toEqual({ owner: "operator", rule: "operator-hold" });
+  expect(route([holder])).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(route([holder, { ...owner, project: "another-project" }])).toMatchObject({ owner: "seat", rule: "unowned" });
+  const answered = { ...owner, prototypeReview: { ...owner.prototypeReview, waitingReviewId: null, decision: { chosen: [], comment: "", at: at(-1), delivery: "sent" as const } } };
+  expect(route([holder, answered])).toMatchObject({ owner: "seat", rule: "form-answered", action: expect.stringContaining("round-elsewhere") });
+});
+
+test("a retired round returns the seat to the round that carries the answer, and an answered round to itself", () => {
+  const route = (ref: string, history: ReturnType<typeof roundRows>) => {
+    const row = { ...task("retired-round-hold", "operator", { ref }), prototypeReviews: history } as BoardTask;
+    row.prototypeReview = prototypeReviewSummary(history);
+    return waitingRoute(row, waitingRouteIndex([row], [lane(row.id, "needs_decision", { dismissedAt: at(-1) })]), NOW);
+  };
+  const superseded = roundRows(["round-a", false], ["round-b", true]);
+  expect(route("round-a", superseded)).toMatchObject({ owner: "seat", rule: "form-answered", action: expect.stringContaining("round-b") });
+  expect(route("round-a", superseded)).toMatchObject({ action: expect.not.stringContaining("round-a") });
+  expect(route("round-b", superseded)).toMatchObject({ rule: "form-answered", action: expect.stringContaining("round-b") });
+  const bothAnswered = roundRows(["round-a", true], ["round-b", true]);
+  expect(route("round-a", bothAnswered)).toMatchObject({ rule: "form-answered", action: expect.stringContaining("round-a") });
+  expect(route("round-b", bothAnswered)).toMatchObject({ rule: "form-answered", action: expect.stringContaining("round-b") });
+});
+
+test("a seat round answered through the real store points to the saved answer after delivery", async () => {
+  const { clearSeatRoundsForTests, insertSeatRound, mutateSeatRound } = await import("@/lib/prototypeReview/seatRounds");
+  const { seatRoundLookup } = await import("./holdEvidence");
+  const id = `pr_${"f".repeat(32)}`;
+  const row = task("seat-round-hold", "operator", { ref: id, note: "Choose the release option" });
   const dismissed = lane(row.id, "needs_decision", { dismissedAt: at(-1) });
-  const route = waitingRoute(row, waitingRouteIndex([row], [dismissed]), NOW);
-  expect(row.prototypeReview).toMatchObject({ latestReviewId: "round-b", waitingReviewId: null,
-    settledReviewIds: expect.arrayContaining(["round-a", "round-b"]) });
-  expect(route).toMatchObject({ owner: "seat", rule: "form-answered", action: expect.stringContaining("round-a") });
+  const notice = { id: `prototype:${id}`, project, taskId: null, reviewId: id, title: "Choose", createdAt: at(-3),
+    target: { kind: "seat-decision", project, reviewId: id } } as const;
+  clearSeatRoundsForTests();
+  try {
+    insertSeatRound({ id, taskId: null, project, title: "Choose", createdAt: at(-3), publicationKey: "seat-hold", inputDigest: "fixture", source: { conversationId: null }, variants: [] });
+    const route = (notices: readonly (typeof notice)[]) => waitingRoute(row, waitingRouteIndex([row], [dismissed], new Set(), {}, undefined, seatRoundLookup(notices)), NOW);
+    expect(route([notice])).toEqual({ owner: "operator", rule: "operator-hold" });
+    expect(route([])).toMatchObject({ owner: "seat", rule: "unowned" });
+    mutateSeatRound(id, round => { round.decision = { chosen: [], comment: "Proceed", at: at(-1), delivery: { state: "pending", clientMessageId: "a", conversationId: null, text: "" } } as never; });
+    mutateSeatRound(id, round => { round.decision!.delivery = { ...round.decision!.delivery, state: "sent" } as never; });
+    // A delivered answer leaves no notice behind; the store still holds it.
+    expect(route([])).toMatchObject({ owner: "seat", rule: "form-answered", action: expect.stringContaining(id) });
+  } finally { clearSeatRoundsForTests(); }
 });
 
-test("an operator hold on an open step clears when its linked lane completes", () => {
+test("an operator hold on an open step follows only the card's own lanes", () => {
   const row = task("linked-step-hold", "operator", { ref: "step-lane" });
   row.steps = [{ id: "step-lane", text: "Finish linked work", state: "open", ref: "step-lane" }];
   const dismissed = lane(row.id, "needs_decision", { dismissedAt: at(-1) });
-  expect(waitingRoute(row, waitingRouteIndex([row], [dismissed]), NOW)).toMatchObject({ owner: "operator", rule: "operator-hold" });
-  const completed = { ...lane("elsewhere", "completed"), id: "step-lane" };
-  expect(waitingRoute(row, waitingRouteIndex([row], [dismissed, completed]), NOW)).toMatchObject({ owner: "seat", rule: "wait-cleared" });
+  const route = (...others: Pipeline[]) => waitingRoute(row, waitingRouteIndex([row], [dismissed, ...others]), NOW);
+  expect(route()).toMatchObject({ owner: "operator", rule: "operator-hold" });
+  const unrelated = { ...lane("elsewhere", "completed"), id: "step-lane" };
+  expect(route(unrelated)).toMatchObject({ owner: "operator", rule: "operator-hold" });
+  const linked = { ...lane(row.id, "completed"), id: "step-lane" };
+  expect(route(linked)).toMatchObject({ owner: "seat", rule: "wait-cleared" });
+});
+
+test("a lane pause keeps its date and never hides a prerequisite that already cleared", () => {
+  const dismissed = (id: string) => lane(id, "needs_decision", { dismissedAt: at(-1) });
+  const operatorPause = (id: string) => ({ ...lane(id, "paused", { pause: { reason: "Operator pause", resumeCondition: { kind: "date", at: at(5) } } }), id: `pause-${id}` });
+  const cases: Array<[string, Partial<TaskHold>, BoardTask[], HoldPullRequestState | undefined, string]> = [
+    ["merged PR", { kind: "pr", ref: "41" }, [], () => "merged", "wait-cleared"],
+    ["closed task", { kind: "task", ref: "aabbccdd" }, [{ ...task("aabbccdd", null), status: "done" }], undefined, "wait-cleared"],
+    ["expired date", { kind: "postponed", until: at(-1) }, [], undefined, "wait-cleared"],
+  ];
+  for (const [name, hold, others, pullRequestState, rule] of cases) {
+    const row = task(`pause-${rule}-${name}`.replace(/ /g, "-"), hold.kind as TaskHoldKind, hold);
+    const index = (...lanes: Pipeline[]) => waitingRouteIndex([row, ...others], lanes, new Set(), {}, pullRequestState);
+    expect(waitingRoute(row, index(dismissed(row.id), operatorPause(row.id)), NOW), name).toMatchObject({ owner: "seat", rule });
+    expect(waitingRoute(row, index(operatorPause(row.id)), NOW), name).toMatchObject({ owner: "seat", rule });
+  }
+  // Open prerequisites leave the pause in charge.
+  const open = task("pause-open", "pr", { ref: "41" });
+  expect(waitingRoute(open, waitingRouteIndex([open], [dismissed(open.id), operatorPause(open.id)], new Set(), {}, () => "open"), NOW)).toMatchObject({ owner: "agents", rule: "dated" });
 });
 
 test("changed routing evidence earns a new key while edits to the title or hold note preserve it", () => {
