@@ -264,6 +264,12 @@ test("production retention requires an injected container observer in tests", as
     const stat = fs.lstatSync(directory), seeded = new TemporaryDataStore(path.join(state, "temporary-data.sqlite"));
     seeded.register({ directory, scope: path.join(state, "evidence"), kind: "ownerless-copy", owner: name, identity: `${stat.dev}:${stat.ino}`,
       adoptedAt: Date.now() - WEEK - 1, checkedAt: 0, bytes: 0, reason: "fixture" }); seeded.close();
+    const old = new Date(Date.now() - WEEK * 2), pending = [directory];
+    while (pending.length) {
+      const current = pending.pop()!, entry = fs.lstatSync(current);
+      if (entry.isDirectory()) pending.push(...fs.readdirSync(current).map(child => path.join(current, child)));
+      fs.utimesSync(current, old, old);
+    }
     return directory;
   });
   const script = path.join(f.root, "run-sweep.ts");
