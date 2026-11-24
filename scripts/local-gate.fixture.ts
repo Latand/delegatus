@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync, type WriteFileOptions } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkEnvironment } from "./gate-cache";
@@ -18,13 +18,36 @@ export function fixtureCheckAdmissionEnv(directory: string) {
   const file = path.join(directory, ".git", "check-admission.sqlite");
   return { LLV_CHECK_ADMISSION_FILE: file, LLV_GATE_CHECK_ADMISSION_FILE: file };
 }
-export function createHookFixture(root: string, roots: string[], realLint = false, controlledClock = false, directory?: string) {
-  const dir = directory ?? mkdtempSync(path.join(tmpdir(), "hooks-e2e-")); roots.push(dir);
-  mkdirSync(dir, { recursive: true });
+export function createHookFixture(root: string, roots: string[], realLint = false, controlledClock = false, directory?: string, comparatorStub?: string) {
+  const fixtureDirectory = directory ?? mkdtempSync(path.join(tmpdir(), "hooks-e2e-"));
+  roots.push(fixtureDirectory);
+  mkdirSync(fixtureDirectory, { recursive: true });
+  const dir = realpathSync(fixtureDirectory);
+  const write = (file: string, source: string, options?: WriteFileOptions) => {
+    const target = path.resolve(dir, file);
+    const relative = path.relative(dir, target);
+    const outside = () => new Error(`Refusing to write outside the hook fixture: ${file}`);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      || realpathSync(dir) !== dir) throw outside();
+    // Some fixture inputs link to the source checkout. Check every component
+    // before creating directories or opening a file for writing.
+    let current = dir;
+    for (const segment of relative.split(path.sep)) {
+      current = path.join(current, segment);
+      const existing = lstatSync(current, { throwIfNoEntry: false });
+      if (existing?.isSymbolicLink() || (current === target && existing?.isFile() && existing.nlink > 1)) throw outside();
+    }
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, source, options);
+  };
   for (const leaf of [".githooks", "scripts", "shims", ".github/workflows"]) mkdirSync(path.join(dir, leaf), { recursive: true });
   for (const hook of ["pre-commit", "pre-push"]) copyFileSync(path.join(root, ".githooks", hook), path.join(dir, ".githooks", hook));
   symlinkSync(path.join(root, "scripts/local-gate.ts"), path.join(dir, "scripts/local-gate.ts"));
-  symlinkSync(path.join(root, "scripts/local-gate-tests.ts"), path.join(dir, "scripts/local-gate-tests.ts"));
+  if (comparatorStub === undefined) {
+    symlinkSync(path.join(root, "scripts/local-gate-tests.ts"), path.join(dir, "scripts/local-gate-tests.ts"));
+  } else {
+    write("scripts/local-gate-tests.ts", comparatorStub);
+  }
   copyFileSync(path.join(root, "scripts/local-gate-capabilities.json"), path.join(dir, "scripts/local-gate-capabilities.json"));
   if (realLint) {
     symlinkSync(path.join(root, "scripts/eslint-changes.ts"), path.join(dir, "scripts/eslint-changes.ts"));
@@ -59,7 +82,7 @@ export function createHookFixture(root: string, roots: string[], realLint = fals
   writeFileSync(path.join(dir, "example.test.ts"), "// hook fixture\n"); git("add", "."); git("commit", "-m", "base");
   git("update-ref", "refs/remotes/origin/main", "HEAD"); git("config", "core.hooksPath", ".githooks");
   const calls = () => readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; now?: number; state?: string; home?: string; config?: string; tmp?: string; known?: string; gitDir?: string; index?: string; workTree?: string; commonDir?: string; configCount?: string; configKey?: string; deadline?: string; ownedBudget?: string; names: string[]; path?: string });
-  return { dir, env: { ...env, HOOK_REAL_LINT: realLint ? "1" : "0" }, git, calls };
+  return { dir, env: { ...env, HOOK_REAL_LINT: realLint ? "1" : "0" }, git, calls, write };
 }
 
 /** The variable names a Claude stage agent carries (values are stand-ins), and

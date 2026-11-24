@@ -8,13 +8,13 @@ import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 
 /** Each owned test file gets its own fixture roots and cleanup lifecycle. */
 export function createPublicationFixtures(root: string, roots: string[]) {
-function fixture() {
+function fixture(comparatorStub?: string) {
   const parent = fs.mkdtempSync(path.join(tmpdir(), "publication-http-")); roots.push(parent);
-  const f = createHookFixture(root, roots, false, false, path.join(parent, "source-pipeline-p0000001"));
+  const f = createHookFixture(root, roots, false, false, path.join(parent, "source-pipeline-p0000001"), comparatorStub);
   f.git("branch", "-m", "pipeline/task-1-p0000001");
   // Hook-fixture helpers are tracked before the changed source is committed.
   f.git("config", "core.hooksPath", "/dev/null");
-  fs.writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
+  f.write("example.ts", "export const value = 2;\n");
   f.git("add", "example.ts"); f.git("commit", "-m", "checked work");
   f.git("config", "core.hooksPath", ".githooks");
   const head = f.git("rev-parse", "HEAD").toString().trim();
@@ -32,11 +32,7 @@ function fixture() {
 
 function nativeFixture(coldBun = false) {
   const f = fixture();
-  const write = (file: string, source: string) => {
-    const target = path.join(f.dir, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, source);
-  };
+  const { write } = f;
   const smoke = 'import { test, expect } from "bun:test"; test("runtime fixture", () => expect(1).toBe(1));\n';
   write("scripts/runtime-smoke.test.ts", smoke);
   write("src/lib/mcp/answerSizes.test.ts", smoke);
@@ -58,7 +54,7 @@ function nativeFixture(coldBun = false) {
   const target = `node_modules/@openai/codex-linux-${process.arch}/vendor/${process.arch === "x64" ? "x86_64" : "aarch64"}-unknown-linux-musl/bin/codex`;
   const codex = path.join(f.env.XDG_CACHE_HOME, `delegatus-gate/codex-${SUPPORTED_CODEX_VERSIONS[0]}`, target);
   const installer = path.join(f.dir, ".git", "install-native.ts");
-  fs.writeFileSync(installer, `import fs from "node:fs"; import path from "node:path";
+  write(".git/install-native.ts", `import fs from "node:fs"; import path from "node:path";
     if (process.env.HOOK_FAIL === "native-install") process.exit(1);
     const args = process.argv.slice(2), prefix = args[args.indexOf("--prefix") + 1]!;
     const bun = args.at(-1)!.startsWith("bun@");
@@ -66,8 +62,7 @@ function nativeFixture(coldBun = false) {
     fs.mkdirSync(path.dirname(binary), { recursive: true });
     fs.writeFileSync(binary, bun ? ${JSON.stringify(`#!/bin/sh\nif [ "$1" = --version ]; then\n  "${process.execPath}" -e 'if (Object.keys(process.env).some(name => name.startsWith("LLV_GATE_PUBLICATION_"))) process.exit(23)' || exit 23\n  echo ${bun}; exit 0\nfi\nexec "${process.execPath}" "$@"\n`)} : "#!/bin/sh\\nexit 0\\n", { mode: 0o755 });
     fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: ["native-install", bun ? "bun" : "codex", args.at(-1)], names: [] }) + "\\n");`);
-  write("shims/npm", `#!/bin/sh\nexec "${process.execPath}" "${installer}" "$@"\n`);
-  fs.chmodSync(path.join(f.dir, "shims/npm"), 0o755);
+  write("shims/npm", `#!/bin/sh\nexec "${process.execPath}" "${installer}" "$@"\n`, { mode: 0o755 });
   f.git("-c", "core.hooksPath=/dev/null", "add", ".");
   f.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "selected native tools fixture");
   f.head = f.git("rev-parse", "HEAD").toString().trim(); f.env.LLV_GATE_PUSH_HEAD = f.head;
@@ -91,10 +86,9 @@ async function httpFixture(f: ReturnType<typeof fixture>, expireDuringChecks = t
   const bare = path.join(f.dir, ".git", "remote.git");
   f.git("init", "--bare", bare);
   const events = path.join(f.dir, ".git", "events.jsonl"), clock = path.join(f.dir, ".git", "clock");
-  fs.writeFileSync(clock, "0"); fs.writeFileSync(events, "");
-  const record = path.join(f.dir, "record.ts");
+  f.write(".git/clock", "0"); f.write(".git/events.jsonl", "");
   const helper = path.join(f.dir, "credential.ts");
-  fs.writeFileSync(helper, `import fs from "node:fs"; if (process.argv[2] === "get") { const at = Number(fs.readFileSync(process.env.CREDENTIAL_CLOCK!, "utf8")); fs.appendFileSync(process.env.CREDENTIAL_EVENTS!, JSON.stringify({ kind: "mint", at }) + "\\n"); process.stdout.write("username=fixture\\n" + ["password", "fixture-" + at].join("=") + "\\n\\n"); }`);
+  f.write("credential.ts", `import fs from "node:fs"; if (process.argv[2] === "get") { const at = Number(fs.readFileSync(process.env.CREDENTIAL_CLOCK!, "utf8")); fs.appendFileSync(process.env.CREDENTIAL_EVENTS!, JSON.stringify({ kind: "mint", at }) + "\\n"); process.stdout.write("username=fixture\\n" + ["password", "fixture-" + at].join("=") + "\\n\\n"); }`);
   f.git("config", "core.hooksPath", "/dev/null"); f.git("add", "record.ts", "credential.ts"); f.git("commit", "-m", "HTTP fixture");
   f.git("config", "core.hooksPath", ".githooks");
   f.head = f.git("rev-parse", "HEAD").toString().trim(); f.env.LLV_GATE_PUSH_HEAD = f.head;
