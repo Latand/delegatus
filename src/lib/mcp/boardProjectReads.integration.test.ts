@@ -708,8 +708,9 @@ test("includeClosed project index bootstrap reads only that project's archive me
   const lanes = Array.from({ length: 40 }, (_, index) => {
     const project = index === 0 ? OWN : FOREIGN;
     const row = buildPipeline({ id: `bounded-archive-${String(index).padStart(2, "0")}`, project,
-      task: `Archived ${index}`, repoDir: h.folder, stages: [], state: "closed", srcPath: null, srcConversationId: null,
+      task: `Archived ${index}`, repoDir: h.folder, stages: [], state: "draft", srcPath: null, srcConversationId: null,
       now: new Date(Date.parse(AT) + index * 1000).toISOString() });
+    row.state = "closed";
     row.closedAt = AT; row.cursor = null;
     return row;
   });

@@ -168,7 +168,7 @@ export class BoardSelection {
     try {
       const projects = project ? [project, ...Object.keys(this.projects.aliases()).filter(key => this.projects.canonical(key) === project)] : [];
       const cacheKey = `${project}\0${ids?.join("\0") ?? "*"}`;
-      const revision = database.query<{ collection: string; revision: number }, []>(
+      const revision = database.query<{ collection: string; revision: number }, SQLQueryBindings[]>(
         `SELECT collection,revision FROM state_collections WHERE collection IN (${this.collections.map(() => "?").join(",")}) ORDER BY collection`
       ).all(...this.collections).map(row => `${row.collection}:${row.revision}`).join("|");
       const cached = this.referenceCache.get(cacheKey);
