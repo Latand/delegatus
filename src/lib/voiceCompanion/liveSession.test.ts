@@ -5,7 +5,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { backendResponse, delegationCreated, FakeLiveProvider, functionCall, message } from "./fakeProvider";
-import type { BackendRequest } from "./sessionConfig";
+import { RESOURCE } from "@/lib/chatgptPlan/constants";
+import { complete, now as planNow, planFixture, stream } from "@/lib/chatgptPlan/plan.fixture";
+import { PlanSession } from "@/lib/chatgptPlan/session";
+import { LIVE_BACKEND_MODEL, PLAN_TOOL_NAMESPACE } from "./sessionConfig";
+import type { BackendRequest, planBackendRequest } from "./sessionConfig";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-live-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -3795,4 +3799,75 @@ for (const outcome of ["handed", "uncertain", "withdrawn"] as const) test(`recon
     f.provider.replay(n.providerId, said("QUEUED_RESULT", 4000, "output")); await f.service.drain(n.sessionId);
     expect(f.storage.read().sessions[n.sessionId].speechInFlight).toEqual([]);
   } finally { await f.service.close(n.sessionId); }
+});
+
+test.each(["owner", "member", "unconfigured", "limit"] as const)("voice %s bills only completed plan turns to the plan and reserves each key turn", async mode => {
+  const f = fixture();
+  const planRequests: Array<Record<string, unknown>> = [];
+  const plan = planFixture((url, init) => {
+    expect(url).toBe(`${RESOURCE}/responses`);
+    planRequests.push(JSON.parse(String(init?.body)));
+    if (mode === "limit") return stream({ type: "response.failed", response: { error: { code: "subscription_sharing_usage_limit_exceeded" } } });
+    if (planRequests.length === 1) return stream(complete(backendResponse("plan-tool", [
+      { ...functionCall("wrong", "call_clock"), namespace: "unexpected" },
+      { ...functionCall("valid", "call_clock"), namespace: PLAN_TOOL_NAMESPACE },
+    ])));
+    return stream(complete(backendResponse("plan-text", [message("Plan answer.")])));
+  });
+  const session = new PlanSession(plan.store, plan.oidc, () => planNow);
+  if (mode !== "unconfigured") plan.seed({ models: [LIVE_BACKEND_MODEL] });
+  const owner = (startedBy: import("./storage").SessionStarter) => "operator" in startedBy;
+  const reservedAtKeyDispatch: number[] = [];
+  f.provider.responder = () => {
+    const settings = f.storage.settings();
+    reservedAtKeyDispatch.push(settings.usageUsd + settings.reservedUsd);
+    return backendResponse("key-text", [message("Key answer.")]);
+  };
+  const provider = Object.assign(f.provider, {
+    respondOnPlan: (body: ReturnType<typeof planBackendRequest>, signal: AbortSignal, guard: () => boolean) => session.respond(body, signal, guard),
+  });
+  const service = new CompanionLiveSessions(f.storage, f.admission, f.reads, provider, {
+    key: () => "synthetic-credential", closeTimeoutMs: 20, timers: false,
+    plan: { eligible: model => session.eligible(model), owner },
+  });
+  const starter = mode === "member" ? { memberId: "member-fixture" } as const : { operator: true } as const;
+  const call = await service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: starter });
+  try {
+    if (mode === "owner") expect(service.planBillingFor(starter)).toEqual({ source: "plan" });
+    provider.replay(call.providerId, delegationCreated("first-plan-test", 1_000));
+    await service.drain(call.sessionId);
+    const stored = () => f.storage.read().sessions[call.sessionId]?.usage?.responses;
+    if (mode === "owner") {
+      expect(planRequests).toHaveLength(2);
+      expect(planRequests[0]).toMatchObject({ tools: [{ type: "namespace", name: PLAN_TOOL_NAMESPACE }], store: false, stream: true });
+      expect(planRequests[0]).not.toHaveProperty("max_output_tokens");
+      expect(planRequests[0]).not.toHaveProperty("service_tier");
+      expect(planRequests[1].input).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "function_call", call_id: "valid", namespace: PLAN_TOOL_NAMESPACE }),
+        expect.objectContaining({ type: "function_call_output", call_id: "valid" }),
+      ]));
+      expect(JSON.stringify(planRequests[1])).not.toContain('"call_id":"wrong"');
+      expect(f.provider.requests).toHaveLength(0);
+      expect(stored()).toEqual({});
+      const settings = f.storage.settings();
+      expect(settings.usageUsd + settings.reservedUsd).toBeCloseTo(VOICE_SESSION_RESERVE_USD);
+    } else {
+      expect(planRequests).toHaveLength(mode === "limit" ? 1 : 0);
+      expect(f.provider.requests).toHaveLength(1);
+      expect(f.provider.requests[0]).toHaveProperty("max_output_tokens");
+      expect(Object.values(stored() ?? {})).toMatchObject([{ complete: true }]);
+      expect(reservedAtKeyDispatch[0]).toBeCloseTo(VOICE_SESSION_RESERVE_USD + BACKEND_RESPONSE_RESERVE_USD);
+    }
+    if (mode === "limit") {
+      expect(service.planBillingFor(starter)).toEqual({ source: "key", reason: "plan_limit" });
+      expect(service.planBillingFor({ memberId: "other" })).toBeUndefined();
+      provider.replay(call.providerId, delegationCreated("second-plan-test", 2_000));
+      await service.drain(call.sessionId);
+      expect(planRequests).toHaveLength(1);
+      expect(f.provider.requests).toHaveLength(2);
+    }
+  } finally {
+    await service.close(call.sessionId);
+    plan.dispose();
+  }
 });

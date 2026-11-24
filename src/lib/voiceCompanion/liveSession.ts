@@ -16,11 +16,13 @@ import { cleanStrings, withoutCredentials, withoutLocalPaths, withoutSeparators 
 import { actionWords, asksAbout, explicitDelegationRequest, namesAction, spokenAgreement, spokenSendRequest } from "./gate";
 import { speechParts, messageSpokenText } from "./reportSpeech";
 import { callClockContext, clockAnswer, clockRows, delegationClockLine, localizeSpeech, localizeTimes, onCallTimeline, resolveVoiceClock, type ClockRow, type VoiceClock } from "./voiceClock";
-import { backendRequest, type BackendItem } from "./sessionConfig";
+import { backendRequest, LIVE_BACKEND_MODEL, planBackendRequest, PLAN_TOOL_NAMESPACE, type BackendItem } from "./sessionConfig";
 import { COMPANION_TOOL_REGISTRY, DELEGATION_TOOLS, EGRESS_TOOLS, PRIVATE_RESULT_TOOLS, runCompanionTool } from "./tools";
 import { deliveryFact, delegationSpeech, nothingSent, speakable, type DeliveryFact } from "./delegationOutcome";
 import { EMPTY_VOICE_TOOLS, findSnapshotTool, snapshotRecord, type VoiceToolCalls, type VoiceToolSnapshot } from "@/lib/voiceTools/snapshot";
 import { byteShort } from "./prototypeRead";
+import { fallbackReason, PlanError } from "@/lib/chatgptPlan/errors";
+import type { PlanBilling } from "@/lib/chatgptPlan/public";
 import type { VoiceTimers } from "./voiceTimers";
 import { backendUsageTokens, backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACKEND_ROUNDS, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD } from "./usage";
 
@@ -92,6 +94,7 @@ interface ActiveSession {
   /** The provider this call runs on, chosen at its start; a Codex call has no key, cap or charge. */
   provider: LiveProvider; codex: boolean;
   key: string; secrets: string[];
+  planBilling?: PlanBilling;
   queue: unknown[]; processing?: Promise<void>; seen: Set<string>;
   /** Delegations Live named; each runs once. */
   delegations: Set<string>;
@@ -163,6 +166,7 @@ interface ActiveSession {
   lastHandoff?: { latest?: number; turn?: number; replied: boolean; attempt: string };
 }
 interface Options {
+  plan?: { eligible(model: string): Promise<boolean>; owner(starter: SessionStarter): boolean };
   memory?: CallMemory;
   ownerHistory?: OwnerHistoryRead;
   key?(): string; now?(): number; closeTimeoutMs?: number; timers?: boolean;
@@ -245,6 +249,7 @@ function companionPlan(value: unknown): CompanionPlan | null {
  * it is asked, so no response starts that the cap has not covered. */
 export class CompanionLiveSessions {
   private readonly active = new Map<string, ActiveSession>();
+  private lastPlanBilling?: { id: string; owner: SessionStarter; billing?: PlanBilling };
   private readonly minting = new Map<string, Promise<MintedCompanionSession>>();
   private readonly reaping = new Map<string, Promise<void>>();
   /** Hangups the provider has not confirmed, each asked again on a timer. */
@@ -253,6 +258,11 @@ export class CompanionLiveSessions {
   private readonly now: () => number;
   constructor(readonly storage: CompanionStorage, readonly admission: CompanionAdmission, private readonly reads: CompanionBoardReads,
     private readonly provider: LiveProvider, private readonly options: Options = {}) { this.now = options.now ?? Date.now; }
+
+  planBillingFor(starter: SessionStarter): PlanBilling | undefined {
+    const latest = this.lastPlanBilling;
+    return latest && sameCallOwner(starter, latest.owner) && this.options.plan?.owner(starter) ? latest.billing : undefined;
+  }
 
   /** The provider a new call runs on: the one the settings choose when this
    * service holds it, else the one it was built with. */
@@ -310,6 +320,14 @@ export class CompanionLiveSessions {
     if (!settings.enabled) throw new Error("COMPANION_DISABLED");
     if (!input.project.trim() || input.project.length > 200 || !["en", "uk"].includes(input.locale)
       || !input.sdp.trim() || input.sdp.length > 96_000) throw new Error("INVALID_REQUEST");
+    const provider = this.providerFor(settings.backend);
+    const codex = provider.backend === "codex";
+    const plan = this.options.plan;
+    const starter = input.startedBy;
+    // Resolve plan eligibility alongside the media mint. The usual mint
+    // receipt and close path are installed before the first await.
+    const planEligible = !codex && settings.backend === "api" && provider.respondOnPlan && starter && plan?.owner(starter)
+      ? plan.eligible(LIVE_BACKEND_MODEL).catch(() => false) : undefined;
     const resumed = input.resume ? this.continued(input.resume, input.startedBy) : null;
     // Recheck after recovery/close awaited: another start may have leased this part.
     if (input.resume && this.storage.read().sessions[input.resume]?.resumedBy) throw new Error("PROVIDER_ERROR");
@@ -352,8 +370,6 @@ export class CompanionLiveSessions {
       });
     } catch (error) { this.admission.retire(id); throw error; }
     this.options.memory?.retry(input.startedBy);
-    const provider = this.providerFor(settings.backend);
-    const codex = provider.backend === "codex";
     try { if (!codex) this.storage.reserve(id, VOICE_SESSION_RESERVE_USD, SESSION_START_ROOM_USD); }
     catch (error) { this.admission.retire(id); throw error; }
     let key: string;
@@ -453,6 +469,8 @@ export class CompanionLiveSessions {
       if (echoes(minted.sdp, secrets) || active.ended) throw new Error("PROVIDER_ERROR");
       this.storage.change(document => { document.sessions[id].answerSdp = minted.sdp; });
       if (!codex) this.storage.observe(id, 15 * LIVE_USD_PER_SECOND);
+      if (planEligible && await planEligible && starter && plan?.owner(starter)) active.planBilling = { source: "plan" };
+      if (active.ended) throw new Error("PROVIDER_ERROR");
       active.connection = await provider.attach(minted.id, key, event => this.enqueue(active, event), () => this.lost(active), async (name, args, callId, turnId) => {
         await active.processing;
         if (active.ended || active.closePromise || active.limitReached) throw new Error("SESSION_CLOSED");
@@ -469,6 +487,7 @@ export class CompanionLiveSessions {
       if (voiceTools.servers.length) this.options.voiceTools!.open(id, voiceTools);
       // The call clock starts with the voice, on this server's clock.
       if (codex) this.storage.change(document => { document.sessions[id].usage!.startedAt = this.now(); });
+      if (starter && plan?.owner(starter)) this.lastPlanBilling = { id, owner: starter, billing: active.planBilling };
       this.admission.emit(id, { type: "session.ready", mode: "official-realtime" });
       if (input.reconnect) {
         const start = this.admission.transcriptRecord(id).entries.find(row => row.kind === "session_start")!;
@@ -801,16 +820,32 @@ export class CompanionLiveSessions {
         if (active.ended || active.closePromise) return;
         const final = round === BACKEND_ROUNDS;
         if (final) input.push({ role: "user", content: "The tool budget for this delegation is spent. Answer now from what the tools returned, in at most three short sentences, and say plainly what is still unknown. Call no tool." });
-        const responseKey = `backend-${randomUUID()}`;
-        try { this.storage.extend(active.id, BACKEND_RESPONSE_RESERVE_USD); }
-        catch { this.capReached(active, delegationId); return; }
-        this.storage.change(document => { document.sessions[active.id].usage!.responses[responseKey] = { usd: null, complete: false }; });
-        let result: Record<string, unknown> | null;
-        try { result = jsonObject(await active.provider.respond(active.key, backendRequest(input, { final, locale: stored.locale, tools: active.voiceTools }), active.abort.signal)); }
-        catch { result = null; }
-        // A request with no answer may still have been billed: its reservation stays held.
-        const usd = backendUsageUsd(result?.usage);
-        this.receipt(active, responseKey, usd, result);
+        const options = { final, locale: stored.locale, tools: active.voiceTools };
+        let result: Record<string, unknown> | null = null;
+        let usedPlan = false;
+        if (active.planBilling?.source === "plan" && active.provider.respondOnPlan) {
+          const owner = () => this.options.plan?.owner(active.owner) === true && !active.ended && !active.closePromise;
+          try {
+            result = jsonObject(await active.provider.respondOnPlan(planBackendRequest(input, options), active.abort.signal, owner));
+            if (!owner()) throw new PlanError("plan_disabled");
+            if (!Array.isArray(result?.output)) throw new PlanError("interrupted");
+            usedPlan = true;
+          } catch (error) {
+            if (active.ended || active.closePromise || active.abort.signal.aborted) return;
+            active.planBilling = { source: "key", reason: fallbackReason(error) };
+            if (this.lastPlanBilling?.id === active.id) this.lastPlanBilling.billing = active.planBilling;
+          }
+        }
+        if (!usedPlan) {
+          const responseKey = `backend-${randomUUID()}`;
+          try { this.storage.extend(active.id, BACKEND_RESPONSE_RESERVE_USD); }
+          catch { this.capReached(active, delegationId); return; }
+          this.storage.change(document => { document.sessions[active.id].usage!.responses[responseKey] = { usd: null, complete: false }; });
+          try { result = jsonObject(await active.provider.respond(active.key, backendRequest(input, options), active.abort.signal)); }
+          catch { result = null; }
+          // A request with no answer may still have been billed: its reservation stays held.
+          this.receipt(active, responseKey, backendUsageUsd(result?.usage), result);
+        }
         const output = Array.isArray(result?.output) ? result.output.map(jsonObject).filter((item): item is Record<string, unknown> => item !== null) : null;
         if (!output) {
           reply(delegationSpeech(`The board could not be read just now.${facts.length ? "" : " No request was sent."}`, facts));
@@ -818,6 +853,7 @@ export class CompanionLiveSessions {
         }
         if (active.ended || active.closePromise) return;
         const functionCalls = output.filter(item => item.type === "function_call" && typeof item.call_id === "string" && item.call_id.length <= 200
+          && (!usedPlan || item.namespace === undefined || item.namespace === PLAN_TOOL_NAMESPACE)
           && typeof item.name === "string" && typeof item.arguments === "string" && !calls.has(item.call_id));
         const oversizedCall = functionCalls.find(item => [...(item.arguments as string)].length > MAX_BACKEND_TOOL_ARGUMENT_SCALARS);
         if (oversizedCall) {

@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
+import { PLAN_USAGE_URL } from "@/lib/chatgptPlan/public";
 import { openKeys } from "@/components/keys/openKeys";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
 import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
@@ -30,7 +31,16 @@ type Control = "enabled" | "backend" | "cap" | "callMemory" | "timerTelegram" | 
  */
 export function VoiceSection({ sub, go, back }: { sub: SettingsSub | null; go: (sub: SettingsSub) => void; back: () => void }) {
   const { t, locale } = useLocale();
-  const { settings, busy, error, update } = useVoiceCompanionSettings(true);
+  const { settings, busy, error, update, refreshPlanBilling } = useVoiceCompanionSettings(true);
+  const watchBilling = !!settings?.enabled && settings.backend === "api";
+  useEffect(() => {
+    if (!watchBilling) return;
+    let stopped = false;
+    let timer: number;
+    const next = () => { timer = window.setTimeout(() => void refreshPlanBilling().finally(() => { if (!stopped) next(); }), 2_000); };
+    next();
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [watchBilling, refreshPlanBilling]);
   const memory = useCallMemory();
   const tools = useVoiceTools();
   const speech = locale === "uk" ? "uk" as const : "en" as const;
@@ -160,6 +170,13 @@ export function VoiceSection({ sub, go, back }: { sub: SettingsSub | null; go: (
         <VoiceToolRows tools={tools} onOpen={(name, title) => go({ id: "tool", arg: name, title })} />
         {refusal(null)}
         <DetailsRow lines={[
+          settings?.enabled && api && settings.planBilling ? {
+            label: t("chatgptPlan.backendTurns"),
+            value: <span data-chatgpt-plan-billing={settings.planBilling.source}>
+              {settings.planBilling.source === "plan" ? t("chatgptPlan.title") : t("chatgptPlan.fallback", { reason: t(`chatgptPlan.fallback.${settings.planBilling.reason}`) })}
+              {" · "}<a href={PLAN_USAGE_URL} target="_blank" rel="noopener noreferrer" className="underline">{t("chatgptPlan.manage")}</a>
+            </span>,
+          } : null,
           settings?.enabled && api ? { label: t("settings.voice.detail.api"), value: settings.keySource === "env" ? t("voiceCompanion.settings.key.env") : <>{t("settings.voice.detail.apiLine")} <Literal text="OPENAI_API_KEY" /></> } : null,
           { label: t("voiceCompanion.settings.label"), value: t("voiceCompanion.settings.explanation") },
           { label: t("settings.voice.detail.summaries"), value: t("voiceCompanion.memory.provider") },

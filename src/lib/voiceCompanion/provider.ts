@@ -1,6 +1,8 @@
 import type { Locale } from "./contract";
-import { liveSessionConfiguration, type BackendRequest } from "./sessionConfig";
+import { liveSessionConfiguration, type BackendRequest, type planBackendRequest } from "./sessionConfig";
 import type { VoiceToolSnapshot } from "@/lib/voiceTools/snapshot";
+
+import { chatgptPlan } from "@/lib/chatgptPlan/session";
 
 export type LiveCommand = Record<string, unknown> & { type: string };
 /** What became of words handed to `speak`: voiced at the provider, possibly voiced, or never going to be. */
@@ -27,6 +29,7 @@ export interface LiveProvider {
   hangup(id: string, key: string): Promise<void>;
   /** One backend response, paid for by the caller before it is asked. */
   respond(key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown>;
+  respondOnPlan?(request: ReturnType<typeof planBackendRequest>, signal: AbortSignal, owner: () => boolean): Promise<unknown>;
 }
 export const jsonObject = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -46,6 +49,9 @@ export class OpenAILiveProvider implements LiveProvider {
       // A session the provider no longer has is closed: nothing is left to hang up or to bill.
       if (!response.ok && response.status !== 404 && response.status !== 410) throw new Error("PROVIDER_ERROR");
     } catch { throw new Error("PROVIDER_ERROR"); }
+  }
+  respondOnPlan(request: ReturnType<typeof planBackendRequest>, signal: AbortSignal, owner: () => boolean): Promise<unknown> {
+    return chatgptPlan().respond(request, signal, owner);
   }
   async respond(key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown> {
     try {

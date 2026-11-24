@@ -47673,3 +47673,10 @@ describe("relay requester enrolment on the board", () => {
     }
   }, 180_000);
 });
+
+describe("ChatGPT plan settings", () => {
+  browserTest("ChatGPT plan settings render the Keys and Voice states in both languages and themes", async () => {
+    const { captureChatGPTPlanFrames } = await import("@/components/kanban/issue1695BrowserHarness");
+    await captureChatGPTPlanFrames(false);
+  }, 300_000);
+});

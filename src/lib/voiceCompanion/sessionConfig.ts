@@ -97,3 +97,13 @@ export function backendRequest(input: readonly BackendItem[], options: { final?:
     reasoning: { effort: "none" }, store: false };
 }
 export type BackendRequest = ReturnType<typeof backendRequest>;
+
+export const PLAN_TOOL_NAMESPACE = "delegatus";
+
+/** The plan route takes stateless history and namespaced tools. The API-key
+ * request keeps its original limits and flat tools, including after fallback. */
+export function planBackendRequest(input: readonly BackendItem[], options: Parameters<typeof backendRequest>[1] = {}) {
+  const { max_output_tokens: _max, service_tier: _tier, tools, ...request } = backendRequest(input, options);
+  return { ...request, input: input.map(item => item.type === "function_call" ? { ...item, namespace: PLAN_TOOL_NAMESPACE } : item),
+    tools: [{ type: "namespace", name: PLAN_TOOL_NAMESPACE, description: "Voice Delegatus tools", tools }] };
+}

@@ -15019,3 +15019,10 @@ describe("account row on the phone", () => {
     } finally { await browser.close(); server.stop(); }
   }, 7_200_000);
 });
+
+describe("ChatGPT plan settings", () => {
+  browserTest("ChatGPT plan settings render the Keys and Voice states in both languages and themes", async () => {
+    const { captureChatGPTPlanFrames } = await import("@/components/kanban/issue1695BrowserHarness");
+    await captureChatGPTPlanFrames(true);
+  }, 300_000);
+});
