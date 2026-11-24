@@ -557,7 +557,7 @@ test.skipIf(!hasUserManager).each([
   const diag = () => new Error(fs.existsSync(log) ? redactBounded(fs.readFileSync(log, "utf8"), 3_000) : "recorded log is missing");
   try {
     fs.mkdirSync(hook.writablePath("scripts/gate-runner"));
-    const env: NodeJS.ProcessEnv = { ...hook.env, ...f.env, PATH: hook.env.PATH, LLV_GATE_BUN: process.execPath,
+    const env: NodeJS.ProcessEnv = { ...hook.env, ...f.env, PATH: process.env.PATH, LLV_GATE_BUN: process.execPath,
       LLV_GATE_SLOTS: String(cap), LLV_GATE_RUNNER: "off", TMPDIR: f.dir,
       LLV_GATE_PUSH_DEADLINE: undefined, LLV_GATE_PUBLICATION_RECEIPT: undefined, LLV_GATE_SANDBOX_RECORD: undefined };
     withoutInheritedGate(env, { keepSandbox: true });
@@ -570,7 +570,7 @@ test.skipIf(!hasUserManager).each([
       ': > "$READY"; while [[ ! -f "$RELEASE" ]]; do sleep 0.02; done'], legacy, olderEnv,
     { timeoutMs: limit, signal: control.signal }));
     await until(() => fs.existsSync(holderReady), 10_000);
-    pending.push(realExec("bash", [wrapper, "--record", log, ".githooks/pre-push"], hook.dir, env,
+    pending.push(realExec("bash", [wrapper, "--record", log, ".githooks/pre-push"], hook.dir, { ...env, PATH: hook.env.PATH },
       { timeoutMs: limit, signal: control.signal }));
     await until(() => waiting().length === 1, 10_000, diag);
     const first = waiting()[0]!;
@@ -582,7 +582,7 @@ test.skipIf(!hasUserManager).each([
       expect(proof.recorder.pid).not.toBe(proof.wrapper.pid);
       expect(proof.command).toEqual([".githooks/pre-push"]);
     }
-    pending.push(realExec("bash", f.command("competing").slice(1), process.cwd(), { ...env, PATH: f.env.PATH },
+    pending.push(realExec("bash", f.command("competing").slice(1), process.cwd(), env,
       { timeoutMs: limit, signal: control.signal }));
     await until(() => waiting().length === 2, 10_000, diag);
     const second = waiting()[1]!;

@@ -24,7 +24,7 @@ function commit(f: Fixture) {
   f.git("-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", "candidate");
   return f.git("rev-parse", "HEAD").toString().trim();
 }
-const names = (plan: ReturnType<typeof gatePlan>) => plan.checks.map(check => check.step.name);
+const names = (plan: ReturnType<typeof gatePlan>): readonly string[] => plan.checks.map(check => check.step.name);
 
 const linux = process.platform === "linux" ? ["Linux backend", "Linux tests"] : [];
 const runtime = ["runtime verdict tests", "Viewer build", "MCP size budgets", "Viewer runtime", "runtime host", "runtime negative controls",
@@ -195,7 +195,7 @@ test("check-step and pre-push share the publication selection and refuse a forge
     const stage = Bun.spawn([process.execPath, "scripts/local-gate.ts", "check-step", "types"], {
       cwd: f.dir, env: f.env, stderr: "pipe", timeout: 25_000,
     });
-    const [code, stderr] = await Promise.all([stage.exited, stage.stderr.text()]);
+    const [code, stderr] = await Promise.all([stage.exited, new Response(stage.stderr).text()]);
     expect(code, stderr).toBe(0);
     expect(publications).toHaveLength(1);
   } finally { monitor.close(); }
