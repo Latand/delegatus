@@ -1,6 +1,6 @@
 import { performanceSpans } from "@/lib/performanceSpans";
 import { DeadlineExceededError } from "@/lib/deadline";
-import { MeasuredCache, MeasuredWeakCache } from "@/lib/cacheTelemetry";
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -17,7 +17,6 @@ import { diffFilesBodies, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER } f
 import { BOARD_PROTOCOL_HEADER, BOARD_SCOPE_HEADER } from "@/lib/boardDelta";
 import { BoardEncoder, boardCursorScope } from "@/lib/boardEncoding";
 import { BoardHistory } from "@/lib/boardHistory";
-import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import { readStateCollectionRevision, readStateCollectionRevisions } from "@/lib/state/sqliteStateStore";
 import { ensureEmptyTaskBoardVisibilityMigration } from "@/lib/tasks/boardVisibilityMigration";
 import { markBoardViewed } from "@/lib/links/boardPresence";
@@ -82,7 +81,6 @@ const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionCache?: Map<string, CachedProjection>;
   __llvBoardHistory?: BoardHistory;
   __llvBoardEncoder?: BoardEncoder;
-  __llvFilesGzipBodiesV2?: MeasuredWeakCache<ProjectionRepresentation, { promise: Promise<Uint8Array>; bytes: number }>;
   __llvFilesProjectionInflight?: Map<string, Promise<ProjectionRepresentation>>;
   __llvFilesProjectionPersistenceTail?: Promise<void>;
   __llvFilesPersistedProjectionChecked?: boolean;
@@ -112,23 +110,6 @@ function boardHistory(): BoardHistory {
 
 function boardEncoder(): BoardEncoder {
   return projectionCacheStore.__llvBoardEncoder ??= new BoardEncoder();
-}
-
-/** One compression per representation, however many clients fetch it. */
-function gzippedRepresentation(representation: ProjectionRepresentation): Promise<Uint8Array> {
-  const cache = projectionCacheStore.__llvFilesGzipBodiesV2 ??= new MeasuredWeakCache("gzip-bodies", "files/operatorProjection", entry => entry.bytes);
-  let compressed = cache.get(representation);
-  if (!compressed) {
-    const entry = { promise: gzipBody(representation.body), bytes: 0 };
-    compressed = entry;
-    cache.set(representation, entry);
-    void entry.promise.then(bytes => {
-      if (cache.get(representation) !== entry) return;
-      entry.bytes = bytes.byteLength;
-      cache.set(representation, entry);
-    }, () => cache.delete(representation));
-  }
-  return compressed.promise;
 }
 
 function projectionInflight(): Map<string, Promise<ProjectionRepresentation>> {
@@ -678,9 +659,8 @@ function boardBootstrap(): BoardBootstrap {
   return bootstrapStore.__llvBoardBootstrap;
 }
 
-/** Registration loads this module and the saved bytes before Next accepts
- * requests, including on a passive candidate. Building a missing artifact
- * requires release ownership and runs during activation. */
+/** Read the saved bytes, or warm a missing artifact in the owning release's
+ * fenced background startup. The first board request can read on demand. */
 export async function prepareBoardSummary(buildIfMissing = false): Promise<void> {
   const saved = await boardBootstrap().read;
   if (!buildIfMissing) return;
@@ -725,13 +705,11 @@ async function bootstrapResponse(request: Request, afterResponse: AfterFilesResp
       }
     });
   }
-  const gzip = acceptsGzip(request);
-  return new Response(bootstrapBody(gzip ? saved.gzip : saved.body), { headers: {
+  return new Response(bootstrapBody(saved.body), { headers: {
     "content-type": "application/json",
     "cache-control": "no-store",
     etag: saved.etag,
     vary: `accept-encoding, ${FILES_DELTA_ACCEPT_HEADER}`,
-    ...(gzip ? { "content-encoding": "gzip" } : {}),
     "x-llv-files-projection-cache": "bootstrap",
     "x-llv-files-cache": "stale",
     "x-llv-files-generation": "0",
@@ -830,7 +808,7 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
        is the one the body was built from, older when the answer is stale. */
     ...(projected.representation.built ? { [FILES_BUILT_HEADER]: formatFilesBuilt(projected.representation.built) } : {}),
   };
-  let body: string | Uint8Array | null = null;
+  let body: string | null = null;
   const fullBytes = projected.representation.bytes ??= Buffer.byteLength(projected.representation.body);
   if (!notModified) {
     /* A client that certified an earlier representation of this scope, and
@@ -854,12 +832,8 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
       }
     }
     headers["cache-control"] = "no-store";
-    if (acceptsGzip(request) && body.length >= 1024) {
-      body = delta ? await boardHistory().gzip(delta) : await gzippedRepresentation(projected.representation);
-      headers["content-encoding"] = "gzip";
-    }
   }
-  headers["x-llv-files-bytes"] = String(body === null ? 0 : typeof body === "string" ? Buffer.byteLength(body) : body.byteLength);
+  headers["x-llv-files-bytes"] = String(body === null ? 0 : Buffer.byteLength(body));
   const response = new Response(body as BodyInit | null, {
     status: notModified ? 304 : 200,
     headers,
@@ -889,6 +863,6 @@ export async function operatorBoardRepresentation(signal?: AbortSignal): Promise
 }
 
 /** The exact panel representation, decoded and reduced outside the Viewer. */
-export async function operatorSeatAgenda(project: string, seatConversationId?: string): Promise<import("@/lib/monitor/types").SeatTickAgendaInput> {
-  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000, undefined, seatConversationId);
+export async function operatorSeatAgenda(project: string, seatConversationId?: string, pauses?: import("@/lib/attention/seatAgenda").SeatAgendaPauses): Promise<import("@/lib/monitor/types").SeatTickAgendaInput> {
+  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000, undefined, seatConversationId, pauses);
 }

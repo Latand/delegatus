@@ -976,7 +976,7 @@ check no agent-facing wording. No row is needed.
 | `src/lib/memory/roleLaunch.test.ts` | no agent-facing phrase assertion |
 | `src/lib/memory/injection.test.ts` | no agent-facing phrase assertion |
 | `src/lib/memory/context.test.ts` | no agent-facing phrase assertion |
-| `src/lib/pipelines/engine.settlement.test.ts` | relayed findings and outputs between stages |
+| `src/lib/pipelines/engine.settlement.review.test.ts` | relayed findings and outputs between stages |
 | `src/lib/pipelines/engine.routing.test.ts` | continuation chosen by cause (restart, silence, lost host), present and absent compared |
 | `src/lib/pipelines/engine.succession.test.ts` | continuation keeps uncommitted work |
 | `src/lib/pipelines/engine.succession.part2.test.ts` | continuation keeps uncommitted work |

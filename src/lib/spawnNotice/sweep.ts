@@ -74,7 +74,7 @@ export interface SpawnNoticeSweepPorts {
   child(child: string): Promise<SpawnNoticeChildView | null>;
   recipient(launcher: string): SpawnNoticeRecipient;
   lossRelevant?(row: SpawnNoticeTurn): boolean;
-  finalMessage(child: string): SpawnNoticeFinalMessage;
+  finalMessage(child: string, turnId: string, turn?: Pick<SpawnNoticeTurn, "startedAt" | "endedAt">): SpawnNoticeFinalMessage;
   origin(child: string): MessageOrigin;
   recordAttempt(child: string, attempt: SpawnNoticeAttempt): void;
   settle(child: string, turnIds: readonly string[], settlement: SpawnNoticeSettlement, at: string): void;
@@ -141,6 +141,9 @@ export function composeSpawnNotice(input: {
   const lines = [`Agent finished: ${input.title} (${input.child})`];
   const verdict = detectedVerdict(input.final.text);
   if (verdict) lines.push(`Verdict: ${verdict}`);
+  if (newest.outcome === "completed" && verdict === "needs_decision") {
+    lines.push("If this worker still owns the assignment, send the decision and next action to the conversation above with send_message. Check its delivery receipt before any replacement.");
+  }
   const started = newest.startedAt ? Date.parse(newest.startedAt) : Number.NaN;
   const ended = Date.parse(newest.endedAt);
   const ran = Number.isFinite(started) && Number.isFinite(ended) ? ` · ran ${formatRunTime(ended - started)}` : "";
@@ -277,7 +280,7 @@ async function sweepChild(child: string, rows: SpawnNoticeTurn[], ports: SpawnNo
     clientMessageId: spawnNoticeMessageId(child, newest.turnId),
     recipientConversationId: recipient.conversationId,
     recipientPath: recipient.path,
-    text: composeSpawnNotice({ child, title: newest.lost?.title ?? view?.title ?? "spawned agent", turns, final: lost ? { text: null, error: null } : ports.finalMessage(child) }),
+    text: composeSpawnNotice({ child, title: newest.lost?.title ?? view?.title ?? "spawned agent", turns, final: lost ? { text: null, error: null } : ports.finalMessage(child, newest.turnId, newest) }),
     turnIds,
     attempts: 1,
     firstAttemptAt: iso(now),

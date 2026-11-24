@@ -542,7 +542,7 @@ test("the replayed day with no report filed: every owed key is asked for in each
   const day = replayDay(false);
   /* Every wake from the first outcome on carries the owed line: the 21
      outcome wakes plus debt reminders; delivered agendas stay deduped. */
-  expect(day.wakes).toBe(47);
+  expect(day.wakes).toBe(49);
   expect(day.owedLines).toHaveLength(day.wakes);
   let before = 0;
   for (const line of day.owedLines) {

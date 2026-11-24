@@ -32,7 +32,7 @@ export const TRANSCRIPT_SEARCH_FIELDS = ["message.body"] as const;
 export interface TranscriptIndexSource {
   path: string;
   project: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   size: number;
   mtimeMs: number;
 }

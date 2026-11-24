@@ -117,6 +117,37 @@ test("revocations resolve once per decision and a later decision reads a new rev
   expect(resolutions).toBe(103);
 });
 
+test("a named caller checks only its canonical claim, skipping history when no active seat matches", () => {
+  const a = seat({ project: "proj-a", conversationId: "conversation_old", seatEpoch: 5 });
+  const b = seat({ project: "proj-b", conversationId: "conversation_b", seatEpoch: 2 });
+  const revocations: OrchestratorRevocation[] = [];
+  let decisions = 0, historyReads = 0;
+  const checked: string[] = [];
+  const value = sources({
+    activeSeats: () => [a, b],
+    revocations: () => { historyReads++; return revocations; },
+    conversationFacts: id => { checked.push(id); return LIVE; },
+    resolveAlias: () => { throw Error("unexpected separate alias read"); },
+    withAliases: read => {
+      decisions++;
+      return read(id => id === "conversation_old" ? "conversation_a" : id);
+    },
+  });
+
+  expect(authorizedManagerSeats(value, "conversation_worker")).toEqual([]);
+  expect(authorizedManagerSeats(value, "conversation_old")).toEqual([]);
+  expect(historyReads).toBe(0);
+  expect(checked).toEqual([]);
+  expect(authorizedManagerSeats(value, "conversation_a")).toEqual([
+    { conversationId: "conversation_a", project: "proj-a", path: null },
+  ]);
+  expect(checked).toEqual(["conversation_a"]);
+  revocations.push({ project: a.project, conversationId: "conversation_old", seatEpoch: 5, revokedAt: a.designatedAt });
+  expect(authorizedManagerSeats(value, "conversation_a")).toEqual([]);
+  expect(ids(value)).toEqual(["conversation_b"]);
+  expect(decisions).toBe(5);
+});
+
 /* docs/design/ghost-seat.md §4: a deputy speaks for its seat only while that
    seat holds the project at the same epoch, the record is live, and nothing
    revoked the seat. */

@@ -112,6 +112,7 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/attention/needs-you` | POST | project |
 | `/api/board` | GET, PATCH | project |
 | `/api/board/maintenance/worktrees` | POST | owner |
+| `/api/board/work-time` | GET | project |
 | `/api/bridge` | GET, POST | owner |
 | `/api/composer-upload` | POST | owner |
 | `/api/conversation-host` | GET, POST | project |
@@ -399,6 +400,7 @@ unchanged base copy. No workflow files change.
 - `src/app/api/attention/done/route.ts`
 - `src/app/api/attention/needs-you/route.ts`
 - `src/app/api/board/route.ts`
+- `src/app/api/board/work-time/route.ts`
 - `src/app/api/conversation-host/route.test.ts`
 - `src/app/api/conversation-host/route.ts`
 - `src/app/api/conversation-host/targets/route.ts`

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { AgentRegistry, AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { registryCollectionPage, registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
-import { AGENT_STATE_POLICY, emptyAgentStateMetrics, evaluateAgentState, fact, validAgentFacts, validAgentEvidence, type AgentFacts, type AgentProjection, type AgentStateJournal, type AgentStateMetrics } from "./model";
+import { AGENT_STATE_POLICY, emptyAgentStateMetrics, evaluateAgentState, fact, validAgentFacts, validAgentEvidence, type AgentFacts, type AgentProjection, type AgentStateJournal, type AgentStateMetrics, type AgentStateMetricsRow } from "./model";
 
 export function copyAgentStateRow<T>(row: T): T { return JSON.parse(JSON.stringify(row)) as T; }
 const hash = (v: unknown) => crypto.createHash("sha256").update(JSON.stringify(v)).digest("hex");
@@ -17,37 +17,52 @@ export function artifactRevision(entry: AgentRegistryEntry): string {
   return hash([entry.key, entry.artifactPath, entry.structuredHost?.process, entry.structuredHost?.agentStateNativePromptAnchor]);
 }
 
+const metricsDefaults = emptyAgentStateMetrics();
+
 export function normalizeAgentStateRows(value: unknown, kind: "projection"): Record<string, AgentProjection>;
 export function normalizeAgentStateRows(value: unknown, kind: "journal"): Record<string, AgentStateJournal>;
+export function normalizeAgentStateRows(value: unknown, kind: "metrics", preserveStoredShape: true): Record<string, AgentStateMetricsRow>;
 export function normalizeAgentStateRows(value: unknown, kind: "metrics"): Record<string, AgentStateMetrics>;
-export function normalizeAgentStateRows(value: unknown, kind: "projection" | "journal" | "metrics"): Record<string, AgentProjection | AgentStateJournal | AgentStateMetrics> {
+export function normalizeAgentStateRows(value: unknown, kind: "projection" | "journal" | "metrics", preserveStoredShape = false): Record<string, AgentProjection | AgentStateJournal | AgentStateMetricsRow> {
   if (value === undefined) return {};
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid agent-state collection");
-  const rows: Record<string, AgentProjection | AgentStateJournal | AgentStateMetrics> = {};
+  const rows: Record<string, AgentProjection | AgentStateJournal | AgentStateMetricsRow> = {};
   for (const [key, row] of Object.entries(value)) {
     if (!row || row.version !== 1 || key.length > 128 || Buffer.byteLength(JSON.stringify(row)) > 8192
       || (kind === "projection" && (!validAgentFacts(row.facts) || row.subject !== row.facts.subject || !row.verdict || !Number.isSafeInteger(row.revision)))
-      || (kind === "journal" && (row.id !== key || typeof row.at !== "number" || !Array.isArray(row.evidence) || row.evidence.length > 16 || !row.evidence.every(validAgentEvidence)))
-      || (kind === "metrics" && !validAgentStateMetrics(row))) throw new Error("invalid agent-state row");
-    rows[key] = row;
+      || (kind === "journal" && (row.id !== key || typeof row.at !== "number" || !Array.isArray(row.evidence) || row.evidence.length > 16 || !row.evidence.every(validAgentEvidence)))) throw new Error("invalid agent-state row");
+    if (kind === "metrics") {
+      const metrics = normalizeAgentStateMetrics(row);
+      if (!metrics) throw new Error("invalid agent-state row");
+      // Registry snapshots are written as whole files. Keep the original
+      // sparse representation there so an unrelated write cannot migrate history.
+      rows[key] = preserveStoredShape ? row as AgentStateMetricsRow : metrics;
+    } else rows[key] = row;
   }
   return rows;
 }
-export function validAgentStateMetrics(v: unknown): v is AgentStateMetrics {
+export function validAgentStateMetrics(v: unknown): v is AgentStateMetricsRow {
   if (!v || typeof v !== "object" || Array.isArray(v)) return false;
   const row = v as Record<string, unknown>;
-  return Object.entries(emptyAgentStateMetrics()).every(([key, sample]) => {
+  return Object.entries(metricsDefaults).every(([key, sample]) => {
     const value = row[key];
     if (key === "version") return value === 1;
-    if (key === "stuckByEngine" || key === "stuckByReason") return Boolean(value && typeof value === "object" && !Array.isArray(value)
-      && Object.keys(value).length === Object.keys(sample!).length
-      && Object.keys(sample!).every(bucket => typeof (value as Record<string, unknown>)[bucket] === "number"
-        && Number.isSafeInteger((value as Record<string, number>)[bucket]) && (value as Record<string, number>)[bucket]! >= 0));
+    if (key === "stuckByEngine" || key === "stuckByReason") {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const buckets = Object.entries(value);
+      return (key === "stuckByEngine" || buckets.length === Object.keys(sample!).length)
+        && buckets.every(([bucket, count]) => Object.hasOwn(sample!, bucket)
+          && typeof count === "number" && Number.isSafeInteger(count) && count >= 0);
+    }
     if (key === "afterKey") return value === null || typeof value === "string" && value.length <= 128;
     if (sample === null) return value === null || typeof value === "number" && Number.isFinite(value) && value >= 0;
     return typeof value === "number" && Number.isFinite(value) && value >= 0;
   }) && (row.physicalSubjects === undefined || Array.isArray(row.physicalSubjects) && row.physicalSubjects.length <= 16 && row.physicalSubjects.every(id => typeof id === "string" && /^[a-f0-9]{48}$/.test(id)))
-    && Object.keys(row).length === Object.keys(emptyAgentStateMetrics()).length + Number(row.physicalSubjects !== undefined);
+    && Object.keys(row).length === Object.keys(metricsDefaults).length + Number(row.physicalSubjects !== undefined);
+}
+export function normalizeAgentStateMetrics(value: unknown): AgentStateMetrics | null {
+  if (!validAgentStateMetrics(value)) return null;
+  return { ...value, stuckByEngine: { ...metricsDefaults.stuckByEngine, ...value.stuckByEngine } };
 }
 
 export interface StateObservation {
@@ -145,7 +160,7 @@ function boardFacts(row: AgentProjection): string {
 
 /** The repair, conversation axis, journal and totals have one commit boundary. */
 export function commitAgentObservation(registry: AgentRegistry, observation: StateObservation, guard: () => boolean): AgentProjection | null {
-  return registry.agentStateWrite(file => {
+  return registry.agentStateWrite((file, readMetrics) => {
     const key = sessionKeyId(observation.entry.key);
     const current = file.entries[key];
     if (!current || entryRevision(current) !== entryRevision(observation.entry)
@@ -177,7 +192,7 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
       next.divergence = null;
     }
     if (old && !observation.repair && !observation.repairConversation && semantic(old) === semantic(next)) return copyAgentStateRow(old);
-    const metrics = file.agentStateMetrics.current ?? emptyAgentStateMetrics();
+    const metrics = readMetrics();
     metrics.revision++;
     metrics.at = observation.journal.at;
     next.revision = metrics.revision;
@@ -212,15 +227,18 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
 }
 
 export function readAgentStateMetrics(registry: AgentRegistry): AgentStateMetrics {
-  return registry.agentStateRead(file => copyAgentStateRow(file.agentStateMetrics.current ?? emptyAgentStateMetrics()));
+  return registry.agentStateMetricsRead();
 }
 export function readAgentProjection(registry: AgentRegistry, subject: string): AgentProjection | null {
   return registry.agentStateRead(file => copyAgentStateRow(file.agentStates[subject] ?? null));
 }
 export function readAgentStatePage(registry: AgentRegistry, collection: "agentStateJournal" | "agentStateMetrics", after = "", limit = 32) {
+  const currentMetrics = collection === "agentStateMetrics" ? registry.agentStateMetricsRead() : null;
   return registry.agentStateRead(file => {
     const keys = registryCollectionPage(file, collection, after, limit);
-    return { rows: keys.map(key => copyAgentStateRow(file[collection][key])), nextCursor: keys.length === limit ? keys.at(-1) : null };
+    return { rows: keys.map(key => collection === "agentStateMetrics"
+      ? key === "current" && currentMetrics ? currentMetrics : normalizeAgentStateMetrics(file.agentStateMetrics[key])
+      : copyAgentStateRow(file.agentStateJournal[key])), nextCursor: keys.length === limit ? keys.at(-1) : null };
   });
 }
 /** A status transition noticed at the runtime owner must survive a failed files publication. */
@@ -247,10 +265,10 @@ export function acknowledgeAgentProjection(registry: AgentRegistry, subject: str
 
 /** Ending one physical identity never mutates a replacement's registry row. */
 export function recordAgentProcessEnded(registry: AgentRegistry, observed: AgentProjection, journal: AgentStateJournal, guard: () => boolean): boolean {
-  return registry.agentStateWrite(file => {
+  return registry.agentStateWrite((file, readMetrics) => {
     const row = file.agentStates[observed.subject];
     if (!row || row.revision !== observed.revision || row.verdict.state === "dead" || !row.facts.process.determined || !guard()) return false;
-    const metrics = file.agentStateMetrics.current ?? emptyAgentStateMetrics();
+    const metrics = readMetrics();
     const before = copyAgentStateRow(row);
     row.facts.process = fact({ ...row.facts.process.value, status: "dead" }, {
       ...row.facts.process.evidence, observedAt: journal.at, validUntil: undefined,
@@ -269,14 +287,14 @@ export function recordAgentProcessEnded(registry: AgentRegistry, observed: Agent
 
 /** Terminal diagnostics are disposable only after registry custody settled. */
 export function pruneTerminalAgentProjection(registry: AgentRegistry, subject: string, at: number, guard: () => boolean): void {
-  registry.agentStateWrite(file => {
+  registry.agentStateWrite((file, readMetrics) => {
     const row = file.agentStates[subject];
     if (!row || row.verdict.state !== "dead" || row.pendingPublication || !guard()) return;
     const entry = file.entries[row.entryKey];
     if (entry?.structuredHost?.process || entry?.structuredHost?.scope || entry?.structuredHost?.memory?.unit
       || entry?.structuredTerminationSurvivors?.length || entry?.pendingHostExits?.length
       || entry?.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true) return;
-    const metrics = file.agentStateMetrics.current ?? emptyAgentStateMetrics();
+    const metrics = readMetrics();
     if (row.terminalAt === undefined) { row.terminalAt = at; metrics.terminalSubjects++; }
     if (at - row.terminalAt >= 86400_000 || metrics.terminalSubjects > 4096) {
       const old = contribution(row);

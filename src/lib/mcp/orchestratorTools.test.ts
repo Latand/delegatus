@@ -1109,7 +1109,7 @@ test("owner relay admits orchestrator messages only while its recorded run and s
   const run = { requestId: "owner_request", relayId: "relay", targetId: "target", conversationId: caller,
     ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
     ownerTurn: { request: { text: "Hand this request to the seat", requestText: null } } };
-  const store = { v: 1, relays: [{ id: "relay", paused: false, targets: [{ id: "target", enabled: true, ownerTier: true }] }] };
+  const store = { v: 1, relays: [{ id: "relay", paused: false, owner: { namespace: "telegram", id: "101" }, targets: [{ id: "target", enabled: true, ownerTier: true, project: null }] }] };
   const ledger = (runs: unknown[]) => writeRelayFile(externalRelayFile("runs"), { v: 1, runs });
   writeRelayFile(externalRelayFile("relays"), store);
   ledger([]);

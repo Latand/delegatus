@@ -37,7 +37,7 @@ export type EngineStatus = {
 
 type RowKey = { roleId: RoleId; variant?: RoleVariantId };
 
-const ENGINE_NAME: Record<RoleEngine, string> = { claude: "Claude", codex: "Codex" };
+const ENGINE_NAME: Record<RoleEngine, string> = { claude: "Claude", codex: "Codex", antigravity: "Antigravity" };
 
 /* One track list for the head and every row. The model column stops at 220 px
    and the role column takes what is left, so the standalone surface (no step
@@ -144,7 +144,7 @@ export type RoleMove = { row: RowKey; config: RoleConfig | null };
  * resets, a row the install had changed gets that change back. Null unless
  * exactly one engine is connected.
  */
-export function oneEngineMove(roles: readonly MappingCatalogItem[], statuses: Record<RoleEngine, { connected: boolean }>): {
+export function oneEngineMove(roles: readonly MappingCatalogItem[], statuses: { claude: { connected: boolean }; codex: { connected: boolean }; antigravity?: { connected: boolean } }): {
   rows: RowKey[];
   changes: RoleMove[];
   undo: RoleMove[];
@@ -242,7 +242,7 @@ function EngineSegments({ value, label, locked, statuses, onChange }: { value: R
   const { t } = useLocale();
   return (
     <div role="radiogroup" aria-label={t("onboarding.agents.engineAria", { role: label })} className="inline-flex h-8 shrink-0 rounded-[8px] border border-border bg-sunken p-0.5 max-sm:h-auto">
-      {(["claude", "codex"] as const).map((engine) => {
+      {(["claude", "codex", "antigravity"] as const).map((engine) => {
         const checked = value === engine;
         /* A role locked to one engine (visual judgement runs on Claude) cannot be pointed at the other. */
         const refused = !!locked && engine !== locked;
@@ -413,12 +413,17 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
   );
 }
 
-export function AgentMappingTable({ statuses, layout, onConnect }: {
-  statuses: Record<RoleEngine, EngineStatus>;
+export function AgentMappingTable({ statuses: rawStatuses, layout, onConnect }: {
+  statuses: { claude: EngineStatus; codex: EngineStatus; antigravity?: EngineStatus };
   layout: "table" | "card";
   /** Opens the Engines step (or the accounts surface) for the missing engine. */
   onConnect: (engine: RoleEngine) => void;
 }) {
+  const statuses: Record<RoleEngine, EngineStatus> = {
+    claude: rawStatuses.claude,
+    codex: rawStatuses.codex,
+    antigravity: rawStatuses.antigravity ?? { connected: false, account: null },
+  };
   const { t } = useLocale();
   const [roles, setRoles] = useState<MappingCatalogItem[] | null>(null);
   const [resets, setResets] = useState<RoleMappingReset[]>([]);

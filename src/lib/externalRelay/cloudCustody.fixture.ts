@@ -10,13 +10,17 @@ import * as client from "./client";
 
 const [mode, tier] = process.argv.slice(2);
 const relay: PairedRelay = { id: "cloud_custody", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1", name: "Relay", description: "", credential: "fixture",
-  owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-10-20T12:00:00Z", paused: false,
+  owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: "2026-10-20T12:00:00Z", paused: false,
   limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
   targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: true,
     engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
 updateRelayStore(store => ({ ...store, relays: [relay] }));
 let cloud = 0, local = 0, stops = 0;
-const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation(() => { local++; throw Error("unexpected local admission"); });
+const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation(() => {
+  local++;
+  throw Error("unexpected local admission");
+});
+if (tier === "owner" && mode !== "redeliver") selection.mockReturnValueOnce({ kind: "unavailable" });
 const wire = spyOn(client, "relayCall").mockImplementation(async (_base, route) => {
   if (mode === "refused" && route.endsWith("/complete")) throw new client.ExternalRelayError("lease_lost", 409);
   if (mode === "completed" && route.endsWith("/complete")) { process.send?.({ type: "started" }); await new Promise(() => {}); }

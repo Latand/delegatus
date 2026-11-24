@@ -40,6 +40,7 @@ export const WORKSPACE_ROUTES = {
   "/api/attention/needs-you": "project",
   "/api/board": "project",
   "/api/board/maintenance/worktrees": "owner",
+  "/api/board/work-time": "project",
   "/api/bridge": "owner",
   "/api/codex-update/check": "owner",
   "/api/composer-upload": "owner",

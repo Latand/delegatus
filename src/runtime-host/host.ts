@@ -2,7 +2,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { runtimeDataCorruptionCode } from "@/lib/runtime/dataCorruption";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
-import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, DeploymentAdmissionClosedError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
+import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, STARTUP_SESSION_VERSION_BATCH, RuntimeIdempotencyConflictError, DeploymentAdmissionClosedError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { consumeRuntimeEvent, RuntimeConsumerDeferredError, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
@@ -157,6 +157,19 @@ export class RuntimeHost {
         conversationId: request.params?.conversationId as string | undefined,
         artifactPath: request.params?.artifactPath as string | undefined,
       });
+      else if (request.method === "startup-session-evidence") {
+        if (!this.structuredHosts) throw new Error("structured hosts are disabled");
+        const ids = request.params?.conversationIds;
+        if (!Array.isArray(ids) || ids.length > STARTUP_SESSION_VERSION_BATCH
+          || ids.some(id => typeof id !== "string" || !id.trim() || id.length > 512)) {
+          throw new Error("runtime startup session identities are invalid");
+        }
+        const includeEvidence = request.params?.includeEvidence;
+        if (includeEvidence !== undefined && (typeof includeEvidence !== "boolean" || (includeEvidence && ids.length !== 1))) {
+          throw new Error("runtime startup session evidence requires one identity");
+        }
+        result = this.journal.startupSessionEvidence(ids, includeEvidence === true);
+      }
       else if (request.method === "events") result = this.journal.replay(Number(request.params?.after ?? 0));
       else if (request.method === "wait") result = await this.journal.waitForEvents(
         Number(request.params?.after ?? 0),

@@ -1,4 +1,5 @@
 import { gateToolingFiles } from "./gateTooling";
+import { gateAdmissionInterpreter, gateAdmissionLauncherParent } from "./gateAdmissionLauncher";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -288,8 +289,10 @@ export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Sign
  * the independent monitor for the run's entire lifetime. */
 export function spawnHeadlessSignalSandbox(command: string, args: string[], options: SpawnOptions,
   start: typeof spawn = spawn, scope?: string | null): ChildProcess {
-  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
-  const prepared = prepareLaunch(options.env ?? process.env, options.env ?? process.env, bridged);
+  const sourceEnv = options.env ?? process.env;
+  const routedOptions = { ...options, env: { ...sourceEnv, ...installedGateAdmissionEnv(sourceEnv) } };
+  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || routedOptions.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
+  const prepared = prepareLaunch(routedOptions.env!, routedOptions.env!, bridged);
   if ("off" in prepared) {
     // No launcher runs to print the fallback, so a run's own stderr file gets
     // the line here, before the engine's first byte.
@@ -298,15 +301,15 @@ export function spawnHeadlessSignalSandbox(command: string, args: string[], opti
       try { fs.writeSync(stderr, `agent signal sandbox: boundary off, running unprotected: ${prepared.off}\n`); }
       catch { /* The Viewer log below still names the launch. */ }
     }
-    const child = start(command, args, options);
+    const child = start(command, args, routedOptions);
     recordSignalBoundaryOff(child, prepared.off, "headless");
     return child;
   }
   const { launcher, directory } = prepared;
   const receipt = path.join(directory, "ready.json");
-  const env: NodeJS.ProcessEnv = { ...launcherEnv(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt, LLV_SIGNAL_AUTOMATIC: "1" };
-  const child = bridged ? start(command, args, { ...options, env })
-    : start("python3", [launcher, "--automatic", "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
+  const env: NodeJS.ProcessEnv = { ...launcherEnv(routedOptions.env!), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt, LLV_SIGNAL_AUTOMATIC: "1" };
+  const child = bridged ? start(command, args, { ...routedOptions, env })
+    : start("python3", [launcher, "--automatic", "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...routedOptions, env });
   pendingReceipts.set(child, receipt);
   // The launcher's fallback line is in the run's own stderr from its start.
   // Its receipt is read at cleanup, or here, which removes its scratch.
@@ -382,15 +385,49 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
   throw new Error("Gate wrapper unavailable: installed Delegatus tooling must support agent signal namespaces before a managed stage can launch");
 }
 
+/** Route Linux admission calls from older helper copies through the installed
+ * detector. An explicit LLV_GATE_BUN stays a check input. The launcher's
+ * default is local to its caller: the image selects bun-container, and a
+ * bridged agent uses bun from the host PATH. */
+export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.ProcessEnv>> = process.env, localDefault?: string): Record<string, string> {
+  if (process.platform !== "linux") return {};
+  try {
+    const helper = path.join(path.dirname(resolveSignalTooling().gate), "cpu-admission.ts");
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    // Launch and publication can both apply this binding. Rebind the helper
+    // while retaining the caller's original interpreter, or its absence.
+    const recorded = gateAdmissionInterpreter(source.LLV_GATE_BUN);
+    const nativeBun = recorded === undefined ? source.LLV_GATE_BUN || "" : recorded ?? "";
+    // The image's admission default belongs to the launcher. Only a caller's
+    // explicit check input is recorded for reuse and Cloud submission.
+    const launcherBun = nativeBun || localDefault;
+    const body = Buffer.from(`#!/bin/bash
+set -eu
+if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
+  case $2 in
+    --wait|--claim) shift; set -- ${quote(helper)} "$@" ;;
+  esac
+fi
+exec ${launcherBun ? quote(launcherBun) : "bun"} "$@"
+`);
+    const directory = cacheSignalTooling(gateAdmissionLauncherParent(), new Map([["bun", body], ["interpreter", Buffer.from(nativeBun)]]));
+    return { LLV_GATE_BUN: path.join(directory, "bun") };
+  } catch { return {}; }
+}
+
 /** Container paths cannot appear in a host agent's test instructions. The
  * bundled tools have no checkout imports and are published atomically into
  * the home mounted at the same path on both sides of the transition. */
 function cacheHostTooling(launcher: string, scripts: string): { launcher: string; gate: string } {
   const files = new Map([...gateToolingFiles.map(name => [name, fs.readFileSync(path.join(scripts, name))] as const),
     ["launch.py", fs.readFileSync(launcher)] as const]);
+  const directory = cacheSignalTooling(path.join(os.homedir(), ".cache/delegatus/signal-tooling"), files);
+  return { launcher: path.join(directory, "launch.py"), gate: path.join(directory, "gate-slot.sh") };
+}
+
+function cacheSignalTooling(parent: string, files: ReadonlyMap<string, Buffer>): string {
   const digest = createHash("sha256");
   for (const [name, body] of files) digest.update(name).update(body);
-  const parent = path.join(os.homedir(), ".cache/delegatus/signal-tooling");
   fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
   const directory = path.join(parent, digest.digest("hex"));
   if (!fs.existsSync(directory)) {
@@ -404,7 +441,7 @@ function cacheHostTooling(launcher: string, scripts: string): { launcher: string
   for (const [name, body] of files) {
     if (!fs.readFileSync(path.join(directory, name)).equals(body)) throw new Error("agent signal sandbox unavailable: cached host tooling differs from this release");
   }
-  return { launcher: path.join(directory, "launch.py"), gate: path.join(directory, "gate-slot.sh") };
+  return directory;
 }
 
 /** The resource wrapper remains outside the namespace. An injected spawn is
@@ -412,11 +449,13 @@ function cacheHostTooling(launcher: string, scripts: string): { launcher: string
 export async function spawnSignalSandbox(command: string, args: string[], options: SpawnOptions,
   start: typeof spawn = spawn, scope?: string | null, capabilityEnv = options.env ?? process.env, assertCurrent?: () => void): Promise<ChildProcess> {
   assertCurrent?.();
-  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
-  const prepared = prepareLaunch(capabilityEnv, options.env ?? process.env, bridged);
+  const sourceEnv = options.env ?? process.env;
+  const routedOptions = { ...options, env: { ...sourceEnv, ...installedGateAdmissionEnv(sourceEnv) } };
+  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || routedOptions.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
+  const prepared = prepareLaunch(capabilityEnv, routedOptions.env!, bridged);
   if ("off" in prepared) {
     // Main's launch path: the engine under its memory and CPU wrapper only.
-    const child = start(command, args, options);
+    const child = start(command, args, routedOptions);
     await (child as ChildProcess & { spawnReady?: Promise<void> }).spawnReady;
     await retainStructuredSetupProcessOffLoop(child.pid);
     recordSignalBoundaryOff(child, prepared.off, "managed");
@@ -425,11 +464,11 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   const { launcher, directory } = prepared;
   const receipt = path.join(directory, "ready.json");
   const diagnosticFile = options.env?.LLV_SIGNAL_IGNORE_NATIVE_STDIO === "1" ? `${directory}.stderr` : undefined;
-  const env: NodeJS.ProcessEnv = { ...launcherEnv(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt,
+  const env: NodeJS.ProcessEnv = { ...launcherEnv(routedOptions.env!), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt,
     LLV_SIGNAL_EXEC_ACK: assertCurrent ? "1" : undefined,
     ...(diagnosticFile ? { LLV_SIGNAL_DIAGNOSTIC: diagnosticFile } : {}) };
-  const child = bridged ? start(command, args, { ...options, env })
-    : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
+  const child = bridged ? start(command, args, { ...routedOptions, env })
+    : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...routedOptions, env });
   let stderr = "", failure: Error | undefined, closed = false;
   // The head of the output keeps a secret's opening marker with its payload;
   // a clipped tail could start inside one and defeat redaction.

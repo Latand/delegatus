@@ -32,7 +32,7 @@ const step = (job: Job, name: string) => job.steps.find((entry) => entry.name ==
 // Execute the publication suffix with GitHub's step timeout, continue-on-error
 // and original-outcome warning semantics. The CLI double supplies independent
 // baseline, scanner and candidate verdicts without repository or network calls.
-function runPublication(extra: Record<string, string> = {}, budget = "130s") {
+function runPublication(extra: Record<string, string> = {}, budget = "240s") {
   const root = mkdtempSync(join(tmpdir(), "privacy-repair-workflow-"));
   try {
     const log = join(root, "calls");
@@ -66,10 +66,10 @@ esac
       if (entry.id === "privacy-scope") continue;
       if (entry === warning && baselineCode === 0) continue;
       // Only the wall-clock duration changes in timeout controls.
-      const command = ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", entry.run!.replace("130s", budget)];
+      const command = ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", entry.run!.replace("240s", budget)];
       // A local timeout supplies the runner's step deadline. The candidate's
       // shell still enforces its own timeout exactly as the workflow declares.
-      if (entry === baseline) command.unshift("timeout", "--kill-after=5s", budget === "130s" ? `${entry["timeout-minutes"]}m` : budget);
+      if (entry === baseline) command.unshift("timeout", "--kill-after=5s", budget === "240s" ? `${entry["timeout-minutes"]}m` : budget);
       const result = Bun.spawnSync(command, {
         cwd: join(root, entry["working-directory"]!),
         env: { ...process.env, PATH: `${root}:${process.env.PATH}`, GITHUB_EVENT_NAME: "pull_request", CALL_LOG: log, BASELINE_EXIT: "1", SCAN_EXIT: "0", CANDIDATE_EXIT: "0", STALL_DIRECTORY: "", ...extra },
@@ -148,15 +148,15 @@ test("candidate privacy tests run last with a failing time budget", () => {
   const candidate = step(job, "Verify candidate privacy gate behavior within budget");
   expect(job.steps.at(-1)).toBe(candidate);
   expect(candidate["working-directory"]).toBe("candidate");
-  expect(candidate["timeout-minutes"]).toBe(3);
-  expect(candidate.run).toContain("timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts");
+  expect(candidate["timeout-minutes"]).toBe(5);
+  expect(candidate.run).toContain("timeout --kill-after=5s 240s bun test scripts/privacy-*.test.ts");
   const root = mkdtempSync(join(tmpdir(), "privacy-candidate-budget-"));
   try {
     // Drive the actual shell with a short budget and a stalled test process.
     mkdirSync(join(root, "trusted/node_modules"), { recursive: true });
     mkdirSync(join(root, "candidate"));
     writeFileSync(join(root, "bun"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
-    const result = Bun.spawnSync(["bash", "-e", "-c", candidate.run!.replace("130s", "0.1s")], {
+    const result = Bun.spawnSync(["bash", "-e", "-c", candidate.run!.replace("240s", "0.1s")], {
       cwd: join(root, "candidate"),
       env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
       stdout: "pipe", stderr: "pipe",

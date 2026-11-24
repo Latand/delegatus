@@ -602,7 +602,7 @@ function spawnCard(
     cwd: receipt.cwd,
     projectRoot: projectRootForCwd(receipt.cwd) ?? null,
     ...(attribution.worktree ? { worktree: attribution.worktree } : {}),
-    title: receipt.launchProfile.title ?? (receipt.engine === "codex" ? "Codex" : receipt.engine === "copilot" ? "Copilot" : "Claude"),
+    title: receipt.launchProfile.title ?? (receipt.engine === "codex" ? "Codex" : receipt.engine === "copilot" ? "Copilot" : receipt.engine === "antigravity" ? "Antigravity" : "Claude"),
     engine: receipt.engine,
     kind: "session",
     fmt: receipt.engine,
