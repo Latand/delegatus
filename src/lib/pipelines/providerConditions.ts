@@ -33,6 +33,9 @@ export function classifyProviderCondition(engine: RuntimeEngine, errorClass: str
   if ((code === "server_error" && race) || ["overloaded", "rate_limit", "stream_disconnected", "stream_disconnect", "stream_connection_failed", "http_connection_failed"].includes(code)) {
     return { kind: "transient", scope: null, resetLabel: null, label: race ? "auth refresh race" : "transient provider error" };
   }
+  if (engine === "codex" && code === "cyber_policy") {
+    return { kind: "other", scope: null, resetLabel: null, label: "Codex cybersecurity refusal" };
+  }
   if (engine === "codex" && /^failed to load workspace requirements(?::|$)/i.test(text.trim())) {
     return { kind: "transient", scope: null, resetLabel: null, label: CODEX_WORKSPACE_REQUIREMENTS_FAILURE };
   }
