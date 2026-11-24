@@ -5,7 +5,7 @@ function expectRestartHandoverCause(prompt: string, expected: string): void {
   expect(start).toBeGreaterThanOrEqual(0);
   const handover = prompt.slice(start);
   expect(handover).toContain(expected);
-  if (!expected.includes("Delegatus restart")) expect(handover).not.toContain("interrupted by a Delegatus restart");
+  if (!expected.includes("Delegatus restart")) expect(handover).not.toContain("Delegatus restart");
 }
 import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
 import { spawn as spawnChild, spawnSync } from "node:child_process";

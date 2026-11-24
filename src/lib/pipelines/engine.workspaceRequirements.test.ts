@@ -1,6 +1,5 @@
-import { pipelineStageRead } from "@/lib/mcp/compactAnswers";
-import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 import { expect, test, loadPipelines, savePipelines, providerRecoveryHarness, readFixtures, SPARE_ACCOUNT, stageTranscript, tickPipelines, entry } from "./engine.fixture";
+import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 import { recoverPipelineProviderTurn } from "./engine";
 
 const workspaceError = "failed to load workspace requirements: invalid data";
@@ -14,7 +13,7 @@ test.each(["success", "previous-classification", "exhausted", "exhausted-restart
   const stageId = original.cursor!.stageId;
   const attempt = original.runs[0]!.attempts[0]!;
   const originalAttempt = { n: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId, agentPath: attempt.agentPath, sessionId: attempt.sessionId };
-  const current = () => pipelineStageRead(pipeline(), stageId).attempt!;
+  const current = () => pipeline().runs.find(run => run.stageId === stageId)!.attempts.at(-1)!;
   const tick = async () => { await tickPipelines([], { ...f.h.ports }); };
   const records: Record<string, unknown>[] = [];
   const deliveredKeys = new Set<string>();
@@ -65,7 +64,7 @@ test.each(["success", "previous-classification", "exhausted", "exhausted-restart
   const delays = outcome === "exhausted" || outcome === "exhausted-restarts" ? [60_000, 120_000, 240_000] : [60_000];
   for (const [index, delay] of delays.entries()) {
     expect(pipeline().state).toBe("running");
-    expect(current().providerWait).toEqual({ tries: index, resumeAt: new Date(f.now() + delay).toISOString(), lastError });
+    expect(current().providerWait).toMatchObject({ tries: index, resumeAt: new Date(f.now() + delay).toISOString(), text: lastError });
     f.advance(delay - 1);
     await tick();
     expect(sends).toHaveLength(index);
@@ -95,11 +94,11 @@ test.each(["success", "previous-classification", "exhausted", "exhausted-restart
   }
 
   if (outcome !== "exhausted" && outcome !== "exhausted-restarts") {
-    expect(current()).toMatchObject({ verdict: "pass" });
+    expect(current()).toMatchObject({ verdict: { status: "pass" } });
     expect(current().providerWait).toBeUndefined();
   } else {
     expect(pipeline()).toMatchObject({ state: "needs_decision", stateDetail: `stage cut by workspace requirements failure after 3 tries; last: ${lastError}` });
-    expect(current().providerWait).toMatchObject({ tries: 3, lastError });
+    expect(current().providerWait).toMatchObject({ tries: 3, text: lastError });
     expect(pipeline().runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeUndefined();
     f.advance(10 * 60_000);
     await tick();
