@@ -260,12 +260,12 @@ async function main() {
         presence: { claude: agent === "claude" ? "found" : "missing", codex: agent === "codex" ? "found" : "missing" },
       }]);
     }
-    stub("codex", path.join(home, "Applications/Codex.app/Contents/Resources"), audit);
-    entries.push(["desktop-bundle", env, {
-      message: "Agent CLI: codex. Sign in", available: true, presence: { claude: "missing", codex: "found" },
-    }]);
     const caseFailures = await runCases(cases, entries);
-    finalizeCases(report, audit, home, caseFailures);
+    stub("codex", path.join(home, "Applications/Codex.app/Contents/Resources"), audit);
+    const desktopFailures = await runCases(cases, [["desktop-bundle", env, {
+      message: "Agent CLI: codex. Sign in", available: true, presence: { claude: "missing", codex: "found" },
+    }]]);
+    finalizeCases(report, audit, home, [...caseFailures, ...desktopFailures]);
   } catch (error) {
     report.error = publicFixtureText(error.message.replaceAll(target, "<package subject>"), home);
     throw new Error(report.error);
