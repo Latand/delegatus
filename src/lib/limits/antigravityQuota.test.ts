@@ -77,6 +77,10 @@ test("parses explicit individual quota messages across spaced and compact reset 
 
 test("rejects transient per-minute rate limits and non-quota errors, and redacts PII", () => {
   expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: requests per minute exceeded; retry after 10 seconds", BASE_MS)).toBeNull();
+  expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Per-minute request quota exceeded. Retry after 10 seconds.", BASE_MS)).toBeNull();
+  expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'GenerateContentRequestsPerMinutePerProjectPerModel' and limit 'GenerateContent request limit per minute for a region'", BASE_MS)).toBeNull();
+  expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: GenerateContentRequestsPerMinutePerProjectPerModel", BASE_MS)).toBeNull();
+  expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: quota exceeded. Retry after 10 seconds.", BASE_MS)).toBeNull();
   expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: tokens per minute limit reached; retry after 15 seconds", BASE_MS)).toBeNull();
   expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Rate limit exceeded; retry after 10 seconds", BASE_MS)).toBeNull();
   expect(parseAntigravityQuotaError("RESOURCE_EXHAUSTED: Too many requests", BASE_MS)).toBeNull();

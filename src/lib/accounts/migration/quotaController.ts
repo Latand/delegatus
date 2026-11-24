@@ -404,10 +404,43 @@ export class QuotaController {
             observation.authenticated && observation.provenance.source === "live");
         }
         const providerWithUnknownLimits = engine === "claude" && "provider" in account && Boolean(account.provider);
+        const previousObservedMs = previous ? Date.parse(previous.observedAt) : Number.NaN;
+        const previousCapturedMs = previous?.limits?.capturedAt != null ? previous.limits.capturedAt * 1000 : Number.NaN;
+        const previousAuthoritativeMs = Math.max(
+          Number.isFinite(previousObservedMs) ? previousObservedMs : -Infinity,
+          Number.isFinite(previousCapturedMs) ? previousCapturedMs : -Infinity,
+        );
+        const previousAntigravityAuthoritative = engine === "antigravity"
+          && Boolean(
+            previous
+            && (previous.limits !== null
+              || previous.provenance.reason === "antigravity quota reset window elapsed"),
+          );
         const previousAntigravityActive = engine === "antigravity"
           && isAntigravitySessionWindowActive(previous?.limits?.session, Math.floor(now / 1000));
-        if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot" && engine !== "antigravity" && !providerWithUnknownLimits
-          || (previous?.limits && (engine !== "antigravity" || previousAntigravityActive) && Date.parse(previous.observedAt) > observation.observedAt)
+        // An older Antigravity transcript observation (`observation.observedAt < previousAuthoritativeMs`)
+        // must never override a newer observation or move `observedAt` backwards — even after
+        // the newer observation's own reset window has elapsed.
+        if (engine === "antigravity" && observation?.authenticated && observation.limits
+          && previousAntigravityAuthoritative && previousAuthoritativeMs > observation.observedAt) {
+          if (previousAntigravityActive) {
+            observations.push(this.carryForward(engine, account.id, "quota-probe-older", now));
+          } else {
+            observations.push({
+              engine,
+              accountId: account.id,
+              authenticated: observation.authenticated,
+              authCheckedAt: now,
+              limits: null,
+              provenance: { source: "unavailable", reason: "antigravity quota reset window elapsed", staleSince: null },
+              observedAt: previousAuthoritativeMs,
+              envelope: null,
+              resetCredits: previous?.resetCredits ?? null,
+              limitReached: false,
+            });
+          }
+        } else if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot" && engine !== "antigravity" && !providerWithUnknownLimits
+          || (previous?.limits && engine !== "antigravity" && Date.parse(previous.observedAt) > observation.observedAt)
           || (engine === "antigravity" && !observation.limits && previousAntigravityActive)))) {
           observations.push(this.carryForward(engine, account.id, result.reason ?? observation?.provenance.reason ?? (observation?.limits ? "quota-probe-older" : "quota-probe-empty"), now));
         } else {

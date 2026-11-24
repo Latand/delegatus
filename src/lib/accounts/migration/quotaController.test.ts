@@ -345,6 +345,78 @@ test("Antigravity EIO isolation preserves auth & HTTP 200, keeps host exhaustion
     await failingController.tick("antigravity");
     expect(((await (await GET()).json()) as { antigravity?: unknown }).antigravity ?? null).toBeNull();
     expect((await accountManager.status("antigravity", "default", false)).limits.session).toBeNull();
+
+    // 5. After a newer observation's reset passes, an older transcript with a LATER reset
+    //    must NEVER resurrect exhaustion on GET /api/limits, QuotaController.tick, or MCP,
+    //    and must NEVER move observedAt backwards.
+    for (const entry of fs.readdirSync(sessionsDir)) {
+      fs.rmSync(path.join(sessionsDir, entry), { recursive: true, force: true });
+    }
+    const olderObservedMs = Date.parse("2026-11-24T06:27:54.000Z");
+    const olderObservedSec = Math.floor(olderObservedMs / 1000);
+    const olderResetSec = olderObservedSec + 5 * 3600; // 11:27:54 UTC (still in future!)
+    const newerObservedMs = Date.parse("2026-11-24T06:59:54.000Z");
+    const newerObservedSec = Math.floor(newerObservedMs / 1000);
+    const newerResetSec = newerObservedSec + 30 * 60; // 07:29:54 UTC
+
+    const oldSessionDir = path.join(sessionsDir, "older-longer-reset");
+    fs.mkdirSync(oldSessionDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(oldSessionDir, "events.jsonl"),
+      `${JSON.stringify({
+        type: "session.quota_exhausted",
+        timestamp: new Date(olderObservedMs).toISOString(),
+        data: {
+          code: "RESOURCE_EXHAUSTED",
+          message: "Individual quota reached. Resets in 5h",
+          resetsAt: olderResetSec,
+          windowMinutes: 300,
+          usedPercent: 100,
+          observedAt: olderObservedSec,
+        },
+      })}\n`,
+    );
+    registry.recordQuotaObservation({
+      engine: "antigravity",
+      accountId: "default",
+      authenticated: true,
+      authCheckedAt: new Date(newerObservedMs).toISOString(),
+      observedAt: new Date(newerObservedMs).toISOString(),
+      bootId: "antigravity-acp-host",
+      provenance: { source: "transcript", reason: null, staleSince: null },
+      limits: {
+        session: { usedPercent: 100, resetsAt: newerResetSec, windowMinutes: 300, observedAt: newerObservedSec, source: "account" },
+        weekly: null,
+        tiers: [],
+        plan: "Pro",
+        capturedAt: newerObservedSec,
+      },
+      resetCredits: null,
+      limitReached: true,
+    });
+
+    // 1 second AFTER newer reset (07:29:55 UTC), STILL 4 hours BEFORE older transcript's reset (11:27:54 UTC).
+    clock = (newerResetSec + 1) * 1000;
+    setSystemTime(new Date(clock));
+    const httpBeforeTick = await (await GET()).json() as { antigravity?: unknown };
+    expect(httpBeforeTick.antigravity ?? null).toBeNull();
+
+    await controller.tick("antigravity");
+    const afterResurrectionTick = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterResurrectionTick?.limitReached).toBe(false);
+    expect(afterResurrectionTick?.limits).toBeNull();
+    expect(Date.parse(afterResurrectionTick!.observedAt)).toBeGreaterThanOrEqual(newerObservedMs);
+
+    const httpAfterTick = await (await GET()).json() as { antigravity?: unknown };
+    expect(httpAfterTick.antigravity ?? null).toBeNull();
+    const mcpAfterTick = accountLimitRows({
+      engine: "antigravity",
+      accounts: { claude: [], codex: [], copilot: [], antigravity: [{ accountId: "default", authPresent: true }] },
+      active: { claude: null, codex: null, copilot: null, antigravity: "default" },
+      observations: { claude: {}, codex: {}, copilot: {}, antigravity: afterResurrectionTick ? { default: afterResurrectionTick } : {} },
+      now: clock,
+    });
+    expect(mcpAfterTick[0]?.session ?? null).toBeNull();
   } finally {
     setSystemTime();
     setAgentRegistryForTests(null);

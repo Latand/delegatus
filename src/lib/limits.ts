@@ -450,30 +450,50 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
       return { data: null, reason: "antigravity transcript read error", source: "unavailable" };
     }
   })();
-  const antigravityObserved = (() => {
+  const antigravityRawObs = (() => {
     if (!antigravityAccount) return null;
     try {
-      const obs = agentRegistry().quotaObservations("antigravity").find((row) => row.accountId === antigravityAccount.id);
-      const session = obs?.limits?.session;
-      if (!obs?.limits || !isAntigravitySessionWindowActive(session, Math.floor(now / 1000))) return null;
-      return obs;
+      return agentRegistry().quotaObservations("antigravity").find((row) => row.accountId === antigravityAccount.id) ?? null;
     } catch {
       return null;
     }
   })();
   const antigravityRead = (() => {
+    const nowSec = Math.floor(now / 1000);
     const transcriptData = antigravityTranscriptRead?.data ?? null;
-    const observedData = antigravityObserved?.limits ?? null;
-    if (transcriptData && observedData) {
-      const transcriptAt = transcriptData.capturedAt ?? 0;
-      const observedAt = observedData.capturedAt ?? 0;
-      return observedAt > transcriptAt
-        ? { data: observedData, source: antigravityObserved!.provenance.source, reason: antigravityObserved!.provenance.reason }
-        : antigravityTranscriptRead!;
+    const obsCapturedSec = antigravityRawObs?.limits?.capturedAt ?? null;
+    const obsSessionSec = antigravityRawObs?.limits?.session?.observedAt ?? null;
+    const obsMs = antigravityRawObs ? Date.parse(antigravityRawObs.observedAt) : Number.NaN;
+    const obsIsoSec = Number.isFinite(obsMs) ? Math.floor(obsMs / 1000) : null;
+    // Compare by authoritative event time (`observedAt`/`capturedAt`) BEFORE
+    // checking whether the newer observation's reset window has elapsed, so an
+    // older transcript with a later reset can never resurrect an expired newer window.
+    const hasAuthoritativeObs = Boolean(
+      antigravityRawObs
+      && (antigravityRawObs.limits !== null
+        || antigravityRawObs.provenance.reason === "antigravity quota reset window elapsed"),
+    );
+    const obsEventSec = hasAuthoritativeObs
+      ? Math.max(obsCapturedSec ?? 0, obsSessionSec ?? 0, obsIsoSec ?? 0)
+      : 0;
+    const obsActive = Boolean(
+      antigravityRawObs?.limits
+      && isAntigravitySessionWindowActive(antigravityRawObs.limits.session, nowSec),
+    );
+    const observedData = obsActive ? antigravityRawObs!.limits! : null;
+
+    if (transcriptData) {
+      const transcriptAt = transcriptData.capturedAt ?? transcriptData.session?.observedAt ?? 0;
+      if (hasAuthoritativeObs && obsEventSec > transcriptAt) {
+        if (observedData) {
+          return { data: observedData, source: antigravityRawObs!.provenance.source, reason: antigravityRawObs!.provenance.reason };
+        }
+        return { data: null, source: "unavailable" as const, reason: "antigravity quota reset window elapsed" };
+      }
+      return antigravityTranscriptRead!;
     }
-    if (transcriptData) return antigravityTranscriptRead!;
     if (observedData) {
-      return { data: observedData, source: antigravityObserved!.provenance.source, reason: antigravityObserved!.provenance.reason };
+      return { data: observedData, source: antigravityRawObs!.provenance.source, reason: antigravityRawObs!.provenance.reason };
     }
     return antigravityTranscriptRead;
   })();

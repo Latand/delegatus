@@ -20,6 +20,8 @@ const MAX_DIR_CACHE = 32;
 const DIR_SCAN_CACHE_TTL_MS = 30_000;
 const EVENT_TYPE_MARKER = Buffer.from('"session.quota_exhausted"');
 
+const MAX_INCREMENTAL_NEW_DIRS = 64;
+
 interface CachedExhaustionEntry {
   fingerprint: string;
   exhaustion: AntigravityQuotaExhaustion | null;
@@ -27,7 +29,10 @@ interface CachedExhaustionEntry {
 
 interface CachedDirEntry {
   dirFingerprint: string;
-  scannedAtMonoMs: number;
+  fullScanAtMonoMs: number;
+  /** Session directory names observed at the last scan (null when seeded only via
+   * `noteAntigravitySessionActivity` before any directory listing ran). */
+  knownNames: Set<string> | null;
   files: string[];
 }
 
@@ -60,11 +65,18 @@ function fileFingerprintOf(stat: fs.BigIntStats): string {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
 
-function cacheDirTopFiles(sessionsDir: string, dirFingerprint: string, files: string[]): void {
+function cacheDirTopFiles(
+  sessionsDir: string,
+  dirFingerprint: string,
+  files: string[],
+  knownNames: Set<string> | null,
+  fullScanAtMonoMs: number,
+): void {
   dirScanCache.delete(sessionsDir);
   dirScanCache.set(sessionsDir, {
     dirFingerprint,
-    scannedAtMonoMs: performance.now(),
+    fullScanAtMonoMs,
+    knownNames,
     files: files.slice(0, MAX_FILES),
   });
   while (dirScanCache.size > MAX_DIR_CACHE) {
@@ -74,14 +86,32 @@ function cacheDirTopFiles(sessionsDir: string, dirFingerprint: string, files: st
   }
 }
 
-/** Keeps the cached top-N recent session list current when a live Antigravity host
- * creates or appends to a transcript file, avoiding full directory scans on polls. */
+/** Keeps the cached top-N recent session list and known session set current when
+ * a live Antigravity host creates or appends to a transcript file, avoiding
+ * full directory scans on subsequent polls. */
 export function noteAntigravitySessionActivity(sessionsDir: string, transcriptFile: string): void {
   const dirFp = dirFingerprintOf(sessionsDir);
   if (!dirFp) return;
   const cached = dirScanCache.get(sessionsDir);
   const existing = cached ? cached.files.filter((item) => item !== transcriptFile) : [];
-  cacheDirTopFiles(sessionsDir, dirFp, [transcriptFile, ...existing].slice(0, MAX_FILES));
+  const sessionName = path.basename(path.dirname(transcriptFile));
+  const nextKnown = cached?.knownNames ? new Set(cached.knownNames) : null;
+  if (nextKnown && isValidAntigravitySessionId(sessionName)) {
+    nextKnown.add(sessionName);
+  }
+  cacheDirTopFiles(
+    sessionsDir,
+    dirFp,
+    [transcriptFile, ...existing].slice(0, MAX_FILES),
+    nextKnown,
+    cached?.fullScanAtMonoMs ?? performance.now(),
+  );
+}
+
+function sortTopSessionCandidates(candidates: SessionFileCandidate[]): SessionFileCandidate[] {
+  return candidates
+    .sort((a, b) => (b.stat.mtimeNs > a.stat.mtimeNs ? 1 : b.stat.mtimeNs < a.stat.mtimeNs ? -1 : b.file.localeCompare(a.file)))
+    .slice(0, MAX_FILES);
 }
 
 function newestSessionFiles(sessionsDir: string): SessionFileCandidate[] {
@@ -92,7 +122,7 @@ function newestSessionFiles(sessionsDir: string): SessionFileCandidate[] {
   }
   const nowMono = performance.now();
   const cached = dirScanCache.get(sessionsDir);
-  if (cached && cached.dirFingerprint === dirFp && nowMono - cached.scannedAtMonoMs < DIR_SCAN_CACHE_TTL_MS) {
+  if (cached && cached.dirFingerprint === dirFp && nowMono - cached.fullScanAtMonoMs < DIR_SCAN_CACHE_TTL_MS) {
     dirScanCache.delete(sessionsDir);
     dirScanCache.set(sessionsDir, cached);
     const live: SessionFileCandidate[] = [];
@@ -107,23 +137,88 @@ function newestSessionFiles(sessionsDir: string): SessionFileCandidate[] {
     }
   }
 
-  const entries: { file: string; stat: fs.BigIntStats }[] = [];
+  let dirEntries: string[];
   try {
-    for (const name of fs.readdirSync(sessionsDir)) {
-      if (!isValidAntigravitySessionId(name)) continue;
-      const file = path.join(sessionsDir, name, "events.jsonl");
-      try {
-        const stat = fs.statSync(file, { bigint: true });
-        if (stat.isFile()) entries.push({ file, stat });
-      } catch { /* incomplete or removed session */ }
-    }
+    dirEntries = fs.readdirSync(sessionsDir);
   } catch {
     return [];
   }
-  const top = entries
-    .sort((a, b) => (b.stat.mtimeNs > a.stat.mtimeNs ? 1 : b.stat.mtimeNs < a.stat.mtimeNs ? -1 : b.file.localeCompare(a.file)))
-    .slice(0, MAX_FILES);
-  cacheDirTopFiles(sessionsDir, dirFp, top.map((entry) => entry.file));
+
+  // Incremental path: when we already scanned this directory and the directory
+  // changed (e.g. ordinary creation of one or a few new sessions), stat ONLY
+  // the newly appeared sessions plus the <= MAX_FILES cached top files instead
+  // of re-statting every historical session directory.
+  if (cached?.knownNames && nowMono - cached.fullScanAtMonoMs < DIR_SCAN_CACHE_TTL_MS) {
+    const currentNames = new Set<string>();
+    const addedNames: string[] = [];
+    for (const name of dirEntries) {
+      if (!isValidAntigravitySessionId(name)) continue;
+      currentNames.add(name);
+      if (!cached.knownNames.has(name)) addedNames.push(name);
+    }
+    if (addedNames.length <= MAX_INCREMENTAL_NEW_DIRS) {
+      const seenFiles = new Set<string>();
+      const candidates: SessionFileCandidate[] = [];
+      let cachedTopIntact = true;
+      for (const file of cached.files) {
+        const name = path.basename(path.dirname(file));
+        if (!currentNames.has(name)) {
+          cachedTopIntact = false;
+          continue;
+        }
+        try {
+          const stat = fs.statSync(file, { bigint: true });
+          if (stat.isFile()) {
+            candidates.push({ file, stat });
+            seenFiles.add(file);
+          } else {
+            cachedTopIntact = false;
+          }
+        } catch {
+          cachedTopIntact = false;
+        }
+      }
+      const confirmedNames = new Set(currentNames);
+      for (const name of addedNames) {
+        const file = path.join(sessionsDir, name, "events.jsonl");
+        if (seenFiles.has(file)) continue;
+        try {
+          const stat = fs.statSync(file, { bigint: true });
+          if (stat.isFile()) {
+            candidates.push({ file, stat });
+            seenFiles.add(file);
+          } else {
+            confirmedNames.delete(name);
+          }
+        } catch {
+          // Directory created before `events.jsonl` landed; leave it unknown so
+          // a subsequent scan picks it up once the file appears.
+          confirmedNames.delete(name);
+        }
+      }
+      if (cachedTopIntact || candidates.length >= MAX_FILES || candidates.length >= currentNames.size) {
+        const top = sortTopSessionCandidates(candidates);
+        cacheDirTopFiles(sessionsDir, dirFp, top.map((entry) => entry.file), confirmedNames, cached.fullScanAtMonoMs);
+        return top;
+      }
+    }
+  }
+
+  const entries: SessionFileCandidate[] = [];
+  const knownNames = new Set<string>();
+  for (const name of dirEntries) {
+    if (!isValidAntigravitySessionId(name)) continue;
+    const file = path.join(sessionsDir, name, "events.jsonl");
+    try {
+      const stat = fs.statSync(file, { bigint: true });
+      if (stat.isFile()) {
+        entries.push({ file, stat });
+        knownNames.add(name);
+      }
+    } catch { /* incomplete or removed session */ }
+  }
+  const top = sortTopSessionCandidates(entries);
+  cacheDirTopFiles(sessionsDir, dirFp, top.map((entry) => entry.file), knownNames, nowMono);
   return top;
 }
 

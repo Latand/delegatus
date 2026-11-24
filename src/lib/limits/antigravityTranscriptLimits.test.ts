@@ -266,11 +266,31 @@ test("isolates per-file EIO errors and bounds warm directory scan stat calls acr
     expect(opens).toBe(0);
     expect(bytes).toBe(0);
 
-    // Creating a new session subdirectory invalidates the dir cache immediately (nlink/mtime change).
+    // Adding new sessions one by one updates the directory cache incrementally
+    // (<= 6 child stats per poll, never re-statting all 257/258/259 historical dirs).
+    for (let k = 1; k <= 3; k += 1) {
+      writeSession(scaleDir, `fixture-incremental-${k}`, padLine, 2000 + k);
+      stats = 0;
+      opens = 0;
+      readAntigravityTranscriptLimits(scaleDir);
+      expect(stats).toBeLessThanOrEqual(6);
+      expect(opens).toBeLessThanOrEqual(1);
+    }
+
+    // Creating a new session subdirectory with active exhaustion is still picked up immediately with incremental stats.
     writeSession(scaleDir, "fixture-newest-after-warm", exhaustionLine(t0, "Individual quota reached. Resets in 1h", resetAt), 5000);
+    stats = 0;
     const afterNewDir = readAntigravityTranscriptLimits(scaleDir, Date.parse(t0) + 10_000);
+    expect(stats).toBeLessThanOrEqual(6);
     expect(afterNewDir.source).toBe("transcript");
     expect(afterNewDir.data?.session?.usedPercent).toBe(100);
+
+    // Subsequent unchanged poll stays at <= 5 child stats and 0 opens.
+    stats = 0;
+    opens = 0;
+    readAntigravityTranscriptLimits(scaleDir, Date.parse(t0) + 10_000);
+    expect(stats).toBeLessThanOrEqual(5);
+    expect(opens).toBe(0);
   } finally {
     fs.statSync = origStatSync;
     fs.openSync = origOpenSync;

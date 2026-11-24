@@ -25,23 +25,31 @@ export interface AntigravityLimitsMapping {
   expired: boolean;
 }
 
-/** Transient burst/throughput throttles (e.g. RPM/TPM 429s) that can be retried
- * after seconds and MUST NOT be misclassified as 5-hour account quota exhaustion. */
+/** Transient burst/throughput throttles (e.g. RPM/TPM 429s and per-minute metric
+ * limits) that can be retried after seconds and MUST NOT be misclassified as
+ * 5-hour account quota exhaustion. Checked BEFORE any positive quota match. */
 const TRANSIENT_RATE_LIMIT_PATTERNS: readonly RegExp[] = [
+  /\bper[\s_-]?(?:minute|min|second|sec)\b/i,
+  /(?:requests?|tokens?|queries|input|output|generatecontent\w*)per(?:minute|second)/i,
   /\b(?:requests?|tokens?|queries)\s+per\s+(?:minute|second)\b/i,
-  /\b(?:rpm|tpm|qpm|qps)\b/i,
-  /\brate[\s_-]*limit(?:ed|s)?\b/i,
+  /\b(?:rpm|tpm|qpm|qps|rps)\b/i,
+  /\brate[\s_-]*limit(?:ed|ing|s)?\b/i,
   /\btoo\s+many\s+requests\b/i,
+  /\b(?:burst|throttl(?:ed|ing))\b/i,
+  /\bper[\s_-]?project\b/i,
 ];
 
 /** Explicit individual/account quota exhaustion messages from Antigravity (`agy`).
- * Bare `RESOURCE_EXHAUSTED` alone is insufficient because Google APIs also use
- * that gRPC status for transient per-minute rate limits. */
+ * Bare `RESOURCE_EXHAUSTED` or generic `quota exceeded` alone is insufficient
+ * because Google APIs also use those strings for short-lived per-minute/project
+ * request limits. */
 const QUOTA_ERROR_PATTERNS: readonly RegExp[] = [
-  /\bIndividual\s+quota\s+reached\b/i,
-  /\bquota\s+(?:has\s+been\s+)?(?:exhausted|reached|exceeded)\b/i,
+  /\bIndividual\s+quota\s+(?:reached|exhausted|exceeded)\b/i,
+  /\b(?:your|account|user|personal|usage|antigravity)\s+quota\s+(?:has\s+been\s+)?(?:exhausted|reached|exceeded)\b/i,
+  /\bquota\s+(?:has\s+been\s+)?(?:exhausted|reached|exceeded)\s+for\s+(?:your\s+)?(?:account|user|plan|tier)\b/i,
   /\bexhausted\s+your\s+(?:capacity|quota)\b/i,
   /\byour\s+quota\s+will\s+reset\b/i,
+  /\bquota\s+(?:has\s+been\s+)?(?:exhausted|reached|exceeded)\b(?=.*(?:\bresets?\s+(?:in|after|at)\b|\buntil\s+\d{4}-\d{2}-\d{2}T|\b(?:5[\s-]?hour|five[\s-]?hour)\b))/i,
 ];
 
 const RESET_DURATION_PHRASE = /\b(?:(?:resets?|try\s+again|available)\s+in|reset\s+after)\s+([^.\n,;]+)/i;
