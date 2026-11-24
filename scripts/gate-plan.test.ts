@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
+import * as platformScopeModule from "./ci-platform-scope";
 import { executedPaths, workflowEntries } from "./ci-platform-scope";
 import { gatePlan } from "./gate-plan";
 import { createHookFixture } from "./local-gate.fixture";
@@ -37,7 +38,7 @@ test.each([
   { profile: "runtime and native matrix", file: "Dockerfile", push: ["privacy", ...runtime], commit: ["staged whitespace"], batch: ["dependencies", "tsc", "privacy"] },
   { profile: "dependency", file: "package.json", push: ["privacy", "frozen install", "types", ...linux, "audit retry tests", "supply chain"], commit: ["staged whitespace"], batch: ["dependencies", "tsc", "privacy"] },
   { profile: "workflow and privacy", file: ".github/workflows/privacy-publication.yml", push: ["privacy", "types", "touched tests"], commit: ["staged whitespace"], batch: ["dependencies", "tsc", "privacy"] },
-  { profile: "shared source", file: "example.ts", push: ["privacy", "types", "eslint", "touched tests"], commit: ["staged whitespace", "eslint"], batch: ["dependencies", "tsc", "eslint", "privacy", "tests"] },
+  { profile: "shared source", file: "example.ts", push: ["privacy", "types", "eslint", "touched tests"], commit: ["staged whitespace", "eslint"], batch: ["dependencies", "tsc", "eslint", "tests", "privacy"] },
 ])("$profile preserves the ordered obligations of each adapter", ({ file, push, commit: staged, batch }) => {
   const f = fixture();
   if (file.includes("privacy-publication")) {
@@ -181,9 +182,18 @@ test("platform helper bytes invalidate cached discovery without changing the Git
   f.git("update-ref", "refs/remotes/origin/main", "HEAD");
   write(f, "example.ts", "export const value = 2;\n");
   commit(f);
-  const first = gatePlan(f.dir, { profile: "pre-push" }, f.env);
-  expect(first.changedPaths).toEqual(["example.ts"]);
-  expect(names(first)).not.toContain("Linux tests");
+  const closure = spyOn(platformScopeModule, "executedPaths");
+  let first: ReturnType<typeof gatePlan>;
+  try {
+    first = gatePlan(f.dir, { profile: "pre-push" }, f.env);
+    expect(closure).toHaveBeenCalledTimes(1);
+    expect(first.changedPaths).toEqual(["example.ts"]);
+    expect(names(first)).not.toContain("Linux tests");
+    const admitted = gatePlan(f.dir, { profile: "pre-push" }, f.env, process.execPath, first.planId);
+    expect(admitted.planId).toBe(first.planId);
+    expect(admitted.checks).toEqual(first.checks);
+    expect(closure).toHaveBeenCalledTimes(1);
+  } finally { closure.mockRestore(); }
 
   writeFileSync(helper, '#!/bin/sh\nbun "../example.ts"\n');
   const entries = workflowEntries(readFileSync(workflow, "utf8"));
@@ -198,7 +208,45 @@ test("platform helper bytes invalidate cached discovery without changing the Git
   expect(after.planId).not.toBe(first.planId);
 });
 
-test("batch graph follows privacy before native and reviewed observations with trusted scan arguments", () => {
+test("privacy helper bytes invalidate a warm selection and preserve its privacy self-test", () => {
+  const f = fixture();
+  write(f, "scripts/privacy-fixture.test.ts", "import './ignored-privacy-helper';\n");
+  write(f, "scripts/ignored-privacy-helper.ts", "export const value = 1;\n");
+  write(f, "src/privacy-target.ts", "export const value = 1;\n");
+  mkdirSync(f.writablePath(".git/info"), { recursive: true });
+  writeFileSync(f.writablePath(".git/info/exclude"), "scripts/ignored-privacy-helper.ts\n");
+  f.git("add", "scripts/privacy-fixture.test.ts");
+  f.git("commit", "--quiet", "-m", "privacy closure baseline");
+  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  write(f, "src/privacy-target.ts", "export const value = 2;\n");
+  commit(f);
+  const first = gatePlan(f.dir, { profile: "pre-push" }, f.env);
+  expect(names(first)).not.toContain("touched tests");
+  writeFileSync(f.writablePath("scripts/ignored-privacy-helper.ts"), "import '../src/privacy-target.ts';\n");
+  const warm = gatePlan(f.dir, { profile: "pre-push" }, f.env);
+  const fresh = gatePlan(f.dir, { profile: "pre-push" }, f.env, process.execPath, "forced-fresh");
+  expect(names(warm)).toContain("touched tests");
+  expect(warm.checks.find(check => check.step.name === "touched tests")?.files).toContain("scripts/privacy-fixture.test.ts");
+  expect(warm.planId).not.toBe(first.planId);
+  expect(warm.planId).toBe(fresh.planId);
+  expect(names(warm)).toEqual(names(fresh));
+});
+
+test("batch resolution selection works without the platform workflow", () => {
+  const f = fixture();
+  write(f, "src/example.ts", "export const value = 1;\n");
+  const base = commit(f);
+  write(f, "src/example.ts", "export const value = 2;\n");
+  write(f, "src/example.test.ts", "test('native case', () => {});\n");
+  const head = commit(f);
+  rmSync(f.writablePath(".github/workflows/platform-tests.yml"));
+  const batch = gatePlan(f.dir, { profile: "batch", base, subject: head }, f.env);
+  expect(names(batch)).toEqual(["dependencies", "tsc", "eslint", "tests", "privacy"]);
+  expect(batch.checks.find(check => check.step.name === "tests")?.step.command)
+    .toEqual(["bun", "test", "./src/example.test.ts"]);
+});
+
+test("reviewed batch graph runs its full trusted scan before the reviewed test comparisons", () => {
   const f = fixture();
   write(f, "src/example.ts", "export const value = 1;\n");
   const base = commit(f);
@@ -206,14 +254,14 @@ test("batch graph follows privacy before native and reviewed observations with t
   write(f, "src/example.test.ts", "test('native case', () => {});\n");
   const head = commit(f);
   const plan = gatePlan(f.dir, { profile: "batch", base, reviewed: [{ number: 17, base, head }] }, f.env);
-  expect(names(plan)).toEqual(["dependencies", "tsc", "eslint", "privacy", "tests", "reviewed detectors", "test attribution"]);
+  expect(names(plan)).toEqual(["dependencies", "tsc", "eslint", "privacy", "reviewed detectors", "test attribution"]);
   expect(plan.checks.map(check => [check.step.name, check.after])).toEqual([
     ["dependencies", []], ["tsc", ["dependencies"]], ["eslint", ["tsc"]], ["privacy", ["eslint"]],
-    ["tests", ["privacy"]], ["reviewed detectors", ["privacy"]], ["test attribution", ["reviewed detectors"]],
+    ["reviewed detectors", ["privacy"]], ["test attribution", ["reviewed detectors"]],
   ]);
   expect(plan.checks.find(check => check.step.name === "privacy")?.step.command)
     .toEqual(["bun", "scripts/privacy-publication-gate.ts", "--base", base, "--require-known-values", "--check-commits"]);
-  const dispatched = plan.checks.filter(check => !["tests", "reviewed detectors", "test attribution"].includes(check.step.name))
+  const dispatched = plan.checks.filter(check => !["reviewed detectors", "test attribution"].includes(check.step.name))
     .map(check => check.step.name);
   expect(dispatched).toEqual(["dependencies", "tsc", "eslint", "privacy"]);
   expect(plan.checks.find(check => check.step.name === "reviewed detectors")?.after).toEqual(["privacy"]);

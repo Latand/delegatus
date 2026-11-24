@@ -214,6 +214,21 @@ export class GateCache<T> {
       if (record.key === key && record.digest === fingerprint(record.value) && this.valid(record.value)) return record.value;
     } catch { /* Optional acceleration never authorizes a missing verdict. */ }
   }
+  /** Locate a previously named immutable value without repeating its expensive
+   * discovery. The caller must validate every recorded input before reuse. */
+  find(predicate: (value: T) => boolean): T | undefined {
+    try {
+      for (const name of readdirSync(this.directory).filter(file => /^[a-f0-9]{64}\.json$/.test(file)).sort()) {
+        try {
+          const file = path.join(this.directory, name);
+          const stat = statSync(file);
+          if (stat.size > 1024 * 1024 || Date.now() - stat.mtimeMs > this.maxAgeMs) continue;
+          const record = JSON.parse(readFileSync(file, "utf8"));
+          if (record.digest === fingerprint(record.value) && this.valid(record.value) && predicate(record.value)) return record.value;
+        } catch { /* Skip a damaged optional entry and keep looking. */ }
+      }
+    } catch { /* Optional acceleration remains a miss on any invalid record. */ }
+  }
   remove(key: string): void {
     try { rmSync(path.join(this.directory, `${fingerprint(key)}.json`), { force: true }); } catch { /* Miss on the next validated read. */ }
   }

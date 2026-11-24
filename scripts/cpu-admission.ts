@@ -630,17 +630,22 @@ async function serveQueue(queue: CpuAdmissionQueue) {
     if (gateSlot && fullSlotLimit(queue, claimSlot) !== undefined) return { reason, wait: null, slotBlocked: true };
     checkOwner();
     const wait = queue.check(key!, !reason, owner, mode === "--claim", priority, true, gateSlot);
-    if (mode === "--wait" && wait && process.env.LLV_GATE_RECORD_WAIT_ONLY) {
+    if (mode === "--wait" && process.env.LLV_GATE_RECORD_WAIT_ONLY &&
+      queue.waitingGateTickets().some(ticket => ticket.key === key)) {
       try {
         const file = process.env.LLV_GATE_RECORD_WAIT_ONLY!;
         if (path.isAbsolute(file) && path.basename(file) === "wait-only.json") {
           const phase = JSON.parse(fs.readFileSync(file, "utf8"));
           const parent = JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY ?? "null");
-          const identity = cpuOwnerIdentity(Number(pid));
-          const scope = fs.readFileSync(`/proc/${pid}/cgroup`, "utf8");
+          // Store the exact normalized identity checked by CpuAdmissionQueue.
+          // In a signal sandbox this is a host PID, so observe its cgroup in
+          // the same proc view used by the legacy-holder recheck.
+          const identity = owner;
+          const procView = signalSandboxContext()?.hostProc ?? "/proc";
+          const scope = fs.readFileSync(path.join(procView, String(identity.pid), "cgroup"), "utf8");
           if (phase.version === 1 && phase.recorder?.pid === parent?.pid &&
             phase.recorder?.startIdentity === parent?.startIdentity && cpuOwnerStatus(phase.recorder) === "alive" &&
-            identity.pid === Number(pid) && typeof identity.startIdentity === "string" && identity.startIdentity.startsWith(`${pid}:`)) {
+            identity.pid === owner.pid && typeof identity.startIdentity === "string" && identity.startIdentity.startsWith(`${identity.pid}:`)) {
             const updated = { ...phase, child: { ticket: key, identity, scope } };
             const temp = `${file}.${process.pid}.tmp`;
             fs.writeFileSync(temp, JSON.stringify(updated), { mode: 0o600, flag: "wx" });

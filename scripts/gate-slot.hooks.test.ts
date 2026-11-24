@@ -539,7 +539,7 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
     }
   }, 60_000);
 
-test.skipIf(!hasUserManager).each([
+test.skipIf(process.platform !== "linux").each([
   { cap: 1, mode: "drain" }, { cap: 2, mode: "drain" }, { cap: 6, mode: "drain" }, { cap: 1, mode: "deadline" },
   { cap: 2, mode: "recorder identity changed" },
 ])("a recorded native pre-push and competing waiter at cap $cap ($mode)", async ({ cap, mode }) => {
@@ -630,16 +630,14 @@ test.skipIf(!hasUserManager).each([
         if (mode === "recorder identity changed") stale.recorder.startIdentity = `${stale.recorder.pid}:0`;
         else stale.child.ticket = second.key;
         fs.writeFileSync(phaseFile, JSON.stringify(stale));
-      }
-      fs.writeFileSync(releaseHolder, "release");
-      expect((await pending[0]!).code).toBe(0);
-      if (phase) {
         const poll = () => f.db.query<{ polled: number }, [string]>("SELECT polled FROM tickets WHERE key = ?").get(first.key)?.polled;
         const before = poll();
         await until(() => poll() !== before, 5_000, diag);
         expect(waiting().map(ticket => ticket.key)).toEqual([first.key, second.key]);
         fs.writeFileSync(phaseFile, phase);
       }
+      fs.writeFileSync(releaseHolder, "release");
+      expect((await pending[0]!).code).toBe(0);
       const opened = performance.now();
       await until(() => !waiting().some(ticket => ticket.key === first.key), 12_000, diag);
       const firstWait = Math.round(performance.now() - opened);

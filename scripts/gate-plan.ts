@@ -155,7 +155,9 @@ function siblingTests(root: string, files: readonly string[]): string[] {
   return [...tests];
 }
 
-export function discover(root: string, base: string, files: readonly string[], mode: Mode = "pre-push", tests = siblingTests(root, [...files, "scripts/local-gate.ts"])): PlanEnvironment {
+type DiscoveryClosures = { privacy?: ReadonlySet<string>; platform?: ReadonlySet<string> };
+export function discover(root: string, base: string, files: readonly string[], mode: Mode = "pre-push",
+  tests = siblingTests(root, [...files, "scripts/local-gate.ts"]), closures: DiscoveryClosures = {}): PlanEnvironment {
   const existing = new Set(files.filter(file => existsSync(path.join(root, file))));
   const privacyTests = tests.filter(file => /^scripts\/privacy-.*\.test\.ts$/.test(file));
   let privacySelfTests: string[] = [];
@@ -165,7 +167,7 @@ export function discover(root: string, base: string, files: readonly string[], m
     // The same import and execution closure as the required hosted check.
     if (directlyChanged) privacySelfTests = privacyTests;
     else {
-      const inputs = executedPaths(root, [...privacyTests, "test-preload.ts"]);
+      const inputs = closures.privacy ?? executedPaths(root, [...privacyTests, "test-preload.ts"]);
       if (files.some(file => inputs.has(file))) privacySelfTests = privacyTests;
     }
   }
@@ -178,7 +180,9 @@ export function discover(root: string, base: string, files: readonly string[], m
     base, existing, tests, privacySelfTests,
     // An empty diff is "run" to the CI scope, where skipping must be proven.
     // Here it is proven: nothing changed, so no platform job has a subject.
-    linux: process.platform === "linux" && files.length > 0 && platformScope({ root, workflow: platformFile, prefixes: ["src/lib/proc/"], changed: files }).run,
+    linux: process.platform === "linux" && files.length > 0 && (closures.platform
+      ? files.some(file => file === platformFile || ALWAYS_IN_SCOPE.includes(file) || file.startsWith("src/lib/proc/") || closures.platform!.has(file))
+      : platformScope({ root, workflow: platformFile, prefixes: ["src/lib/proc/"], changed: files }).run),
     runtime: runtimeChanged,
     native: runtimeChanged,
     linuxTests: workflowEntries(platform.jobs["windows-platform"]!.steps.find(step => step.name === "Platform tests")!.run!).filter(isTest),
@@ -333,6 +337,8 @@ export type TreeTestFile = TreeTestEntry & { file: string };
 
 export interface GatePlan extends PlanInputs {
   readonly planId: string;
+  readonly requestId: string;
+  readonly discoveryInputs: readonly (readonly [string, string])[];
   readonly checks: readonly GateCheck[];
   readonly detectors?: DetectorSelection;
 }
@@ -342,7 +348,9 @@ const strings = (value: unknown): value is string[] => Array.isArray(value) && v
 function validPlan(value: unknown): value is GatePlan {
   if (!value || typeof value !== "object") return false;
   const plan = value as GatePlan;
-  return plan.version === VERSION && sha(plan.planId) && Array.isArray(plan.checks) && plan.checks.length > 0 &&
+  return plan.version === VERSION && sha(plan.planId) && sha(plan.requestId) && Array.isArray(plan.discoveryInputs) &&
+    plan.discoveryInputs.every(row => Array.isArray(row) && row.length === 2 && typeof row[0] === "string" && (sha(row[1]) || row[1] === "missing")) &&
+    Array.isArray(plan.checks) && plan.checks.length > 0 &&
     plan.checks.every(check => check && sha(check.checkKey) && check.step && typeof check.step.name === "string" &&
       strings(check.step.command) && check.step.command.length > 0 && strings(check.after) && strings(check.files)) &&
     new Set(plan.checks.map(check => check.step.name)).size === plan.checks.length;
@@ -379,8 +387,8 @@ function stepsForBatch(base: string, paths: string[], existing: ReadonlySet<stri
     { name: "dependencies", command: ["bun", "install", "--frozen-lockfile"], capped: true },
     { ...types(), name: "tsc" },
     ...(lint.length ? [{ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", base, ...lint], capped: true }] : []),
+    ...(detectorBrowser === undefined && tests.length ? [{ name: "tests", command: ["bun", "test", ...tests.map(file => `./${file}`)], capped: true }] : []),
     { name: "privacy", command: ["bun", "scripts/privacy-publication-gate.ts", "--base", base, "--require-known-values", "--check-commits"], capped: true },
-    ...(tests.length ? [{ name: "tests", command: ["bun", "test", ...tests.map(file => `./${file}`)], capped: true }] : []),
     ...(detectorBrowser === undefined ? [] : [
       { name: "reviewed detectors", command: ["bun", "test"], capped: true, selection: detectorBrowser ? "include browser" : "exclude browser" },
       { name: "test attribution", command: ["bun", "test"], capped: true, selection: "reported cases and omitted-member controls" },
@@ -438,8 +446,8 @@ function identifyChecks(inputs: PlanInputs, steps: Step[], bindings: string, com
   });
 }
 
-/** Read the inputs that can change selection before opening the plan cache.
- * The expensive reachable-script/workflow analysis runs only on a miss. */
+/** Read stable selection inputs first. An admitted child can validate the
+ * parent's recorded discovery files by identity and reuse its immutable plan. */
 export function gatePlan(root: string, operation: Operation, env: NodeJS.ProcessEnv = process.env, execPath = process.execPath,
   expectedPlanId?: string): GatePlan {
   const { profile } = operation;
@@ -470,19 +478,33 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
     return batch ? existsSync(absolute) && statSync(absolute, { throwIfNoEntry: false })?.isFile() : existsSync(absolute);
   }));
   const siblings = batch ? [] : siblingTests(root, [...files, "scripts/local-gate.ts"]);
-  const platformWorkflowPath = path.join(root, ".github/workflows/platform-tests.yml");
-  const platformInputs = executedPaths(root, workflowEntries(readFileSync(platformWorkflowPath, "utf8")));
-  const sourceInputs = [...new Set([...dirty.filter(file => batchSource.test(file)), ...platformInputs,
-    ".github/workflows/platform-tests.yml", ".github/workflows/bun-runtime.yml", "Dockerfile", "bun.lock", "package.json",
-    "node_modules/typescript/package.json", "node_modules/eslint/package.json"])]
-    .map(file => [file, fileFingerprint(path.join(root, file))]);
   // The slot wrapper supplies this default to both producers. Normalize its
   // absent form when naming the graph before that wrapper runs.
   const checkEnv = checkEnvironment({ ...env, NODE_OPTIONS: env.NODE_OPTIONS || "--max-old-space-size=11264" });
   const compilerInput = dependencyTreeFingerprint(root, "node_modules/typescript");
-  const bindings = fingerprint([process.platform, process.arch, Bun.version, execPath, SUPPORTED_CODEX_VERSIONS,
-    environmentFingerprint(checkEnv), sourceInputs, compilerInput,
-    ...[env.PATH, checkEnv.PATH].map(PATH => ["bun", "bunx", "node", "git"].map(tool => Bun.which(tool, { PATH: PATH ?? "" })))]);
+  const tools = [env.PATH, checkEnv.PATH].map(PATH => ["bun", "bunx", "node", "git"].map(tool => Bun.which(tool, { PATH: PATH ?? "" })));
+  const runtimeBinding = [process.platform, process.arch, Bun.version, execPath, SUPPORTED_CODEX_VERSIONS,
+    environmentFingerprint(checkEnv), compilerInput, tools];
+  const requestId = fingerprint([VERSION, profile, subject, base, tree, changedPaths, selector, trustPolicy, runtimeBinding,
+    files, [...existing], siblings, batch?.browser ?? false, batch?.detectorBrowser ?? false,
+    batch?.reviewed?.map(row => [row.number, row.base, row.head])]);
+  const cache = new GateCache<GatePlan>(cacheDirectory(root, "plans"), validPlan);
+  if (expectedPlanId) {
+    const cached = cache.find(candidate => candidate.planId === expectedPlanId && candidate.requestId === requestId &&
+      candidate.discoveryInputs.every(([file, digest]) => fileFingerprint(path.join(root, file)) === digest));
+    if (cached) return freezePlan(cached);
+  }
+  const platformWorkflow = ".github/workflows/platform-tests.yml";
+  const platformInputs = batch ? new Set<string>() : executedPaths(root,
+    workflowEntries(readFileSync(path.join(root, platformWorkflow), "utf8")));
+  const privacyTests = siblings.filter(file => /^scripts\/privacy-.*\.test\.ts$/.test(file));
+  const privacyInputs = !batch && profile === "pre-push" && privacyTests.length
+    ? executedPaths(root, [...privacyTests, "test-preload.ts"]) : new Set<string>();
+  const sourceInputs = [...new Set([...dirty.filter(file => batchSource.test(file)), ...platformInputs, ...privacyInputs,
+    ...(batch ? [] : [platformWorkflow]), ".github/workflows/bun-runtime.yml", "Dockerfile", "bun.lock", "package.json",
+    "node_modules/typescript/package.json", "node_modules/eslint/package.json"])]
+    .map(file => [file, fileFingerprint(path.join(root, file))] as const);
+  const bindings = fingerprint([runtimeBinding, sourceInputs]);
   const reviewed = batch?.reviewed?.map(row => ({ number: row.number, base: commit(row.base), head: commit(row.head) }));
   const runtime = files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
   const changeClass = profile === "pre-commit" ? "staged" : !files.length ? "empty"
@@ -490,18 +512,18 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
   const inputs: PlanInputs = { version: VERSION, profile, subject, base, tree, changeClass, changedPaths, selector, trustPolicy,
     discovery: fingerprint([files, [...existing], siblings, bindings, batch?.browser ?? false, batch?.detectorBrowser ?? false, reviewed]) };
   const key = fingerprint(inputs);
-  const cache = new GateCache<GatePlan>(cacheDirectory(root, "plans"), validPlan);
   const stored = cache.read(key);
   const planId = (checks: readonly GateCheck[], detectors?: DetectorSelection) => fingerprint([key, checks, detectors]);
   if (stored) {
-    const { planId: storedId, checks, detectors, ...header } = stored;
+    const { planId: storedId, checks, detectors, requestId: _requestId, discoveryInputs: _discoveryInputs, ...header } = stored;
     if ((!expectedPlanId || expectedPlanId === storedId) && storedId === planId(checks, detectors) && fingerprint(header) === key)
       return freezePlan(stored);
   }
   const detectorBrowser = reviewed ? batch?.detectorBrowser ?? batch?.browser ?? false : undefined;
   const detectors = reviewed ? selectDetectors(root, base, subject, files, reviewed) : undefined;
   const steps = batch ? stepsForBatch(base, files, existing, batch.browser ?? false, detectorBrowser)
-    : plan(profile as Mode, files, { ...discover(root, base, files, profile as Mode, siblings),
+    : plan(profile as Mode, files, { ...discover(root, base, files, profile as Mode, siblings,
+      { privacy: privacyInputs, platform: platformInputs }),
       existing, base: profile === "pre-commit" ? "HEAD" : base, lintBase: base });
   let bunPin: string | undefined;
   if (steps.some(step => step.pinned)) {
@@ -509,7 +531,7 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
     catch { /* Keep the required check. Its runtime preparation reports the error. */ }
   }
   const checks = identifyChecks(inputs, steps, bindings, compilerInput, env, execPath, detectors, bunPin);
-  const built = { ...inputs, checks, ...(detectors ? { detectors } : {}), planId: planId(checks, detectors) };
+  const built = { ...inputs, requestId, discoveryInputs: sourceInputs, checks, ...(detectors ? { detectors } : {}), planId: planId(checks, detectors) };
   cache.write(key, built);
   return freezePlan(built);
 }
