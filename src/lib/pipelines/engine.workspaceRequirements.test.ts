@@ -194,3 +194,49 @@ test.each(["ordinary tick", "provider observer"] as const)("a delayed continuati
     expect(sent).toHaveLength(delivered + 1);
   }
 });
+
+test.each(["ordinary tick", "provider observer"] as const)("the %s parks an unresolved continuation receipt after its reconciliation bound", async entrypoint => {
+  const f = await providerRecoveryHarness("codex", "other", workspaceError);
+  const initial = loadPipelines()[0]!;
+  const attempt = initial.runs[0]!.attempts[0]!;
+  const transcriptPath = attempt.agentPath!;
+  let preAcknowledgement: ReturnType<typeof loadPipelines> | undefined;
+  const sent: string[] = [];
+  f.h.ports.resumeSeveredTurn = async input => {
+    sent.push(input.clientMessageId);
+    preAcknowledgement = structuredClone(loadPipelines());
+    f.h.setConversationActive(true);
+    return true;
+  };
+  f.h.ports.conversationDeliveryCompleted = () => false;
+  f.h.ports.conversationDeliveryRetryable = async () => false;
+  const process = async () => {
+    if (entrypoint === "ordinary tick") await tickPipelines([entry(transcriptPath)], { ...f.h.ports });
+    else await recoverPipelineProviderTurn(initial.id, { ...f.h.ports });
+  };
+
+  await process();
+  f.advance(60_000);
+  await process();
+  expect(sent).toHaveLength(1);
+  expect(preAcknowledgement).toBeDefined();
+
+  savePipelines(preAcknowledgement!);
+  f.h.setConversationActive(false);
+  f.advance(1_000);
+  f.cut();
+  await process();
+  const pending = loadPipelines()[0]!;
+  expect(pending.runs[0]!.attempts[0]!.providerWait).toMatchObject({
+    continuationRequestedAt: expect.any(String), receiptWaitStartedAt: expect.any(String), tries: 0,
+  });
+  f.advance(10 * 60_000);
+  await process();
+
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision" });
+  expect(parked.stateDetail).toContain("provider continuation receipt remained unresolved for 10 minutes");
+  expect(parked.runs[0]!.attempts).toHaveLength(1);
+  expect(parked.runs[0]!.attempts[0]!.providerWait).toMatchObject({ tries: 0 });
+  expect(sent).toHaveLength(1);
+});
