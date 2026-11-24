@@ -101,6 +101,18 @@ export class BotSelector {
     try { return await work; } finally { if (this.#checks.get(key) === check) this.#checks.delete(key); }
   }
 
+  /** Re-read the recorded pair after an external chat lookup that may deliver
+   * a newer membership update while it was in flight. */
+  async assertCurrentPostingEligibility(bot: PostingBot, chat: ChatRow): Promise<void> {
+    if (bot.tokenState === "rejected") throw new TelegramBotError("token_rejected", "Telegram rejected the bot token");
+    if (chat.type === "private") return;
+    const membership = await this.membership(chat.chatId, bot.id);
+    if (membership && Date.parse(membership.expiresAt) > this.now().getTime()) {
+      const refusal = botPostingRefusal(bot, membership, "canPost");
+      if (refusal) throw refusal;
+    }
+  }
+
   async observeUpdate(bot: PostingBot, chat: ChatRow, update: Record<string, unknown>): Promise<void> {
     if (chat.type === "private") return;
     const status = update.status as Membership["status"];

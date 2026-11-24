@@ -37,6 +37,7 @@ const STATUS: Record<TelegramBotErrorCode, number> = {
   format_invalid: 400,
   reaction_invalid: 400,
   reaction_not_allowed: 403,
+  reaction_limit_reached: 400,
   reaction_paid_unsupported: 400,
   reaction_uncertain: 409,
   forbidden: 403,

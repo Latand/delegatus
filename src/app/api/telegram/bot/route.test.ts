@@ -482,6 +482,54 @@ test("revoking the allowlist during getChat stops the reaction before it is set"
   expect(transport.callsOf("setMessageReaction")).toEqual([]);
 });
 
+test("a membership update received during getChat rejects the bot before a reaction write", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  transport.handlers.getChat = async () => {
+    transport.script("getUpdates", ok([{
+      update_id: 3,
+      my_chat_member: { chat: TEAM, date: 3, new_chat_member: { status: "restricted", is_member: true, can_send_messages: false } },
+    }]));
+    await service.pollOnce(new AbortController().signal);
+    return ok({ ...TEAM, available_reactions: [HEART] });
+  };
+
+  const response = await setReaction(HEART, 5);
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({ code: "not_enough_rights", retryable: false });
+  expect(transport.callsOf("setMessageReaction")).toEqual([]);
+});
+
+test("a newly restricted assigned bot falls back to an eligible bot for the same reaction", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  const extra = new FakeBotTransport();
+  const extraToken = fakeBotToken("5151515");
+  sendingTransports.set(extraToken, extra);
+  extra.handlers.getChatMember = () => ok({ status: "administrator" });
+  extra.script("getMe", ok({ id: 5151515, is_bot: true, first_name: "Second bot", username: "second_fixture_bot" }));
+  await service.addBot(extraToken);
+  await service.assignBot(String(TEAM.id), "report_test_bot");
+  transport.handlers.getChat = async () => {
+    transport.script("getUpdates", ok([{
+      update_id: 3,
+      my_chat_member: { chat: TEAM, date: 3, new_chat_member: { status: "restricted", is_member: true, can_send_messages: false } },
+    }]));
+    await service.pollOnce(new AbortController().signal);
+    return ok({ ...TEAM, available_reactions: [HEART] });
+  };
+  extra.handlers.getChat = () => ok({ ...TEAM, available_reactions: [HEART] });
+  extra.script("setMessageReaction", ok(true));
+
+  const response = await setReaction(HEART, 517);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ messageId: 517, setBy: { username: "second_fixture_bot" } });
+  expect(transport.callsOf("setMessageReaction")).toEqual([]);
+  expect(extra.callsOf("setMessageReaction").map(call => call.params)).toEqual([{
+    chat_id: TEAM.id, message_id: 517, reaction: [HEART],
+  }]);
+});
+
 test("reactions prefer the assigned bot and fall back when that bot cannot see the chat", async () => {
   await connected();
   service.setChat(String(TEAM.id), "team-reports", true);
@@ -504,4 +552,65 @@ test("reactions prefer the assigned bot and fall back when that bot cannot see t
   expect(extra.callsOf("setMessageReaction").map(call => call.params.message_id)).toEqual([5]);
   expect(transport.callsOf("getChat")).toHaveLength(1);
   expect(transport.callsOf("setMessageReaction").map(call => call.params.message_id)).toEqual([6]);
+});
+
+test.each([
+  "Bad Request: CHANNEL_PRIVATE",
+  "Bad Request: Can't access the chat",
+])("a definitive chat access refusal (%s) falls back on the same reaction", async (description) => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  const extra = new FakeBotTransport();
+  const extraToken = fakeBotToken("5151515");
+  sendingTransports.set(extraToken, extra);
+  extra.handlers.getChatMember = () => ok({ status: "administrator" });
+  extra.script("getMe", ok({ id: 5151515, is_bot: true, first_name: "Second bot", username: "second_fixture_bot" }));
+  await service.addBot(extraToken);
+  await service.assignBot(String(TEAM.id), "second_fixture_bot");
+  extra.handlers.getChat = () => ok({ ...TEAM, available_reactions: [HEART] });
+  transport.handlers.getChat = () => ok({ ...TEAM, available_reactions: [HEART] });
+  extra.script("setMessageReaction", refused(400, description));
+  transport.script("setMessageReaction", ok(true));
+
+  const response = await setReaction(HEART, 518);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ messageId: 518, setBy: { username: "report_test_bot" } });
+  expect(extra.callsOf("setMessageReaction").map(call => call.params.message_id)).toEqual([518]);
+  expect(transport.callsOf("setMessageReaction").map(call => call.params)).toEqual([{
+    chat_id: TEAM.id, message_id: 518, reaction: [HEART],
+  }]);
+});
+
+test("an uncertain reaction write does not attempt another bot", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  const extra = new FakeBotTransport();
+  const extraToken = fakeBotToken("5151515");
+  sendingTransports.set(extraToken, extra);
+  extra.handlers.getChatMember = () => ok({ status: "administrator" });
+  extra.script("getMe", ok({ id: 5151515, is_bot: true, first_name: "Second bot", username: "second_fixture_bot" }));
+  await service.addBot(extraToken);
+  await service.assignBot(String(TEAM.id), "second_fixture_bot");
+  extra.handlers.getChat = () => ok({ ...TEAM, available_reactions: [HEART] });
+  extra.script("setMessageReaction", unreachable("timed_out"));
+
+  const response = await setReaction(HEART, 519);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ code: "reaction_uncertain", retryable: false });
+  expect(extra.callsOf("setMessageReaction").map(call => call.params.message_id)).toEqual([519]);
+  expect(transport.callsOf("getChat")).toEqual([]);
+  expect(transport.callsOf("setMessageReaction")).toEqual([]);
+});
+
+test("Telegram's per-message reaction limit returns a named refusal after one write", async () => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  transport.handlers.getChatMember = () => ok({ status: "administrator" });
+  transport.handlers.getChat = () => ok({ ...TEAM, available_reactions: [HEART] });
+  transport.script("setMessageReaction", refused(400, "Bad Request: REACTIONS_TOO_MANY"));
+
+  const response = await setReaction(HEART, 520);
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({ code: "reaction_limit_reached", retryable: false });
+  expect(transport.callsOf("setMessageReaction").map(call => call.params.message_id)).toEqual([520]);
 });

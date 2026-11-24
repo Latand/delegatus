@@ -4268,7 +4268,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   telegram_bot_set_reaction: [
     "Set one reaction on a specific message in an allowlisted Telegram chat using a connected Bot API bot. Supply the chat alias or ID and the message ID within that chat.",
-    "Use {type: 'emoji', emoji: '👍'} or an explicitly allowed {type: 'custom_emoji', custom_emoji_id: '…'} from telegram_bot_reactions. The bot's reaction replaces its prior reaction on that message. Paid reactions return reaction_paid_unsupported. Unavailable reactions return reaction_not_allowed. If delivery is uncertain, reaction_uncertain means Telegram may have applied the change.",
+    "Use {type: 'emoji', emoji: '👍'} or an explicitly allowed {type: 'custom_emoji', custom_emoji_id: '…'} from telegram_bot_reactions. The bot's reaction replaces its prior reaction on that message. Paid reactions return reaction_paid_unsupported. Unavailable reactions return reaction_not_allowed. Telegram's per-message limit returns reaction_limit_reached. If delivery is uncertain, reaction_uncertain means Telegram may have applied the change.",
     "Telegram applies an album reaction to the first surviving message in the album.",
   ].join(" "),
   telegram_bot_messages: [

@@ -59,6 +59,7 @@ export type TelegramBotErrorCode =
   | "format_invalid"
   | "reaction_invalid"
   | "reaction_not_allowed"
+  | "reaction_limit_reached"
   | "reaction_paid_unsupported"
   | "reaction_uncertain"
   | "not_enough_rights"

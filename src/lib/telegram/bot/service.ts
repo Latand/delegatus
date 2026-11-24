@@ -1109,6 +1109,7 @@ export class TelegramBotService {
     return this.selector().withNativePostingBot(chat, authorize, async (bot, assertCurrent) => {
       const found = await bot.transport.call<{ id: number; available_reactions?: unknown }>("getChat", { chat_id: Number(chat.chatId) }, { timeoutMs: 5000 });
       assertCurrent();
+      await this.selector().assertCurrentPostingEligibility(bot, chat);
       if (!found.ok) throw lookupFailure(found);
       if (found.result?.id !== Number(chat.chatId)) throw new TelegramBotError("telegram_failed", "Telegram did not confirm the selected chat");
       if (!Object.hasOwn(found.result, "available_reactions")) return run({ chat, bot, catalog: { kind: "standard" } });
@@ -1149,6 +1150,9 @@ export class TelegramBotService {
         throw new TelegramBotError("reaction_uncertain", "Telegram did not confirm whether the reaction was set");
       }
       if (!result.ok) {
+        if (result.status === 400 && /\bREACTIONS_TOO_MANY\b/i.test(result.description ?? "")) {
+          throw new TelegramBotError("reaction_limit_reached", "Telegram has reached the reaction limit for this message");
+        }
         if (result.status === 400 && /\bREACTION_(?:INVALID|NOT_ALLOWED)\b/i.test(result.description ?? "")) {
           throw new TelegramBotError("reaction_not_allowed", "Telegram refused that reaction for the message");
         }
