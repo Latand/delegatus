@@ -35,6 +35,18 @@ test("active credentials are masked before a speech projection can cut their fra
   expect(result.speech).toBe("1 tasks. Safe task [redacted] ready: inbox");
 });
 
+test("task speech keeps partial counts and the continuation from the board", async () => {
+  const reads = new CompanionBoardReads({ call: async () => ({ partial: true, omissions: ["total", "remainingCount", "omittedCount"],
+    count: 1, hasMore: true, nextCursor: "fixture-continuation", tasks: [{ id: "task-a", text: "Review export", status: "inbox" }] }),
+    projectFor: async () => "fixture", resolveProject: () => "fixture", recipient: () => null,
+    review: () => { throw new Error("unused"); }, frame: async () => { throw new Error("unused"); } });
+  expect(await reads.call("fixture", "list_tasks", {})).toEqual({
+    shown: 1, more: true, nextCursor: "fixture-continuation", partial: true, omissions: ["total", "remainingCount", "omittedCount"],
+    rows: [{ handle: "task-a", title: "Review export", state: "inbox" }],
+    speech: "Showing 1 task. Total deferred. Review export: inbox", truncated: true,
+  });
+});
+
 test("every speech read tool stays on its board, bounds output, and refuses the rest of MCP", async () => {
   const title = "A".repeat(20_000);
   const reads = fixtureBoardReads({

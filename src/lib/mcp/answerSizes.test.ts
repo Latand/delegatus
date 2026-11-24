@@ -408,11 +408,12 @@ test("multibyte titles and paths obey service byte budgets and paginate without 
 test("real service uses keyed reads and replays only changed selection rows on a 10000-card board", async () => {
   const { taskSelectionSource } = await import("@/lib/tasks/store");
   const { pipelineSelectionSource, buildPipeline, pipelineIdentity, withDeliveryMutation } = await import("@/lib/pipelines/store");
-  const { boardSelection } = await import("./boardSelection");
+  const { BoardSelection, boardSelection } = await import("./boardSelection");
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(sandbox, "indexed-state");
   fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
   const taskFile = path.join(process.env.LLV_STATE_DIR, "tasks.json");
+  const originalPage = BoardSelection.prototype.page;
   try {
   const count = 10_000;
   const tasks = Array.from({ length: count }, (_, i) => ({
@@ -440,28 +441,38 @@ test("real service uses keyed reads and replays only changed selection rows on a
   } as never), new MemoryMcpReceiptStore());
   let sequence = 0;
   const call = (tool: "list_tasks" | "list_pipelines" | "get_task", args: Args) => service.callTool(tool, { clientRequestId: `indexed-${++sequence}`, ...args }) as Promise<any>;
-  const taskIndex = boardSelection(taskSource.filename, "tasks"), pipelineIndex = boardSelection(pipelineSource.filename, "pipelines");
+  let taskSelectionPageCalls = 0;
+  BoardSelection.prototype.page = function (this: InstanceType<typeof BoardSelection>, ...args: Parameters<typeof originalPage>) {
+    if ((this as unknown as { collection: string }).collection === "tasks") taskSelectionPageCalls++;
+    return originalPage.apply(this, args);
+  } as unknown as typeof originalPage;
+  const pipelineIndex = boardSelection(pipelineSource.filename, "pipelines");
   const cold = await call("list_pipelines", { ids: [pipelines[10]!.id], limit: 1 });
   expect(cold.ok).toBe(true); expect(cold.count).toBe(1);
   expect(pipelineIndex.work.metadataRows).toBe(0);
   expect(pipelineReads).toBe(1);
   const first = await call("list_tasks", { ids: [tasks[10]!.id], limit: 1 });
   expect(first.ok).toBe(true); expect(first.count).toBe(1);
-  expect(taskReads).toBe(1); expect(taskIndex.work.metadataRows).toBe(0);
+  expect(taskReads).toBe(1);
   expect(first.tasks[0].pipelineIds).toEqual([pipelines[10]!.id]);
-  const taskMetadata = taskIndex.work.metadataRows, pipelineMetadata = pipelineIndex.work.metadataRows;
+  const pipelineMetadata = pipelineIndex.work.metadataRows;
   await call("list_tasks", { ids: [tasks[20]!.id], limit: 1 });
   await call("list_pipelines", { ids: [pipelines[20]!.id], limit: 1 });
   expect(taskReads).toBe(2); expect(pipelineReads).toBe(2);
-  expect(taskIndex.work.metadataRows).toBe(taskMetadata); expect(pipelineIndex.work.metadataRows).toBe(pipelineMetadata);
+  expect(pipelineIndex.work.metadataRows).toBe(pipelineMetadata);
+  await call("list_pipelines", { project: "indexed-board", limit: 1 });
+  expect(pipelineIndex.work.metadataRows).toBe(count);
+  const warmedPipelineMetadata = pipelineIndex.work.metadataRows;
   const newest = await call("list_tasks", { project: "indexed-board", limit: 1 });
   expect(newest.tasks[0].id).toBe(tasks[count - 1]!.id);
-  expect(newest.total).toBe(count);
+  expect(newest.omissions).toEqual(["total", "remainingCount", "omittedCount"]);
   const legacyPlacement = await call("list_tasks", { project: "indexed-board", placement: "unplaced", query: "Legacy placement regression", limit: 200 });
-  expect(legacyPlacement.tasks.some((task: any) => task.id === tasks[60]!.id)).toBe(true);
+  expect(legacyPlacement).toMatchObject({ tasks: [], partial: true, hasMore: true,
+    omissions: ["total", "remainingCount", "omittedCount"] });
   const pinned = await call("list_tasks", { project: "indexed-board", placement: "pinned", limit: 1 });
-  expect(pinned.total).toBe(0);
-  const beforeTasks = taskIndex.work.metadataRows, beforePipelines = pipelineIndex.work.metadataRows;
+  expect(pinned.count).toBe(0);
+  expect(pinned.omissions).toEqual(["total", "remainingCount", "omittedCount"]);
+  const beforePipelines = warmedPipelineMetadata;
   tasks[50]!.text = "Updated unrelated record";
   pipelines[50]!.task = "Updated unrelated pipeline";
   Object.assign(pipelines[50]!, pipelineIdentity(pipelines[50]!.id, pipelines[50]!.task, "/repo"));
@@ -472,18 +483,16 @@ test("real service uses keyed reads and replays only changed selection rows on a
   }, taskFile);
   // Write only the changed pipeline so fixture costs track the intended journal replay.
   withDeliveryMutation(tx => tx.put(pipelines[50]!));
-  const changed = await call("list_tasks", { project: "indexed-board", query: "unrelated", limit: 1 });
-  expect(changed.tasks[0].id).toBe(tasks[50]!.id);
+  const changed = await call("list_tasks", { ids: [tasks[50]!.id], limit: 1 });
+  expect(changed.tasks[0]).toMatchObject({ id: tasks[50]!.id, text: "Updated unrelated record" });
   const changedPipeline = await call("list_pipelines", { project: "indexed-board", query: "unrelated", limit: 1 });
   expect(changedPipeline.pipelines[0].id).toBe(pipelines[50]!.id);
-  expect(taskIndex.work.metadataRows - beforeTasks).toBe(1);
   expect(pipelineIndex.work.metadataRows - beforePipelines).toBe(1);
   const linked = await call("get_task", { taskId: tasks[20]!.id });
   expect(new Set(linked.task.pipelineIds)).toEqual(new Set([pipelines[20]!.id, pipelines[50]!.id]));
   const keyedReads = taskReads;
   await call("list_tasks", { ids: [tasks[30]!.id], limit: 1 });
   expect(taskReads - keyedReads).toBe(1);
-  expect(taskIndex.work.metadataRows - beforeTasks).toBe(1);
   const linkPage = await call("list_tasks", { ids: [tasks[20]!.id, tasks[50]!.id], limit: 50 });
   expect(linkPage.tasks.find((task: { id: string }) => task.id === tasks[20]!.id).pipelineIds).toEqual([pipelines[20]!.id, pipelines[50]!.id]);
   expect(linkPage.tasks.find((task: { id: string }) => task.id === tasks[50]!.id).pipelineIds).toEqual([]);
@@ -495,7 +504,8 @@ test("real service uses keyed reads and replays only changed selection rows on a
   const nextLinkPage = await call("list_tasks", { ids: [tasks[20]!.id, tasks[50]!.id], limit: 50 });
   expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[20]!.id).pipelineIds).toEqual([]);
   expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[50]!.id).pipelineIds).toEqual([pipelines[50]!.id]);
-  expect(pipelineIndex.work.metadataRows - beforePipelines).toBe(2);
-  console.log(`Indexed 10000-card service: changed-ID reads=1, single task update metadata=1, single pipeline update metadata=1`);
-  } finally { process.env.LLV_STATE_DIR = previousState; }
+  expect(pipelineIndex.work.metadataRows - beforePipelines).toBe(1);
+  expect(taskSelectionPageCalls).toBe(0);
+  console.log(`Indexed 10000-card service: keyed task reads remain one per requested ID; list_tasks skips task BoardSelection`);
+  } finally { BoardSelection.prototype.page = originalPage; process.env.LLV_STATE_DIR = previousState; }
 }, 90_000);
