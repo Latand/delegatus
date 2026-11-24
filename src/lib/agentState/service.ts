@@ -449,7 +449,7 @@ export class AgentStateService {
         // connection can write between publication checks and must be seen.
         const row = registry.agentStateRead((file, antigravityStates) => {
           const current = file.entries[committed.entryKey];
-          const stored = file.agentStates[committed.subject] ?? antigravityStates[committed.subject];
+          const stored = file.agentStates[committed.subject] ?? antigravityStates.get(committed.subject);
           if (stored?.revision !== committed.revision || !current
             || entryRevision(current) !== committed.facts.revision || this.ports.process(process) !== processStatus) return null;
           if (claimIdentity && this.ports.process(claimIdentity) !== claimStatus) return null;

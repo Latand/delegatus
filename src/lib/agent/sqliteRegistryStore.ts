@@ -1,5 +1,5 @@
 import { measureRegistryRead } from "./registryReadPerformance";
-import { compareDeliveryAdmission, seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
+import { compareDeliveryAdmission, seatViewerMcpOwner, seatViewerMcpObservation, type RegistryConversation, type SeatTickConversation } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { beginRegistryTransaction } from "./registryTransaction";
 import { observeRegistryWriter } from "./registryWriter";
@@ -29,6 +29,77 @@ import { agentStateMetricsForStorage, type AgentProjection, type AgentStateMetri
  * inside the exact same SQLite transaction as `agentStateJournal` and
  * `agentStateMetrics`, while remaining invisible to older releases and JSON exports. */
 export const ANTIGRAVITY_AGENT_STATES_ACCESS = Symbol.for("delegatus.antigravityAgentStatesAccess");
+
+/** Non-enumerable container attached to JSON-backed `RegistryFile` views (`off`
+ * and `dual-write` modes) so Antigravity projections persist atomically inside
+ * `agent-registry.json` under top-level `antigravityAgentStates` (ignored by
+ * older releases' `normalizeRegistry`) rather than in-memory or a sidecar file. */
+export const ANTIGRAVITY_JSON_STATES = Symbol.for("delegatus.antigravityJsonStates");
+
+export interface AntigravityAgentStatesView {
+  get(subject: string): AgentProjection | undefined;
+  page(after: string, limit: number): Array<[string, AgentProjection]>;
+}
+
+export interface AntigravityAgentStatesMutable extends AntigravityAgentStatesView {
+  set(subject: string, projection: AgentProjection): void;
+  delete(subject: string): void;
+}
+
+/** Keyed view/mutator over an in-memory map used by JSON-backed registry modes (`off` / `dual-write`). */
+export function antigravityStatesHandleForRecord(
+  record: Record<string, AgentProjection>,
+): AntigravityAgentStatesMutable {
+  return {
+    get: (subject: string) => record[subject],
+    page: (after: string, limit: number) => {
+      if (limit <= 0) return [];
+      return Object.keys(record)
+        .filter((subject) => subject > after)
+        .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+        .slice(0, limit)
+        .map((subject) => [subject, record[subject]!] as [string, AgentProjection]);
+    },
+    set: (subject: string, projection: AgentProjection) => {
+      record[subject] = projection;
+    },
+    delete: (subject: string) => {
+      delete record[subject];
+    },
+  };
+}
+
+/** Persists Antigravity entries with `accountId: null` and sibling `antigravityAccountId`
+ * so prior releases (which index `quotaObservations[engine][accountId]` over only 3 engines)
+ * never throw on rollback while candidate readers restore `accountId` losslessly. */
+export function registryEntryForStorage(
+  entry: AgentRegistryEntry,
+): AgentRegistryEntry & { antigravityAccountId?: string } {
+  if (entry.key?.engine !== "antigravity" || typeof entry.accountId !== "string" || entry.accountId.length === 0) return entry;
+  return { ...entry, accountId: null, antigravityAccountId: entry.accountId };
+}
+
+/** Persists Antigravity conversation generations with `accountId: null` and sibling
+ * `antigravityAccountId` so prior releases never index `quotaObservations["antigravity"]`. */
+export function registryConversationForStorage(
+  conversation: RegistryConversation,
+): RegistryConversation {
+  if (conversation.engine !== "antigravity") return conversation;
+  if (!conversation.generations.some((generation) => typeof generation.accountId === "string" && generation.accountId.length > 0)) return conversation;
+  return {
+    ...conversation,
+    generations: conversation.generations.map((generation) =>
+      typeof generation.accountId === "string" && generation.accountId.length > 0
+        ? ({ ...generation, accountId: null, antigravityAccountId: generation.accountId } as RegistryConversation["generations"][number])
+        : generation),
+  };
+}
+
+function rowForStorage(collection: RowCollection, row: unknown): unknown {
+  if (collection === "entries") return registryEntryForStorage(row as AgentRegistryEntry);
+  if (collection === "conversations") return registryConversationForStorage(row as RegistryConversation);
+  return row;
+}
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -6427,23 +6498,63 @@ export class SqliteAgentRegistryStore {
         },
       });
     }
-    let antigravityLoaded = false;
+    const antigravityLoaded = new Map<string, AgentProjection | undefined>();
     const antigravityBaseline = new Map<string, string>();
-    let antigravityCurrent: Record<string, AgentProjection> | null = null;
-    const loadAntigravityStates = (): Record<string, AgentProjection> => {
-      if (antigravityLoaded && antigravityCurrent) return antigravityCurrent;
-      antigravityLoaded = true;
-      antigravityCurrent = {};
-      for (const [subject, valueJson] of this.readAntigravityAgentStatesInTransaction()) {
+    const antigravityDirty = new Map<string, AgentProjection | null>();
+    const antigravityStatesHandle: AntigravityAgentStatesMutable = {
+      get: (subject: string) => {
+        if (antigravityDirty.has(subject)) return antigravityDirty.get(subject) ?? undefined;
+        if (antigravityLoaded.has(subject)) return antigravityLoaded.get(subject);
+        const valueJson = this.readAntigravityAgentStateBySubjectInTransaction(subject);
+        if (valueJson === null) {
+          antigravityLoaded.set(subject, undefined);
+          return undefined;
+        }
         if (trackMutations) antigravityBaseline.set(subject, valueJson);
-        antigravityCurrent[subject] = parseSqliteJson(valueJson, this.db) as AgentProjection;
-      }
-      return antigravityCurrent;
+        const parsed = parseSqliteJson(valueJson, this.db) as AgentProjection;
+        antigravityLoaded.set(subject, parsed);
+        return parsed;
+      },
+      page: (after: string, limit: number) => {
+        if (limit <= 0) return [];
+        const combined = new Map<string, AgentProjection>();
+        const storedRows = this.readAntigravityAgentStatesPageInTransaction(after, limit + antigravityDirty.size);
+        for (const [subject, valueJson] of storedRows) {
+          if (antigravityDirty.has(subject)) continue;
+          let parsed = antigravityLoaded.get(subject);
+          if (parsed === undefined && !antigravityLoaded.has(subject)) {
+            if (trackMutations) antigravityBaseline.set(subject, valueJson);
+            parsed = parseSqliteJson(valueJson, this.db) as AgentProjection;
+            antigravityLoaded.set(subject, parsed);
+          }
+          if (parsed) combined.set(subject, parsed);
+        }
+        for (const [subject, value] of antigravityDirty) {
+          if (value !== null && subject > after) combined.set(subject, value);
+        }
+        return [...combined.entries()]
+          .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+          .slice(0, limit);
+      },
+      set: (subject: string, projection: AgentProjection) => {
+        if (trackMutations && !antigravityBaseline.has(subject) && !antigravityLoaded.has(subject)) {
+          const existingJson = this.readAntigravityAgentStateBySubjectInTransaction(subject);
+          if (existingJson !== null) antigravityBaseline.set(subject, existingJson);
+        }
+        antigravityDirty.set(subject, projection);
+      },
+      delete: (subject: string) => {
+        if (trackMutations && !antigravityBaseline.has(subject) && !antigravityLoaded.has(subject)) {
+          const existingJson = this.readAntigravityAgentStateBySubjectInTransaction(subject);
+          if (existingJson !== null) antigravityBaseline.set(subject, existingJson);
+        }
+        antigravityDirty.set(subject, null);
+      },
     };
     Object.defineProperty(file, ANTIGRAVITY_AGENT_STATES_ACCESS, {
       configurable: true,
       enumerable: false,
-      value: loadAntigravityStates,
+      value: antigravityStatesHandle,
     });
     return {
       file,
@@ -6464,7 +6575,9 @@ export class SqliteAgentRegistryStore {
               continue;
             }
             const row = current[key];
-            let json = JSON.stringify(row);
+            let json = JSON.stringify(collection === "entries" || collection === "conversations"
+              ? rowForStorage(collection, row)
+              : row);
             if (json === previous) continue;
             if (collection === "agentStateMetrics") {
               json = JSON.stringify(agentStateMetricsForStorage(row as AgentStateMetricsRow));
@@ -6484,17 +6597,14 @@ export class SqliteAgentRegistryStore {
         for (const [field, value] of loadedMeta) {
           if (!isDeepStrictEqual(baselineMeta.get(field), value)) changes.meta.add(field);
         }
-        if (antigravityLoaded && antigravityCurrent) {
-          const keys = new Set([...antigravityBaseline.keys(), ...Object.keys(antigravityCurrent)]);
-          for (const subject of keys) {
-            const previous = antigravityBaseline.get(subject);
-            if (!Object.hasOwn(antigravityCurrent, subject)) {
-              if (previous !== undefined) changes.antigravityStates.set(subject, null);
-              continue;
-            }
-            const json = JSON.stringify(antigravityCurrent[subject]);
-            if (json !== previous) changes.antigravityStates.set(subject, json);
+        for (const [subject, value] of antigravityDirty) {
+          const previous = antigravityBaseline.get(subject);
+          if (value === null) {
+            if (previous !== undefined) changes.antigravityStates.set(subject, null);
+            continue;
           }
+          const json = JSON.stringify(value);
+          if (json !== previous) changes.antigravityStates.set(subject, json);
         }
         return changes;
       },
@@ -6683,9 +6793,12 @@ export class SqliteAgentRegistryStore {
     if (this.changesReady) this.db.exec("DELETE FROM registry_cold");
     for (const collection of ROW_COLLECTIONS) {
       for (const [order, [key, value]] of Object.entries(file[collection]).entries()) {
-        this.upsertRow(collection, key, JSON.stringify(value), order);
+        this.upsertRow(collection, key, JSON.stringify(rowForStorage(collection, value)), order);
       }
     }
+    this.syncAntigravityJsonStatesInTransaction(
+      (file as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> })[ANTIGRAVITY_JSON_STATES],
+    );
     for (const field of META_FIELDS) this.setMeta(field, JSON.stringify(file[field]));
     this.setMeta("revision", String(revision));
   }
@@ -6702,15 +6815,28 @@ export class SqliteAgentRegistryStore {
           continue;
         }
         if (key in previous && isDeepStrictEqual(previous[key], next[key])) continue;
-        this.upsertRow(collection, key, JSON.stringify(next[key]));
+        this.upsertRow(collection, key, JSON.stringify(rowForStorage(collection, next[key])));
       }
       this.persistRowOrder(collection, Object.keys(next));
     }
+    this.syncAntigravityJsonStatesInTransaction(
+      (after as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> })[ANTIGRAVITY_JSON_STATES],
+    );
     for (const field of META_FIELDS) {
       if (isDeepStrictEqual(before[field], after[field])) continue;
       this.setMeta(field, JSON.stringify(after[field]));
     }
     this.setMeta("revision", String(revision));
+  }
+
+  private antigravityAgentStatesTableExists(): boolean {
+    if (this.antigravityStatesTableReady === true) return true;
+    const exists = this.db.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_antigravity_agent_states'",
+    ).get();
+    if (!exists) return false;
+    this.antigravityStatesTableReady = true;
+    return true;
   }
 
   private ensureAntigravityAgentStatesTable(): void {
@@ -6722,18 +6848,53 @@ export class SqliteAgentRegistryStore {
     this.antigravityStatesTableReady = true;
   }
 
-  private readAntigravityAgentStatesInTransaction(): Array<[string, string]> {
-    try {
-      if (this.antigravityStatesTableReady !== true) {
-        const exists = this.db.query<{ name: string }, []>(
-          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_antigravity_agent_states'",
-        ).get();
-        if (!exists) return [];
-        this.antigravityStatesTableReady = true;
+  private syncAntigravityJsonStatesInTransaction(states: Record<string, AgentProjection> | undefined): void {
+    const entries = states ? Object.entries(states) : [];
+    if (entries.length === 0) {
+      if (this.antigravityAgentStatesTableExists()) {
+        this.db.exec("DELETE FROM registry_antigravity_agent_states");
       }
-      return this.db.query<{ subject: string; value_json: string }, []>(
-        "SELECT subject, value_json FROM registry_antigravity_agent_states ORDER BY subject",
-      ).all().map((row) => [row.subject, row.value_json]);
+      return;
+    }
+    this.ensureAntigravityAgentStatesTable();
+    const existing = new Set(
+      this.db.query<{ subject: string }, []>("SELECT subject FROM registry_antigravity_agent_states").all().map((row) => row.subject),
+    );
+    const keep = new Set<string>();
+    for (const [subject, projection] of entries) {
+      keep.add(subject);
+      this.db.query(`
+        INSERT INTO registry_antigravity_agent_states(subject, value_json) VALUES (?, ?)
+        ON CONFLICT(subject) DO UPDATE SET value_json = excluded.value_json
+      `).run(subject, JSON.stringify(projection));
+    }
+    for (const subject of existing) {
+      if (!keep.has(subject)) {
+        this.db.query("DELETE FROM registry_antigravity_agent_states WHERE subject = ?").run(subject);
+      }
+    }
+  }
+
+  private readAntigravityAgentStateBySubjectInTransaction(subject: string): string | null {
+    try {
+      if (!this.antigravityAgentStatesTableExists()) return null;
+      return this.db.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM registry_antigravity_agent_states WHERE subject = ? LIMIT 1",
+      ).get(subject)?.value_json ?? null;
+    } catch (error) {
+      this.antigravityStatesTableReady = undefined;
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("no such table")) return null;
+      throw error;
+    }
+  }
+
+  private readAntigravityAgentStatesPageInTransaction(after: string, limit: number): Array<[string, string]> {
+    try {
+      if (limit <= 0 || !this.antigravityAgentStatesTableExists()) return [];
+      return this.db.query<{ subject: string; value_json: string }, [string, number]>(
+        "SELECT subject, value_json FROM registry_antigravity_agent_states WHERE subject > ? ORDER BY subject LIMIT ?",
+      ).all(after, limit).map((row) => [row.subject, row.value_json]);
     } catch (error) {
       this.antigravityStatesTableReady = undefined;
       const message = error instanceof Error ? error.message : String(error);

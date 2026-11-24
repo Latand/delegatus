@@ -1,10 +1,19 @@
 import crypto from "node:crypto";
 import type { AgentRegistry, AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
-import { registryCollectionPage, registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
+import { registryCollectionPage, registryConversationsForEntryKey, type AntigravityAgentStatesView } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { AGENT_STATE_POLICY, emptyAgentStateMetrics, evaluateAgentState, fact, validAgentFacts, validAgentEvidence, type AgentFacts, type AgentProjection, type AgentStateJournal, type AgentStateMetrics, type AgentStateMetricsRow } from "./model";
 
-export function copyAgentStateRow<T>(row: T): T { return JSON.parse(JSON.stringify(row)) as T; }
+export function copyAgentStateRow<T>(row: T): T {
+  if (row === null || typeof row !== "object") return row;
+  if (Array.isArray(row)) return row.map((item) => copyAgentStateRow(item)) as T;
+  const copy: Record<string, unknown> = {};
+  for (const key of Object.keys(row as Record<string, unknown>)) {
+    const value = (row as Record<string, unknown>)[key];
+    if (value !== undefined) copy[key] = copyAgentStateRow(value);
+  }
+  return copy as T;
+}
 const hash = (v: unknown) => crypto.createHash("sha256").update(JSON.stringify(v)).digest("hex");
 export function subjectId(entry: AgentRegistryEntry): string {
   return hash([sessionKeyId(entry.key), entry.structuredHost?.process ?? entry.structuredHost?.exitProcess ?? entry.hostExitProcess]).slice(0, 48);
@@ -88,7 +97,7 @@ function changeMetrics(
   metrics: AgentStateMetrics,
   old: AgentProjection | undefined,
   next: AgentProjection,
-  extraStates: Readonly<Record<string, AgentProjection>> = {},
+  extraStates?: AntigravityAgentStatesView,
 ): void {
   const before = contribution(old), after = contribution(next);
   for (const key of ["subjectsObserved", "subjectsUnverified", "pendingProjectionPublications", "registryTranscriptDivergencesCurrent"] as const)
@@ -99,7 +108,7 @@ function changeMetrics(
   const prior = file.agentStateMetrics[key] ?? emptyAgentStateMetrics();
   const members = [...new Set([...(prior.physicalSubjects ?? []), next.subject])];
   const rows = members.flatMap(id => {
-    const row = id === next.subject ? next : file.agentStates[id] ?? extraStates[id];
+    const row = id === next.subject ? next : file.agentStates[id] ?? extraStates?.get(id);
     return row?.facts.process.determined && row.facts.process.value.status === "alive" ? [row] : [];
   });
   const physical = emptyAgentStateMetrics();
@@ -174,7 +183,7 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
     if (!current || entryRevision(current) !== entryRevision(observation.entry)
       || conversationRevision(file, current) !== observation.conversationRevision || !guard()) return null;
     const old = isAntigravity
-      ? antigravityStates[observation.projection.subject] ?? file.agentStates[observation.projection.subject]
+      ? antigravityStates.get(observation.projection.subject) ?? file.agentStates[observation.projection.subject]
       : file.agentStates[observation.projection.subject];
     const next = copyAgentStateRow(observation.projection);
     const open = next.facts.turn.determined && next.facts.turn.value.state === "open";
@@ -233,9 +242,9 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
     if (isAntigravity) {
       // Keep Antigravity projections out of the shared `agentStates` collection
       // so rollback to a prior release never fails strict engine validation,
-      // while persisting them in the exact same SQLite transaction.
+      // while persisting them in the exact same SQLite/JSON atomic boundary.
       if (file.agentStates[next.subject]) delete file.agentStates[next.subject];
-      antigravityStates[next.subject] = next;
+      antigravityStates.set(next.subject, next);
     } else {
       file.agentStates[next.subject] = next;
     }
@@ -249,7 +258,7 @@ export function readAgentStateMetrics(registry: AgentRegistry): AgentStateMetric
 }
 export function readAgentProjection(registry: AgentRegistry, subject: string): AgentProjection | null {
   return registry.agentStateRead((file, antigravityStates) => {
-    const row = file.agentStates[subject] ?? antigravityStates[subject] ?? null;
+    const row = file.agentStates[subject] ?? antigravityStates.get(subject) ?? null;
     return row ? copyAgentStateRow(row) : null;
   });
 }
@@ -261,8 +270,8 @@ export function readAgentStatesPage(registry: AgentRegistry, after = "", limit =
       const row = file.agentStates[key];
       if (row) combined.set(key, copyAgentStateRow(row));
     }
-    for (const [key, row] of Object.entries(antigravityStates)) {
-      if (key > after) combined.set(key, copyAgentStateRow(row));
+    for (const [key, row] of antigravityStates.page(after, limit)) {
+      combined.set(key, copyAgentStateRow(row));
     }
     return [...combined.entries()]
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
@@ -282,19 +291,23 @@ export function readAgentStatePage(registry: AgentRegistry, collection: "agentSt
 /** A status transition noticed at the runtime owner must survive a failed files publication. */
 export function requireAgentFilesRevision(registry: AgentRegistry, subject: string, revision: number): boolean {
   return registry.agentStateWrite((file, _readMetrics, antigravityStates) => {
-    const row = file.agentStates[subject] ?? antigravityStates[subject];
+    const primary = file.agentStates[subject];
+    const row = primary ?? antigravityStates.get(subject);
     if (!row || row.revision !== revision || !row.pendingPublication) return false;
     row.pendingFilesRevision = true;
+    if (!primary) antigravityStates.set(subject, row);
     return true;
   });
 }
 
 export function acknowledgeAgentProjection(registry: AgentRegistry, subject: string, revision: number, at = Date.now()): boolean {
   return registry.agentStateWrite((file, readMetrics, antigravityStates) => {
-    const row = file.agentStates[subject] ?? antigravityStates[subject];
+    const primary = file.agentStates[subject];
+    const row = primary ?? antigravityStates.get(subject);
     if (!row || row.revision !== revision || !row.pendingPublication) return false;
     row.pendingPublication = false;
     row.pendingFilesRevision = false;
+    if (!primary) antigravityStates.set(subject, row);
     if (file.agentStateMetrics.current) {
       const metrics = readMetrics();
       metrics.pendingProjectionPublications = Math.max(0, metrics.pendingProjectionPublications - 1);
@@ -309,7 +322,8 @@ export function acknowledgeAgentProjection(registry: AgentRegistry, subject: str
 /** Ending one physical identity never mutates a replacement's registry row. */
 export function recordAgentProcessEnded(registry: AgentRegistry, observed: AgentProjection, journal: AgentStateJournal, guard: () => boolean): boolean {
   return registry.agentStateWrite((file, readMetrics, antigravityStates) => {
-    const row = file.agentStates[observed.subject] ?? antigravityStates[observed.subject];
+    const primary = file.agentStates[observed.subject];
+    const row = primary ?? antigravityStates.get(observed.subject);
     if (!row || row.revision !== observed.revision || row.verdict.state === "dead" || !row.facts.process.determined || !guard()) return false;
     const metrics = readMetrics();
     const before = copyAgentStateRow(row);
@@ -320,6 +334,7 @@ export function recordAgentProcessEnded(registry: AgentRegistry, observed: Agent
     row.revision = ++metrics.revision;
     row.verdict.projectionRevision = row.revision;
     row.pendingPublication = false;
+    if (!primary) antigravityStates.set(observed.subject, row);
     file.agentStateJournal[journal.id] = { ...journal, from: before.verdict.state, to: "dead" };
     metrics.journalRows++;
     changeMetrics(file, metrics, before, row, antigravityStates);
@@ -332,7 +347,7 @@ export function recordAgentProcessEnded(registry: AgentRegistry, observed: Agent
 export function pruneTerminalAgentProjection(registry: AgentRegistry, subject: string, at: number, guard: () => boolean): void {
   registry.agentStateWrite((file, readMetrics, antigravityStates) => {
     const primary = file.agentStates[subject];
-    const row = primary ?? antigravityStates[subject];
+    const row = primary ?? antigravityStates.get(subject);
     if (!row || row.verdict.state !== "dead" || row.pendingPublication || !guard()) return;
     const entry = file.entries[row.entryKey];
     if (entry?.structuredHost?.process || entry?.structuredHost?.scope || entry?.structuredHost?.memory?.unit
@@ -347,7 +362,9 @@ export function pruneTerminalAgentProjection(registry: AgentRegistry, subject: s
       metrics.registryTranscriptDivergencesCurrent = Math.max(0, metrics.registryTranscriptDivergencesCurrent - old.registryTranscriptDivergencesCurrent);
       metrics.terminalSubjects = Math.max(0, metrics.terminalSubjects - 1);
       if (primary) delete file.agentStates[subject];
-      else delete antigravityStates[subject];
+      else antigravityStates.delete(subject);
+    } else if (!primary) {
+      antigravityStates.set(subject, row);
     }
     file.agentStateMetrics.current = metrics;
   });

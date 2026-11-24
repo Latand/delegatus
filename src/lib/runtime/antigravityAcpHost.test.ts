@@ -20,6 +20,7 @@ import {
   validateAntigravitySessionId,
   type AntigravityAcpHostOptions,
 } from "./antigravityAcpHost";
+import type { DeliveryReceipt } from "./engineHost";
 import { FileRuntimeEventStore } from "./eventStore";
 
 interface ScriptedAcpServer {
@@ -1327,6 +1328,50 @@ describe("AntigravityAcpHost", () => {
       await tick();
       expect(physicalEchoCount(ledgerFile, firstEntry.id)).toBe(1);
       expect(physicalEchoCount(ledgerFile, altId)).toBe(1);
+      await host.release();
+    }
+
+    // 5. EIO while reconciling a replaced ledger MUST NOT serve stale cached delivery state:
+    //    both send() and sessionMaterializationEvidence() withhold confirmation until disk recovers.
+    {
+      const { ledgerFile, host } = await seedEvictedSession("eio");
+      const cachedId = "edge-eio-later-4095";
+      const altId = `X${cachedId.slice(1)}`;
+      const originalBytes = fs.readFileSync(ledgerFile, "utf8");
+      const replacedBytes = originalBytes.replaceAll(cachedId, altId);
+      expect(replacedBytes).not.toBe(originalBytes);
+      fs.writeFileSync(`${ledgerFile}.restore`, replacedBytes);
+      fs.renameSync(`${ledgerFile}.restore`, ledgerFile);
+
+      const origReadFileSync = fs.readFileSync;
+      let faults = 0;
+      fs.readFileSync = function (filePath: fs.PathOrFileDescriptor, ...rest: unknown[]) {
+        if (String(filePath) === ledgerFile) {
+          faults += 1;
+          throw Object.assign(new Error("fixture recoverable read error"), { code: "EIO" });
+        }
+        return (origReadFileSync as (...args: unknown[]) => unknown).call(fs, filePath, ...rest);
+      } as typeof fs.readFileSync;
+
+      const promptsBefore = outboundPrompts.length;
+      let receiptDuringEio: DeliveryReceipt;
+      let evidenceDuringEio: { state: string; reason?: string };
+      try {
+        receiptDuringEio = await host.send({ id: cachedId, text: "fixture" });
+        evidenceDuringEio = await host.sessionMaterializationEvidence(cachedId);
+      } finally {
+        fs.readFileSync = origReadFileSync;
+      }
+
+      expect(faults).toBeGreaterThan(0);
+      expect(receiptDuringEio.outcome).toBe("rejected");
+      expect(evidenceDuringEio.state).toBe("unavailable");
+      expect(outboundPrompts.length - promptsBefore).toBe(0);
+      expect(physicalEchoCount(ledgerFile, cachedId)).toBe(0);
+
+      // Once disk reads recover, the same host reconciles cleanly against canonical disk truth.
+      expect((await host.sessionMaterializationEvidence(cachedId)).state).toBe("absent");
+      expect((await host.sessionMaterializationEvidence(altId)).state).toBe("materialized");
       await host.release();
     }
   });

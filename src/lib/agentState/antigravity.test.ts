@@ -262,4 +262,218 @@ describe("Antigravity agentState integration", () => {
       else process.env.LLV_STATE_DIR = prevState;
     }
   });
+
+  it("persists Antigravity projections across reopen in sqlite, dual-write, and off modes without double accounting", async () => {
+    for (const mode of ["sqlite", "dual-write", "off"] as const) {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-ag-reopen-${mode}-`));
+      roots.push(root);
+      const filename = path.join(root, "agent-registry.json");
+      const sqliteFilename = path.join(root, "registry.sqlite");
+      fs.writeFileSync(filename, JSON.stringify(fixtureRegistry(root, "antigravity", captureProcessIdentity(process.pid), null)));
+      const rows = fixtureRecords("antigravity");
+      fs.writeFileSync(path.join(root, "native.jsonl"), [...rows.open, ...rows.close].map((row) => JSON.stringify(row)).join("\n") + "\n");
+
+      const openRegistry = () => new AgentRegistry(filename, undefined, undefined, { sqliteMode: mode, sqliteFilename });
+      const collect = async (reg: AgentRegistry) => {
+        await new AgentStateService({
+          registry: reg,
+          now: () => FIXTURE_NOW + 2000,
+          owns: () => true,
+          process: observeAgentProcess,
+          memory: () => null,
+          release: "fixture",
+          publish: async () => true,
+        }).request();
+      };
+      const observe = (reg: AgentRegistry) => {
+        const snap = reg.snapshot();
+        const entry = reg.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })!;
+        return {
+          present: readAgentProjection(reg, subjectId(entry)) !== null,
+          subjects: snap.agentStateMetrics.current?.subjectsObserved ?? 0,
+          journal: Object.keys(snap.agentStateJournal).length,
+        };
+      };
+
+      const firstReg = openRegistry();
+      let initial: ReturnType<typeof observe>;
+      try {
+        await collect(firstReg);
+        initial = observe(firstReg);
+        expect(initial).toEqual({ present: true, subjects: 1, journal: 1 });
+      } finally {
+        firstReg.close();
+      }
+      expect(fs.existsSync(path.join(root, "antigravity-agent-states.json"))).toBe(false);
+
+      const secondReg = openRegistry();
+      try {
+        expect(observe(secondReg)).toEqual(initial);
+        await collect(secondReg);
+        expect(observe(secondReg)).toEqual({ present: true, subjects: 1, journal: 1 });
+      } finally {
+        secondReg.close();
+      }
+    }
+  });
+
+  it("decodes O(1) Antigravity projections on subject lookup, bounded page read, and metrics cursor read", async () => {
+    const { Database } = await import("bun:sqlite");
+    const { readAgentStatesPage } = await import("./store");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ag-keyed-cost-"));
+    roots.push(root);
+    const filename = path.join(root, "registry.json");
+    const sqliteFilename = path.join(root, "registry.sqlite");
+    fs.writeFileSync(filename, JSON.stringify(fixtureRegistry(root, "antigravity", captureProcessIdentity(process.pid), null)));
+    const rows = fixtureRecords("antigravity");
+    fs.writeFileSync(path.join(root, "native.jsonl"), [...rows.open, ...rows.close].map((row) => JSON.stringify(row)).join("\n") + "\n");
+
+    const reg = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+    registries.push(reg);
+    await new AgentStateService({
+      registry: reg,
+      now: () => FIXTURE_NOW + 2000,
+      owns: () => true,
+      process: observeAgentProcess,
+      memory: () => null,
+      release: "fixture",
+      publish: async () => true,
+    }).request();
+
+    const entry = reg.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })!;
+    const saved = readAgentProjection(reg, subjectId(entry))!;
+    const db = new Database(sqliteFilename);
+    try {
+      db.exec("BEGIN");
+      db.exec("DELETE FROM registry_antigravity_agent_states");
+      for (let i = 0; i < 128; i += 1) {
+        const subject = i.toString(16).padStart(48, "0");
+        const row = { ...saved, subject, facts: { ...saved.facts, subject }, verdict: { ...saved.verdict, subject } };
+        db.query("INSERT INTO registry_antigravity_agent_states (subject, value_json) VALUES (?, ?)").run(subject, JSON.stringify(row));
+      }
+      db.exec("COMMIT");
+    } finally {
+      db.close();
+    }
+
+    const origParse = JSON.parse;
+    let parsedAntigravity = 0;
+    JSON.parse = function (body: string, ...args: unknown[]) {
+      const value = (origParse as (text: string, ...rest: unknown[]) => unknown).call(JSON, body, ...args);
+      if ((value as { facts?: { engine?: string } } | null)?.facts?.engine === "antigravity") {
+        parsedAntigravity += 1;
+      }
+      return value;
+    } as typeof JSON.parse;
+    try {
+      parsedAntigravity = 0;
+      const point = readAgentProjection(reg, "0".repeat(48));
+      expect(point?.facts.engine).toBe("antigravity");
+      expect(parsedAntigravity).toBe(1);
+
+      parsedAntigravity = 0;
+      const page = readAgentStatesPage(reg, "", 1);
+      expect(page).toHaveLength(1);
+      expect(parsedAntigravity).toBe(1);
+
+      parsedAntigravity = 0;
+      const cursor = reg.agentStateRead((file) => file.agentStateMetrics.maintenance?.afterKey ?? "");
+      expect(typeof cursor).toBe("string");
+      expect(parsedAntigravity).toBe(0);
+    } finally {
+      JSON.parse = origParse;
+    }
+  });
+
+  it("persists Antigravity entries and generations with null accountId so legacy 3-engine rateLimit logic never throws while candidate restores accountId", async () => {
+    const { Database } = await import("bun:sqlite");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ag-rollback-rl-"));
+    roots.push(root);
+    const filename = path.join(root, "agent-registry.json");
+    const sqliteFilename = path.join(root, "registry.sqlite");
+    const seed = fixtureRegistry(root, "antigravity", captureProcessIdentity(process.pid), null);
+    const seedEntry = Object.values(seed.entries)[0]!;
+    const seedConv = Object.values(seed.conversations)[0]!;
+    seedEntry.accountId = "default";
+    seedConv.generations[0]!.accountId = "default";
+
+    for (const mode of ["sqlite", "dual-write", "off"] as const) {
+      const subRoot = path.join(root, mode);
+      fs.mkdirSync(subRoot, { recursive: true });
+      const fn = path.join(subRoot, "agent-registry.json");
+      const sq = path.join(subRoot, "registry.sqlite");
+      const reg = new AgentRegistry(fn, undefined, undefined, { sqliteMode: mode, sqliteFilename: sq });
+      try {
+        reg.agentStateWrite((file) => {
+          file.entries[`antigravity:${FIXTURE_SESSION}`] = structuredClone(seedEntry);
+          file.conversations[seedConv.id] = structuredClone(seedConv);
+        });
+      } finally {
+        reg.close();
+      }
+
+      // Candidate reopens and sees full `accountId: "default"` losslessly.
+      const reopened = new AgentRegistry(fn, undefined, undefined, { sqliteMode: mode, sqliteFilename: sq });
+      try {
+        const snap = reopened.snapshot();
+        expect(snap.entries[`antigravity:${FIXTURE_SESSION}`]?.accountId).toBe("default");
+        expect(snap.conversations[seedConv.id]?.generations[0]?.accountId).toBe("default");
+      } finally {
+        reopened.close();
+      }
+
+      // Raw stored rows carry `accountId: null` so pre-Antigravity `rateLimit.ts`
+      // (`snapshot.quotaObservations[engine][accountId]`) never indexes `"antigravity"`.
+      let rawEntries: Record<string, { artifactPath: string; status: string; accountId: string | null }>;
+      let rawConversations: Record<string, { id: string; engine: string; generations: Array<{ path: string; accountId: string | null }> }>;
+      if (mode === "sqlite" || mode === "dual-write") {
+        const db = new Database(sq, { readonly: true });
+        try {
+          const entryJson = db.query<{ value_json: string }, [string]>(
+            "SELECT value_json FROM registry_rows WHERE collection = 'entries' AND row_key = ?",
+          ).get(`antigravity:${FIXTURE_SESSION}`)!.value_json;
+          const convJson = db.query<{ value_json: string }, [string]>(
+            "SELECT value_json FROM registry_rows WHERE collection = 'conversations' AND row_key = ?",
+          ).get(seedConv.id)!.value_json;
+          rawEntries = { [`antigravity:${FIXTURE_SESSION}`]: JSON.parse(entryJson) };
+          rawConversations = { [seedConv.id]: JSON.parse(convJson) };
+        } finally {
+          db.close();
+        }
+      } else {
+        const rawJson = JSON.parse(fs.readFileSync(fn, "utf8")) as {
+          entries: typeof rawEntries;
+          conversations: typeof rawConversations;
+        };
+        rawEntries = rawJson.entries;
+        rawConversations = rawJson.conversations;
+      }
+
+      expect(rawEntries[`antigravity:${FIXTURE_SESSION}`]?.accountId).toBeNull();
+      expect(rawConversations[seedConv.id]?.generations[0]?.accountId).toBeNull();
+
+      // Exact legacy 7bc9b9de rateLimit.ts lookup with only 3 quotaObservations groups:
+      const legacyQuotaObservations: Record<string, Record<string, unknown>> = { claude: {}, codex: {}, copilot: {} };
+      const hosts = new Map<string, { engine: string; accountId: string | null }>();
+      for (const conv of Object.values(rawConversations)) {
+        if (conv.engine === "copilot") continue;
+        for (const gen of conv.generations) {
+          hosts.set(gen.path, { engine: conv.engine, accountId: gen.accountId });
+        }
+      }
+      const activeEntries = new Map<string, { engine: string; accountId: string }>();
+      for (const entry of Object.values(rawEntries)) {
+        const host = hosts.get(entry.artifactPath);
+        if (!host || !entry.accountId) continue;
+        activeEntries.set(entry.artifactPath, { engine: host.engine, accountId: entry.accountId });
+      }
+      const artifactPath = seedEntry.artifactPath;
+      const host = hosts.get(artifactPath);
+      const activeEntry = activeEntries.get(artifactPath);
+      const accountId = activeEntry?.accountId ?? host?.accountId ?? null;
+      const engine = activeEntry?.engine ?? host?.engine;
+      expect(() => (engine && accountId ? legacyQuotaObservations[engine]![accountId] : undefined)).not.toThrow();
+      expect(accountId).toBeNull();
+    }
+  });
 });

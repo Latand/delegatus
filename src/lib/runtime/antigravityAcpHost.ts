@@ -271,11 +271,13 @@ function readContentSampleSha256(filePath: string, size: number): string {
   }
 }
 
-function statLedgerFingerprint(ledgerPath: string): { exists: true; fingerprint: LedgerFileFingerprint } | { exists: false; enoent: boolean } {
+function statLedgerFingerprint(
+  ledgerPath: string,
+): { exists: true; fingerprint: LedgerFileFingerprint } | { exists: false; enoent: boolean; error?: string } {
   try {
     const canonical = canonicalizeFilePath(ledgerPath);
     const stat = fs.statSync(canonical, { bigint: true });
-    if (!stat.isFile()) return { exists: false, enoent: false };
+    if (!stat.isFile()) return { exists: false, enoent: false, error: "runtime event ledger path is not a regular file" };
     const sizeNumber = Number(stat.size);
     return {
       exists: true,
@@ -290,7 +292,8 @@ function statLedgerFingerprint(ledgerPath: string): { exists: true; fingerprint:
       },
     };
   } catch (error) {
-    return { exists: false, enoent: (error as NodeJS.ErrnoException).code === "ENOENT" };
+    const enoent = (error as NodeJS.ErrnoException).code === "ENOENT";
+    return { exists: false, enoent, ...(enoent ? {} : { error: safeError(error) }) };
   }
 }
 
@@ -1603,8 +1606,12 @@ export class AntigravityAcpHost implements EngineHost {
     let sawConcurrentMutation = this.deliveryMutationSeq !== mutationAtEntry;
     for (;;) {
       // Reconcile against canonical JSONL before deciding from memory or SQLite
-      // if the ledger file was replaced or rewritten out-of-band.
-      this.ensureLedgerContinuityBeforeRead();
+      // if the ledger file was replaced or rewritten out-of-band. Never serve a
+      // cached decision when reconciliation hits an I/O error.
+      const continuity = this.ensureLedgerContinuityBeforeRead();
+      if (!continuity.ok) {
+        return { outcome: "rejected", reason: "stale-turn", refusal: continuity.reason };
+      }
       const mutationBefore = this.deliveryMutationSeq;
       const already = this.sentEntries.get(normalized.id);
       if (already) return { outcome: "turn-started", turnId: already };
@@ -1912,7 +1919,10 @@ export class AntigravityAcpHost implements EngineHost {
     if (!deliveryId) {
       return { state: "absent", reason: "Antigravity delivery id is empty" };
     }
-    this.ensureLedgerContinuityBeforeRead();
+    const continuity = this.ensureLedgerContinuityBeforeRead();
+    if (!continuity.ok) {
+      return { state: "unavailable", reason: continuity.reason };
+    }
     let acceptance = this.deliveryAcceptance.get(deliveryId);
     if (!acceptance && this.deliveryAcceptanceEvicted) {
       const lookedUp = await this.lookupDurableDeliveryAcceptance(deliveryId);
@@ -2107,26 +2117,58 @@ export class AntigravityAcpHost implements EngineHost {
   }
 
   private currentLedgerFingerprint(): LedgerFileFingerprint | null {
-    if (typeof this.eventStore.ledgerPath !== "function" || this.identity.sessionId === "pending") return null;
+    const probed = this.probeLedgerFingerprint();
+    return probed.ok ? probed.fingerprint : null;
+  }
+
+  private probeLedgerFingerprint(): { ok: true; fingerprint: LedgerFileFingerprint | null } | { ok: false; reason: string } {
+    if (typeof this.eventStore.ledgerPath !== "function" || this.identity.sessionId === "pending") {
+      return { ok: true, fingerprint: null };
+    }
     const stat = statLedgerFingerprint(this.eventStore.ledgerPath(this.identity.sessionId));
-    return stat.exists ? stat.fingerprint : null;
+    if (stat.exists) return { ok: true, fingerprint: stat.fingerprint };
+    if (stat.enoent) return { ok: true, fingerprint: null };
+    return {
+      ok: false,
+      reason: `Antigravity runtime event ledger cannot be verified: ${stat.error ?? "stat failed"}`,
+    };
   }
 
-  private ensureLedgerContinuityBeforeRead(): void {
-    if (this.identity.sessionId === "pending" || typeof this.eventStore.ledgerPath !== "function") return;
-    const currentFp = this.currentLedgerFingerprint();
-    if (this.lastLedgerFingerprint === null) {
-      if (currentFp !== null) this.reconcileExternallyModifiedLedger(currentFp);
-      return;
-    }
-    if (!sameLedgerFingerprint(this.lastLedgerFingerprint, currentFp)) {
-      this.reconcileExternallyModifiedLedger(currentFp);
-    }
-  }
-
-  private reconcileExternallyModifiedLedger(afterFp: LedgerFileFingerprint | null): void {
+  private clearCachedDeliveryState(): void {
     this.deliveryIndex?.clearFingerprint(this.identity.sessionId);
     this.eventStore.invalidate?.(this.identity.sessionId);
+    this.deliveryAcceptance.clear();
+    this.sentEntries.clear();
+    this.deliveryAcceptanceEvicted = false;
+    this.deliveryIndexHealthy = false;
+    this.lastLedgerFingerprint = null;
+    this.deliveryMutationSeq += 1;
+  }
+
+  private ensureLedgerContinuityBeforeRead(): { ok: true } | { ok: false; reason: string } {
+    if (this.identity.sessionId === "pending" || typeof this.eventStore.ledgerPath !== "function") {
+      return { ok: true };
+    }
+    const probed = this.probeLedgerFingerprint();
+    if (!probed.ok) {
+      this.clearCachedDeliveryState();
+      return { ok: false, reason: probed.reason };
+    }
+    const currentFp = probed.fingerprint;
+    if (this.lastLedgerFingerprint === null) {
+      if (currentFp !== null) return this.reconcileExternallyModifiedLedger(currentFp);
+      return { ok: true };
+    }
+    if (!sameLedgerFingerprint(this.lastLedgerFingerprint, currentFp)) {
+      return this.reconcileExternallyModifiedLedger(currentFp);
+    }
+    return { ok: true };
+  }
+
+  private reconcileExternallyModifiedLedger(afterFp: LedgerFileFingerprint | null): { ok: true } | { ok: false; reason: string } {
+    // Discard cached delivery decisions BEFORE reading disk so a transient I/O
+    // failure (e.g. EIO) can never fall through to stale pre-replacement state.
+    this.clearCachedDeliveryState();
     try {
       const canonical = this.eventStore.load(this.identity.sessionId);
       const rebuilt = new Map<string, { record: DeliveryAcceptanceRecord; seq: number }>();
@@ -2136,8 +2178,6 @@ export class AntigravityAcpHost implements EngineHost {
           maxDeliverySeq = ev.seq;
         }
       }
-      this.deliveryAcceptance.clear();
-      this.sentEntries.clear();
       this.deliveryAcceptanceEvicted = rebuilt.size > ANTIGRAVITY_SENT_ENTRY_MEMORY;
       for (const [entryId, entry] of rebuilt) {
         this.recordDeliveryAcceptance(entryId, entry.record, false);
@@ -2158,11 +2198,12 @@ export class AntigravityAcpHost implements EngineHost {
         this.deliveryIndexHealthy = false;
       }
       this.lastLedgerFingerprint = afterFp;
+      return { ok: true };
     } catch (error) {
-      this.deliveryIndex?.clearFingerprint(this.identity.sessionId);
-      this.deliveryIndexHealthy = false;
-      this.lastLedgerFingerprint = null;
-      console.warn("[antigravity] externally modified ledger reconciliation failed; falling back to ledger lookup", safeError(error));
+      this.clearCachedDeliveryState();
+      const reason = `Antigravity runtime event ledger reconciliation failed: ${safeError(error)}`;
+      console.warn("[antigravity] externally modified ledger reconciliation failed; withholding cached delivery state", safeError(error));
+      return { ok: false, reason };
     }
   }
 
