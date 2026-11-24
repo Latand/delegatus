@@ -50,6 +50,7 @@ export type ProvisioningRecord = {
   cacheWaitIdentity?: string;
   cacheOwner?: DependencyCacheFence;
   legacyWaitSince?: number;
+  legacyWriter?: { pid: number; start: string };
   waitReason?: string;
   privateReceipt?: PrivateInstallReceipt;
   privateIntent?: PrivateInstallIntent;
@@ -95,6 +96,8 @@ export function validProvisioningRecord(value: unknown): value is ProvisioningRe
     || (value.cacheWaitIdentity !== undefined && !validCacheIdentity(value.cacheWaitIdentity))
     || (value.cacheOwner !== undefined && (!value.worker || !validCacheFence(value.cacheOwner)))
     || (value.legacyWaitSince !== undefined && !timestamp(value.legacyWaitSince))
+    || (value.legacyWriter !== undefined && (!object(value.legacyWriter) || !timestamp(value.legacyWriter.pid)
+      || value.legacyWriter.pid === 0 || !text(value.legacyWriter.start, 128)))
     || (value.waitReason !== undefined && !text(value.waitReason, 256))
     || (value.privateReceipt !== undefined && !validPrivateReceipt(value.privateReceipt))
     || (value.privateIntent !== undefined && !validPrivateIntent(value.privateIntent))) return false;

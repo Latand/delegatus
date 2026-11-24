@@ -22,7 +22,7 @@ import { provesProvisionCacheHolder } from "./provisionCacheHolder";
 import { physicalProvisioningPath, provisioningStripe, tryProvisioningLock, type ProvisioningGrant } from "./provisionCheckoutCustody";
 import { ProvisionToolchainFailure, runProvisionToolchain } from "./provisionToolchain";
 import { provisionToolchainEntry } from "./provisionToolchainEntry";
-import { PROVISION_STEPS, validProvisioningRecord, type ProvisioningRecord, type ProvisionStep } from "./provisioningRecord";
+import { PROVISION_STEPS, provisioningStepView, validProvisioningRecord, type ProvisioningRecord, type ProvisioningStepView, type ProvisionStep } from "./provisioningRecord";
 import { controllerPipelineVersionNow, deliveryJournal, findControllerPipeline, provisioningCacheOwnerKeys, withProvisioningCheckpoint } from "./store";
 import type { Pipeline, PipelineBoundedWait } from "./types";
 import type { StateBoundedTransaction } from "@/lib/state/sqliteStateStore";
@@ -46,6 +46,7 @@ type ProvisionPorts = {
   provisionExec?: ProvisionExecPort;
   provisionClock?: ProvisionClock;
   provisionToolchainReply?: (id: string, type: string, detail?: string) => Promise<void>;
+  observeProvisioningCheckpoint?: (id: string, step: ProvisioningStepView | undefined, at: number) => void;
   now(): string;
   monotonicNow(): number;
   scheduleTick?(delayMs?: number): void;
@@ -124,7 +125,7 @@ class JobRevoked extends Error {}
 class StepDeadline extends Error {}
 class Deferred extends Error {
   constructor(readonly step: ProvisionStep, readonly since: number, readonly deadline: number, readonly reason: string, readonly resource?: string,
-    readonly cache?: { identity: string; holderDeadline?: number }) { super(reason); }
+    readonly cache?: { identity: string; holderDeadline?: number }, readonly legacyWriter?: ProvisioningRecord["legacyWriter"]) { super(reason); }
 }
 
 function schedule(pool: Pool, at: number, clock: ProvisionClock, ports: ProvisionPorts) {
@@ -387,9 +388,16 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     }, afterStop ? 500 : stopAt - clock.monotonicMs()).finally(() => { handle.writing = false; });
     changed = true;
     handle.subject = subject(result);
+    const transitioned = initial || !next || next.step !== slot.step || next.since !== slot.since || next.status !== slot.status;
     if (next) { handle.token = next.token; slot = next; }
     else delete handle.token;
     row = result;
+    if (transitioned) {
+      const view = provisioningStepView(result);
+      const at = clock.wallMs();
+      if (view) reportProvisioningPhase(id, { phase: "step", view }, asDate(at));
+      ports.observeProvisioningCheckpoint?.(id, view, at);
+    }
     requestPipelineTick();
   };
   const step = async (name: ProvisionStep) => {
@@ -430,7 +438,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       { ...slot, step: error.step, since: error.since, deadlineAt: error.deadline, status: "waiting", retryAt: at,
       resource: error.resource, waitReason: error.reason,
       ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity } : {}),
-      ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since } : {}) }, false, true);
+      ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since, legacyWriter: error.legacyWriter } : {}) }, false, true);
     schedule(pool, at, clock, ports);
   };
   const disk = () => {
@@ -616,8 +624,9 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
         legacyWriter: async cause => {
           const since = slot.legacyWaitSince ?? clock.wallMs();
           const detail = cause.kind === "possible-writer" ? "possible-writer" : cause.reason;
+          const writer = cause.kind === "possible-writer" ? { pid: cause.pid, start: cause.start } : undefined;
           throw new Deferred("waitingForLegacyInstaller", since, since + PROVISION_STEPS.waitingForLegacyInstaller,
-            `private-install-writer-live (${detail})`);
+            `private-install-writer-live (${detail})`, undefined, undefined, writer);
         }, track: child => { handle.child = child; },
       }); else {
         await step("checkingDependencies");
@@ -666,7 +675,9 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     if (error instanceof Deferred) {
       if (error.step !== "waitingForTurn" && clock.wallMs() >= error.deadline) {
         await write(() => {}, { ...slot, step: error.step, since: error.since, deadlineAt: error.deadline, waitReason: error.reason,
-          ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity } : {}) }, false, true);
+          ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity } : {}),
+          ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since, legacyWriter: error.legacyWriter } : {}),
+        }, false, true);
         await park(error.reason);
       }
       else await wait(error);

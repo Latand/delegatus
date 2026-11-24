@@ -5,12 +5,14 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { assertOperationLease, withoutOperationLease } from "@/lib/operationLease";
 import { requestPipelineTick } from "./controllerSignal";
+import type { ProvisioningStepView } from "./provisioningRecord";
 
 type ProvisioningGitStep = "common-directory" | "fetch" | "worktree-add";
 type ProvisioningPhase =
   | { phase: "accepted"; admission: "direct" | "queued" }
   | { phase: "scheduler-selected" | "state-validated" | "first-attempt" }
   | { phase: "toolchain-ready" }
+  | { phase: "step"; view: ProvisioningStepView }
   | { phase: "git-started"; step: ProvisioningGitStep }
   | { phase: "git-finished"; step: ProvisioningGitStep; status: "ok" | "failed" | "cancelled" };
 

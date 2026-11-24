@@ -483,17 +483,49 @@ test.skipIf(process.platform !== "linux")("a lost cache permit reply reaps the l
   }), 26_000);
 
 const linuxInstall = process.platform === "linux" ? test : test.skip;
-linuxInstall.each(["unchanged", "replace-before-write"] as const)("the production checkout-relative install leaves a %s checkout safe", mode =>
+linuxInstall.each([
+  ["file", "unchanged"], ["workspace", "unchanged"], ["file", "replace-before-write"],
+  ["file", "resume"], ["file", "replace-on-rerun"], ["file", "replace-during-write"], ["file", "replace-during-rerun"],
+] as const)("the production %s install preserves checkout custody in %s", (inputKind, mode) =>
   withControllerAuditState(async () => {
     const { h, git, repo, root } = await realWorktreeLane("relative-install-custody", BUILD_ONLY as never);
-    let installs = 0, launches = 0;
+    const firstPermit = latch(), release = latch();
+    const requestedPackage = latch(), sendPackage = latch();
+    const during = mode === "replace-during-write" || mode === "replace-during-rerun";
+    const interrupted = mode === "resume" || mode === "replace-on-rerun" || mode === "replace-during-rerun";
+    const replaced = during || mode === "replace-before-write" || mode === "replace-on-rerun";
+    let wall = Date.now(), monotonic = 0;
+    const timers = new Set<{ at: number; run: () => void }>();
+    const advance = (ms: number) => {
+      wall += ms;
+      monotonic += ms;
+      for (const timer of [...timers]) if (timer.at <= monotonic) {
+        timers.delete(timer);
+        timer.run();
+      }
+    };
+    let installs = 0, launches = 0, holdPackage = false;
+    let supply: (() => Promise<void>) | undefined;
+    let unrelated: ReturnType<typeof Bun.spawn<"pipe", "pipe", "ignore">> | undefined;
     try {
+      const packageEnv = { ...process.env, BUN_INSTALL_CACHE_DIR: path.join(root, "lockfile-cache") };
+      if (during) {
+        supply = await seedProvisioningPackage(repo, root, packageEnv, process.execPath, async () => {
+          if (!holdPackage) return;
+          requestedPackage.resolve();
+          await sendPackage.promise;
+        }, "fixture-relative");
+      }
       fs.mkdirSync(path.join(repo, "packages", "fixture"), { recursive: true });
       fs.writeFileSync(path.join(repo, "packages", "fixture", "package.json"), '{"name":"fixture-local","version":"1.0.0"}');
-      fs.writeFileSync(path.join(repo, "package.json"), '{"name":"fixture-relative","dependencies":{"fixture-local":"file:./packages/fixture"}}');
+      const remote = during ? JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8")).dependencies : {};
+      fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ name: "fixture-relative",
+        dependencies: { ...remote, "fixture-local": inputKind === "file" ? "file:./packages/fixture" : "workspace:*" },
+        ...(inputKind === "workspace" ? { workspaces: ["packages/*"] } : {}),
+      }));
       fs.appendFileSync(path.join(repo, ".gitignore"), "node_modules\n");
       const freeze = Bun.spawn([process.execPath, "--no-env-file", "install", "--lockfile-only", "--ignore-scripts"], {
-        cwd: repo, stdout: "ignore", stderr: "pipe", timeout: 5_000,
+        cwd: repo, env: packageEnv, stdout: "ignore", stderr: "pipe", timeout: 5_000,
       });
       const [code, error] = await Promise.all([freeze.exited, new Response(freeze.stderr).text()]);
       expect(code, error).toBe(0);
@@ -501,7 +533,13 @@ linuxInstall.each(["unchanged", "replace-before-write"] as const)("the productio
       await git(repo, "commit", "-m", "checkout relative fixture inputs");
       await git(repo, "push", "origin", "main");
       delete h.ports.provisionExec;
-      h.ports.now = () => new Date().toISOString();
+      h.ports.now = () => new Date(interrupted ? wall : Date.now()).toISOString();
+      if (interrupted) h.ports.provisionClock = { wallMs: () => wall, monotonicMs: () => monotonic,
+        arm(delay, run) {
+          const timer = { at: monotonic + delay, run };
+          timers.add(timer);
+          return () => { timers.delete(timer); };
+        } };
       const lane = (await createPipelineFromRequest({ task: "Install the checkout-relative fixture", repoDir: repo,
         publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
       const target = path.join(lane.worktreeDir, "node_modules");
@@ -516,42 +554,87 @@ linuxInstall.each(["unchanged", "replace-before-write"] as const)("the productio
         return result;
       };
       let foreignInode: bigint | undefined;
-      h.ports.provisionToolchainReply = async (id, type, effect) => {
-        if (id !== lane.id || type !== "dispatch" || effect !== "install-in-place") return;
-        installs++;
-        if (mode === "unchanged") return;
+      const replace = () => {
         fs.renameSync(target, target + ".previous");
         fs.mkdirSync(path.join(target, "fixture-local"), { recursive: true });
         fs.writeFileSync(path.join(target, "fixture-local", "package.json"), "foreign bytes");
         foreignInode = fs.statSync(target, { bigint: true }).ino;
       };
+      h.ports.provisionToolchainReply = async (id, type, effect) => {
+        if (id === lane.id && type === "ready" && inputKind === "file" && mode === "unchanged" && !unrelated) {
+          unrelated = Bun.spawn(["python3", "-c",
+            "import ctypes,sys; assert ctypes.CDLL(None).prctl(4,0,0,0,0)==0; print('ready',flush=True); sys.stdin.read(1)"],
+          { cwd: lane.worktreeDir, stdin: "pipe", stdout: "pipe", stderr: "ignore", timeout: 10_000 });
+          const reader = unrelated.stdout.getReader();
+          try {
+            expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready\n");
+            expect(() => fs.readlinkSync(`/proc/${unrelated!.pid}/cwd`)).toThrow();
+          } finally { reader.releaseLock(); }
+        }
+        if (id !== lane.id || type !== "dispatch" || effect !== "install-in-place") return;
+        installs++;
+        if (interrupted && installs === 1) {
+          firstPermit.resolve();
+          await release.promise;
+          return;
+        }
+        if (replaced && !during) replace();
+      };
+      holdPackage = during;
+      if (interrupted) {
+        await driveProvisioning(h.ports, async () => installs === 1);
+        await until(firstPermit.promise);
+        const slot = (await findControllerPipeline(lane.id))!.provisioningJob!;
+        expect(slot.privateIntent?.inode).toBe(String(fs.statSync(target, { bigint: true }).ino));
+        expect(fs.existsSync(path.join(target, ".delegatus-install-receipt.json"))).toBe(false);
+        advance(slot.deadlineAt - wall);
+        await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.provisioningJob?.status === "waiting");
+        const waiting = (await findControllerPipeline(lane.id))!.provisioningJob!;
+        expect(waiting.interruption?.reason).toBe("provision-step-timeout");
+        release.resolve();
+        advance(waiting.retryAt! - wall);
+      }
+      if (during) {
+        let reachedBun = false;
+        void requestedPackage.promise.then(() => { reachedBun = true; });
+        await driveProvisioning(h.ports, async () => reachedBun);
+        replace();
+        sendPackage.resolve();
+      }
       await driveProvisioning(h.ports, async () => {
         const row = await findControllerPipeline(lane.id);
         return row?.state === "needs_decision" || (launches === 1 && row?.runs[0]?.attempts[0]?.state === "running");
       });
       const row = (await findControllerPipeline(lane.id))!;
       const marker = path.join(target, ".delegatus-install-receipt.json");
-      if (mode === "unchanged") {
+      if (!replaced) {
         expect(row.state, row.stateDetail ?? "").toBe("running");
-        expect(installs).toBe(1);
+        expect(installs).toBe(interrupted ? 2 : 1);
         expect(launches).toBe(1);
         expect(fs.existsSync(marker)).toBe(true);
         expect(JSON.parse(fs.readFileSync(path.join(target, "fixture-local", "package.json"), "utf8")).name).toBe("fixture-local");
       } else {
         expect(row).toMatchObject({ state: "needs_decision", stateDetail: "private-install-unverified" });
-        expect(installs).toBe(1);
+        expect(installs).toBe(interrupted ? 2 : 1);
         expect(launches).toBe(0);
         expect(fs.existsSync(marker)).toBe(false);
         expect(fs.statSync(target, { bigint: true }).ino).toBe(foreignInode);
         expect(fs.readFileSync(path.join(target, "fixture-local", "package.json"), "utf8")).toBe("foreign bytes");
       }
     } finally {
+      release.resolve();
+      sendPackage.resolve();
+      if (unrelated && unrelated.exitCode === null && unrelated.signalCode === null) {
+        unrelated.stdin.end();
+        await unrelated.exited;
+      }
       await (await import("./provisioningJob")).settleProvisioningJobsForTests();
+      await supply?.();
       await settlePipelineControllerJobs();
       await settlePipelineStopReadLanes();
       await removeProvisioningFixture(root);
     }
-  }), 18_000);
+  }), 26_000);
 
 const legacyTree = process.env.LLV_PROVISION_LEGACY_TREE;
 test.skipIf(!legacyTree)("pre-v1 reads the committed plan after origin moves and the forward release retires its slot", () =>
@@ -711,6 +794,8 @@ test.skipIf(process.platform !== "linux")("a slotless checkout waits for the liv
       await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.provisioningJob?.step === "waitingForLegacyInstaller");
       const waiting = (await findControllerPipeline(lane.id))!;
       expect(waiting.provisioningJob?.waitReason).toBe("private-install-writer-live (possible-writer)");
+      expect(waiting.provisioningJob?.legacyWriter?.pid).toBe(installer.pid);
+      expect(waiting.provisioningJob?.legacyWriter?.start).toMatch(/^\d+$/);
       expect(waiting.runs[0]?.attempts).toHaveLength(0);
       expect(observed).not.toContain("private-scratch");
       expect(fs.readdirSync(lane.worktreeDir).some(file => file.startsWith(".delegatus-dependencies-"))).toBe(false);

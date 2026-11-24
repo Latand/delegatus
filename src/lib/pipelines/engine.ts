@@ -342,6 +342,7 @@ export interface PipelinePorts {
   provisionClock?: ProvisionClock;
   /** Observe the worker's response boundary from an isolated controller harness. */
   provisionToolchainReply?: (id: string, type: string, detail?: string) => Promise<void>;
+  observeProvisioningCheckpoint?: (id: string, step: import("./provisioningRecord").ProvisioningStepView | undefined, at: number) => void;
   preflightRepo(repoDir: string): PipelineRepoPreflight | Promise<PipelineRepoPreflight>;
   roleLookup?: PipelineRoleLookup | null;
   spawnAgent(input: {
