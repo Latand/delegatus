@@ -531,11 +531,37 @@ function refusedIdempotencyKey(key: string): Extract<StructuredMessageResult, { 
   });
 }
 
-function commandInput(request: StructuredMessageRequest) {
+/** Automated senders targeting a busy Antigravity conversation default to
+    `queue` so they never cancel an active turn unless they explicitly asked
+    to interrupt or steer (docs/design/antigravity-engine.md §3.3). */
+export function defaultStructuredSendPolicy(
+  request: Pick<StructuredMessageRequest, "kind" | "policy" | "origin">,
+  engine: AgentEngine | null | undefined,
+): NonNullable<StructuredMessageRequest["policy"]> {
+  if (request.policy) return request.policy;
+  if (
+    engine === "antigravity"
+    && request.kind !== "steer"
+    && request.kind !== "inject"
+    && request.origin
+    && request.origin.kind !== "operator"
+  ) {
+    return "queue";
+  }
+  return "interrupt-active";
+}
+
+function commandInput(request: StructuredMessageRequest, engine?: AgentEngine | null) {
+  const resolvedPolicy = request.policy ?? (engine && request.kind !== "inject"
+    ? (() => {
+      const effective = defaultStructuredSendPolicy(request, engine);
+      return effective === "interrupt-active" ? undefined : effective;
+    })()
+    : undefined);
   return {
     ...(request.operationId ? { operationId: request.operationId } : {}),
     ...(request.kind ? { kind: request.kind } : {}),
-    ...(request.policy ? { policy: request.policy } : {}),
+    ...(resolvedPolicy ? { policy: resolvedPolicy } : {}),
     ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
     ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
     ...(request.origin ? { origin: request.origin } : {}),
@@ -712,7 +738,7 @@ async function holdDuringRuntimeSynchronization(
       payloadKind,
       refs,
       contentDigest,
-      commandInput(request),
+      commandInput(request, conversation.engine),
     );
     if (replay?.state === "delivered") {
       return deliveredReservationReplay(replay, idempotencyKey, conversation.id, false);
@@ -740,7 +766,7 @@ async function holdDuringRuntimeSynchronization(
         payloadKind,
         refs,
         contentDigest,
-        commandInput(request),
+        commandInput(request, conversation.engine),
         { recoveryIntent: allowReclaimed ? "reclaimed-host" : null, admissionGuard: request.admissionGuard,
           ...(needsAccountReseat ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
         request.admissionGuardAsync,
@@ -765,7 +791,7 @@ async function holdDuringRuntimeSynchronization(
         payloadKind,
         refs,
         contentDigest,
-        commandInput(request),
+        commandInput(request, conversation.engine),
       );
       if (raced) return raced;
       (admission.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
@@ -1684,7 +1710,7 @@ export async function enqueueStructuredMessage(
       refs.length ? "runtime-images" : "text",
       refs,
       content.contentDigest,
-      commandInput(request),
+      commandInput(request, conversation.engine),
     );
     if (!terminalReplay && request.admissionGuard
       && registry.deliveryAdmissionForKey(conversation.id, idempotencyKey).outcome !== "admitted") request.admissionGuard();
@@ -1752,7 +1778,7 @@ export async function enqueueStructuredMessage(
       refs.length ? "runtime-images" : "text",
       refs,
       content.contentDigest,
-      commandInput(request),
+      commandInput(request, conversation.engine),
     );
     if (replay) return replay;
     if (request.admissionGuard
@@ -1778,7 +1804,7 @@ export async function enqueueStructuredMessage(
         refs.length ? "runtime-images" : "text",
         refs,
         content.contentDigest,
-        commandInput(request),
+        commandInput(request, conversation.engine),
         { admissionGuard: request.admissionGuard,
           ...(needsAccountReseat && request.kind !== "inject" ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
         request.admissionGuardAsync,
@@ -2204,7 +2230,7 @@ export async function enqueueStructuredMessage(
            the send default here refused every injection at the journal, with
            `thread/inject_items` never called. The default stays exactly what it
            was for every other kind. */
-        ...(assigned.command.kind === "inject" ? {} : { policy: request.policy ?? "interrupt-active" }),
+        ...(assigned.command.kind === "inject" ? {} : { policy: assigned.command.policy ?? defaultStructuredSendPolicy(request, conversation.engine) }),
         ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
         ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
         ...(request.runtime ? { runtime: request.runtime } : {}),

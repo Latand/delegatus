@@ -19,6 +19,10 @@ export interface RuntimeEventStore {
   append(threadId: string, event: RuntimeEvent): void;
   /** Visit the validated prefix without retaining it; return its final cursor. */
   scan?(threadId: string, visit: (event: RuntimeEvent) => void): Promise<number>;
+  /** Canonical on-disk ledger file path when backed by files. */
+  ledgerPath?(threadId: string): string;
+  /** Drop any cached copy/tail for this thread so the next read reloads from disk. */
+  invalidate?(threadId: string): void;
 }
 
 export interface RuntimeEventCursorRecoveryDiagnostic {
@@ -820,9 +824,18 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
      starving snapshot and concurrent admission for the length of a turn. */
   private readonly timingGaps = new Set<string>();
   private timingOverflow = false;
-  private readonly tails = new Map<string, { lastSeq: number; bytes: number }>();
+  private readonly tails = new Map<string, { lastSeq: number; bytes: number; identity: LedgerIdentity }>();
 
   constructor(private readonly directory = statePath("structured-host-events")) {}
+
+  ledgerPath(threadId: string): string {
+    return this.filename(threadId);
+  }
+
+  invalidate(threadId: string): void {
+    this.tails.delete(threadId);
+    forgetLedger(this.filename(threadId));
+  }
 
   load(threadId: string): RuntimeEvent[] {
     const filename = this.filename(threadId);
@@ -928,10 +941,13 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
     const filename = this.filename(threadId);
     const fd = fs.openSync(filename, "a+", 0o600);
     try {
-      if ((fs.fstatSync(fd).mode & 0o777) !== 0o600) fs.fchmodSync(fd, 0o600);
+      const beforeStat = fs.fstatSync(fd);
+      if ((beforeStat.mode & 0o777) !== 0o600) fs.fchmodSync(fd, 0o600);
+      let beforeIdentity = ledgerIdentity(beforeStat);
       let tail = this.tails.get(threadId);
-      if (!tail || fs.fstatSync(fd).size !== tail.bytes) {
+      if (!tail || !sameLedgerIdentity(tail.identity, beforeIdentity)) {
         tail = this.reconcileTail(threadId, filename, fd);
+        beforeIdentity = tail.identity;
       }
       if (tail.lastSeq > 0 && event.seq !== tail.lastSeq + 1) {
         throw new Error(`runtime event ledger sequence gap after ${tail.lastSeq}`);
@@ -946,16 +962,17 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
           console.warn("[accounting] native timing observation unavailable");
         }
       }
-      const nextTail = { lastSeq: event.seq, bytes: tail.bytes + Buffer.byteLength(line) };
+      const current = fs.fstatSync(fd);
+      const nextIdentity = ledgerIdentity(current);
+      const nextTail = { lastSeq: event.seq, bytes: current.size, identity: nextIdentity };
       this.tails.set(threadId, nextTail);
       const cached = ledgerCache().get(filename);
-      const current = fs.fstatSync(fd);
-      if (cached && cached.identity.size === tail.bytes && (cached.events.at(-1)?.seq ?? 0) === tail.lastSeq) {
+      if (cached && sameLedgerIdentity(cached.identity, beforeIdentity) && (cached.events.at(-1)?.seq ?? 0) === tail.lastSeq) {
         /* The cache owns its array and hands out copies, so an append extends
            it in place. Copying it twice per append made every streamed delta
            of a cached ledger cost O(ledger). */
         cached.events.push(event);
-        rememberLedger(filename, ledgerIdentity(current), cached.events, true);
+        rememberLedger(filename, nextIdentity, cached.events, true);
       } else {
         forgetLedger(filename);
       }
@@ -965,11 +982,12 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
   }
 
   /* First touch of a ledger, or any on-disk divergence from the owned tail
-     (a torn crash tail, external truncation), replays the file once to
-     re-establish the durable tail and repair an unterminated final record. */
-  private reconcileTail(threadId: string, filename: string, fd: number): { lastSeq: number; bytes: number } {
-    if (fs.fstatSync(fd).size === 0) {
-      const empty = { lastSeq: 0, bytes: 0 };
+     (a torn crash tail, external replacement or truncation), replays the file
+     once to re-establish the durable tail and repair an unterminated final record. */
+  private reconcileTail(threadId: string, filename: string, fd: number): { lastSeq: number; bytes: number; identity: LedgerIdentity } {
+    const initialStat = fs.fstatSync(fd);
+    if (initialStat.size === 0) {
+      const empty = { lastSeq: 0, bytes: 0, identity: ledgerIdentity(initialStat) };
       this.tails.set(threadId, empty);
       return empty;
     }
@@ -987,9 +1005,10 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
       else fs.ftruncateSync(fd, Buffer.byteLength(contents.slice(0, boundary)));
     }
     const current = fs.fstatSync(fd);
-    const tail = { lastSeq: events.at(-1)?.seq ?? 0, bytes: current.size };
+    const identity = ledgerIdentity(current);
+    const tail = { lastSeq: events.at(-1)?.seq ?? 0, bytes: current.size, identity };
     this.tails.set(threadId, tail);
-    rememberLedger(filename, ledgerIdentity(current), events);
+    rememberLedger(filename, identity, events);
     return tail;
   }
 
