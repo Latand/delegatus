@@ -184,7 +184,7 @@ for (const failure of ["host", "web", "import"] as const) (legacySource ? test :
   const newer = install(); const candidate = release(newer, "terminal-candidate", { brokenHost: failure === "host" });
   if (shape === "package") {
     writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.1" }));
-    mkdirSync(path.join(candidate.dir, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(candidate.dir, "dist", "standalone", "server.js"), STUB_NEXT(false));
+    mkdirSync(path.join(candidate.dir, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(candidate.dir, "dist", "standalone", "server.js"), STUB_NEXT(false, false, true));
   } else git(fixture.checkout, "fetch", candidate.dir, candidate.sha);
   const running = await start(fixture);
   let record = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
@@ -441,7 +441,7 @@ for (const broken of [false, true]) (legacySource ? test : test.skip)(`actual le
   renameSync(path.join(fixture.checkout, ".git"), path.join(fixture.root, "saved-git"));
   const candidateFixture = install(); const candidate = release(candidateFixture, "package-handoff", { brokenHost: broken });
   writeFileSync(path.join(candidate.dir, "package.json"), JSON.stringify({ name: "delegatus-cli", type: "module", version: "0.0.1" }));
-  mkdirSync(path.join(candidate.dir, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(candidate.dir, "dist", "standalone", "server.js"), STUB_NEXT(false));
+  mkdirSync(path.join(candidate.dir, "dist", "standalone"), { recursive: true }); writeFileSync(path.join(candidate.dir, "dist", "standalone", "server.js"), STUB_NEXT(false, false, true));
   const running = await start(fixture);
   const before = await until(() => { const r = readRecord(fixture.state); return r.web.state === "healthy" && r.runtimeHost.state === "healthy" ? r : null; });
   const record = { ...before, installRoot: fixture.checkout } as unknown as import("../src/lib/selfUpdate/launcher").LauncherRecord;
@@ -1107,7 +1107,7 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
   }
 });
 
-for (const failurePhase of ["none", "files", "page", "chunk", "output", "journal"] as const) {
+for (const failurePhase of ["none", "readiness", "page", "chunk", "output", "journal"] as const) {
   test(`relaunch readiness persists phases across exec and rollback, failure=${failurePhase}`, async () => {
     const failed = failurePhase !== "none";
     const pageFails = failurePhase === "page" || failurePhase === "output" || failurePhase === "journal";
@@ -1125,16 +1125,27 @@ for (const failurePhase of ["none", "files", "page", "chunk", "output", "journal
       console.log("discarded startup prefix " + "x".repeat(70_000));
       console.log("▲ Next.js fixture startup line");
       console.error("candidate startup diagnostic");
+      console.error("[viewer startup phase] access running 0");
+      console.error("[viewer startup phase] access ready 3");
+      console.error("[viewer startup phase] state-compatibility running 0");
+      if (${failurePhase !== "readiness"}) console.error("[viewer startup phase] state-compatibility ready 7");
       let pages = 0;
       const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT ?? process.argv[process.argv.indexOf("--port") + 1]),
         fetch(request) {
-          const pathname = new URL(request.url).pathname;
-          if (pathname === "/api/files" && ${failurePhase === "files"}) return new Promise(() => {});
+          const { pathname, searchParams } = new URL(request.url);
+          if (pathname === "/api/ready") {
+            if (${failurePhase === "readiness"}) return new Promise(() => {});
+            const revision = process.env.LLV_DIAGNOSTIC_REVISION;
+            return searchParams.get("revision") === revision
+              ? new Response(null, { headers: { "x-delegatus-viewer-revision": revision } })
+              : new Response(null, { status: 409 });
+          }
+          if (pathname === "/api/files") return new Promise(() => {});
           if (pathname.startsWith("/_next/") && ${failurePhase === "chunk"}) return new Promise(() => {});
           if (pathname === "/") {
             pages += 1;
             if (${pageFails}) return new Promise(() => {});
-            if (${!failed} && pages === 1) return new Promise(resolve => setTimeout(() => resolve(new Response("late page")), 600));
+            if (${!failed} && pages === 1) return new Promise(() => {});
             return new Response('<script src="/_next/static/chunks/app.js"></script>');
           }
           return new Response("ready");
@@ -1152,7 +1163,8 @@ for (const failurePhase of ["none", "files", "page", "chunk", "output", "journal
     const resultFile = `${before.requestFile}.result.json`;
     const result = await until(() => existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : null, 15_000);
     expect(result.state).toBe(failed ? "rolled-back" : "done");
-    let runs: Array<{ revision: string; status: string; elapsedMs: number; phases: Record<string, { attempts: number; elapsedMs: number; status: string }> }> = [];
+    let runs: Array<{ revision: string; status: string; elapsedMs: number; startup: Record<string, unknown>;
+      phases: Record<string, { attempts: number; elapsedMs: number; status: string; observations: unknown[] }> }> = [];
     if (failurePhase === "journal") {
       expect(readRecord(fixture.state).web).toMatchObject({ state: "healthy", revision: fixture.first.slice(0, 7) });
       expect(statSync(evidenceFile).isDirectory()).toBe(true);
@@ -1161,22 +1173,35 @@ for (const failurePhase of ["none", "files", "page", "chunk", "output", "journal
       const candidate = runs.find((run: { revision: string }) => run.revision === next.sha)!;
       expect(candidate.status).toBe(failed ? "failed" : "ready");
       expect(candidate.phases.files.attempts).toBeGreaterThanOrEqual(1);
-      expect(candidate.phases.files.status).toBe(failurePhase === "files" ? "failed" : "ready");
-      if (failurePhase === "files") {
+      expect(candidate.phases.files.status).toBe(failurePhase === "readiness" ? "failed" : "ready");
+      expect(candidate.startup.access).toEqual({ status: "ready", elapsedMs: 3 });
+      if (failurePhase === "readiness") {
+        expect(candidate.elapsedMs).toBeLessThan(5_000);
+        expect(result.detail).toContain("[state-compatibility]");
+        expect(candidate.startup["state-compatibility"]).toMatchObject({ status: "failed" });
+        expect(candidate.phases.files.observations.at(-1)).toMatchObject({ endpoint: "/api/ready", error: "deadline" });
         expect(candidate.phases.page.attempts).toBe(0);
         expect(candidate.phases.page.status).toBe("pending");
       } else {
+        expect(candidate.startup["state-compatibility"]).toEqual({ status: "ready", elapsedMs: 7 });
+        expect(candidate.phases.files.observations.at(-1)).toMatchObject({ endpoint: "/api/ready", httpStatus: 200 });
         expect(candidate.phases.page.attempts).toBeGreaterThanOrEqual(2);
         expect(candidate.phases.page.status).toBe(pageFails ? "failed" : "ready");
         expect(candidate.phases.page.elapsedMs).toBeGreaterThanOrEqual(200);
       }
       expect(candidate.phases.chunk.status).toBe(failurePhase === "none" ? "ready" : failurePhase === "chunk" ? "failed" : "pending");
+      if (failurePhase === "none") {
+        expect(candidate.phases.page.observations.at(-1)).toMatchObject({ httpStatus: 200, status: "ready" });
+        expect(candidate.phases.chunk.observations.at(-1)).toMatchObject({ httpStatus: 200, status: "ready" });
+      }
       expect(statSync(evidenceFile).mode & 0o777).toBe(0o600);
     }
     if (failed) {
       if (failurePhase !== "journal") {
         expect(runs.at(-1)!.revision).toBe(fixture.first);
         expect(runs.at(-1)!.status).toBe("ready");
+        expect(runs.at(-1)!.phases.files.observations).toContainEqual(expect.objectContaining({ endpoint: "/api/ready", httpStatus: 404 }));
+        expect(runs.at(-1)!.phases.files.observations.at(-1)).toMatchObject({ endpoint: "/api/files", httpStatus: 200 });
       }
       if (failurePhase === "output") {
         expect(running.output()).toContain("could not persist candidate startup output; continuing rollback");

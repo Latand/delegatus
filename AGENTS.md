@@ -117,7 +117,11 @@ The command defaults to the committed `scripts/privacy-known-value-fingerprints.
 beside the gate. `LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE` overrides that catalog;
 an empty value disables the default and still requires another known-value source.
 
-Touched tests run the branch first. Gate-harness and privacy suites use at most two file workers because they launch nested commands. Linux portable runners sharing a parent service use one. Other selections run up to eight explicit head files at once, each
+Touched tests run the branch first with up to eight file workers. Gate-harness
+and privacy files share a limit of two workers because they launch nested
+commands. Ordinary files can use the remaining workers in the same selection.
+When Linux portable runners share their parent service, a selection containing
+gate-harness or privacy files uses one worker. Each explicit head file runs
 with fresh state, HOME and TMPDIR under the OS temp root. Only files failing on
 the branch are sampled on the merge base with `origin/main`, filtered to the
 failing assertions; runner errors require the full file. A green branch needs
