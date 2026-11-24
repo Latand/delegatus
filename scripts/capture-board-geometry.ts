@@ -8868,7 +8868,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
         await page.locator(preview).first().click();
         if (!pendingData || mutations || await page.locator(live).count()) throw new Error("preview exposed mutation handlers or needed a network answer");
         await page.waitForSelector("[data-board-first-seat]", { timeout: 7_500 });
-        await page.waitForFunction(locale => document.documentElement.lang === locale, locale);
+        await page.waitForFunction(locale => document.documentElement.lang === locale, locale, { timeout: 10_000 });
         const bounds = await page.locator(`${preview}, [data-board-first-seat]`).evaluateAll(nodes => nodes
           .filter(node => node.getClientRects().length > 0)
           .map(node => {
@@ -8965,7 +8965,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
       new MutationObserver(observe).observe(document, { childList: true, subtree: true });
       Object.assign(window, { sawSavedCard: () => sawSavedCard });
     });
-    const board = await context.newPage();
+    let board = await context.newPage();
     await board.goto(url, { waitUntil: "commit" });
     await board.waitForSelector(desktopBoard, { timeout: 45_000 });
     await board.waitForFunction(hasRecord, undefined, { timeout: 10_000 });
@@ -8983,7 +8983,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
     });
     const membership = base + "/api/team/workspaces/" + workspace + "/members";
     await ownerControl.addCookies(await context.cookies());
-    const role = (value: "member" | "manager") => ownerControl.request.put(membership, { headers: authHeaders, data: { memberId: me.id, role: value } });
+    const role = (value: "member" | "manager") => ownerControl.request.put(membership, { headers: authHeaders, timeout: 15_000, data: { memberId: me.id, role: value } });
     if (!created.ok() || !(await role("member")).ok()) throw new Error("fixture workspace grant failed");
 
     const ownerCookies = await context.cookies();
@@ -9011,10 +9011,15 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
       await board.waitForFunction(hasRecord, { scope: memberScope }, { timeout: 10_000 });
       note("a second signed-in member with the same project grant missed the first person's disk record");
 
-      dataHeld = Promise.withResolvers<void>();
+      // Start a fresh document after the grant changes. The previous document
+      // can reload itself while its team check observes the same grant change.
+      await board.close();
       if (!(await role("manager")).ok()) throw new Error("fixture role change failed");
-      const changed = board.waitForResponse(bootAccess);
-      await board.reload({ waitUntil: "commit" });
+      board = await context.newPage();
+      dataHeld = Promise.withResolvers<void>();
+      await board.route(dataRoutes, hold);
+      const changed = board.waitForResponse(bootAccess, { timeout: 15_000 });
+      await board.goto(url, { waitUntil: "commit", timeout: 30_000 });
       if (!(await changed).ok()) throw new Error("updated role could not confirm access");
       await board.waitForSelector("[data-kanban-skeleton]", { timeout: 15_000 });
       await board.waitForTimeout(1_600);
