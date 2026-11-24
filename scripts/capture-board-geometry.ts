@@ -8948,6 +8948,14 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
   try {
     const claimed = await context.request.post(base + "/api/team/claim", { headers: { origin: base }, data: { name: "Fixture owner" } });
     if (!claimed.ok()) throw new Error(`synthetic team claim failed with ${claimed.status()}`);
+    await context.addInitScript(() => {
+      let sawSavedCard = false;
+      const observe = () => {
+        if (document.querySelector("[data-board-first-card], [data-board-first-seat]")) sawSavedCard = true;
+      };
+      new MutationObserver(observe).observe(document, { childList: true, subtree: true });
+      Object.assign(window, { sawSavedCard: () => sawSavedCard });
+    });
     const board = await context.newPage();
     await board.goto(url, { waitUntil: "commit" });
     await board.waitForSelector(desktopBoard, { timeout: 45_000 });
@@ -8971,39 +8979,50 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
     const ownerCookies = await context.cookies();
     const memberCookies = await member.cookies();
     const dataRoutes = /\/api\/(board|files|orchestrator\/seat)(?:\?|$)/;
-    const block = (route: import("playwright-core").Route) => route.abort();
-    await board.route(dataRoutes, block);
-    await context.addCookies(memberCookies);
-    const memberBoot = board.waitForResponse(bootAccess);
-    await board.reload({ waitUntil: "commit" });
-    const memberAnswer = await memberBoot;
-    if (!memberAnswer.ok()) throw new Error("second person could not confirm access");
-    const { scope: memberScope } = await memberAnswer.json() as { scope: string };
-    await board.waitForSelector("[data-kanban-skeleton]", { timeout: 15_000 });
-    if (await board.locator(preview).count()) throw new Error("second person saw the first person's cards");
-    await board.unroute(dataRoutes, block);
-    await board.waitForSelector(desktopBoard, { timeout: 45_000 });
-    await board.waitForFunction(hasRecord, { scope: memberScope }, { timeout: 10_000 });
-    note("a second signed-in member with the same project grant missed the first person's disk record");
+    let dataHeld = Promise.withResolvers<void>();
+    const hold = async (route: import("playwright-core").Route) => {
+      await dataHeld.promise;
+      await route.continue().catch(() => {});
+    };
+    const sawSavedCard = () => (window as unknown as { sawSavedCard: () => boolean }).sawSavedCard();
+    await board.route(dataRoutes, hold);
+    try {
+      await context.addCookies(memberCookies);
+      const memberBoot = board.waitForResponse(bootAccess);
+      await board.reload({ waitUntil: "commit" });
+      const memberAnswer = await memberBoot;
+      if (!memberAnswer.ok()) throw new Error("second person could not confirm access");
+      const { scope: memberScope } = await memberAnswer.json() as { scope: string };
+      await board.waitForSelector("[data-kanban-skeleton]", { timeout: 15_000 });
+      await board.waitForTimeout(1_600);
+      if (await board.evaluate(sawSavedCard)) throw new Error("second person saw the first person's cards");
+      dataHeld.resolve();
+      await board.waitForSelector(desktopBoard, { timeout: 45_000 });
+      await board.waitForFunction(hasRecord, { scope: memberScope }, { timeout: 10_000 });
+      note("a second signed-in member with the same project grant missed the first person's disk record");
 
-    await board.route(dataRoutes, block);
-    if (!(await role("manager")).ok()) throw new Error("fixture role change failed");
-    const changed = board.waitForResponse(bootAccess);
-    await board.reload({ waitUntil: "commit" });
-    if (!(await changed).ok()) throw new Error("updated role could not confirm access");
-    await board.waitForSelector("[data-kanban-skeleton]", { timeout: 15_000 });
-    if (await board.locator(preview).count()) throw new Error("role change reused the old disk record");
-    note("a real workspace role change invalidated the saved screen");
+      dataHeld = Promise.withResolvers<void>();
+      if (!(await role("manager")).ok()) throw new Error("fixture role change failed");
+      const changed = board.waitForResponse(bootAccess);
+      await board.reload({ waitUntil: "commit" });
+      if (!(await changed).ok()) throw new Error("updated role could not confirm access");
+      await board.waitForSelector("[data-kanban-skeleton]", { timeout: 15_000 });
+      await board.waitForTimeout(1_600);
+      if (await board.evaluate(sawSavedCard)) throw new Error("role change reused the old disk record");
+      note("a real workspace role change invalidated the saved screen");
 
-    const removed = await context.request.delete(membership, { headers: authHeaders, data: { memberId: me.id } });
-    if (!removed.ok()) throw new Error("fixture workspace revocation failed");
-    await board.reload({ waitUntil: "domcontentloaded" });
-    await board.waitForURL("**/team");
-    if (await board.locator(preview).count()) throw new Error("revoked member still saw board cards");
-    note("a revoked workspace grant closed the real board route");
+      const removed = await context.request.delete(membership, { headers: authHeaders, data: { memberId: me.id } });
+      if (!removed.ok()) throw new Error("fixture workspace revocation failed");
+      await board.reload({ waitUntil: "domcontentloaded" });
+      await board.waitForURL("**/team");
+      if (await board.locator(preview).count()) throw new Error("revoked member still saw board cards");
+      note("a revoked workspace grant closed the real board route");
+    } finally {
+      dataHeld.resolve();
+      await board.unroute(dataRoutes, hold);
+    }
 
     await context.addCookies(ownerCookies);
-    await board.unroute(dataRoutes, block);
     await board.goto(url, { waitUntil: "commit" });
     await board.waitForSelector(desktopBoard, { timeout: 45_000 });
     await board.waitForFunction(hasRecord, undefined, { timeout: 10_000 });
