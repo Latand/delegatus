@@ -1,26 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import type { ForgeCommitAuthor, LandedPushEvidence } from "./privacy-publication-gate";
+import type { LandedPushEvidence } from "./privacy-publication-gate";
 
 const signatureQuery = `query($owner: String!, $name: String!, $oid: GitObjectID!) {
   repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit {
     oid signature { isValid wasSignedByGitHub } parents(first: 1) { totalCount }
-  } } }
-}`;
-
-const authorsQuery = `query($owner: String!, $name: String!, $oid: GitObjectID!, $after: String) {
-  repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit {
-    oid
-    associatedPullRequests(first: 1) {
-      pageInfo { hasNextPage }
-      nodes {
-        id merged baseRefName baseRepository { nameWithOwner } headRefOid mergeCommit { oid }
-        commits(first: 100, after: $after) {
-          nodes { commit { author { name email } } }
-          pageInfo { hasNextPage endCursor }
-        }
-      }
-    }
   } } }
 }`;
 
@@ -55,39 +39,10 @@ export async function landedPushEvidence(env: NodeJS.ProcessEnv, gitIdentity: st
     return undefined;
   }
 
-  // GitHub signs squash merges. Its rebase-and-merge operation cannot sign
-  // the rewritten source commits. Require the exact merged PR result as well.
-  if (signed.parents?.totalCount !== 1) return { tip };
-  try {
-    const authors: ForgeCommitAuthor[] = [];
-    const cursors = new Set<string>();
-    let after: string | null = null;
-    let pullId: string | undefined;
-    while (!signal.aborted) {
-      const commit = await request(authorsQuery, { after });
-      const associated = commit?.associatedPullRequests;
-      if (associated?.pageInfo?.hasNextPage !== false || !Array.isArray(associated.nodes) || associated.nodes.length !== 1) break;
-      const pull = associated.nodes[0];
-      if (typeof pull?.id !== "string" || (pullId !== undefined && pullId !== pull.id) ||
-          pull.merged !== true || pull.baseRefName !== env.PRIVACY_DEFAULT_BRANCH ||
-          pull.baseRepository?.nameWithOwner !== repository || pull.mergeCommit?.oid !== tip ||
-          typeof pull.headRefOid !== "string" || !/^[0-9a-f]{40}$/.test(pull.headRefOid) || pull.headRefOid === tip) break;
-      pullId = pull.id;
-      if (!Array.isArray(pull.commits?.nodes)) break;
-      for (const node of pull.commits.nodes) {
-        const author = node?.commit?.author;
-        if (typeof author?.name === "string" && typeof author.email === "string") {
-          authors.push({ name: author.name, email: author.email });
-        }
-      }
-      const page = pull.commits.pageInfo;
-      if (page?.hasNextPage === false) return { tip, authors };
-      if (page?.hasNextPage !== true || typeof page.endCursor !== "string" ||
-          !page.endCursor || cursors.has(page.endCursor)) break;
-      after = page.endCursor;
-      cursors.add(page.endCursor);
-    }
-  } catch { /* Unavailable PR evidence leaves every forge account trailer attributable. */ }
+  // A signature proves GitHub signed these bytes, not that GitHub generated
+  // any particular trailer. The squash message can be edited before signing,
+  // and the API exposes no trailer-level provenance. Keep the tip evidence
+  // for the separately scoped committer exemption; trailers remain attributable.
   return { tip };
 }
 

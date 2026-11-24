@@ -2693,34 +2693,7 @@ function* addressLines(
 }
 
 export type CommitAddressReview = { attributable: string[]; exempt: string[] };
-export type ForgeCommitAuthor = { name: string; email: string };
-export type LandedPushEvidence = { tip: string; authors?: readonly ForgeCommitAuthor[] };
-
-/** Record the raw location of each verified mailbox in the final paragraph.
- * A projection can expose more addresses, but it cannot create a trailer. */
-function squashTrailerOffsets(message: string, authors: readonly ForgeCommitAuthor[]): Map<string, number> {
-  const offsets = new Map<string, number>();
-  const lines = message.split("\n");
-  const paragraphs = messageParagraphs(lines);
-  const last = paragraphs.at(-1);
-  if (!last || paragraphs.length < 2 || !lines.slice(last.start, last.end).every(isTrailerLine)) return offsets;
-
-  const trailers = new Set(authors.filter(({ email }) => isForgeAccountAddress(email))
-    .map(({ name, email }) => `${COMPOSED_ATTRIBUTION_TRAILER}: ${name} <${email}>`));
-  let offset = 0;
-  for (let line = 0; line < last.end; line += 1) {
-    const text = lines[line];
-    if (line >= last.start && trailers.has(text)) {
-      const email = /^Co-authored-by: [^<>\r]+ <([^<>\s]+)>$/.exec(text)?.[1];
-      if (email) {
-        // Repeated mailboxes are ambiguous, even with a recorded author.
-        offsets.set(email, offsets.has(email) ? -1 : offset + text.length - email.length - 1);
-      }
-    }
-    offset += text.length + 1;
-  }
-  return offsets;
-}
+export type LandedPushEvidence = { tip: string };
 
 /**
  * Every address detected in a commit message, split by exemption.
@@ -2730,10 +2703,9 @@ function squashTrailerOffsets(message: string, authors: readonly ForgeCommitAuth
  * detection reported. An address the exemption does not name stays
  * attributable wherever it sits, including on the same line as an exempt one.
  */
-export function commitMessageAddressReview(message: string, squashAuthors?: readonly ForgeCommitAuthor[]): CommitAddressReview {
+export function commitMessageAddressReview(message: string): CommitAddressReview {
   const attributable = new Set<string>();
   const exempt = new Set<string>();
-  const squashOffsets = squashAuthors && squashTrailerOffsets(message, squashAuthors);
   for (const { text: view, source } of emailTextViews(message)) {
     const lines = view.split("\n");
     const block = trailerBlockLines(lines);
@@ -2741,10 +2713,7 @@ export function commitMessageAddressReview(message: string, squashAuthors?: read
       const attributed = !block.has(line)
         || !MACHINE_ATTRIBUTION_TRAILER.test(lines[line])
         || !isMachineAttributionAddress(occurrence);
-      const rawOffset = source ? source.raw.offsets[occurrence.index] : occurrence.index;
-      const squashOffset = squashOffsets?.get(occurrence.address);
-      const verifiedSquashTrailer = squashOffset !== undefined && squashOffset === rawOffset;
-      (attributed && !verifiedSquashTrailer ? attributable : exempt).add(occurrence.address);
+      (attributed ? attributable : exempt).add(occurrence.address);
     }
   }
   return { attributable: [...attributable], exempt: [...exempt] };
@@ -2848,7 +2817,7 @@ export function commitMessageFindings(
     const message = messages.get(commit)!;
     const messageFindings = sensitiveClasses(message);
     if (messageFindings.has("email_address")) {
-      const { attributable, exempt } = commitMessageAddressReview(message, landed?.tip === commit ? landed.authors : undefined);
+      const { attributable, exempt } = commitMessageAddressReview(message);
       if (exempt.length > 0 && attributable.length === 0) messageFindings.delete("email_address");
     }
     const reported: FindingClass[] = [];

@@ -5145,34 +5145,23 @@ describe("mergeBoundaryReview", () => {
   const squashTrailer = `Co-authored-by: ${squashAuthor.name} <${squashAuthor.email}>`;
   const squashMessage = `Squash subject\n\n* Original subject\n\n---\n\n${squashTrailer}`;
 
-  test("landed squash evidence exempts only the exact tip's recorded co-author", async () => {
+  test("a matching handwritten trailer stays attributable with landed squash evidence", async () => {
     const repo = await gitRepo();
     await commit(repo, squashMessage, canonicalIdentity);
-    const evidence = { tip: await head(repo), authors: [squashAuthor] };
-    expect(commitMessageFindings(repo, "main", [], evidence)).toEqual(new Map());
+    const evidence = { tip: await head(repo) };
+    expect(commitMessageFindings(repo, "main", [], evidence).get("email_address")).toBe(1);
     expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
-    expect(commitMessageFindings(repo, "main", [], { ...evidence, tip: "1".repeat(40) }).get("email_address")).toBe(1);
-
-    writeFileSync(join(repo, "published.txt"), squashAuthor.email + "\n");
-    await commit(repo, squashMessage, canonicalIdentity);
-    const nextTip = { ...evidence, tip: await head(repo) };
-    expect(commitMessageFindings(repo, "main", [], nextTip).get("email_address")).toBe(1);
-    const ordinary = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
-    expect(ordinary.exitCode).toBe(1);
-    expect(ordinary.stdout.toString()).toContain("email_address: 3");
-
     const landed = await runPrivacyTestProcess({
       cmd: [process.execPath, "-e", `
         import { runPublicationGate } from "./scripts/privacy-publication-gate";
         const [repository, evidence] = process.argv.slice(1);
         runPublicationGate(["--repository", repository, "--base", "main", "--check-commits"], JSON.parse(evidence));
-      `, repo, JSON.stringify(nextTip)],
+      `, repo, JSON.stringify(evidence)],
       cwd: join(import.meta.dir, ".."), env: process.env, stderr: "pipe", stdout: "pipe",
     });
     expect(landed.exitCode).toBe(1);
-    expect(landed.stdout.toString()).toContain("email_address: 2");
+    expect(landed.stdout.toString()).toContain("email_address: 1");
     expect(landed.stdout.toString()).toContain(`commit_message: ${evidence.tip.slice(0, 12)} message email_address`);
-    expect(landed.stdout.toString()).not.toContain(nextTip.tip.slice(0, 12));
     expect(landed.stdout.toString()).not.toContain(squashAuthor.email);
   });
 
@@ -5188,7 +5177,7 @@ describe("mergeBoundaryReview", () => {
   ])("landed squash evidence leaves %s attributable", async (_case, message) => {
     const repo = await gitRepo();
     await commit(repo, message, canonicalIdentity);
-    const evidence = { tip: await head(repo), authors: [squashAuthor, { ...squashAuthor, email: otherMailbox }] };
+    const evidence = { tip: await head(repo) };
     const notices: string[] = [];
     expect(commitMessageFindings(repo, "main", notices, evidence)).toEqual(new Map([["email_address", 1]]));
     expect(notices).toEqual([`commit_message: ${evidence.tip.slice(0, 12)} message email_address`]);
