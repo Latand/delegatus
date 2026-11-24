@@ -24,6 +24,16 @@ export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
 const BOUNDED_GATE_PREFIX = "command:bounded:";
 export const ACTIVE_GATE_PREFIX = "command:gate-active:";
+const PUBLICATION_LAUNCHES = "publication_launches";
+/** More live publications than this never run on one machine. */
+const PUBLICATION_LAUNCH_LIMIT = 64;
+function readPublicationLaunch(stored: string): ProcessIdentity | null {
+  try {
+    const identity = JSON.parse(stored) as ProcessIdentity | null;
+    return identity && Number.isSafeInteger(identity.pid) && identity.pid > 0 && typeof identity.startIdentity === "string"
+      && typeof identity.bootEpoch === "string" && identity.bootEpoch ? identity : null;
+  } catch { return null; }
+}
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; waitedMs: number; heldBy: "queue" | "pressure"; priority?: TaskPriority; stalledMs?: number };
 /** Recent kernel capacity evidence from before admission. Any intervening
@@ -416,6 +426,46 @@ export class CpuAdmissionQueue {
   waitingGateOwners(): string[] {
     return this.db.query<{ owner: string }, []>(`SELECT DISTINCT owner FROM tickets
       WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all().map(row => row.owner);
+  }
+  /** The Viewer records each publication preparer it starts by the kernel
+   * identity of the process it spawned and the operation it handed that
+   * process. Gate helpers read the rows to tell the preparer's cleanup runner
+   * from a legacy holder, whatever bytes the lane's checkout carries. A row
+   * proves nothing alone: a reader must match it to a live process that still
+   * carries the same operation. Older releases never read this table. */
+  recordPublicationLaunch(identity: ProcessIdentity, operation: string): void {
+    // Probe the processes before taking the writer, as check() does.
+    const ended = this.publicationLaunchRows().filter(row => {
+      const launch = readPublicationLaunch(row.identity);
+      return !launch || this.observer.status(launch) === "dead";
+    }).map(row => row.identity);
+    this.db.transaction(() => {
+      this.db.exec(`CREATE TABLE IF NOT EXISTS ${PUBLICATION_LAUNCHES} (identity TEXT PRIMARY KEY, operation TEXT NOT NULL, recorded INTEGER NOT NULL)`);
+      const remove = this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity = ?`);
+      for (const row of ended) remove.run(row);
+      this.db.query(`INSERT OR REPLACE INTO ${PUBLICATION_LAUNCHES} VALUES (?, ?, ?)`).run(JSON.stringify(identity), operation, this.now());
+      // A Viewer that dies before forgetting leaves its row until the process
+      // is seen dead. The newest rows are the live publications.
+      this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity NOT IN
+        (SELECT identity FROM ${PUBLICATION_LAUNCHES} ORDER BY recorded DESC, rowid DESC LIMIT ?)`).run(PUBLICATION_LAUNCH_LIMIT);
+    }).immediate();
+  }
+  forgetPublicationLaunch(identity: ProcessIdentity): void {
+    if (!this.hasPublicationLaunches()) return;
+    this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity = ?`).run(JSON.stringify(identity));
+  }
+  publicationLaunches(): { identity: ProcessIdentity; operation: string }[] {
+    return this.publicationLaunchRows().flatMap(row => {
+      const identity = readPublicationLaunch(row.identity);
+      return identity ? [{ identity, operation: row.operation }] : [];
+    });
+  }
+  private hasPublicationLaunches(): boolean {
+    return this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(PUBLICATION_LAUNCHES) !== null;
+  }
+  private publicationLaunchRows(): { identity: string; operation: string }[] {
+    if (!this.hasPublicationLaunches()) return [];
+    return this.db.query<{ identity: string; operation: string }, []>(`SELECT identity, operation FROM ${PUBLICATION_LAUNCHES}`).all();
   }
   activeGateSlots(): ActiveGateSlot[] {
     if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gate_slots'").get()) return [];

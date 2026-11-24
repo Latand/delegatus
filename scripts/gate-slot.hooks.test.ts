@@ -7,7 +7,8 @@ import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib
 import { redactBounded } from "../src/lib/monitor/redact";
 import { captureProcessIdentity } from "../src/lib/processIdentity";
 import { installedGateAdmissionEnv } from "../src/lib/runtime/agentSignalSandbox";
-import { CPU_QUEUE_SPACING_MS } from "../src/lib/runtime/cpuAdmission";
+import { CPU_QUEUE_SPACING_MS, CpuAdmissionQueue } from "../src/lib/runtime/cpuAdmission";
+import { stampPublicationPreparer, type PublicationPreparerStamp } from "../src/lib/runtime/publicationLaunch";
 import { hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { realExec } from "../src/lib/workflows/provision";
@@ -19,6 +20,10 @@ const systemctl = process.platform === "linux" ? Bun.which("systemctl") : null;
 const hasUserManager = systemctl !== null && Bun.spawnSync([systemctl, "--user", "show-environment"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
 // #4376 (`b0de5fb1ef`) is the last main revision of local-gate.ts and gate-slot.sh before this protocol.
 const MAIN_ERA_REVISION = "b0de5fb1ef6b500853e53b587e63a13a91b3e0dd";
+// #4251 (`d8c5ffb9a6`): an older lane checkout's local-gate.ts, without the
+// dispatch marker and outside the pinned dispatcher hashes. A lane republished
+// from it in production stalled the queue with free slots.
+const UNPINNED_REVISION = "d8c5ffb9a6000e4868aed1b686a5cadf5b8881ed";
 
 test("older publication stubs preserve the tracked files of the checkout used as cwd", () => {
   const cwd = process.cwd(), roots: string[] = [];
@@ -455,23 +460,28 @@ command -p git "$@"
   }
 }, 50_000);
 
-for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "mixed service prepare", "mixed service prepare first-open", "service hooks", "historical service hook", "older helper head", "main-era service prepare", "main-era service hook", "main-era service hook first-open", "main-era portable hooks"] as const) test.skipIf(
+for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "mixed service prepare", "mixed service prepare first-open", "service hooks", "historical service hook", "older helper head", "main-era service prepare", "main-era service hook", "main-era service hook first-open", "main-era portable hooks", "unpinned service prepare", "unpinned portable prepare", "unpinned service prepare forged"] as const) test.skipIf(
   process.platform !== "linux" || !mode.startsWith("portable") && !hasUserManager
 )(`FIFO publication admits the first check while the peer waits (${mode})`, async () => {
     const useService = !mode.includes("portable");
     // An older wrapper takes the same bypass on the portable cleanup fallback,
     // and its launch can fall on the journal's cutover tick.
     const historical = mode === "historical service hook" || mode.startsWith("main-era service hook") || mode === "main-era portable hooks", olderHead = mode === "older helper head";
-    const mixedPrepare = mode.startsWith("mixed service prepare") || mode === "main-era service prepare";
+    // The Viewer launches the first preparer from an older lane checkout. Its
+    // launch record is the only evidence; a forged run first shows records
+    // that name the wrong process or operation granting nothing.
+    const unpinned = mode.startsWith("unpinned"), forged = mode.endsWith("forged");
+    const mixedPrepare = mode.startsWith("mixed service prepare") || mode === "main-era service prepare" || unpinned;
     // Main after #4376 is the release deployed when this queue protocol lands.
     // Its dispatcher and wrapper carry no launch marker of their own.
     const mainEra = mode.startsWith("main-era");
-    const deployedRevision = mainEra ? MAIN_ERA_REVISION : "43fab846adb9a443384d30540cf7e318a12a6198";
+    const deployedRevision = mainEra ? MAIN_ERA_REVISION : unpinned ? UNPINNED_REVISION : "43fab846adb9a443384d30540cf7e318a12a6198";
     const historicalRevision = mainEra ? MAIN_ERA_REVISION : "c0ceb7ff5eb064b1d9d29a9aef2540edd15d5dd1";
     const ordinary = mode.includes("hooks") || historical || olderHead;
     const firstOpen = mode.endsWith("first-open");
     const f = fixture(), control = new AbortController(), roots: string[] = [];
     const pending: ReturnType<typeof realExec>[] = [];
+    const stamps: PublicationPreparerStamp[] = [];
     const { fixture: publicationFixture, commitFixtureInputs } = createPublicationFixtures(process.cwd(), roots);
     const release = path.join(f.dir, "release"), started = path.join(f.dir, "started");
     const last = () => f.db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last;
@@ -529,7 +539,11 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
       const enclosingDeadline = process.env.LLV_GATE_PUSH_DEADLINE;
       process.env.LLV_GATE_PUSH_DEADLINE = "1";
       try {
-        pending.push(Promise.resolve(realExec("bash", ["-c", 'echo "$$" > "$CPU_SLOT_ROOT_PID"; exec "$@" 2>"$CPU_SLOT_STDERR"', "publication-fixture", ...command], publication.dir, env, { timeoutMs: 30_000, signal: control.signal }))
+        // The Viewer stamps its preparer as it spawns it (git.ts). Each wrapper
+        // here execs in place, as systemd-run --scope and the Bun shims do.
+        const onSpawn = unpinned && !forged && name === "first"
+          ? (pid: number) => { stamps.push(stampPublicationPreparer(pid, env.LLV_GATE_PUBLICATION_ID, env)); } : undefined;
+        pending.push(Promise.resolve(realExec("bash", ["-c", 'echo "$$" > "$CPU_SLOT_ROOT_PID"; exec "$@" 2>"$CPU_SLOT_STDERR"', "publication-fixture", ...command], publication.dir, env, { timeoutMs: 30_000, signal: control.signal, onSpawn }))
           .then(result => { outcome = result; return result; }));
       } finally {
         if (enclosingDeadline === undefined) delete process.env.LLV_GATE_PUSH_DEADLINE;
@@ -636,7 +650,57 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
         f.db.query("UPDATE legacy_gate_cutover SET uptime = ?").run(uptime);
       }
       if (firstOpen) f.age();
+      const launchRows = () => f.db.query("SELECT 1 FROM sqlite_master WHERE name = 'publication_launches'").get()
+        ? f.db.query<{ identity: string; operation: string }, []>("SELECT identity, operation FROM publication_launches ORDER BY rowid").all() : [];
+      const root = Number(fs.readFileSync(firstRun.env.CPU_SLOT_ROOT_PID!, "utf8").trim());
+      const genuine = captureProcessIdentity(root);
+      const launched = { identity: JSON.stringify(genuine), operation: "first" };
+      if (unpinned && !forged) {
+        await Promise.all(stamps.map(stamp => stamp.recorded));
+        expect(launchRows()).toEqual([launched]);
+      }
       fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+      if (forged) {
+        // No record, then records that are each wrong in one respect: another
+        // operation, a reused PID's older start, an exited process, and the
+        // cleanup runner instead of the preparer the Viewer spawned.
+        const client = fs.readdirSync(`/proc/${root}/task`).flatMap(task => fs.readFileSync(`/proc/${root}/task/${task}/children`, "utf8").trim().split(/\s+/))
+          .find(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")[1]?.endsWith("owned-runner.ts"));
+        expect(client).toBeDefined();
+        const exited = Bun.spawn(["true"]);
+        const gone = captureProcessIdentity(exited.pid);
+        await exited.exited;
+        const start = Number(genuine.startIdentity!.split(":")[1]);
+        const forgedRows = [[genuine, "peer"], [{ ...genuine, startIdentity: `${root}:${start - 1}` }, "first"],
+          [gone, "first"], [captureProcessIdentity(Number(client)), "first"]] as const;
+        const head = f.db.query<{ key: string }, [string]>(`SELECT key ${queuedTickets} AND owner = ?`).get(firstTicket.owner)!.key;
+        const drains = async (barrier: string) => {
+          const held = last(), polls = new Set<number>();
+          await firstRun.waitFor(barrier, () => {
+            const polled = f.db.query<{ polled: number }, [string]>("SELECT polled FROM tickets WHERE key = ?").get(head)?.polled;
+            if (polled && polled > (held ?? 0) + CPU_QUEUE_SPACING_MS) polls.add(polled);
+            return polls.size >= 3;
+          });
+          expect(stderr("first")).toContain("Waiting for legacy heavy commands to drain");
+          expect(grants()).toEqual([]);
+          expect(fs.existsSync(started)).toBe(false);
+        };
+        await drains("a legacy drain without a launch record");
+        const queue = new CpuAdmissionQueue(path.join(f.dir, "admission.sqlite"));
+        try { queue.recordPublicationLaunch(forgedRows[0][0], forgedRows[0][1]); } finally { queue.close(); }
+        // Write the rest directly: a later record would prune the dead ones.
+        for (const [identity, operation] of forgedRows.slice(1)) {
+          f.db.query("INSERT INTO publication_launches VALUES (?, ?, ?)").run(JSON.stringify(identity), operation, Date.now());
+        }
+        expect(launchRows().map(row => row.operation)).toEqual(["peer", "first", "first", "first"]);
+        await drains("a legacy drain under forged launch records");
+        const stamp = stampPublicationPreparer(root, "first", firstRun.env);
+        stamps.push(stamp);
+        await stamp.recorded;
+        // The genuine record replaces the row for the same process and prunes
+        // the rows of processes that are gone.
+        expect(launchRows()).toEqual([{ identity: JSON.stringify(captureProcessIdentity(Number(client))), operation: "first" }, launched]);
+      }
       await firstRun.waitFor("the admitted check starting", () => fs.existsSync(started));
       const admitted = last()!;
       expect(admitted).toBeGreaterThan(previous);
@@ -659,9 +723,14 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
         else expect(readPublicationCheckReceipt(publication.receipt, publicationCheckBinding(env)).completedAt).toBeGreaterThanOrEqual(admitted);
       }
       expect(f.count()).toBe(0);
+      if (unpinned) {
+        await Promise.all(stamps.map(stamp => stamp.release()));
+        expect(launchRows()).not.toContainEqual(launched);
+      }
     } finally {
       fs.writeFileSync(release, "release"); control.abort();
       await Promise.allSettled(pending);
+      await Promise.allSettled(stamps.map(stamp => stamp.release()));
       for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
       f.close();
     }

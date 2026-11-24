@@ -187,6 +187,12 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const localPid = Number(/^NSpid:\s+(.+)$/m.exec(status)?.[1]?.trim().split(/\s+/).at(-1));
     return Number.isSafeInteger(localPid) && proof.pid === localPid && proof.startIdentity === `${localPid}:${fields[19]}`;
   };
+  let launches: ReturnType<CpuAdmissionQueue["publicationLaunches"]> | undefined;
+  const viewerLaunched = (parent: string, fields: string[]) => {
+    const operation = readEnvironment(parent)("LLV_GATE_PUBLICATION_ID");
+    return Boolean(operation) && (launches ??= queue.publicationLaunches()).some(launch =>
+      launch.operation === operation && hookParentMatches(launch.identity, parent, fields));
+  };
   const localPid = (base: string) => /^NSpid:\s+(.+)$/m.exec(fs.readFileSync(path.join(base, "status"), "utf8"))?.[1]?.trim().split(/\s+/).at(-1);
   const hookClient = (command: string[], cwd: () => string, client: string, runner: string) => {
     // The hook starts a second copy under an owned runner before it queues
@@ -218,6 +224,12 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     // The dispatcher starts the runner beside its own entry.
     if (fs.realpathSync(path.join(path.dirname(original.entry), "owned-runner.ts")) !== runner) return false;
     if (env("LLV_GATE_HOOK_DISPATCH") === binding) return true;
+    // The Viewer records each publication preparer it launches by the kernel
+    // identity it spawned (src/lib/runtime/publicationLaunch.ts). Every
+    // local-gate.ts whose preparer dispatches a cleanup runner starts it
+    // directly, so a lane checkout of any age is recognised by this record.
+    // The record needs this live parent, still carrying its operation.
+    if (original.mode === "--publication-prepare" && viewerLaunched(parent, parentStat)) return true;
     // A deployed dispatcher at the cutover predates the explicit handoff.
     // Bind its live parent proof to the known dispatcher that spawns this
     // exact client directly. A nested gate ticket cannot prove that launch.

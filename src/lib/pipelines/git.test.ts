@@ -2340,6 +2340,58 @@ test.each([1, 3] as const)("capability %i uses its own publication path and land
   }
 }, 60_000);
 
+test.skipIf(process.platform !== "linux")("the Viewer records the publication preparer it launches while it runs and removes the record after", async () => {
+  const box = await publishSandbox();
+  const lockDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-publication-launch-"));
+  const inheritedLock = process.env.LLV_GATE_LOCK_DIR;
+  const queueRows = () => {
+    const db = new Database(path.join(lockDir, "admission.sqlite"), { readonly: true });
+    try { return db.query<{ identity: string; operation: string }, []>("SELECT identity, operation FROM publication_launches").all(); }
+    finally { db.close(); }
+  };
+  try {
+    process.env.LLV_GATE_LOCK_DIR = lockDir;
+    const scripts = path.join(box.subject.worktreeDir, "scripts");
+    fs.mkdirSync(scripts);
+    fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// publication gate fixture\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: 1 }));
+    const head = await box.commit("change.txt", "accepted work\n");
+    const barrier = path.join(lockDir, "release");
+    const observed: { pid?: number; rows?: { identity: string; operation: string }[]; operation?: string } = {};
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare") {
+        // A stand-in preparer that lives until the record has been read.
+        const running = realExec(process.execPath, ["-e", `while (!require("node:fs").existsSync(${JSON.stringify(barrier)})) await Bun.sleep(10);`], cwd, env, {
+          ...options, onSpawn: pid => { observed.pid = pid; options?.onSpawn?.(pid); } });
+        const until = Date.now() + 10_000;
+        while (Date.now() < until) {
+          try { if (queueRows().length) break; } catch { /* the table appears with the first record */ }
+          await Bun.sleep(10);
+        }
+        observed.rows = queueRows();
+        observed.operation = env?.LLV_GATE_PUBLICATION_ID;
+        fs.writeFileSync(barrier, "release");
+        const result = await running;
+        expect(result.code, result.stderr).toBe(0);
+        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(env!), "a".repeat(64), {}, 1, 1);
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(result).toMatchObject({ ok: true, sha: head });
+    expect(observed.operation).toEqual(expect.any(String));
+    expect(observed.rows).toEqual([{ identity: expect.stringContaining(`"pid":${observed.pid},`), operation: observed.operation! }]);
+    expect(JSON.parse(observed.rows![0]!.identity).startIdentity).toStartWith(`${observed.pid}:`);
+    expect(queueRows()).toEqual([]);
+  } finally {
+    if (inheritedLock === undefined) delete process.env.LLV_GATE_LOCK_DIR;
+    else process.env.LLV_GATE_LOCK_DIR = inheritedLock;
+    fs.rmSync(lockDir, { recursive: true, force: true });
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+}, 60_000);
+
 test.skipIf(process.platform !== "linux")("capability 3 scopes a cold shared dependency install under in-image Bun", async () => {
   const { setCpuPortsForTests } = await import("@/lib/runtime/cpuPlacement");
   const box = await publishSandbox();

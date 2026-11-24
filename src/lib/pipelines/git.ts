@@ -35,6 +35,7 @@ import { recordWorktreeProvenance } from "./worktreeProvenance";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
 import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
+import { stampPublicationPreparer, type PublicationPreparerStamp } from "@/lib/runtime/publicationLaunch";
 import { installedGateAdmissionEnv } from "@/lib/runtime/agentSignalSandbox";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
@@ -2145,6 +2146,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       const budget = cpuWaitBudget({ ...process.env, ...env });
       const execution = { deadline: new Date(Date.now() + (options?.timeoutMs ?? 60_000)).toISOString(), waitRoot: budget.directory };
       let executed: ExecResult;
+      const preparerLaunch: { stamp?: PublicationPreparerStamp } = {};
       try {
         await withDeliveryMutationAsync(tx => {
           const current = tx.get(pipeline.id);
@@ -2161,9 +2163,15 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           return { code: 1, stdout: "", stderr: APP_PUSH_WINDOW_ENDED_REASON };
         }
         if (command === "git" && args[0] === "push") writeStarted = true;
+        // The machine's CPU queue tells a preparer's cleanup runner from a
+        // legacy holder by this record, whatever the checkout's gate bytes.
+        const preparer = preparingChecks ? { onSpawn: (pid: number) => {
+          preparerLaunch.stamp = stampPublicationPreparer(pid, env?.LLV_GATE_PUBLICATION_ID, { ...process.env, ...env });
+        } } : {};
         executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env,
-          LLV_CPU_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS, LLV_CPU_WAIT_CONFIRM_ROOT: budget.directory, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor, additionalInheritedFds: [...options?.additionalInheritedFds ?? [], runDescriptor!] });
+          LLV_CPU_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS, LLV_CPU_WAIT_CONFIRM_ROOT: budget.directory, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, ...preparer, signal: abort.signal, inheritFd: descriptor, additionalInheritedFds: [...options?.additionalInheritedFds ?? [], runDescriptor!] });
       } finally {
+        await preparerLaunch.stamp?.release();
         try { await withDeliveryMutationAsync(tx => {
           const current = tx.get(pipeline.id);
           const executor = current?.delivery?.operation?.executor;
