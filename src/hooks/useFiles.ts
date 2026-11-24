@@ -15,7 +15,8 @@ import { applyFilesDelta, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER, ty
 import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { createRuntimeFilesStatusProjection } from "@/lib/client/runtimeFilesStatus";
 import { FILES_CHANGED_EVENT } from "@/lib/filesEvents";
-import { CREATION_RECEIPT_LIMIT, usableCreationLocators, FILES_SNAPSHOT_MAX_BYTES, FILES_SNAPSHOT_VERSION, indexedDbFilesSnapshotStore, type CreationLocator, type CreationLocators, type FilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
+import { boardBootRetired, bootSnapshotStore, readBoardBootAuthority, recheckBoardBoot, subscribeBoardBootAuthority } from "@/lib/client/boardBootAuthority";
+import { CREATION_RECEIPT_LIMIT, usableCreationLocators, FILES_SNAPSHOT_MAX_BYTES, FILES_SNAPSHOT_VERSION, type CreationLocator, type CreationLocators, type FilesSnapshotStore } from "@/lib/client/filesSnapshotStore";
 import type { PipelineCreationReceipt } from "@/lib/pipelines/creationQueue";
 import type { Flow } from "@/lib/flows/types";
 import { EMPTY_FILES_WORK_LINKS, type FilesWorkLinks } from "@/lib/forge/workLinks";
@@ -43,7 +44,7 @@ const EMPTY_CREATION_IDS: readonly string[] = [];
 
 function browserCreationAuthority(): CreationAuthority | null {
   const { view, signInRequired } = readTeamAuthority();
-  if (signInRequired || !view) return null;
+  if (signInRequired || !view || boardBootRetired()) return null;
   if (view.mode === "solo") return { owner: "solo", signature: "solo" };
   const workspaces = readConfirmedWorkspaces();
   if (!view.me || workspaces?.mode !== "team") return null;
@@ -869,12 +870,14 @@ export function createFilesClientCache(
         if (!creationWritePending && global && materialized.every(id => (global.raw.pipelines as Pipeline[] | undefined)?.some(pipeline => pipeline.id === id))) {
           const store = hooks.creationStore?.();
           const generation = authorityGeneration;
+          const accessScope = readBoardBootAuthority()?.scope ?? undefined;
+          const current = () => ownsCreation(generation) && accessScope === (readBoardBootAuthority()?.scope ?? undefined);
           creationWritePending = true;
           creationWrites = creationWrites.then(async () => {
-            if (!ownsCreation(generation) || !store?.updateCreations) return;
-            await store.updateCreations(authority!.owner, [], materialized, () => ownsCreation(generation),
-              { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: catalogText(global.raw) }, authority!.signature);
-            if (!ownsCreation(generation)) return;
+            if (!current() || !store?.updateCreations) return;
+            await store.updateCreations(authority!.owner, [], materialized, current,
+              { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: catalogText(global.raw), accessScope }, authority!.signature);
+            if (!current()) return;
             for (const id of materialized) creations.delete(id);
             publishCreations();
           }).catch(() => {}).finally(() => { creationWritePending = false; });
@@ -1457,11 +1460,10 @@ export function createFilesClientCache(
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
 
-/* The cached-first board (#2071, D4). The browser's snapshot store is read the
-   moment this module loads, before React mounts; the first request waits for
-   that read (bounded), so it can ask conditionally. */
+/* The first catalog request waits for the bounded snapshot read, after the
+   document has server-confirmed access, so it can ask conditionally. */
 const RESTORE_WAIT_MS = 1_500;
-let snapshotStore: FilesSnapshotStore | null = typeof window === "undefined" ? null : indexedDbFilesSnapshotStore();
+let snapshotStore: FilesSnapshotStore | null = bootSnapshotStore;
 let persistedEtag: string | null = null;
 let persistScheduled = false;
 let firstPersistDone = false;
@@ -1473,6 +1475,7 @@ function newFilesClientCache(): FilesClientCache {
     accessDenied: (owner) => {
       persistedEtag = null;
       void snapshotStore?.clear(owner);
+      if (readBoardBootAuthority()) void recheckBoardBoot();
     },
   });
 }
@@ -1480,11 +1483,14 @@ function newFilesClientCache(): FilesClientCache {
 function restoreFilesSnapshot(cache: FilesClientCache, store: FilesSnapshotStore | null): Promise<void> {
   if (!store) return Promise.resolve();
   const before = browserCreationAuthority();
+  const injectedStore = store !== bootSnapshotStore;
+  const scope = readBoardBootAuthority()?.scope;
   const read = store.read().then((record) => {
     if (!record) return;
     if (record.creations) cache.restoreCreations(record.creations);
+    if (!injectedStore && (!scope || record.accessScope !== scope || readBoardBootAuthority()?.scope !== scope)) return;
     const current = browserCreationAuthority();
-    if (record.creations && (!current || record.creations.owner !== current.owner || record.creations.scope !== current.signature || before?.signature !== current.signature)) return;
+    if (injectedStore && record.creations && (!current || record.creations.owner !== current.owner || record.creations.scope !== current.signature || before?.signature !== current.signature)) return;
     if (cache.hydrate(record)) persistedEtag = record.etag;
   }, () => undefined);
   const bound = new Promise<void>((resolve) => setTimeout(resolve, RESTORE_WAIT_MS));
@@ -1492,12 +1498,13 @@ function restoreFilesSnapshot(cache: FilesClientCache, store: FilesSnapshotStore
 }
 
 let filesClientCache = newFilesClientCache();
-let snapshotRestore = restoreFilesSnapshot(filesClientCache, snapshotStore);
+let snapshotRestore: Promise<void> | undefined;
 
 const creationAuthorityChanged = () => {
   filesClientCache.refreshCreationAuthority();
   void filesClientCache.reconcileCreations(true);
 };
+subscribeBoardBootAuthority(creationAuthorityChanged);
 subscribeTeamAuthority(creationAuthorityChanged);
 subscribeConfirmedWorkspaces(creationAuthorityChanged);
 
@@ -1558,7 +1565,9 @@ export function useMaterializedCreationIds(): readonly string[] {
 function persistFilesSnapshot(): void {
   const store = snapshotStore;
   const current = filesClientCache.certifiedGlobal();
-  if (!store || !current || current.etag === persistedEtag) return;
+  const accessScope = readBoardBootAuthority()?.scope ?? undefined;
+  const injectedStore = store !== bootSnapshotStore;
+  if ((!accessScope && !injectedStore) || !store || !current || current.etag === persistedEtag) return;
   let text: string;
   try {
     text = catalogText(current.raw);
@@ -1568,8 +1577,8 @@ function persistFilesSnapshot(): void {
   if (text.length > FILES_SNAPSHOT_MAX_BYTES) return;
   persistedEtag = current.etag;
   const owner = browserCreationAuthority()?.signature;
-  void store.write({ version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: current.etag, text },
-    () => owner === browserCreationAuthority()?.signature).catch(() => { persistedEtag = null; });
+  void store.write({ version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: current.etag, text, accessScope },
+    () => (injectedStore || accessScope === readBoardBootAuthority()?.scope) && owner === browserCreationAuthority()?.signature).catch(() => { persistedEtag = null; });
 }
 
 /** After the first certified load of a document, on idle time: once. Later
@@ -1814,7 +1823,7 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
       try {
         /* The first request of a document asks conditionally when a snapshot
            was restored; after that this has long settled. */
-        await snapshotRestore;
+        await (snapshotRestore ??= restoreFilesSnapshot(cache, snapshotStore));
         if (!alive) return true;
         await cache.revalidate(pinnedPath, revision, inflight.signal);
         persistAfterFirstLoad();

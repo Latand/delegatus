@@ -111,6 +111,7 @@ function stubFetch(filesResponse: () => Response) {
   let filesCalls = 0;
   globalThis.fetch = mock(async (input: string | URL | Request) => {
     const url = String(input);
+    if (url === "/api/team?view=board-access") return Response.json({ scope: null, projects: null, team: false });
     if (url.startsWith("/api/files")) {
       filesCalls += 1;
       return filesResponse();

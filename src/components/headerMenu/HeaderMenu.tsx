@@ -1,5 +1,7 @@
 "use client";
 
+import { clearBoardBootOnSignOut } from "@/lib/client/boardBootAuthority";
+
 import {
   Activity, AudioLines, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleArrowUp, Compass, LifeBuoy,
   ListChecks, LogOut, Power, QrCode, Route, Settings, Users, type LucideIcon,
@@ -37,6 +39,7 @@ async function signOutMember(): Promise<void> {
   try {
     await fetch("/api/team/session/sign-out", { method: "POST" });
   } finally {
+    await clearBoardBootOnSignOut();
     window.location.replace("/sign-in");
   }
 }

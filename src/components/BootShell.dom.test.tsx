@@ -4,8 +4,7 @@
  * The server used to render the desktop Overview with no data, so a phone's
  * first paint was a desktop layout claiming "No projects yet" until the bundle
  * ran. The server and hydration renders now draw the boot shell: both form
- * factors, one shown by `useIsMobile`'s own media query, named before first
- * paint by its inline script.
+ * factors, one shown by `useIsMobile`'s own media query, with a neutral title.
  */
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -58,35 +57,16 @@ function boot(): HTMLElement {
   new Function(BOOT_SHELL_SCRIPT).call(dom);
   return dom.document.querySelector("[data-boot-shell]") as unknown as HTMLElement;
 }
-/** The name the stylesheet draws into every title (`::before` content). */
-const drawnName = (root: HTMLElement) => root.style.getPropertyValue("--boot-name");
-
-test("the stored project is named from the remembered name before the first paint", () => {
+test("the boot shell keeps a neutral title with a stored name and a readable deep link", () => {
   dom.localStorage.setItem("llvProject", KEY);
-  dom.localStorage.setItem("llvProjectNames", JSON.stringify({ [KEY]: "atlas" }));
+  dom.localStorage.setItem("llvProjectNames", JSON.stringify({ [KEY]: "Stored fixture name" }));
+  dom.location.hash = "#p=" + encodeURIComponent("second-fixture");
   const root = boot();
   expect(root.getAttribute("data-boot-view")).toBe("project");
-  expect(drawnName(root)).toBe('"atlas"');
-  expect(root.hasAttribute("data-boot-named")).toBe(true);
-  /* The titles themselves stay as the server rendered them: React owns them. */
-  for (const title of root.querySelectorAll("[data-boot-title]")) expect(title.textContent).toBe("");
-});
-
-test("an opaque key with no remembered name stays a placeholder bar; the key is never written", () => {
-  dom.localStorage.setItem("llvProject", KEY);
-  const root = boot();
-  expect(drawnName(root)).toBe("");
-  expect(root.hasAttribute("data-boot-named")).toBe(false);
-  expect(root.textContent ?? "").not.toContain(KEY);
-  expect(root.getAttribute("style") ?? "").not.toContain(KEY);
+  expect(root.outerHTML).not.toContain("Stored fixture name");
+  expect(root.outerHTML).not.toContain("second-fixture");
+  expect(root.outerHTML).not.toContain(KEY);
   expect(root.querySelectorAll("[data-boot-title-bar]").length).toBeGreaterThan(0);
-});
-
-test("a readable key names itself, and the hash outranks storage", () => {
-  dom.localStorage.setItem("llvProject", KEY);
-  dom.location.hash = "#p=" + encodeURIComponent("-agents-tools-atlas");
-  const root = boot();
-  expect(drawnName(root)).toBe('"atlas"');
 });
 
 test("no stored project is the overview, and the language comes from storage", () => {
@@ -125,7 +105,7 @@ test("the script carries no `<`, so its own text hydrates equal in every parser"
   expect(BOOT_SHELL_SCRIPT).not.toContain("<");
 });
 
-test("hydration adopts the shell after the script named it from a remembered name", async () => {
+test("hydration adopts the neutral shell when a project name is stored", async () => {
   dom.localStorage.setItem("llvProject", KEY);
   dom.localStorage.setItem("llvProjectNames", JSON.stringify({ [KEY]: "atlas" }));
   const { recoverable, logged } = await hydrateAfterBoot();

@@ -8793,7 +8793,421 @@ async function activityTokensMain(): Promise<void> {
   if (failures.length) process.exitCode = 1;
 }
 
-if (process.env.BOARD_CAPTURE_CASE === "registry-history") await registryHistoryMain();
+/**
+ * BOARD_CAPTURE_CASE=board-startup compares production builds with the same
+ * fictional fixture. Set BOARD_STARTUP_SAFETY=1 on the candidate to hold the
+ * real data requests and exercise the browser's storage boundary.
+ */
+async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: string): Promise<void> {
+  const checks: string[] = [];
+  const base = new URL(url).origin;
+  const bootAccess = base + "/api/team?view=board-access";
+  const desktopBoard = "[data-kanban-board] [data-kanban-card] .title";
+  const phoneBoard = "[data-phone-kanban] [data-phone-card-title]";
+  const preview = "[data-board-first-card]";
+  const hasRecord = () => new Promise<boolean>((resolve, reject) => {
+    const open = indexedDB.open("delegatus-boot", 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction("snapshot");
+      const read = tx.objectStore("snapshot").get("project-first-screens");
+      read.onsuccess = () => resolve(Array.isArray(read.result) && read.result.length > 0);
+      read.onerror = () => reject(read.error);
+      tx.oncomplete = () => db.close();
+    };
+  });
+  const note = (label: string) => {
+    checks.push(label);
+    fs.writeFileSync(reportPath, JSON.stringify(checks, null, 2) + "\n");
+  };
+  for (const width of [1440, 390]) for (const locale of ["en", "uk"]) for (const colorScheme of ["light", "dark"] as const) {
+    const mobile = width < 500;
+    const live = mobile ? phoneBoard : desktopBoard;
+    const context = await browser.newContext({ viewport: { width, height: mobile ? 844 : 900 }, hasTouch: mobile, isMobile: mobile,
+      colorScheme, locale, reducedMotion: "reduce" });
+    try {
+      await context.addInitScript(locale => { localStorage.setItem("llv_lang", locale); }, locale);
+      const page = await context.newPage();
+      const auth = page.waitForResponse(bootAccess);
+      await page.goto(url, { waitUntil: "commit" });
+      const scope = (await (await auth).json() as { scope: string }).scope;
+      await page.waitForSelector(live, { timeout: 45_000 });
+      await page.waitForFunction(hasRecord, undefined, { timeout: 10_000 });
+      let releaseData!: () => void;
+      const dataHeld = new Promise<void>(resolve => { releaseData = resolve; });
+      let pendingData = 0;
+      let mutations = 0;
+      await page.route(/\/api\/(board|files|orchestrator\/seat)(?:\?|$)/, async route => {
+        if (route.request().method() !== "GET" && route.request().method() !== "HEAD") {
+          mutations++;
+          await route.abort();
+          return;
+        }
+        pendingData++;
+        await dataHeld;
+        await route.continue().catch(() => {});
+      });
+      const noMutation = (request: import("playwright-core").Request) => {
+        if (/\/api\/(?:tasks|assign)(?:[/?]|$)/.test(request.url()) && !["GET", "HEAD"].includes(request.method())) mutations++;
+      };
+      page.on("request", noMutation);
+      try {
+        await page.reload({ waitUntil: "commit" });
+        await page.waitForSelector(preview, { timeout: 15_000 });
+        await page.locator(preview).first().click();
+        if (!pendingData || mutations || await page.locator(live).count()) throw new Error("preview exposed mutation handlers or needed a network answer");
+        await page.waitForSelector("[data-board-first-seat]", { timeout: 7_500 });
+        const bounds = await page.locator(`${preview}, [data-board-first-seat]`).evaluateAll(nodes => nodes
+          .filter(node => node.getClientRects().length > 0)
+          .map(node => {
+            const { x, y, width, height } = node.getBoundingClientRect();
+            return { x, y, width, height, viewport: innerWidth };
+          }));
+        if (!bounds.length || bounds.some(rect => rect.x < -1 || rect.x + rect.width > rect.viewport + 1
+          || rect.width < 1 || rect.height < 1)) throw new Error("cached text is clipped horizontally");
+        await page.screenshot({ path: path.join(OUT_DIR, `first-screen-${width}-${locale}-${colorScheme}.png`) });
+      } finally {
+        releaseData();
+      }
+      await page.waitForSelector(live, { timeout: 45_000 });
+      if (await page.locator(preview).count()) throw new Error("current board did not replace preview");
+      await page.screenshot({ path: path.join(OUT_DIR, `current-board-${width}-${locale}-${colorScheme}.png`) });
+      note(`warm ${width} ${locale} ${colorScheme}: cards and seat before data, display only, refreshed board`);
+
+      if (width !== 1440 || locale !== "en" || colorScheme !== "light") continue;
+      // Delay authority separately, then return a different session or decline this project.
+      for (const change of ["person", "workspace", "revoked"] as const) {
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const data = /\/api\/(board|files|orchestrator\/seat)(?:\?|$)/;
+        const abort = (route: import("playwright-core").Route) => route.abort();
+        await page.route(data, abort);
+        await page.route(bootAccess, async route => {
+          await held;
+          await route.fulfill(change === "revoked" ? { status: 401, json: { code: "member_required" } }
+            : { json: { scope: change === "person" ? "f".repeat(64) : scope, projects: change === "workspace" ? [] : null, team: true } });
+        });
+        const confirmed = page.waitForResponse(bootAccess);
+        try {
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await page.waitForSelector("[data-boot-shell]", { timeout: 10_000 });
+          if (await page.locator(preview).count()) throw new Error("cache displayed before identity");
+        } finally { release(); }
+        await confirmed;
+        await page.waitForTimeout(700);
+        if (await page.locator(preview + ", [data-board-first-seat]").count()) throw new Error(`cache visible after ${change}`);
+        await page.unroute(bootAccess);
+        await page.unroute(data, abort);
+        note(`neutral until confirmed, cache refused for ${change}`);
+      }
+    } finally { await context.close(); }
+  }
+
+  for (const fault of ["blocked", "open error", "quota"] as const) {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    try {
+      await context.addInitScript(fault => {
+        if (fault === "quota") {
+          IDBObjectStore.prototype.put = () => { throw new DOMException("fixture quota", "QuotaExceededError"); };
+        } else {
+          Object.defineProperty(indexedDB, "open", { value: () => {
+            if (fault === "open error") throw new DOMException("fixture open error", "InvalidStateError");
+            const request = { onblocked: () => {} };
+            queueMicrotask(() => request.onblocked());
+            return request;
+          } });
+        }
+      }, fault);
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on("pageerror", error => errors.push(error.name));
+      await page.goto(url, { waitUntil: "commit" });
+      await page.waitForSelector(desktopBoard, { timeout: 45_000 });
+      await page.reload({ waitUntil: "commit" });
+      await page.waitForSelector(desktopBoard, { timeout: 45_000 });
+      if (await page.locator(preview).count() || errors.length) throw new Error(`live board failed under ${fault}`);
+      note(`network board recovered after IndexedDB ${fault}`);
+    } finally { await context.close(); }
+  }
+
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const member = await browser.newContext();
+  try {
+    const claimed = await context.request.post(base + "/api/team/claim", { headers: { origin: base }, data: { name: "Fixture owner" } });
+    if (!claimed.ok()) throw new Error(`synthetic team claim failed with ${claimed.status()}`);
+    const board = await context.newPage();
+    await board.goto(url, { waitUntil: "commit" });
+    await board.waitForSelector(desktopBoard, { timeout: 45_000 });
+    await board.waitForFunction(hasRecord, undefined, { timeout: 10_000 });
+    const authHeaders = { origin: base };
+    const invite = await context.request.post(base + "/api/team/invites", { headers: authHeaders, data: { name: "Fixture member" } });
+    if (!invite.ok()) throw new Error(`fixture invite failed with ${invite.status()}`);
+    const code = new URL((await invite.json() as { url: string }).url).pathname.split("/").pop();
+    const joined = await member.request.post(base + "/api/team/join/" + code, { headers: authHeaders, data: { name: "Fixture member" } });
+    if (!joined.ok()) throw new Error(`fixture join failed with ${joined.status()}`);
+    const { me } = await joined.json() as { me: { id: string } };
+    const workspace = "w_" + "c".repeat(32);
+    const project = new URLSearchParams(new URL(url).hash.slice(1)).get("p");
+    const created = await context.request.post(base + "/api/team/workspaces", {
+      headers: authHeaders, data: { id: workspace, name: "Fixture room", projects: [project] },
+    });
+    const membership = base + "/api/team/workspaces/" + workspace + "/members";
+    const role = (value: "member" | "manager") => context.request.put(membership, { headers: authHeaders, data: { memberId: me.id, role: value } });
+    if (!created.ok() || !(await role("member")).ok()) throw new Error("fixture workspace grant failed");
+
+    const ownerCookies = await context.cookies();
+    const memberCookies = await member.cookies();
+    const dataRoutes = /\/api\/(board|files|orchestrator\/seat)(?:\?|$)/;
+    const block = (route: import("playwright-core").Route) => route.abort();
+    await board.route(dataRoutes, block);
+    await context.addCookies(memberCookies);
+    const memberBoot = board.waitForResponse(bootAccess);
+    await board.reload({ waitUntil: "commit" });
+    if (!(await memberBoot).ok()) throw new Error("second person could not confirm access");
+    await board.waitForSelector("[data-kanban-skeleton]", { timeout: 15_000 });
+    if (await board.locator(preview).count()) throw new Error("second person saw the first person's cards");
+    await board.unroute(dataRoutes, block);
+    await board.waitForSelector(desktopBoard, { timeout: 45_000 });
+    await board.waitForFunction(hasRecord, undefined, { timeout: 10_000 });
+    note("a second signed-in member with the same project grant missed the first person's disk record");
+
+    await board.route(dataRoutes, block);
+    if (!(await role("manager")).ok()) throw new Error("fixture role change failed");
+    const changed = board.waitForResponse(bootAccess);
+    await board.reload({ waitUntil: "commit" });
+    if (!(await changed).ok()) throw new Error("updated role could not confirm access");
+    await board.waitForSelector("[data-kanban-skeleton]", { timeout: 15_000 });
+    if (await board.locator(preview).count()) throw new Error("role change reused the old disk record");
+    note("a real workspace role change invalidated the saved screen");
+
+    const removed = await context.request.delete(membership, { headers: authHeaders, data: { memberId: me.id } });
+    if (!removed.ok()) throw new Error("fixture workspace revocation failed");
+    await board.reload({ waitUntil: "domcontentloaded" });
+    await board.waitForURL("**/team");
+    if (await board.locator(preview).count()) throw new Error("revoked member still saw board cards");
+    note("a revoked workspace grant closed the real board route");
+
+    await context.addCookies(ownerCookies);
+    await board.unroute(dataRoutes, block);
+    await board.goto(url, { waitUntil: "commit" });
+    await board.waitForSelector(desktopBoard, { timeout: 45_000 });
+    await board.waitForFunction(hasRecord, undefined, { timeout: 10_000 });
+    const settings = await context.newPage();
+    await settings.goto(base + "/team", { waitUntil: "domcontentloaded" });
+    await settings.locator("[data-team-sign-out]").click({ timeout: 15_000 });
+    await settings.waitForURL("**/sign-in");
+    await board.waitForSelector("[data-boot-shell]", { timeout: 15_000 });
+    if (await settings.evaluate(hasRecord)) throw new Error("sign-out retained the first screen");
+    note("team sign-out cleared disk and retired the other tab");
+  } finally { await member.close(); await context.close(); }
+}
+
+/** Timings from the real board in a production build with its normal APIs. */
+async function boardStartupMain(): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  type Mark = { card: number | null; current: number | null; input: number | null; bytes: number | null; files: number | null; board: number | null; cache: string; clock?: number; cutoff?: number; completedBytes?: number | null; wire?: Record<string, { status: number; encoding: string | null; transferred: number }> };
+  const rows: (Mark & { profile: string; scenario: string; repetition: number })[] = [];
+  let server: ChildProcess | null = null;
+  let chrome: Awaited<ReturnType<typeof chromium.launchServer>> | null = null;
+  let browser: Browser | null = null;
+  let browserTempHandle: number | undefined;
+  const repeats = Number(process.env.BOARD_STARTUP_REPEATS ?? 20);
+  const workers = Number(process.env.BOARD_STARTUP_WORKERS ?? 8);
+  let layoutBytes = 0;
+  const save = () => fs.writeFileSync(path.join(OUT_DIR, "board-startup.json"), JSON.stringify({
+    commit: captureCommit(), layoutBytes, repeats, workers, profile: process.env.BOARD_STARTUP_PROFILE ?? "both", bytes: "CDP transfer to card, including encoded data from pending requests when reported", rows,
+  }, null, 2) + "\n");
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    const { project } = await waitForBoard(baseUrl, false);
+    await stop(server);
+    server = null;
+    fs.rmSync(STATE_DIR, { recursive: true, force: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    seedState(project, tasks, reviewers);
+    const browserTemp = process.env.TMPDIR;
+    process.env.TMPDIR = BASE;
+    try { await seedSeats(project); }
+    finally { process.env.TMPDIR = browserTemp; }
+    // Closed rows dominate the fixture's wire layout. None of these titles or paths is real.
+    const hidden = Array.from({ length: 6200 }, (_, index) => `/fixture/transcripts/${String(index).padStart(5, "0")}-${"closed-".repeat(13)}.jsonl`);
+    fs.writeFileSync(path.join(STATE_DIR, "board.json"), JSON.stringify({ schemaVersion: 1, projects: {
+      [project]: { schemaVersion: 1, revision: 1, updatedAt: "2100-01-01T00:00:00.000Z",
+        prefs: { hidden, manual: [], expanded: [], viewMode: null, taskPanelOpen: false } },
+    } }));
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, true);
+    const headers = { "content-type": "application/json", origin: baseUrl };
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers, body: JSON.stringify({ dismissed: true }) });
+    await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers, body: JSON.stringify({ noticeDismissed: true }) });
+    const board = await fetch(`${baseUrl}/api/board?project=${encodeURIComponent(project)}`);
+    layoutBytes = (await board.arrayBuffer()).byteLength;
+    if (!board.ok || layoutBytes < 700_000) throw new Error(`unexpected fixture layout size ${layoutBytes}`);
+    // Chrome's SingletonSocket has a platform path limit. Keep its files in the
+    // capture directory, with a short Linux path through the driver-owned handle.
+    browserTempHandle = process.platform === "linux" ? fs.openSync(path.join(BASE, "tmp"), "r") : undefined;
+    const chromeTemp = browserTempHandle === undefined ? process.env.TMPDIR : `/proc/${process.pid}/fd/${browserTempHandle}`;
+    chrome = await chromium.launchServer({ args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      executablePath: process.env.CHROME_BIN, env: { ...process.env, TMPDIR: chromeTemp } });
+    console.log(JSON.stringify({ browserPid: chrome.process().pid, viewerPid: server.pid, layoutBytes }));
+    browser = await chromium.connect(chrome.wsEndpoint());
+    const url = `${baseUrl}/#p=${encodeURIComponent(project)}`;
+    const run = async (profile: "desktop" | "4g", repetition: number) => {
+      const phone = profile === "4g";
+      const context = await browser!.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+        isMobile: phone, hasTouch: phone, locale: "en", reducedMotion: "reduce" });
+      try {
+        await context.addInitScript(({ project, seatStorage, heightVersion }) => {
+          localStorage.setItem("llv_lang", "en");
+          localStorage.setItem("llvSound", "0");
+          localStorage.setItem(seatStorage, JSON.stringify({ height: null, heightV: heightVersion, collapsed: { [project]: false }, placement: "top" }));
+          let hidden = false;
+          let start = 0;
+          let mark = { card: null, current: null, input: null, bytes: null, files: null, board: null, cache: "" } as Mark;
+          const visible = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)].some(node => {
+            const rect = node.getBoundingClientRect();
+            if (rect.width < 2 || rect.height < 2 || rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth) return false;
+            const text = node.innerText.trim();
+            if (selector.includes("first-card") && !text) return false;
+            return getComputedStyle(node).visibility === "visible" && getComputedStyle(node).opacity !== "0";
+          });
+          const frame = () => {
+            const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+            const boardDrawn = !!document.querySelector("[data-kanban-board], [data-phone-kanban], [data-testid=mobile-chat-shell]");
+            const resourceEnd = (path: string) => entries.find(entry =>
+              (path === "/api/files" ? entry.name.includes("/api/files?view=summary") : new URL(entry.name).pathname === path)
+              && entry.startTime >= start && entry.responseEnd > 0 && (entry.responseStatus === 200 || entry.responseStatus === 304))?.responseEnd ?? null;
+            mark.board ??= resourceEnd("/api/board");
+            mark.files ??= resourceEnd("/api/files");
+            if (mark.card === null && visible("[data-kanban-card] .title, [data-phone-card-title], [data-board-first-card]")) {
+              mark.card = performance.now() - start;
+              const navigation = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
+              mark.cutoff = performance.timeOrigin + start + mark.card;
+              mark.completedBytes = [...navigation, ...entries].filter(entry => entry.startTime >= start && entry.responseEnd <= start + mark.card!)
+                .reduce((sum, entry) => sum + entry.transferSize, 0);
+              mark.cache = document.querySelector("[data-board-first-screen]") ? "IndexedDB first screen"
+                : start > 0 && mark.board === null ? "live memory"
+                : mark.board === null ? "local layout" : "network layout";
+            }
+            if (mark.current === null && boardDrawn && mark.board !== null && mark.files !== null
+              && !document.querySelector("[data-board-first-screen], [data-bar-updating]")) mark.current = performance.now() - start;
+            if (mark.input === null && visible("[data-orchestrator-conversation] textarea:not([disabled]):not([readonly]), [data-testid=mobile-chat-shell] textarea:not([disabled]):not([readonly])")) mark.input = performance.now() - start;
+            requestAnimationFrame(frame);
+          };
+          Object.defineProperty(document, "visibilityState", { configurable: true, get: () => hidden ? "hidden" : "visible" });
+          Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+          Object.assign(window, {
+            readBoardStartup: () => ({ ...mark, files: mark.files === null ? null : mark.files - start, board: mark.board === null ? null : mark.board - start }),
+            boardStartupVisibility: (value: boolean) => {
+              hidden = value;
+              if (!value) {
+                start = performance.now();
+                mark = { card: null, current: null, input: null, bytes: null, files: null, board: null, cache: "" };
+              }
+              document.dispatchEvent(new Event("visibilitychange"));
+            },
+          });
+          requestAnimationFrame(frame);
+        }, { project, seatStorage: SEAT_STORAGE_KEY, heightVersion: SEAT_HEIGHT_VERSION });
+        const page = await context.newPage();
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Network.enable");
+        type Wire = { chunks: { at: number; bytes: number }[]; ended?: { at: number; bytes: number }; path: string; status?: number; encoding: string | null };
+        const wire = new Map<string, Wire>();
+        let clock = 0;
+        cdp.on("Network.requestWillBeSent", event => {
+          clock = event.wallTime * 1000 - event.timestamp * 1000;
+          wire.set(event.requestId, { chunks: [], path: new URL(event.request.url, baseUrl).pathname, encoding: null });
+        });
+        cdp.on("Network.responseReceived", event => {
+          const request = wire.get(event.requestId);
+          if (request) {
+            request.status = event.response.status;
+            request.encoding = String(event.response.headers["content-encoding"] ?? event.response.headers["Content-Encoding"] ?? "") || null;
+          }
+        });
+        cdp.on("Network.dataReceived", event => {
+          if (event.encodedDataLength > 0) wire.get(event.requestId)?.chunks.push({ at: event.timestamp * 1000 + clock, bytes: event.encodedDataLength });
+        });
+        cdp.on("Network.loadingFinished", event => {
+          const request = wire.get(event.requestId);
+          if (request) request.ended = { at: event.timestamp * 1000 + clock, bytes: event.encodedDataLength };
+        });
+        if (phone) await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 150, downloadThroughput: 200_000, uploadThroughput: 200_000 });
+        const record = async (scenario: string) => {
+          const mark = () => (window as unknown as { readBoardStartup: () => Mark }).readBoardStartup();
+          await page.waitForFunction(() => (window as unknown as { readBoardStartup: () => Mark }).readBoardStartup().card !== null,
+            undefined, { timeout: 45_000 }).catch(() => {});
+          if (phone) {
+            const liveSeat = page.locator('[data-mobile2-seat-tap="conversation"] [data-mobile2-seat-open]');
+            await liveSeat.click({ timeout: 12_000 }).catch(() => {});
+          }
+          const input = page.waitForFunction(() => (window as unknown as { readBoardStartup: () => Mark }).readBoardStartup().input !== null,
+            undefined, { timeout: 12_000 }).catch(() => {});
+          const current = page.waitForFunction(() => (window as unknown as { readBoardStartup: () => Mark }).readBoardStartup().current !== null,
+            undefined, { timeout: 16_000 }).catch(() => {});
+          await Promise.all([input, current]);
+          const reading = await page.evaluate(mark);
+          const { cutoff, ...sample } = reading;
+          if (cutoff !== undefined) sample.bytes = [...wire.values()].reduce((sum, request) => {
+            if (request.ended && request.ended.at <= cutoff) return sum + request.ended.bytes;
+            return sum + request.chunks.filter(chunk => chunk.at <= cutoff).reduce((total, chunk) => total + chunk.bytes, 0);
+          }, 0);
+          sample.wire = Object.fromEntries([...wire.values()].filter(request => request.ended && request.status
+            && ["/api/files", "/api/board", "/api/orchestrator/seat"].includes(request.path))
+            .map(request => [request.path, { status: request.status!, encoding: request.encoding, transferred: request.ended!.bytes }]));
+          rows.push({ profile, repetition, scenario, ...sample });
+          save();
+          if (phone) await page.locator("[data-mobile2-back]").click({ timeout: 2500 }).catch(() => {});
+        };
+        await page.goto(url, { waitUntil: "commit", timeout: 60_000 });
+        await record("cold");
+        await page.waitForTimeout(1100);
+        wire.clear();
+        await page.reload({ waitUntil: "commit" });
+        await record("reload");
+        if (process.env.BOARD_STARTUP_NAV_ONLY === "1") return;
+        const visibility = (value: boolean) => page.evaluate(value =>
+          (window as unknown as { boardStartupVisibility: (hidden: boolean) => void }).boardStartupVisibility(value), value);
+        for (const seconds of [15, 120]) {
+          await visibility(true);
+          await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
+          await Bun.sleep(seconds * 1000);
+          wire.clear();
+          await cdp.send("Page.setWebLifecycleState", { state: "active" });
+          await visibility(false);
+          await record(`sleep-${seconds}`);
+        }
+      } finally {
+        await context.close();
+      }
+    };
+    const safetyOnly = process.env.BOARD_STARTUP_SAFETY_ONLY === "1";
+    if (safetyOnly) await checkBoardFirstScreen(browser, url, path.join(OUT_DIR, "board-startup-safety.json"));
+    if (!safetyOnly) {
+      const profiles = (["desktop", "4g"] as const).filter(profile => !process.env.BOARD_STARTUP_PROFILE || process.env.BOARD_STARTUP_PROFILE === profile);
+      const jobs = Array.from({ length: repeats }, (_, index) => profiles.map(profile => [profile, index + 1] as const)).flat();
+      for (let index = 0; index < jobs.length; index += workers) {
+        await Promise.all(jobs.slice(index, index + workers).map(job => run(...job)));
+      }
+      if (process.env.BOARD_STARTUP_SAFETY === "1") await checkBoardFirstScreen(browser, url, path.join(OUT_DIR, "board-startup-safety.json"));
+    }
+  } finally {
+    save();
+    await browser?.close();
+    await chrome?.close();
+    if (browserTempHandle !== undefined) fs.closeSync(browserTempHandle);
+    await stop(server);
+  }
+}
+
+if (process.env.BOARD_CAPTURE_CASE === "board-startup") await boardStartupMain();
+else if (process.env.BOARD_CAPTURE_CASE === "registry-history") await registryHistoryMain();
 else if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();

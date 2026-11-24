@@ -168,6 +168,7 @@ const originalFetch = globalThis.fetch;
 function stubFetch(): void {
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
+    if (url === "/api/team?view=board-access") return Response.json({ scope: null, projects: null, team: false });
     const method = (init?.method ?? "GET").toUpperCase();
     if (url.startsWith("/api/files")) {
       return Response.json({

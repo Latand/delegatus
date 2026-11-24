@@ -1,3 +1,5 @@
+import { OPERATOR_COOKIE, soloBrowserSession } from "@/lib/agent/operatorSession";
+
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -20,6 +22,8 @@ import { TeamError } from "@/lib/team/members";
 
 import { POST as createProject } from "../projects/create/route";
 
+import { GET as teamView } from "./route";
+import { POST as signOut } from "./session/sign-out/route";
 import { POST as claim } from "./claim/route";
 import { POST as createInvite } from "./invites/route";
 import { POST as join } from "./join/[code]/route";
@@ -478,4 +482,52 @@ describe("creating a project by name in a team", () => {
       expect(placedIn("dir-a")).toBeNull();
     });
   });
+});
+
+test("board boot authority follows the installation, browser session and current workspace role", async () => {
+  const endpoint = "/api/team?view=board-access";
+  const anonymous = await teamView(call(endpoint));
+  expect(await anonymous.json()).toEqual({ scope: null, projects: null, team: false });
+  const before = await teamView(call(endpoint, { headers: { cookie: `${OPERATOR_COOKIE}=${soloBrowserSession()}` } }));
+  const solo = await before.json() as { scope: string; projects: string[] | null };
+  expect(before.headers.get("cache-control")).toBe("no-store");
+  expect(solo.scope).toMatch(/^[a-f0-9]{64}$/);
+  expect(solo.projects).toBeNull();
+  expect((await teamView(call(endpoint, { headers: { origin: "https://elsewhere.invalid" } }))).status).toBe(403);
+
+  const { owner, member } = await team();
+  expect((await teamView(call(endpoint + "&project=repo-a"))).status).toBe(401);
+  const boot = async (cookie: string) => {
+    const answer = await teamView(call(endpoint + "&project=repo-forged", { cookie }));
+    expect(answer.status).toBe(200);
+    return await answer.json() as typeof solo;
+  };
+  const ownerView = await boot(owner);
+  const memberView = await boot(member);
+  expect(ownerView.scope).not.toBe(solo.scope);
+  expect(ownerView.scope).not.toBe(memberView.scope);
+  expect(ownerView.projects).toBeNull();
+  expect(memberView.projects).toEqual([]);
+  expect(await boot(member)).toEqual(memberView);
+
+  expect((await create(owner, { id: W1, name: "Board work", projects: ["repo-a"] })).status).toBe(201);
+  const store = teamStore();
+  const memberId = verifySessionValue(store, member)!.member.id;
+  const ownerId = verifySessionValue(store, owner)!.member.id;
+  store.putWorkspaceMember(W1, memberId, "member", ownerId, "2100-01-01T00:00:00.000Z");
+  const allowed = await boot(member);
+  expect(allowed.projects).toEqual(["repo-a"]);
+  expect(allowed.scope).not.toBe(memberView.scope);
+  store.putWorkspaceMember(W1, memberId, "manager", ownerId, "2100-01-01T00:00:01.000Z");
+  expect((await boot(member)).scope).not.toBe(allowed.scope);
+  store.removeWorkspaceMember(W1, memberId);
+  expect((await boot(member)).projects).toEqual([]);
+  const currentOwner = await boot(owner);
+  fs.unlinkSync(path.join(stateDir, "links", "self.json"));
+  expect((await boot(owner)).scope).not.toBe(currentOwner.scope);
+  const held = store.member(memberId)!;
+  store.updateMember({ ...held, status: "revoked", revokedAt: "2100-01-01T00:00:02.000Z" });
+  expect((await teamView(call(endpoint, { cookie: member }))).status).toBe(401);
+  expect((await signOut(call("/api/team/session/sign-out", { body: {}, cookie: owner }))).status).toBe(200);
+  expect((await teamView(call(endpoint, { cookie: owner }))).status).toBe(401);
 });

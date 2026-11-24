@@ -202,6 +202,7 @@ test("a snapshot is never painted over an answer this document already has", asy
 test("a stored record is used only while current, fresh, bounded and revalidatable", () => {
   const now = Date.now();
   expect(usableSnapshot(record(), now)).toBe(true);
+  expect(usableSnapshot(record({ version: FILES_SNAPSHOT_VERSION - 1 }), now)).toBe(false);
   expect(usableSnapshot(record({ version: FILES_SNAPSHOT_VERSION + 1 }), now)).toBe(false);
   expect(usableSnapshot(record({ savedAt: now - FILES_SNAPSHOT_MAX_AGE_MS - 1 }), now)).toBe(false);
   expect(usableSnapshot(record({ etag: "" }), now)).toBe(false);

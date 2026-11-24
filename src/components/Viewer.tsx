@@ -18,6 +18,7 @@ import { WorkLinksProvider } from "@/components/workLinks/workLinksContext";
 import { useFiles } from "@/hooks/useFiles";
 import { ServerReachProvider, useDerivedServerReach } from "@/hooks/serverReach";
 import { publishConversationAvailability } from "@/lib/mcp/availability";
+import { readBoardBootAuthority, useBoardBootAuthority } from "@/lib/client/boardBootAuthority";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useViewPresence } from "@/hooks/useViewPresence";
@@ -252,7 +253,12 @@ function writePanelPref(key: string, value: string): void {
 }
 
 export function Viewer() {
-  return useMounted() ? <ViewerApp /> : <BootShell />;
+  const { authority, suspended } = useBoardBootAuthority();
+  if (!useMounted() || !authority) return <BootShell />;
+  return <>
+    {suspended ? <BootShell /> : null}
+    <div className={suspended ? "hidden" : "contents"}><ViewerApp /></div>
+  </>;
 }
 
 function ViewerApp() {
@@ -1906,7 +1912,7 @@ function ViewerApp() {
       {!isMobile && orchestratorOpen && !kanbanFace && project !== OVERVIEW && !relayIdOfChatsProject(project) ? (
         <OrchestratorDock
           project={project}
-          projectName={projectTitle(project, projectDisplayNames[project], cachedProjectName(project)) ?? (loaded ? t("dash.projectUnnamed") : "…")}
+          projectName={projectTitle(project, projectDisplayNames[project], readBoardBootAuthority()?.team ? undefined : cachedProjectName(project)) ?? (loaded ? t("dash.projectUnnamed") : "…")}
           projectCwd={projectCwds[project]}
           files={files}
           onClose={toggleOrchestrator}
@@ -2022,6 +2028,7 @@ function ViewerApp() {
             project={dashboardProject}
             loaded={loaded}
             cached={cached}
+            catalogConfirmed={loaded && scopeCertified && !cached}
             catalogFailures={catalogFailures}
             openNonce={openNonce}
             focusRequest={focusRequest?.catalog && catalogPin?.path !== focusRequest.path ? null : focusRequest}

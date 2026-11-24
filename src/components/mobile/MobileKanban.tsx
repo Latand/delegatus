@@ -1,4 +1,6 @@
 "use client";
+
+import { firstScreenColumn, type FirstScreenProjection } from "@/lib/client/projectFirstScreen";
 import { useMaterializedCreationIds } from "@/hooks/useFiles";
 
 import { CardStatusBadge } from "@/components/CardStatusBadge";
@@ -114,6 +116,7 @@ const SWALLOW_CLICK_MS = 600;
 const DEDUPE_MS = 300;
 
 export interface MobileKanbanProps extends PhoneBoardInput {
+  onFirstScreen?: (layout: FirstScreenProjection) => void;
   /** The attention queue's order (`attentionKey`): the pin walks it as ⚠ does. */
   attention: readonly string[];
   /** The orchestrator card above the tabs; the dock takes its place later (§3.6). */
@@ -963,6 +966,16 @@ export function MobileKanban(props: MobileKanbanProps) {
     [model, props.attention, doneShown, props.closing, modelNow],
   );
   const active = usePhoneKanbanColumn(project);
+  const onFirstScreen = props.onFirstScreen;
+  useEffect(() => {
+    if (!onFirstScreen || timelineShown || statuses.size || edits.size) return;
+    const columns = KANBAN_STATUSES.map(status => {
+      const column = phone.columns[status];
+      return firstScreenColumn(status, [...column.pinned, ...column.cards, ...column.unlinked]
+        .filter(({ card }) => card.task || (!card.drafts.length && card.members.length > 0)).map(({ card }) => card.title));
+    });
+    onFirstScreen({ columns, active });
+  }, [onFirstScreen, phone, active, statuses, edits, timelineShown]);
   const tasksById = useRef(new Map<string, BoardTask>());
   tasksById.current = new Map(storedTasks.map((task) => [task.id, task] as const));
 

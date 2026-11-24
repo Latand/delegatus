@@ -1,5 +1,7 @@
 "use client";
 
+import { announceBoardSignIn } from "@/lib/client/boardBootAuthority";
+
 import { KeyRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -62,6 +64,7 @@ export function JoinCard({ code }: { code: string }) {
     const answer = await teamRequest<{ me: { name: string } }>(`/api/team/join/${encodeURIComponent(code)}`, { body: needsName ? { name } : {} });
     setBusy(false);
     if (!answer.ok) return setError(errorText(t, answer));
+    announceBoardSignIn();
     if (screen.preview.kind === "invite" && passkeyHere) setScreen({ kind: "passkey", name: answer.body.me.name });
     else {
       setScreen({ kind: "done", name: answer.body.me.name });

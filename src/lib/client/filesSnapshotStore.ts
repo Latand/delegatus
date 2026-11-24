@@ -1,3 +1,5 @@
+import { FIRST_SCREEN_PROJECTS, mergeFirstScreenParts, type ProjectFirstScreen, readFirstScreenParts } from "./projectFirstScreen";
+
 /*
  * The last certified `/api/files` answer, kept across documents (#2071,
  * docs/design/skeletons-and-transitions.md D4).
@@ -19,13 +21,14 @@
  * served (`servedPayloadSecrets.test.ts`).
  */
 
-export const FILES_SNAPSHOT_VERSION = 1;
+export const FILES_SNAPSHOT_VERSION = 2;
 export const FILES_SNAPSHOT_MAX_BYTES = 24 * 1024 * 1024;
 export const FILES_SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const DB_NAME = "delegatus-boot";
 const STORE = "snapshot";
 const KEY = "files";
+const FIRST_SCREEN_KEY = "project-first-screens";
 
 export const CREATION_RECEIPT_LIMIT = 8;
 export const CREATION_LOCATORS_MAX_BYTES = 64 * 1024;
@@ -60,6 +63,7 @@ export interface FilesSnapshotRecord {
   text: string;
   /** Independently retained known IDs. Never part of the ETag's catalog. */
   creations?: CreationLocators;
+  accessScope?: string;
 }
 
 export interface FilesSnapshotStore {
@@ -92,7 +96,13 @@ function request<T>(req: IDBRequest<T>): Promise<T> {
 
 /** The browser's store, or null where IndexedDB is missing (private modes,
     old engines, the server). Every failure reads as "no snapshot". */
-export function indexedDbFilesSnapshotStore(): FilesSnapshotStore | null {
+interface IndexedDbBootStore extends FilesSnapshotStore {
+  readFirstScreen(scope: string, project: string): Promise<ProjectFirstScreen | null>;
+  writeFirstScreen(record: ProjectFirstScreen, current: () => boolean): Promise<void>;
+  clearBootData(): Promise<void>;
+}
+
+export function indexedDbFilesSnapshotStore(): IndexedDbBootStore | null {
   if (typeof indexedDB === "undefined") return null;
   let opening: Promise<IDBDatabase> | null = null;
   const open = (): Promise<IDBDatabase> => {
@@ -101,9 +111,23 @@ export function indexedDbFilesSnapshotStore(): FilesSnapshotStore | null {
       req.onupgradeneeded = () => {
         if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE);
       };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error ?? new Error("indexedDB open failed"));
-      req.onblocked = () => reject(new Error("indexedDB open blocked"));
+      let abandoned = false;
+      const abandon = (error: Error) => {
+        clearTimeout(timer);
+        abandoned = true;
+        reject(error);
+      };
+      const timer = setTimeout(() => abandon(new Error("indexedDB open timed out")), 1_500);
+      req.onsuccess = () => {
+        const db = req.result;
+        clearTimeout(timer);
+        if (abandoned) { db.close(); return; }
+        db.onversionchange = () => { db.close(); opening = null; };
+        db.onclose = () => { opening = null; };
+        resolve(db);
+      };
+      req.onerror = () => abandon(req.error ?? new Error("indexedDB open failed"));
+      req.onblocked = () => abandon(new Error("indexedDB open blocked"));
     }).catch((error: unknown) => {
       opening = null;
       throw error;
@@ -177,6 +201,48 @@ export function indexedDbFilesSnapshotStore(): FilesSnapshotStore | null {
         tx.oncomplete = () => current() ? resolve(creations!) : reject(new Error("creation owner changed"));
         tx.onerror = tx.onabort = () => reject(tx.error ?? new Error("creation recovery write failed"));
       });
+    },
+    async readFirstScreen(scope, project) {
+      try {
+        const rows: unknown = await run("readonly", (store) => store.get(FIRST_SCREEN_KEY));
+        const now = Date.now();
+        if (!Array.isArray(rows)) return null;
+        for (const row of rows.slice(0, FIRST_SCREEN_PROJECTS)) {
+          const parts = readFirstScreenParts(row, scope, project, now);
+          if (parts) return parts;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    },
+    async writeFirstScreen(record, current) {
+      const next = readFirstScreenParts(record, record.scope, record.project, Date.now());
+      if (!next) return;
+      const db = await open();
+      if (!current()) return;
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        const store = tx.objectStore(STORE);
+        const read = store.get(FIRST_SCREEN_KEY);
+        read.onsuccess = () => {
+          try {
+            if (!current()) return;
+            const now = Date.now();
+            const rows = Array.isArray(read.result) ? (read.result as ProjectFirstScreen[]).slice(0, FIRST_SCREEN_PROJECTS)
+              .flatMap(row => readFirstScreenParts(row, next.scope, row?.project, now) ?? []) : [];
+            const previous = rows.find(row => row.project === next.project);
+            store.put([mergeFirstScreenParts(previous, next), ...rows.filter(row => row.project !== next.project)]
+              .slice(0, FIRST_SCREEN_PROJECTS), FIRST_SCREEN_KEY);
+          } catch { tx.abort(); }
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = tx.onabort = () => reject(tx.error ?? new Error("board first screen write failed"));
+      });
+    },
+    async clearBootData() {
+      try { await run("readwrite", store => store.clear()); }
+      catch { /* unavailable storage */ }
     },
     async clear(owner) {
       try {

@@ -1,5 +1,9 @@
 "use client";
 
+import { useProjectFirstScreen } from "@/hooks/useProjectFirstScreen";
+import { readBoardBootAuthority } from "@/lib/client/boardBootAuthority";
+import { firstScreenTitle } from "@/lib/client/projectFirstScreen";
+
 import { usePipelineCreationCards } from "@/hooks/useFiles";
 
 import { Archive, Bot, Check, GitMerge, Users, EyeOff, Info, LayoutGrid, ListTodo, ListTree, MessageSquarePlus, Network, PanelRight, Search, UserRound } from "lucide-react";
@@ -146,6 +150,7 @@ interface Props {
       (reviewer auto-close, draft restore, presence reports, pruning) keeps
       waiting for `loaded`. */
   cached?: boolean;
+  catalogConfirmed?: boolean;
   /** Consecutive `/api/files` failures (issue #696). A restored `#p=` or
       localStorage project lands straight here, so this is the surface a dead
       server reaches FIRST — and on the phone the rail is behind a drawer, so
@@ -347,6 +352,7 @@ function ProjectDashboardView({
   project,
   loaded,
   cached = false,
+  catalogConfirmed = loaded && !cached,
   catalogFailures = 0,
   openNonce,
   focusRequest,
@@ -433,7 +439,7 @@ function ProjectDashboardView({
   const knownProjectName = projectTitle(
     project,
     providedProjectName ?? projectCatalogEntries.find((entry) => entry.project === project)?.displayName,
-    cachedProjectName(project),
+    readBoardBootAuthority()?.team ? undefined : cachedProjectName(project),
   );
   /* The surfaces that take the name as a string (the focus view, sheets, the
      seat) say "Unnamed project" only once the catalog is certified; before
@@ -472,7 +478,18 @@ function ProjectDashboardView({
      until the scan and the persisted board arrangement have both loaded, so the
      first painted board already reflects closes, worker-stack collapse and caps
      instead of flashing the raw scan snapshot and culling it. */
-  const boardReady = boardFirstPaintReady(loaded || cached, board.loaded || board.cached);
+  const bootAuthority = readBoardBootAuthority();
+  const currentBoard = loaded && !cached && board.loaded && board.sync !== "unavailable";
+  const boardReady = bootAuthority?.scope ? currentBoard : boardFirstPaintReady(loaded || cached, board.loaded || board.cached);
+  const seatStatus = isMobile ? cachedSeatRead : desktopSeatRead;
+  const liveSeat = seatStatus.failed ? null : seatStatus.status;
+  const liveSeatFile = catalogConfirmed && liveSeat?.seat ? resolveSeatFile({
+    files, conversationId: liveSeat.seat.conversationId, seatPath: liveSeat.seat.path, currentPath: null,
+  }) : null;
+  const seatName = liveSeat && !liveSeat.exists ? null
+    : firstScreenTitle(liveSeatFile?.title ?? liveSeat?.currentTask?.title ?? "") || undefined;
+  const firstScreen = useProjectFirstScreen(project, isMobile, board.revision,
+    currentBoard && catalogConfirmed && board.sync === "current", seatName);
   const prefs = useMemo<ColumnPrefs>(
     () => ({ manual: board.prefs.manual, hidden: board.prefs.hidden, expanded: board.prefs.expanded }),
     [board.prefs],
@@ -2253,6 +2270,8 @@ function ProjectDashboardView({
               : catalogFailures > 0
               ? t("catalog.unreachable")
               /* Loading never borrows «nothing is running» (#2071 D6). */
+              : !boardReady && (firstScreen.layout || firstScreen.seatName)
+              ? t("dash.updating")
               : !loaded ? t(cached ? "dash.updating" : "common.loadingCap")
               : !boardReady ? t("common.loadingCap")
               : t("common.nothingRunning");
@@ -2384,7 +2403,7 @@ function ProjectDashboardView({
                meta line. */
             back={mobileConversationKey !== null}
             /* A restored answer being confirmed says so under the name (#2071). */
-            title={<MobileBarTitle meta={cached && !loaded ? t("dash.updating") : undefined} eyebrow={mobileShell?.workspaceEyebrow}>{projectTitleNode}</MobileBarTitle>}
+            title={<MobileBarTitle meta={!boardReady && (cached || firstScreen.layout || firstScreen.seatName) ? t("dash.updating") : undefined} eyebrow={mobileShell?.workspaceEyebrow}>{projectTitleNode}</MobileBarTitle>}
             titleLabel={t("mobile2.bar.switchProject")}
             titleOpens={mobileShell ? "projects" : undefined}
             host={mobileShell}
@@ -2408,13 +2427,16 @@ function ProjectDashboardView({
               {!boardReady ? (
                 /* The shape of what is coming: the board's tabs and cards, or
                    a conversation's feed when one is on top. */
-                catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : mobileConversationKey === null ? <PhoneKanbanSkeleton /> : <FeedSkeleton />
+                catalogFailures > 0 && !firstScreen.layout && !firstScreen.seatName
+                  ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" />
+                  : mobileConversationKey === null ? <PhoneKanbanSkeleton layout={firstScreen.layout} seatName={firstScreen.seatName} /> : <FeedSkeleton />
               ) : mobileBoardLeaf ? (
                 /* The phone's board is the desktop's status columns (#2072
                    slice 4): the same bands, the same model and counts, one
                    column at a time. The orchestrator card stays above the
                    tabs and the dock below until the dock takes both (§3.6). */
                 <MobileKanban
+                  onFirstScreen={firstScreen.saveLayout}
                   layout={pipelineLayout}
                   project={project}
                   groups={layoutGroups}
@@ -2447,6 +2469,7 @@ function ProjectDashboardView({
                            renders from the same answer instead of polling for
                            it a second time. */
                         seat={seatRead}
+                        bootSeatName={firstScreen.seatName}
                         incumbentRead={seatIncumbentRead}
                         /* The board's own clock, so the card's badge ticks with
                            the cards beside it rather than on a second one. */
@@ -2536,9 +2559,13 @@ function ProjectDashboardView({
         <div className="flex min-h-0 min-w-0 flex-1">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {!boardReady ? (
-              catalogFailures > 0 ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" /> : <KanbanSkeleton project={project} />
+              catalogFailures > 0 && !firstScreen.layout && !firstScreen.seatName
+                ? <CatalogFailureNotice failures={catalogFailures} className="mt-[12vh]" />
+                : <KanbanSkeleton project={project} layout={firstScreen.layout} seatName={firstScreen.seatName} />
             ) : kanbanLeaf ? (
               <KanbanBoard
+                initialTab={firstScreen.layout?.active}
+                onFirstScreen={firstScreen.saveLayout}
                 stageDrafts={stageDrafts}
                 conversationDrafts={conversationDrafts}
                 layout={pipelineLayout}
@@ -2570,7 +2597,7 @@ function ProjectDashboardView({
                 onRestoreConversation={restoreClosedConversation}
                 onReadersChange={holdReaders}
                 seat={(boardId) => (
-                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={desktopSeatRead} />
+                  <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={desktopSeatRead} bootSeatName={firstScreen.seatName} />
                 )}
                 onNewAgent={addDraft}
                 onAddAgent={addBandAgentDraft}

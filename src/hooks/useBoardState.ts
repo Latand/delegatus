@@ -1,5 +1,7 @@
 "use client";
 
+import { boardBootRetired, boardBootScopeFor, readBoardBootAuthority, recheckBoardBoot } from "@/lib/client/boardBootAuthority";
+
 import { useEffect, useRef, useState } from "react";
 
 import { commitMarqueeSelection, pruneSelection, toggleSelected } from "@/components/scheme/selectionGesture";
@@ -212,8 +214,11 @@ function readPersistedBoards(): Array<[string, BoardProjectStateV1]> {
   try {
     const raw = boardStorage()?.getItem(PERSISTED_BOARDS_KEY);
     const parsed = raw ? JSON.parse(raw) as unknown : null;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((entry): entry is [string, BoardProjectStateV1] => Array.isArray(entry)
+    const authority = readBoardBootAuthority();
+    const scoped = parsed as { scope?: string; boards?: unknown } | null;
+    const boards = authority ? authority.scope && scoped?.scope === authority.scope ? scoped.boards : null : parsed;
+    if (!Array.isArray(boards)) return [];
+    return boards.filter((entry): entry is [string, BoardProjectStateV1] => Array.isArray(entry)
       && typeof entry[0] === "string"
       && Boolean(entry[1]) && typeof entry[1] === "object"
       && (entry[1] as BoardProjectStateV1).schemaVersion === 1
@@ -225,19 +230,24 @@ function readPersistedBoards(): Array<[string, BoardProjectStateV1]> {
 }
 
 export function persistedBoard(project: string): BoardProjectStateV1 | undefined {
+  const authority = readBoardBootAuthority();
+  if (boardBootRetired() || (authority && !boardBootScopeFor(project))) return;
   return readPersistedBoards().find(([key]) => key === project)?.[1];
 }
 
 function persistBoard(project: string, board: BoardProjectStateV1): void {
+  const authority = readBoardBootAuthority();
+  if (boardBootRetired() || (authority && !boardBootScopeFor(project))) return;
   if (persistedRevisions.get(project) === board.revision) return;
   const store = boardStorage();
   if (!store) return;
   persistedRevisions.set(project, board.revision);
   const entries: Array<[string, BoardProjectStateV1]> = [[project, board] as [string, BoardProjectStateV1], ...readPersistedBoards().filter(([key]) => key !== project)].slice(0, PERSISTED_BOARDS_MAX);
-  let text = JSON.stringify(entries);
+  const encode = () => JSON.stringify(authority ? { scope: authority.scope, boards: entries } : entries);
+  let text = encode();
   while (text.length > PERSISTED_BOARDS_MAX_BYTES && entries.length > 1) {
     entries.pop();
-    text = JSON.stringify(entries);
+    text = encode();
   }
   try {
     if (text.length <= PERSISTED_BOARDS_MAX_BYTES) store.setItem(PERSISTED_BOARDS_KEY, text);
@@ -1119,7 +1129,15 @@ function acquireBoardStore(project: string): BoardStore {
   } catch {
     storage = null;
   }
-  const store = createBoardStore({ project, fetcher: (input, init) => fetch(input, init), storage });
+  const store = createBoardStore({ project, fetcher: async (input, init) => {
+    const started = readBoardBootAuthority();
+    const response = await fetch(input, init);
+    if (started && (response.status === 401 || response.status === 403) && boardBootScopeFor(project)) {
+      void recheckBoardBoot(true);
+    }
+    if (started !== readBoardBootAuthority()) throw new Error("board access changed");
+    return response;
+  }, storage });
   sharedStores.set(project, { store, refs: 1 });
   return store;
 }

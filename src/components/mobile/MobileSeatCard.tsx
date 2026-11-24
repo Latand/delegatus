@@ -122,6 +122,7 @@ export function MobileSeatCard({
   projectName,
   files,
   seat,
+  bootSeatName,
   incumbentRead,
   now,
   onOpenConversation,
@@ -136,6 +137,7 @@ export function MobileSeatCard({
       answer. Given a read, this card starts none of its own: the hook called
       with a null project issues no request and sets no interval. */
   seat?: OrchestratorSeatRead;
+  bootSeatName?: string | null;
   /** Home shares the sheet-gated read with its footer. Other hosts retain this
       card's own reader. Supplying a read disables the card's status poll. */
   incumbentRead?: OrchestratorIncumbentRead;
@@ -538,6 +540,13 @@ export function MobileSeatCard({
       onClose={closeSheet}
     />
   ) : null;
+
+  if (!status && bootSeatName) {
+    return <div className="flex min-h-14 items-center gap-3 rounded-[12px] bg-card px-3 shadow-1">
+      <SeatMark />
+      <span className="min-w-0 truncate text-ui font-semibold text-primary" data-board-first-seat="">{bootSeatName}</span>
+    </div>;
+  }
 
   return (
     <div

@@ -152,6 +152,7 @@ let pending: ReturnType<typeof refusedPending> | null = null;
 function stubFetch(): void {
   globalThis.fetch = (async (input: string | URL | Request) => {
     const url = String(input);
+    if (url === "/api/team?view=board-access") return Response.json({ scope: null, projects: null, team: false });
     if (url.startsWith("/api/files")) {
       return new Response(JSON.stringify({
         files: [seatFile],
