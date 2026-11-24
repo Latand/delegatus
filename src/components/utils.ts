@@ -109,7 +109,7 @@ function modelBaseHex(file: FileEntry): string {
   const model = (file.model ?? "").toLowerCase();
   /* OpenClaw runs other vendors' models through its own provider layer, so no
      model-family table applies: its cards keep the flat engine identity. */
-  if (file.engine === "openclaw") return base;
+  if (file.engine === "openclaw" || file.engine === "antigravity") return base;
   for (const [re, color] of file.engine === "codex" ? CODEX_MODEL_COLORS : CLAUDE_MODEL_COLORS) {
     if (re.test(model)) return color;
   }
