@@ -19,6 +19,8 @@ export interface RuntimeEventStore {
   append(threadId: string, event: RuntimeEvent): void;
   /** Visit the validated prefix without retaining it; return its final cursor. */
   scan?(threadId: string, visit: (event: RuntimeEvent) => void): Promise<number>;
+  /** Canonical on-disk ledger file path when backed by files. */
+  ledgerPath?(threadId: string): string;
 }
 
 export interface RuntimeEventCursorRecoveryDiagnostic {
@@ -823,6 +825,10 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
   private readonly tails = new Map<string, { lastSeq: number; bytes: number }>();
 
   constructor(private readonly directory = statePath("structured-host-events")) {}
+
+  ledgerPath(threadId: string): string {
+    return this.filename(threadId);
+  }
 
   load(threadId: string): RuntimeEvent[] {
     const filename = this.filename(threadId);

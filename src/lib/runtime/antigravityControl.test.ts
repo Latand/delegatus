@@ -1072,9 +1072,29 @@ describe("Antigravity Slice 2 conversation control", () => {
 
       const proof = await readConfirmedSendEvidence(registry.readOnlySnapshot(), opId, true);
       expect(proof).toMatchObject({ source: "antigravity-ledger", sessionId });
-      expect(proof?.turnId).toBeTruthy();
+      const proofTurnId = proof?.turnId ?? "";
+      expect(proofTurnId).toBeTruthy();
 
       await host.release();
+
+      // Append 4,096 extra deliveries to the session ledger, adopt(), and verify BOTH
+      // readConfirmedSendEvidence and resolveSendReceipt resolve in O(1) with 0 ledger scans!
+      const recorded = eventStore.load(sessionId);
+      const turnEvents = recorded.filter((e) => "turnId" in e && e.turnId === proofTurnId);
+      expect(turnEvents.some((e) => e.kind === "item" && e.deliveryEcho?.operationId === opId)).toBe(true);
+      const extraLines: string[] = [];
+      let nextSeq = recorded.at(-1)!.seq;
+      for (let i = 0; i < 4096; i += 1) {
+        for (const ev of turnEvents) {
+          extraLines.push(
+            JSON.stringify({ ...ev, seq: ++nextSeq })
+              .replaceAll(proofTurnId, `handoff-later-turn-${i}`)
+              .replaceAll(opId, `handoff-later-op-${i}`),
+          );
+        }
+      }
+      fs.appendFileSync(path.join(stateDir, "structured-host-events", `${sessionId}.jsonl`), `${extraLines.join("\n")}\n`);
+
       host = await AntigravityAcpHost.adopt(sessionId, {
         cwd,
         antigravityHome,
@@ -1086,6 +1106,24 @@ describe("Antigravity Slice 2 conversation control", () => {
         signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
         spawnProcess: spawnFake,
       });
+
+      const scanCalls: number[] = [];
+      const origProtoScan = FileRuntimeEventStore.prototype.scan;
+      FileRuntimeEventStore.prototype.scan = async function scanSpy(sid, visit) {
+        let count = 0;
+        const result = await origProtoScan.call(this, sid, (ev) => { count += 1; visit(ev); });
+        scanCalls.push(count);
+        return result;
+      };
+      try {
+        const fastProof = await readConfirmedSendEvidence(registry.readOnlySnapshot(), opId, true);
+        expect(fastProof).toMatchObject({ source: "antigravity-ledger", sessionId, turnId: proof!.turnId });
+        const fastReceipt = await resolveSendReceipt(opId, { registry, client: inProcessClient });
+        expect(fastReceipt?.state).toBe("delivered");
+        expect(scanCalls).toEqual([]);
+      } finally {
+        FileRuntimeEventStore.prototype.scan = origProtoScan;
+      }
 
       const successor = new StructuredDeliveryQueue({
         ...journalPort(journal, "successor:2"),
@@ -1105,7 +1143,7 @@ describe("Antigravity Slice 2 conversation control", () => {
     }
   });
 
-  it("applies idle Antigravity reconfigure in place without restarting, rolls back on ACP refusal, and falls back to restart when unhosted", async () => {
+  it("applies idle Antigravity reconfigure in place without restarting, rolls back on partial ACP refusal (or restarts if rollback fails), and falls back to restart when unhosted", async () => {
     const sessionId = crypto.randomUUID();
     const eventStore = new FileRuntimeEventStore(path.join(stateDir, "structured-host-events"));
     const registry = new AgentRegistry(path.join(stateDir, "agent-registry.json"), undefined, undefined, {
@@ -1118,11 +1156,15 @@ describe("Antigravity Slice 2 conversation control", () => {
     let starts = 0;
     let resumes = 0;
     let releases = 0;
-    let rejectNextConfig = false;
+    let rejectConfigRule: ((configId: string, value: string) => boolean) | null = null;
+    const activeNative: { model: string | null; effort: string | null } = { model: null, effort: null };
+    const seenPromptSettings: Array<{ model: string | null; effort: string | null }> = [];
     const configCalls: Array<{ configId: string; value: string }> = [];
 
     const spawnFake = () => {
       starts += 1;
+      activeNative.model = null;
+      activeNative.effort = null;
       fake = makeFakeAcpChild((msg, api) => {
         const id = msg.id as number | undefined;
         const method = msg.method as string | undefined;
@@ -1131,13 +1173,17 @@ describe("Antigravity Slice 2 conversation control", () => {
         else if (method === "session/resume") { resumes += 1; api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } }); }
         else if (method === "session/set_config_option") {
           const params = msg.params as { configId: string; value: string };
-          if (rejectNextConfig) {
-            rejectNextConfig = false;
-            api.sendToHost({ jsonrpc: "2.0", id, error: { code: -32602, message: "unsupported model" } });
+          if (rejectConfigRule?.(params.configId, params.value)) {
+            api.sendToHost({ jsonrpc: "2.0", id, error: { code: -32602, message: `unsupported ${params.configId}` } });
             return;
           }
           configCalls.push({ configId: params.configId, value: params.value });
+          if (params.configId === "model") activeNative.model = params.value;
+          if (params.configId === "thought_level") activeNative.effort = params.value;
           api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+        } else if (method === "session/prompt" && id !== undefined) {
+          seenPromptSettings.push({ model: activeNative.model, effort: activeNative.effort });
+          api.sendToHost({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
         } else if (method === "session/close") api.sendToHost({ jsonrpc: "2.0", id, result: {} });
       });
       return fake.child;
@@ -1283,8 +1329,14 @@ describe("Antigravity Slice 2 conversation control", () => {
         { configId: "thought_level", value: "high" },
       ]);
 
-      // 2. Explicit ACP refusal on live idle host -> fails, rolls back launchProfile, 0 restarts!
-      rejectNextConfig = true;
+      // 2. Explicit ACP refusal on first option (`model`) -> fails, rolls back launchProfile, 0 restarts!
+      rejectConfigRule = (configId) => {
+        if (configId === "model") {
+          rejectConfigRule = null;
+          return true;
+        }
+        return false;
+      };
       const opBad = `op-reconf-bad-${crypto.randomUUID().slice(0, 8)}`;
       await admitReconfigure(opBad, "gemini-4-argon", "medium");
       await queue.drain({ freshAdmission: true });
@@ -1293,6 +1345,61 @@ describe("Antigravity Slice 2 conversation control", () => {
       expect(registry.conversation(convId)?.generations.at(-1)?.launchProfile).toMatchObject({ model: "gemini-4-neon", effort: "high" });
       expect(releases).toBe(0);
       expect(starts - startsBeforeLive).toBe(0);
+      await liveHost!.send({ id: "probe-after-model-refusal", text: "probe settings" });
+      await new Promise((r) => setTimeout(r, 25));
+      expect(seenPromptSettings.at(-1)).toEqual({ model: "gemini-4-neon", effort: "high" });
+
+      // 2b. Partial live-reconfigure refusal (`model` accepted, `thought_level` refused):
+      //     host rolls live ACP model + effort back to previous profile with 0 restarts so
+      //     the next prompt never drifts from the rolled-back registry profile.
+      rejectConfigRule = (configId, value) => {
+        if (configId === "thought_level" && value === "medium") {
+          rejectConfigRule = null;
+          return true;
+        }
+        return false;
+      };
+      const opPartial = `op-reconf-partial-${crypto.randomUUID().slice(0, 8)}`;
+      await admitReconfigure(opPartial, "gemini-3.8-flash", "medium");
+      await queue.drain({ freshAdmission: true });
+      expect(journal.operationResult(opPartial)?.receipt.status).toBe("failed");
+      expect(registry.conversation(convId)?.reconfigure?.status).toBe("failed");
+      expect(registry.conversation(convId)?.generations.at(-1)?.launchProfile).toMatchObject({ model: "gemini-4-neon", effort: "high" });
+      expect(releases).toBe(0);
+      expect(starts - startsBeforeLive).toBe(0);
+      expect({ model: activeNative.model, effort: activeNative.effort }).toEqual({ model: "gemini-4-neon", effort: "high" });
+      await liveHost!.send({ id: "probe-after-partial-rollback", text: "probe settings" });
+      await new Promise((r) => setTimeout(r, 25));
+      expect(seenPromptSettings.at(-1)).toEqual({ model: "gemini-4-neon", effort: "high" });
+
+      // 2c. Partial live-reconfigure where live rollback ALSO fails:
+      //     executor releases drifted host and recovers onto the rolled-back registry profile!
+      let rejectedEffortOnce = false;
+      rejectConfigRule = (configId, value) => {
+        if (configId === "thought_level" && value === "medium" && !rejectedEffortOnce) {
+          rejectedEffortOnce = true;
+          return true;
+        }
+        if (rejectedEffortOnce && configId === "model" && value === "gemini-4-neon") {
+          rejectConfigRule = null;
+          return true;
+        }
+        return false;
+      };
+      const releasesBeforeFallback = releases;
+      const resumesBeforeFallback = resumes;
+      const opRollbackFail = `op-reconf-rollback-fail-${crypto.randomUUID().slice(0, 8)}`;
+      await admitReconfigure(opRollbackFail, "gemini-3.8-flash", "medium");
+      await queue.drain({ freshAdmission: true });
+      expect(journal.operationResult(opRollbackFail)?.receipt.status).toBe("failed");
+      expect(registry.conversation(convId)?.reconfigure?.status).toBe("failed");
+      expect(registry.conversation(convId)?.generations.at(-1)?.launchProfile).toMatchObject({ model: "gemini-4-neon", effort: "high" });
+      expect(releases - releasesBeforeFallback).toBe(1);
+      expect(resumes - resumesBeforeFallback).toBe(1);
+      expect({ model: activeNative.model, effort: activeNative.effort }).toEqual({ model: "gemini-4-neon", effort: "high" });
+      await liveHost!.send({ id: "probe-after-rollback-restart", text: "probe settings" });
+      await new Promise((r) => setTimeout(r, 25));
+      expect(seenPromptSettings.at(-1)).toEqual({ model: "gemini-4-neon", effort: "high" });
 
       // 3. Stopped / unhosted conversation -> falls back to recovery with session/resume!
       await liveHost!.release();
@@ -1314,6 +1421,7 @@ describe("Antigravity Slice 2 conversation control", () => {
         },
       });
       const startsBeforeRestart = starts;
+      const resumesBeforeRestart = resumes;
       configCalls.length = 0;
       const opRestart = `op-reconf-restart-${crypto.randomUUID().slice(0, 8)}`;
       await admitReconfigure(opRestart, "gemini-4-argon", "medium");
@@ -1321,7 +1429,7 @@ describe("Antigravity Slice 2 conversation control", () => {
       expect(journal.operationResult(opRestart)?.receipt).toMatchObject({ status: "applied" });
       expect(registry.conversation(convId)?.generations.at(-1)?.launchProfile).toMatchObject({ model: "gemini-4-argon", effort: "medium" });
       expect(starts - startsBeforeRestart).toBe(1);
-      expect(resumes).toBe(1);
+      expect(resumes - resumesBeforeRestart).toBe(1);
     } finally {
       if (liveHost) await liveHost.release();
       registry.close();

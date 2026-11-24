@@ -976,8 +976,31 @@ describe("AntigravityAcpHost", () => {
     expect(scanVisits).toBe(0);
     expect(loadCalls).toBe(0);
 
-    // Second SQLite connection sees committed indexed rows immediately without lock contention.
+    // Receipt confirmation reader (`readAntigravityConfirmedDelivery`) MUST also use O(1) SQLite point reads
+    // (0 ledger scans, 0 full loads) for both accepted and absent IDs when the index fingerprint matches,
+    // and fall back cleanly to the canonical JSONL ledger on busy DB or external ledger modification.
+    const { readAntigravityConfirmedDelivery } = await import("./antigravityAcpHost");
+    const confirmedAccepted = await readAntigravityConfirmedDelivery(retentionSessionId, firstEntry.id, { eventStore: baseEventStore });
+    expect(confirmedAccepted?.turnId).toBe(firstTurnId);
+    const confirmedAbsent = await readAntigravityConfirmedDelivery(retentionSessionId, "edge-never-sent", { eventStore: baseEventStore });
+    expect(confirmedAbsent).toBeNull();
+    expect(scanVisits).toBe(0);
+    expect(loadCalls).toBe(0);
+
+    // Concurrent WAL writer (`BEGIN IMMEDIATE`) neither blocks nor forces a full scan.
     const { Database } = await import("bun:sqlite");
+    const lockerDb = new Database(path.join(antigravityHome, "delivery-acceptance.sqlite"));
+    try {
+      lockerDb.exec("BEGIN IMMEDIATE");
+      const walConcurrent = await readAntigravityConfirmedDelivery(retentionSessionId, firstEntry.id, { eventStore: baseEventStore });
+      expect(walConcurrent?.turnId).toBe(firstTurnId);
+      expect(scanVisits).toBe(0);
+    } finally {
+      try { lockerDb.exec("ROLLBACK"); } catch { /* ignore */ }
+      lockerDb.close();
+    }
+
+    // Second SQLite connection sees committed indexed rows immediately without lock contention.
     const readerDb = new Database(path.join(antigravityHome, "delivery-acceptance.sqlite"), { readonly: true });
     try {
       const rowFirst = readerDb.query<{ state: string; turn_id: string }, [string, string]>(
@@ -1071,6 +1094,35 @@ describe("AntigravityAcpHost", () => {
       .filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === firstEntry.id);
     expect(echoesForFirst).toHaveLength(1);
     await host.release();
+
+    // External ledger append after release invalidates the stored fingerprint and forces
+    // canonical JSONL fallback so the newly appended acceptance is observed accurately.
+    const externalId = "edge-external-after-index";
+    const externalTurn = "antigravity:external-turn";
+    const latestSeq = baseEventStore.load(retentionSessionId).at(-1)!.seq;
+    fs.appendFileSync(
+      path.join(stateDir, "runtime-events-edge", `${retentionSessionId}.jsonl`),
+      `${JSON.stringify({
+        seq: latestSeq + 1,
+        kind: "item",
+        turnId: externalTurn,
+        phase: "completed",
+        item: { type: "userMessage", content: [{ type: "text", text: "external" }] },
+        deliveryEcho: { operationId: externalId, acceptedAt: new Date().toISOString() },
+      })}\n`,
+    );
+    let fallbackScansAfterExternal = 0;
+    baseEventStore.scan = async (session, visit) => origScan(session, (event) => {
+      fallbackScansAfterExternal += 1;
+      visit(event);
+    });
+    try {
+      const externalProof = await readAntigravityConfirmedDelivery(retentionSessionId, externalId, { eventStore: baseEventStore });
+      expect(externalProof?.turnId).toBe(externalTurn);
+      expect(fallbackScansAfterExternal).toBeGreaterThan(0);
+    } finally {
+      baseEventStore.scan = origScan;
+    }
   });
 
   it("bases delivery acceptance on ACP's actual response when interrupt races end_turn, and keeps release-mid-prompt unavailable", async () => {

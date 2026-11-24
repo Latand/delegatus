@@ -43,6 +43,14 @@ class AntigravityLiveReconfigureRefusedError extends Error {
   }
 }
 
+class AntigravityLiveReconfigureRollbackError extends Error {
+  readonly rollbackFailed = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "AntigravityLiveReconfigureRollbackError";
+  }
+}
+
 const liveReconfigureHostStorage = new AsyncLocalStorage<EngineHost | null>();
 
 /** Binds the currently resolved live host for an in-flight reconfigure call so
@@ -124,9 +132,13 @@ async function reconfigureIdleHostInstance(
     await host.reconfigure(settings);
     return true;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if ((error as Error & { rollbackFailed?: unknown }).rollbackFailed === true) {
+      throw new AntigravityLiveReconfigureRollbackError(message);
+    }
     const rpcCode = (error as Error & { rpcCode?: unknown }).rpcCode;
     if (typeof rpcCode === "number") {
-      throw new AntigravityLiveReconfigureRefusedError(error instanceof Error ? error.message : String(error));
+      throw new AntigravityLiveReconfigureRefusedError(message);
     }
     return false;
   }
@@ -543,6 +555,22 @@ export async function applyStructuredReconfigure(
       }
     } catch (error) {
       if (settledElsewhere(error) || registryBusy(error)) throw error;
+      const rollbackFailed = error instanceof AntigravityLiveReconfigureRollbackError
+        || (error as Error & { rollbackFailed?: unknown })?.rollbackFailed === true;
+      if (rollbackFailed) {
+        await settle("failed", error);
+        const custody = captureReleasedHostCustody(registry, key);
+        await release(key);
+        await terminateReleasedHost(registry, key, conversationId, custody, (current) =>
+          current?.reconfigure?.operationId === effect.operationId
+          && current.reconfigure.revision === effect.eventSeq
+          && current.reconfigure.status === "failed");
+        await recover({ path: generation.path, conversationId }, {
+          registry,
+          ownership: recoveryOwnership("failed"),
+        }).catch(() => null);
+        throw error;
+      }
       const rpcCode = (error as Error & { rpcCode?: unknown })?.rpcCode;
       if (error instanceof AntigravityLiveReconfigureRefusedError || typeof rpcCode === "number") {
         await settle("failed", error);

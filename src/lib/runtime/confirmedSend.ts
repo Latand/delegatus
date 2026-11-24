@@ -129,7 +129,9 @@ export async function readConfirmedSendEvidence(file: RegistryFile, operationId:
     if (owner.batchId) return null;
     try {
       const { readAntigravityConfirmedDelivery } = await import("./antigravityAcpHost");
-      const proof = await readAntigravityConfirmedDelivery(generation.id, operationId);
+      const proof = await readAntigravityConfirmedDelivery(generation.id, operationId, {
+        artifactPath: generation.path,
+      });
       return proof ? { source: "antigravity-ledger", turnId: proof.turnId, sessionId: generation.id } : null;
     } catch {
       return null;
