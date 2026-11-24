@@ -5144,37 +5144,44 @@ describe("mergeBoundaryReview", () => {
   const otherMailbox = [squashAuthor.email.split("@")[0], "fixture-publication.dev"].join("@");
   const squashTrailer = `Co-authored-by: ${squashAuthor.name} <${squashAuthor.email}>`;
   const squashMessage = `Squash subject\n\n* Original subject\n\n---\n\n${squashTrailer}`;
+  const squashEvidence = (landed: string, addresses = [squashAuthor.email]) =>
+    ({ signedCommits: [landed], squashAddresses: { [landed]: addresses } });
+  const runLandedGate = (repo: string, evidence: unknown) => runPrivacyTestProcess({
+    cmd: [process.execPath, "-e", `
+      import { runPublicationGate } from "./scripts/privacy-publication-gate";
+      const [repository, evidence] = process.argv.slice(1);
+      runPublicationGate(["--repository", repository, "--base", "main", "--check-commits"], JSON.parse(evidence));
+    `, repo, JSON.stringify(evidence)],
+    cwd: join(import.meta.dir, ".."), env: process.env, stderr: "pipe", stdout: "pipe",
+  });
 
-  test("landed squash evidence exempts only the exact tip's trailer for a recorded PR address", async () => {
+  test("landed squash evidence exempts only the verified commit's trailer for a recorded PR address", async () => {
     const repo = await gitRepo();
     await commit(repo, squashMessage, canonicalIdentity);
-    const evidence = { tip: await head(repo), squashAddresses: [squashAuthor.email] };
+    const landed = await head(repo);
+    const evidence = squashEvidence(landed);
     expect(commitMessageFindings(repo, "main", [], evidence)).toEqual(new Map());
     expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
-    expect(commitMessageFindings(repo, "main", [], { tip: evidence.tip }).get("email_address")).toBe(1);
-    expect(commitMessageFindings(repo, "main", [], { ...evidence, tip: "1".repeat(40) }).get("email_address")).toBe(1);
+    expect(commitMessageFindings(repo, "main", [], { signedCommits: [landed] }).get("email_address")).toBe(1);
+    expect(commitMessageFindings(repo, "main", [], squashEvidence("1".repeat(40))).get("email_address")).toBe(1);
 
     writeFileSync(join(repo, "published.txt"), squashAuthor.email + "\n");
     await commit(repo, squashMessage, canonicalIdentity);
-    const nextTip = { ...evidence, tip: await head(repo) };
+    const next = await head(repo);
+    const nextTip = { ...evidence, signedCommits: [next, landed] };
     expect(commitMessageFindings(repo, "main", [], nextTip).get("email_address")).toBe(1);
     const ordinary = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
     expect(ordinary.exitCode).toBe(1);
     expect(ordinary.stdout.toString()).toContain("email_address: 3");
 
-    const landed = await runPrivacyTestProcess({
-      cmd: [process.execPath, "-e", `
-        import { runPublicationGate } from "./scripts/privacy-publication-gate";
-        const [repository, evidence] = process.argv.slice(1);
-        runPublicationGate(["--repository", repository, "--base", "main", "--check-commits"], JSON.parse(evidence));
-      `, repo, JSON.stringify(nextTip)],
-      cwd: join(import.meta.dir, ".."), env: process.env, stderr: "pipe", stdout: "pipe",
-    });
-    expect(landed.exitCode).toBe(1);
-    expect(landed.stdout.toString()).toContain("email_address: 2");
-    expect(landed.stdout.toString()).toContain(`commit_message: ${evidence.tip.slice(0, 12)} message email_address`);
-    expect(landed.stdout.toString()).not.toContain(nextTip.tip.slice(0, 12));
-    expect(landed.stdout.toString()).not.toContain(squashAuthor.email);
+    const gate = await runLandedGate(repo, nextTip);
+    expect(gate.exitCode).toBe(1);
+    expect(gate.stdout.toString()).toContain("email_address: 2");
+    /* The evidence names the first squash only; the next commit carries the
+       same trailer and the address in a file, and both stay attributable. */
+    expect(gate.stdout.toString()).toContain(`commit_message: ${next.slice(0, 12)} message email_address`);
+    expect(gate.stdout.toString()).not.toContain(landed.slice(0, 12));
+    expect(gate.stdout.toString()).not.toContain(squashAuthor.email);
   });
 
   test("a recorded PR address passes under any trailer name", async () => {
@@ -5183,7 +5190,7 @@ describe("mergeBoundaryReview", () => {
        the address GitHub would compose from the pull request's commits. */
     const repo = await gitRepo();
     await commit(repo, squashMessage.replace(squashAuthor.name, "Another Contributor"), canonicalIdentity);
-    const evidence = { tip: await head(repo), squashAddresses: [squashAuthor.email] };
+    const evidence = squashEvidence(await head(repo));
     expect(commitMessageFindings(repo, "main", [], evidence)).toEqual(new Map());
   });
 
@@ -5199,10 +5206,11 @@ describe("mergeBoundaryReview", () => {
   ])("landed squash evidence leaves %s attributable", async (_case, message) => {
     const repo = await gitRepo();
     await commit(repo, message, canonicalIdentity);
-    const evidence = { tip: await head(repo), squashAddresses: [squashAuthor.email, otherMailbox] };
+    const landed = await head(repo);
+    const evidence = squashEvidence(landed, [squashAuthor.email, otherMailbox]);
     const notices: string[] = [];
     expect(commitMessageFindings(repo, "main", notices, evidence)).toEqual(new Map([["email_address", 1]]));
-    expect(notices).toEqual([`commit_message: ${evidence.tip.slice(0, 12)} message email_address`]);
+    expect(notices).toEqual([`commit_message: ${landed.slice(0, 12)} message email_address`]);
   });
 
   test.each([
@@ -5217,20 +5225,72 @@ describe("mergeBoundaryReview", () => {
     const message = `Squash subject\n\nBody prose\n${separator}\n${squashTrailer}`;
     const repo = await gitRepo();
     await commit(repo, message, canonicalIdentity);
-    const evidence = { tip: await head(repo), squashAddresses: [squashAuthor.email] };
+    const evidence = squashEvidence(await head(repo));
     expect(await identityField(repo, "%(trailers:key=Co-authored-by,valueonly)") !== "").toBe(composed);
     expect(commitMessageFindings(repo, "main", [], evidence).get("email_address")).toBe(composed ? undefined : 1);
 
-    const gate = await runPrivacyTestProcess({
-      cmd: [process.execPath, "-e", `
-        import { runPublicationGate } from "./scripts/privacy-publication-gate";
-        const [repository, evidence] = process.argv.slice(1);
-        runPublicationGate(["--repository", repository, "--base", "main", "--check-commits"], JSON.parse(evidence));
-      `, repo, JSON.stringify(evidence)],
-      cwd: join(import.meta.dir, ".."), env: process.env, stderr: "pipe", stdout: "pipe",
-    });
+    const gate = await runLandedGate(repo, evidence);
     expect(gate.exitCode).toBe(composed ? 0 : 1);
     expect(gate.stdout.toString()).not.toContain(squashAuthor.email);
+  });
+
+  const cutLine = "# ------------------------ >8 ------------------------";
+  test.each([
+    ["between body prose and the trailer, as its own paragraph", `Squash subject\n\nBody prose\n\n${cutLine}\n\n${squashTrailer}`, false, 1],
+    ["inside the paragraph before the trailer", `Squash subject\n\nBody prose\n${cutLine}\n${squashTrailer}`, false, 1],
+    ["after the trailer block", `Squash subject\n\nBody prose\n\n${squashTrailer}\n${cutLine}`, true, undefined],
+    ["between a trailer block and the same trailer", `Squash subject\n\n${squashTrailer}\n\n${cutLine}\n\n${squashTrailer}`, true, 1],
+    ["under another comment character", `Squash subject\n\nBody prose\n\n; ${cutLine.slice(2)}\n\n${squashTrailer}`, true, 1],
+  ])("a recorded trailer and git's cut line %s follow git's own trailer parse", async (_case, message, gitTrailer, finding) => {
+    /* Git stops reading trailers at its scissors line, so nothing after the cut
+       is a trailer whatever its shape. A cut line written with a character the
+       checkout may or may not be configured to comment with grants nothing. */
+    const repo = await gitRepo();
+    await commit(repo, message, canonicalIdentity);
+    const evidence = squashEvidence(await head(repo));
+    expect(await identityField(repo, "%(trailers:key=Co-authored-by,valueonly)") !== "").toBe(gitTrailer);
+    expect(commitMessageFindings(repo, "main", [], evidence).get("email_address")).toBe(finding);
+    const gate = await runLandedGate(repo, evidence);
+    expect(gate.exitCode).toBe(finding ? 1 : 0);
+    expect(gate.stdout.toString()).not.toContain(squashAuthor.email);
+  });
+
+  test("each verified squash of a stack landed in one push keeps its own PR's evidence", async () => {
+    const second = { name: "Second Contributor", email: ["78+second-contributor", forgeAccountDomain].join("@") };
+    const secondTrailer = `Co-authored-by: ${second.name} <${second.email}>`;
+    const repo = await gitRepo();
+    await commitWithIdentities(repo, squashMessage, canonicalIdentity, forgeWebFlowIdentity);
+    const first = await head(repo);
+    await commitWithIdentities(repo, squashMessage, canonicalIdentity, forgeWebFlowIdentity);
+    const neighbour = await head(repo);
+    await commitWithIdentities(repo, `Second squash\n\n* Its commit\n\n---\n\n${secondTrailer}`, canonicalIdentity, forgeWebFlowIdentity);
+    const tip = await head(repo);
+    const both = {
+      signedCommits: [tip, first],
+      squashAddresses: { [first]: [squashAuthor.email], [tip]: [second.email] },
+    };
+
+    const notices: string[] = [];
+    expect(commitMessageFindings(repo, "main", notices, both)).toEqual(new Map([["email_address", 1]]));
+    expect(notices).toEqual([`commit_message: ${neighbour.slice(0, 12)} message email_address`]);
+    const gate = await runLandedGate(repo, both);
+    expect(gate.exitCode).toBe(1);
+    expect(gate.stdout.toString()).toBe(
+      "PRIVACY GATE: FAIL\nemail_address: 2\n"
+      + `commit_message: ${neighbour.slice(0, 12)} message email_address\n`
+      + `merge_boundary: ${neighbour.slice(0, 12)} committer identity composes an attributable `
+      + "Co-authored-by trailer (address withheld)\n",
+    );
+
+    /* One pull request's identities never cover another squash's trailer. */
+    const crossed = { ...both, squashAddresses: { [first]: [second.email], [tip]: [squashAuthor.email] } };
+    expect(commitMessageFindings(repo, "main", [], crossed).get("email_address")).toBe(3);
+
+    const verified = { ...both, signedCommits: [...both.signedCommits, neighbour],
+      squashAddresses: { ...both.squashAddresses, [neighbour]: [squashAuthor.email] } };
+    const passing = await runLandedGate(repo, verified);
+    expect(passing.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    expect(passing.exitCode).toBe(0);
   });
 
   test("an invisible non-git separator keeps a machine trailer in body prose", () => {
@@ -5425,12 +5485,12 @@ describe("mergeBoundaryReview", () => {
     await commitWithIdentities(repo, "fixture change", canonicalIdentity, forgeWebFlowIdentity);
     const landed = await head(repo);
     expect(mergeBoundaryReview(repo, "main").findings.get("email_address")).toBe(1);
-    expect(mergeBoundaryReview(repo, "main", landed).findings.size).toBe(0);
-    expect(mergeBoundaryReview(repo, "main", "a".repeat(40)).findings.get("email_address")).toBe(1);
+    expect(mergeBoundaryReview(repo, "main", [landed]).findings.size).toBe(0);
+    expect(mergeBoundaryReview(repo, "main", ["a".repeat(40)]).findings.get("email_address")).toBe(1);
     const person = ["fixture", "private.dev"].join("@");
     await commitWithIdentities(repo, "fixture change", { name: "Fixture", email: person }, forgeWebFlowIdentity);
     const next = await head(repo);
-    expect(mergeBoundaryReview(repo, landed, next).findings.get("email_address")).toBe(1);
+    expect(mergeBoundaryReview(repo, landed, [next]).findings.get("email_address")).toBe(1);
   });
 
   test.concurrent("a message with a real-looking address still fails behind a forge merge, and is named", async () => {
