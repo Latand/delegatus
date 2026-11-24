@@ -1,7 +1,6 @@
+import type { ViewerOperation } from "./viewerLoopMonitor";
 import { requestWorkload } from "./requestWorkload";
 import { readAttribution } from "./readAttribution";
-import { registryReadCallSite } from "./blockingWaits";
-import type { ViewerOperation } from "./viewerLoopMonitor";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { awaitLeasedOperation } from "./operationLease";
@@ -37,20 +36,11 @@ export const performanceSites = [
   "state.copy",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
-/** One keyed read. Only a selected slow read receives a stack collector. */
-export interface RegistryReadCaller {
-  operation?: ViewerOperation;
-  sample?: (stack: () => string | undefined) => void;
-}
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";
-  start: number; end: number; count: number; totalMs: number; maxMs: number; rows: number; bytes: number; failed: boolean; correlation?: string; requestClass?: string;
-  // A sampled call site belongs only to this read. Unsampled work has no call site.
-  registryOperation?: ViewerOperation; registryCallSite?: string };
+  start: number; end: number; count: number; totalMs: number; maxMs: number; rows: number; bytes: number; failed: boolean; correlation?: string; requestClass?: string; registryOperation?: ViewerOperation };
 const siteIds = new Map(performanceSites.map((site, index) => [site, index]));
 const capacity = 1024;
 const requestCapacity = 256;
-const slowKeyedReadMs = 2;
-const keyedReadSamplesPerSecond = 8;
 const monotonicNow = performance.now.bind(performance);
 
 export function createPerformanceSpans(now = monotonicNow) {
@@ -61,9 +51,6 @@ export function createPerformanceSpans(now = monotonicNow) {
   let cursor = 0;
   let sequence = 0, spans = 0, dropped = 0, droppedMs = 0, pending = 0;
   let enabled = true;
-  // Reserve stack and filesystem work for slow reads without a more specific owner.
-  // Charge the budget before touching the stack, including unresolved or failed samples.
-  let registrySampleWindow = -Infinity, registrySamples = 0;
   let currentSite = -1, currentSpan = 0;
   let observeSite: ((site: number) => void) | undefined;
   const requests = new Map<string, { id: string; method: "snapshot" | "append" | "wait" | "files" | "health" | "other";
@@ -78,8 +65,7 @@ export function createPerformanceSpans(now = monotonicNow) {
     // separately from the enclosing interval, which can include a suspension.
     if (previous && record.kind === "sync" && previous.kind === "sync" && record.maxMs < 1 && previous.maxMs < 1
       && previous.site === record.site && previous.parent === record.parent && previous.correlation === record.correlation && previous.requestClass === record.requestClass
-      && previous.registryOperation === record.registryOperation
-      && record.start - previous.end < 0.1) {
+      && previous.registryOperation === record.registryOperation && record.start - previous.end < 0.1) {
       previous.end = record.end; previous.count++; previous.totalMs += record.totalMs;
       previous.maxMs = Math.max(previous.maxMs, record.maxMs); previous.rows += record.rows; previous.bytes += record.bytes;
       previous.failed ||= record.failed;
@@ -104,40 +90,20 @@ export function createPerformanceSpans(now = monotonicNow) {
     requestClass: requestWorkload.label(),
     ...(correlations.getStore() ? { correlation: correlations.getStore() } : {}),
   });
-  const finish = (record: Slice, caller?: RegistryReadCaller) => {
-    record.end = now();
-    record.totalMs = record.maxMs = record.end - record.start;
-    if (caller && record.totalMs >= slowKeyedReadMs) {
-      if (record.end - registrySampleWindow >= 1000) {
-        registrySampleWindow = record.end;
-        registrySamples = 0;
-      }
-      if (registrySamples < keyedReadSamplesPerSecond) {
-        registrySamples++;
-        caller.sample = stack => {
-          try { record.registryCallSite = registryReadCallSite(stack()); }
-          catch { record.registryCallSite = "unresolved"; }
-        };
-      }
-    }
-    add(record);
-  };
+  const finish = (record: Slice) => { record.end = now(); record.totalMs = record.maxMs = record.end - record.start; add(record); };
   const { delegatusPerformanceSync: sync } = {
-    delegatusPerformanceSync<T>(site: PerformanceSite, work: () => T, rows = 0, bytes = 0,
-      keyedCaller?: RegistryReadCaller): T {
+    delegatusPerformanceSync<T>(site: PerformanceSite, work: () => T, rows = 0, bytes = 0, operation?: ViewerOperation): T {
       if (!enabled) return work();
       const record = begin(site, "sync", rows, bytes);
-      const caller = site === "registry.keyed" && !record.requestClass ? keyedCaller : undefined;
-      if (caller?.operation && caller.operation !== "registry.read") record.registryOperation = caller.operation;
+      if (site === "registry.keyed" && !record.requestClass && operation && operation !== "registry.read") {
+        record.registryOperation = operation;
+      }
       const parentSite = currentSite, parentSpan = currentSpan;
       currentSpan = record.span;
       currentSite = record.site; observeSite?.(currentSite);
       // A synchronous stack has no async context allocation per row.
       try { return readAttribution.sync(site, work, 0, site === "runtime.parse" ? bytes : 0, site !== "state.json" && site !== "runtime.parse"); } catch (error) { record.failed = true; throw error; }
-      finally {
-        finish(record, record.registryOperation ? undefined : caller);
-        currentSpan = parentSpan; currentSite = parentSite; observeSite?.(currentSite);
-      }
+      finally { finish(record); currentSpan = parentSpan; currentSite = parentSite; observeSite?.(currentSite); }
     },
   };
   const recorder = {

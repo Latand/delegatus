@@ -379,15 +379,15 @@ function relativeVerifiedCallSite(rawFramePath: string): string | null {
   return `${rel}${coordSuffix}`;
 }
 
-function collectVerifiedCallSite(stack: string | undefined, fallback: "unresolved" | "external", maxFrames = 8, lineLimit?: number): string {
+function collectVerifiedCallSite(stack: string | undefined, fallback: "unresolved" | "external"): string {
   const locations: string[] = [];
-  for (const frame of stack?.split("\n", lineLimit).slice(1) ?? []) {
+  for (const frame of stack?.split("\n").slice(1) ?? []) {
     const rawLocation = frame.trim().match(/\(?((?:file:\/\/)?[^\s()]+?\.[cm]?[jt]sx?:\d+:\d+)\)?$/)?.[1];
     if (!rawLocation) continue;
     const location = relativeVerifiedCallSite(rawLocation);
     if (!location || /(?:blockingWaits|sqliteRegistryStore|agent\/registry|state\/fileTransaction)\.[cm]?[jt]sx?:/.test(location)) continue;
     locations.push(location);
-    if (locations.length === maxFrames) break;
+    if (locations.length === 8) break;
   }
   // Bundled helpers share one chunk: retain the caller frames as well as the
   // first coordinate so that its minified name cannot hide the write's origin.
@@ -399,15 +399,6 @@ function collectVerifiedCallSite(stack: string | undefined, fallback: "unresolve
  * Capture only on the slow path; ordinary registry writes allocate no stack. */
 export function registryWaitCallSite(stack: string | undefined): string {
   return collectVerifiedCallSite(stack, "unresolved");
-}
-
-/** Many keyed reads can appear in one gap report. Bound each sampled chain separately. */
-export function registryReadCallSite(stack: string | undefined): string {
-  // Inspect at most twelve source frames, even if the runtime stack limit was raised.
-  const chain = collectVerifiedCallSite(stack?.slice(0, 4096), "unresolved", 4, 13);
-  if (chain.length <= 256) return chain;
-  const boundary = chain.lastIndexOf(" <- ", 256);
-  return boundary > 0 ? chain.slice(0, boundary) : "unresolved";
 }
 
 /** Repo-relative caller coordinates for file-transaction waits; frames outside
