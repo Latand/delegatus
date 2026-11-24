@@ -24,7 +24,7 @@ import { createViewerMcpServer, createMcpToolService, SqliteMcpReceiptStore, req
   type McpToolArgs, type McpToolService, type McpToolResult, type McpReceiptStore } from "./server";
 import { withWorkspaceMcpFence } from "./workspaceFence";
 import { McpPageCursorStore } from "./pageCursors";
-import { BoardSelection } from "./boardSelection";
+import { BoardSelection, boardSelection } from "./boardSelection";
 import { LIST_ANSWER_BYTES } from "./listAnswers";
 import { deferredTaskPage, indexedTaskPage } from "./taskListPage";
 
@@ -701,6 +701,42 @@ test("list_pipelines pages through active and archived lanes with one order and 
   expect(await h.call("list_pipelines", { project: OWN, full: false })).toMatchObject({
     ok: true, total: 1, count: 1, hasMore: false, nextCursor: null, pipelines: [{ id: older.id }],
   });
+});
+
+test("includeClosed project index bootstrap reads only that project's archive metadata", async () => {
+  const h = await harness(); h.indexed();
+  const lanes = Array.from({ length: 40 }, (_, index) => {
+    const project = index === 0 ? OWN : FOREIGN;
+    const row = buildPipeline({ id: `bounded-archive-${String(index).padStart(2, "0")}`, project,
+      task: `Archived ${index}`, repoDir: h.folder, stages: [], state: "closed", srcPath: null, srcConversationId: null,
+      now: new Date(Date.parse(AT) + index * 1000).toISOString() });
+    row.closedAt = AT; row.cursor = null;
+    return row;
+  });
+  savePipelines(lanes);
+  expect(await archiveSettledPipelines(Date.parse(AT) + 4 * 24 * 60 * 60 * 1000)).toBe(40);
+  const source = h.domain.pipelineSelectionSource!(true)!;
+  const index = boardSelection(source.filename, "pipelines", true);
+  const before = index.work.metadataRows;
+  const result = await h.call("list_pipelines", { project: OWN, includeClosed: true, limit: 1, full: false });
+  expect(result).toMatchObject({ ok: true, total: 1, pipelines: [{ id: "bounded-archive-00" }] });
+  expect(index.work.metadataRows - before).toBeLessThanOrEqual(3);
+});
+
+test("PR reference projection is reused across page lookups and invalidated by a collection write", async () => {
+  const h = await harness();
+  const first = buildPipeline({ id: "pr-cache-first", project: OWN, task: "PR #2800", repoDir: h.folder,
+    stages: [], state: "draft", srcPath: null, srcConversationId: null, now: AT });
+  savePipelines([first]);
+  const source = productionDomainDependencies.pipelineSelectionSource!(true)!;
+  const index = boardSelection(source.filename, "pipelines", true);
+  const warm = index.referenceRecords(source, OWN);
+  expect(index.referenceRecords(source, OWN)).toBe(warm);
+
+  const second = buildPipeline({ id: "pr-cache-second", project: OWN, task: "PR #2801", repoDir: h.folder,
+    stages: [], state: "draft", srcPath: null, srcConversationId: null, now: AT });
+  savePipelines([first, second]);
+  expect(index.referenceRecords(source, OWN).map(row => (row as { id: string }).id).sort()).toEqual([first.id, second.id]);
 });
 
 for (const workspace of [false, true]) for (const spelling of ["outer-alias", "legacy_board", "repo-33333333", "Historic Board"]) {

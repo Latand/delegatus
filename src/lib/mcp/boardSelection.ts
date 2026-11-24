@@ -27,6 +27,8 @@ export class BoardSelection {
   private db: Database;
   private readonly collections: readonly string[];
   private readonly revisions = new Map<string, number>();
+  private readonly referenceCache = new Map<string, { revision: string; rows: unknown[] }>();
+  private indexedProject = "";
   readonly work = { metadataRows: 0, recordReads: 0, rebuilds: 0 };
   constructor(private filename: string, private collection: "tasks" | "pipelines" | "flows",
     private projects: ProjectSelection = defaultProjects, includeArchivedPipelines = false) {
@@ -44,7 +46,7 @@ export class BoardSelection {
       CREATE INDEX links_pipeline ON links(pipeline);`);
   }
   close() { this.db.close(); }
-  private metadataSql() {
+  private metadataSql(projects: readonly string[] = []) {
     const task = this.collection === "tasks";
     return `SELECT json_extract(value_json,'$.id') AS id,
       json_extract(value_json,'$.${task ? "updatedAt" : "createdAt"}') AS time,
@@ -55,7 +57,12 @@ export class BoardSelection {
       (json_extract(value_json,'$.${this.collection === "flows" ? "closedAt" : "hiddenAt"}') IS NOT NULL) AS hidden,
       ${this.collection === "flows" ? "''" : `json_extract(value_json,'$.${task ? "text" : "task"}')`} AS text,
       COALESCE(json_extract(value_json,'$.taskIds'),'[]') AS links
-      FROM state_rows WHERE collection = ? ${task ? "AND row_key GLOB 't:*'" : ""}`;
+      FROM state_rows WHERE collection = ? ${task ? "AND row_key GLOB 't:*'" : ""}
+      AND json_type(value_json,'$.id')='text'
+      AND json_type(value_json,'$.project')='text'
+      AND json_type(value_json,'$.${task ? "updatedAt" : "createdAt"}')='text'
+      ${this.collection === "pipelines" ? "AND json_type(value_json,'$.task')='text' AND length(json_extract(value_json,'$.task'))>0 AND json_extract(value_json,'$.state') IN ('draft','provisioning','running','paused','needs_decision','needs_review','completed','closed')" : ""}
+      ${projects.length ? `AND json_extract(value_json,'$.project') IN (${projects.map(() => "?").join(",")})` : ""}`;
   }
   private remove(id: string) {
     this.db.query("DELETE FROM rows WHERE id=?").run(id);
@@ -72,7 +79,7 @@ export class BoardSelection {
       this.db.query("INSERT OR IGNORE INTO links VALUES (?,?)").run(task, row.id);
     }
   }
-  sync(snapshot?: Database | null) {
+  sync(snapshot?: Database | null, project = "") {
     const Database = sqliteDatabase();
     const source = snapshot ?? observeSqlite(new Database(this.filename, { readonly: true }), "board-selection");
     try {
@@ -81,24 +88,26 @@ export class BoardSelection {
       const readChanges = source.query<{ row_key: string }, [string, number, number]>(
         "SELECT DISTINCT row_key FROM state_changes WHERE collection=? AND revision>? AND revision<=?"
       );
+      const projectChanged = this.collection === "pipelines" && this.collections.length > 1 && this.indexedProject !== project;
       const updates = this.collections.flatMap(collection => {
         const meta = readMeta.get(collection);
         if (!meta) throw new Error(`missing ${collection} collection`);
         const previous = this.revisions.get(collection) ?? -1;
-        if (meta.revision === previous) return [];
+        if (meta.revision === previous && !projectChanged) return [];
         const reset = previous < 0 || previous > meta.revision || previous < meta.change_floor;
         const changes = reset ? [] : readChanges.all(collection, previous, meta.revision);
-        return [{ collection, revision: meta.revision, changes }];
+        return [{ collection, revision: meta.revision, changes: projectChanged ? [] : changes }];
       });
       if (!updates.length) return;
       this.db.transaction(() => {
         if (updates.some(update => !update.changes.length)) {
           this.work.rebuilds++;
           this.db.exec("DELETE FROM rows; DELETE FROM terms; DELETE FROM links;");
-          const readRows = source.query<Metadata, [string]>(this.metadataSql());
+          const projectKeys = project ? [project, ...Object.keys(this.projects.aliases()).filter(key => this.projects.canonical(key) === project)] : [];
+          const readRows = source.query<Metadata, SQLQueryBindings[]>(this.metadataSql(projectKeys));
           // Active rows take precedence, as they do in the by-id reader.
           for (const collection of [...this.collections].reverse()) {
-            for (const row of readRows.iterate(collection)) this.put(row, source);
+            for (const row of readRows.iterate(collection, ...projectKeys)) this.put(row, source);
           }
         } else {
           const changedKeys = new Set(updates.flatMap(update => update.changes.map(change => change.row_key)));
@@ -118,6 +127,7 @@ export class BoardSelection {
         }
       })();
       for (const update of updates) this.revisions.set(update.collection, update.revision);
+      if (this.collections.length > 1) this.indexedProject = project;
     } finally { if (!snapshot) source.close(); }
   }
   links(task: string): string[] {
@@ -157,6 +167,12 @@ export class BoardSelection {
     const database = source.database ?? observeSqlite(new Database(this.filename, { readonly: true }), "board-selection");
     try {
       const projects = project ? [project, ...Object.keys(this.projects.aliases()).filter(key => this.projects.canonical(key) === project)] : [];
+      const cacheKey = `${project}\0${ids?.join("\0") ?? "*"}`;
+      const revision = database.query<{ collection: string; revision: number }, []>(
+        `SELECT collection,revision FROM state_collections WHERE collection IN (${this.collections.map(() => "?").join(",")}) ORDER BY collection`
+      ).all(...this.collections).map(row => `${row.collection}:${row.revision}`).join("|");
+      const cached = this.referenceCache.get(cacheKey);
+      if (cached?.revision === revision) return cached.rows as T[];
       const where = projects.length ? ` AND json_extract(value_json,'$.project') IN (${projects.map(() => "?").join(",")})` : "";
       const keys = ids ? ` AND row_key IN (${ids.map(() => "?").join(",")})` : "";
       const pipeline = this.collection === "pipelines";
@@ -172,9 +188,14 @@ export class BoardSelection {
       const unshadowed = this.collections.length > 1 ? ` AND (collection = 'pipelines' OR NOT EXISTS (
         SELECT 1 FROM state_rows AS active WHERE active.collection = 'pipelines' AND active.row_key = state_rows.row_key
       ))` : "";
-      return database.query<{ value: string }, SQLQueryBindings[]>(`SELECT json_object(${fields}${provenance}) AS value FROM state_rows
+      const rows = database.query<{ value: string }, SQLQueryBindings[]>(`SELECT json_object(${fields}${provenance}) AS value FROM state_rows
         WHERE collection IN (${collections})${this.collection === "tasks" ? " AND row_key GLOB 't:*'" : ""}${unshadowed}${where}${keys}`)
         .all(...this.collections, ...projects, ...(ids ?? [])).map(row => parseSqliteJson(row.value, database));
+      if (rows.length <= 4096) {
+        this.referenceCache.set(cacheKey, { revision, rows });
+        while (this.referenceCache.size > 4) this.referenceCache.delete(this.referenceCache.keys().next().value!);
+      }
+      return rows;
     } finally { if (!source.database) database.close(); }
   }
   page<T, Row>(source: Source<T>, scope: BoardScope, cursor: unknown, limit: number, project: (record: T) => Row) {
@@ -185,7 +206,7 @@ export class BoardSelection {
       if (decoded.scope !== hash || typeof decoded.id !== "string" || typeof decoded.time !== "string") throw new Error("scope");
       boundary = decoded;
     } catch { cursorReset = true; }
-    let candidates: Array<{ id: string; time: string }>, total: number, remaining: number;
+    let candidates: Array<{ id: string; time: string; project: string }>, total: number, remaining: number;
     const keyed = new Map<string, T>();
     if (scope.ids.length) {
       // A cold one-id read never bootstraps or traverses the board index.
@@ -197,7 +218,7 @@ export class BoardSelection {
         const row = record as Record<string, any>;
         const time = String(this.collection === "tasks" ? row.updatedAt : row.createdAt);
         if (!matches(row, scope, this.collection, this.projects.canonical)) continue;
-        keyed.set(id, record); candidates.push({ id, time });
+        keyed.set(id, record); candidates.push({ id, time, project: String(row.project ?? "") });
       }
       candidates.sort(compare);
       total = candidates.length;
@@ -205,13 +226,13 @@ export class BoardSelection {
       remaining = candidates.length;
       candidates = candidates.slice(0, limit);
     } else {
-      this.sync(source.database);
+      this.sync(source.database, scope.project);
       const { where, values } = this.where(scope);
       total = this.db.query<{ n: number }, SQLQueryBindings[]>(`SELECT count(*) AS n FROM rows WHERE ${where}`).get(...values)!.n;
       const after = boundary ? " AND (time < ? OR (time = ? AND id < ?))" : "";
       const bindings: SQLQueryBindings[] = boundary ? [...values, boundary.time, boundary.time, boundary.id] : values;
       remaining = boundary ? this.db.query<{ n: number }, SQLQueryBindings[]>(`SELECT count(*) AS n FROM rows WHERE ${where}${after}`).get(...bindings)!.n : total;
-      candidates = this.db.query<{ id: string; time: string }, SQLQueryBindings[]>(`SELECT id,time FROM rows WHERE ${where}${after} ORDER BY time DESC,id DESC LIMIT ?`).all(...bindings, limit);
+      candidates = this.db.query<{ id: string; time: string; project: string }, SQLQueryBindings[]>(`SELECT id,time,project FROM rows WHERE ${where}${after} ORDER BY time DESC,id DESC LIMIT ?`).all(...bindings, limit);
     }
     const rows: Row[] = [];
     let bytes = 2, last: { id: string; time: string } | undefined;
@@ -219,6 +240,12 @@ export class BoardSelection {
       let record = keyed.get(candidate.id);
       if (!record) { this.work.recordReads++; record = source.read(candidate.id) ?? undefined; }
       if (!record) continue;
+      // A malformed active row can shadow an archived row with the same id in
+      // the by-id reader. Never project that fallback under the active row's
+      // indexed project or count it as an admissible page result.
+      const sourceRow = record as Record<string, unknown>;
+      if (sourceRow.id !== candidate.id || sourceRow.project !== candidate.project
+        || !matches(sourceRow, scope, this.collection, this.projects.canonical)) continue;
       const row = project(record), size = Buffer.byteLength(JSON.stringify(row)) + 1;
       if (rows.length && bytes + size > LIST_ANSWER_BYTES) break;
       rows.push(row); bytes += size; last = candidate;
