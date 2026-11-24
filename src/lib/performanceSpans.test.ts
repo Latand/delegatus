@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createPerformanceSpans } from "./performanceSpans";
+import { createPerformanceSpans, type RegistryReadCaller } from "./performanceSpans";
+import { requestWorkload } from "./requestWorkload";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { createLoopLogSink, createViewerLoopMonitor } from "./viewerLoopMonitor";
 
@@ -207,3 +208,50 @@ test("unwrapped CPU work remains an unknown site while the watchdog observes run
     expect(after.runNs).toBeGreaterThan(before.runNs);
   } finally { await watcher.stop(); }
 }, 15_000);
+
+test("gap attribution keeps different background callers separate and samples slow unscoped reads within budget", () => {
+  let at = 0, captures = 0, watchdogSite = -1;
+  const recorder = createPerformanceSpans(() => at);
+  recorder.observeSite(site => { watchdogSite = site; });
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, recorder);
+  const stack = () => {
+    captures++;
+    expect(watchdogSite).toBe(-1);
+    at += 0.5; // Observer time must stay outside the recorded read.
+    const frames = [21, 22, 23, 24, 25, 26].map(line => `    at private-input (${import.meta.path}:${line}:34)`);
+    return ["Error: private-input", "    at private-input (/outside/private-input.js:9:9)", ...frames].join("\n");
+  };
+  function read(work: () => void, operation?: RegistryReadCaller["operation"], capture = stack) {
+    const caller: RegistryReadCaller = { operation };
+    try { recorder.sync("registry.keyed", work, 0, 0, caller); }
+    finally { caller.sample?.(capture); }
+  }
+  const fast = () => { at += 0.25; };
+  read(fast, "agents.reconcile");
+  read(fast, "seat.panel");
+  read(fast, "seat.panel");
+  read(() => { at += 3; }, "agents.reconcile");
+  requestWorkload.withRoute("/api/files?query=private-input", () => read(() => { at += 3; }, "seat.panel"));
+  expect(captures).toBe(0);
+
+  for (let i = 0; i < 10; i++) read(() => { at += 3; });
+  expect(captures).toBe(8);
+  at += 1000;
+  const original = new Error("read failed");
+  expect(() => read(() => { at += 3; throw original; }, undefined, () => {
+    throw new Error("sampling failed");
+  })).toThrow(original);
+  monitor.tick();
+  const rows = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length)).attribution.slices;
+  expect(rows).toContainEqual(expect.objectContaining({ registryOperation: "agents.reconcile", count: 1, totalMs: 0.25 }));
+  expect(rows).toContainEqual(expect.objectContaining({ registryOperation: "seat.panel", count: 2, totalMs: 0.5 }));
+  const expectedChain = [21, 22, 23, 24].map(line => `src/lib/performanceSpans.test.ts:${line}:34`).join(" <- ");
+  const sampled = rows.filter((row: { registryCallSite?: string }) => row.registryCallSite === expectedChain);
+  expect(sampled).toHaveLength(8);
+  expect(sampled.every((row: { totalMs: number }) => row.totalMs === 3)).toBe(true);
+  expect(rows).toContainEqual(expect.objectContaining({ requestClass: "http:/api/files", totalMs: 3 }));
+  expect(rows).toContainEqual(expect.objectContaining({ registryCallSite: "unresolved", failed: true, totalMs: 3 }));
+  expect(JSON.stringify(rows)).not.toContain("private-input");
+  expect(JSON.stringify(rows)).not.toContain(import.meta.dir);
+});
