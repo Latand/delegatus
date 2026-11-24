@@ -19,7 +19,7 @@ import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { AGENT_STATE_POLICY, evaluateAgentState, fact, unknown, type AgentFacts, type AgentProjection, type Evidence, type NativeTurn } from "./model";
 import { AgentTranscriptCache, fileSignature, transcriptVersionMatches } from "./transcript";
 import { acknowledgeAgentProjection, artifactRevision, commitAgentObservation, conversationRevision, entryRevision,
-  readAgentProjection, readAgentStateMetrics, readAgentStatesPage, readAntigravityAgentProjection, subjectId, copyAgentStateRow, recordAgentProcessEnded, pruneTerminalAgentProjection } from "./store";
+  readAgentProjection, readAgentStateMetrics, readAgentStatesPage, subjectId, copyAgentStateRow, recordAgentProcessEnded, pruneTerminalAgentProjection } from "./store";
 
 const digest = (v: unknown) => crypto.createHash("sha256").update(JSON.stringify(v)).digest("hex");
 export const AGENT_STATE_INTERVAL_MS = AGENT_STATE_POLICY.reconcileMs;
@@ -447,10 +447,9 @@ export class AgentStateService {
         if (!allowed() || !publicationSource) return false;
         // Check all registry facts against a single read transaction. A second
         // connection can write between publication checks and must be seen.
-        const row = registry.agentStateRead(file => {
+        const row = registry.agentStateRead((file, antigravityStates) => {
           const current = file.entries[committed.entryKey];
-          const stored = file.agentStates[committed.subject]
-            ?? (committed.facts.engine === "antigravity" ? readAntigravityAgentProjection(registry.filename, committed.subject) : null);
+          const stored = file.agentStates[committed.subject] ?? antigravityStates[committed.subject];
           if (stored?.revision !== committed.revision || !current
             || entryRevision(current) !== committed.facts.revision || this.ports.process(process) !== processStatus) return null;
           if (claimIdentity && this.ports.process(claimIdentity) !== claimStatus) return null;

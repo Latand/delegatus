@@ -1152,6 +1152,185 @@ describe("AntigravityAcpHost", () => {
     }
   });
 
+  it("reconciles direct send() retries against same-length replaced, in-place overwritten, and identical-copy ledgers for evicted deliveries", async () => {
+    const ledgerDir = path.join(stateDir, "runtime-events-direct-replace");
+    const baseEventStore = new FileRuntimeEventStore(ledgerDir);
+    const { readAntigravityConfirmedDelivery } = await import("./antigravityAcpHost");
+    const outboundPrompts: string[] = [];
+    let lastPromptId = 0;
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+    const makeOpts = (sessionId: string): AntigravityAcpHostOptions => ({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore: baseEventStore,
+      shutdownGraceMs: 50,
+      processIdentity: () => "start-id-direct-replace",
+      signalProcess: ((_pid: number, signal?: NodeJS.Signals | number) => {
+        fake.signals.push(signal ?? "SIGTERM");
+        fake.closeChild(0);
+        return true;
+      }) as typeof process.kill,
+      spawnProcess: () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          } else if (method === "session/new" || method === "session/resume") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+          } else if (method === "session/prompt" && id !== undefined) {
+            lastPromptId = id;
+            outboundPrompts.push(String(id));
+          } else if (method === "session/close") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          }
+        });
+        return fake.child;
+      },
+    });
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    const seedEvictedSession = async (tag: string) => {
+      const sessionId = `ag_${tag}_${crypto.randomUUID().slice(0, 8)}`;
+      const firstEntry = { id: `edge-${tag}-first`, text: "First of 4097" };
+      let host = await AntigravityAcpHost.start(makeOpts(sessionId));
+      const firstReceipt = await host.send(firstEntry);
+      expect(firstReceipt.outcome).toBe("turn-started");
+      if (firstReceipt.outcome !== "turn-started") throw new Error("expected turn-started");
+      const firstTurnId = firstReceipt.turnId;
+      fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+      await tick();
+      await host.release();
+
+      const stored = baseEventStore.load(sessionId);
+      const turnEvents = stored.filter((event) => "turnId" in event && event.turnId === firstTurnId);
+      let seq = stored.at(-1)!.seq;
+      const extraLines: string[] = [];
+      for (let n = 0; n < 4096; n += 1) {
+        for (const ev of turnEvents) {
+          extraLines.push(
+            JSON.stringify({ ...ev, seq: ++seq })
+              .replaceAll(firstTurnId, `edge-${tag}-turn-${n}`)
+              .replaceAll(firstEntry.id, `edge-${tag}-later-${n}`),
+          );
+        }
+      }
+      const ledgerFile = path.join(ledgerDir, `${sessionId}.jsonl`);
+      fs.appendFileSync(ledgerFile, `${extraLines.join("\n")}\n`);
+      host = await AntigravityAcpHost.adopt(sessionId, makeOpts(sessionId));
+      return { sessionId, firstEntry, firstTurnId, ledgerFile, host };
+    };
+
+    const physicalEchoCount = (ledgerFile: string, deliveryId: string) => fs.readFileSync(ledgerFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { deliveryEcho?: { operationId?: string } })
+      .filter((event) => event.deliveryEcho?.operationId === deliveryId)
+      .length;
+
+    // 1. Atomic same-length replacement where the retried ID IS already on disk:
+    //    direct send() MUST return the original turn with 0 new prompts and 1 echo.
+    {
+      const { firstEntry, firstTurnId, ledgerFile, host } = await seedEvictedSession("already");
+      const altId = `X${firstEntry.id.slice(1)}`;
+      const originalBytes = fs.readFileSync(ledgerFile, "utf8");
+      const replacedBytes = originalBytes.replaceAll(firstEntry.id, altId);
+      expect(replacedBytes.length).toBe(originalBytes.length);
+      fs.writeFileSync(`${ledgerFile}.restore`, replacedBytes);
+      fs.renameSync(`${ledgerFile}.restore`, ledgerFile);
+
+      const promptsBefore = outboundPrompts.length;
+      const receipt = await host.send({ id: altId, text: firstEntry.text });
+      await tick();
+      expect(receipt).toEqual({ outcome: "turn-started", turnId: firstTurnId });
+      expect(outboundPrompts.length - promptsBefore).toBe(0);
+      expect(physicalEchoCount(ledgerFile, altId)).toBe(1);
+      await host.release();
+    }
+
+    // 2. Atomic same-length replacement where the retried ID was EVICTED from disk:
+    //    direct send() MUST NOT falsely confirm it and MUST dispatch exactly once.
+    {
+      const { firstEntry, firstTurnId, ledgerFile, host } = await seedEvictedSession("missing");
+      const altId = `X${firstEntry.id.slice(1)}`;
+      const originalBytes = fs.readFileSync(ledgerFile, "utf8");
+      const replacedBytes = originalBytes.replaceAll(firstEntry.id, altId);
+      expect(replacedBytes.length).toBe(originalBytes.length);
+      fs.writeFileSync(`${ledgerFile}.restore`, replacedBytes);
+      fs.renameSync(`${ledgerFile}.restore`, ledgerFile);
+
+      const promptsBefore = outboundPrompts.length;
+      const receipt = await host.send({ id: firstEntry.id, text: firstEntry.text });
+      expect(receipt.outcome).toBe("turn-started");
+      if (receipt.outcome !== "turn-started") throw new Error("expected turn-started");
+      expect(receipt.turnId).not.toBe(firstTurnId);
+      expect(outboundPrompts.length - promptsBefore).toBe(1);
+      fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+      await tick();
+      expect(physicalEchoCount(ledgerFile, firstEntry.id)).toBe(1);
+      expect(physicalEchoCount(ledgerFile, altId)).toBe(1);
+      await host.release();
+    }
+
+    // 3. Atomic byte-identical copy-rename (same history, new inode):
+    //    must preserve materialized evidence and deduplicate direct send().
+    {
+      const { sessionId, firstEntry, firstTurnId, ledgerFile, host } = await seedEvictedSession("same");
+      fs.copyFileSync(ledgerFile, `${ledgerFile}.identical`);
+      fs.renameSync(`${ledgerFile}.identical`, ledgerFile);
+
+      expect(await host.sessionMaterializationEvidence(firstEntry.id)).toEqual({ state: "materialized" });
+      const promptsBefore = outboundPrompts.length;
+      const retry = await host.send(firstEntry);
+      await host.release();
+      const confirmed = await readAntigravityConfirmedDelivery(sessionId, firstEntry.id, {
+        eventStore: baseEventStore,
+        antigravityHome,
+      });
+      expect(retry).toEqual({ outcome: "turn-started", turnId: firstTurnId });
+      expect(confirmed?.turnId).toBe(firstTurnId);
+      expect(outboundPrompts.length - promptsBefore).toBe(0);
+      expect(physicalEchoCount(ledgerFile, firstEntry.id)).toBe(1);
+    }
+
+    // 4. In-place same-inode same-length overwrite preserving mtime:
+    //    content sample digest detects the rewrite and reconciles before send().
+    {
+      const { firstEntry, firstTurnId, ledgerFile, host } = await seedEvictedSession("inplace");
+      const altId = `X${firstEntry.id.slice(1)}`;
+      const statBefore = fs.statSync(ledgerFile);
+      const originalBuf = fs.readFileSync(ledgerFile);
+      const replacedBuf = Buffer.from(originalBuf.toString("utf8").replaceAll(firstEntry.id, altId), "utf8");
+      expect(replacedBuf.length).toBe(originalBuf.length);
+      const fd = fs.openSync(ledgerFile, "r+");
+      try {
+        fs.writeSync(fd, replacedBuf, 0, replacedBuf.length, 0);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.utimesSync(ledgerFile, statBefore.atime, statBefore.mtime);
+
+      const promptsBefore = outboundPrompts.length;
+      const altReceipt = await host.send({ id: altId, text: firstEntry.text });
+      expect(altReceipt).toEqual({ outcome: "turn-started", turnId: firstTurnId });
+      expect(outboundPrompts.length - promptsBefore).toBe(0);
+
+      const missingReceipt = await host.send({ id: firstEntry.id, text: firstEntry.text });
+      expect(missingReceipt.outcome).toBe("turn-started");
+      if (missingReceipt.outcome !== "turn-started") throw new Error("expected turn-started");
+      expect(missingReceipt.turnId).not.toBe(firstTurnId);
+      expect(outboundPrompts.length - promptsBefore).toBe(1);
+      fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+      await tick();
+      expect(physicalEchoCount(ledgerFile, firstEntry.id)).toBe(1);
+      expect(physicalEchoCount(ledgerFile, altId)).toBe(1);
+      await host.release();
+    }
+  });
+
   it("bases delivery acceptance on ACP's actual response when interrupt races end_turn, and keeps release-mid-prompt unavailable", async () => {
     const baseEventStore = new FileRuntimeEventStore(path.join(stateDir, "runtime-events-interrupt-race"));
     const outboundPrompts: string[] = [];

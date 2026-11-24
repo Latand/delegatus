@@ -118,6 +118,7 @@ import {
   type RegistryBackendResolution,
 } from "./registryBackendIdentity";
 import {
+  ANTIGRAVITY_AGENT_STATES_ACCESS,
   SqliteAgentRegistryStore,
   registryCollectionPage, type RowCollection,
   registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryOpenDeliveryKeys, registryHasDeliveryPredecessor, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
@@ -5534,6 +5535,7 @@ export class AgentRegistry {
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   private antigravityStuckCount: number | undefined;
+  private antigravityAgentStatesMemory: Record<string, AgentProjection> = {};
   private lastDeliveryCompactionChangeId: number | null = null;
   private nextDeliveryCompactionAt: number | null = null;
   /** Synchronous writer admission lends its JSON claim to the mutation. */
@@ -7487,8 +7489,11 @@ export class AgentRegistry {
     });
   }
 
-  agentStateRead<T>(read: (file: RegistryFile) => T): T {
-    return this.readKeyed(read);
+  agentStateRead<T>(read: (file: RegistryFile, antigravityStates: Readonly<Record<string, AgentProjection>>) => T): T {
+    return this.readKeyed(file => {
+      const access = (file as RegistryFile & { [ANTIGRAVITY_AGENT_STATES_ACCESS]?: () => Record<string, AgentProjection> })[ANTIGRAVITY_AGENT_STATES_ACCESS];
+      return read(file, access ? access() : this.antigravityAgentStatesMemory);
+    });
   }
 
   agentStateMetricsRead(): AgentStateMetrics {
@@ -7501,15 +7506,19 @@ export class AgentRegistry {
     return metrics;
   }
 
-  agentStateWrite<T>(write: (file: RegistryFile, readMetrics: () => AgentStateMetrics) => T): T {
+  agentStateWrite<T>(write: (file: RegistryFile, readMetrics: () => AgentStateMetrics, antigravityStates: Record<string, AgentProjection>) => T): T {
     let nextAntigravityCount: number | undefined;
+    let pendingMemoryStates: Record<string, AgentProjection> | null = null;
     const result = this.mutate(file => {
       // SQLite tracks changed rows lazily. For a whole-file write, compare to
       // the input here so compaction and mirrors can serialize history as-is.
       const previous = this.sqliteMode === "off" || this.sqliteMode === "dual-write"
         ? clone(file.agentStateMetrics) : null;
       const storedCount = file.agentStateMetrics.current?.stuckByEngine.antigravity;
-      const result = write(file, () => this.currentAgentStateMetrics(file));
+      const access = (file as RegistryFile & { [ANTIGRAVITY_AGENT_STATES_ACCESS]?: () => Record<string, AgentProjection> })[ANTIGRAVITY_AGENT_STATES_ACCESS];
+      const antigravityStates = access ? access() : clone(this.antigravityAgentStatesMemory);
+      const result = write(file, () => this.currentAgentStateMetrics(file), antigravityStates);
+      if (!access) pendingMemoryStates = antigravityStates;
       const count = file.agentStateMetrics.current?.stuckByEngine.antigravity;
       nextAntigravityCount = count === storedCount ? this.antigravityStuckCount ?? count : count;
       if (previous) {
@@ -7522,6 +7531,7 @@ export class AgentRegistry {
       }
       return result;
     }, { deliveryOnly: true });
+    if (pendingMemoryStates) this.antigravityAgentStatesMemory = pendingMemoryStates;
     if (nextAntigravityCount !== undefined) this.antigravityStuckCount = nextAntigravityCount;
     return result;
   }

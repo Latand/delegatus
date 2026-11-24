@@ -1,7 +1,7 @@
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
 import { projectAgentStateDisplay } from "@/lib/agentState/model";
 import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
-import { entryRevision, readAntigravityAgentProjection, subjectId } from "@/lib/agentState/store";
+import { entryRevision, readAgentProjection, subjectId } from "@/lib/agentState/store";
 import { differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, stopAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostExit";
 import fs from "node:fs";
@@ -88,7 +88,7 @@ export function readStructuredHostRecords(dependencies: {
     const pipeline = memberships.find((membership) => membership.kind === "pipeline") ?? null;
     const candidate = cachedAgentObservation(subjectId(entry))
       ?? file.agentStates?.[subjectId(entry)]
-      ?? (entry.key.engine === "antigravity" ? readAntigravityAgentProjection(agentRegistry().filename, subjectId(entry)) : undefined);
+      ?? (entry.key.engine === "antigravity" && !dependencies.snapshot ? readAgentProjection(agentRegistry(), subjectId(entry)) : undefined);
     const central = candidate?.facts.revision === entryRevision(entry) ? candidate : null;
     const display = central ? projectAgentStateDisplay(central, (dependencies.now ?? Date.now)()) : null;
     if (!dependencies.snapshot && (!display || display.quality === "unverified")) invalidateAgentState(agentRegistry().filename, entry.key);

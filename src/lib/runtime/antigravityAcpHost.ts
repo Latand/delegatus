@@ -224,7 +224,7 @@ interface LedgerFileFingerprint {
 }
 
 const MAX_LEDGER_HOME_REGISTRY = 256;
-const LEDGER_TAIL_SAMPLE_BYTES = 256;
+const LEDGER_CONTENT_SAMPLE_BYTES = 4096;
 const ledgerHomeRegistry = new Map<string, string>();
 
 function canonicalizeFilePath(pathname: string): string {
@@ -241,15 +241,31 @@ function canonicalizeFilePath(pathname: string): string {
   }
 }
 
-function readTailSampleSha256(filePath: string, size: number): string {
-  if (size <= 0) return crypto.createHash("sha256").digest("hex");
-  const sampleLen = Math.min(size, LEDGER_TAIL_SAMPLE_BYTES);
-  const offset = Math.max(0, size - sampleLen);
-  const buf = Buffer.allocUnsafe(sampleLen);
+/** Hashes head, middle, and tail samples (or full contents when <= 16 KiB) plus
+ * byte length so same-length replacements at any region are detected in O(1) I/O. */
+function readContentSampleSha256(filePath: string, size: number): string {
+  const hash = crypto.createHash("sha256");
+  hash.update(`v2:${size}:`);
+  if (size <= 0) return hash.digest("hex");
   const fd = fs.openSync(filePath, "r");
   try {
-    const bytesRead = fs.readSync(fd, buf, 0, sampleLen, offset);
-    return crypto.createHash("sha256").update(buf.subarray(0, bytesRead)).digest("hex");
+    if (size <= LEDGER_CONTENT_SAMPLE_BYTES * 4) {
+      const buf = Buffer.allocUnsafe(size);
+      const bytesRead = fs.readSync(fd, buf, 0, size, 0);
+      hash.update(buf.subarray(0, bytesRead));
+      return hash.digest("hex");
+    }
+    const buf = Buffer.allocUnsafe(LEDGER_CONTENT_SAMPLE_BYTES);
+    const offsets = [
+      0,
+      Math.max(0, Math.floor((size - LEDGER_CONTENT_SAMPLE_BYTES) / 2)),
+      Math.max(0, size - LEDGER_CONTENT_SAMPLE_BYTES),
+    ];
+    for (const offset of offsets) {
+      const bytesRead = fs.readSync(fd, buf, 0, LEDGER_CONTENT_SAMPLE_BYTES, offset);
+      hash.update(buf.subarray(0, bytesRead));
+    }
+    return hash.digest("hex");
   } finally {
     fs.closeSync(fd);
   }
@@ -270,7 +286,7 @@ function statLedgerFingerprint(ledgerPath: string): { exists: true; fingerprint:
         fileSize: String(stat.size),
         mtimeNs: String(stat.mtimeNs),
         ctimeNs: String(stat.ctimeNs),
-        tailSha256: readTailSampleSha256(canonical, sizeNumber),
+        tailSha256: readContentSampleSha256(canonical, sizeNumber),
       },
     };
   } catch (error) {
@@ -1586,6 +1602,9 @@ export class AntigravityAcpHost implements EngineHost {
     let priorAcceptance: DeliveryAcceptanceRecord | undefined;
     let sawConcurrentMutation = this.deliveryMutationSeq !== mutationAtEntry;
     for (;;) {
+      // Reconcile against canonical JSONL before deciding from memory or SQLite
+      // if the ledger file was replaced or rewritten out-of-band.
+      this.ensureLedgerContinuityBeforeRead();
       const mutationBefore = this.deliveryMutationSeq;
       const already = this.sentEntries.get(normalized.id);
       if (already) return { outcome: "turn-started", turnId: already };
@@ -1893,12 +1912,7 @@ export class AntigravityAcpHost implements EngineHost {
     if (!deliveryId) {
       return { state: "absent", reason: "Antigravity delivery id is empty" };
     }
-    if (this.lastLedgerFingerprint !== null) {
-      const currentFp = this.currentLedgerFingerprint();
-      if (!sameLedgerFingerprint(this.lastLedgerFingerprint, currentFp)) {
-        this.reconcileExternallyModifiedLedger(currentFp);
-      }
-    }
+    this.ensureLedgerContinuityBeforeRead();
     let acceptance = this.deliveryAcceptance.get(deliveryId);
     if (!acceptance && this.deliveryAcceptanceEvicted) {
       const lookedUp = await this.lookupDurableDeliveryAcceptance(deliveryId);
@@ -2068,12 +2082,12 @@ export class AntigravityAcpHost implements EngineHost {
         this.lastLedgerFingerprint = ledgerFp;
         this.deliveryIndexHealthy = true;
       } else {
-        this.lastLedgerFingerprint = null;
+        this.lastLedgerFingerprint = this.currentLedgerFingerprint();
         this.deliveryIndexHealthy = false;
       }
     } catch (error) {
       this.deliveryIndexHealthy = false;
-      this.lastLedgerFingerprint = null;
+      this.lastLedgerFingerprint = this.currentLedgerFingerprint();
       this.closeDeliveryIndex();
       console.warn("[antigravity] delivery acceptance index unavailable; falling back to ledger lookup", safeError(error));
     }
@@ -2098,8 +2112,21 @@ export class AntigravityAcpHost implements EngineHost {
     return stat.exists ? stat.fingerprint : null;
   }
 
+  private ensureLedgerContinuityBeforeRead(): void {
+    if (this.identity.sessionId === "pending" || typeof this.eventStore.ledgerPath !== "function") return;
+    const currentFp = this.currentLedgerFingerprint();
+    if (this.lastLedgerFingerprint === null) {
+      if (currentFp !== null) this.reconcileExternallyModifiedLedger(currentFp);
+      return;
+    }
+    if (!sameLedgerFingerprint(this.lastLedgerFingerprint, currentFp)) {
+      this.reconcileExternallyModifiedLedger(currentFp);
+    }
+  }
+
   private reconcileExternallyModifiedLedger(afterFp: LedgerFileFingerprint | null): void {
     this.deliveryIndex?.clearFingerprint(this.identity.sessionId);
+    this.eventStore.invalidate?.(this.identity.sessionId);
     try {
       const canonical = this.eventStore.load(this.identity.sessionId);
       const rebuilt = new Map<string, { record: DeliveryAcceptanceRecord; seq: number }>();
@@ -2118,16 +2145,19 @@ export class AntigravityAcpHost implements EngineHost {
           this.recordSentEntry(entryId, entry.record.turnId || `restored:${entryId}`);
         }
       }
+      this.deliveryMutationSeq += 1;
       const tailSeq = canonical.at(-1)?.seq ?? 0;
+      this.cursor = tailSeq;
+      this.eventWindow.restore(canonical);
+      this.eventWindowRevision += 1;
       if (this.deliveryIndex) {
         this.deliveryIndex.syncSession(this.identity.sessionId, tailSeq, rebuilt, maxDeliverySeq, afterFp);
         if (afterFp) rememberLedgerAntigravityHome(afterFp.ledgerPath, this.options.antigravityHome);
-        this.lastLedgerFingerprint = afterFp;
         this.deliveryIndexHealthy = true;
       } else {
-        this.lastLedgerFingerprint = null;
         this.deliveryIndexHealthy = false;
       }
+      this.lastLedgerFingerprint = afterFp;
     } catch (error) {
       this.deliveryIndex?.clearFingerprint(this.identity.sessionId);
       this.deliveryIndexHealthy = false;
@@ -2139,6 +2169,15 @@ export class AntigravityAcpHost implements EngineHost {
   private emit(event: UnsequencedEvent): boolean {
     this.turnSilence?.observe(event);
     if (this.ledgerFailed || this.identity.sessionId === "pending") return false;
+    const beforeFp = this.currentLedgerFingerprint();
+    const externallyModified = this.lastLedgerFingerprint !== null
+      && !sameLedgerFingerprint(this.lastLedgerFingerprint, beforeFp);
+    if (externallyModified) {
+      // Reconcile cached state, sequence cursor, and SQLite delivery rows against
+      // the replaced canonical file BEFORE appending, so neither sequence numbers
+      // nor index rows drift from disk.
+      this.reconcileExternallyModifiedLedger(beforeFp);
+    }
     let nextCursor: number;
     try {
       nextCursor = nextRuntimeEventSequence(this.cursor);
@@ -2146,14 +2185,6 @@ export class AntigravityAcpHost implements EngineHost {
       this.ledgerFailed = true;
       this.fail(new Error(safeError(error)));
       return false;
-    }
-    const beforeFp = this.currentLedgerFingerprint();
-    const externallyModified = this.lastLedgerFingerprint !== null
-      && !sameLedgerFingerprint(this.lastLedgerFingerprint, beforeFp);
-    if (externallyModified) {
-      // Never allow stale indexed rows to remain trusted if the canonical file
-      // was replaced or modified out-of-band before this append.
-      this.deliveryIndex?.clearFingerprint(this.identity.sessionId);
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
@@ -2166,9 +2197,7 @@ export class AntigravityAcpHost implements EngineHost {
       return false;
     }
     const afterFp = this.currentLedgerFingerprint();
-    if (externallyModified) {
-      this.reconcileExternallyModifiedLedger(afterFp);
-    } else if (this.deliveryIndex && this.deliveryIndexHealthy) {
+    if (this.deliveryIndex && this.deliveryIndexHealthy) {
       try {
         this.deliveryIndex.applyEvent(this.identity.sessionId, sequenced, afterFp);
         if (afterFp) rememberLedgerAntigravityHome(afterFp.ledgerPath, this.options.antigravityHome);
@@ -2179,6 +2208,8 @@ export class AntigravityAcpHost implements EngineHost {
         this.lastLedgerFingerprint = null;
         console.warn("[antigravity] delivery acceptance index update failed; falling back to ledger lookup", safeError(error));
       }
+    } else {
+      this.lastLedgerFingerprint = afterFp;
     }
     this.eventWindowRevision += 1;
     this.eventWindow.append(sequenced);

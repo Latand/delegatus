@@ -21,6 +21,8 @@ export interface RuntimeEventStore {
   scan?(threadId: string, visit: (event: RuntimeEvent) => void): Promise<number>;
   /** Canonical on-disk ledger file path when backed by files. */
   ledgerPath?(threadId: string): string;
+  /** Drop any cached copy/tail for this thread so the next read reloads from disk. */
+  invalidate?(threadId: string): void;
 }
 
 export interface RuntimeEventCursorRecoveryDiagnostic {
@@ -828,6 +830,11 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
 
   ledgerPath(threadId: string): string {
     return this.filename(threadId);
+  }
+
+  invalidate(threadId: string): void {
+    this.tails.delete(threadId);
+    forgetLedger(this.filename(threadId));
   }
 
   load(threadId: string): RuntimeEvent[] {

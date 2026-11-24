@@ -1,7 +1,7 @@
 import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
 import { observeAgentProcess } from "@/lib/agentState/process";
 import { AGENT_STATE_POLICY } from "@/lib/agentState/model";
-import { entryRevision, readAntigravityAgentProjection, subjectId } from "@/lib/agentState/store";
+import { entryRevision, readAgentProjection, subjectId } from "@/lib/agentState/store";
 import { fileSignature, NATIVE_SIZE_REFUSALS } from "@/lib/agentState/transcript";
 import { servingAgentStateService } from "@/lib/agentState/service";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
@@ -1508,7 +1508,7 @@ function retirementSubject(
 
   const central = cachedAgentObservation(subjectId(entry))
     ?? inputs.file.agentStates?.[subjectId(entry)]
-    ?? (entry.key.engine === "antigravity" ? readAntigravityAgentProjection(agentRegistry().filename, subjectId(entry)) : undefined);
+    ?? (entry.key.engine === "antigravity" ? readAgentProjection(agentRegistry(), subjectId(entry)) : undefined);
   let centralSettled: boolean | null = null;
   let abandonedTurn = false;
   let openNativeTurnId: string | null = null;

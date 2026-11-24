@@ -107,8 +107,11 @@ describe("Antigravity agentState integration", () => {
 
     // Rollback compatibility: the shared SQLite `agentStates` collection and JSON
     // snapshot MUST NEVER hold `facts.engine === "antigravity"` rows (which prior
-    // releases reject with `invalid agent-state row`), while a second AgentRegistry
-    // still resolves the durable Antigravity projection via `readAgentProjection`.
+    // releases reject with `invalid agent-state row`), `agentStateMetrics` MUST
+    // keep the 3-engine `stuckByEngine` shape, and Antigravity projections MUST
+    // live inside the dedicated `registry_antigravity_agent_states` table in the
+    // same SQLite database (no separate sidecar file).
+    expect(fs.existsSync(path.join(root, "antigravity-agent-states.json"))).toBe(false);
     const { Database } = await import("bun:sqlite");
     const db = new Database(path.join(root, "registry.sqlite"), { readonly: true });
     try {
@@ -116,6 +119,16 @@ describe("Antigravity agentState integration", () => {
         "SELECT value_json FROM registry_rows WHERE collection = 'agentStates'",
       ).all();
       expect(rawStates.every((row) => (JSON.parse(row.value_json) as { facts?: { engine?: string } }).facts?.engine !== "antigravity")).toBe(true);
+      const agRows = db.query<{ subject: string }, []>(
+        "SELECT subject FROM registry_antigravity_agent_states",
+      ).all();
+      expect(agRows.map((row) => row.subject)).toEqual([subjectId(entry)]);
+      const rawMetrics = db.query<{ value_json: string }, []>(
+        "SELECT value_json FROM registry_rows WHERE collection = 'agentStateMetrics' AND row_key = 'current'",
+      ).get();
+      expect(rawMetrics).not.toBeNull();
+      const parsedMetrics = JSON.parse(rawMetrics!.value_json) as { stuckByEngine: Record<string, number> };
+      expect(Object.keys(parsedMetrics.stuckByEngine).sort()).toEqual(["claude", "codex", "copilot"]);
     } finally {
       db.close();
     }
@@ -128,6 +141,77 @@ describe("Antigravity agentState integration", () => {
     });
     registries.push(reader);
     expect(readAgentProjection(reader, subjectId(entry))?.facts.engine).toBe("antigravity");
+  });
+
+  it("commits Antigravity projection, journal, and metrics in one SQLite transaction and rolls back atomically on write failure", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-ag-atomic-"));
+    roots.push(root);
+    const filename = path.join(root, "agent-registry.json");
+    const sqliteFilename = path.join(root, "registry.sqlite");
+    fs.writeFileSync(filename, JSON.stringify(fixtureRegistry(root, "antigravity", captureProcessIdentity(process.pid), null)));
+    const rows = fixtureRecords("antigravity");
+    fs.writeFileSync(path.join(root, "native.jsonl"), [...rows.open, ...rows.close].map((row) => JSON.stringify(row)).join("\n") + "\n");
+
+    const registry = new AgentRegistry(filename, undefined, undefined, {
+      sqliteMode: "sqlite",
+      sqliteFilename,
+    });
+    registries.push(registry);
+    const makeService = () => new AgentStateService({
+      registry,
+      now: () => FIXTURE_NOW + 2000,
+      owns: () => true,
+      process: observeAgentProcess,
+      memory: () => null,
+      release: "fixture",
+      publish: async () => true,
+    });
+    const snapshotCounts = () => {
+      const file = registry.snapshot();
+      const metrics = file.agentStateMetrics.current;
+      const entry = registry.hostEntry({ engine: "antigravity", sessionId: FIXTURE_SESSION })!;
+      return {
+        projected: readAgentProjection(registry, subjectId(entry)) !== null,
+        subjects: metrics?.subjectsObserved ?? 0,
+        journal: Object.keys(file.agentStateJournal).length,
+      };
+    };
+
+    // Inject a failure during the Antigravity projection write inside the SQLite transaction.
+    const { Database } = await import("bun:sqlite");
+    const faultDb = new Database(sqliteFilename);
+    try {
+      faultDb.exec(`
+        CREATE TABLE IF NOT EXISTS registry_antigravity_agent_states (
+          subject TEXT PRIMARY KEY,
+          value_json TEXT NOT NULL
+        );
+        CREATE TRIGGER fail_ag_state_insert
+        BEFORE INSERT ON registry_antigravity_agent_states
+        BEGIN
+          SELECT RAISE(ABORT, 'synthetic EIO on antigravity projection');
+        END;
+      `);
+    } finally {
+      faultDb.close();
+    }
+
+    // AgentStateService catches per-subject persistence errors and defers the subject;
+    // the single SQLite transaction MUST roll back journal, metrics, and projection together.
+    await makeService().request();
+    expect(snapshotCounts()).toEqual({ projected: false, subjects: 0, journal: 0 });
+    expect(fs.existsSync(path.join(root, "antigravity-agent-states.json"))).toBe(false);
+
+    // Clear the injected write fault and retry: accounting MUST commit exactly once.
+    const healDb = new Database(sqliteFilename);
+    try {
+      healDb.exec("DROP TRIGGER fail_ag_state_insert");
+    } finally {
+      healDb.close();
+    }
+    await makeService().request();
+    expect(snapshotCounts()).toEqual({ projected: true, subjects: 1, journal: 1 });
+    expect(fs.existsSync(path.join(root, "antigravity-agent-states.json"))).toBe(false);
   });
 
   it("keeps host-retirement-cursor.json strictly v1 legacy-valid after sweeping an Antigravity host", async () => {

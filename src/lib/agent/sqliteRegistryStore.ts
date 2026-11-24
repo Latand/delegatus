@@ -22,7 +22,13 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, DatabaseReplacedError, openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentStateMetricsForStorage, type AgentStateMetricsRow } from "@/lib/agentState/model";
+import { agentStateMetricsForStorage, type AgentProjection, type AgentStateMetricsRow } from "@/lib/agentState/model";
+
+/** Non-enumerable per-transaction accessor attached to lazy `RegistryFile` views
+ * so Antigravity `AgentProjection` rows persist in `registry_antigravity_agent_states`
+ * inside the exact same SQLite transaction as `agentStateJournal` and
+ * `agentStateMetrics`, while remaining invisible to older releases and JSON exports. */
+export const ANTIGRAVITY_AGENT_STATES_ACCESS = Symbol.for("delegatus.antigravityAgentStatesAccess");
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -1203,6 +1209,7 @@ interface RegistryChanges {
   rows: Map<RowCollection, Map<string, string | null>>;
   meta: Set<(typeof META_FIELDS)[number]>;
   order: Set<RowCollection>;
+  antigravityStates: Map<string, string | null>;
 }
 
 export interface SqliteRegistrySnapshot {
@@ -1599,6 +1606,8 @@ export class SqliteAgentRegistryStore {
   private changesReady = false;
   /** Whether this connection's file has the ending change queue; read on first use. */
   private endingQueueReady: boolean | undefined;
+  /** Whether `registry_antigravity_agent_states` exists in this connection's DB. */
+  private antigravityStatesTableReady: boolean | undefined;
   private recordsSource = "registry_rows";
   private readonly localRows = new Map<string, { dataVersion: string; valueJson: string | null }>();
   /** Frozen copies of rows for the shared view. Keyed by what a row was
@@ -1687,6 +1696,7 @@ export class SqliteAgentRegistryStore {
         this.recordsSource = this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_records'").get() ? "registry_records" : "registry_rows";
         this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
         this.endingQueueReady = undefined;
+        this.antigravityStatesTableReady = undefined;
         this.grantJournalReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'").get());
         this.pendingDeliveryOwnerOriginIndexReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'registry_pending_delivery_owner_origin'").get());
         this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
@@ -1757,6 +1767,7 @@ export class SqliteAgentRegistryStore {
     this.grantJournalReady = true;
     this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
     this.endingQueueReady = undefined;
+    this.antigravityStatesTableReady = undefined;
     this.recordsSource = this.changesReady ? "registry_records" : "registry_rows";
     const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(registry_rows)").all();
     if (!columns.some((column) => column.name === "row_order")) {
@@ -2329,6 +2340,7 @@ export class SqliteAgentRegistryStore {
     this.recordsSource = db.query("SELECT 1 FROM sqlite_master WHERE name='registry_records'").get() ? "registry_records" : "registry_rows";
     this.changesReady = Boolean(db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
     this.endingQueueReady = undefined;
+    this.antigravityStatesTableReady = undefined;
     this.grantJournalReady = Boolean(db.query(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'",
     ).get());
@@ -5581,7 +5593,8 @@ export class SqliteAgentRegistryStore {
       current = this.loadLazyInTransaction();
       result = operation(current.file);
       changes = current.changes();
-      const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
+      const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0
+        || changes.antigravityStates.size > 0;
       revision = changed ? current.revision + 1 : current.revision;
       if (changed) {
         stamps.before = this.storeStamp();
@@ -5590,6 +5603,7 @@ export class SqliteAgentRegistryStore {
       }
       this.db.exec("RELEASE registry_admitted_mutation");
     } catch (error) {
+      this.antigravityStatesTableReady = undefined;
       this.db.exec("ROLLBACK TO registry_admitted_mutation");
       this.db.exec("RELEASE registry_admitted_mutation");
       throw error;
@@ -5638,7 +5652,8 @@ export class SqliteAgentRegistryStore {
       if (!pessimistic) this.beginMutationWrite(options.noWait);
       let revision: number;
       let stamps = { before: "", after: "" };
-      const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
+      const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0
+        || changes.antigravityStates.size > 0;
       try {
         if (!pessimistic) this.noteWriterWait(performance.now() - optimisticWaitStartedAt, operationName, options.noWait);
         if (!pessimistic && Number(this.meta("revision") ?? 0) !== current.revision) {
@@ -5671,6 +5686,7 @@ export class SqliteAgentRegistryStore {
         }
         this.db.exec("COMMIT");
       } catch (error) {
+        this.antigravityStatesTableReady = undefined;
         try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
         throw error;
       }
@@ -6411,11 +6427,29 @@ export class SqliteAgentRegistryStore {
         },
       });
     }
+    let antigravityLoaded = false;
+    const antigravityBaseline = new Map<string, string>();
+    let antigravityCurrent: Record<string, AgentProjection> | null = null;
+    const loadAntigravityStates = (): Record<string, AgentProjection> => {
+      if (antigravityLoaded && antigravityCurrent) return antigravityCurrent;
+      antigravityLoaded = true;
+      antigravityCurrent = {};
+      for (const [subject, valueJson] of this.readAntigravityAgentStatesInTransaction()) {
+        if (trackMutations) antigravityBaseline.set(subject, valueJson);
+        antigravityCurrent[subject] = parseSqliteJson(valueJson, this.db) as AgentProjection;
+      }
+      return antigravityCurrent;
+    };
+    Object.defineProperty(file, ANTIGRAVITY_AGENT_STATES_ACCESS, {
+      configurable: true,
+      enumerable: false,
+      value: loadAntigravityStates,
+    });
     return {
       file,
       revision,
       changes: () => {
-        const changes: RegistryChanges = { rows: new Map(), meta: new Set(), order: new Set() };
+        const changes: RegistryChanges = { rows: new Map(), meta: new Set(), order: new Set(), antigravityStates: new Map() };
         for (const [collection, value] of loadedCollections) {
           const baseline = baselineCollections.get(collection)!;
           const current = value as Record<string, unknown>;
@@ -6449,6 +6483,18 @@ export class SqliteAgentRegistryStore {
         }
         for (const [field, value] of loadedMeta) {
           if (!isDeepStrictEqual(baselineMeta.get(field), value)) changes.meta.add(field);
+        }
+        if (antigravityLoaded && antigravityCurrent) {
+          const keys = new Set([...antigravityBaseline.keys(), ...Object.keys(antigravityCurrent)]);
+          for (const subject of keys) {
+            const previous = antigravityBaseline.get(subject);
+            if (!Object.hasOwn(antigravityCurrent, subject)) {
+              if (previous !== undefined) changes.antigravityStates.set(subject, null);
+              continue;
+            }
+            const json = JSON.stringify(antigravityCurrent[subject]);
+            if (json !== previous) changes.antigravityStates.set(subject, json);
+          }
         }
         return changes;
       },
@@ -6667,12 +6713,54 @@ export class SqliteAgentRegistryStore {
     this.setMeta("revision", String(revision));
   }
 
+  private ensureAntigravityAgentStatesTable(): void {
+    if (this.antigravityStatesTableReady) return;
+    this.db.exec(`CREATE TABLE IF NOT EXISTS registry_antigravity_agent_states (
+      subject TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL
+    )`);
+    this.antigravityStatesTableReady = true;
+  }
+
+  private readAntigravityAgentStatesInTransaction(): Array<[string, string]> {
+    try {
+      if (this.antigravityStatesTableReady !== true) {
+        const exists = this.db.query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_antigravity_agent_states'",
+        ).get();
+        if (!exists) return [];
+        this.antigravityStatesTableReady = true;
+      }
+      return this.db.query<{ subject: string; value_json: string }, []>(
+        "SELECT subject, value_json FROM registry_antigravity_agent_states ORDER BY subject",
+      ).all().map((row) => [row.subject, row.value_json]);
+    } catch (error) {
+      this.antigravityStatesTableReady = undefined;
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("no such table")) return [];
+      throw error;
+    }
+  }
+
   private persistChanges(file: DecidedRegistryFile, changes: RegistryChanges, revision: number): void {
     this.assertDecided(file);
     for (const [collection, rows] of changes.rows) {
       for (const [key, valueJson] of rows) {
         if (valueJson === null) this.deleteRow(collection, key);
         else this.upsertRow(collection, key, valueJson);
+      }
+    }
+    if (changes.antigravityStates.size > 0) {
+      this.ensureAntigravityAgentStatesTable();
+      for (const [subject, valueJson] of changes.antigravityStates) {
+        if (valueJson === null) {
+          this.db.query("DELETE FROM registry_antigravity_agent_states WHERE subject = ?").run(subject);
+        } else {
+          this.db.query(`
+            INSERT INTO registry_antigravity_agent_states(subject, value_json) VALUES (?, ?)
+            ON CONFLICT(subject) DO UPDATE SET value_json = excluded.value_json
+          `).run(subject, valueJson);
+        }
       }
     }
     for (const collection of changes.order) this.persistRowOrder(collection, Object.keys(file[collection]));
