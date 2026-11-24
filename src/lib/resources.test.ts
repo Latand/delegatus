@@ -2,6 +2,8 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 import { ownFixtureTree, signalFixtureIdentity, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
+import { emptyAgentStateMetrics } from "@/lib/agentState/model";
+import { validAgentStateMetricsBeforeAntigravity } from "@/lib/agentState/legacyMetricsFixture";
 
 import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -14,7 +16,7 @@ import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
-import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
+import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, serializeResourceObservationForStorage, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
 import { RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT } from "./resources";
 
 afterEach(async () => { await stopWorktreeSweepWorker(); });
@@ -646,6 +648,52 @@ function workerTestReader(options: Parameters<typeof createResourcesReader>[4] =
 }
 
 describe("resource observation", () => {
+  const preAntigravityMetrics = {
+    ...emptyAgentStateMetrics(), at: 1, stuckTurns: 2,
+    stuckByEngine: { codex: 2, claude: 0, copilot: 0 },
+  };
+  const completeMetrics = { ...preAntigravityMetrics, stuckByEngine: { ...preAntigravityMetrics.stuckByEngine, antigravity: 0 } };
+
+  test("durable pre-Antigravity resource metrics are normalized and malformed buckets are rejected", () => {
+    const message = JSON.parse(EMPTY_WORKER_MESSAGE);
+    const serialize = (agentState: unknown) => JSON.stringify({ version: 1, observation: {
+      generation: 1, startedAt: 1, completedAt: 2, collectorId: "worker:fixture",
+      value: { payload: { ...message.payload, agentState }, diagnostic: message.diagnostic, hostCount: 0, treeCount: 0, targets: [] },
+    } });
+    expect(parsePersistedResourceObservation(serialize(preAntigravityMetrics))?.value.payload.agentState).toEqual(completeMetrics);
+    expect(parsePersistedResourceObservation(serialize({ ...preAntigravityMetrics, stuckByEngine: { codex: null } }))).toBeNull();
+  });
+
+  test("resource observation writes retain the rollback-compatible metrics shape", () => {
+    const metrics = { ...emptyAgentStateMetrics(), stuckByEngine: { codex: 1, claude: 0, copilot: 0, antigravity: 4 } };
+    const diagnostic = { fresh: true, status: "complete" as const, durationMs: 0, phases: {
+      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+    } };
+    const serialized = serializeResourceObservationForStorage({ generation: 1, startedAt: 1, completedAt: 2, collectorId: "legacy-shape-fixture",
+      value: { payload: { system: null, sessions: [], agentState: metrics }, diagnostic, hostCount: 0, treeCount: 0, targets: [] } });
+    const persisted = JSON.parse(serialized).observation.value.payload.agentState;
+    expect(validAgentStateMetricsBeforeAntigravity(persisted)).toBe(true);
+    expect(persisted.stuckByEngine).toEqual({ codex: 1, claude: 0, copilot: 0 });
+    expect(parsePersistedResourceObservation(serialized)?.value.payload.agentState?.stuckByEngine.antigravity).toBe(0);
+  });
+
+  test("worker pre-Antigravity resource metrics are normalized and malformed buckets are rejected", async () => {
+    const message = JSON.parse(EMPTY_FRESH_WORKER_MESSAGE);
+    for (const agentState of [preAntigravityMetrics, { ...preAntigravityMetrics, stuckByEngine: { codex: null } }]) {
+      const frame = JSON.stringify({ ...message, payload: { ...message.payload, agentState } });
+      await withResourceWorkerScript([`printf '%s\\n' ${shellQuote(frame)}`], async () => {
+        const outcome = await workerTestReader().read(true);
+        if (agentState === preAntigravityMetrics) {
+          expect(outcome.diagnostic.status).toBe("complete");
+          expect(outcome.payload.agentState).toEqual(completeMetrics);
+        } else {
+          expect(outcome.payload.agentState).toBeUndefined();
+          expect(outcome.diagnostic.failure?.cause).toBe("worker-output-invalid");
+        }
+      });
+    }
+  });
+
   test("the packaged worker leaves writable and read-only homes and state trees byte-identical", async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "llv-resource-package-purity-"));
     const bundleName = "packaged-resource-worker.mjs";
