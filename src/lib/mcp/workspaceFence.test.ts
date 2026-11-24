@@ -1139,6 +1139,8 @@ test("a fenced seat keeps the Telegram tools its record grants; no other fenced 
     call("telegram_bot_chats", { clientRequestId: `telegram-${++requests}` }),
     call("telegram_bot_messages", { chat: "team", clientRequestId: `telegram-${++requests}` }),
     call("telegram_bot_send", { chat: "team", text: "status", clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_reactions", { chat: "team", clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_set_reaction", { chat: "team", messageId: 5, reaction: { type: "emoji", emoji: "👍" }, clientRequestId: `telegram-${++requests}` }),
   ]);
   const refused = async () => { for (const answer of await tools()) expect(answer).toMatchObject(REFUSED); };
   const served = async () => { for (const answer of await tools()) expect(answer.ok).toBe(true); };
