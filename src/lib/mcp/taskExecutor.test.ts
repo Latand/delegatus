@@ -18,7 +18,7 @@ import { peerCredentials } from "./nativePeer";
 const seedTaskId = `00000000-0000-4000-8000-${String(0).padStart(12, "0")}`;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-task-executor-"));
 // Keep the preload's private state root: static imports already captured it.
-for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
+for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
   process.env[name] = path.join(root, name); fs.mkdirSync(process.env[name]!, { recursive: true });
 }
 process.env.TMPDIR = root;
