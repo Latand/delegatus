@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
-import { recordAntigravityAuthState } from "@/lib/accounts/antigravity";
+import { antigravityDefaultHome, recordAntigravityAuthState } from "@/lib/accounts/antigravity";
 import {
   antigravityModelsFromAcp,
   resolveAntigravityModelAndEffort,
@@ -37,6 +37,7 @@ import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSan
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import { nativeProcessId, signalAgentDomain, signalBoundaryOff, signalDomain, spawnManagedEngine } from "./agentSignalSandbox";
 import type {
+  DeliveryAcceptanceObservation,
   DeliveryReceipt,
   EngineHost,
   HostState,
@@ -114,6 +115,9 @@ type RunningPrompt = {
   imageCount: number;
   accepted: boolean;
   settled: Promise<void>;
+  confirmation: Promise<DeliveryAcceptanceObservation>;
+  confirmationResult: DeliveryAcceptanceObservation | null;
+  resolveConfirmation: (result: DeliveryAcceptanceObservation) => void;
 };
 type DeliveryAcceptanceRecord =
   | { state: "pending"; turnId: string }
@@ -209,6 +213,122 @@ interface DeliveryAcceptanceRow {
   reason: string | null;
 }
 
+interface LedgerFileFingerprint {
+  ledgerPath: string;
+  dev: string;
+  ino: string;
+  fileSize: string;
+  mtimeNs: string;
+  ctimeNs: string;
+  tailSha256: string;
+}
+
+const MAX_LEDGER_HOME_REGISTRY = 256;
+const LEDGER_CONTENT_SAMPLE_BYTES = 4096;
+const ledgerHomeRegistry = new Map<string, string>();
+
+function canonicalizeFilePath(pathname: string): string {
+  const resolved = path.resolve(pathname);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    const dir = path.dirname(resolved);
+    try {
+      return path.join(fs.realpathSync(dir), path.basename(resolved));
+    } catch {
+      return resolved;
+    }
+  }
+}
+
+/** Hashes head, middle, and tail samples (or full contents when <= 16 KiB) plus
+ * byte length so same-length replacements at any region are detected in O(1) I/O. */
+function readContentSampleSha256(filePath: string, size: number): string {
+  const hash = crypto.createHash("sha256");
+  hash.update(`v2:${size}:`);
+  if (size <= 0) return hash.digest("hex");
+  const fd = fs.openSync(filePath, "r");
+  try {
+    if (size <= LEDGER_CONTENT_SAMPLE_BYTES * 4) {
+      const buf = Buffer.allocUnsafe(size);
+      const bytesRead = fs.readSync(fd, buf, 0, size, 0);
+      hash.update(buf.subarray(0, bytesRead));
+      return hash.digest("hex");
+    }
+    const buf = Buffer.allocUnsafe(LEDGER_CONTENT_SAMPLE_BYTES);
+    const offsets = [
+      0,
+      Math.max(0, Math.floor((size - LEDGER_CONTENT_SAMPLE_BYTES) / 2)),
+      Math.max(0, size - LEDGER_CONTENT_SAMPLE_BYTES),
+    ];
+    for (const offset of offsets) {
+      const bytesRead = fs.readSync(fd, buf, 0, LEDGER_CONTENT_SAMPLE_BYTES, offset);
+      hash.update(buf.subarray(0, bytesRead));
+    }
+    return hash.digest("hex");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function statLedgerFingerprint(
+  ledgerPath: string,
+): { exists: true; fingerprint: LedgerFileFingerprint } | { exists: false; enoent: boolean; error?: string } {
+  try {
+    const canonical = canonicalizeFilePath(ledgerPath);
+    const stat = fs.statSync(canonical, { bigint: true });
+    if (!stat.isFile()) return { exists: false, enoent: false, error: "runtime event ledger path is not a regular file" };
+    const sizeNumber = Number(stat.size);
+    return {
+      exists: true,
+      fingerprint: {
+        ledgerPath: canonical,
+        dev: String(stat.dev),
+        ino: String(stat.ino),
+        fileSize: String(stat.size),
+        mtimeNs: String(stat.mtimeNs),
+        ctimeNs: String(stat.ctimeNs),
+        tailSha256: readContentSampleSha256(canonical, sizeNumber),
+      },
+    };
+  } catch (error) {
+    const enoent = (error as NodeJS.ErrnoException).code === "ENOENT";
+    return { exists: false, enoent, ...(enoent ? {} : { error: safeError(error) }) };
+  }
+}
+
+function sameLedgerFingerprint(left: LedgerFileFingerprint | null, right: LedgerFileFingerprint | null): boolean {
+  if (!left || !right) return false;
+  return left.ledgerPath === right.ledgerPath
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.fileSize === right.fileSize
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+    && left.tailSha256 === right.tailSha256;
+}
+
+function rememberLedgerAntigravityHome(ledgerPath: string, antigravityHome: string): void {
+  const canonicalLedger = canonicalizeFilePath(ledgerPath);
+  const canonicalHome = canonicalizeFilePath(antigravityHome);
+  ledgerHomeRegistry.delete(canonicalLedger);
+  ledgerHomeRegistry.set(canonicalLedger, canonicalHome);
+  while (ledgerHomeRegistry.size > MAX_LEDGER_HOME_REGISTRY) {
+    const oldest = ledgerHomeRegistry.keys().next().value;
+    if (oldest === undefined) break;
+    ledgerHomeRegistry.delete(oldest);
+  }
+}
+
+function antigravityHomeFromArtifactPath(artifactPath: string | null | undefined): string | null {
+  if (!artifactPath || typeof artifactPath !== "string") return null;
+  if (path.basename(artifactPath) !== "events.jsonl") return null;
+  const sessionDir = path.dirname(artifactPath);
+  const sessionsDir = path.dirname(sessionDir);
+  if (path.basename(sessionsDir) !== "sessions") return null;
+  return path.dirname(sessionsDir);
+}
+
 function deliveryRecordFromRow(row: DeliveryAcceptanceRow | null | undefined): DeliveryAcceptanceRecord | null {
   if (!row) return null;
   if (row.state === "accepted") {
@@ -261,9 +381,9 @@ class AntigravityDeliveryIndex {
       if (!readonly) {
         try { fs.chmodSync(dbPath, 0o600); } catch { /* best effort */ }
         const existingTables = db.query<{ count: number }, []>(
-          "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('antigravity_delivery_acceptance', 'antigravity_delivery_ledger_sync')",
+          "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('antigravity_delivery_acceptance', 'antigravity_delivery_ledger_sync', 'antigravity_delivery_ledger_fingerprint')",
         ).get()?.count ?? 0;
-        if (existingTables < 2) {
+        if (existingTables < 3) {
           db.exec(
             "PRAGMA journal_mode=WAL;"
             + "PRAGMA synchronous=NORMAL;"
@@ -282,8 +402,24 @@ class AntigravityDeliveryIndex {
             + "  synced_seq INTEGER NOT NULL,"
             + "  synced_count INTEGER NOT NULL,"
             + "  max_delivery_seq INTEGER NOT NULL"
+            + ");"
+            + "CREATE TABLE IF NOT EXISTS antigravity_delivery_ledger_fingerprint ("
+            + "  session_id TEXT PRIMARY KEY,"
+            + "  ledger_path TEXT NOT NULL,"
+            + "  dev TEXT NOT NULL,"
+            + "  ino TEXT NOT NULL,"
+            + "  file_size TEXT NOT NULL,"
+            + "  mtime_ns TEXT NOT NULL,"
+            + "  ctime_ns TEXT NOT NULL,"
+            + "  tail_sha256 TEXT NOT NULL DEFAULT ''"
             + ");",
           );
+        }
+        const fpColumns = db.query<{ name: string }, []>(
+          "PRAGMA table_info(antigravity_delivery_ledger_fingerprint)",
+        ).all();
+        if (fpColumns.length > 0 && !fpColumns.some((col) => col.name === "tail_sha256")) {
+          db.exec("ALTER TABLE antigravity_delivery_ledger_fingerprint ADD COLUMN tail_sha256 TEXT NOT NULL DEFAULT '';");
         }
       }
       return new AntigravityDeliveryIndex(db);
@@ -300,11 +436,38 @@ class AntigravityDeliveryIndex {
     return deliveryRecordFromRow(row);
   }
 
+  matchesFingerprint(sessionId: string, expected: LedgerFileFingerprint): boolean {
+    try {
+      const row = this.db.query<{
+        ledger_path: string;
+        dev: string;
+        ino: string;
+        file_size: string;
+        mtime_ns: string;
+        ctime_ns: string;
+        tail_sha256: string;
+      }, [string]>(
+        "SELECT ledger_path, dev, ino, file_size, mtime_ns, ctime_ns, tail_sha256 FROM antigravity_delivery_ledger_fingerprint WHERE session_id = ?",
+      ).get(sessionId);
+      if (!row) return false;
+      return row.ledger_path === expected.ledgerPath
+        && row.dev === expected.dev
+        && row.ino === expected.ino
+        && row.file_size === expected.fileSize
+        && row.mtime_ns === expected.mtimeNs
+        && row.ctime_ns === expected.ctimeNs
+        && row.tail_sha256 === expected.tailSha256;
+    } catch {
+      return false;
+    }
+  }
+
   syncSession(
     sessionId: string,
     ledgerTailSeq: number,
     entries: ReadonlyMap<string, { record: DeliveryAcceptanceRecord; seq: number }>,
     maxDeliverySeq: number,
+    fingerprint?: LedgerFileFingerprint | null,
   ): void {
     const syncRow = this.db.query<
       { synced_seq: number; synced_count: number; max_delivery_seq: number },
@@ -316,7 +479,7 @@ class AntigravityDeliveryIndex {
       "SELECT 1 AS found FROM antigravity_delivery_acceptance WHERE session_id = ? LIMIT 1",
     ).get(sessionId) !== null;
 
-    if (entries.size === 0 && !syncRow && !hasRows) {
+    if (entries.size === 0 && !syncRow && !hasRows && !fingerprint) {
       return;
     }
 
@@ -336,32 +499,67 @@ class AntigravityDeliveryIndex {
     const deleteSync = this.db.query(
       "DELETE FROM antigravity_delivery_ledger_sync WHERE session_id = ?",
     );
+    const upsertFingerprint = this.db.query(
+      "INSERT OR REPLACE INTO antigravity_delivery_ledger_fingerprint (session_id, ledger_path, dev, ino, file_size, mtime_ns, ctime_ns, tail_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    const deleteFingerprint = this.db.query(
+      "DELETE FROM antigravity_delivery_ledger_fingerprint WHERE session_id = ?",
+    );
 
     this.db.transaction(() => {
       deleteSession.run(sessionId);
       if (entries.size === 0) {
         deleteSync.run(sessionId);
-        return;
+      } else {
+        for (const [deliveryId, entry] of entries) {
+          const rec = entry.record;
+          upsert.run(
+            sessionId,
+            deliveryId,
+            rec.state,
+            rec.turnId,
+            rec.state === "accepted" ? rec.acceptedAt : null,
+            rec.state === "failed" || rec.state === "unavailable" ? rec.reason : null,
+            entry.seq,
+          );
+        }
+        updateSync.run(sessionId, ledgerTailSeq, entries.size, maxDeliverySeq);
       }
-      for (const [deliveryId, entry] of entries) {
-        const rec = entry.record;
-        upsert.run(
+      if (fingerprint) {
+        upsertFingerprint.run(
           sessionId,
-          deliveryId,
-          rec.state,
-          rec.turnId,
-          rec.state === "accepted" ? rec.acceptedAt : null,
-          rec.state === "failed" || rec.state === "unavailable" ? rec.reason : null,
-          entry.seq,
+          fingerprint.ledgerPath,
+          fingerprint.dev,
+          fingerprint.ino,
+          fingerprint.fileSize,
+          fingerprint.mtimeNs,
+          fingerprint.ctimeNs,
+          fingerprint.tailSha256,
         );
+      } else {
+        deleteFingerprint.run(sessionId);
       }
-      updateSync.run(sessionId, ledgerTailSeq, entries.size, maxDeliverySeq);
     })();
   }
 
-  applyEvent(sessionId: string, event: RuntimeEvent): void {
+  applyEvent(sessionId: string, event: RuntimeEvent, fingerprint?: LedgerFileFingerprint | null): void {
     const ids = extractDeliveryEventIds(event);
-    if (ids.length === 0) return;
+    if (ids.length === 0) {
+      if (!fingerprint) return;
+      this.db.query(
+        "INSERT OR REPLACE INTO antigravity_delivery_ledger_fingerprint (session_id, ledger_path, dev, ino, file_size, mtime_ns, ctime_ns, tail_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        sessionId,
+        fingerprint.ledgerPath,
+        fingerprint.dev,
+        fingerprint.ino,
+        fingerprint.fileSize,
+        fingerprint.mtimeNs,
+        fingerprint.ctimeNs,
+        fingerprint.tailSha256,
+      );
+      return;
+    }
     const selectRow = this.db.query<DeliveryAcceptanceRow, [string, string]>(
       "SELECT state, turn_id, accepted_at, reason FROM antigravity_delivery_acceptance WHERE session_id = ? AND delivery_id = ?",
     );
@@ -376,6 +574,9 @@ class AntigravityDeliveryIndex {
     );
     const updateSync = this.db.query(
       "INSERT OR REPLACE INTO antigravity_delivery_ledger_sync (session_id, synced_seq, synced_count, max_delivery_seq) VALUES (?, ?, ?, ?)",
+    );
+    const upsertFingerprint = this.db.query(
+      "INSERT OR REPLACE INTO antigravity_delivery_ledger_fingerprint (session_id, ledger_path, dev, ino, file_size, mtime_ns, ctime_ns, tail_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     );
 
     this.db.transaction(() => {
@@ -403,7 +604,25 @@ class AntigravityDeliveryIndex {
         (syncRow?.synced_count ?? 0) + inserted,
         Math.max(syncRow?.max_delivery_seq ?? 0, event.seq),
       );
+      if (fingerprint) {
+        upsertFingerprint.run(
+          sessionId,
+          fingerprint.ledgerPath,
+          fingerprint.dev,
+          fingerprint.ino,
+          fingerprint.fileSize,
+          fingerprint.mtimeNs,
+          fingerprint.ctimeNs,
+          fingerprint.tailSha256,
+        );
+      }
     })();
+  }
+
+  clearFingerprint(sessionId: string): void {
+    try {
+      this.db.query("DELETE FROM antigravity_delivery_ledger_fingerprint WHERE session_id = ?").run(sessionId);
+    } catch { /* best effort */ }
   }
 
   close(): void {
@@ -485,6 +704,63 @@ export function validateAntigravitySessionId(sessionId: string): string {
     throw new Error("Antigravity session id is invalid");
   }
   return sessionId;
+}
+
+/** Reads durable owner-verified acceptance evidence for one Antigravity delivery
+    from the structured runtime event ledger. Uses an O(1) SQLite point read when
+    the derived index is proven consistent with the canonical JSONL ledger file
+    (`dev`, `ino`, `size`, `mtimeNs`, `ctimeNs`), and falls back cleanly to the
+    canonical JSONL ledger on busy DB, missing index, or modified history. */
+export async function readAntigravityConfirmedDelivery(
+  sessionId: string,
+  deliveryId: string,
+  options?: { eventStore?: RuntimeEventStore; antigravityHome?: string; artifactPath?: string },
+): Promise<{ turnId: string; acceptedAt: string } | null> {
+  if (!ANTIGRAVITY_SESSION_ID_PATTERN.test(sessionId) || sessionId.includes("..") || !deliveryId) return null;
+  const store = options?.eventStore ?? new FileRuntimeEventStore();
+  const ledgerFile = typeof store.ledgerPath === "function" ? store.ledgerPath(sessionId) : null;
+  if (ledgerFile) {
+    const stat = statLedgerFingerprint(ledgerFile);
+    if (!stat.exists && stat.enoent) return null;
+    if (stat.exists) {
+      const candidateHomes = new Set<string>();
+      if (options?.antigravityHome) candidateHomes.add(options.antigravityHome);
+      const fromArtifact = antigravityHomeFromArtifactPath(options?.artifactPath);
+      if (fromArtifact) candidateHomes.add(fromArtifact);
+      const remembered = ledgerHomeRegistry.get(stat.fingerprint.ledgerPath);
+      if (remembered) candidateHomes.add(remembered);
+      candidateHomes.add(antigravityDefaultHome());
+      for (const home of candidateHomes) {
+        let index: AntigravityDeliveryIndex | null = null;
+        try {
+          index = AntigravityDeliveryIndex.open(home, true);
+          if (index && index.matchesFingerprint(sessionId, stat.fingerprint)) {
+            const rec = index.get(sessionId, deliveryId);
+            return rec?.state === "accepted"
+              ? { turnId: rec.turnId, acceptedAt: rec.acceptedAt }
+              : null;
+          }
+        } catch {
+          // Busy DB or unreadable index: fall through to next candidate or canonical JSONL ledger.
+        } finally {
+          index?.close();
+        }
+      }
+    }
+  }
+  let current: DeliveryAcceptanceRecord | undefined;
+  if (store.scan) {
+    await store.scan(sessionId, (event) => {
+      current = reduceDeliveryAcceptanceEvent(current, event, deliveryId);
+    });
+  } else {
+    for (const event of store.load(sessionId)) {
+      current = reduceDeliveryAcceptanceEvent(current, event, deliveryId);
+    }
+  }
+  return current?.state === "accepted"
+    ? { turnId: current.turnId, acceptedAt: current.acceptedAt }
+    : null;
 }
 
 export function antigravityNativeHome(antigravityHome: string): string {
@@ -734,6 +1010,8 @@ export class AntigravityAcpHost implements EngineHost {
   private deliveryMutationSeq = 0;
   private deliveryIndex: AntigravityDeliveryIndex | null = null;
   private deliveryIndexHealthy = false;
+  private lastLedgerFingerprint: LedgerFileFingerprint | null = null;
+  private ledgerReconciliationPending = false;
   private readonly stateListeners = new Set<(state: HostState) => void>();
   private readonly stdoutDecoder = new StringDecoder("utf8");
   private readonly launchFlags: readonly string[];
@@ -741,6 +1019,7 @@ export class AntigravityAcpHost implements EngineHost {
   private stdoutBuffer = "";
   private nextRequestId = 1;
   private turnCounter = 0;
+  private confirmedPromptOrdinal = 0;
   private running: RunningPrompt | null = null;
   private pendingAssistantText = "";
   private currentModel: string | null = null;
@@ -1004,6 +1283,7 @@ export class AntigravityAcpHost implements EngineHost {
     });
 
     this.agentStateNativePromptAnchor = await readNativePromptAnchor(this.identity.path, !resumeSessionId);
+    this.confirmedPromptOrdinal = 0;
     this.options.assertCurrent?.();
     this.restore();
     this.emit({ kind: "session-status", status: "idle" });
@@ -1026,6 +1306,10 @@ export class AntigravityAcpHost implements EngineHost {
     recordChange: boolean,
   ): Promise<void> {
     const resolved = resolveAntigravityModelAndEffort(model, effort);
+    const previousBaseModel = this.currentBaseModel;
+    const previousEffort = this.currentEffort;
+    const previousModel = this.currentModel;
+    let modelChanged = false;
     if (resolved.baseModel) {
       const modelResult = record(await this.request("session/set_config_option", {
         sessionId,
@@ -1033,18 +1317,54 @@ export class AntigravityAcpHost implements EngineHost {
         value: resolved.baseModel,
       }));
       this.captureModelCatalog(modelResult?.configOptions);
+      modelChanged = resolved.baseModel !== previousBaseModel;
       this.currentBaseModel = resolved.baseModel;
       this.currentModel = resolved.combinedId ?? resolved.baseModel;
     }
     if (resolved.thoughtLevel) {
-      const effortResult = record(await this.request("session/set_config_option", {
-        sessionId,
-        configId: "thought_level",
-        value: resolved.thoughtLevel,
-      }));
-      this.captureModelCatalog(effortResult?.configOptions);
-      this.currentEffort = resolved.thoughtLevel;
-      if (this.currentBaseModel) this.currentModel = `${this.currentBaseModel}-${resolved.thoughtLevel}`;
+      try {
+        const effortResult = record(await this.request("session/set_config_option", {
+          sessionId,
+          configId: "thought_level",
+          value: resolved.thoughtLevel,
+        }));
+        this.captureModelCatalog(effortResult?.configOptions);
+        this.currentEffort = resolved.thoughtLevel;
+        if (this.currentBaseModel) this.currentModel = `${this.currentBaseModel}-${resolved.thoughtLevel}`;
+      } catch (effortError) {
+        if (modelChanged) {
+          if (previousBaseModel) {
+            try {
+              const restored = record(await this.request("session/set_config_option", {
+                sessionId,
+                configId: "model",
+                value: previousBaseModel,
+              }));
+              this.captureModelCatalog(restored?.configOptions);
+              if (previousEffort) {
+                const restoredEffort = record(await this.request("session/set_config_option", {
+                  sessionId,
+                  configId: "thought_level",
+                  value: previousEffort,
+                }));
+                this.captureModelCatalog(restoredEffort?.configOptions);
+              }
+              this.currentBaseModel = previousBaseModel;
+              this.currentEffort = previousEffort;
+              this.currentModel = previousModel;
+            } catch {
+              const failure = effortError instanceof Error ? effortError : new Error(String(effortError));
+              (failure as Error & { rollbackFailed?: boolean }).rollbackFailed = true;
+              throw failure;
+            }
+          } else {
+            const failure = effortError instanceof Error ? effortError : new Error(String(effortError));
+            (failure as Error & { rollbackFailed?: boolean }).rollbackFailed = true;
+            throw failure;
+          }
+        }
+        throw effortError;
+      }
     }
     if (recordChange && (resolved.baseModel || resolved.thoughtLevel) && this.identity.path) {
       this.appendTranscriptRecord("session.model_change", {
@@ -1105,8 +1425,8 @@ export class AntigravityAcpHost implements EngineHost {
     try { fs.closeSync(fd); } catch { /* already closed */ }
   }
 
-  private appendTranscriptRecord(type: string, data: JsonObject): void {
-    if (this.transcriptFd === null) return;
+  private appendTranscriptRecord(type: string, data: JsonObject): boolean {
+    if (this.transcriptFd === null) return false;
     try {
       const line = JSON.stringify({
         schemaVersion: ANTIGRAVITY_TRANSCRIPT_SCHEMA_VERSION,
@@ -1116,8 +1436,10 @@ export class AntigravityAcpHost implements EngineHost {
         data,
       });
       fs.writeSync(this.transcriptFd, `${line}\n`, undefined, "utf8");
+      return true;
     } catch (error) {
       console.warn("[antigravity] failed to append transcript record", safeError(error));
+      return false;
     }
   }
 
@@ -1220,20 +1542,23 @@ export class AntigravityAcpHost implements EngineHost {
       },
     });
     if (!persisted) {
+      const reason = `Antigravity runtime event ledger failed while persisting acceptance for delivery ${running.entryId}`;
       this.recordDeliveryAcceptance(running.entryId, {
         state: "unavailable",
         turnId: running.turnId,
-        reason: `Antigravity runtime event ledger failed while persisting acceptance for delivery ${running.entryId}`,
+        reason,
       });
+      running.resolveConfirmation({ outcome: "uncertain", reason });
       return false;
     }
-    this.appendTranscriptRecord("user.message", {
+    const wroteUserMessage = this.appendTranscriptRecord("user.message", {
       turnId: running.turnId,
       entryId: running.entryId,
       content: running.promptText,
       imageCount: running.imageCount,
       acceptedAt,
     });
+    if (wroteUserMessage) this.confirmedPromptOrdinal += 1;
     this.appendTranscriptRecord("assistant.turn_start", {
       turnId: running.turnId,
       entryId: running.entryId,
@@ -1244,6 +1569,8 @@ export class AntigravityAcpHost implements EngineHost {
       turnId: running.turnId,
       acceptedAt,
     });
+    running.resolveConfirmation({ outcome: "accepted", turnId: running.turnId });
+    this.notifyStateListeners();
     return true;
   }
 
@@ -1279,6 +1606,13 @@ export class AntigravityAcpHost implements EngineHost {
     let priorAcceptance: DeliveryAcceptanceRecord | undefined;
     let sawConcurrentMutation = this.deliveryMutationSeq !== mutationAtEntry;
     for (;;) {
+      // Reconcile against canonical JSONL before deciding from memory or SQLite
+      // if the ledger file was replaced or rewritten out-of-band. Never serve a
+      // cached decision when reconciliation hits an I/O error.
+      const continuity = this.ensureLedgerContinuityBeforeRead();
+      if (!continuity.ok) {
+        return { outcome: "rejected", reason: "stale-turn", refusal: continuity.reason };
+      }
       const mutationBefore = this.deliveryMutationSeq;
       const already = this.sentEntries.get(normalized.id);
       if (already) return { outcome: "turn-started", turnId: already };
@@ -1307,7 +1641,23 @@ export class AntigravityAcpHost implements EngineHost {
       return { outcome: "turn-started", turnId: restoredTurnId };
     }
     if (priorAcceptance?.state === "pending") {
-      return { outcome: "turn-started", turnId: priorAcceptance.turnId };
+      const inFlight = this.running?.entryId === normalized.id
+        ? this.running
+        : this.outstandingPrompt?.entryId === normalized.id
+          ? this.outstandingPrompt
+          : null;
+      return {
+        outcome: "turn-started",
+        turnId: priorAcceptance.turnId,
+        ...(inFlight
+          ? { observeAcceptance: () => inFlight.confirmation }
+          : {
+            observeAcceptance: async () => ({
+              outcome: "uncertain" as const,
+              reason: `Antigravity delivery ${normalized.id} is pending without an active ACP prompt`,
+            }),
+          }),
+      };
     }
     if (priorAcceptance?.state === "unavailable") {
       return { outcome: "rejected", reason: "stale-turn", refusal: priorAcceptance.reason };
@@ -1329,6 +1679,8 @@ export class AntigravityAcpHost implements EngineHost {
     const turnId = `antigravity:${this.turnCounter}-${crypto.randomBytes(4).toString("hex")}`;
 
     let settle!: () => void;
+    let resolveConfirmationRaw!: (result: DeliveryAcceptanceObservation) => void;
+    const confirmation = new Promise<DeliveryAcceptanceObservation>((resolve) => { resolveConfirmationRaw = resolve; });
     const running: RunningPrompt = {
       turnId,
       entryId: normalized.id,
@@ -1336,6 +1688,13 @@ export class AntigravityAcpHost implements EngineHost {
       imageCount: normalized.content.images.length,
       accepted: false,
       settled: new Promise((resolve) => { settle = resolve; }),
+      confirmation,
+      confirmationResult: null,
+      resolveConfirmation: (result) => {
+        if (running.confirmationResult !== null) return;
+        running.confirmationResult = result;
+        resolveConfirmationRaw(result);
+      },
     };
     this.recordDeliveryAcceptance(normalized.id, { state: "pending", turnId });
     this.agentStateTurnStartedAt = Date.now();
@@ -1387,11 +1746,17 @@ export class AntigravityAcpHost implements EngineHost {
             phase: "completed",
             item: { type: "antigravity.delivery_failed", entryId: running.entryId, turnId, reason },
           });
+          const unpersistedReason = `Antigravity runtime event ledger failed while recording cancellation for delivery ${running.entryId}`;
           this.recordDeliveryAcceptance(
             running.entryId,
             failedPersisted
               ? { state: "failed", turnId, reason }
-              : { state: "unavailable", turnId, reason: `Antigravity runtime event ledger failed while recording cancellation for delivery ${running.entryId}` },
+              : { state: "unavailable", turnId, reason: unpersistedReason },
+          );
+          running.resolveConfirmation(
+            failedPersisted
+              ? { outcome: "rejected", reason }
+              : { outcome: "uncertain", reason: unpersistedReason },
           );
         }
         this.flushPendingAssistantText(turnId);
@@ -1436,21 +1801,29 @@ export class AntigravityAcpHost implements EngineHost {
               phase: "completed",
               item: { type: "antigravity.delivery_failed", entryId: running.entryId, turnId, reason },
             });
+            const unpersistedReason = `Antigravity runtime event ledger failed while recording outcome for delivery ${running.entryId}`;
             this.recordDeliveryAcceptance(
               running.entryId,
               failedPersisted
                 ? { state: "failed", turnId, reason }
-                : { state: "unavailable", turnId, reason: `Antigravity runtime event ledger failed while recording outcome for delivery ${running.entryId}` },
+                : { state: "unavailable", turnId, reason: unpersistedReason },
+            );
+            running.resolveConfirmation(
+              failedPersisted
+                ? { outcome: "rejected", reason }
+                : { outcome: "uncertain", reason: unpersistedReason },
             );
           } else {
             // Lost ACP reply (disconnect, crash, timeout, or host release after
             // prompt dispatch): never emit `delivery_failed`; leave the attempt
             // `unavailable` so a successor cannot blindly re-send.
+            const reason = `Antigravity lost the ACP reply for delivery ${running.entryId}: ${message}`;
             this.recordDeliveryAcceptance(running.entryId, {
               state: "unavailable",
               turnId,
-              reason: `Antigravity lost the ACP reply for delivery ${running.entryId}: ${message}`,
+              reason,
             });
+            running.resolveConfirmation({ outcome: "uncertain", reason });
           }
         }
         if (interrupted) {
@@ -1467,7 +1840,14 @@ export class AntigravityAcpHost implements EngineHost {
         settle();
       },
     );
-    return { outcome: "turn-started", turnId };
+    if (running.confirmationResult?.outcome === "accepted") {
+      return { outcome: "turn-started", turnId };
+    }
+    return {
+      outcome: "turn-started",
+      turnId,
+      observeAcceptance: () => running.confirmation,
+    };
   }
 
   async interrupt(turnRef: string): Promise<void> {
@@ -1539,6 +1919,10 @@ export class AntigravityAcpHost implements EngineHost {
     const deliveryId = typeof clientMessageId === "string" ? clientMessageId.trim() : "";
     if (!deliveryId) {
       return { state: "absent", reason: "Antigravity delivery id is empty" };
+    }
+    const continuity = this.ensureLedgerContinuityBeforeRead();
+    if (!continuity.ok) {
+      return { state: "unavailable", reason: continuity.reason };
     }
     let acceptance = this.deliveryAcceptance.get(deliveryId);
     if (!acceptance && this.deliveryAcceptanceEvicted) {
@@ -1637,7 +2021,7 @@ export class AntigravityAcpHost implements EngineHost {
       activeTurnRef: this.running?.turnId ?? null,
       pendingAttention: [...this.attentions.keys()],
       eventCursor: this.cursor,
-      promptOrdinal: this.agentStateNativePromptAnchor === null ? null : this.turnCounter,
+      promptOrdinal: this.agentStateNativePromptAnchor === null ? null : this.confirmedPromptOrdinal,
       startedAt: this.agentStateTurnStartedAt,
     };
   }
@@ -1663,7 +2047,7 @@ export class AntigravityAcpHost implements EngineHost {
       activeTurnRef: this.running?.turnId ?? null,
       agentStateTurnStartedAt: this.agentStateTurnStartedAt,
       agentStateNativePromptAnchor: this.agentStateNativePromptAnchor,
-      agentStateNativePromptOrdinal: this.agentStateNativePromptAnchor === null ? null : this.turnCounter,
+      agentStateNativePromptOrdinal: this.agentStateNativePromptAnchor === null ? null : this.confirmedPromptOrdinal,
       agentStateAttention: { pending: [...this.attentions.keys()], unverified: false },
       pendingAttention: [...this.attentions.keys()],
       ...memoryField(this.memoryCell),
@@ -1703,13 +2087,18 @@ export class AntigravityAcpHost implements EngineHost {
       this.closeDeliveryIndex();
       this.deliveryIndex = AntigravityDeliveryIndex.open(this.options.antigravityHome);
       if (this.deliveryIndex) {
-        this.deliveryIndex.syncSession(this.identity.sessionId, durableTailSeq, restoredAcceptance, maxDeliverySeq);
+        const ledgerFp = this.currentLedgerFingerprint();
+        this.deliveryIndex.syncSession(this.identity.sessionId, durableTailSeq, restoredAcceptance, maxDeliverySeq, ledgerFp);
+        if (ledgerFp) rememberLedgerAntigravityHome(ledgerFp.ledgerPath, this.options.antigravityHome);
+        this.lastLedgerFingerprint = ledgerFp;
         this.deliveryIndexHealthy = true;
       } else {
+        this.lastLedgerFingerprint = this.currentLedgerFingerprint();
         this.deliveryIndexHealthy = false;
       }
     } catch (error) {
       this.deliveryIndexHealthy = false;
+      this.lastLedgerFingerprint = this.currentLedgerFingerprint();
       this.closeDeliveryIndex();
       console.warn("[antigravity] delivery acceptance index unavailable; falling back to ledger lookup", safeError(error));
     }
@@ -1728,9 +2117,122 @@ export class AntigravityAcpHost implements EngineHost {
     }
   }
 
+  private currentLedgerFingerprint(): LedgerFileFingerprint | null {
+    const probed = this.probeLedgerFingerprint();
+    return probed.ok ? probed.fingerprint : null;
+  }
+
+  private probeLedgerFingerprint(): { ok: true; fingerprint: LedgerFileFingerprint | null } | { ok: false; reason: string } {
+    if (typeof this.eventStore.ledgerPath !== "function" || this.identity.sessionId === "pending") {
+      return { ok: true, fingerprint: null };
+    }
+    const stat = statLedgerFingerprint(this.eventStore.ledgerPath(this.identity.sessionId));
+    if (stat.exists) return { ok: true, fingerprint: stat.fingerprint };
+    if (stat.enoent) return { ok: true, fingerprint: null };
+    return {
+      ok: false,
+      reason: `Antigravity runtime event ledger cannot be verified: ${stat.error ?? "stat failed"}`,
+    };
+  }
+
+  private clearCachedDeliveryState(): void {
+    this.deliveryIndex?.clearFingerprint(this.identity.sessionId);
+    this.eventStore.invalidate?.(this.identity.sessionId);
+    this.deliveryAcceptance.clear();
+    this.sentEntries.clear();
+    this.deliveryAcceptanceEvicted = false;
+    this.deliveryIndexHealthy = false;
+    this.lastLedgerFingerprint = null;
+    this.ledgerReconciliationPending = true;
+    this.deliveryMutationSeq += 1;
+  }
+
+  private ensureLedgerContinuityBeforeRead(): { ok: true } | { ok: false; reason: string } {
+    if (this.identity.sessionId === "pending" || typeof this.eventStore.ledgerPath !== "function") {
+      return { ok: true };
+    }
+    const probed = this.probeLedgerFingerprint();
+    if (!probed.ok) {
+      this.clearCachedDeliveryState();
+      return { ok: false, reason: probed.reason };
+    }
+    const currentFp = probed.fingerprint;
+    if (this.ledgerReconciliationPending) {
+      return this.reconcileExternallyModifiedLedger(currentFp);
+    }
+    if (this.lastLedgerFingerprint === null) {
+      if (currentFp !== null) return this.reconcileExternallyModifiedLedger(currentFp);
+      return { ok: true };
+    }
+    if (!sameLedgerFingerprint(this.lastLedgerFingerprint, currentFp)) {
+      return this.reconcileExternallyModifiedLedger(currentFp);
+    }
+    return { ok: true };
+  }
+
+  private reconcileExternallyModifiedLedger(afterFp: LedgerFileFingerprint | null): { ok: true } | { ok: false; reason: string } {
+    // Discard cached delivery decisions BEFORE reading disk so a transient I/O
+    // failure (e.g. EIO) can never fall through to stale pre-replacement state.
+    this.clearCachedDeliveryState();
+    try {
+      const canonical = this.eventStore.load(this.identity.sessionId);
+      const rebuilt = new Map<string, { record: DeliveryAcceptanceRecord; seq: number }>();
+      let maxDeliverySeq = 0;
+      for (const ev of canonical) {
+        if (ev.kind === "item" && reduceDeliveryAcceptanceIntoMap(rebuilt, ev)) {
+          maxDeliverySeq = ev.seq;
+        }
+      }
+      this.deliveryAcceptanceEvicted = rebuilt.size > ANTIGRAVITY_SENT_ENTRY_MEMORY;
+      for (const [entryId, entry] of rebuilt) {
+        this.recordDeliveryAcceptance(entryId, entry.record, false);
+        if (entry.record.state === "accepted") {
+          this.recordSentEntry(entryId, entry.record.turnId || `restored:${entryId}`);
+        }
+      }
+      if (this.running && !this.running.accepted && !rebuilt.has(this.running.entryId)) {
+        this.recordDeliveryAcceptance(this.running.entryId, { state: "pending", turnId: this.running.turnId }, false);
+      }
+      this.deliveryMutationSeq += 1;
+      const tailSeq = canonical.at(-1)?.seq ?? 0;
+      this.cursor = tailSeq;
+      this.eventWindow.restore(canonical);
+      this.eventWindowRevision += 1;
+      if (this.deliveryIndex) {
+        this.deliveryIndex.syncSession(this.identity.sessionId, tailSeq, rebuilt, maxDeliverySeq, afterFp);
+        if (afterFp) rememberLedgerAntigravityHome(afterFp.ledgerPath, this.options.antigravityHome);
+        this.deliveryIndexHealthy = true;
+      } else {
+        this.deliveryIndexHealthy = false;
+      }
+      this.lastLedgerFingerprint = afterFp;
+      this.ledgerReconciliationPending = false;
+      return { ok: true };
+    } catch (error) {
+      this.clearCachedDeliveryState();
+      const reason = `Antigravity runtime event ledger reconciliation failed: ${safeError(error)}`;
+      console.warn("[antigravity] externally modified ledger reconciliation failed; withholding cached delivery state", safeError(error));
+      return { ok: false, reason };
+    }
+  }
+
   private emit(event: UnsequencedEvent): boolean {
     this.turnSilence?.observe(event);
     if (this.ledgerFailed || this.identity.sessionId === "pending") return false;
+    const before = this.probeLedgerFingerprint();
+    const needsReconcile = this.ledgerReconciliationPending
+      || !before.ok
+      || (this.lastLedgerFingerprint !== null && !sameLedgerFingerprint(this.lastLedgerFingerprint, before.fingerprint));
+    if (needsReconcile) {
+      // Reconcile cached state, sequence cursor, and SQLite delivery rows against
+      // the replaced canonical file BEFORE appending, so neither sequence numbers
+      // nor index rows drift from disk — and never clear pending reconciliation on I/O failure.
+      if (!before.ok) {
+        this.clearCachedDeliveryState();
+      } else {
+        this.reconcileExternallyModifiedLedger(before.fingerprint);
+      }
+    }
     let nextCursor: number;
     try {
       nextCursor = nextRuntimeEventSequence(this.cursor);
@@ -1749,12 +2251,21 @@ export class AntigravityAcpHost implements EngineHost {
       this.fail(new Error(`runtime event ledger failed: ${safeError(error)}`));
       return false;
     }
-    if (this.deliveryIndex && this.deliveryIndexHealthy) {
-      try {
-        this.deliveryIndex.applyEvent(this.identity.sessionId, sequenced);
-      } catch (error) {
-        this.deliveryIndexHealthy = false;
-        console.warn("[antigravity] delivery acceptance index update failed; falling back to ledger lookup", safeError(error));
+    if (!this.ledgerReconciliationPending) {
+      const afterFp = this.currentLedgerFingerprint();
+      if (this.deliveryIndex && this.deliveryIndexHealthy) {
+        try {
+          this.deliveryIndex.applyEvent(this.identity.sessionId, sequenced, afterFp);
+          if (afterFp) rememberLedgerAntigravityHome(afterFp.ledgerPath, this.options.antigravityHome);
+          this.lastLedgerFingerprint = afterFp;
+        } catch (error) {
+          this.deliveryIndex.clearFingerprint(this.identity.sessionId);
+          this.deliveryIndexHealthy = false;
+          this.lastLedgerFingerprint = null;
+          console.warn("[antigravity] delivery acceptance index update failed; falling back to ledger lookup", safeError(error));
+        }
+      } else {
+        this.lastLedgerFingerprint = afterFp;
       }
     }
     this.eventWindowRevision += 1;
@@ -1991,11 +2502,13 @@ export class AntigravityAcpHost implements EngineHost {
         // Do NOT emit `antigravity.delivery_failed` on host release: ACP
         // already received `session/prompt` after durable `delivery_dispatched`,
         // so release without an explicit ACP rejection leaves delivery `unavailable`.
+        const reason = `Antigravity host released before ACP confirmed delivery ${running.entryId}`;
         this.recordDeliveryAcceptance(running.entryId, {
           state: "unavailable",
           turnId: running.turnId,
-          reason: `Antigravity host released before ACP confirmed delivery ${running.entryId}`,
+          reason,
         });
+        running.resolveConfirmation({ outcome: "uncertain", reason });
       }
       this.flushPendingAssistantText(running.turnId);
       this.appendTranscriptRecord("abort", { turnId: running.turnId, reason: "host_release" });
@@ -2041,13 +2554,15 @@ export class AntigravityAcpHost implements EngineHost {
         // a host exit/fault without an explicit ACP JSON-RPC error cannot prove
         // the peer never started it, so leave it `unavailable` (never emit
         // `antigravity.delivery_failed`).
+        const reason = this.ledgerFailed
+          ? `Antigravity runtime event ledger failed while tracking delivery ${running.entryId}: ${safeError(error)}`
+          : `Antigravity host exited before confirming delivery ${running.entryId}: ${safeError(error)}`;
         this.recordDeliveryAcceptance(running.entryId, {
           state: "unavailable",
           turnId: running.turnId,
-          reason: this.ledgerFailed
-            ? `Antigravity runtime event ledger failed while tracking delivery ${running.entryId}: ${safeError(error)}`
-            : `Antigravity host exited before confirming delivery ${running.entryId}: ${safeError(error)}`,
+          reason,
         });
+        running.resolveConfirmation({ outcome: "uncertain", reason });
       }
       this.flushPendingAssistantText(running.turnId);
       this.appendTranscriptRecord("session.error", {

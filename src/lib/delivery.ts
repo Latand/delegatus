@@ -267,7 +267,7 @@ type AgentTranscript = FileEntry & { engine: AgentEngine };
 
 /** A transcript of an engine the registry keeps conversations for. */
 function agentTranscript(entry: FileEntry): entry is AgentTranscript {
-  return entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot";
+  return entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot" || entry.engine === "antigravity";
 }
 
 /**
