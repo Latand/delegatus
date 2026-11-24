@@ -12,7 +12,7 @@ import { BACKUP_DIRECTORY, backupDatabase, stateDatabases } from "@/lib/state/du
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { RuntimeHost } from "@/runtime-host/host";
-import { projectHostedRestart, activeSeat } from "./startupRecipient.fixture";
+import { projectHostedRestart, activeSeat, runtimeJournalClient } from "./startupRecipient.fixture";
 import { CHECKOUT_MERGER_CAPTURE, type CheckoutMergerCut } from "./checkoutMergerRecovery";
 import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
 import type { RuntimeHostClient } from "./client";
@@ -20,7 +20,7 @@ import type { RuntimeSocketRequest } from "./contracts";
 import * as startup from "./startup";
 import { startupStructuredHostEntries } from "./startupSnapshot";
 import { StartupRowRetries, startupRowRetries } from "./startupRowRetries";
-import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
+import { bindStructuredDeliveryQueue, completeStructuredDeliveryQueueStartup } from "./structuredDeliveryController";
 import * as startupStatus from "./startupStatus";
 
 const full = process.env.LLV_STARTUP_CENSUS_REPLAY === "1";
@@ -43,30 +43,58 @@ const shape: RegistryPerformanceDatasetShape = {
   uncertainDeliveries: 0, outstandingReceipts: 0, workers: 0, transcripts: 0, projects: 8,
 };
 
+async function buildSeed(directory: string) {
+  const data = buildRegistryPerformanceDataset(directory, shape, { sessionsRoot: path.join(directory, "sessions") });
+  const filename = path.join(directory, "runtime.sqlite");
+  const previous = process.env.LLV_RUNTIME_JOURNAL;
+  process.env.LLV_RUNTIME_JOURNAL = filename;
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: data.filename,
+  });
+  try {
+    // The steady-state watermark must be backed by published projections.
+    // Use the serving controller to write the initial journal once.
+    await bindStructuredDeliveryQueue([], {
+      registry, client: runtimeJournalClient(journal), deferStartupWork: true,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0,
+    });
+    await completeStructuredDeliveryQueueStartup([]);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    registry.close();
+    journal.close();
+    if (previous === undefined) delete process.env.LLV_RUNTIME_JOURNAL;
+    else process.env.LLV_RUNTIME_JOURNAL = previous;
+  }
+  return data;
+}
+
 test("replay a retained structured-host registry", async () => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "startup-census-replay-"));
   if (seed) {
     try {
-      const data = buildRegistryPerformanceDataset(seed, shape, { sessionsRoot: path.join(seed, "sessions") });
+      const data = await buildSeed(seed);
       const sha256 = createHash("sha256").update(fs.readFileSync(data.filename)).digest("hex");
-      console.log(JSON.stringify({ startupCensusSeed: { sha256, rows: data.rows, coldRows: data.coldRows, seedMs: data.seedMs } }));
+      const journalSha256 = createHash("sha256").update(fs.readFileSync(path.join(seed, "runtime.sqlite"))).digest("hex");
+      console.log(JSON.stringify({ startupCensusSeed: { sha256, journalSha256, rows: data.rows, coldRows: data.coldRows, seedMs: data.seedMs } }));
     } finally { fs.rmdirSync(scratch); }
     return;
   }
-  const fixture = process.env.LLV_STARTUP_CENSUS_DATA
-    ? path.join(process.env.LLV_STARTUP_CENSUS_DATA, "agent-registry.sqlite")
-    : buildRegistryPerformanceDataset(scratch, shape, { sessionsRoot: path.join(scratch, "sessions") }).filename;
+  const fixture = process.env.LLV_STARTUP_CENSUS_DATA ?? path.join(scratch, "seed");
+  if (!process.env.LLV_STARTUP_CENSUS_DATA) await buildSeed(fixture);
   const sqliteFilename = path.join(scratch, "replay.sqlite");
-  fs.copyFileSync(fixture, sqliteFilename);
+  fs.copyFileSync(path.join(fixture, "agent-registry.sqlite"), sqliteFilename);
   const journalPath = path.join(scratch, "runtime.sqlite");
+  fs.copyFileSync(path.join(fixture, "runtime.sqlite"), journalPath);
   const previousJournal = process.env.LLV_RUNTIME_JOURNAL;
   process.env.LLV_RUNTIME_JOURNAL = journalPath;
   const journal = new RuntimeJournal(journalPath, { structuredHosts: true });
   const db = new Database(sqliteFilename);
   try {
     const archiveId = db.query<{ value: number }, []>("SELECT MAX(id) AS value FROM registry_archive").get()!.value;
-    // Replay a normal boot after the one-time fallback sweep has completed.
-    db.query("INSERT INTO registry_meta(key,value) VALUES ('startup_fallback_watermark',?)")
+    // Translate the completed watermark to the private journal copy's inode.
+    db.query("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('startup_fallback_watermark',?)")
       .run(JSON.stringify({ journal: databaseFileIdentity(journalPath), archiveId }));
   } finally { db.close(); }
   let entryPayloadReads = 0;
@@ -224,6 +252,7 @@ test("replay a retained structured-host registry", async () => {
       interruption: interruptions.list().map(obligation => obligation.state).sort(),
       alarm: JSON.parse(fs.readFileSync(alarm, "utf8"))[hostKey(6)] !== undefined,
       checkoutEndpoint: after.entries[hostKey(2)]?.structuredHost?.endpoint, historicalDeferral,
+      historyProjection: journal.readSession({ conversationId: conversation(9) })?.host,
       nonReleasedArchived: after.entries[hostKey(8)]?.structuredHost?.endpoint,
     };
     const metrics = {
@@ -242,6 +271,7 @@ test("replay a retained structured-host registry", async () => {
     expect(eligible).toContain(session(4));
     expect(censusMs).toBeGreaterThan(0);
     expect(historicalDeferral).toBe(true);
+    expect(digestInput.historyProjection).toBe("dead");
     if (process.env.LLV_STARTUP_CENSUS_BASE === "1") expect(selected).toHaveLength(entries);
     else {
       expect(selected).toHaveLength(entries - census.archived);
