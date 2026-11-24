@@ -6,6 +6,7 @@ import path from "node:path";
 import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
 import { headFileCache } from "./local-gate-tests";
 import { fixtureCheckAdmissionEnv } from "./local-gate.fixture";
+import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -86,14 +87,18 @@ test("fixture contract", () => { ${interrupted ? "process.exit(124);" : "expect(
 
 serviceTest("an incomplete head run retains only complete green files across fresh isolated workers", () => {
   const f = fixture();
-  const run = (name: string, supervisor: number) => f.run({
-    ...isolatedEnvironment(path.join(f.root, name), { NODE_ENV: "test" }),
-    LLV_CHECK_ENTRY_SUPERVISOR: String(supervisor),
-  });
-  const first = run("first-check", 100);
+  const run = (supervisor: number) => {
+    const sandbox = recordGateSandbox(mkdtempSync(path.join(f.root, "delegatus-local-gate-")));
+    try {
+      return f.run({ ...isolatedEnvironment(sandbox, { NODE_ENV: "test" }), LLV_CHECK_ENTRY_SUPERVISOR: String(supervisor) });
+    } finally {
+      releaseGateSandbox(sandbox);
+    }
+  };
+  const first = run(100);
   expect(first.status, first.output).toBe(1);
   expect(f.samples()).toEqual({ a: 1, b: 1 });
-  const repeated = run("retry-check", 101);
+  const repeated = run(101);
   expect(repeated.status, repeated.output).toBe(1);
   expect(repeated.output).toContain("reused complete green head file a.test.ts");
   expect(repeated.output).not.toContain("reused complete green head file b.test.ts");
