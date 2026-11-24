@@ -10,9 +10,10 @@ export type LegacyInstallerObservation =
 
 const vanished = (error: NodeJS.ErrnoException) => error.code === "ENOENT" || error.code === "ESRCH";
 const exec = promisify(execFile);
+const CENSUS_MS = 5_000;
 
 async function observeMacInstaller(checkout: string): Promise<LegacyInstallerObservation> {
-  const end = performance.now() + 5_000;
+  const end = performance.now() + CENSUS_MS;
   const command = (executable: string, args: string[]) => exec(executable, args, {
     env: { ...process.env, LC_ALL: "C" }, timeout: Math.max(1, Math.floor(end - performance.now())), maxBuffer: 4 * 1024 * 1024,
   });
@@ -48,7 +49,7 @@ async function observeMacInstaller(checkout: string): Promise<LegacyInstallerObs
 
 /** Read a fresh Linux snapshot. Failure to observe a possible same-credential
  * installer (including one held before it creates its directory) stays open. */
-export async function observeLegacyInstaller(checkout: string): Promise<LegacyInstallerObservation> {
+async function inspectLegacyInstallers(checkout: string): Promise<LegacyInstallerObservation> {
   if (process.platform === "darwin") return observeMacInstaller(checkout);
   if (process.platform !== "linux" || process.getuid === undefined || process.geteuid === undefined) {
     return { kind: "incomplete", reason: "unsupported" };
@@ -59,7 +60,7 @@ export async function observeLegacyInstaller(checkout: string): Promise<LegacyIn
   try {
     [names, root] = await Promise.all([fs.readdir("/proc"), fs.realpath(checkout)]);
   } catch { return { kind: "incomplete", reason: "enumeration" }; }
-  const inspect = async (name: string): Promise<LegacyInstallerObservation | undefined> => {
+  const inspect = async (name: string, reread = false): Promise<LegacyInstallerObservation | undefined> => {
     const pid = Number(name), proc = `/proc/${pid}`;
     if (pid === process.pid) return;
     let status: string, cmdline: string, stat: string;
@@ -73,9 +74,15 @@ export async function observeLegacyInstaller(checkout: string): Promise<LegacyIn
     } catch (error) { return vanished(error as NodeJS.ErrnoException) ? undefined : { kind: "incomplete", reason: "process-identity" }; }
     const identity = stat.slice(stat.lastIndexOf(")") + 2).trim().split(" ");
     if (!identity[19]) return { kind: "incomplete", reason: "process-identity" };
-    if (identity[0] === "Z" || identity[0] === "X") return;
+    if (["Z", "X", "x"].includes(identity[0]!)) return;
     const args = cmdline.split("\0").slice(0, -1);
-    if (!args.length) return status.includes("Kthread:\t1") ? undefined : { kind: "incomplete", reason: "process-identity" };
+    if (!args.length) {
+      if (status.includes("Kthread:\t1")) return;
+      // cmdline can become empty during exit between the status and stat
+      // reads. A fresh stat distinguishes that cut from a live unknown writer.
+      if (!reread && performance.now() - started < CENSUS_MS) return inspect(name, true);
+      return { kind: "incomplete", reason: "process-identity" };
+    }
     const commands = args.slice(0, 3).map(argument => path.basename(argument));
     if (!args.includes("install") || !commands.some(command => command === "bun" || command === "bun-container")) return;
     try {
@@ -95,10 +102,19 @@ export async function observeLegacyInstaller(checkout: string): Promise<LegacyIn
   };
   const pids = names.filter(name => /^[1-9][0-9]*$/.test(name));
   for (let at = 0; at < pids.length; at += 32) {
-    if (performance.now() - started >= 5_000) return { kind: "incomplete", reason: "expired" };
+    if (performance.now() - started >= CENSUS_MS) return { kind: "incomplete", reason: "expired" };
     const results = await Promise.all(pids.slice(at, at + 32).map(inspect));
     const issue = results.find(result => result !== undefined);
     if (issue) return issue;
   }
-  return performance.now() - started >= 5_000 ? { kind: "incomplete", reason: "expired" } : { kind: "clear", observedAt: Date.now() };
+  return performance.now() - started >= CENSUS_MS ? { kind: "incomplete", reason: "expired" } : { kind: "clear", observedAt: Date.now() };
+}
+
+export async function observeLegacyInstaller(checkout: string): Promise<LegacyInstallerObservation> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<LegacyInstallerObservation>(resolve => {
+    timer = setTimeout(() => resolve({ kind: "incomplete", reason: "expired" }), CENSUS_MS);
+  });
+  try { return await Promise.race([inspectLegacyInstallers(checkout), expired]); }
+  finally { clearTimeout(timer); }
 }

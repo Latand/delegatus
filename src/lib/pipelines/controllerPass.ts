@@ -10,7 +10,7 @@ import { tickPipelines, defaultPipelinePorts, type PipelinePorts } from "./engin
 import { pipelineControllerJobLanes, reportProvisioningPhase, takePipelineControllerJobChanges } from "./controllerJobs";
 import { withControllerPipelineScope } from "./controllerScope";
 import { requestPipelineTick } from "./controllerSignal";
-import { advanceProvisioningJob, provisioningDueAt, reconcileExcludedProvisioning } from "./provisioningJob";
+import { advanceProvisioningJob, hasSupersededProvisioningJob, provisioningDueAt, reconcileExcludedProvisioning } from "./provisioningJob";
 import { pipelineStopReadLanes, runControllerStopReadLane } from "./controllerStopRead";
 import { acknowledgeExcludedProvisioning, controllerAttemptWindow, controllerPipelineVersion, deferPipelineControllerWork, acknowledgePipelineControllerWork, findControllerPipeline, recordPipelineControllerSelection, selectExcludedProvisioning, selectPipelineControllerWork, pipelineControllerReady, PipelineStoreError } from "./store";
 
@@ -56,7 +56,7 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
           const selectedAt = Date.now();
           const version = await awaitLeasedOperation("controllerPipelineVersion", () => controllerPipelineVersion(item.row_key));
           const lane = await awaitLeasedOperation("findControllerPipeline", () => findControllerPipeline(item.row_key));
-          if (lane?.provisioningJob && (lane.state === "closed" || lane.state === "completed" || lane.hiddenAt)) {
+          if (lane && hasSupersededProvisioningJob(lane)) {
             advanceProvisioningJob(lane, lanePorts, { parked: () => {} });
           }
           if (lane?.state === "provisioning") reportProvisioningPhase(item.row_key, { phase: "scheduler-selected" }, new Date(selectedAt).toISOString());

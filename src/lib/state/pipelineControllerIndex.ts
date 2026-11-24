@@ -61,7 +61,7 @@ export function installProvisioningSlotIndex(db: Database, directory: string): v
     const at = (field: string) => `json_extract(${row}.value_json,'$.${field}')`;
     return `SELECT ${row}.row_key,
       CASE
-        WHEN ${at("state")} IN ('closed','completed') OR ${at("hiddenAt")} IS NOT NULL THEN 0
+        WHEN ${at("state")} IN ('closed','completed','running') OR ${at("hiddenAt")} IS NOT NULL THEN 0
         WHEN ${at("state")}='provisioning' AND ${at("provisioningJob.status")} IN ('running','awaitingApply','waiting')
         THEN COALESCE(${at("provisioningJob.retryAt")},${at("provisioningJob.deadlineAt")})
       END,

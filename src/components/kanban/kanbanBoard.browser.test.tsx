@@ -72,6 +72,19 @@ const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(proc
 /** Where a memory-profile block keeps its frames: under MEMORY_PROFILE_OUT when set, otherwise under .artifacts. */
 const memoryOut = (name: string) => process.env.MEMORY_PROFILE_OUT ? path.resolve(process.env.MEMORY_PROFILE_OUT, name) : path.resolve(".artifacts", name);
 
+describe("public provisioning step", () => {
+  browserTest("provisioning step and age fit the desktop board", async () => {
+    const { captureProvisioningStepGeometry, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await chromium.launchServer({ ...LAUNCH, env: sockets.env });
+    const browser = await chromium.connect(server.wsEndpoint());
+    try {
+      expect(server.process().pid).toBeGreaterThan(0);
+      expect(await captureProvisioningStepGeometry(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "provision-board"), [768, 1440])).toBe(32);
+    } finally { await browser.close(); await server.close(); sockets.close(); }
+  }, 120_000);
+});
+
 describe("accepted queued creation continuity", () => {
   browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
     const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");

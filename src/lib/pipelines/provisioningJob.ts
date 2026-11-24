@@ -45,6 +45,7 @@ type ProvisionPorts = {
   exec: typeof realExec;
   provisionExec?: ProvisionExecPort;
   provisionClock?: ProvisionClock;
+  provisionToolchainReply?: (id: string, type: string, detail?: string) => Promise<void>;
   now(): string;
   monotonicNow(): number;
   scheduleTick?(delayMs?: number): void;
@@ -97,6 +98,11 @@ export function provisioningDueAt(pipeline: Pipeline): number | undefined {
   const slot = pipeline.provisioningJob;
   if (!validProvisioningRecord(slot) || slot.status === "parked") return;
   return slot.retryAt ?? slot.deadlineAt;
+}
+
+export function hasSupersededProvisioningJob(row: Pipeline): boolean {
+  return row.provisioningJob !== undefined
+    && (row.state === "closed" || row.state === "completed" || row.state === "running" || Boolean(row.hiddenAt));
 }
 
 function subject(row: Pipeline): string {
@@ -185,7 +191,7 @@ export async function reconcileExcludedProvisioning(row: Pipeline, ports: Provis
   const slot = row.provisioningJob;
   if (!validProvisioningRecord(slot)) return false;
   const root = stateDir();
-  const terminal = row.state === "closed" || row.state === "completed" || Boolean(row.hiddenAt);
+  const terminal = hasSupersededProvisioningJob(row);
   const active = pools.get(root)?.handles.get(row.id);
   if (active) {
     if (terminal) active.abort.abort(new JobRevoked());
@@ -211,7 +217,7 @@ export async function reconcileExcludedProvisioning(row: Pipeline, ports: Provis
 
 export function advanceProvisioningJob(row: Pipeline, ports: ProvisionPorts, hooks: JobHooks): Promise<boolean> | undefined {
   if (stopped) return;
-  const cleanup = (row.state === "closed" || row.state === "completed" || !!row.hiddenAt) && row.provisioningJob !== undefined;
+  const cleanup = hasSupersededProvisioningJob(row);
   if (!eligible(row) && !cleanup) return;
   const root = stateDir();
   let pool = pools.get(root);
@@ -295,7 +301,8 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
   const wall = clock.wallMs();
   const release = hotStateWriterRevision(root) ?? "unversioned";
   const authority = readHotStateAuthority(root);
-  if (previous?.status === "running" && previous.owner.instance !== instance && previous.deadlineAt > wall
+  const claimed = previous?.status === "running" || previous?.status === "awaitingApply";
+  if (claimed && previous.owner.instance !== instance && previous.deadlineAt > wall
     && !(authority?.mode === "sqlite" && hotStateSqliteWriterReady(root) && authority.releaseRevision !== previous.owner.release)) {
     const boot = systemBootEpoch();
     const sameDomain = boot && previous.owner.bootEpoch === boot;
@@ -312,7 +319,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     executionDeadlineAt: wall + EXECUTION_MS, retryAt: undefined,
     cacheOwner: undefined,
   };
-  if (previous?.status === "running" && previous.deadlineAt <= wall && !slot.interruption) {
+  if (claimed && previous.deadlineAt <= wall && !slot.interruption) {
     slot.interruption = { step: previous.step, since: previous.since, deadlineAt: previous.deadlineAt, observedAt: wall, reason: "provision-step-timeout" };
   }
   const stale = previous?.planSubject !== undefined && previous.planSubject !== slot.planSubject;
@@ -567,6 +574,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       await step("startingToolchain");
       if (git.native) await runProvisionToolchain({ root, token: slot.token, repository: row!.repoDir, checkout: row!.worktreeDir,
         signal, exec, budgetMs: Math.min(180_000, Math.floor(executionStop - clock.monotonicMs())),
+        observeReply: ports.provisionToolchainReply ? (type, detail) => ports.provisionToolchainReply!(id, type, detail) : undefined,
         privateReceipt: slot.privateReceipt,
         privateIntent: slot.privateIntent,
         recordPrivateReceipt: receipt => write(() => {}, { ...slot, privateReceipt: receipt }),

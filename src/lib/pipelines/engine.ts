@@ -340,6 +340,8 @@ export interface PipelinePorts {
   /** Asynchronous Git used only by the provisioning pre-pass. */
   provisionExec?: ProvisionExecPort;
   provisionClock?: ProvisionClock;
+  /** Observe the worker's response boundary from an isolated controller harness. */
+  provisionToolchainReply?: (id: string, type: string, detail?: string) => Promise<void>;
   preflightRepo(repoDir: string): PipelineRepoPreflight | Promise<PipelineRepoPreflight>;
   roleLookup?: PipelineRoleLookup | null;
   spawnAgent(input: {

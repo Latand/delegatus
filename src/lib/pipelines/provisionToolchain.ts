@@ -39,6 +39,7 @@ type ToolchainRequest = {
   cacheAcquired(fence: DependencyCacheFence): Promise<void>;
   legacyWriter(cause: Exclude<LegacyInstallerObservation, { kind: "clear" }>): Promise<never>;
   track(child: ChildProcess): void;
+  observeReply?(type: string, detail?: string): Promise<void>;
 };
 
 export async function runProvisionToolchain(request: ToolchainRequest): Promise<void> {
@@ -84,6 +85,7 @@ export async function runProvisionToolchain(request: ToolchainRequest): Promise<
           || !Number.isSafeInteger(frame.pid) || frame.pid <= 0) throw new Error("invalid provisioning ready frame");
         const pid = frame.pid;
         await parent(() => request.ready(pid));
+        await request.observeReply?.("ready");
         ready = true;
         await send({ type: "start", token, repository, checkout, budgetMs, privateReceipt: request.privateReceipt, privateIntent: request.privateIntent });
         continue;
@@ -116,6 +118,7 @@ export async function runProvisionToolchain(request: ToolchainRequest): Promise<
         continue;
       } else if (frame.type === "checkIgnoredModules") {
         const result = await request.exec("git", ["check-ignore", "--quiet", "node_modules"], checkout, request.signal);
+        await request.observeReply?.("checkIgnoredModules");
         await send({ ...go, code: result.code });
         continue;
       } else if (frame.type === "result") {
@@ -123,6 +126,8 @@ export async function runProvisionToolchain(request: ToolchainRequest): Promise<
         if (frame.outcome === "private-install-unverified") throw new ProvisionToolchainFailure(frame.outcome);
         throw new Error("invalid provisioning result");
       } else throw new Error("invalid provisioning worker request");
+      await request.observeReply?.(String(frame.type),
+        typeof frame.effect === "string" ? frame.effect : typeof frame.step === "string" ? frame.step : undefined);
       await send(go);
     }
     throw new Error("provisioning worker exited before its result");

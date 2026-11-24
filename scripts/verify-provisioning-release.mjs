@@ -39,7 +39,7 @@ export async function provisioningFixtureEnvironment(sandbox, env) {
 }
 
 /** @param {() => void | Promise<void>} [beforePackageResponse] */
-export async function seedProvisioningPackage(checkout, sandbox, env, bun, beforePackageResponse) {
+export async function seedProvisioningPackage(checkout, sandbox, env, bun, beforePackageResponse, packageName = "delegatus-cli") {
   const directory = await mkdtemp(path.join(sandbox, "provision-package-"));
   await mkdir(path.join(directory, "package"));
   await writeFile(path.join(directory, "package", "package.json"), '{"name":"provision-fixture-dependency","version":"1.0.0"}\n');
@@ -63,7 +63,7 @@ export async function seedProvisioningPackage(checkout, sandbox, env, bun, befor
       server.once("error", reject);
       server.listen(0, "127.0.0.1", resolve);
     });
-    const manifest = { name: "delegatus-cli", dependencies: { "provision-fixture-dependency": `http://127.0.0.1:${server.address().port}/package.tgz` } };
+    const manifest = { name: packageName, dependencies: { "provision-fixture-dependency": `http://127.0.0.1:${server.address().port}/package.tgz` } };
     await writeFile(path.join(checkout, "package.json"), JSON.stringify(manifest) + "\n");
     await writeFile(path.join(checkout, ".gitignore"), "node_modules\n", { flag: "a" });
     await run(bun, ["--no-env-file", "install", "--lockfile-only", "--ignore-scripts"], { cwd: checkout, env, timeout: 8_000 });
@@ -131,6 +131,9 @@ async function verifyFixtureLane(origin, checkout, remote, git) {
     const lane = (await response.json()).pipeline;
     if (lane?.provisioningStep?.status === "parked") {
       throw new Error(`provisioning fixture parked at ${lane.provisioningStep.step} (${lane.provisioningStep.reason ?? "refused"})`);
+    }
+    if (["toolchain-start-failed", "toolchain-reply-lost"].includes(lane?.provisioningStep?.reason)) {
+      throw new Error(`provisioning fixture interrupted at ${lane.provisioningStep.step} (${lane.provisioningStep.reason})`);
     }
     if (lane && lane.state !== "provisioning" && !lane.provisioningStep && lane.lastPassedCommit === planned) {
       if ((await git(lane.worktreeDir, "rev-parse", "HEAD")) !== planned) throw new Error("release fixture checkout has an unexpected HEAD");
