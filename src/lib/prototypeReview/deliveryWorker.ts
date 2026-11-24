@@ -258,8 +258,6 @@ export async function resetPrototypeDeliveryWorkerForTests(): Promise<void> {
   state.scanAfter = undefined;
   state.seatScanAfter = undefined;
   state.postTaskAfter = undefined; state.postTaskRoundAfter = undefined;
-  state.pollTaskAfter = undefined; state.pollTaskRoundAfter = undefined;
   state.postSeatAfter = undefined; state.postSeatRoundAfter = undefined;
-  state.pollSeatAfter = undefined; state.pollSeatRoundAfter = undefined;
-  state.preferSeatPost = undefined; state.preferSeatPoll = undefined;
+  state.preferSeatPost = undefined;
 }
