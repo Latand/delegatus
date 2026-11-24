@@ -1273,7 +1273,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       console.error("pre-push: verified completed checks for this publication; transport admitted");
     } else if (mode === "pre-push" && !admitted) {
       const privacy = (cancel?: AbortSignal) => runSteps(mode, steps.filter(step => step.name === "privacy"), { ...options, cancel });
-      const memoryBytes = imagePreparation && steps.some(step => step.name === "types")
+      const memoryBytes = imagePreparation && steps.some(step => step.name === "types" || step.name === "Viewer build")
         ? String(publicationMemoryBytes(process.env.NODE_OPTIONS)) : undefined;
       const localChecks = (cancel: AbortSignal) => runAdmittedChecks(
         ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,

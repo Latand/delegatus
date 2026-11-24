@@ -2111,9 +2111,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         return { code: null, stdout: "", stderr: "publication authority revoked" };
       }
       fs.futimesSync(descriptor, new Date(), new Date());
-      const preparingDependencies = command === "bun" && args[0] === "install";
-      const preparingChecks = (command === "bun" || command === process.execPath)
-        && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare";
+      const usesBun = command === "bun" || command === process.execPath;
+      const preparingDependencies = usesBun && args[0] === "install";
+      const preparingChecks = usesBun && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare";
       // The push runs the repository's pre-push gates; both leave the
       // production service for a work scope. Its PID, group and the inherited
       // lock descriptor stay this command's.
@@ -2453,6 +2453,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     if (remoteIsAncestor.code !== 0) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
   }
 
+  const runtime = preparation === 3 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
   // Read-only stages can pass without dependencies. Prepare a Bun worktree before
   // its full repository hook runs, keeping privacy and every other gate active.
   // Frozen installation cannot upgrade the accepted lockfile. The same bounded,
@@ -2462,9 +2463,12 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   if (fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
     && ["bun.lock", "bun.lockb"].some((file) => fs.existsSync(path.join(pipeline.worktreeDir, file)))) {
     try {
-      if (!await prepareLockedDependencies(pipeline.worktreeDir, { exec })) {
+      // The shared graph installer calls Bun through the same fenced executor.
+      const dependencyExec: ExecPort = (command, args, cwd, env, options) =>
+        exec(command === "bun" && args[0] === "install" ? runtime : command, args, cwd, env, options);
+      if (!await prepareLockedDependencies(pipeline.worktreeDir, { exec: dependencyExec })) {
         await isolateWorktreeDependencies(pipeline);
-        const installed = await exec("bun", ["install", "--frozen-lockfile", WORKTREE_INSTALL_BACKEND], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
+        const installed = await exec(runtime, ["install", "--frozen-lockfile", WORKTREE_INSTALL_BACKEND], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
         if (installed.code !== 0) return { ok: false, error: dependencyInstallFailure(installed) };
       }
     } catch (error) { return { ok: false, error: dependencyEnvironmentError(error) }; }
@@ -2498,7 +2502,6 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // The repository's gate can finish before Git's authenticated discovery.
   // The subsequent native hook verifies this exact operation's consumed
   // inputs and scans fresh privacy data under a separate transport deadline.
-  const runtime = preparation === 3 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
   // The installed launcher takes precedence over gate-slot's image detection.
   // Keep its CPU helper and run it under the same Bun as the native hook.
   const forgeEnv = engineForgeWriteEnv();

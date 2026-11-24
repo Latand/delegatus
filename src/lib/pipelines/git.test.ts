@@ -2290,11 +2290,24 @@ test.each([1, 3] as const)("capability %i uses its own publication path and land
     fs.mkdirSync(scripts);
     fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// publication gate fixture\n");
     fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: capability }));
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "bun.lock"), "{}\n");
     const head = await box.commit("change.txt", "accepted work\n");
+    expect(fs.existsSync(path.join(box.subject.worktreeDir, "node_modules"))).toBeFalse();
+    const runtime = capability === 3 ? containerRuntime : "bun";
+    const installs: string[] = [];
     const preparations: string[] = [];
     const pushes: number[] = [];
     const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (args[0] === "install") {
+        installs.push(command);
+        expect(cwd).toBe(box.subject.worktreeDir);
+        expect(args).toEqual(["install", "--frozen-lockfile", "--backend=copyfile"]);
+        expect(options?.inheritFd).toEqual(expect.any(Number));
+        return { code: 0, stdout: "", stderr: "" };
+      }
       if (args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare") {
+        expect(installs).toEqual([runtime]);
         preparations.push(command);
         if (capability === 3 && process.platform === "linux") {
           expect(gateAdmissionInterpreter(env?.LLV_GATE_BUN)).toBeNull();
@@ -2314,7 +2327,7 @@ test.each([1, 3] as const)("capability %i uses its own publication path and land
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
     expect(result).toMatchObject({ ok: true, sha: head, remote: "published", phaseTimings: { checksMs: 1, peakRssBytes: 123_456 } });
     expect(findPipelineRecord(box.subject.id)?.delivery?.journal.at(-1)?.reason).toContain("peak RSS=123456B");
-    expect(preparations).toEqual([capability === 3 ? containerRuntime : "bun"]);
+    expect(preparations).toEqual([runtime]);
     expect(pushes).toEqual([240_000]);
     expect(await box.originHead()).toBe(head);
   } finally {
@@ -2322,6 +2335,54 @@ test.each([1, 3] as const)("capability %i uses its own publication path and land
     else process.env.LLV_GATE_PUBLICATION_RECEIPT = inheritedReceipt;
     if (inheritedBun === undefined) delete process.env.LLV_GATE_BUN;
     else process.env.LLV_GATE_BUN = inheritedBun;
+    process.execPath = execPath;
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test.skipIf(process.platform !== "linux")("capability 3 scopes a cold shared dependency install under in-image Bun", async () => {
+  const { setCpuPortsForTests } = await import("@/lib/runtime/cpuPlacement");
+  const box = await publishSandbox();
+  const execPath = process.execPath;
+  const cpu = process.env.LLV_AGENT_CPU;
+  const runtime = "/usr/local/bin/bun-container";
+  try {
+    const worktree = box.subject.worktreeDir;
+    fs.mkdirSync(path.join(worktree, "scripts"));
+    fs.writeFileSync(path.join(worktree, "scripts/local-gate.ts"), "// image gate fixture\n");
+    fs.writeFileSync(path.join(worktree, "scripts/local-gate-capabilities.json"), '{"publicationPrepare":3}\n');
+    fs.writeFileSync(path.join(worktree, "package.json"), '{"name":"delegatus-cli"}\n');
+    fs.writeFileSync(path.join(worktree, "bun.lock"), "{}\n");
+    const head = await box.commit(".gitignore", "node_modules\n");
+    expect(fs.existsSync(path.join(worktree, "node_modules"))).toBeFalse();
+    process.execPath = runtime;
+    process.env.LLV_AGENT_CPU = "auto";
+    setCpuPortsForTests({ probe: () => ({ kind: "available", systemdVersion: 255 }), workSlice: "test-agents-work.slice", runner: () => "", cpus: 24 });
+    const installs: string[][] = [];
+    const later: string[] = [];
+    const exec: ExecPort = (command, args, cwd, env, options) => {
+      const inner = command === "systemd-run" ? args.slice(args.indexOf("--") + 1) : [command, ...args];
+      if (inner[1] === "install") {
+        installs.push(inner);
+        expect(command).toBe("systemd-run");
+        expect(args).toContain("--slice=test-agents-work.slice");
+        expect(path.basename(cwd)).toMatch(/^building-[a-f0-9]{64}$/);
+        expect(options?.inheritFd).toEqual(expect.any(Number));
+        expect(options?.additionalInheritedFds).toEqual([expect.any(Number), expect.any(Number)]);
+        return { code: 1, stdout: "", stderr: "error: lockfile had changes" };
+      }
+      if (inner[1] === "scripts/local-gate.ts" || inner[1] === "push") later.push(inner[1]);
+      return realExec(command, args, cwd, env, options);
+    };
+    expect(await publishPipelineBranch(box.subject, exec, { acceptedSha: head })).toMatchObject({
+      ok: false, failure: { step: "preparing publication dependencies", code: 1, outputTail: expect.stringContaining("frozen lockfile does not match the manifest") },
+    });
+    expect(installs).toEqual([[runtime, "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile", "--config=stage-install.toml"]]);
+    expect(later).toEqual([]);
+    expect(await box.originHead()).toBe("");
+  } finally {
+    setCpuPortsForTests(null);
+    if (cpu === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = cpu;
     process.execPath = execPath;
     fs.rmSync(box.root, { recursive: true, force: true });
   }

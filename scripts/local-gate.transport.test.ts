@@ -6,6 +6,7 @@ import { createPublicationFixtures } from "./publicationHook.fixture";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publishPipelineBranch } from "../src/lib/pipelines/git";
+import { recoverablePublication } from "../src/lib/pipelines/publicationHistory";
 import { pipelineCorpus } from "../src/lib/pipelines/fixtures/corpus";
 import { findPipelineRecord, loadPipelines, savePipelines } from "../src/lib/pipelines/store";
 import { realExec, type ExecPort } from "../src/lib/workflows/provision";
@@ -96,14 +97,41 @@ test.each(["active", "expired"] as const)("native Git expires its discovered pas
   } finally { savePipelines(previous); http.close(); }
 }, 150_000);
 
-for (const capability of ["absent", "historical", "unsupported", "malformed"] as const) {
+test("retired publication marker 2 refuses without transport or uploaded objects", async () => {
+  const f = fixture();
+  fs.writeFileSync(f.writablePath("scripts/local-gate-capabilities.json"), '{"publicationPrepare":2}\n');
+  commitFixtureInputs(f);
+  const http = await httpFixture(f, false), previous = loadPipelines();
+  try {
+    const subject = pipelineCorpus(2, 1)[1]!;
+    Object.assign(subject, { project: "fixture", repoDir: path.join(path.dirname(f.dir), "source"), worktreeDir: f.dir, lastPassedCommit: f.head });
+    subject.delivery = { target: { repository: "repo-fixture", remote: http.remote, branch: "refs/heads/main" },
+      disposition: "owner", publish: "enabled", active: true, ownerId: subject.id, epoch: 1, journal: [] };
+    savePipelines([subject]);
+    const commands: string[] = [];
+    const exec: ExecPort = (command, args, cwd, env, options) => {
+      if (command !== "git" || !["rev-parse", "status", "branch"].includes(args[0]!)) commands.push([command, ...args].join(" "));
+      return realExec(command, args, cwd, { ...f.env, ...env }, options);
+    };
+    const result = await publishPipelineBranch(subject, exec, { acceptedSha: f.head });
+    expect(result).toEqual({ ok: false, error: "publication capability 2 is retired; update the checkout to current main" });
+    if (result.ok) throw new Error("expected terminal refusal");
+    expect(recoverablePublication(result)).toBeFalse();
+    expect(commands).toEqual([]);
+    expect(http.events()).toEqual([]);
+    expect(http.rpc()).toBe(0);
+    expect(f.git("--git-dir", http.bare, "for-each-ref").toString()).toBe("");
+    expect(f.git("--git-dir", http.bare, "cat-file", "--batch-all-objects", "--batch-check").toString()).toBe("");
+  } finally { savePipelines(previous); http.close(); }
+}, 90_000);
+
+for (const capability of ["absent", "unsupported", "malformed"] as const) {
   test(`a gate with ${capability} preparation capability keeps one ordinary gated push`, async () => {
     const f = fixture();
     delete f.env.LLV_GATE_PUBLICATION_RECEIPT;
     const marker = f.writablePath("scripts/local-gate-capabilities.json");
     if (capability === "absent") fs.rmSync(marker);
-    else fs.writeFileSync(marker, capability === "historical" ? '{"publicationPrepare":2}'
-      : capability === "unsupported" ? '{"publicationPrepare":4}' : '{');
+    else fs.writeFileSync(marker, capability === "unsupported" ? '{"publicationPrepare":4}' : '{');
     // The native entry point retains the ordinary pre-push protocol. In
     // particular, nothing may try its unknown --publication-prepare argument.
     f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json", "scripts/local-gate.ts");

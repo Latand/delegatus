@@ -206,9 +206,10 @@ inventory, and C1 and C2 publish content or refs that no check saw.
    both main's `max(60 s, 2 × preparation)` formula (up to 24 minutes for a
    25-minute budget) and 4f3c4fff's capability split.
 4. **Capability 3 declares the in-image hook with a fresh privacy scan.** The
-   controller refuses capability 2 before contacting the remote. For capability 3, the container
-   controller starts preparation with `bun-container` and binds the installed
-   CPU admission launcher's interpreter to it. The preparation and the native
+   controller refuses capability 2 before contacting the remote. For capability
+   3, the container controller uses `bun-container` for cold dependency
+   installs and preparation. It also binds the installed CPU admission
+   launcher's interpreter to that executable. The preparation and the native
    hook then fingerprint the same runtime and toolchain, and the launcher
    still routes admission to the installed CPU helper. The image interpreter
    is a local launcher default. Cloud receives the portable check inputs.
@@ -279,12 +280,13 @@ Earlier findings from lanes 3730c10f and 9b4c476a:
 - Publication marker 2 appeared only in closed lanes for this PR. The
   controller refuses it before either publication path opens transport, with
   a terminal message directing the caller to update the checkout to current main.
-- Local prepared types keep the 11,264 MiB V8 heap. The gate waits for that
-  heap plus 2 GiB of memory headroom for native allocations, the runner and
-  concurrent checks. The first shared gate slot serializes cold container
-  plans with types. The gate uses the lower of host `MemAvailable` and finite
-  cgroup headroom. It waits up to 60 seconds after acquiring the slot and
-  defers immediately if total capacity is below budget. A deferral retries
+- Local preparation reserves memory for the 11,264 MiB V8 heap used by
+  standalone types and the Viewer build's full-project compiler, plus 2 GiB
+  for native allocations, the runner and concurrent checks. The first shared
+  gate slot serializes cold container plans with a full compiler run. The gate
+  uses the lower of host `MemAvailable` and finite cgroup headroom. It waits
+  up to 60 seconds after acquiring the slot and defers immediately if total
+  capacity is below budget. A deferral retries
   publication. The receipt and journal record the sampled concurrent RSS of
   the local preparation process tree alongside phase timings.
 - The in-image admission interpreter stays local to its launcher. Cloud
@@ -362,8 +364,8 @@ test that fails without it. Restore everything else to `origin/main`.
   The privacy scanner runs twice (preparation and transport), and one RPC
   lands. "Over cap": a transport scan that passes 180 s ends with
   `retryableDeadline: true`, `hookStoppedCheck: "privacy"`, no RPC and an
-  unchanged ref. Terminal refusal for marker 2 leaves the existing remote ref
-  unchanged with and without a preparation script.
+  unchanged ref. The marker-2 HTTP fixture verifies a terminal refusal, zero
+  transport calls and an empty remote object store.
 - **T2** `scripts/local-gate.publication.test.ts`: restore main's cases
   "prepared checks are consumed once by a fresh native hook, with fresh privacy
   and no second admission", "a privacy-only refresh retains all reused heavy
@@ -382,9 +384,9 @@ test that fails without it. Restore everything else to `origin/main`.
   with $elapsed ms` table (:2281–2320) with one case per capability. Each
   asserts the preparation interpreter (`process.execPath` for capability 3
   under `bun-container`, `bun` for capability 1), a 240 s push timeout and one
-  landed push. Capability 3 also checks the admission interpreter. A
-  capability-2 checkout uses one ordinary push without a receipt. Keep the
-  `phaseTimings` cases.
+  landed push. Capability 3 also checks the install and admission interpreters.
+  The marker-2 tests preserve the existing remote ref with and without a
+  preparation script. Keep the `phaseTimings` cases.
 - **T5** `src/lib/pipelines/publication.test.ts`,
   `src/lib/pipelines/parkedPublication.test.ts`: delete the drift and
   tool-preparation admission cases; keep the rest.

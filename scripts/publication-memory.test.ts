@@ -9,7 +9,7 @@ import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib
 const MiB = 1024 ** 2;
 const GiB = 1024 ** 3;
 const roots: string[] = [];
-const { fixture, commitFixtureInputs } = createPublicationFixtures(path.resolve(import.meta.dir, ".."), roots);
+const { fixture, nativeFixture, commitFixtureInputs } = createPublicationFixtures(path.resolve(import.meta.dir, ".."), roots);
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 function memoryFixture(root: string) {
@@ -63,8 +63,20 @@ test("publication memory waits for heap plus 2 GiB and defers at 60 seconds", as
   expect(clock).toBe(60_000);
 });
 
-test.skipIf(process.platform !== "linux")("portable publication memory defers the whole heavy plan, then records its RSS and passes", () => {
-  const f = fixture();
+test.skipIf(process.platform !== "linux").each(["types", "Viewer build"] as const)("portable publication memory defers the %s plan, then records its RSS and passes", compiler => {
+  const f = compiler === "Viewer build" ? nativeFixture() : fixture();
+  const buildLog = f.writablePath(".git/viewer-build");
+  if (compiler === "Viewer build") {
+    fs.writeFileSync(f.writablePath("package.json"), JSON.stringify({ scripts: { build: '"$HOOK_BUN" scripts/build-fixture.ts' } }));
+    fs.writeFileSync(f.writablePath("scripts/build-fixture.ts"), `
+      import fs from "node:fs";
+      import { fixtureWritePath } from "./fixture-write-path";
+      if (process.env.LLV_GATE_FULL_TYPES !== fs.realpathSync(process.cwd())) throw new Error("missing full types binding");
+      fs.appendFileSync(fixtureWritePath(${JSON.stringify(f.dir)}, ${JSON.stringify(buildLog)}), "build\\n");
+    `);
+    fs.mkdirSync(f.writablePath("src/runtime-host"), { recursive: true });
+    fs.writeFileSync(f.writablePath("src/runtime-host/main.ts"), "// runtime change\n");
+  }
   const fake = memoryFixture(f.writablePath(".git/memory"));
   fake.control("viewer", 12 * GiB, GiB);
   const systemctl = f.writablePath("shims/systemctl");
@@ -79,15 +91,24 @@ test.skipIf(process.platform !== "linux")("portable publication memory defers th
   expect(refused.stderr).toContain("using the documented portable cleanup fallback");
   expect(refused.stderr).toContain("publication memory admission deferred before checks started");
   expect(fs.existsSync(f.receipt)).toBeFalse();
+  expect(fs.existsSync(buildLog)).toBeFalse();
   const calls = () => fs.existsSync(f.env.HOOK_LOG!) ? f.calls().map(call => call.args[0]).sort() : [];
-  expect(calls().filter(name => name !== "scripts/privacy-publication-gate.ts")).toEqual([]);
+  const checks = () => calls().filter(name => name !== "scripts/privacy-publication-gate.ts" && name !== "native-install");
+  expect(checks()).toEqual([]);
 
   fake.control("viewer", 16 * GiB, GiB);
   const prepared = f.run(true);
   expect(prepared.status, prepared.stderr).toBe(0);
-  expect(calls().filter(name => name !== "scripts/privacy-publication-gate.ts")).toEqual([
-    "scripts/eslint-changes.ts", "scripts/local-gate-tests.ts", "tsc",
-  ]);
+  if (compiler === "Viewer build") {
+    expect(fs.readFileSync(buildLog, "utf8")).toBe("build\n");
+    for (const check of ["runtime verdict tests", "MCP size budgets", "Viewer runtime", "runtime host", "runtime negative controls"]) {
+      expect(prepared.stderr).toContain(`pre-push: ${check}`);
+    }
+    expect(checks()).toContain("scripts/local-gate-tests.ts");
+    expect(checks()).not.toContain("tsc");
+  } else {
+    expect(checks()).toEqual(["scripts/eslint-changes.ts", "scripts/local-gate-tests.ts", "tsc"]);
+  }
   const receipt = readPublicationCheckReceipt(f.receipt, publicationCheckBinding(f.env));
   expect(receipt.peakRssBytes).toBeGreaterThan(0);
   expect(receipt.checksMs).toBeGreaterThan(0);
