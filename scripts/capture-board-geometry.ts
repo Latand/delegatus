@@ -8953,6 +8953,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
 
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const member = await browser.newContext();
+  const ownerControl = await browser.newContext();
   try {
     const claimed = await context.request.post(base + "/api/team/claim", { headers: { origin: base }, data: { name: "Fixture owner" } });
     if (!claimed.ok()) throw new Error(`synthetic team claim failed with ${claimed.status()}`);
@@ -8981,7 +8982,8 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
       headers: authHeaders, data: { id: workspace, name: "Fixture room", projects: [project] },
     });
     const membership = base + "/api/team/workspaces/" + workspace + "/members";
-    const role = (value: "member" | "manager") => context.request.put(membership, { headers: authHeaders, data: { memberId: me.id, role: value } });
+    await ownerControl.addCookies(await context.cookies());
+    const role = (value: "member" | "manager") => ownerControl.request.put(membership, { headers: authHeaders, data: { memberId: me.id, role: value } });
     if (!created.ok() || !(await role("member")).ok()) throw new Error("fixture workspace grant failed");
 
     const ownerCookies = await context.cookies();
@@ -9019,7 +9021,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
       if (await board.evaluate(sawSavedCard)) throw new Error("role change reused the old disk record");
       note("a real workspace role change invalidated the saved screen");
 
-      const removed = await context.request.delete(membership, { headers: authHeaders, data: { memberId: me.id } });
+      const removed = await ownerControl.request.delete(membership, { headers: authHeaders, data: { memberId: me.id } });
       if (!removed.ok()) throw new Error("fixture workspace revocation failed");
       await board.reload({ waitUntil: "domcontentloaded" });
       await board.waitForURL("**/team");
@@ -9041,7 +9043,7 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
     await board.waitForSelector("[data-boot-shell]", { timeout: 15_000 });
     if (await settings.evaluate(hasRecord)) throw new Error("sign-out retained the first screen");
     note("team sign-out cleared disk and retired the other tab");
-  } finally { await member.close(); await context.close(); }
+  } finally { await ownerControl.close(); await member.close(); await context.close(); }
 }
 
 /** Timings from the real board in a production build with its normal APIs. */
