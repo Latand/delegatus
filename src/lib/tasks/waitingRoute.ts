@@ -1,4 +1,5 @@
 import { laneRouteNow, laneWaitCleared } from "@/lib/attention/routeTypes";
+import type { PullRequestState } from "@/lib/forge/workLinks";
 import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { pausedByOperator, pauseReminderDue } from "@/lib/pipelines/pauseReminder";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -13,7 +14,9 @@ export type WaitingRoute =
     { carriedBy: "task" } | { carriedBy: "lane"; laneId: string })
   | { owner: "agents"; rule: "running" | "dated" | "dependency" | "lane"; action: string };
 
-type WaitingTask = Pick<BoardTask, "id" | "status" | "hold" | "prototypeReview" | "prototypeReviews" | "prototypeReviewReplica" | "doneAt" | "updatedAt">;
+type WaitingTask = Pick<BoardTask, "id" | "status" | "hold" | "steps" | "prototypeReview" | "prototypeReviews" | "prototypeReviewReplica" | "doneAt" | "updatedAt">;
+
+export type HoldPullRequestState = (taskId: string, ref: string) => PullRequestState | undefined;
 
 interface ReadyPauses {
   quota?: ReadonlySet<string>;
@@ -21,7 +24,13 @@ interface ReadyPauses {
 }
 
 /** Index the same snapshot once for the whole project's routing pass. */
-export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status" | "assignments">[], pipelines: readonly Pipeline[], liveAssignments: ReadonlySet<string> = new Set(), readyPauses: ReadyPauses = {}) {
+export function waitingRouteIndex(
+  tasks: readonly Pick<BoardTask, "id" | "status" | "assignments" | "hold">[],
+  pipelines: readonly Pipeline[],
+  liveAssignments: ReadonlySet<string> = new Set(),
+  readyPauses: ReadyPauses = {},
+  pullRequestState?: HoldPullRequestState,
+) {
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   const lanesById = new Map<string, Pipeline>();
   const lanesByTask = new Map<string, Set<Pipeline>>();
@@ -35,7 +44,26 @@ export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status
       linked.add(owner);
     }
   }
-  return { tasksById, lanesById, lanesByTask, liveAssignments, readyPauses };
+  // Cache only the prerequisite chains reached by this routing pass.
+  const cyclic = new Map<string, boolean>();
+  function hasCircularPrerequisite(id: string): boolean {
+    const path = new Set<string>();
+    let current = id;
+    while (!cyclic.has(current) && !path.has(current)) {
+      const task = tasksById.get(current);
+      const hold = task?.hold;
+      if (task?.status === "done" || hold?.kind !== "task" || !hold.ref) {
+        cyclic.set(current, false);
+        break;
+      }
+      path.add(current);
+      current = hold.ref;
+    }
+    const result = cyclic.get(current) ?? true;
+    for (const visited of path) cyclic.set(visited, result);
+    return result;
+  }
+  return { tasksById, lanesById, lanesByTask, liveAssignments, readyPauses, pullRequestState, hasCircularPrerequisite };
 }
 
 function laneOpen(lane: Pipeline): boolean {
@@ -80,12 +108,18 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
       decision])}`;
     return { owner: "seat", rule, why, action, key, ...(lane ? { carriedBy: "lane", laneId: lane.id } : { carriedBy: "task" }) };
   };
+  const cleared = () => seat("wait-cleared", "its recorded prerequisite cleared", "Start or continue the work, then clear the hold.");
 
   if (prototypeWaitsOnOperator(form, task) || routed.some(({ route }) => route?.owner === "form")) return { owner: "operator", rule: "form" };
   if (hold?.kind === "operator") {
-    if (decision && Date.parse(decision.at) > Date.parse(hold.since)) {
+    if (decision && (hold.ref ? hold.ref === decision.id : Date.parse(decision.at) > Date.parse(hold.since))) {
       return seat("form-answered", "the operator answered the task’s decision form",
         `Read round ${decision.id} with read_prototype_review and carry out the answer. Clear the hold or set a new one naming the operator’s next action.`);
+    }
+    if (hold.ref) {
+      if (hold.ref === form?.latestReviewId) return cleared();
+      const step = task.steps?.find(step => step.id === hold.ref);
+      if (step) return step.state === "open" ? { owner: "operator", rule: "operator-hold" } : cleared();
     }
     if (!hold.note.trim()) return seat("unowned", "its operator hold names no action", "Review the wait and either move it back to work or name the operator action or publish an outstanding decision form.");
     return { owner: "operator", rule: "operator-hold" };
@@ -100,10 +134,6 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
   if (paused.some(lane => lane.pause?.resumeCondition?.kind === "date" && Date.parse(lane.pause.resumeCondition.at) > now)) {
     return { owner: "agents", rule: "dated", action: "Wait for the lane’s resume date." };
   }
-  if (!open.length && lanes.some(laneWaitCleared)) {
-    return seat("lane-dismissed", "its lane wait was dismissed", "Start the next step or close the task with a note.");
-  }
-
   const until = Date.parse(hold?.until ?? "");
   const ref = hold?.kind === "task" || hold?.kind === "external" ? hold.ref : undefined;
   const dependency = ref && ref !== task.id ? input.tasksById.get(ref) : undefined;
@@ -112,17 +142,24 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
   // dependency text that never identified a record.
   const gone = hold?.kind === "task" && ref && ref !== task.id && !dependency && !dependencyLane
     && /^(?:[a-f0-9]{8}|[a-f0-9]{16}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.test(ref);
-  if (until <= now || dependency?.status === "done" || dependencyLane && !laneOpen(dependencyLane) || gone) {
-    return seat("wait-cleared", "its recorded prerequisite cleared", "Start or continue the work, then clear the hold.");
-  }
-  if (until > now || hold?.kind === "postponed") return { owner: "agents", rule: "dated", action: "Keep the recorded postponement or reset time." };
+  const pr = hold?.kind === "pr" && hold.ref ? input.pullRequestState?.(task.id, hold.ref) : undefined;
+  if (until <= now || dependency?.status === "done" || dependencyLane && !laneOpen(dependencyLane) || gone
+    || pr === "merged" || pr === "closed") return cleared();
+  if (until > now) return { owner: "agents", rule: "dated", action: "Keep the recorded postponement or reset time." };
   const dependencyHasOwner = !!dependency && (dependency.assignments.some(a => a.state === "spawning" && !a.conversationId
     || input.liveAssignments.has(a.conversationId ?? "") || input.liveAssignments.has(a.path ?? ""))
     || [...(input.lanesByTask.get(dependency.id) ?? [])].some(laneActive))
     || !!dependencyLane && laneActive(dependencyLane);
-  if (dependencyHasOwner || open.length && (hold?.kind === "pr" || hold?.kind === "issue")) {
+  if (dependencyHasOwner || hold?.kind === "task" && dependency && !input.hasCircularPrerequisite(dependency.id)
+    || pr === "open" || pr === "draft"
+    || open.length && (hold?.kind === "pr" || hold?.kind === "issue")) {
     return { owner: "agents", rule: "dependency", action: "Keep the hold while its prerequisite is open." };
   }
+  // Dismissal settles a lane wait. A recorded task prerequisite can still carry the task.
+  if (!open.length && lanes.some(laneWaitCleared)) {
+    return seat("lane-dismissed", "its lane wait was dismissed", "Start the next step or close the task with a note.");
+  }
+  if (hold?.kind === "postponed") return { owner: "agents", rule: "dated", action: "Keep the recorded postponement or reset time." };
   if (lanes.length && !open.length && lanes.some(lane => lane.merge?.state === "merged")) {
     return seat("unowned", "its lanes settled and work merged", "Check acceptance on the running build with deployment_status. Close the task or name what remains.");
   }

@@ -165,9 +165,12 @@ async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<stri
     const { needsYouAnswer } = await import("@/lib/attention/needsYouProjection");
     const { canonicalOrchestratorProject } = await import("@/lib/orchestrator/seats");
     const { loadPipelinesForSeatAgenda } = await import("@/lib/pipelines/store");
+    const { forgeCacheView } = await import("@/lib/forge/cache");
+    const { taskRepository } = await import("@/lib/forge/resolve");
+    const { normalizeWorkLinkInput } = await import("@/lib/forge/workLinks");
     const { overlayAttentionRoutes } = await import("@/lib/attention/routeOverlay");
     const { waitingRoundIds } = await import("@/lib/attention/routing");
-    // Imports and file IO finish before this synchronous projection. The scope
+    // Imports and asynchronous file reads finish before this projection. The scope
     // ends before result persistence or another request can observe it.
     value = withProjectAliasSnapshot(projectAliasSnapshot(), (): import("@/lib/monitor/types").SeatTickAgendaInput => {
       const project = canonicalOrchestratorProject(request.project);
@@ -190,7 +193,19 @@ async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<stri
         tasks: body.tasks ?? [], pipelines: body.pipelines ?? [], dismissals: [], reports: null, admissions: [], unavailable: [], workLinks: body.workLinks, seatConversationId: request.seatConversationId,
       }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
       const pauses = new Map<string, string[]>();
-      const asks = seatAgendaAsks({ ...body, pipelines: [...body.pipelines, ...retained] }, request.now, project, pauses, request.pauses);
+      let cache: ReturnType<typeof forgeCacheView> | undefined;
+      let projectRepository: string | null | undefined;
+      const asks = seatAgendaAsks({
+        ...body,
+        pipelines: [...body.pipelines, ...retained],
+        pullRequestState: (taskId, ref) => {
+          if (projectRepository === undefined) projectRepository = taskRepository({ project });
+          const repository = body.workLinks?.tasks[taskId]?.repository ?? projectRepository;
+          const link = normalizeWorkLinkInput(ref, { repository });
+          if (!link.ok || link.link.kind === "issue") return undefined;
+          return (cache ??= forgeCacheView()).repository(link.link.repository)?.pr(link.link.number)?.state;
+        },
+      }, request.now, project, pauses, request.pauses);
       return { asks, ...(pauses.size ? { pauseWaitingTasks: Object.fromEntries([...pauses].map(([id, tasks]) => [id, tasks.sort()])) } : {}),
         forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
     });

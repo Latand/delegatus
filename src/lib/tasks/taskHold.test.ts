@@ -227,25 +227,27 @@ test("operator undo restores hold age and provenance, requires its revision, and
   expect(patchTask([moved], moved.id, { ...request, expectedRevision: "stale" }, LATER, { actor: "operator" }).ok).toBe(false);
   expect(patchTask([moved], moved.id, request, LATER, { actor: "agent" }).ok).toBe(false);
 
-  const operatorHeld = ok(patchTask([task()], "hold-task", { hold: { kind: "operator", note: "Choose a setting" } }, NOW, { actor: "operator" })).task;
+  const operatorHeld = ok(patchTask([task()], "hold-task", { hold: { kind: "operator", note: "Choose a setting", ref: "fixture-round" } }, NOW, { actor: "operator" })).task;
   const operatorMoved = ok(patchTask([operatorHeld], operatorHeld.id, { status: "assigned" }, LATER)).task;
   const operatorRestored = ok(patchTask([operatorMoved], operatorMoved.id, {
     status: "blocked", restoreHold: operatorHeld.hold, expectedProject: operatorMoved.project,
     expectedRevision: taskRevision(operatorMoved),
   }, LATER, { actor: "operator" }));
-  expect(operatorRestored.task).toMatchObject({ status: "blocked", hold: { kind: "operator" } });
+  expect(operatorRestored.task).toMatchObject({ status: "blocked", hold: { kind: "operator", ref: "fixture-round" } });
 });
 
-for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], ["banana", "unstated"], ["unstated", "unstated"]] as const) {
+for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], [" Operator ", "operator"], ["banana", "unstated"], ["unstated", "unstated"]] as const) {
   test(`hold kind ${JSON.stringify(kind)} normalizes across create, update and steps`, () => {
-    const hold = { kind, ref: 123, note: "After the dependency finishes" };
+    const hold = { kind, ref: expected === "operator" ? "fixture-round" : 123, note: "After the dependency finishes" };
     const steps = [{ id: "dependency", text: "Finish dependency", state: "open", hold }];
     const created = ok(createTask([], { project: "fixture", placement: "unplaced", text: "Wait for dependency", hold, steps }, [], { now: () => NOW, id: () => "normalized-hold" }));
     const updated = ok(patchTask(created.tasks, created.task.id, { hold, steps }, LATER));
     for (const result of [created, updated]) {
       expect(result.task.hold?.kind).toBe(expected);
       expect(result.task.steps?.[0]?.hold?.kind).toBe(expected);
-      expect(result.task.hold?.ref).toBe(expected === "pr" || expected === "issue" ? "123" : undefined);
+      const ref = expected === "unstated" ? undefined : String(hold.ref);
+      expect(result.task.hold?.ref).toBe(ref);
+      expect(result.task.steps?.[0]?.hold?.ref).toBe(ref);
       if (kind === "banana") {
         expect(result.notes).toEqual([
           'Unknown hold kind "banana" normalized to unstated.',

@@ -40,7 +40,7 @@ test("durable maintainer role fences writes on the service wire, independent of 
   const updated = await call("update_task", { taskId: task.id, text: "Оновлена перевірка дошки", appendLine: "Maintenance: fixture evidence" }); expect(updated.ok).toBe(true);
   const log = readMaintenanceRun(result.run.runId)!.log; expect(log.changes).toHaveLength(2); expect(log.changes[1].textBefore).toBe(task.text);
   const beforeParking = loadTasks();
-  for (const args of [{ status: "blocked" }, { hold: { kind: " Operator ", note: "Supply access" } }]) {
+  for (const args of [{ status: "blocked" }, { hold: { kind: " Operator ", note: "Choose the next step", ref: "fixture-round" } }]) {
     expect(await call("update_task", { taskId: task.id, ...args })).toMatchObject({ ok: false, code: "maintainer_park_refused" });
     expect(await call("create_task", withTaskDue({ project, text: "Перевірка очікування", ...args }))).toMatchObject({ ok: false, code: "maintainer_park_refused" });
   }
@@ -77,6 +77,27 @@ test("builder retains normal task writes", async () => {
   role = "builder";
   const builder = createMcpToolService(viewerMcpBindings(undefined, undefined, builderDomain as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(builderDomain as never));
   const task = loadTasks()[0]; expect(await builder.callTool("update_task", { clientRequestId: "builder-whole-details", taskId: task.id, details: "fixture replaced" })).toMatchObject({ ok: true });
+});
+
+test("a builder can persist an operator hold that references an open step", async () => {
+  const id = ["conversation", "fixture-step-builder"].join("_");
+  snapshot.conversations[id as `conversation_${string}`] = { id, agentRole: "builder", projectOwnership: { project }, generations: [], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
+  const builderDomain = { ...domain, callerAttribution: () => ({ kind: "agent", conversationId: id, role: "builder" }) };
+  const builder = createMcpToolService(viewerMcpBindings(undefined, undefined, builderDomain as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(builderDomain as never));
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  const taskId = "fixture-step-task";
+  const at = "2026-11-20T06:47:00.000Z";
+  const steps = [{ id: "choose-setting", text: "Choose a setting", state: "open" as const }];
+  const hold = { kind: "operator", note: "Choose a setting", ref: steps[0]!.id };
+  mutateTasks(tasks => ({ tasks: [...tasks, withTaskDue({ id: taskId, project, text: "Approve a setting", status: "inbox" as const,
+    placement: "unplaced" as const, assignments: [], createdAt: at, updatedAt: at })], result: undefined }));
+  try {
+    const updated = await builder.callTool("update_task", { clientRequestId: "builder-operator-step", taskId, hold, steps, full: true });
+    expect(updated).toMatchObject({ ok: true, task: { id: taskId, status: "blocked", hold, steps } });
+    expect(loadTasks().find(row => row.id === taskId)).toMatchObject({ status: "blocked", hold, steps });
+  } finally {
+    mutateTasks(tasks => ({ tasks: tasks.filter(task => task.id !== taskId), result: undefined }));
+  }
 });
 
 

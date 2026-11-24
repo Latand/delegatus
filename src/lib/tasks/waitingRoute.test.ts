@@ -80,20 +80,23 @@ test("structured dates and refs tell a cleared wait from an open prerequisite", 
   const dependency = { ...task("aabbccdd", null), status: "assigned" as const };
   const held = task("ref", "task", { ref: dependency.id });
   const finished = { owner: "seat", rule: "wait-cleared", carriedBy: "task" };
-  expect(classify(held, [], [dependency])).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(classify(held, [], [dependency])).toMatchObject({ owner: "agents", rule: "dependency" });
   const owningLane = lane(dependency.id, "running");
   expect(classify(held, [owningLane], [dependency])).toMatchObject({ owner: "agents", rule: "dependency" });
-  expect(classify(held, [{ ...owningLane, state: "closed" }], [dependency])).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(classify(held, [{ ...owningLane, state: "closed" }], [dependency])).toMatchObject({ owner: "agents", rule: "dependency" });
   const assigned = { ...dependency, assignments: [{
     state: "delivered" as const, path: null, conversationId: "conversation_live", panePid: null, error: null, at: at(0),
   }] };
-  expect(classify(held, [], [assigned])).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(classify(held, [], [assigned])).toMatchObject({ owner: "agents", rule: "dependency" });
   expect(classify(held, [], [assigned], false, new Set(["conversation_live"]))).toMatchObject({ owner: "agents", rule: "dependency" });
-  expect(classify(held, [], [{ ...dependency, status: "inbox" }])).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
+  expect(classify(held, [], [{ ...dependency, status: "inbox" }])).toMatchObject({ owner: "agents", rule: "dependency" });
+  expect(classify(task("self", "task", { ref: "self" }))).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
   const cycleA = task("cycle-a", "task", { ref: "cycle-b" });
   const cycleB = task("cycle-b", "task", { ref: "cycle-a" });
   const cycleIndex = waitingRouteIndex([cycleA, cycleB], []);
-  expect(waitingRoute(cycleA, cycleIndex, NOW)).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
+  for (const row of [cycleA, cycleB]) {
+    expect(waitingRoute(row, cycleIndex, NOW)).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
+  }
   expect(classify(held, [], [{ ...dependency, status: "done" }])).toMatchObject(finished);
   expect(classify(held)).toMatchObject(finished);
   expect(classify(task("ref", "task", { ref: "unknown prerequisite" }))).toMatchObject({ owner: "seat", rule: "unowned" });
@@ -137,7 +140,7 @@ test("changed routing evidence earns a new key while edits to the title or hold 
   expect(key(classify({ ...answered, prototypeReview: { ...answered.prototypeReview, latestReviewId: "other-round" } }))).not.toBe(key(classify(answered)));
 });
 
-test("dry run over 111 synthetic Waiting cards reproduces the design counts", () => {
+test("the Waiting sample leaves waits with an exact open task prerequisite off the seat agenda", () => {
   const dependency = { ...task("open-dependency", null), status: "assigned" as const };
   const closed = { ...task("closed-dependency", null), status: "done" as const };
   const rows: BoardTask[] = [];
@@ -209,8 +212,8 @@ test("dry run over 111 synthetic Waiting cards reproduces the design counts", ()
     else outcomes[route.carriedBy]++;
     if (route.owner === "seat" && route.action.includes("deployment_status")) acceptance++;
   }
-  expect(outcomes).toEqual({ operator: 11, answered: 6, task: 52, lane: 34, agents: 8 });
+  expect(outcomes).toEqual({ operator: 11, answered: 6, task: 31, lane: 34, agents: 29 });
   expect(Object.fromEntries(rules)).toEqual({ "operator-hold": 11, "form-answered": 6, "lane-stop": 30, "lane-dismissed": 1,
-    "pause-ready": 4, "wait-cleared": 3, unowned: 48, running: 2, dated: 6 });
+    "pause-ready": 4, "wait-cleared": 3, unowned: 27, running: 2, dated: 6, dependency: 21 });
   expect(acceptance).toBe(11);
 });

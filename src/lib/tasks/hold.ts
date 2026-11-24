@@ -40,7 +40,7 @@ export function readTaskHold(value: unknown, now: string, by: TaskHold["by"], pr
     notes?.push(`hold.until ignored for hold kind "${kind}"; only limit and postponed store until. Use dueAt for the task deadline.`);
   }
   return { kind, note: sentence(raw.note), since: previous?.since ?? now, by,
-    ...(["task", "pr", "issue", "external"].includes(kind) && ref ? { ref } : {}),
+    ...(["operator", "task", "pr", "issue", "external"].includes(kind) && ref ? { ref } : {}),
     ...(until ? { until } : {}), ...(by === "agent" && conversationId ? { conversationId } : {}) };
 }
 
