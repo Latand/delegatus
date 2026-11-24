@@ -865,7 +865,7 @@ test("a process first seen by retirement scan reports its live reference", async
   let scans = 0;
   try {
     const report = await runAttemptTempSweep({ ...workPorts, references,
-      scan: () => ++scans < 2 ? emptyScan() : ({ ownNamespace: null, processes: [
+      scan: () => ++scans < 4 ? emptyScan() : ({ ownNamespace: null, processes: [
         { pid: 41, namespace: null, stamped: false, paths: [directory!] },
       ] }),
     }, workMode);
