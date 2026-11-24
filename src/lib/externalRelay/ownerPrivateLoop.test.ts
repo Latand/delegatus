@@ -84,6 +84,10 @@ test.each([true, false])("owner private loop captures real selection, claim, Tel
     expect(await published).toBe("published");
     expect((wire.publish as { text: string }).text).toBe(rich.plainText!);
     expect((wire.publish as { text: string }).text).not.toContain("<tg-");
+    const sentText = rich.plainText!;
+    expect(sentText).toContain("Питання 1/3 · Where should this live?");
+    expect(sentText).toMatch(/Review layout\n\n#proto-[a-f0-9]+/);
+    expect(sentText).not.toMatch(/Review layout · #proto-/);
     await service.sendOwnerReview({ clientRequestId: round.id, message: rich });
     expect(publishes).toBe(1);
     expect(transport.callsOf("sendPoll")).toHaveLength(0);
