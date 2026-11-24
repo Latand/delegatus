@@ -1655,4 +1655,110 @@ describe("AntigravityAcpHost", () => {
       blocker.close();
     }
   });
+
+  it("intercepts RESOURCE_EXHAUSTED prompt errors, appends session.quota_exhausted, emits limits event, and records durable observation", async () => {
+    const { readAntigravityTranscriptLimits } = await import("@/lib/limits/antigravityTranscriptLimits");
+    const { buildFeed } = await import("@/components/feed/parse");
+    const sessionId = `ag_quota_${crypto.randomUUID().slice(0, 8)}`;
+    const eventStore = new FileRuntimeEventStore(path.join(stateDir, "runtime-events-quota"));
+    const recorded: import("@/lib/accounts/migration/contracts").DurableQuotaObservation[] = [];
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+
+    const fixtureEmail = ["fixture-account", "example.invalid"].join("@");
+    const host = await AntigravityAcpHost.start({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      model: "gemini-4-neon",
+      effort: "high",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore,
+      shutdownGraceMs: 40,
+      processIdentity: () => "start-quota",
+      signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+      recordQuotaObservation: (obs) => { recorded.push(obs); },
+      spawnProcess: () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          } else if (method === "session/new") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+          } else if (method === "session/set_config_option" || method === "session/close") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          } else if (method === "session/prompt" && id !== undefined) {
+            api.sendToHost({
+              jsonrpc: "2.0",
+              id,
+              error: {
+                code: -32000,
+                message: `RESOURCE_EXHAUSTED: Individual quota reached for ${fixtureEmail}. Resets in 3h 20m 15s`,
+              },
+            });
+          }
+        });
+        return fake.child;
+      },
+    });
+
+    try {
+      const receipt = await host.send({ id: "quota-delivery-1", text: "trigger quota" });
+      expect(receipt.outcome).toBe("turn-started");
+      await new Promise((r) => setTimeout(r, 40));
+
+      const events = eventStore.load(sessionId);
+      const limitsEvent = events.find((event) => event.kind === "limits");
+      expect(limitsEvent).toBeDefined();
+      expect(limitsEvent && limitsEvent.kind === "limits" ? limitsEvent.snapshot : null).toMatchObject({
+        engine: "antigravity",
+        exhausted: true,
+        windowMinutes: 300,
+      });
+      const snapshotMsg = String(limitsEvent && limitsEvent.kind === "limits"
+        ? (limitsEvent.snapshot as Record<string, unknown>).message ?? ""
+        : "");
+      expect(snapshotMsg).toContain("Individual quota reached");
+      expect(snapshotMsg).not.toContain(fixtureEmail);
+
+      const transcriptLines = fs.readFileSync(host.identity.path, "utf8").trim().split("\n");
+      const quotaRecord = transcriptLines
+        .map((line) => JSON.parse(line) as { type: string; data: Record<string, unknown> })
+        .find((row) => row.type === "session.quota_exhausted");
+      expect(quotaRecord).toBeDefined();
+      expect(quotaRecord?.data.windowMinutes).toBe(300);
+      expect(quotaRecord?.data.usedPercent).toBe(100);
+      expect(typeof quotaRecord?.data.resetsAt).toBe("number");
+      expect(String(quotaRecord?.data.message ?? "")).not.toContain(fixtureEmail);
+
+      // Feed parser displays the quota exhaustion stop reason on the card.
+      const feed = buildFeed(
+        { path: host.identity.path, engine: "antigravity", fmt: "antigravity", activity: "recent" } as import("@/lib/types").FileEntry,
+        transcriptLines,
+        false,
+        "",
+      ).items;
+      expect(feed.some((item) => item.kind === "note" && item.text.includes("Individual quota reached"))).toBe(true);
+
+      // Durable QuotaObservation recorded by identity with no process spawn.
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]).toMatchObject({
+        engine: "antigravity",
+        accountId: "default",
+        authenticated: true,
+        limitReached: true,
+        provenance: { source: "transcript" },
+        limits: { session: { usedPercent: 100, windowMinutes: 300 } },
+      });
+
+      // Bounded transcript reader reads back the exact same exhaustion.
+      const read = readAntigravityTranscriptLimits(path.join(antigravityHome, "sessions"));
+      expect(read.source).toBe("transcript");
+      expect(read.data?.session?.usedPercent).toBe(100);
+      expect(read.data?.session?.windowMinutes).toBe(300);
+    } finally {
+      await host.release();
+    }
+  });
 });

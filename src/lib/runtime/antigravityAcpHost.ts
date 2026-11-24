@@ -6,14 +6,25 @@ import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
-import { antigravityDefaultHome, recordAntigravityAuthState } from "@/lib/accounts/antigravity";
+import {
+  ANTIGRAVITY_DEFAULT_ACCOUNT_ID,
+  antigravityDefaultHome,
+  readAntigravityAuthState,
+  recordAntigravityAuthState,
+} from "@/lib/accounts/antigravity";
+import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import {
   antigravityModelsFromAcp,
   resolveAntigravityModelAndEffort,
   writeAntigravityModelCatalog,
 } from "@/lib/agent/antigravityModels";
 import { grantedMcpServers } from "@/lib/agent/mcpAllowlist";
-import type { ProcessIdentity } from "@/lib/agent/registry";
+import { agentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
+import {
+  antigravityLimitsFromExhaustion,
+  parseAntigravityQuotaError,
+  type AntigravityQuotaExhaustion,
+} from "@/lib/limits/antigravityQuota";
 import {
   resolveClaudeMcpServers,
   viewerMcpHttpUrl,
@@ -672,6 +683,8 @@ export interface AntigravityAcpHostOptions {
   processIdentity?: (pid: number) => string | null;
   eventStore?: RuntimeEventStore;
   readImage?: (ref: StructuredImageRef) => Buffer;
+  /** Optional sink for durable quota exhaustion observations; defaults to agentRegistry(). */
+  recordQuotaObservation?: (observation: DurableQuotaObservation) => void;
 }
 
 export const ANTIGRAVITY_TRANSCRIPT_SCHEMA_VERSION = 1;
@@ -1829,11 +1842,36 @@ export class AntigravityAcpHost implements EngineHost {
         if (interrupted) {
           this.appendTranscriptRecord("abort", { turnId, reason: "user_initiated" });
         } else {
-          this.appendTranscriptRecord("session.error", {
-            turnId,
-            code: typeof rpcCode === "number" ? String(rpcCode) : "error",
-            message,
-          });
+          const quota = parseAntigravityQuotaError(message, Date.now());
+          if (quota) {
+            this.appendTranscriptRecord("session.quota_exhausted", {
+              turnId,
+              code: typeof rpcCode === "number" ? String(rpcCode) : "RESOURCE_EXHAUSTED",
+              message: quota.message,
+              resetsAt: quota.resetsAt,
+              windowMinutes: quota.windowMinutes,
+              usedPercent: quota.usedPercent,
+              observedAt: quota.observedAt,
+            });
+            this.emit({
+              kind: "limits",
+              snapshot: {
+                engine: "antigravity",
+                exhausted: true,
+                windowMinutes: quota.windowMinutes,
+                resetsAt: quota.resetsAt,
+                observedAt: quota.observedAt,
+                message: quota.message,
+              },
+            });
+            this.recordQuotaExhaustion(quota);
+          } else {
+            this.appendTranscriptRecord("session.error", {
+              turnId,
+              code: typeof rpcCode === "number" ? String(rpcCode) : "error",
+              message,
+            });
+          }
         }
         this.finishTurn(running, interrupted ? "interrupted" : "error");
         if (this.outstandingPrompt === running) this.outstandingPrompt = null;
@@ -2489,6 +2527,33 @@ export class AntigravityAcpHost implements EngineHost {
       }
     }
     this.finishRelease();
+  }
+
+  private recordQuotaExhaustion(quota: AntigravityQuotaExhaustion): void {
+    try {
+      const tierName = readAntigravityAuthState()?.tierName ?? null;
+      const observedMs = quota.observedAt * 1000;
+      const mapped = antigravityLimitsFromExhaustion(quota, { nowMs: observedMs, tierName });
+      const observation: DurableQuotaObservation = {
+        engine: "antigravity",
+        accountId: this.options.accountId?.trim() || ANTIGRAVITY_DEFAULT_ACCOUNT_ID,
+        authenticated: true,
+        authCheckedAt: new Date(observedMs).toISOString(),
+        limits: mapped.limits,
+        provenance: { source: "transcript", reason: null, staleSince: null },
+        observedAt: new Date(observedMs).toISOString(),
+        bootId: "antigravity-acp-host",
+        resetCredits: null,
+        limitReached: true,
+      };
+      if (this.options.recordQuotaObservation) {
+        this.options.recordQuotaObservation(observation);
+      } else {
+        agentRegistry().recordQuotaObservations([observation]);
+      }
+    } catch {
+      /* Best-effort durable quota recording; transcript and limits event remain authoritative. */
+    }
   }
 
   private finishRelease(): void {

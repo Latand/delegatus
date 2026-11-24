@@ -107,6 +107,98 @@ test("Copilot quota probe reads its transcript and never starts an engine probe"
   }
 });
 
+test("Antigravity quota probe reads transcript exhaustion with zero process spawns and clears after resetsAt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-antigravity-transcript-"));
+  const { liveQuotaProbe } = await import("./quotaController");
+  const { managedCodexRuntime } = await import("@/lib/accounts/codexRuntime");
+  const runtime = managedCodexRuntime();
+  const spawnProbe = spyOn(runtime, "probeQuota").mockImplementation(async () => { throw new Error("Antigravity quota checks must not spawn a process"); });
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite",
+    sqliteFilename: path.join(root, "registry.sqlite"),
+  });
+  const secondReader = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite",
+    sqliteFilename: path.join(root, "registry.sqlite"),
+  });
+  try {
+    const home = path.join(root, "home");
+    const sessions = path.join(home, "sessions");
+    const session = path.join(sessions, crypto.randomUUID());
+    fs.mkdirSync(session, { recursive: true });
+    const observedMs = Date.parse("2026-11-24T01:00:00.000Z");
+    const observedSec = Math.floor(observedMs / 1000);
+    const resetsAt = observedSec + 7200;
+    fs.writeFileSync(
+      path.join(session, "events.jsonl"),
+      `${JSON.stringify({
+        type: "session.quota_exhausted",
+        timestamp: new Date(observedMs).toISOString(),
+        data: {
+          message: "RESOURCE_EXHAUSTED: Individual quota reached. Resets in 2h",
+          resetsAt,
+          windowMinutes: 300,
+          usedPercent: 100,
+          observedAt: observedSec,
+        },
+      })}\n`,
+    );
+    const account = {
+      id: "default",
+      label: "Default",
+      kind: "legacy" as const,
+      home,
+      sessionsDir: sessions,
+      createdAt: 0,
+      auth: "signed_in" as const,
+      tierName: "Pro",
+    };
+
+    const activeObs = await liveQuotaProbe.probe("antigravity", account, observedMs + 60_000);
+    expect(activeObs).toMatchObject({
+      engine: "antigravity",
+      accountId: "default",
+      authenticated: true,
+      limitReached: true,
+      provenance: { source: "transcript" },
+      limits: { session: { usedPercent: 100, resetsAt, windowMinutes: 300 }, plan: "Pro" },
+    });
+    expect(spawnProbe).not.toHaveBeenCalled();
+
+    let clock = observedMs + 60_000;
+    const controller = new QuotaController(registry, {
+      list: () => [account],
+      active: () => account.id,
+      credentialIdentity: () => "ag-cred-v1",
+      probe: (engine, candidate, now) => liveQuotaProbe.probe(engine, candidate, now),
+    }, "boot-ag", () => clock);
+
+    await controller.tick("antigravity");
+    expect(secondReader.quotaObservations("antigravity")[0]).toMatchObject({
+      engine: "antigravity",
+      accountId: "default",
+      limitReached: true,
+      limits: { session: { usedPercent: 100, resetsAt } },
+    });
+
+    // Once resetsAt elapses, a subsequent tick clears the expired 100% exhaustion.
+    clock = resetsAt * 1000 + 1000;
+    await controller.tick("antigravity");
+    expect(secondReader.quotaObservations("antigravity")[0]).toMatchObject({
+      engine: "antigravity",
+      accountId: "default",
+      limitReached: false,
+      limits: null,
+      provenance: { source: "unavailable", reason: "antigravity quota reset window elapsed" },
+    });
+  } finally {
+    registry.close();
+    secondReader.close();
+    spawnProbe.mockRestore();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("quota visibility remains fresh when automatic balancing is disabled", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-controller-"));
   try {

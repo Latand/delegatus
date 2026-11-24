@@ -11,7 +11,7 @@ export const AUTO_BALANCE_SAMPLE_GAP_MS = 60 * 1000;
 export const AUTO_BALANCE_FRESH_MS = 5 * 60 * 1000;
 
 /** Engines with durable quota observations. Migration remains two-engine. */
-export type QuotaEngine = "claude" | "codex" | "copilot";
+export type QuotaEngine = "claude" | "codex" | "copilot" | "antigravity";
 
 /** Usage-limit reset credits an account holds (issue #1373), as the Codex
     app-server reports them beside the rate limits. `expiresAt` is the soonest

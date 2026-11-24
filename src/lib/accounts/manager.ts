@@ -529,6 +529,18 @@ function copilotSummary(id: string): CopilotAccountSummary {
 function antigravitySummary(id: string): AccountSummary {
   const account = listAntigravityAccounts().find((item) => item.id === id);
   if (!account) throw new Error(`unknown antigravity account: ${id}`);
+  const observation = agentRegistry().readOnlySnapshot().quotaObservations.antigravity[id];
+  const observedMs = observation ? Date.parse(observation.observedAt) : Number.NaN;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const session = observation?.limits?.session ?? null;
+  const activeLimit = Boolean(
+    observation?.limits
+    && (!session || session.resetsAt === null || session.resetsAt > nowSec),
+  );
+  const fresh = observation?.authenticated === true
+    && Number.isFinite(observedMs)
+    && Date.now() >= observedMs
+    && Date.now() - observedMs <= 5 * 60_000;
   return {
     id: account.id,
     label: account.label,
@@ -541,7 +553,12 @@ function antigravitySummary(id: string): AccountSummary {
       plan: account.tierName,
       checkedAt: antigravityAuthCheckedAt(),
     },
-    limits: unavailableLimits(),
+    limits: activeLimit && observation?.limits ? {
+      state: fresh ? "fresh" : "stale",
+      session: observation.limits.session,
+      weekly: observation.limits.weekly,
+      checkedAt: observation.observedAt,
+    } : unavailableLimits(),
     login: null,
   };
 }

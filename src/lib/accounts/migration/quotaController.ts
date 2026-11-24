@@ -12,18 +12,21 @@ import { readProviderMessageHealth } from "@/lib/accounts/claudeProviderHealth";
 import { accountProbeIdentity, claudeProbeCredentialIdentity, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { activeCodexAccountId, listCodexAccounts, type CodexAccount } from "@/lib/accounts/codex";
 import { activeCopilotAccountId, copilotSignedInUser, listCopilotAccounts, type CopilotAccount } from "@/lib/accounts/copilot";
+import { activeAntigravityAccountId, listAntigravityAccounts, type AntigravityAccount } from "@/lib/accounts/antigravity";
 import { managedCodexRuntime, type CodexQuotaProbe } from "@/lib/accounts/codexRuntime";
 import type { AppServerResetCredits } from "@/lib/accounts/codexAppServer";
 import { agentRegistry, RegistryWriterBusyError, type AgentRegistry } from "@/lib/agent/registry";
+import { statePath } from "@/lib/configDir";
 import { logQuotaEvent } from "@/lib/events";
 import { adoptClaudeLimitsSnapshot, readClaudeAccountLimits, readCodexLimits } from "@/lib/limits";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
+import { readAntigravityTranscriptLimits } from "@/lib/limits/antigravityTranscriptLimits";
 import { recordLimitSamples } from "@/lib/limitsHistoryStore";
 
 import type { DurableQuotaObservation } from "./contracts";
 import type { QuotaEngine, QuotaObservation, QuotaResetCredits } from "./quotaPolicy";
 
-type QuotaAccount = ClaudeAccount | CodexAccount | CopilotAccount;
+type QuotaAccount = ClaudeAccount | CodexAccount | CopilotAccount | AntigravityAccount;
 
 export interface QuotaProbePort {
   list(engine: QuotaEngine): QuotaAccount[];
@@ -163,11 +166,27 @@ export async function claudeQuotaObservation(
 }
 
 const productionProbe: QuotaProbePort = {
-  list: (engine) => engine === "claude" ? listClaudeAccounts() : engine === "codex" ? listCodexAccounts() : listCopilotAccounts(),
-  active: (engine) => engine === "claude" ? activeClaudeAccountId() : engine === "codex" ? activeCodexAccountId() : activeCopilotAccountId() ?? "",
+  list: (engine) => engine === "claude"
+    ? listClaudeAccounts()
+    : engine === "codex"
+      ? listCodexAccounts()
+      : engine === "copilot"
+        ? listCopilotAccounts()
+        : listAntigravityAccounts(),
+  active: (engine) => engine === "claude"
+    ? activeClaudeAccountId()
+    : engine === "codex"
+      ? activeCodexAccountId()
+      : engine === "copilot"
+        ? activeCopilotAccountId() ?? ""
+        : activeAntigravityAccountId(),
   credentialIdentity: (engine, account) => engine === "claude"
     ? (account as ClaudeAccount).provider ? accountProbeIdentity(account) : claudeProbeCredentialIdentity(account.home)
-    : engine === "copilot" ? copilotProbeIdentity(account as CopilotAccount) : accountProbeIdentity(account),
+    : engine === "copilot"
+      ? copilotProbeIdentity(account as CopilotAccount)
+      : engine === "antigravity"
+        ? antigravityProbeIdentity(account as AntigravityAccount)
+        : accountProbeIdentity(account),
   async probe(engine, account, now, options) {
     if (engine === "claude") return await claudeQuotaObservation(account as ClaudeAccount, now, options);
     if (engine === "copilot") {
@@ -184,6 +203,25 @@ const productionProbe: QuotaProbePort = {
         observedAt: limits.data?.capturedAt === null || limits.data?.capturedAt === undefined
           ? now
           : limits.data.capturedAt * 1000,
+      };
+    }
+    if (engine === "antigravity") {
+      const candidate = account as AntigravityAccount;
+      const limits = candidate.auth === "signed_out"
+        ? { data: null, reason: "Antigravity CLI is signed out", source: "unavailable" as const }
+        : readAntigravityTranscriptLimits(candidate.sessionsDir, now, { tierName: candidate.tierName });
+      const authenticated = candidate.auth === "signed_in" || limits.data !== null;
+      return {
+        engine: "antigravity",
+        accountId: candidate.id,
+        authenticated,
+        authCheckedAt: now,
+        limits: limits.data,
+        provenance: { source: limits.source, reason: limits.reason, staleSince: null },
+        observedAt: limits.data?.capturedAt === null || limits.data?.capturedAt === undefined
+          ? now
+          : limits.data.capturedAt * 1000,
+        limitReached: limits.data !== null,
       };
     }
     const candidate = account as CodexAccount;
@@ -214,6 +252,16 @@ const productionProbe: QuotaProbePort = {
 function copilotProbeIdentity(account: CopilotAccount): string {
   try {
     const stat = fs.statSync(path.join(account.home, "config.json"), { bigint: true });
+    return [accountProbeIdentity(account), stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return `${accountProbeIdentity(account)}:${code === "ENOENT" ? "missing" : "unreadable"}`;
+  }
+}
+
+function antigravityProbeIdentity(account: AntigravityAccount): string {
+  try {
+    const stat = fs.statSync(statePath("antigravity-auth-state.json"), { bigint: true });
     return [accountProbeIdentity(account), stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -340,8 +388,19 @@ export class QuotaController {
             observation.authenticated && observation.provenance.source === "live");
         }
         const providerWithUnknownLimits = engine === "claude" && "provider" in account && Boolean(account.provider);
-        if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot" && !providerWithUnknownLimits
-          || (previous?.limits && Date.parse(previous.observedAt) > observation.observedAt)))) {
+        const previousAntigravityActive = engine === "antigravity"
+          && Boolean(previous?.limits?.session)
+          && (() => {
+            const session = previous!.limits!.session!;
+            const nowSec = Math.floor(now / 1000);
+            if (session.resetsAt !== null) return session.resetsAt > nowSec;
+            if (session.observedAt != null) return nowSec < session.observedAt + (session.windowMinutes ?? 300) * 60;
+            return false;
+          })();
+        if (!observation || (observation.authenticated && (!observation.limits && engine !== "copilot" && engine !== "antigravity" && !providerWithUnknownLimits
+          || (engine !== "antigravity" && previous?.limits && Date.parse(previous.observedAt) > observation.observedAt)
+          || (engine === "antigravity" && !observation.limits && previousAntigravityActive
+            && observation.provenance.reason !== "antigravity quota reset window elapsed")))) {
           observations.push(this.carryForward(engine, account.id, result.reason ?? observation?.provenance.reason ?? (observation?.limits ? "quota-probe-older" : "quota-probe-empty"), now));
         } else {
           observations.push(observation);
@@ -350,7 +409,7 @@ export class QuotaController {
       if (observations.length) {
         const durable = observations.map(observation => durableQuotaObservation({ ...observation, engine }, this.bootId));
         const changed = durable.filter(observation => !isDeepStrictEqual(previousByAccount.get(observation.accountId), observation));
-        if (engine === "copilot") {
+        if (engine === "copilot" || engine === "antigravity") {
           this.registry.recordQuotaObservations(changed);
           return observations;
         }
@@ -377,7 +436,7 @@ export class QuotaController {
     const accounts = new Map(snapshot.accounts.map(({ account }) => [account.id, account]));
     observations.forEach((observation) => {
       const account = accounts.get(observation.accountId)!;
-      if (engine === "copilot") return;
+      if (engine === "copilot" || engine === "antigravity") return;
       logQuotaEvent({
         engine,
         accountId: observation.accountId,
