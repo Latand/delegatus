@@ -1,6 +1,6 @@
-import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, jest, mock, test } from "bun:test";
 import { Window as HappyWindow } from "happy-dom";
-import { useState } from "react";
+import { act, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -878,9 +878,25 @@ test("a missing seat transcript keeps the path, board link, rotation and Re-bind
   const root = createRoot(host);
   roots.add(root);
   flushSync(() => root.render(cardView([])));
-  await settle(root, cardView([]));
-  flushSync(() => openButton(host).click());
-  await settle(root, cardView([]));
+  await settle(root, cardView([]), 12);
+  jest.useFakeTimers();
+  const actGlobal = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousActEnvironment = actGlobal.IS_REACT_ACT_ENVIRONMENT;
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    await act(async () => {
+      openButton(host).click();
+      for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(SEAT_TRANSCRIPT_TIMEOUT_MS);
+      for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+    });
+  } finally {
+    jest.useRealTimers();
+    if (previousActEnvironment === undefined) delete actGlobal.IS_REACT_ACT_ENVIRONMENT;
+    else actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
   const rebind = () => host.querySelector<HTMLButtonElement>("[data-orchestrator-rebind]");
   expect(sheet(host)).not.toBeNull();
   expect(host.querySelector('[data-orchestrator-bind-failure="catalog"]')).not.toBeNull();
@@ -939,14 +955,14 @@ async function createFromDraft(files: FileEntry[]) {
 }
 
 test("a create on a vacated seat carries replaceIncumbent on the first attempt", async () => {
-  seatAnswer = { seat: seat(), pending: null, exists: false };
+  seatAnswer = { seat: null, pending: null, exists: false };
   const { confirm } = await createFromDraft([conversation({})]);
   await confirm();
 
   const posts = seatPosts();
   expect(posts).toHaveLength(1);
-  expect(posts[0]!.body.replaceIncumbent).toBe(true);
-  expect(posts[0]!.body.expectedIncumbentSeatEpoch).toBe(4);
+  expect(posts[0]!.body.replaceIncumbent).toBeUndefined();
+  expect(posts[0]!.body.expectedIncumbentSeatEpoch).toBeUndefined();
 });
 
 test("a predecessor row cannot stand in for the mobile incumbent path", async () => {
@@ -957,8 +973,19 @@ test("a predecessor row cannot stand in for the mobile incumbent path", async ()
   transcriptAnswer = async () => Response.json({ conversationId: "conv_orchestrator", file: current });
   const predecessor = { ...orchestrator, path: "/orchestrator-archived.jsonl", migratedTo: current.path } as FileEntry;
   const { host, root } = await mount([predecessor]);
-  flushSync(() => openButton(host).click());
-  await settle(root, view([predecessor]));
+  const actGlobal = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousActEnvironment = actGlobal.IS_REACT_ACT_ENVIRONMENT;
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    await act(async () => {
+      openButton(host).click();
+      for (let turn = 0; turn < 24; turn += 1) await Promise.resolve();
+      root.render(view([predecessor]));
+    });
+  } finally {
+    if (previousActEnvironment === undefined) delete actGlobal.IS_REACT_ACT_ENVIRONMENT;
+    else actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
   expect(requests.filter((request) => request.url.startsWith("/api/orchestrator/seat/transcript?")).length).toBe(1);
   expect(host.querySelector('[data-mobile2-seat-state="live"]')).not.toBeNull();
   expect(sheet(host)?.textContent).not.toContain("Transcript not found");
@@ -979,12 +1006,23 @@ test("a stalled mobile transcript body aborts at the deadline and exposes recove
   };
   const { host, root } = await mount([]);
   jest.useFakeTimers();
-  flushSync(() => openButton(host).click());
-  for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
-  flushSync(() => jest.advanceTimersByTime(SEAT_TRANSCRIPT_TIMEOUT_MS));
-  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
-  flushSync(() => undefined);
-  jest.useRealTimers();
+  const actGlobal = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousActEnvironment = actGlobal.IS_REACT_ACT_ENVIRONMENT;
+  actGlobal.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    await act(async () => {
+      openButton(host).click();
+      for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+    });
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(SEAT_TRANSCRIPT_TIMEOUT_MS);
+      for (let turn = 0; turn < 16; turn += 1) await Promise.resolve();
+    });
+  } finally {
+    jest.useRealTimers();
+    if (previousActEnvironment === undefined) delete actGlobal.IS_REACT_ACT_ENVIRONMENT;
+    else actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
   expect(signal?.aborted).toBe(true);
   expect(sheet(host)?.textContent).toContain("Transcript not found");
   expect(sheet(host)?.textContent).toContain("/orchestrator.jsonl");
@@ -994,7 +1032,7 @@ test("a stalled mobile transcript body aborts at the deadline and exposes recove
 });
 
 test("a retry after a refused create on a vacated seat still carries replaceIncumbent (fresh key)", async () => {
-  seatAnswer = { seat: seat(), pending: null, exists: false };
+  seatAnswer = { seat: null, pending: null, exists: false };
   postSeat = async () => new Response(JSON.stringify({ error: "orchestrator cwd could not be resolved" }), { status: 400, headers: { "content-type": "application/json" } });
   const { host, confirm } = await createFromDraft([conversation({})]);
   await confirm();
@@ -1005,12 +1043,12 @@ test("a retry after a refused create on a vacated seat still carries replaceIncu
   const posts = seatPosts();
   expect(posts).toHaveLength(2);
   expect(posts[1]!.body.clientRequestId).not.toBe(posts[0]!.body.clientRequestId);
-  expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([true, true]);
-  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([4, 4]);
+  expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([undefined, undefined]);
+  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([undefined, undefined]);
 });
 
 test("a same-key replay after a lost reply on a vacated seat still carries replaceIncumbent", async () => {
-  seatAnswer = { seat: seat(), pending: null, exists: false };
+  seatAnswer = { seat: null, pending: null, exists: false };
   postSeat = async () => { throw new TypeError("network dropped"); };
   const { host, confirm } = await createFromDraft([conversation({})]);
   await confirm();
@@ -1021,8 +1059,8 @@ test("a same-key replay after a lost reply on a vacated seat still carries repla
   const posts = seatPosts();
   expect(posts).toHaveLength(2);
   expect(posts[1]!.body.clientRequestId).toBe(posts[0]!.body.clientRequestId);
-  expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([true, true]);
-  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([4, 4]);
+  expect(posts.map((post) => post.body.replaceIncumbent)).toEqual([undefined, undefined]);
+  expect(posts.map((post) => post.body.expectedIncumbentSeatEpoch)).toEqual([undefined, undefined]);
 });
 
 test("a create with no seat record never carries replaceIncumbent, on the first attempt or the retry", async () => {

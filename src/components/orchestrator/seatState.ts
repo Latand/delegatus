@@ -661,7 +661,7 @@ export function deriveOrchestratorPanelState(input: {
   now?: number;
 }): OrchestratorPanelState {
   const { status } = input;
-  const active = status?.seat && (status.exists || input.transcriptPending || input.transcriptMissing) ? status.seat : null;
+  const active = status?.seat && (status.exists || input.file !== null || input.transcriptPending || input.transcriptMissing) ? status.seat : null;
   const pending = status?.pending ?? null;
   const clientError = unsettledClientError(status, input.submitFailure);
   const failure = currentSeatFailure(status?.lastFailure ?? null, active, status?.hostObservation ?? null);
