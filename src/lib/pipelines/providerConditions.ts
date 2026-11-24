@@ -36,5 +36,8 @@ export function classifyProviderCondition(engine: RuntimeEngine, errorClass: str
   if (engine === "codex" && /^failed to load workspace requirements(?::|$)/i.test(text.trim())) {
     return { kind: "transient", scope: null, resetLabel: null, label: CODEX_WORKSPACE_REQUIREMENTS_FAILURE };
   }
+  if (engine === "codex" && /^(?:API Error:\s*)?This content was flagged for possible cybersecurity risk(?:\.|$)/i.test(text.trim())) {
+    return { kind: "other", scope: null, resetLabel: null, label: "Codex cybersecurity refusal" };
+  }
   return { kind: "other", scope: null, resetLabel: null, label: "provider error" };
 }
