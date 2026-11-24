@@ -787,6 +787,24 @@ test("attributing a legacy copy before its registered source retires survives th
   } finally { clock.mockRestore(); store.close(); }
 });
 
+test.each([false, true])("a verified legacy copy is bound before its source retires (discovery sealed=%s)", async sealed => {
+  const { store, directories: [original] } = workScratchFixture(1, 1);
+  const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
+  try {
+    const { identity } = store.owner(original!)!;
+    const name = createHash("sha256").update(original!).update("\0").update(identity).digest("hex");
+    const copy = statePath("evidence", "attempt-temp", name);
+    fs.mkdirSync(copy, { recursive: true });
+    writeEnvelope(path.join(copy, "manifest.json"), { original, identity });
+    store.checkpointCopies("", sealed);
+    const report = await runAttemptTempSweep({ ...workPorts, references }, workMode);
+    expect(report).toMatchObject({ removed: 1, copies: { removed: 0, unattributed: { count: 0, bytes: 0 } } });
+    expect(fs.existsSync(original!)).toBeFalse();
+    expect(fs.existsSync(copy)).toBeTrue();
+    expect(store.copy(copy)).toMatchObject({ pipelineId: "oldest-lane", launchId: "fixture-launch-0", kind: "lane" });
+  } finally { clock.mockRestore(); store.close(); }
+});
+
 test("expensive expired proofs keep their next retry across fresh helpers", async () => {
   const { store, directories: [directory] } = workScratchFixture(1, 1);
   const tick = async (at: number, fail: boolean) => {
@@ -810,6 +828,53 @@ test("expensive expired proofs keep their next retry across fresh helpers", asyn
     expect(fs.existsSync(directory!)).toBeFalse();
   } finally { store.close(); }
 }, 15_000);
+
+test("a failed full proof under cap pressure waits between minute ticks and retries when due", async () => {
+  const { store, directories: [directory] } = workScratchFixture(1, 1);
+  const previousCap = process.env.LLV_ATTEMPT_TEMP_CAP_BYTES;
+  process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "1";
+  const tick = async (at: number, fail: boolean) => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
+      "--production-report", String(at), "--fixture-container-inventory",
+      ...(fail ? [`--checkout-budget-root=${path.basename(directory!)}`] : [])],
+    { stdout: "pipe", stderr: "pipe" });
+    const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code, errors).toBe(0);
+    return JSON.parse(output.trim().split("\n").at(-1)!);
+  };
+  try {
+    const retryAt = WORK_TICK + 15 * 60_000;
+    const failed = await tick(WORK_TICK, true);
+    expect(failed).toMatchObject({ checked: 1, deferred: 1, removed: 0,
+      outcomes: [expect.objectContaining({ reasonCode: "checkout_budget", retryAt })] });
+    expect(store.owner(directory!)?.checkedAt).toBe(retryAt);
+    expect(await tick(WORK_TICK + 60_000, false)).toMatchObject({ checked: 0, removed: 0 });
+    expect(fs.readFileSync(path.join(directory!, "payload"), "utf8")).toBe("fixture");
+    expect(await tick(retryAt, false)).toMatchObject({ checked: 1, removed: 1, errors: 0 });
+    expect(fs.existsSync(directory!)).toBeFalse();
+  } finally {
+    if (previousCap === undefined) delete process.env.LLV_ATTEMPT_TEMP_CAP_BYTES;
+    else process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = previousCap;
+    store.close();
+  }
+}, 15_000);
+
+test("a process first seen by retirement scan reports its live reference", async () => {
+  const { store, directories: [directory] } = workScratchFixture(1, 1);
+  const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
+  let scans = 0;
+  try {
+    const report = await runAttemptTempSweep({ ...workPorts, references,
+      scan: () => ++scans < 2 ? emptyScan() : ({ ownNamespace: null, processes: [
+        { pid: 41, namespace: null, stamped: false, paths: [directory!] },
+      ] }),
+    }, workMode);
+    expect(report).toMatchObject({ checked: 1, removed: 0, outcomes: [expect.objectContaining({
+      disposition: "live", reasonCode: "process_reference",
+    })] });
+    expect(fs.readFileSync(path.join(directory!, "payload"), "utf8")).toBe("fixture");
+  } finally { clock.mockRestore(); store.close(); }
+});
 
 test.skipIf(process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK !== "1")("work-shaped measurement over one hour of minute ticks", async () => {
   const { store, directories } = workScratchFixture(812, 4);

@@ -114,10 +114,20 @@ function copyHasRegisteredSource(store: AttemptTempStore, destination: string, p
 export function attributeCopyBeforeRootRetirement(store: AttemptTempStore, original: string, identity: string) {
   const name = createHash("sha256").update(original).update("\0").update(identity).digest("hex");
   const destination = statePath("evidence", "attempt-temp", name);
-  if (!store.copySourcePending(destination)) return 0;
   let proof: ReturnType<typeof copyParentProof>;
   try { proof = copyParentProof(); } catch { return 0; }
-  return copyHasRegisteredSource(store, destination, proof) ? store.attributeCopySource(destination) : 0;
+  if (!copyHasRegisteredSource(store, destination, proof)) return 0;
+  if (store.copySourcePending(destination)) return store.attributeCopySource(destination);
+  if (store.copy(destination)) return 0;
+
+  // A sealed discovery cursor may never have seen this legacy destination.
+  // Bind it from its verified manifest while the source owner still exists.
+  const owner = store.owner(original);
+  if (!owner || owner.identity !== identity) return 0;
+  store.registerCopy({ destination, pipelineId: owner.pipelineId, launchId: owner.launchId,
+    kind: owner.pipelineId ? "lane" : "agent", createdAt: owner.createdAt, expiresAt: null,
+    checkedAt: Date.now() + HOUR, bytes: 0 });
+  return 0;
 }
 
 /** Old ledgers can have sealed discovery before this source was registered.

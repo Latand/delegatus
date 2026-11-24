@@ -1213,6 +1213,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           disposition = "evidence";
           reason = observed.reason;
           reasonCode = observed.reason === "pinned" ? "keep_marker" : "mount_boundary";
+        } else if (result.held?.some(held => held.reason === "process_reference")) {
+          disposition = "live";
+          reason = "live process references the attempt root";
+          reasonCode = "process_reference";
         } else if (reason === "retirement dispatch refused" && result.kept.inUse) {
           disposition = "live";
           reason = "live reference or changed retirement guard";
@@ -1280,8 +1284,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           const actionable = ["tick_budget", "protection_checkpoint", "ledger_busy", "admission_busy"].includes(last.reasonCode)
             || last.reasonCode === "root_budget" && AttemptProtectionInventory.exists(owner.directory);
           const quarantined = !fs.existsSync(owner.directory) && fs.existsSync(attemptTempJournalPath(owner.directory));
+          const fullProofWithoutProgress = last.reasonCode === "checkout_budget" || last.reasonCode === "root_budget";
           const retryMs = last.disposition !== "deferred" ? EXPIRED_HOLD_RETRY_MS
-            : options.scheduledOnly && !pressure && !quarantined && !actionable ? EXPIRED_PROOF_RETRY_MS : 0;
+            : !quarantined && !actionable && (options.scheduledOnly && !pressure || pressure && fullProofWithoutProgress)
+              ? EXPIRED_PROOF_RETRY_MS : 0;
           const retryAt = retryMs ? Math.max(current.checkedAt, now() + retryMs) : current.checkedAt;
           if (retryAt !== current.checkedAt) store.defer(owner.directory, retryAt);
           last.retryAt = retryAt;

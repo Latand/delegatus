@@ -332,7 +332,7 @@ export type TempSweepReport = {
   /** Allocations retained under each guard; absent in older report versions. */
   keptBytes?: TempSweepReport["kept"];
   /** Git or inspection holds beyond the pipeline worktree list. */
-  held?: { path: string; via: string; reason: TreeHold | "pinned" | "attempt-owner-unlisted"; bytes: number }[];
+  held?: { path: string; via: string; reason: TreeHold | "pinned" | "attempt-owner-unlisted" | "process_reference"; bytes: number }[];
   errors: string[];
 };
 
@@ -911,6 +911,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         || inside(resolvePhysicalPath(root.via + entry), originalPath);
       if (inUse.some(processHolds) || conversationHolds(reachable, root.via)) {
         await keep("inUse");
+        if (inUse.some(processHolds)) report.held!.push({ path: candidate, via: root.via, reason: "process_reference", bytes: 0 });
         continue;
       }
       const physicallyOverlaps = (entries: readonly string[]) => entries.some(entry => (root.via ? [entry, root.via + entry] : [entry]).some(accessible => {
@@ -938,8 +939,12 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       }
       try {
         const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
-        if (readScan().processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry)))) || conversationHolds(reachable, root.via)) {
+        const freshScan = readScan();
+        const processReferenced = freshScan.processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry))));
+        if (processReferenced || conversationHolds(reachable, root.via)) {
           await keep("inUse", bytes);
+          if (processReferenced)
+            report.held!.push({ path: candidate, via: root.via, reason: "process_reference", bytes });
           continue;
         }
         // Measurement yields to new owners and filesystem activity. Date and
