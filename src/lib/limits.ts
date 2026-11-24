@@ -44,6 +44,10 @@ const CACHE_MS = 30_000;
     shorter than the controller's 60-second cadence, so each tick still reads
     unless a footer poll already did inside the window. */
 const CLAUDE_REFRESH_WINDOW_MS = 50_000;
+/** Loading the local CLI and waiting for its usage report can take longer
+    than the subscription HTTP request alone. */
+const CLAUDE_USAGE_CLI_TIMEOUT_MS = 25_000;
+const CLAUDE_USAGE_HTTP_TIMEOUT_MS = 8_000;
 const FAILURE_COOLDOWN_MS = 60_000;
 const MAX_RATE_LIMIT_BACKOFF_MS = 15 * 60_000;
 const CODEX_INITIALIZE_TIMEOUT_REASON = "app-server-initialize-timeout";
@@ -539,7 +543,7 @@ interface OauthWindow {
 export async function fetchClaudeLimits(
   credentialsPath: string,
   clock: () => number = Date.now,
-  timeoutMs = 8_000,
+  timeoutMs?: number,
   ports: { run?: typeof runHeadlessClaudeOnce } = {},
 ): Promise<LimitRead> {
   // Freeze migration before a CLI result can create the first new cache entry.
@@ -547,7 +551,7 @@ export async function fetchClaudeLimits(
   try {
     const home = path.dirname(credentialsPath);
     const cli = await (ports.run ?? runHeadlessClaudeOnce)({ account: { engine: "claude", accountId: "usage", kind: "managed", home,
-      transcriptRoot: path.join(home, "projects"), env: process.env }, prompt: "/usage", timeoutMs });
+      transcriptRoot: path.join(home, "projects"), env: process.env }, prompt: "/usage", timeoutMs: timeoutMs ?? CLAUDE_USAGE_CLI_TIMEOUT_MS });
     const terminal = cli.records.filter(row => row.type === "result").at(-1);
     if (cli.status === "done" && terminal?.subtype === "success" && terminal.is_error !== true && terminal.local_command === "usage" && terminal.num_turns === 0) {
       const data = claudeCliWindows(cli.records, clock());
@@ -580,7 +584,7 @@ export async function fetchClaudeLimits(
         authorization: "Bearer " + oauthToken,
         "anthropic-beta": "oauth-2025-04-20",
       },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs ?? CLAUDE_USAGE_HTTP_TIMEOUT_MS),
     });
     if (res.status === 429) return { data: null, reason: LIMITS_RATE_LIMITED_REASON, source: "unavailable", retryAt: retryAfterAt(res.headers.get("retry-after"), clock()) };
     if (res.status === 401) return { data: null, reason: LIMITS_REAUTH_REQUIRED_REASON, source: "unavailable" };

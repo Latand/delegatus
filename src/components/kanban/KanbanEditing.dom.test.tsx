@@ -119,6 +119,10 @@ function scripted(rows: () => readonly BoardTask[]): Scripted {
         const row = rows().find((candidate) => candidate.id === id)!;
         const { expectedProject: _project, expectedRevision: _revision, ...change } = body as PatchBody & Record<string, unknown>;
         const saved = { ...row, ...change, revision: REV((revision += 1)) } as BoardTask & Record<string, unknown>;
+        if ("text" in change && saved.origin) {
+          saved.origin = { ...saved.origin, refinement: change.restorePendingTitle ? "pending" : "titled" };
+          delete saved.restorePendingTitle;
+        }
         if ("hide" in change) {
           delete saved.hide;
           if (change.hide) saved.groupHidden = { at: "2026-09-14T12:00:00.000Z", by: "operator", admitted: [] };
@@ -243,6 +247,44 @@ test("Esc cancels without a write; E edits the description and leaving the field
   /* Focus stays where the operator put it. */
   expect(document.activeElement).toBe(cardEl(view.host, "b"));
   expect(view.server.patches).toHaveLength(1);
+});
+
+test("leaving a borrowed name alone writes nothing; undoing a rename restores the borrowed name", async () => {
+  const row = task("a", "assigned", "Claude session", {
+    conversationTitle: "Imported conversation name",
+    origin: { kind: "conversation", key: "conversation_fixture_a", refinement: "pending" },
+  });
+  const view = mount([row, task("b", "assigned", "Another task")]);
+  const rename = () => click(cardEl(view.host, "a")?.querySelector("[data-rename]"));
+  const title = () => cardEl(view.host, "a")?.querySelector(".title")?.textContent;
+  rename();
+  expect(editor(view.host, "a")?.value).toBe("Imported conversation name");
+  flushSync(() => cardEl(view.host, "b")!.focus());
+  await tick(30);
+  expect(editor(view.host, "a")).toBeNull();
+  expect(view.server.patches).toHaveLength(0);
+  expect(receiptTexts(view.host)).toEqual([]);
+  expect(title()).toBe("Imported conversation name");
+
+  rename();
+  type(editor(view.host, "a")!, "Operator rename");
+  key(editor(view.host, "a"), "Enter");
+  await tick();
+  expect(title()).toBe("Operator rename");
+  click([...view.host.querySelectorAll("button")].find(button => button.textContent === "Undo"));
+  await tick();
+  expect(view.server.patches.at(-1)?.body).toMatchObject({ text: "Claude session", restorePendingTitle: true });
+  expect(title()).toBe("Imported conversation name");
+});
+
+test("an imported legacy placeholder recovers its chat name while an explicit task title wins", () => {
+  const origin = { kind: "conversation", key: "conversation_demo", refinement: "titled" } as const;
+  const view = mount([
+    task("legacy", "assigned", "Claude session", { origin, conversationTitle: "Recover the imported title" }),
+    task("named", "assigned", "Operator title", { origin, conversationTitle: "Other conversation title" }),
+  ]);
+  expect(cardEl(view.host, "legacy")?.querySelector(".title")?.textContent).toBe("Recover the imported title");
+  expect(cardEl(view.host, "named")?.querySelector(".title")?.textContent).toBe("Operator title");
 });
 
 test("a refused save keeps the draft with Retry and Discard, and the card shows the stored title again", async () => {

@@ -232,6 +232,12 @@ export interface BoardTask {
       reviews the board: a short title, then a few sentences about the outcome.
       Agent-facing context belongs in `details`. */
   text: string;
+  /** Display title derived on board reads when the linked transcript is outside the board feed. */
+  conversationTitle?: string;
+  /** Project that owns the source title, when resolved. */
+  conversationTitleProject?: string;
+  /** Read-only board link to the task holding the parent conversation. */
+  chatParentTaskId?: string;
   /** Agent-facing context (#1834): the prompt, the working notes, the ids, the
       rules and the state an agent needs and the operator does not. Plain text
       with its own cap ({@link TASK_DETAILS_LIMIT}), persisted and revisioned

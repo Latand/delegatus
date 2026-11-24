@@ -1,5 +1,7 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { NextRequest } from "next/server";
 import os from "node:os";
 import path from "node:path";
 
@@ -10,9 +12,13 @@ import { beginDeputy, DEPUTY_HISTORY_CAP, endDeputy, readDeputies, recordDeputyF
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests } from "@/lib/scanner/scanCache";
 import { projectForCwd } from "@/lib/scanner/describe";
+import { indexTranscriptSources } from "@/lib/search/transcriptSearch";
+import * as chatStatus from "@/lib/forge/chatPullRequestStatus";
 import { writeSessionTitle } from "@/lib/session/titleStore";
 
 import { GET } from "./route";
+import { GET as pullRequests } from "./pull-requests/route";
+import { POST as refreshPullRequests } from "./pull-requests/route";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-conversations-route-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
@@ -29,7 +35,7 @@ afterEach(() => {
   setFileCatalogMembershipProbeForTests(null);
   replaceConversationCatalog([]);
   setAgentRegistryForTests(null);
-  fs.rmSync(path.join(sandbox, "session-titles.json"), { force: true });
+  fs.rmSync(path.join(sandbox, "session-titles.json"), { force: true, recursive: true });
   fs.rmSync(path.join(sandbox, "registry.json"), { force: true });
 });
 afterAll(() => {
@@ -409,6 +415,74 @@ test("warm search beyond the old text-cache ceiling never reopens retained trans
   }
 });
 
+test("main chats and each branch have separate cursors and stable child totals", async () => {
+  const project = "branch-fixture";
+  const codexThread = (suffix: number) => ["0".repeat(8), "0".repeat(4), "4000", "8000", String(suffix).padStart(12, "0")].join("-");
+  const codexParent = codexThread(10);
+  const codexChild = codexThread(11);
+  const make = (name: string, mtime: number, extra: Partial<Parameters<typeof replaceConversationCatalog>[0][number]> = {}) => {
+    const pathname = path.join(sandbox, name + ".jsonl");
+    fs.writeFileSync(pathname, "{}\n");
+    return {
+      path: pathname, name: name + ".jsonl", root: "claude-projects" as const,
+      project, title: name, firstPrompt: "", engine: "claude" as const,
+      kind: "session", fmt: "claude" as const, mtime, size: 3, ...extra,
+    };
+  };
+  const main = make("main", 1);
+  const one = make("recent-branch", 10, { parent: main.path });
+  const two = make("older-branch", 2, { parent: main.path });
+  const nested = make("nested-branch", 3, { parent: one.path });
+  const codex = { engine: "codex", root: "codex-sessions", fmt: "codex" } as const;
+  const thread = make(`rollout-${codexParent}`, 4, codex);
+  const fork = make(`rollout-${codexChild}`, 6, { ...codex, nativeForkSourceThreadId: codexParent });
+  replaceConversationCatalog([main, one, two, nested, thread, fork, make("out-of-project", 12, { parent: main.path, project: "other" })]);
+  const base = `http://127.0.0.1/api/conversations?project=${project}&view=tree&limit=1`;
+  const roots = `${base}&branch=roots`;
+  const children = (parent: string) => `${base}&branch=children&parent=${encodeURIComponent(parent)}`;
+  const json = async (url: string) => (await GET(new Request(url))).json();
+  const firstRoot = await json(roots);
+  expect(firstRoot).toMatchObject({ items: [{ path: main.path, parent: null, directChildCount: 2 }], total: 2, projectTotal: 6 });
+  const firstChild = await json(children(main.path));
+  expect(firstChild).toMatchObject({ items: [{ path: one.path, parent: main.path, directChildCount: 1 }], total: 2, projectTotal: 6 });
+  const rootCursor = `&cursor=${firstRoot.nextCursor}`;
+  const childCursor = `&cursor=${firstChild.nextCursor}`;
+  expect((await GET(new Request(children(main.path) + rootCursor))).status).toBe(409);
+  expect((await GET(new Request(children(thread.path) + childCursor))).status).toBe(409);
+  expect(await json(roots + rootCursor)).toMatchObject({ items: [{ path: thread.path, engine: "codex", directChildCount: 1 }], nextCursor: null });
+  expect(await json(children(main.path) + childCursor)).toMatchObject({ items: [{ path: two.path, directChildCount: 0 }], nextCursor: null });
+  expect(await json(children(thread.path))).toMatchObject({ items: [{ path: fork.path, parent: thread.path, engine: "codex" }], total: 1 });
+  expect(await json(children(one.path))).toMatchObject({ items: [{ path: nested.path, parent: one.path }], total: 1 });
+  expect(await json(children("/absent/example.jsonl"))).toMatchObject({ items: [], nextCursor: null, total: 0 });
+});
+
+test("desktop branch lists keep cross-project Codex subagents under their native parent", async () => {
+  const parentId = randomUUID();
+  const make = (id: string, project: string, nativeParentThreadId?: string) => {
+    const pathname = path.join(sandbox, `rollout-${id}.jsonl`);
+    fs.writeFileSync(pathname, "{}\n");
+    return {
+      path: pathname, name: path.basename(pathname), root: "codex-sessions" as const,
+      project, title: id, firstPrompt: "", engine: "codex" as const,
+      kind: "session", fmt: "codex" as const, mtime: 1, size: 3, nativeParentThreadId,
+    };
+  };
+  const parent = make(parentId, "parent-project");
+  const child = make(randomUUID(), "child-project", parentId);
+  const orphan = make(randomUUID(), "child-project", randomUUID());
+  replaceConversationCatalog([parent, child, orphan]);
+  const page = async (project: string, parent?: string) => {
+    const query = new URLSearchParams({ project, view: "tree", branch: parent ? "children" : "roots" });
+    if (parent) query.set("parent", parent);
+    return (await GET(new Request(`http://127.0.0.1/api/conversations?${query}`))).json();
+  };
+  expect(await page("parent-project")).toMatchObject({ total: 1, items: [{ path: parent.path, directChildCount: 1 }] });
+  expect(await page("parent-project", parent.path)).toMatchObject({
+    total: 1, items: [{ path: child.path, project: "child-project", parent: parent.path }],
+  });
+  expect(await page("child-project")).toMatchObject({ total: 1, items: [{ path: orphan.path }] });
+  expect(await page("child-project", parent.path)).toMatchObject({ total: 0, items: [] });
+});
 
 test("ordinary cursor pages still hydrate their own transcript titles", async () => {
   const entries = [1, 2].map(n => {
@@ -520,5 +594,102 @@ test("a parallel self stays out of the page after the history cap trims its reco
     expect(page.items.map((item) => item.path)).toEqual([seat]);
   } finally {
     fs.rmSync(path.join(sandbox, "orchestrator-deputies.json"), { force: true });
+  }
+});
+
+test("chat PR lookup is scoped to cataloged transcripts in the selected project", async () => {
+  const make = (project: string, number: number) => {
+    const file = path.join(sandbox, `chat-pr-${number}.jsonl`);
+    fs.writeFileSync(file, JSON.stringify({ type: "user", message: { content: `Review https://github.com/sample/reports/pull/${number}` } }) + "\n");
+    const stat = fs.statSync(file);
+    return { path: file, project, root: "claude-projects" as const, name: path.basename(file), title: "Review reports",
+      firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, size: stat.size, mtime: stat.mtimeMs / 1000 };
+  };
+  const allowed = make("reports-a", 7);
+  const elsewhere = make("reports-b", 9);
+  const unknown = make("reports-a", 11);
+  replaceConversationCatalog([allowed, elsewhere]);
+  await indexTranscriptSources([allowed, elsewhere, unknown].map(row => ({ ...row, mtimeMs: row.mtime * 1000 })));
+  const query = new URLSearchParams({ project: "reports-a" });
+  for (const row of [allowed, elsewhere, unknown]) query.append("transcript", row.path);
+  const req = new NextRequest(`http://localhost/api/conversations/pull-requests?${query}`, { headers: { host: "localhost" } });
+  const response = await pullRequests(req);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ [allowed.path]: {
+    partial: false, items: [{ repository: "sample/reports", number: 7, url: "https://github.com/sample/reports/pull/7", state: null }],
+  } });
+});
+
+test("a PR refresh only submits the authorized page and chat dates come from the index", async () => {
+  const file = path.join(sandbox, "dated-prs.jsonl");
+  const records = Array.from({ length: 16 }, (_, index) => ({
+    type: "user", timestamp: new Date(Date.UTC(2026, 4, 1, index)).toISOString(),
+    message: { content: `Review https://github.com/sample/paged/pull/${index + 1}` },
+  }));
+  fs.writeFileSync(file, records.map(item => JSON.stringify(item)).join("\n") + "\n");
+  const stat = fs.statSync(file);
+  const row = { path: file, project: "paged-project", root: "claude-projects" as const, name: path.basename(file),
+    title: "Review reports", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const,
+    size: stat.size, mtime: stat.mtimeMs / 1000 };
+  replaceConversationCatalog([row]);
+  await indexTranscriptSources([{ ...row, mtimeMs: stat.mtimeMs }]);
+  const branch = () => GET(new Request(`http://localhost/api/conversations?view=tree&branch=roots&project=${row.project}`));
+  expect(await (await branch()).json()).toMatchObject({ items: [{
+    firstMessageAt: Date.UTC(2026, 4, 1) / 1000, lastMessageAt: Date.UTC(2026, 4, 1, 15) / 1000,
+  }] });
+  const check = spyOn(chatStatus, "refreshChatPullRequestStatus").mockImplementation(async items => [...items]);
+  try {
+    const open = (project: string, offset: number) => refreshPullRequests(new NextRequest(
+      `http://localhost/api/conversations/pull-requests?${new URLSearchParams({ project, transcript: file, offset: String(offset) })}`,
+      { method: "POST", headers: { host: "localhost" } },
+    ));
+    expect((await (await open(row.project, 0)).json()).map((item: { number: number }) => item.number)).toEqual(
+      [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5],
+    );
+    expect(await (await open(row.project, 12)).json()).toHaveLength(4);
+    expect(await (await open("other-project", 0)).json()).toEqual({});
+    expect(check).toHaveBeenCalledTimes(2);
+  } finally {
+    check.mockRestore();
+  }
+  fs.appendFileSync(file, "{}\n");
+  const stale = (await (await branch()).json()).items[0];
+  expect(stale.lastMessageAt).toBeUndefined();
+  expect(stale.firstMessageAt).toBe(Date.UTC(2026, 4, 1) / 1000);
+});
+
+test("chat PR history uses Claude attachments outside the indexed message window", async () => {
+  const priorHome = process.env.LLV_CLAUDE_HOME;
+  process.env.LLV_CLAUDE_HOME = path.join(sandbox, "claude");
+  try {
+    const projects = path.join(process.env.LLV_CLAUDE_HOME, "projects", "reports");
+    fs.mkdirSync(projects, { recursive: true });
+    const file = path.join(projects, "native-history.jsonl");
+    const attach = (number: number) => JSON.stringify({
+      type: "pr-link", prNumber: number, prUrl: `https://github.com/sample/reports/pull/${number}`,
+    });
+    fs.writeFileSync(file, [
+      attach(7), attach(11),
+      JSON.stringify({ type: "user", message: { content: "Compare https://github.com/sample/reports/pull/9" } }),
+      attach(7), JSON.stringify({ type: "pr-link", prUrl: "https://example.test/reports/pull/1" }),
+    ].join("\n") + "\n");
+    const stat = fs.statSync(file);
+    const row = { path: file, project: "reports", root: "claude-projects" as const, name: path.basename(file),
+      title: "Review reports", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const,
+      size: stat.size, mtime: stat.mtimeMs / 1000 };
+    replaceConversationCatalog([row]);
+    await indexTranscriptSources([{ ...row, mtimeMs: stat.mtimeMs }]);
+    const url = new URL("http://localhost/api/conversations/pull-requests");
+    url.search = new URLSearchParams({ project: row.project, transcript: file }).toString();
+    const read = async () => {
+      const response = await pullRequests(new NextRequest(url, { headers: { host: "localhost" } }));
+      return (await response.json())[file];
+    };
+    expect(await read()).toMatchObject({ partial: false, items: [{ number: 7 }, { number: 11 }] });
+    fs.appendFileSync(file, attach(13) + "\n");
+    expect(await read()).toMatchObject({ partial: false, items: [{ number: 13 }, { number: 7 }, { number: 11 }] });
+  } finally {
+    if (priorHome === undefined) delete process.env.LLV_CLAUDE_HOME;
+    else process.env.LLV_CLAUDE_HOME = priorHome;
   }
 });

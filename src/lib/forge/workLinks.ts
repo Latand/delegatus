@@ -92,6 +92,8 @@ export type CachedPullRequest = {
       entries read before the sweep asked for them. */
   title?: string;
   mergedAt?: string;
+  additions?: number;
+  deletions?: number;
 };
 
 /** One repository of the forge cache, indexed for read-time joins. */

@@ -959,9 +959,8 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
       : { hidden: false, resurfaced: null };
     const stepProjection = deriveTaskSteps(task?.steps, summaries.map(summary => summary.pipeline), now * 1000);
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
-    /* A placeholder no agent will name any more borrows its conversation's
-       title rather than staying «Untitled task» for good. */
-    const naming = task ? placeholderTitle({ task, members, mirrors, failedLaunches: unstarted.flatMap((launch) => (launch.failed ? [launch.failed.file] : [])), nowMs: now * 1000 }) : null;
+    /* A pending task can display a title before its agent refines it. */
+    const naming = task ? placeholderTitle({ task, members, mirrors, failedLaunches: unstarted.flatMap((launch) => (launch.failed ? [launch.failed.file] : [])) }) : null;
     const title = naming?.derived ?? band.title;
     const description = task ? descriptionOf(task.text) : "";
     /* Retain modification metadata separately from agent-work ordering. A

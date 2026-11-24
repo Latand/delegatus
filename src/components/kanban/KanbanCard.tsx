@@ -5,7 +5,7 @@ import { rowStateWord } from "@/components/mobile/mobileBoardModel";
 import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 
 import { Bot, Flag } from "lucide-react";
-import { memo, useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -31,8 +31,11 @@ import { CardAlbumButton } from "@/components/taskAlbum/AlbumButton";
 import { CardPrototypeButton } from "@/components/prototypeReview/PrototypeReviewButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { TASK_COLOR_HEX } from "@/components/tasks/taskColorHex";
+import { ChatPullRequestBadge } from "@/components/workLinks/ChatPullRequestBadge";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
+import type { ChatPullRequests } from "@/lib/forge/chatPullRequests";
+import type { useChatPullRequests } from "@/hooks/useChatPullRequests";
 
 import { TaskHoldEditor } from "./TaskHoldEditor";
 import { TaskMotionLine } from "./TaskMotionLine";
@@ -44,6 +47,7 @@ import { askOrchestratorAboutTask } from "./askOrchestrator";
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { noteShownBesideSummary, TaskSummaryPanel } from "@/components/tasks/TaskSummaryPanel";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
+import { CardChatLinks, type ChatTaskLinks } from "./CardChatLinks";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
 import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
@@ -193,6 +197,9 @@ export interface KanbanCardProps {
       look, draws that machine's lanes, and says where to manage it. */
   remote?: RemoteCard | null;
   card: KanbanCardModel;
+  chatTranscript?: string | null;
+  watchChatPullRequests?: ReturnType<typeof useChatPullRequests>["watch"];
+  chatPullRequests?: ChatPullRequests;
   status: TaskStatus;
   pending: boolean;
   collapsed: boolean;
@@ -264,6 +271,10 @@ export interface KanbanCardProps {
   seatConversationIds?: readonly string[];
   /** Drafts made from a conversation the card holds: the one being made, and Start on a draft lane. */
   conversationDrafts?: ConversationDrafts;
+  chatLinks?: ChatTaskLinks;
+  chatLinksOpen?: boolean;
+  onToggleChatLinks?: (id: string) => void;
+  onJumpChatCard?: (id: string) => void;
 }
 
 /** A draft being made from the card's conversation, or the answer that it was not (variant 3). */
@@ -450,6 +461,11 @@ function SeatTickNoticeButton({ project }: { project: string }) {
 
 export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const { card, status, pending, collapsed, nowMs, editing, failedEdit, incomingEdit } = props;
+  const { chatTranscript, watchChatPullRequests, chatPullRequests } = props;
+  const visibleChatPullRequests = chatPullRequests?.items.length ? chatPullRequests : null;
+  const chatRef = useCallback((node: HTMLElement | null) => {
+    if (chatTranscript) return watchChatPullRequests?.(chatTranscript, node);
+  }, [chatTranscript, watchChatPullRequests]);
   /* The card holding the orchestrator's conversation stays on the board. */
   const protectedSeat = card.holdsSeat;
   const resurfaced = card.task && !card.hide.hidden ? card.hide.resurfaced : null;
@@ -592,6 +608,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const style = hex ? ({ "--label": hex, "--label-strong": hex } as React.CSSProperties) : undefined;
   return (
     <article
+      ref={chatTranscript ? chatRef : undefined}
       className={`card${status === "done" ? " done" : ""} ${workspace ? "work" : "shelf"}${collapsed ? " folded" : ""}${reading ? " has-reader" : ""}${remote ? " remote remote-surface" : ""}`}
       data-id={card.id}
       data-remote={remote ? remote.install : undefined}
@@ -601,6 +618,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       data-color={card.color ?? "none"}
       data-attention={attention}
       data-protected={protectedSeat ? "1" : undefined}
+      data-card-chat-pr={visibleChatPullRequests ? "" : undefined}
       style={style}
       tabIndex={0}
       aria-label={protectedSeat ? `${aria}, ${t("kanban.staysOnBoard")}` : aria}
@@ -671,6 +689,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           </h3>
         )}
         <div className="tools">
+          {visibleChatPullRequests ? <ChatPullRequestBadge title={title} requests={visibleChatPullRequests} transcript={chatTranscript} project={card.project} /> : null}
           <button
             type="button"
             className="icon-btn fold"
@@ -728,6 +747,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         /* A closed card that has not started keeps its priority mark, which is how the Inbox reads at a glance. */
         <div className="card-state prio-only">{motionLine(false)}<PriorityMark priority={card.priority} /></div>
       ) : motionLine(false)}
+      {props.chatLinks && props.onJumpChatCard ? (
+        <CardChatLinks links={props.chatLinks} open={props.chatLinksOpen ?? false}
+          onToggle={() => props.onToggleChatLinks?.(card.id)} onJump={props.onJumpChatCard} />
+      ) : null}
       {/* The task's deadline and images, closed and open alike: the old Tasks panel's two facts. */}
       {card.task && hasTaskMeta(card.task) ? <div className="card-meta-line"><TaskMeta task={card.task} nowMs={nowMs} /></div> : null}
       {answers && state ? (

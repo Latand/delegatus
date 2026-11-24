@@ -14,6 +14,7 @@ import {
   indexTranscriptSources,
   InvalidTranscriptSearchCursorError,
   readTranscriptActivity,
+  readTranscriptPullRequests,
   searchTranscripts,
   TRANSCRIPT_RELEVANCE_PAGE_BYTES,
   pendingTranscriptSearchIndexBuilds,
@@ -1539,4 +1540,52 @@ test("search indexing removes private media refs while preserving native context
   const result = searchTranscripts({ query: "cobalt", project: "media-project" });
   expect(result.items).toHaveLength(1); expect(JSON.stringify(result)).not.toContain(ref);
   expect(fs.readFileSync(filename, "utf8")).toBe(original);
+});
+
+test("chat PRs come from indexed messages, dedupe by repository and keep last-mentioned order", async () => {
+  const pathname = path.join(sandbox, "work-on-reports.jsonl");
+  const other = path.join(sandbox, "other-reports.jsonl");
+  const user = (content: string) => JSON.stringify({ type: "user", message: { content } }) + "\n";
+  fs.writeFileSync(pathname,
+    user("Earlier https://github.com/sample/widget/pull/1.") +
+    user("Then https://github.com/sample/widget/pull/2/files and https://github.com/sample/widget/issues/3") +
+    user("Again https://github.com/sample/widget/pull/1. Ignore https://example.test/sample/widget/pull/9"));
+  fs.writeFileSync(other, user("Elsewhere https://github.com/sample/widget/pull/7"));
+  const selected = source(pathname, "claude", "reports");
+  await indexTranscriptSources([selected, source(other, "claude", "elsewhere")]);
+  const read = readTranscriptPullRequests([selected], {
+    repository: name => name === "sample/widget" ? {
+      canonical: "sample/widget", completeSince: null, byHead: () => [], isIssue: () => false,
+      pr: number => number === 1 ? {
+        number, state: "merged", title: "Write reports", url: "https://github.com/sample/widget/pull/1",
+        headRefName: "reports", checkedAt: "2026-01-02T00:00:00Z", createdAt: "2026-01-01T00:00:00Z",
+        closes: [], additions: 11, deletions: 2,
+      } : undefined,
+    } : null,
+  });
+  expect(Object.keys(read)).toEqual([pathname]);
+  expect(read[pathname]).toEqual({ partial: false, items: [
+    { repository: "sample/widget", number: 1, state: "merged", title: "Write reports", url: "https://github.com/sample/widget/pull/1",
+      checkedAt: "2026-01-02T00:00:00Z", additions: 11, deletions: 2 },
+    { repository: "sample/widget", number: 2, state: null, url: "https://github.com/sample/widget/pull/2" },
+  ] });
+  expect(readTranscriptPullRequests([{ ...selected, size: selected.size + 1 }], { repository: () => null })[pathname]?.partial).toBe(true);
+});
+
+test("Codex PR history includes older indexed messages and excludes tool output", async () => {
+  const file = path.join(sandbox, "historical-codex-pr.jsonl");
+  const message = (text: string) => JSON.stringify({ type: "response_item", payload: {
+    type: "message", role: "assistant", content: [{ type: "output_text", text }],
+  } });
+  fs.writeFileSync(file, [
+    message("Opened https://github.com/sample/reports/pull/7"),
+    ...Array.from({ length: 400 }, (_, i) => message(`Status update ${i}`)),
+    message("Merged https://github.com/sample/reports/pull/11"),
+    JSON.stringify({ type: "response_item", payload: { type: "custom_tool_call_output", output: "https://github.com/sample/another/pull/9" } }),
+  ].join("\n") + "\n");
+  const selected = source(file, "codex", "reports");
+  await indexTranscriptSources([selected]);
+  expect(readTranscriptPullRequests([selected], { repository: () => null })[file]).toMatchObject({
+    partial: false, items: [{ number: 11 }, { number: 7 }],
+  });
 });

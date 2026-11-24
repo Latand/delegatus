@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 
 import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
 import { navigateToFragment, NOTIFICATION_OPEN_MESSAGE, setFragmentNavigator } from "@/lib/navigation/fragmentNavigation";
-import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
+import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, reloadedBoardProject, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
 import { onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { useFleetCues } from "@/hooks/useFleetCues";
 import { useWorkCues } from "@/hooks/useWorkCues";
@@ -19,7 +19,7 @@ import { useFiles } from "@/hooks/useFiles";
 import { ServerReachProvider, useDerivedServerReach } from "@/hooks/serverReach";
 import { publishConversationAvailability } from "@/lib/mcp/availability";
 import { useBoardState } from "@/hooks/useBoardState";
-import { useIsMobile } from "@/hooks/useIsMobile";
+import { isPhoneViewport, useIsMobile } from "@/hooks/useIsMobile";
 import { useViewPresence } from "@/hooks/useViewPresence";
 import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
 import { projectDisplayName, projectTitle } from "@/lib/displayNames";
@@ -273,11 +273,17 @@ function ViewerApp() {
   /* This tree only ever renders in the browser (the server draws the boot
      shell), so the first frame already stands on the hash or the stored
      project: no Overview frame before the project, no restore effect. */
-  const [project, setProject] = useState<string>(() => initialProjectFromState(location.hash, readStored(PROJECT_KEY)));
-  const [pendingHash, setPendingHash] = useState<ConversationHash | null>(() => {
-    const initial = readHash();
-    return initial.filePath || initial.conversationId ? initial : null;
+  const [initial] = useState(() => {
+    const intent = readHash();
+    const navigation = window.performance.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
+    const board = reloadedBoardProject(intent, window.history.state, navigation?.type, isPhoneViewport());
+    return {
+      project: board ?? initialProjectFromState(location.hash, readStored(PROJECT_KEY)),
+      pendingHash: !board && (intent.filePath || intent.conversationId) ? intent : null,
+    };
   });
+  const [project, setProject] = useState(initial.project);
+  const [pendingHash, setPendingHash] = useState<ConversationHash | null>(initial.pendingHash);
   const [catalogPin, dispatchCatalogPin] = useReducer(reduceCatalogPin, null);
   /* The link whose target the plain catalog could not resolve, and which
      therefore asks for the exact transcript. Held by identity: a new link is a
@@ -1877,7 +1883,7 @@ function ViewerApp() {
         <button type="button" className="rounded-[8px] bg-brand px-3 py-1.5 font-semibold text-on-brand pointer-coarse:min-h-11" onClick={() => window.location.reload()}>{t("selfUpdate.reconnect.reload")}</button>
       </div> : null}
       {isMobile || railHidden ? null : (
-        <ProjectRail onHide={toggleRail} files={files} projectCatalog={railCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} workspace={workspaceState} actions={projectRowActions} projectCwds={projectCwds} />
+        <ProjectRail onHide={toggleRail} onOpenChat={openCatalogFile} files={files} projectCatalog={railCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} workspace={workspaceState} actions={projectRowActions} projectCwds={projectCwds} />
       )}
       {/* Hidden rail (issue #1819): one small control at the top-left edge of
           the main area brings it back, and nothing else of the rail is left on

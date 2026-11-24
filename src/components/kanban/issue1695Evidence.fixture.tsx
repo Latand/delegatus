@@ -200,6 +200,7 @@ const FROM_CONVERSATION = SCENARIO === "from-conversation";
 /* A drag on a full board (the whole-card drag, docs on the smoothness gate): 48 tasks with long
    titles and descriptions over the four columns, a lane with a running stage on every second one. */
 const DRAG_BOARD = SCENARIO === "drag-board";
+const DRAG_CHAT_LINKS = DRAG_BOARD && new URLSearchParams(window.location.search).has("chatLinks");
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md): the pipelines board, with the seat
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
@@ -2064,7 +2065,14 @@ function task(id: string, status: TaskStatus, title: string, description: string
   } as BoardTask;
 }
 
+const chatWithPullRequests = SCENARIO === "chat-prs" ? add(conversation("report-chat", "Sort the reports", {
+  directChildCount: 2, firstMessageAt: Date.UTC(2026, 9, 30, 14, 26) / 1000, lastMessageAt: Date.UTC(2026, 10, 11, 0, 42) / 1000,
+})) : null;
+const reportChild = chatWithPullRequests && conversation("report-child", "Review the report", { parent: chatWithPullRequests.path, directChildCount: 0 });
+const reportFork = chatWithPullRequests && conversation("report-fork", "Test the report export", { engine: "codex", parent: chatWithPullRequests.path, directChildCount: 0 });
+const otherMainChat = chatWithPullRequests && conversation("report-other", "Plan the next report", { engine: "codex", directChildCount: 0 });
 const tasks: BoardTask[] = [
+  ...(chatWithPullRequests ? [task("t-chat-pr", "blocked", "Sort the reports", "", 2 * MIN, [chatWithPullRequests])] : []),
   ...(SCENARIO === "finding-recurrence" ? [task("t-finding", "inbox", L("Investigate the recurring timeout", "Перевірити повторний тайм-аут"), L("The socket timed out again.", "Тайм-аут сокета повторився."), 2 * MIN, [], {
     findingKey: "socket-timeout", finding: { count: 3, lastSeenAt: iso(20 * MIN) },
   }), task("t-finding-held", "blocked", L("Review the recurring timeout", "Перевірити повторний тайм-аут у черзі"), L("The socket timed out again.", "Тайм-аут сокета повторився."), 45 * MIN, [], {
@@ -2601,7 +2609,7 @@ if (DRAG_BOARD) {
     const members = status === "assigned" || index % 3 === 0
       ? [add(conversation(`drag-${index}-impl`, `Implementer: ${title.slice(0, 60)}`, index % 2 === 0 ? working({ model: "opus" }) : {})), add(conversation(`drag-${index}-rev`, `Reviewer: ${title.slice(0, 60)}`, { engine: "codex", model: "gpt-5.6" }))]
       : [];
-    tasks.push(task(id, status, title, "Rows from the late feed are written after the ledger closes, so the export sees a shorter table than the bank file. Compare both before the cut-off and name the first row that differs.", (index + 1) * 7 * MIN, members));
+    tasks.push(task(id, status, title, "Rows from the late feed are written after the ledger closes, so the export sees a shorter table than the bank file. Compare both before the cut-off and name the first row that differs.", (index + 1) * 7 * MIN, members, DRAG_CHAT_LINKS && (index === 1 || index === 2) ? { chatParentTaskId: "t-drag-0" } : {}));
     if (index % 2 === 0 && members[0]) {
       pipelines.push(pipeline(`p-drag-${index}`, title, id, "running",
         [stage("build", "builder", "review"), stage("review", "reviewer", "verify"), stage("verify", "verifier", null)],
@@ -4895,7 +4903,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     next.updatedAt = presentationOnly ? current.updatedAt : new Date().toISOString();
     next.revision = REV(revision++);
     tasks[index] = next;
-    return json({ ok: true, task: next });
+    const responseTask = { ...next };
+    if (DRAG_CHAT_LINKS) delete responseTask.chatParentTaskId;
+    return json({ ok: true, task: responseTask });
   }
   if (url.pathname.startsWith("/api/tasks/") && url.pathname.endsWith("/assignment")) {
     const id = decodeURIComponent(url.pathname.split("/")[3] ?? "");
@@ -5269,7 +5279,25 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
+  if (url.pathname === "/api/conversations/pull-requests" && SCENARIO === "chat-prs") {
+    const transcripts = url.searchParams.getAll("transcript").filter(path => path === chatWithPullRequests?.path);
+    const items = [
+      { repository: "sample/widget", number: 7, url: "https://github.com/sample/widget/pull/7", state: "open",
+        title: "Add report sorting", additions: 21, deletions: 4, conflict: method === "POST" ? true : undefined },
+      { repository: "sample/widget", number: 5, url: "https://github.com/sample/widget/pull/5", state: "merged",
+        title: "Prepare the report index" },
+    ];
+    return json(method === "POST" ? (transcripts.length ? items : [])
+      : Object.fromEntries(transcripts.map(transcript => [transcript, { partial: false, items }])));
+  }
   if (url.pathname === "/api/conversations") {
+    if (chatWithPullRequests) {
+      const { searchParams } = url;
+      const children = searchParams.get("branch") === "children";
+      const more = searchParams.has("cursor");
+      const file = children ? (more ? reportFork : reportChild) : (more ? otherMainChat : chatWithPullRequests);
+      return json({ items: [file], total: 2, projectTotal: 4, nextCursor: more ? null : children ? "reports-children" : "reports-roots" });
+    }
     const own = RAIL && url.searchParams.get("project") ? files.filter((file) => file.project === url.searchParams.get("project")) : files;
     return json({ items: own, total: own.length, nextCursor: null });
   }

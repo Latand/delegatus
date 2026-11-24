@@ -8,6 +8,7 @@ import { statePath } from "@/lib/configDir";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
+import { PROJECT_SUMMARY_VERSION } from "@/lib/scanner/projectCatalogStore";
 import { PROJECT_RESOLUTION_VERSION, projectResolutionStateKey } from "@/lib/scanner/projectState";
 import { scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan, resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests, setFileScanRunnerForTests } from "@/lib/scanner/scanCache";
@@ -207,7 +208,7 @@ function listedTranscript(folder: string, name: string): string {
 function recordedMember(transcript: string, project: string, projectName: string) {
   const st = fs.statSync(transcript);
   return {
-    summaryVersion: 4, rootName: "claude-projects", size: st.size, mtimeMs: st.mtimeMs, sidecarSize: null, sidecarMtimeMs: null,
+    summaryVersion: PROJECT_SUMMARY_VERSION, rootName: "claude-projects", size: st.size, mtimeMs: st.mtimeMs, sidecarSize: null, sidecarMtimeMs: null,
     stateKey: projectResolutionStateKey(), project, projectName, projectRoot: null, kind: "session", cwd: null, sessionStartedAt: null,
     nativeParentThreadId: null, nativeForkSourceThreadId: null, title: "Synthetic", engine: "claude", fmt: "claude",
   };

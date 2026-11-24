@@ -1,20 +1,61 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { semanticTitle } from "@/lib/title";
+
 import { globalCache } from "./caches";
 import { readHead } from "./head";
 import { recordValue, stringValue } from "./json";
 
 globalCache<unknown>("codex-native-parent-thread").clear();
 globalCache<unknown>("codex-native-parent-thread-v2").clear();
-type CachedNativeSessionMeta = { size: number; mtimeMs: number; parent: string | null; forkedFrom: string | null };
-const codexNativeSessionMetaCache = globalCache<CachedNativeSessionMeta>("codex-native-session-meta-v1");
+type CachedNativeSessionMeta = Omit<NativeCodexSessionMetaResult, "complete"> & { size: number; mtimeMs: number };
+const codexNativeSessionMetaCache = globalCache<CachedNativeSessionMeta>("codex-native-session-meta-v2");
 
 export const CODEX_NATIVE_HEAD_BYTES = 64 * 1024;
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
 export function codexThreadIdFromPath(pathname: string): string | null {
   return path.basename(pathname).match(UUID_RE)?.[0] ?? null;
+}
+
+const INDEX_TTL_MS = 15_000;
+const MAX_INDEX_BYTES = 16 * 1024 * 1024;
+const codexTitleIndexes = globalCache<{ expiresAt: number; titles: Map<string, string> }>("codex-session-titles-v1");
+
+function codexTitleIndex(indexPath: string): Map<string, string> {
+  const now = Date.now();
+  const cached = codexTitleIndexes.get(indexPath);
+  if (cached && cached.expiresAt > now) return cached.titles;
+  const titles = new Map<string, string>();
+  try {
+    const stat = fs.statSync(indexPath);
+    if (stat.isFile() && stat.size <= MAX_INDEX_BYTES) {
+      for (const line of fs.readFileSync(indexPath, "utf8").split("\n")) {
+        try {
+          const entry = recordValue(JSON.parse(line));
+          const id = stringValue(entry?.id)?.toLowerCase();
+          const title = semanticTitle(stringValue(entry?.thread_name));
+          if (id && title) titles.set(id, title);
+        } catch {
+          // An append may leave an unfinished last record.
+        }
+      }
+    }
+  } catch {
+    // Some accounts do not have a desktop session index.
+  }
+  codexTitleIndexes.set(indexPath, { expiresAt: now + INDEX_TTL_MS, titles });
+  return titles;
+}
+
+/** Read the title recorded by the Codex UI for this rollout's exact thread. */
+export function codexIndexedChatTitle(pathname: string, sessionRoots: readonly string[]): string | null {
+  const id = codexThreadIdFromPath(pathname)?.toLowerCase();
+  if (!id || !pathname.toLowerCase().endsWith(`-${id}.jsonl`)) return null;
+  const normalized = path.resolve(pathname);
+  const root = sessionRoots.find(candidate => normalized.startsWith(candidate + path.sep));
+  return root ? codexTitleIndex(path.join(root, "..", "session_index.jsonl")).get(id) ?? null : null;
 }
 
 export interface NativeCodexParentResult {
@@ -28,7 +69,16 @@ export interface NativeCodexSessionMetaResult {
   /** Source thread of a provider `thread/fork` artifact, from the FIRST
       `session_meta` row's `forked_from_id` (issue #708). */
   forkedFrom: string | null;
+  subagentTitle: string | null;
   complete: boolean;
+}
+
+/** Use only the native child header, since a fork can replay its parent's header. */
+export function codexSubagentTitleFromMeta(payload: Record<string, unknown> | null | undefined): string | null {
+  const spawn = recordValue(recordValue(recordValue(payload?.source)?.subagent)?.thread_spawn);
+  if (!spawn) return null;
+  return semanticTitle(stringValue(spawn.agent_nickname), 120)
+    ?? semanticTitle(stringValue(payload?.agent_nickname), 120);
 }
 
 /**
@@ -42,25 +92,21 @@ export interface NativeCodexSessionMetaResult {
 export function nativeCodexSessionMetaResult(pathname: string, size: number, mtimeMs: number): NativeCodexSessionMetaResult {
   const cached = codexNativeSessionMetaCache.get(pathname);
   if (cached && cached.size === size && cached.mtimeMs === mtimeMs) {
-    return { parent: cached.parent, forkedFrom: cached.forkedFrom, complete: true };
+    return { parent: cached.parent, forkedFrom: cached.forkedFrom, subagentTitle: cached.subagentTitle, complete: true };
   }
 
   let parent: string | null = null;
   let forkedFrom: string | null = null;
+  let subagentTitle: string | null = null;
   const head = readHead(pathname, size, mtimeMs, { maxBytes: CODEX_NATIVE_HEAD_BYTES });
   if (!head.complete || !head.value) {
-    return { parent: cached?.parent ?? null, forkedFrom: cached?.forkedFrom ?? null, complete: false };
+    return { parent: cached?.parent ?? null, forkedFrom: cached?.forkedFrom ?? null, subagentTitle: cached?.subagentTitle ?? null, complete: false };
   }
   for (const line of head.value.text.split("\n")) {
     if (!line.includes('"session_meta"')) continue;
     try {
-      const obj = JSON.parse(line) as {
-        payload?: {
-          parent_thread_id?: unknown;
-          forked_from_id?: unknown;
-          source?: { subagent?: { thread_spawn?: { parent_thread_id?: unknown } } };
-        };
-      };
+      const obj = JSON.parse(line) as { type?: unknown; payload?: unknown };
+      if (obj.type !== "session_meta") continue;
       const payload = recordValue(obj.payload);
       if (!payload) continue;
       const source = recordValue(payload.source);
@@ -70,13 +116,14 @@ export function nativeCodexSessionMetaResult(pathname: string, size: number, mti
       const nested = stringValue(threadSpawn?.parent_thread_id);
       parent = direct ?? nested;
       forkedFrom = stringValue(payload.forked_from_id);
+      subagentTitle = codexSubagentTitleFromMeta(payload);
       break;
     } catch {
       continue;
     }
   }
-  codexNativeSessionMetaCache.set(pathname, { size, mtimeMs, parent, forkedFrom });
-  return { parent, forkedFrom, complete: true };
+  codexNativeSessionMetaCache.set(pathname, { size, mtimeMs, parent, forkedFrom, subagentTitle });
+  return { parent, forkedFrom, subagentTitle, complete: true };
 }
 
 export function nativeCodexParentThreadIdResult(pathname: string, size: number, mtimeMs: number): NativeCodexParentResult {

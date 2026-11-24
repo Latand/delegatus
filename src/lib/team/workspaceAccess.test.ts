@@ -25,7 +25,7 @@ import { loadTasksForList, saveTasks } from "@/lib/tasks/store";
 import { agentRegistry, AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { runtimeScope, type RuntimeEvent, type RuntimeSnapshot } from "@/lib/runtime/contracts";
 import { workspaceRuntime, workspaceRuntimeEvent, workspaceFiles } from "./workspaceProjection";
-import { conversationCatalogSnapshot, replaceConversationCatalog, catalogEntryToFileEntry } from "@/lib/scanner/conversationCatalog";
+import { conversationCatalogSnapshot, replaceConversationCatalog, catalogEntryToFileEntry, type ConversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import type { FilesResponse } from "@/lib/types";
 import { WORKSPACE_ROUTES } from "./workspaceRoutes";
 import { GET as inviteGET, POST as invitePOST } from "@/app/api/team/invites/route";
@@ -304,13 +304,14 @@ describe("workspace authority", () => {
 
   test("spawn suggestions with an own source and no project never return foreign directories", async () => {
     const dirs = ["alpha", "beta"].map(name => path.join(root, name));
-    const entries = dirs.map((cwd, index) => {
+    const catalog: ConversationCatalogEntry[] = dirs.map((cwd, index) => {
       fs.mkdirSync(cwd);
       const transcript = path.join(root, `${index}.jsonl`);
       fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { cwd } }) + "\n");
-      return catalogEntryToFileEntry({ path: transcript, root: "codex-sessions", name: String(index), project: projectForCwd(cwd)!, title: "test", firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: now / 1000 + index, size: fs.statSync(transcript).size }, now);
+      return { path: transcript, root: "codex-sessions", name: String(index), project: projectForCwd(cwd)!, title: "test", firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: now / 1000 + index, size: fs.statSync(transcript).size };
     });
-    replaceConversationCatalog(entries.map(entry => ({ ...entry, kind: "session", fmt: "codex", engine: "codex", title: "test", firstPrompt: "" })));
+    replaceConversationCatalog(catalog);
+    const entries = catalog.map(entry => catalogEntryToFileEntry(entry, now));
     for (let index = 0; index < entries.length; index++) placeProject(store, owner, entries[index]!.project!, index === 0 ? W1 : W2);
     const files = spyOn(scanner, "listFiles").mockResolvedValue(entries);
     const source = spyOn(sourceCwd, "sourceCwdStatus").mockReturnValue({ cwd: dirs[0]!, cwdExists: true });
@@ -744,6 +745,19 @@ describe("workspace authority", () => {
     expect(result.files).toHaveLength(1);
     expect(result.tasks).toHaveLength(1);
     expect(JSON.stringify(result)).not.toContain("beta");
+    expect(workspaceFiles(workspaceScope(store, owner.id), source)).toBe(source);
+  });
+
+  test("a task's linked title requires access to the source conversation's project", () => {
+    const own = loadTasksForList().find(task => task.project === "repo-alpha")!;
+    const tasks = [
+      { ...own, id: "same-project", conversationTitle: "Local title", conversationTitleProject: "repo-alpha" },
+      { ...own, id: "foreign-project", conversationTitle: "Hidden title", conversationTitleProject: "repo-beta" },
+      { ...own, id: "unknown-project", conversationTitle: "Unknown source" },
+    ];
+    const source: FilesResponse = { files: [], tasks, flows: [], pipelines: [], workflows: [], systemHealth: {} };
+    const result = workspaceFiles(workspaceScope(store, member.id), source);
+    expect(result.tasks.map(task => task.conversationTitle)).toEqual(["Local title", undefined, undefined]);
     expect(workspaceFiles(workspaceScope(store, owner.id), source)).toBe(source);
   });
 

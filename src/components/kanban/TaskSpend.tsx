@@ -17,8 +17,8 @@ import { useTaskSpend } from "./taskSpendSummaries";
  * engine mark and a scale of four cells, with no digits; the numbers and each
  * account's week sit behind it, in the state dot's kind of popover. Every
  * figure is an estimate, about ±30 %: an approximate one reads «≈», a lower
- * bound «≥», and a provider whose accounts have no limit readings says so in
- * words and shows its tokens only. Claude first, then Codex, everywhere.
+ * bound «≥», and a provider without a task-level estimate displays its
+ * measured token count. Claude first, then Codex, everywhere.
  */
 
 const ENGINE_NAME = { claude: "Claude", codex: "Codex" } as const;
@@ -80,7 +80,7 @@ export function taskSpendAria(t: TFunction, summary: TaskSpendSummary, locale: L
   const parts = summary.providers.map((provider) => {
     const engine = ENGINE_NAME[provider.engine];
     const kind = providerKind(provider);
-    if (kind === "norate") return t("taskSpend.aria.norate", { engine });
+    if (kind === "norate") return t("taskSpend.aria.norate", { engine, tokens: compact(provider.tokens, locale) });
     if (kind === "tiny") return t("taskSpend.aria.tiny", { engine });
     if (kind === "floor") return t("taskSpend.aria.floor", { engine, value: floorText(provider.weeklyPp, locale) });
     return t("taskSpend.aria.approx", { engine, value: `${Math.round(provider.weeklyPp)}%` });
@@ -97,7 +97,7 @@ function Scale({ cells }: { cells: number }) {
 }
 
 function Marks({ summary }: { summary: TaskSpendSummary }) {
-  const { t } = useLocale();
+  const { locale } = useLocale();
   return (
     <>
       {summary.providers.map((provider) => {
@@ -105,7 +105,7 @@ function Marks({ summary }: { summary: TaskSpendSummary }) {
         return (
           <span key={provider.engine} className="spend-p" data-engine={provider.engine} data-kind={kind}>
             <EngineMark engine={provider.engine} size={12} />
-            {kind === "norate" ? <span className="spend-n">{t("taskSpend.unknown")}</span> : (
+            {kind === "norate" ? <span className="spend-n">{compact(provider.tokens, locale)}</span> : (
               <>
                 {kind === "floor" ? <span className="scale-floor" aria-hidden>≥</span> : null}
                 <Scale cells={providerCells(provider)} />
@@ -157,21 +157,25 @@ function Meter({ provider, account }: { provider: TaskSpendProvider; account: Ta
 function SpendLines({ summary }: { summary: TaskSpendSummary }) {
   const { t, locale } = useLocale();
   const rated = summary.providers.some((provider) => provider.bound !== "norate");
-  /* Who has no limit readings: each account to the owner, the provider to anyone else. */
-  const unread = summary.providers.filter((provider) => provider.bound === "norate").flatMap((provider) =>
-    provider.accounts ? provider.accounts.map((account) => `${ENGINE_NAME[provider.engine]} ${account.label}`) : [ENGINE_NAME[provider.engine]]);
+  const hasUnrated = summary.providers.some((provider) => provider.bound === "norate");
   const blocks = summary.providers.map((provider) => {
     const engine = ENGINE_NAME[provider.engine];
     if (provider.bound === "norate") {
-      const accounts = provider.accounts;
+      const account = provider.accounts?.length === 1 ? provider.accounts[0] : undefined;
       const tokens = compact(provider.tokens, locale);
-      const sub = accounts?.length === 1
-        ? t("taskSpend.norateAccount", { account: accountName(accounts[0]!), tokens })
+      const sub = account
+        ? t("taskSpend.norateAccount", { account: accountName(account), tokens })
         : t("taskSpend.norateTokens", { tokens });
       return (
         <span key={provider.engine} className="pop-row" data-spend-provider={provider.engine} data-kind="norate">
           <EngineMark engine={provider.engine} size={12} />
-          <span className="pop-main"><b>{engine}</b> — {t("taskSpend.norateHead")}<span className="pop-sub">{sub}</span></span>
+          <span className="pop-main">
+            <b>{engine}</b> — {t("taskSpend.norateHead")}
+            <span className="pop-sub">{sub}</span>
+            {account?.week ? (
+              <span className="pop-sub">{t("taskSpend.accountWeekReading", { value: `${Math.round(account.week.usedPercent)}%` })}</span>
+            ) : null}
+          </span>
         </span>
       );
     }
@@ -180,7 +184,7 @@ function SpendLines({ summary }: { summary: TaskSpendSummary }) {
       <span key={provider.engine} className="pop-block" data-spend-provider={provider.engine} data-kind={providerKind(provider)}>
         <span className="pop-row">
           <EngineMark engine={provider.engine} size={12} />
-          <span className="pop-main"><b>{engine} {headline(provider, locale)}</b> {t("taskSpend.ofWeek")}</span>
+          <span className="pop-main"><b>{engine} {headline(provider, locale)}</b> {t("taskSpend.weekEquivalent")}</span>
         </span>
         {provider.accounts?.map((account) => <Meter key={account.key} provider={provider} account={account} />)}
         {provider.floor ? <span className="pop-sub meter-note pop-warn">{t(`taskSpend.floor.${provider.floor}`)}</span> : null}
@@ -192,7 +196,7 @@ function SpendLines({ summary }: { summary: TaskSpendSummary }) {
       </span>
     );
   });
-  const note = [rated ? t("taskSpend.estimate") : null, unread.length ? t("taskSpend.noReadings", { accounts: unread.join(", ") }) : null].filter(Boolean).join(". ");
+  const note = [rated ? t("taskSpend.estimate") : null, hasUnrated ? t("taskSpend.noRateHistory") : null].filter(Boolean).join(". ");
   return (
     <>
       {blocks}

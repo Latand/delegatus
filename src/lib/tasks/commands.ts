@@ -116,6 +116,8 @@ export interface PatchTaskInput {
   findingKey?: unknown;
   /** Dashboard undo only, accepted with operator authority and both fences. */
   restoreHold?: unknown;
+  /** Restore a task's conversation-derived name when undoing a text edit. */
+  restorePendingTitle?: unknown;
   hold?: unknown;
   /** Short status note for the operator; null or blank clears it. */
   note?: unknown;
@@ -660,7 +662,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   /* A group hide is fenced on both surfaces: it is decided against the group
      the caller saw, and a group that changed since is the caller's to re-read. */
   const guardRequired = (options.requirePlacementGuards && (Object.hasOwn(input, "pos") || Object.hasOwn(input, "placement")))
-    || Object.hasOwn(input, "hide") || Object.hasOwn(input, "restoreHold") || Object.hasOwn(input, "accept");
+    || Object.hasOwn(input, "hide") || Object.hasOwn(input, "restoreHold") || Object.hasOwn(input, "restorePendingTitle") || Object.hasOwn(input, "accept");
   if (guardRequired || Object.hasOwn(input, "expectedProject") || Object.hasOwn(input, "expectedRevision")) {
     for (const field of ["expectedProject", "expectedRevision"] as const) {
       if (typeof input[field] !== "string" || !input[field].trim()) {
@@ -713,16 +715,23 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     patch.note = text ? { text, author, updatedAt: now } : undefined;
   }
 
+  const restorePendingTitle = Object.hasOwn(input, "restorePendingTitle");
+  if (restorePendingTitle && (input.restorePendingTitle !== true || options.actor !== "operator"
+    || typeof input.text !== "string" || !task.origin || task.origin.refinedBy)) {
+    return { ok: false, status: 400, code: "TASK_INVALID_FIELD", field: "restorePendingTitle", error: "title source can only be restored by fenced operator undo" };
+  }
   if (Object.hasOwn(input, "text")) {
-    const text = normalizeText(input.text);
-    if (!text) return { ok: false, error: "task text is required", status: 400 };
+    const text = normalizeText(input.text) ?? "";
+    if (!text && !restorePendingTitle) return { ok: false, error: "task text is required", status: 400 };
     if (text.length > TASK_TEXT_LIMIT) return textLimitError(text.length);
     patch.text = text;
     patch.chosen = options.explicit ? true : undefined;
     /* An operator's edit names a placeholder for good: a later agent
        refinement returns "already named" instead of overwriting it (#1586). */
-    if (existing[index]!.origin?.refinement === "pending" && text !== existing[index]!.text) {
-      patch.origin = { ...existing[index]!.origin!, refinement: "titled" };
+    if (restorePendingTitle && task.origin) {
+      patch.origin = { ...task.origin, refinement: "pending" };
+    } else if (task.origin?.refinement === "pending" && text !== task.text) {
+      patch.origin = { ...task.origin, refinement: "titled" };
     }
   }
   /* Its own field, so it is set, replaced and cleared on its own: a patch

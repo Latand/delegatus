@@ -88,7 +88,7 @@ export type TaskFieldChange =
   | { field: "board"; value: TaskBoardVisibility }
   /* `rebase` receives stored text that moved since the edit began and returns
      the edit applied to it, or null when the edited part itself moved. */
-  | { field: "text"; value: string; rebase?: (stored: string) => string | null }
+  | { field: "text"; value: string; restorePendingTitle?: true; rebase?: (stored: string) => string | null }
   /* Agent-facing details (#1834), stored beside the text: this write carries
      only `details`, so a text edit racing it cannot be overwritten by it. An
      empty string clears the field. There is nothing to rebase — the field has
@@ -107,7 +107,7 @@ export type FieldEditOutcome =
   | { kind: "conflict"; field: TaskField; task: BoardTask; serverValue: unknown }
   | { kind: "failed"; field: TaskField; error: string; status: number; code?: string };
 
-export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus; hold?: Partial<TaskHold> | null; restoreHold?: TaskHold | null } | { color: TaskColor | "none" } | { priority: TaskPriority } | { icon: string } | { hide: boolean } | { board: TaskBoardVisibility } | { text: string } | { details: string });
+export type PatchBody = { expectedProject: string; expectedRevision: string } & ({ status: TaskStatus; hold?: Partial<TaskHold> | null; restoreHold?: TaskHold | null } | { color: TaskColor | "none" } | { priority: TaskPriority } | { icon: string } | { hide: boolean } | { board: TaskBoardVisibility } | { text: string; restorePendingTitle?: true } | { details: string });
 
 export interface TaskMutationPorts {
   patch(id: string, body: PatchBody): Promise<PatchResult>;
@@ -148,14 +148,14 @@ export function fieldValue(task: BoardTask, field: TaskField): unknown {
 }
 
 /** The change that would show `value` in `field`. */
-function changeOf(field: TaskField, value: unknown): TaskFieldChange {
+function changeOf(field: TaskField, value: unknown, task?: BoardTask): TaskFieldChange {
   if (field === "color") return { field, value: (value as TaskColor | null) ?? null };
   if (field === "priority") return { field, value: value === "high" || value === "low" ? value : "normal" };
   if (field === "icon") return { field, value: typeof value === "string" && value ? value : null };
   if (field === "hide") return { field, value: Boolean(value) };
   if (field === "board") return { field, value: value === "hidden" ? "hidden" : "shown" };
   if (field === "details") return { field, value: String(value ?? "") };
-  return { field, value: String(value ?? "") };
+  return { field, value: String(value ?? ""), ...(task?.origin?.refinement === "pending" ? { restorePendingTitle: true } : {}) };
 }
 
 /** Whether a stored row already shows `change`. */
@@ -163,7 +163,7 @@ export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
   if (change.field === "color") return (task.color ?? null) === change.value;
   if (change.field === "priority") return taskPriority(task) === change.value;
   if (change.field === "icon") return (task.icon ?? null) === change.value;
-  if (change.field === "text") return task.text === change.value;
+  if (change.field === "text") return task.text === change.value && (!change.restorePendingTitle || task.origin?.refinement === "pending");
   if (change.field === "details") return (task.details ?? "") === change.value;
   if (change.field === "board") return (task.board ?? "shown") === change.value;
   if (!change.value) return !task.groupHidden;
@@ -171,7 +171,7 @@ export function rowHolds(task: BoardTask, change: TaskFieldChange): boolean {
 }
 
 /** The edits a board shows ahead of the poll, per task. */
-export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; priority?: TaskPriority; icon?: string | null; hide?: boolean; board?: TaskBoardVisibility; text?: string; details?: string; hold?: TaskHold | null }>;
+export type FieldEdits = ReadonlyMap<string, { color?: TaskColor | null; priority?: TaskPriority; icon?: string | null; hide?: boolean; board?: TaskBoardVisibility; text?: string; restorePendingTitle?: true; details?: string; hold?: TaskHold | null }>;
 
 /**
  * The tasks a board draws: the stored rows with the edits this device has sent
@@ -219,7 +219,9 @@ export function drawnTasks(tasks: readonly BoardTask[], edits: FieldEdits, stamp
     }
     if (typeof edit.text === "string") {
       next.text = edit.text;
-      if (next.origin?.refinement === "pending") next.origin = { ...next.origin, refinement: "titled" };
+      if (next.origin && (edit.restorePendingTitle || next.origin.refinement === "pending")) {
+        next.origin = { ...next.origin, refinement: edit.restorePendingTitle ? "pending" : "titled" };
+      }
     }
     if (typeof edit.details === "string") {
       if (edit.details) next.details = edit.details;
@@ -299,6 +301,10 @@ export class TaskStatusMutations {
     this.snapshot = new Map([...this.overrides].map(([id, override]) => [id, override.status] as const));
     this.fieldSnapshot = new Map([...this.fieldOverrides].map(([id, fields]) => [id, Object.fromEntries([...fields].map(([field, override]) => [field, override.value]))] as const));
     const fields = new Map(this.fieldSnapshot);
+    for (const [id, overrides] of this.fieldOverrides) {
+      const text = overrides.get("text")?.change;
+      if (text?.field === "text" && text.restorePendingTitle) fields.set(id, { ...fields.get(id), restorePendingTitle: true });
+    }
     for (const [id, hold] of this.holdViews) fields.set(id, { ...fields.get(id), hold: hold.value });
     this.fieldSnapshot = fields;
     for (const listener of this.listeners) listener();
@@ -375,7 +381,10 @@ export class TaskStatusMutations {
     const fields = this.fieldOverrides.get(id) ?? new Map<TaskField, FieldOverride>();
     const current = fields.get(change.field);
     const from = current ? current.value : fieldValue(task, change.field);
-    const shown = current ? current.value === change.value && !(change.field === "hide" && change.replaces) : rowHolds(task, change);
+    const previousChange = current?.change ?? changeOf(change.field, from, task);
+    const shown = current ? current.value === change.value && !(change.field === "hide" && change.replaces)
+      && (change.field !== "text" || (previousChange.field === "text" && previousChange.restorePendingTitle === change.restorePendingTitle))
+      : rowHolds(task, change);
     if (shown && !current?.pending && !options.fenced) return Promise.resolve({ kind: "noop", field: change.field });
     const override: FieldOverride = current ?? { value: change.value, change, pending: 0, baseRevision: revisionOf(task), confirmedRevision: null };
     override.value = change.value;
@@ -387,7 +396,7 @@ export class TaskStatusMutations {
 
     const settled = (promise: Promise<unknown> | undefined) => (promise ?? Promise.resolve()).then(() => undefined, () => undefined);
     const run = Promise.all([settled(this.chains.get(id)), settled(options.after)]).then((): Promise<FieldEditOutcome> | FieldEditOutcome => {
-      if (!options.unless?.()) return this.writeField(task, change, from, options.fenced === true, lineageOf(options.lineage));
+      if (!options.unless?.()) return this.writeField(task, change, from, previousChange, options.fenced === true, lineageOf(options.lineage));
       /* Dropped before it left: the board shows the stored row again. */
       this.settleField(id, change.field, from, null, false);
       return { kind: "noop", field: change.field };
@@ -427,10 +436,10 @@ export class TaskStatusMutations {
     if (change.field === "hide") return { ...fence, hide: change.value };
     if (change.field === "board") return { ...fence, board: change.value };
     if (change.field === "details") return { ...fence, details: change.value };
-    return { ...fence, text: change.value };
+    return { ...fence, text: change.value, ...(change.restorePendingTitle ? { restorePendingTitle: true } : {}) };
   }
 
-  private async writeField(task: BoardTask, change: TaskFieldChange, from: unknown, fenced: boolean, lineage?: number): Promise<FieldEditOutcome> {
+  private async writeField(task: BoardTask, change: TaskFieldChange, from: unknown, previousChange: TaskFieldChange, fenced: boolean, lineage?: number): Promise<FieldEditOutcome> {
     const id = task.id;
     const field = change.field;
     /* A refused edit returns the field to where it started. When an earlier
@@ -439,7 +448,7 @@ export class TaskStatusMutations {
        falling back to a row older than that write. */
     const failed = (status: number, error: string, code?: string): FieldEditOutcome => {
       const confirmed = this.fieldOverrides.get(id)?.get(field)?.confirmedRevision ?? null;
-      this.settleField(id, field, from, confirmed, confirmed !== null, changeOf(field, from));
+      this.settleField(id, field, from, confirmed, confirmed !== null, previousChange);
       return { kind: "failed", field, error, status, ...(code ? { code } : {}) };
     };
     let guard = fenced ? this.fenceFor(task, lineage) : this.guardFor(task);
@@ -452,7 +461,7 @@ export class TaskStatusMutations {
     const first = guard ? await this.patchSafely(id, this.bodyFor(change, guard)) : NO_FENCE;
     const savedField = (saved: BoardTask, replacing: string | null, value: unknown = change.value): FieldEditOutcome => {
       this.remember(saved, replacing, true);
-      this.settleField(id, field, value, revisionOf(saved), true);
+      this.settleField(id, field, value, revisionOf(saved), true, field === "text" ? changeOf(field, value, saved) : undefined);
       this.ports.changed();
       return { kind: "saved", field, task: saved, lineage: this.lineages.get(id) ?? 0 };
     };
@@ -466,7 +475,7 @@ export class TaskStatusMutations {
     this.remember(stored);
     const storedValue = fieldValue(stored, field);
     if (fenced) {
-      this.settleField(id, field, storedValue, revisionOf(stored), true, changeOf(field, storedValue));
+      this.settleField(id, field, storedValue, revisionOf(stored), true, changeOf(field, storedValue, stored));
       this.ports.changed();
       return { kind: "conflict", field, task: stored, serverValue: storedValue };
     }

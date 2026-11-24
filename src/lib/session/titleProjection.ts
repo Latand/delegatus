@@ -1,8 +1,12 @@
+import { codexSessionRoots } from "@/lib/accounts/codex";
 import { agentRegistry, RegistryReadError, type SnapshotTitleConversationProjection } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { registryRowProjection, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
-import { projectInfoFromCwd } from "@/lib/scanner/describe";
+import { claudeDesktopChatForPath, claudeDesktopChats } from "@/lib/scanner/claudeDesktop";
+import { codexIndexedChatTitle, nativeCodexSessionMetaResult } from "@/lib/scanner/codexNative";
+import { projectInfoFromCwd, recoverCodexTranscriptTitle } from "@/lib/scanner/describe";
 import { projectResolutionStateKey } from "@/lib/scanner/projectState";
+import { cleanTitle, isGenericSessionTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
 import { resolveProjectAttribution } from "./projectResolution";
@@ -295,6 +299,18 @@ export function overlayResourceSessionTitles(entries: FileEntry[]): void {
   for (const entry of entries) project(entry);
 }
 
+/** Read provider names by transcript identity even when a board's shortlist
+ * excludes an older linked conversation. Project ownership stays with callers. */
+export function nativeSessionTitleProjector(): (engine: FileEntry["engine"], pathname: string) => string | null {
+  let desktopChats: ReturnType<typeof claudeDesktopChats> | undefined;
+  let codexRoots: string[] | undefined;
+  return (engine, pathname) => {
+    if (engine === "claude") return claudeDesktopChatForPath(pathname, desktopChats ??= claudeDesktopChats())?.title ?? null;
+    if (engine === "codex") return codexIndexedChatTitle(pathname, codexRoots ??= codexSessionRoots());
+    return null;
+  };
+}
+
 function sessionTitleProjector(
   includeRenameEligibility = true,
   suppliedProjection?: RegistryProjection | null,
@@ -317,6 +333,7 @@ function sessionTitleProjector(
     return cwdInfos.get(key) ?? null;
   };
 
+  const nativeTitleFor = nativeSessionTitleProjector();
   return (entry) => {
     if (entry.engine !== "claude" && entry.engine !== "codex") return;
     if (entry.spawn) {
@@ -330,7 +347,8 @@ function sessionTitleProjector(
     const conversation = owner ? snapshot?.conversations[owner] : undefined;
     const latest = conversation?.generations.at(-1);
     if (latest?.path === entry.path) {
-      entry.title = latest.launchProfile.title ?? entry.title;
+      const launchTitle = latest.launchProfile.title;
+      if (launchTitle && !isGenericSessionTitle(launchTitle)) entry.title = launchTitle;
       if (includeProjectMetadata) {
         entry.project = resolveProjectAttribution({
           projectOwnership: conversation?.projectOwnership,
@@ -346,6 +364,16 @@ function sessionTitleProjector(
           entry.projectUnresolved = projectMetadata.unresolved;
         }
         if (conversation?.projectOwnership) entry.projectOwnership = { ...conversation.projectOwnership };
+      }
+    }
+    if (entry.kind === "session") {
+      const nativeTitle = nativeTitleFor(entry.engine, entry.path);
+      if (nativeTitle) entry.title = nativeTitle;
+      else if (entry.root === "codex-sessions" && entry.engine === "codex" && isGenericSessionTitle(entry.title)) {
+        const nickname = entry.nativeParentThreadId
+          ? nativeCodexSessionMetaResult(entry.path, entry.size, entry.mtime * 1000).subagentTitle : null;
+        const recovered = nickname ?? recoverCodexTranscriptTitle(entry.path);
+        if (recovered) entry.title = cleanTitle(recovered, 120);
       }
     }
     if (includeRenameEligibility) entry.renamable = isRenameableSessionEntry(entry);

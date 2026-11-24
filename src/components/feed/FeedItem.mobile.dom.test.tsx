@@ -271,7 +271,9 @@ test("desktop: every message keeps its avatar column, indent and margins, and pr
   expect(host.querySelector("[data-mobile-tool-line]")).toBeNull();
   expect(host.querySelector(".bg-claude")).toBeTruthy();
   expect(classOf(host.querySelector(".group\\/msg"))).toContain("my-3 flex gap-2.5");
-  expect(classOf(host.querySelector("[data-tts-message]"))).toBe("min-w-0 flex-1 max-w-[clamp(68ch,85%,100ch)] whitespace-pre-wrap break-words");
+  const answer = host.querySelector("[data-tts-message]")!;
+  expect(classOf(answer)).toBe("min-w-0 flex-1");
+  expect(classOf(answer.querySelector("[data-tts-body]")?.parentElement ?? null)).toBe("max-w-[clamp(68ch,85%,100ch)] whitespace-pre-wrap break-words");
   /* The operator's bubble: three quarters of the reader, up to the measure,
      with its copy control beside it as before. */
   expect(classOf(host.querySelector(".bg-user"))).toContain("max-w-[min(75%,68ch)]");

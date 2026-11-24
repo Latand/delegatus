@@ -214,7 +214,7 @@ test("the title and the pending verb follow the interface language, and switch w
   try {
     flushSync(() => root!.render(<McpCallCard event={event} availableConversationIds={new Set()} />));
     expect(title().textContent).toBe("Створення задачі: Audit MCP cards");
-    expect(title().getAttribute("title")).toBe("Створення задачі: Audit MCP cards");
+    expect(title().getAttribute("data-feed-summary-tooltip")).toBe("Створення задачі: Audit MCP cards");
     expect(pending().getAttribute("aria-label")).toBe("Створення…");
   } finally {
     setLocale("en");
@@ -252,14 +252,14 @@ test("a delivery check leads with its receipt state in the interface language (#
   for (const [state, word] of Object.entries(english)) {
     const row = title(render(receipt(state), new Set()));
     expect(row?.textContent).toBe(`${word} · delivery check`);
-    expect(row?.getAttribute("title")).toBe(`Checking delivery of op-1: ${word.toLowerCase()}`);
+    expect(row?.getAttribute("data-feed-summary-tooltip")).toBe(`Checking delivery of op-1: ${word.toLowerCase()}`);
   }
   setLocale("uk");
   try {
     for (const [state, word] of Object.entries(ukrainian)) {
       const row = title(render(receipt(state), new Set()));
       expect(row?.textContent).toBe(`${word} · перевірка доставки`);
-      expect(row?.getAttribute("title")).toBe(`Перевірка доставки op-1: ${word.toLowerCase()}`);
+      expect(row?.getAttribute("data-feed-summary-tooltip")).toBe(`Перевірка доставки op-1: ${word.toLowerCase()}`);
     }
   } finally {
     setLocale("en");

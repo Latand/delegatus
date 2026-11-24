@@ -185,3 +185,56 @@ test("a pagination cursor is bound to its member and permission snapshot", () =>
   expect(() => paginateConversationCatalog([], { cursor: first.nextCursor })).toThrow(ExpiredConversationCatalogCursorError);
   expect(paginateConversationCatalog([], { cursor: first.nextCursor, authorityScope: "member-a:workspace-a" }).items).toHaveLength(4);
 });
+
+test("catalog pages retain Claude subagent paths and Codex thread metadata for chat nesting", () => {
+  const subagent = catalogEntryToFileEntry({
+    ...entry(1), engine: "claude", root: "claude-projects", fmt: "claude", kind: "subagent",
+    name: "project/session/subagents/workflow/agent-task.jsonl",
+    path: "/transcripts/project/session/subagents/workflow/agent-task.jsonl",
+  });
+  expect(subagent.parent).toBe("/transcripts/project/session.jsonl");
+
+  const thread = "00000000-0000-0000-0000-000000000002";
+  const parent = "00000000-0000-0000-0000-000000000001";
+  const codex = catalogEntryToFileEntry({ ...entry(2), path: `/sessions/rollout-${thread}.jsonl`, nativeParentThreadId: parent });
+  expect(codex).toMatchObject({ nativeThreadId: thread, nativeParentThreadId: parent });
+});
+
+test("chat pagination bounds large families and preserves every parent link across pages", () => {
+  const parent = entry(1);
+  const children = Array.from({ length: 2_000 }, (_, index) => ({ ...entry(index + 100), parent: parent.path }));
+  const unrelated = entry(20);
+  const otherProject = { ...entry(25, "other"), parent: parent.path };
+  const options = { project: "viewer", tree: true, limit: 23 };
+  let page = paginateConversationCatalog([...children, unrelated, parent, otherProject], options);
+  expect(page.items[0]?.path).toBe(parent.path);
+  expect(page.total).toBe(2_002);
+  const paths: string[] = [];
+  while (true) {
+    expect(page.items.length).toBeLessThanOrEqual(options.limit);
+    for (const row of page.items) {
+      if (row.path !== parent.path && row.path !== unrelated.path) expect(row.parent).toBe(parent.path);
+      paths.push(row.path);
+    }
+    if (!page.nextCursor) break;
+    page = paginateConversationCatalog([], { ...options, cursor: page.nextCursor });
+  }
+  expect(paths.at(-1)).toBe(unrelated.path);
+  expect(paths).toHaveLength(2_002);
+  expect(new Set(paths).size).toBe(paths.length);
+});
+
+test("opening a branch that fits on one page keeps other active cursors", () => {
+  const parent = entry(1);
+  const child = { ...entry(2), parent: parent.path };
+  const catalog = [parent, child, entry(3), entry(4)];
+  const roots = { project: "viewer", tree: true, branch: { parent: null }, limit: 2 };
+  const first = paginateConversationCatalog(catalog, roots);
+  for (let index = 0; index < 15; index += 1) paginateConversationCatalog(catalog, roots);
+
+  const children = paginateConversationCatalog(catalog, { ...roots, branch: { parent: parent.path } });
+  expect(children.items.map(item => item.path)).toEqual([child.path]);
+  expect(children.nextCursor).toBeNull();
+  const second = paginateConversationCatalog([], { ...roots, cursor: first.nextCursor });
+  expect(second.items.map(item => item.path)).toEqual([parent.path]);
+});

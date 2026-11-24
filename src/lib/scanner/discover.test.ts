@@ -15,7 +15,7 @@ import { conversationCatalogSnapshot } from "./conversationCatalog";
 import { discoverFiles, discoverFilesWithProjectCatalog, type RawEntry } from "./discover";
 import { projectForCwd } from "./describe";
 import { projectCatalogSnapshotFromRaw } from "./projectCatalog";
-import { projectCatalogDocumentForTests } from "./projectCatalogStore";
+import { PROJECT_SUMMARY_VERSION, projectCatalogDocumentForTests } from "./projectCatalogStore";
 import { PROJECT_RESOLUTION_VERSION, projectResolutionStateKey } from "./projectState";
 import { FILE_CAP, openclawSessionRoots } from "./roots";
 import { DEFAULT_SCHEME_CARDS_PER_PROJECT } from "./schemeWindow";
@@ -802,7 +802,7 @@ test("a corrupt per-file scanner index falls back to a full parse and repairs it
 
     expect(recovered.files.find((entry) => entry.path === transcript)?.title).toBe("Recovered summary");
     const persisted = storedCatalog()!;
-    expect(persisted.files[transcript]).toMatchObject({ summaryVersion: 4 });
+    expect(persisted.files[transcript]).toMatchObject({ summaryVersion: PROJECT_SUMMARY_VERSION });
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;

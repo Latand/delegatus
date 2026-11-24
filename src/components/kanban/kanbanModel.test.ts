@@ -786,12 +786,14 @@ test("a placeholder no agent will name borrows its conversation's cleaned title 
     pending("ended", [ended.path]),
     /* Still working, but past the bounded wait: the same. */
     pending("slow", [running.path]),
-    /* Young and working: the agent may still name it. */
+    /* Young and working: its conversation title is already usable. */
     pending("young", [fresh.path], { createdAt: iso(NOW - 60) }),
     /* Young, but its conversation already stopped: nothing will name it. */
     pending("stopped", [settled.path], { createdAt: iso(NOW - 60) }),
     /* Young and working, but admitted with its first prompt: that prompt names the card at once. */
     pending("prompted", [fresh.path], { createdAt: iso(NOW - 60), text: "Add a retry budget to the uploader", origin: { kind: "launch", key: "launch-p", refinement: "pending" } }),
+    pending("catalog", [], { text: "Claude session", conversationTitle: "Fix the historical CLI import" }),
+    pending("no-source", [], { text: "Claude session", createdAt: iso(NOW - 60) }),
     /* A launch that never produced a transcript: its own admission title. */
     pending("launch", [], { text: "Exercise legacy spawn fixture", origin: { kind: "launch", key: "launch-x", refinement: "pending" } }),
   ];
@@ -800,9 +802,11 @@ test("a placeholder no agent will name borrows its conversation's cleaned title 
   const shown = (id: string) => ({ title: byId.get(id)!.titlePending ? null : byId.get(id)!.title, pending: byId.get(id)!.titlePending });
   expect(shown("ended")).toEqual({ title: "Fix the upload retries after a timeout", pending: false });
   expect(shown("slow")).toEqual({ title: "Rebuild the search index", pending: false });
-  expect(shown("young")).toEqual({ title: null, pending: true });
+  expect(shown("young")).toEqual({ title: "Draft the release notes", pending: false });
   expect(shown("prompted")).toEqual({ title: "Add a retry budget to the uploader", pending: false });
   expect(shown("stopped")).toEqual({ title: "Answer the API question", pending: false });
+  expect(shown("catalog")).toEqual({ title: "Fix the historical CLI import", pending: false });
+  expect(shown("no-source")).toEqual({ title: null, pending: true });
   expect(shown("launch")).toEqual({ title: "Exercise legacy spawn fixture", pending: false });
   /* A task somebody named keeps its own title, whatever its conversation says. */
   const named = model([task("named", "assigned", [ended.path], { text: "Upload retries", origin: { kind: "conversation", key: "k", refinement: "titled" } })], [ended]);
