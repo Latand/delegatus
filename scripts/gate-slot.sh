@@ -134,7 +134,16 @@ run() {
   fi
   exec "$gate_bun" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --portable "$@"
 }
-if pre_push_parent "$@"; then run "$@"; fi
+# Bind the bypass to the wrapper that took this branch. The marker can
+# cross exec and service handoff, but it cannot identify a descendant.
+unset LLV_GATE_HOOK_WRAPPER_IDENTITY
+if pre_push_parent "$@"; then
+  if [[ -r /proc/$BASHPID/stat ]] && IFS= read -r wrapper_stat < "/proc/$BASHPID/stat"; then
+    read -ra wrapper_fields <<< "${wrapper_stat##*) }"
+    export LLV_GATE_HOOK_WRAPPER_IDENTITY="$BASHPID:${wrapper_fields[19]}"
+  fi
+  run "$@"
+fi
 
 # Keep the ticket until a slot is locked and its admission is committed.
 # CPU waits precede the owned runner's execution deadline.
