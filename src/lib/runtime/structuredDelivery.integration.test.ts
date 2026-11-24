@@ -18,7 +18,7 @@ import { StructuredSendRefusedError } from "./engineHost";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import { ownedHostProcess } from "./fixtures/ownedHostProcess";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, republishStructuredDeliveryHost } from "./structuredDeliveryController";
-import { mirrorSettledReceipts, resolveSendReceipt, sendReceiptFor, settleDueSends, SEND_LOST_REASON, SEND_UNSETTLEABLE_REASON } from "./sendSettlement";
+import { mirrorSettledReceipts, resolveSendReceipt, sendReceiptFor, settleDueSends, SEND_LOST_REASON, SEND_SETTLEMENT_WINDOW_MS, SEND_UNSETTLEABLE_REASON } from "./sendSettlement";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
 import { DeliveryWake } from "./deliveryWake";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -5533,6 +5533,113 @@ test("a send held behind a switch that fails says switch-failed at its next over
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
+  }
+});
+
+test.each(["dead recipient", "started dispatch", "requeued dispatch"] as const)("repeated failed switches settle a held send with a %s", async (scenario) => {
+  const started = scenario !== "dead recipient";
+  const operationId = `failed-switch-${scenario.replace(" ", "-")}`;
+  const fixture = idleHostedConversation(operationId, "5eed0010-9999-\x34999-8999-999999999999");
+  const { registry, conversation, key } = fixture;
+  const journal = fixture.openJournal();
+  const client = runtimeJournalClient(journal);
+  const ledger = createFakeDeliveryLedger();
+  const host = new FakeEngineHost(ledger);
+  const send = spyOn(host, "send");
+  const progressPath = path.join(fixture.directory, "delivery-progress.sqlite");
+  let now = Date.parse("2026-10-06T12:01:00.000Z");
+  const progress = new DeliveryProgressStore(progressPath, () => now);
+  const makeQueue = (registry: AgentRegistry, progress: DeliveryProgressStore) => new StructuredDeliveryQueue({
+    ...journalPort(journal),
+    switchHold: () => registry.switchHold(conversation.id),
+    settled: id => sendReceiptFor(registry.deliverySnapshotForOperation(id), id)?.state === "failed",
+    progress,
+  }, () => host);
+  const queue = makeQueue(registry, progress);
+  const failSwitch = () => {
+    const migration = registry.conversation(conversation.id)!.migration!;
+    registry.transitionConversationMigration(conversation.id, migration.revision, [migration.phase], {
+      phase: "failed-recoverable", error: "successor failed",
+    });
+  };
+
+  try {
+    setSystemTime(new Date(now));
+    registry.requestConversationReseat(conversation.id, "successor-account");
+    const held = registry.holdDelivery(conversation.id, "original delivery", operationId, "text", [], null, { operationId });
+    expect(held.state).toBe("held");
+    const deadline = Date.parse(held.createdAt) + SEND_SETTLEMENT_WINDOW_MS;
+    progress.note(operationId, conversation.id, { waitReason: "switch-failed", admittedAt: held.createdAt });
+    if (started) {
+      journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId, conversationId: conversation.id,
+        text: "original delivery", policy: "queue" });
+      journal.transitionOperation(operationId, "delivering");
+      await host.send({ id: operationId, text: "original delivery" });
+      if (scenario === "requeued dispatch") {
+        journal.transitionOperation(operationId, "queued", { reason: "delivery-auto-retry", deliveryUnverified: true });
+      }
+      progress.deadline(operationId, new Date(deadline + SEND_SETTLEMENT_WINDOW_MS).toISOString(), "turn-boundary");
+    }
+    failSwitch();
+    if (started) {
+      registry.holdForFailedSwitch(conversation.id, {
+        operationId: registry.conversation(conversation.id)!.migration!.operationId,
+        accountId: "successor-account", reason: "successor failed",
+      });
+    }
+    for (const offset of [2_000, 1]) {
+      now = deadline - offset;
+      setSystemTime(new Date(now));
+      registry.retryConversationMigration(conversation.id);
+      failSwitch();
+      await queue.drain();
+      expect((await settleDueSends({ registry, client, progress, now: () => now })).settled).toEqual([]);
+      expect(registry.deliverySnapshotForOperation(operationId).deliveryOperationOwners[operationId]?.terminalState).toBeNull();
+    }
+    if (!started) registry.upsert({ ...registry.hostEntry(key)!, status: "dead" });
+
+    queue.retire();
+    progress.close();
+    const reopened = new AgentRegistry(registry.filename);
+    const restoredProgress = new DeliveryProgressStore(progressPath, () => now);
+    const restartedQueue = makeQueue(reopened, restoredProgress);
+    try {
+      if (started) expect(restoredProgress.get(operationId)?.deadlinePolicy).toBe("turn-boundary");
+      now = deadline;
+      setSystemTime(new Date(now));
+      // Reproduce the sweep clock advancing between selection and per-row checks.
+      const swept = await settleDueSends({
+        registry: reopened, client, progress: restoredProgress, now: () => now++,
+        onDeadline: (id, _, bound) => restoredProgress.deadline(id, bound?.deadlineAt ?? null, bound?.policy ?? null),
+      });
+      expect(swept.settled).toEqual([{ operationId, state: "failed", duplicateRisk: started }]);
+      const snapshot = reopened.deliverySnapshotForOperation(operationId);
+      expect(snapshot.heldDeliveries[held.id]?.state).toBe("failed");
+      expect(snapshot.deliveryOperationOwners[operationId]).toMatchObject({
+        terminalState: "failed", terminalDisposition: started ? "unverified" : "lost", settledAt: expect.any(String),
+      });
+      expect(restoredProgress.get(operationId)).toMatchObject({
+        deadlineAt: new Date(deadline).toISOString(), deadlinePolicy: "failed-switch",
+        terminal: { state: started ? "uncertain" : "failed" }, nextWakeAt: null,
+      });
+      expect(await resolveSendReceipt(operationId, { registry: reopened, client, progress: restoredProgress })).toMatchObject({
+        state: "failed", duplicateRisk: started, resend: started ? "verify-first" : "safe",
+      });
+      if (started) {
+        expect(journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+        reopened.releaseSwitchHold(conversation.id);
+      }
+      await restartedQueue.drain();
+      expect(send).toHaveBeenCalledTimes(started ? 1 : 0);
+      expect(ledger.writes.map(write => write.id)).toEqual(started ? [operationId] : []);
+      expect((await settleDueSends({ registry: reopened, client, progress: restoredProgress, now: () => now })).settled).toEqual([]);
+    } finally { restartedQueue.retire(); restoredProgress.close(); }
+  } finally {
+    queue.retire();
+    progress.close();
+    journal.close();
+    send.mockRestore();
+    setSystemTime();
   }
 });
 

@@ -2182,13 +2182,14 @@ export class StructuredDeliveryQueue {
         const reason = `account switch failed: ${hold.reason}`;
         if (effect.kind === "native-queue") {
           if (!await this.executeNative(effect, reason, lane)) return true;
-        } else if (durableStatuses.get(effect.operationId)?.status === "delivering") {
-          // A switch failure cannot establish the fate of an earlier actuation.
-          this.noteWait(effect, "switch-failed", { wake: "retry", detail: hold.reason });
-          this.retrySoon();
+        } else if (!neverDispatched(durableStatuses.get(effect.operationId))) {
+          // The receipt sweep reconciles an earlier actuation by its original
+          // operation and fences it when the failed-switch admission window ends.
+          this.noteWait(effect, "switch-failed", { detail: hold.reason });
           return true;
         } else {
-          await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason },
+            { fromStatuses: ["pending", "queued"], requirePristineAdmission: true });
         }
         continue;
       }
