@@ -131,6 +131,10 @@ test("fileTransactionSubject, fileTransactionWaitLabel, holder.kind, and callSit
     "/tmp/.next/server/fixture-account-319/review-owner.ts:1:65",
     "/tmp/src/fixture-private-project/checkout/src/lib/recordedChecks/hostFence.ts:19:10",
     "/tmp/src/fixture-private-project/customScript.ts:19:10",
+    // Missing files under allowed prefixes inside the repo root MUST NOT leak lexical path segments.
+    `${repoRoot}/.next/server/chunks/fixture-private-741/old.js:1:2`,
+    `${repoRoot}/src/lib/fixture-private-741/missing.ts:1:2`,
+    `${repoRoot}/dist/fixture-private-741/missing.js:1:2`,
   ]) {
     expect(fileTransactionCallSite(`Error\n    at outside (${externalFrame})`)).toBe("external");
     expect(registryWaitCallSite(`Error\n    at outside (${externalFrame})`)).toBe("unresolved");
@@ -328,5 +332,60 @@ test("external callers under id-bearing directories log callSite='external' with
         holder: { kind: "viewer" },
       });
     }
+  }
+});
+
+test("explicit untrusted withWaitCorrelation labels are clamped to the closed set on all file-transaction paths", async () => {
+  const lines: string[] = [];
+  resetBlockingWaitsForTests((line) => { lines.push(line); });
+  const file = path.join(root, "explicit-correlation.json");
+  const lock = `${file}.write-lock`;
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid, startIdentity: null, token: "t1", role: "worker" }));
+  setTimeout(() => fs.rmSync(lock, { force: true }), 80);
+
+  const result = await withWaitCorrelation(
+    { label: "external-account-134", operationId: "fixture-operation" },
+    () => withFileTransactionAsync(file, "arbitrary busy", () => "ok"),
+  );
+  expect(result).toBe("ok");
+  const sample = blockingWaitDiagnostics().longest.find((item) => item.site === "file-transaction");
+  expect(sample).toMatchObject({
+    site: "file-transaction",
+    subject: "file-transaction",
+    label: "file-transaction",
+    operationId: "fixture-operation",
+  });
+  expect(lines.join("\n")).not.toContain("external-account-134");
+  expect(lines.some((line) => line.includes('"label":"file-transaction"'))).toBe(true);
+});
+
+test("slow diagnostic holder metadata never delays lock admission or causes FileTransactionBusyError", async () => {
+  const fsp = (await import("node:fs/promises")).default;
+  const originalStat = fsp.stat;
+  const file = path.join(root, "slow-metadata-admission.json");
+  const lock = `${file}.write-lock`;
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, startIdentity: null, role: "test", token: "fixture-slow-stat" }));
+  let statCalls = 0;
+  let ran = 0;
+  fsp.stat = (async function (this: typeof fsp, target: fs.PathLike, ...args: unknown[]) {
+    const result = await (originalStat as (...a: unknown[]) => Promise<fs.Stats>).call(this, target, ...args);
+    if (String(target) === lock) {
+      statCalls += 1;
+      await Bun.sleep(320);
+    }
+    return result;
+  }) as typeof fsp.stat;
+  const timer = setTimeout(() => { fs.rmSync(lock, { force: true }); }, 65);
+  const started = performance.now();
+  try {
+    await withFileTransactionAsync(file, "fixture busy", () => { ran += 1; }, { waitMs: 230 });
+    const elapsed = performance.now() - started;
+    expect(ran).toBe(1);
+    expect(elapsed).toBeLessThan(220);
+    expect(statCalls).toBeGreaterThanOrEqual(1);
+  } finally {
+    clearTimeout(timer);
+    fsp.stat = originalStat;
+    fs.rmSync(lock, { force: true });
   }
 });

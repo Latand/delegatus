@@ -7,8 +7,11 @@ import {
   blockingWaitRole,
   currentWaitCorrelation,
   fileTransactionCallSite,
+  KNOWN_FILE_TRANSACTION_WAIT_LABELS,
   normalizeBlockingWaitHolderKind,
   recordBlockingWait,
+  sanitizeFileTransactionWaitLabel,
+  type BlockingWaitCorrelation,
   type FileLockHolder,
 } from "@/lib/blockingWaits";
 import { noteWriterAdmitted } from "./admissionWitness";
@@ -100,8 +103,6 @@ const KNOWN_BUSY_LABELS: ReadonlyMap<string, string> = new Map([
   ["App repository declaration is busy", "git.forge-credentials"],
 ]);
 
-const KNOWN_EXPLICIT_LABELS: ReadonlySet<string> = new Set(KNOWN_BUSY_LABELS.values());
-
 /** Maps a target lock path strictly onto a closed set of canonical subject
     tokens so untrusted directory names, account ids, usernames, or filenames
     can never enter diagnostic logs. */
@@ -125,19 +126,27 @@ export function fileTransactionSubject(filePath: string): string {
 }
 
 /** Maps a wait onto a closed set of canonical operation labels (or the closed
-    subject token). Arbitrary caller busy messages are never echoed into logs. */
+    subject token). Arbitrary caller busy messages and untrusted correlation
+    labels are never echoed into logs. */
 export function fileTransactionWaitLabel(busyMessage: string, subject: string, explicitLabel?: string): string {
   const explicit = explicitLabel?.trim();
-  if (explicit && KNOWN_EXPLICIT_LABELS.has(explicit)) return explicit;
+  if (explicit && KNOWN_FILE_TRANSACTION_WAIT_LABELS.has(explicit)) return explicit;
   const knownBusy = KNOWN_BUSY_LABELS.get(busyMessage.trim());
   if (knownBusy) return knownBusy;
-  const knownSubject = KNOWN_LOCK_BASENAME_SUBJECTS.has(subject)
-    || subject === "interruption-obligations"
-    || subject === "prototype-reviews/<id>.polls.lock"
-    || subject === "prototype-reviews/<id>.telegram.lock"
-    || subject === "prototype-reviews/publication.lock"
-    || [...KNOWN_LOCK_PARENT_SUBJECTS.values()].includes(subject);
-  return knownSubject ? subject : "file-transaction";
+  return sanitizeFileTransactionWaitLabel(subject, "file-transaction");
+}
+
+function fileTransactionWaitCorrelation(
+  busyMessage: string,
+  subject: string,
+  explicitLabel?: string,
+): BlockingWaitCorrelation {
+  const current = currentWaitCorrelation();
+  const candidate = current?.label?.trim();
+  const label = candidate && KNOWN_FILE_TRANSACTION_WAIT_LABELS.has(candidate)
+    ? candidate
+    : fileTransactionWaitLabel(busyMessage, subject, explicitLabel);
+  return current?.operationId ? { label, operationId: current.operationId } : { label };
 }
 
 function parseHolderRecord(raw: string, mtimeMs: number): FileLockHolder | undefined {
@@ -414,7 +423,7 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
         synchronous: true,
         durationMs,
         subject,
-        correlation: currentWaitCorrelation() ?? { label: fileTransactionWaitLabel(busyMessage, subject, options.label) },
+        correlation: fileTransactionWaitCorrelation(busyMessage, subject, options.label),
         ...(durationMs >= 50 && callSiteStack ? { callSite: fileTransactionCallSite(callSiteStack) } : {}),
         ...(holder ? { holder } : {}),
         refused: admittedAt === undefined,
@@ -440,8 +449,10 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
       if (descriptor === null) {
         if (!waited) {
           waited = true;
-          holder = readLockHolderSync(ticket.lockPath);
           callSiteStack = new Error().stack;
+          void readLockHolderAsync(ticket.lockPath).then((resolved) => {
+            holder = resolved;
+          }, () => undefined);
         }
         await new Promise<void>(resolve => setTimeout(resolve, LOCK_WAIT_MS));
         continue;
@@ -466,7 +477,7 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
         synchronous: false,
         durationMs,
         subject,
-        correlation: currentWaitCorrelation() ?? { label: fileTransactionWaitLabel(busyMessage, subject, options.label) },
+        correlation: fileTransactionWaitCorrelation(busyMessage, subject, options.label),
         ...(durationMs >= 50 && callSiteStack ? { callSite: fileTransactionCallSite(callSiteStack) } : {}),
         ...(holder ? { holder } : {}),
         refused: admittedAt === undefined,
@@ -559,8 +570,13 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
       if (handle === null) {
         if (!waited) {
           waited = true;
-          holder = await readLockHolderAsync(lockPath);
           callSiteStack ??= new Error().stack;
+          // Diagnostic holder inspection runs off the admission path so slow
+          // filesystem metadata can never delay lock acquisition or trigger
+          // a false FileTransactionBusyError before the caller's deadline.
+          void readLockHolderAsync(lockPath).then((resolved) => {
+            holder = resolved;
+          }, () => undefined);
         }
         await new Promise<void>((resolve) => setTimeout(resolve, Math.min(LOCK_WAIT_MS, Math.max(0, deadline - performance.now()))));
         continue;
@@ -593,7 +609,7 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
         synchronous: false,
         durationMs,
         subject,
-        correlation: currentWaitCorrelation() ?? { label: fileTransactionWaitLabel(busyMessage, subject, options.label) },
+        correlation: fileTransactionWaitCorrelation(busyMessage, subject, options.label),
         ...(durationMs >= 50 && callSiteStack ? { callSite: fileTransactionCallSite(callSiteStack) } : {}),
         ...(holder ? { holder } : {}),
         refused: admittedAt === undefined,

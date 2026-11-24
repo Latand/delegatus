@@ -167,6 +167,100 @@ const KNOWN_BLOCKING_WAIT_ROLES: ReadonlySet<string> = new Set([
   "unowned",
 ]);
 
+/** Closed set of permitted wait labels for `file-transaction` blocking-wait
+ * diagnostics (including explicit `withWaitCorrelation` labels). Untrusted
+ * caller labels are never echoed verbatim into `[blocking-wait]` logs. */
+export const KNOWN_FILE_TRANSACTION_WAIT_LABELS: ReadonlySet<string> = new Set([
+  "file-transaction",
+  "recorded-check.host-custody",
+  "recorded-check.handoff",
+  "recorded-check.acknowledgement",
+  "recorded-check.observation",
+  "attempt-temp.sweep",
+  "attempt-evidence.copy",
+  "attempt-temp.approved",
+  "temporary-data.retention",
+  "done.media",
+  "report.media",
+  "prototype.decision",
+  "prototype.publication",
+  "telegram.review-polls",
+  "telegram.review-post",
+  "operator.settings",
+  "operator.worker-limit",
+  "state.hot-authority",
+  "state.retirement-guard",
+  "state.disk-pressure",
+  "state.disk-pressure-notices",
+  "release.runs",
+  "loop-profiler.store",
+  "memory.import",
+  "memory.source",
+  "memory.settings",
+  "memory.role-history",
+  "metadata.collection",
+  "account-guard.obligations",
+  "account-credit-guard.obligations",
+  "interruption.index",
+  "interruption.evidence",
+  "pipeline.initialize",
+  "accounts.migration",
+  "voice.settings",
+  "voice-settings.write",
+  "provider.settings",
+  "keys.store",
+  "voice-companion.state",
+  "asks-you.settings",
+  "attention.native-proof",
+  "codex.subagent-boundary",
+  "git.forge-credentials",
+  "state.staged-recovery",
+  "registry.staged-recovery",
+  // Closed canonical file-transaction subjects also serve as fallback labels.
+  "recorded-check-host-fences/<slot>",
+  "recorded-check-observers/<slot>",
+  "seat-quota-recovery/<entry>",
+  "done-media/owner.lock",
+  "report-media/owner",
+  "prototype-reviews/<entry>",
+  "prototype-reviews/<id>.polls.lock",
+  "prototype-reviews/<id>.telegram.lock",
+  "prototype-reviews/publication.lock",
+  "telegram/<entry>",
+  "codex-update/<entry>",
+  "interruption-obligations",
+  "attempt-temp.sqlite.sweep",
+  "hot-state-authority.json",
+  "lifecycle-journal.json",
+  "operator-settings.json",
+  "worker-limit.json",
+  "project-settings.json",
+  "tasks-row-preparation.json",
+  "disk-pressure.json",
+  "disk-pressure-notices.json",
+  "release-runs.json",
+  "structured-user-metadata-publication",
+  ".delegatus-initialization",
+  "import-job",
+  "publication.lock",
+  "openai-api-key",
+  "voice-settings.json",
+  "accounts.json",
+  "asks-you-settings.json",
+  "companion-state.json",
+  "memory-settings.json",
+  "role-memory-history.json",
+  "provider-settings.json",
+  "loop-profiler.json",
+]);
+
+export function sanitizeFileTransactionWaitLabel(rawLabel: unknown, fallback = "file-transaction"): string {
+  const candidate = typeof rawLabel === "string" ? rawLabel.trim() : "";
+  if (candidate && KNOWN_FILE_TRANSACTION_WAIT_LABELS.has(candidate)) return candidate;
+  const safeFallback = fallback.trim();
+  return KNOWN_FILE_TRANSACTION_WAIT_LABELS.has(safeFallback) ? safeFallback : "file-transaction";
+}
+
 const KNOWN_SRC_TOP_ENTRIES: ReadonlySet<string> = new Set([
   "app",
   "components",
@@ -232,10 +326,13 @@ function relativeVerifiedCallSite(rawFramePath: string): string | null {
     }
   }
   if (!path.isAbsolute(filePart)) return null;
-  let resolvedFile = path.resolve(filePart);
+  let resolvedFile: string;
   try {
-    if (fs.existsSync(resolvedFile)) resolvedFile = fs.realpathSync(resolvedFile);
-  } catch { /* keep resolved absolute path */ }
+    resolvedFile = fs.realpathSync(path.resolve(filePart));
+  } catch {
+    // Missing or unreadable source file: never emit an unverified lexical path.
+    return null;
+  }
   const normalized = resolvedFile.replaceAll("\\", "/");
   let rel: string | null = null;
   for (const verifiedRoot of VERIFIED_SOURCE_ROOTS) {
@@ -334,7 +431,9 @@ export function recordBlockingWait(input: {
     durationMs: round(input.durationMs),
     synchronous: input.synchronous,
     subject: input.subject ? input.subject.slice(0, 80) : null,
-    label: context?.label ? context.label.slice(0, 80) : null,
+    label: input.site === "file-transaction"
+      ? (context?.label ? sanitizeFileTransactionWaitLabel(context.label, "file-transaction") : null)
+      : (context?.label ? context.label.slice(0, 80) : null),
     operationId: context?.operationId ? context.operationId.slice(0, 120) : null,
     ...(deferred ? { deferred: true as const } : input.refused ? { refused: true as const } : {}),
     at: new Date().toISOString(),
