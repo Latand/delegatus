@@ -177,6 +177,19 @@ export type SearchSchemaReadyResult =
 
 const scheduledSearchIndexes = new Map<string, { promise: Promise<SearchIndexBuildResult>; ref: () => void }>();
 const searchBuildBackoffs = new Map<string, SearchBuildBackoff>();
+const searchBuildRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearSearchBuildRetryTimer(filename: string): void {
+  const timer = searchBuildRetryTimers.get(filename);
+  if (!timer) return;
+  clearTimeout(timer);
+  searchBuildRetryTimers.delete(filename);
+}
+
+function clearSearchBuildBackoff(filename: string): void {
+  searchBuildBackoffs.delete(filename);
+  clearSearchBuildRetryTimer(filename);
+}
 const readySearchDatabases = new WeakSet<Database>();
 // Readiness is schema metadata. Invalidate on either replacement of the file
 // or a schema change; ordinary appends keep the same readiness. Bound the cache
@@ -241,7 +254,45 @@ function migrateSearchSchema(db: Database): void {
       // belongs to background work; readers use timestamp/file time meanwhile.
       db.exec("ALTER TABLE transcript_messages ADD COLUMN sort_timestamp REAL");
     }
-    if (lockedVersion < 6) {
+    if (lockedVersion < 4) {
+      // Table replacement invalidates its old descriptor checkpoint as well.
+      db.exec("DROP TABLE IF EXISTS transcript_checkpoints");
+      db.exec(`
+        ALTER TABLE transcript_messages RENAME TO transcript_messages_previous;
+        ALTER TABLE transcript_files RENAME TO transcript_files_previous;
+        CREATE TABLE transcript_files (
+          path TEXT PRIMARY KEY,
+          size INTEGER NOT NULL,
+          mtime_ms REAL NOT NULL,
+          project TEXT NOT NULL,
+          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot', 'antigravity')),
+          messages_count INTEGER NOT NULL,
+          indexed_at INTEGER NOT NULL
+        );
+        INSERT INTO transcript_files SELECT * FROM transcript_files_previous;
+        CREATE TABLE transcript_messages (
+          id INTEGER PRIMARY KEY,
+          transcript_path TEXT NOT NULL,
+          message_index INTEGER NOT NULL,
+          speaker TEXT NOT NULL CHECK(speaker IN ('user', 'assistant')),
+          timestamp INTEGER,
+          byte_offset INTEGER NOT NULL,
+          line_number INTEGER NOT NULL,
+          body TEXT NOT NULL,
+          body_hash TEXT NOT NULL,
+          sort_timestamp REAL,
+          UNIQUE(transcript_path, message_index),
+          FOREIGN KEY(transcript_path) REFERENCES transcript_files(path) ON DELETE CASCADE
+        );
+        INSERT INTO transcript_messages SELECT * FROM transcript_messages_previous;
+        DROP TABLE transcript_messages_previous;
+        DROP TABLE transcript_files_previous;
+        UPDATE transcript_messages
+          SET sort_timestamp = COALESCE(timestamp,
+            (SELECT mtime_ms / 1000.0 FROM transcript_files WHERE path = transcript_path))
+          WHERE sort_timestamp IS NULL;
+      `);
+    } else if (lockedVersion < 6) {
       // Only `transcript_files.engine` widens its CHECK constraint in v6.
       // With `legacy_alter_table = ON` + `foreign_keys = OFF` (SQLite 3.26+,
       // including macOS 3.39.4), renaming `transcript_files` leaves both
@@ -465,14 +516,25 @@ function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<
   const now = Date.now();
   const activeBackoff = searchBuildBackoffs.get(filename);
   if (activeBackoff && now < activeBackoff.nextAttemptAt) {
+    const retryAfterMs = Math.max(1, activeBackoff.nextAttemptAt - now);
+    if (!keepAlive && !searchBuildRetryTimers.has(filename)) {
+      const timer = setTimeout(() => {
+        searchBuildRetryTimers.delete(filename);
+        if (!fs.existsSync(filename)) return;
+        void scheduleSearchIndexBuild(filename, false);
+      }, retryAfterMs);
+      timer.unref?.();
+      searchBuildRetryTimers.set(filename, timer);
+    }
     return Promise.resolve({
       ok: false,
       reason: activeBackoff.lastReason,
-      retryAfterMs: Math.max(1, activeBackoff.nextAttemptAt - now),
+      retryAfterMs,
       nextAttemptAt: activeBackoff.nextAttemptAt,
       throttled: true,
     });
   }
+  clearSearchBuildRetryTimer(filename);
   let resolveBuild!: (result: SearchIndexBuildResult) => void;
   const promise = new Promise<SearchIndexBuildResult>((resolve) => { resolveBuild = resolve; });
   let ref = () => {};
@@ -501,7 +563,7 @@ function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<
         console.error(`[transcript-search] ${failure}; migration will retry with backoff`);
         resolveBuild({ ok: false, reason: failure, retryAfterMs: delayMs, nextAttemptAt, throttled: false });
       } else {
-        searchBuildBackoffs.delete(filename);
+        clearSearchBuildBackoff(filename);
         resolveBuild({ ok: true });
       }
     };
@@ -560,7 +622,7 @@ export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<Sear
   const filename = statePath("transcript-search.sqlite");
   const initial = probeTranscriptSearchReadiness(filename);
   if (!initial.exists) {
-    searchBuildBackoffs.delete(filename);
+    clearSearchBuildBackoff(filename);
     return { ready: true };
   }
   if ("error" in initial) {
@@ -583,7 +645,7 @@ export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<Sear
     // Only clear shared backoff once the read accelerators that the same
     // background worker builds are also present; partial-v6 DBs keep the
     // existing retry deadline while still letting writers proceed on v6.
-    if (initial.hit && initial.vocabulary) searchBuildBackoffs.delete(filename);
+    if (initial.hit && initial.vocabulary) clearSearchBuildBackoff(filename);
     return { ready: true };
   }
   const build = await scheduleSearchIndexBuild(filename, true);
@@ -598,7 +660,7 @@ export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<Sear
   }
   const after = probeTranscriptSearchReadiness(filename);
   if (!after.exists) {
-    searchBuildBackoffs.delete(filename);
+    clearSearchBuildBackoff(filename);
     return { ready: true };
   }
   if ("error" in after) {
@@ -612,7 +674,7 @@ export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<Sear
     return { ready: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false };
   }
   if (after.hit && after.vocabulary) {
-    searchBuildBackoffs.delete(filename);
+    clearSearchBuildBackoff(filename);
   } else {
     recordSearchBuildFailure(filename, "search read accelerators incomplete after migration");
   }
@@ -621,6 +683,8 @@ export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<Sear
 
 /** Test-only seam to tune or reset per-DB off-thread migration backoff state. */
 export function setTranscriptSearchMigrationRetryBackoffForTests(baseMs: number | null): void {
+  for (const timer of searchBuildRetryTimers.values()) clearTimeout(timer);
+  searchBuildRetryTimers.clear();
   searchBuildBackoffs.clear();
   searchMigrationRetryBaseMs = baseMs === null
     ? DEFAULT_SEARCH_MIGRATION_RETRY_BASE_MS
