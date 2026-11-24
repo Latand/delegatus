@@ -1020,7 +1020,7 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
   const endedAt = run ? seatTickLocalTime(run.endedAt ?? run.claimedAt, now, locale) ?? t("seatTick.unknown") : null;
   const startedAt = running ? seatTickLocalTime(running.claimedAt, now, locale) : null;
   const nextAt = seatTickLocalTime(value.nextRunAt, now, locale);
-  const runCounts = run?.counts;
+  const runCounts = run && value.runsError === null ? run.counts : undefined;
   const counts = runCounts ? ([
     ["calls", "seatTick.curation.count.calls"],
     ["changed", "seatTick.curation.count.changed"],
