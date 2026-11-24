@@ -17,12 +17,14 @@ const {
   SPAWN_NOTICE_COALESCE_MS, SPAWN_NOTICE_FINAL_MESSAGE_BYTES, SPAWN_NOTICE_MAX_ATTEMPTS,
 } = await import("./sweep");
 const { recordSpawnTurnEnded } = await import("@/lib/runtime/serverConsumers");
-const { spawnLossRelevant, spawnNoticeRecipient, transcriptErrorFromRecords } = await import("./production");
+const { spawnLossRelevant, spawnNoticeFinalMessage, spawnNoticeRecipient, transcriptErrorFromRecords } = await import("./production");
+const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
 type Ports = import("./sweep").SpawnNoticeSweepPorts;
 type Request = import("./sweep").SpawnNoticeDeliveryRequest;
 type Answer = import("./sweep").SpawnNoticeDeliveryAnswer;
 
 afterAll(() => {
+  setAgentRegistryForTests(null);
   fs.rmSync(SANDBOX, { recursive: true, force: true });
   if (RESTORE.LLV_STATE_DIR === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = RESTORE.LLV_STATE_DIR;
@@ -30,8 +32,34 @@ afterAll(() => {
 
 const T0 = Date.parse("2026-09-29T12:00:00.000Z");
 const LAUNCHER = "conversation_launcher";
+const DECISION_REPLY_HINT = "If this worker still owns the assignment, send the decision and next action to the conversation above with send_message. Check its delivery receipt before any replacement.";
+const DECISION_VERDICT = "Verdict: needs_decision";
 let sequence = 0;
 const nextChild = () => `conversation_child_${++sequence}`;
+
+function installCodexTranscript(child: string, entries: readonly Record<string, unknown>[]): string {
+  const transcript = path.join(SANDBOX, `${child}.jsonl`);
+  fs.writeFileSync(transcript, entries.map(entry => JSON.stringify(entry)).join("\n") + "\n");
+  setAgentRegistryForTests({
+    conversation: (id: string) => id === child ? ({
+      engine: "codex",
+      generations: [{ path: transcript, launchProfile: { title: `Reviewer ${child.slice(-1)}`, cwd: "/repo" } }],
+    }) : null,
+  } as never);
+  return transcript;
+}
+
+function installClaudeTranscript(child: string, entries: readonly Record<string, unknown>[]): string {
+  const transcript = path.join(SANDBOX, `${child}.jsonl`);
+  fs.writeFileSync(transcript, entries.map(entry => JSON.stringify(entry)).join("\n") + "\n");
+  setAgentRegistryForTests({
+    conversation: (id: string) => id === child ? ({
+      engine: "claude",
+      generations: [{ path: transcript, launchProfile: { title: `Reviewer ${child.slice(-1)}`, cwd: "/repo" } }],
+    }) : null,
+  } as never);
+  return transcript;
+}
 
 function obligation(child: string, turnId: string, overrides: Partial<import("./store").SpawnNoticeObligation> = {}) {
   return store.recordSpawnNoticeObligation({
@@ -112,6 +140,55 @@ test("a settled turn sends one steer-first notice, attributed to the child, unde
   expect(sent).toHaveLength(1);
 });
 
+test.each([
+  { format: "plain", verdict: DECISION_VERDICT, recipient: LAUNCHER },
+  { format: "bold", verdict: "**Verdict:** needs_decision", recipient: "conversation_successor" },
+])("a completed $format decision sends the reply hint once to $recipient", async ({ verdict, recipient }) => {
+  const child = nextChild();
+  const recipientPath = `/sessions/${recipient}.jsonl`;
+  const final = `Which option should I use?\n${verdict}`;
+  obligation(child, "turn-decision");
+  const { ports, sent } = harness([child], {
+    finalMessage: () => ({ text: final, error: null }),
+    recipient: (launcher) => spawnNoticeRecipient(launcher, {
+      seats: () => ({
+        seats: { "project-a": { conversationId: recipient } },
+        revocations: recipient === LAUNCHER ? [] : [{ project: "project-a", conversationId: LAUNCHER, revokedAt: new Date(T0).toISOString() }],
+      }) as never,
+      conversation: (id) => id === recipient ? ({ id, generations: [{ path: recipientPath, launchProfile: { cwd: "/repo" } }] }) as never : null,
+      hiddenPaths: () => [],
+    }),
+  });
+  await sweepSpawnNotices(ports);
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatchObject({ conversationId: recipient, path: recipientPath });
+  expect(sent[0]!.text.split("\n")).toEqual([
+    `Agent finished: Reviewer ${child.slice(-1)} (${child})`,
+    DECISION_VERDICT,
+    DECISION_REPLY_HINT,
+    "Turn completed · ran 12m 04s",
+    "Final message:",
+    ...final.split("\n"),
+  ]);
+  expect(store.readSpawnNoticeTurn(child, "turn-decision")).toMatchObject({ state: "sent", recipientConversationId: recipient });
+});
+
+test.each([
+  { outcome: "completed", final: `${DECISION_VERDICT}\nVerdict: pass` },
+  { outcome: "completed", final: "Verdict: fail" },
+  { outcome: "completed", final: "No verdict was recorded." },
+  { outcome: "interrupted", final: DECISION_VERDICT },
+  { outcome: "error", final: DECISION_VERDICT },
+] as const)("the reply hint is absent for $outcome with final text '$final'", async ({ outcome, final }) => {
+  const child = nextChild();
+  obligation(child, "turn-no-hint", { outcome });
+  const { ports, sent } = harness([child], { finalMessage: () => ({ text: final, error: null }) });
+  await sweepSpawnNotices(ports);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.text).not.toContain(DECISION_REPLY_HINT);
+});
+
 test("an error or an interrupted turn notifies with its reason", async () => {
   const child = nextChild();
   obligation(child, "turn-err", { outcome: "error", startedAt: new Date(T0 - 40_000).toISOString() });
@@ -151,11 +228,12 @@ test("the final message is cut at 4 KB on a character boundary, with the marker"
     turns: [{ kind: "turn", childConversationId: "conversation_c", turnId: "t", launcherConversationId: LAUNCHER, outcome: "completed",
       startedAt: null, endedAt: new Date(T0).toISOString(), state: "pending", reason: null, recipientConversationId: null,
       clientMessageId: null, operationId: null, settledAt: null }],
-    final: { text: `${"x".repeat(5_000)}\nVerdict: fail`, error: null },
+    final: { text: `${"x".repeat(5_000)}\n${DECISION_VERDICT}`, error: null },
   });
   const lines = text.split("\n");
-  expect(lines[1]).toBe("Verdict: fail");
-  expect(lines.at(-1)).toBe(`[… cut: ${5_000 + 14 - 4_096} bytes more — conversation_messages conversationId=conversation_c]`);
+  expect(lines.slice(1, 3)).toEqual([DECISION_VERDICT, DECISION_REPLY_HINT]);
+  expect(lines.at(-2)).toBe("x".repeat(4_096));
+  expect(lines.at(-1)).toBe(`[… cut: ${5_000 + 1 + DECISION_VERDICT.length - 4_096} bytes more — conversation_messages conversationId=conversation_c]`);
 });
 
 test("the verdict is the last Verdict line, and absent when none is written", () => {
@@ -165,7 +243,10 @@ test("the verdict is the last Verdict line, and absent when none is written", ()
   expect(detectedVerdict(null)).toBeNull();
 });
 
-test("restart replay: a replayed event writes nothing, and a crash between deliver and mark resends under the same key", async () => {
+test.each([
+  { firstFinal: DECISION_VERDICT, laterFinal: "Verdict: pass", hasHint: true },
+  { firstFinal: "Verdict: pass", laterFinal: DECISION_VERDICT, hasHint: false },
+])("restart replay preserves stored text and key for '$firstFinal'", async ({ firstFinal, laterFinal, hasHint }) => {
   const child = nextChild();
   /* The runtime host replays an unconsumed `turn-ended` after a restart: the
      consumer runs twice for one turn and the second insert finds its row. */
@@ -178,22 +259,130 @@ test("restart replay: a replayed event writes nothing, and a crash between deliv
 
   /* The Viewer dies after the delivery layer accepted the notice and before
      the row was marked: the attempt is still recorded. */
-  const first = harness([child], { settle: () => { throw new Error("process died before the mark"); } });
+  const first = harness([child], {
+    finalMessage: () => ({ text: firstFinal, error: null }),
+    settle: () => { throw new Error("process died before the mark"); },
+  });
   await sweepSpawnNotices(first.ports);
   expect(first.sent).toHaveLength(1);
   expect(store.readSpawnNoticeTurn(child, "turn-replay")?.state).toBe("pending");
+  const attempt = store.readSpawnNoticeChild(child)?.attempt;
+  expect(attempt).toMatchObject({ text: first.sent[0]!.text, clientMessageId: spawnNoticeMessageId(child, "turn-replay") });
+  expect(attempt!.text.split("\n").filter(line => line === DECISION_REPLY_HINT)).toHaveLength(hasHint ? 1 : 0);
 
   /* The restarted sweep resends the recorded attempt: same key, same text,
      which the delivery layer answers from its record. A newer turn does not
      change what that attempt was. */
   obligation(child, "turn-later", { endedAt: new Date(T0 + 500).toISOString() });
-  const second = harness([child], { finalMessage: () => ({ text: "a different, later message", error: null }) });
+  const second = harness([child], { finalMessage: () => ({ text: laterFinal, error: null }) });
   await sweepSpawnNotices(second.ports);
   expect(second.sent).toHaveLength(1);
-  expect(second.sent[0]!.clientMessageId).toBe(first.sent[0]!.clientMessageId);
-  expect(second.sent[0]!.text).toBe(first.sent[0]!.text);
+  expect(second.sent[0]).toMatchObject({ clientMessageId: attempt!.clientMessageId, text: attempt!.text });
   expect(store.readSpawnNoticeTurn(child, "turn-replay")?.state).toBe("sent");
   expect(store.readSpawnNoticeTurn(child, "turn-later")?.state).toBe("pending");
+});
+
+test.each([
+  { newestMessage: null, expectedHints: 0 },
+  { newestMessage: `Decision needed.\n${DECISION_VERDICT}`, expectedHints: 1 },
+])("a folded Codex notice uses only the newest task_complete verdict ($expectedHints hints)", async ({ newestMessage, expectedHints }) => {
+  const child = nextChild();
+  installCodexTranscript(child, [
+    { type: "event_msg", timestamp: "2026-09-29T11:00:00.000Z", payload: { type: "task_started", turn_id: "turn-a" } },
+    { type: "event_msg", timestamp: "2026-09-29T11:01:00.000Z", payload: { type: "task_complete", turn_id: "turn-a", last_agent_message: `Earlier decision.\n${DECISION_VERDICT}` } },
+    { type: "event_msg", timestamp: "2026-09-29T11:02:00.000Z", payload: { type: "task_started", turn_id: "turn-b" } },
+    { type: "event_msg", timestamp: "2026-09-29T11:03:00.000Z", payload: { type: "task_complete", turn_id: "turn-b", last_agent_message: newestMessage } },
+  ]);
+  obligation(child, "turn-a", { endedAt: "2026-09-29T11:01:00.000Z" });
+  obligation(child, "turn-b", { endedAt: "2026-09-29T11:03:00.000Z" });
+  const { ports, sent } = harness([child], {
+    finalMessage: (id, turnId) => spawnNoticeFinalMessage(id, text => text, { turnId }),
+  });
+
+  await sweepSpawnNotices(ports);
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.clientMessageId).toBe(spawnNoticeMessageId(child, "turn-b"));
+  expect(sent[0]!.text.split("\n").filter(line => line === DECISION_REPLY_HINT)).toHaveLength(expectedHints);
+  expect(sent[0]!.text).toContain(" · 2 turns since the last notice");
+});
+
+test.each([
+  { bMessage: `B asks.\n${DECISION_VERDICT}`, expectedHints: 1 },
+  { bMessage: "B completed with pass.", expectedHints: 0 },
+])("a standalone Codex final message stays bound to its task_complete turn ($expectedHints hints)", async ({ bMessage, expectedHints }) => {
+  const child = nextChild();
+  installCodexTranscript(child, [
+    { type: "event_msg", timestamp: "2026-09-29T11:00:00.000Z", payload: { type: "task_started", turn_id: "turn-a" } },
+    { type: "event_msg", timestamp: "2026-09-29T11:01:00.000Z", payload: { type: "task_complete", turn_id: "turn-a", last_agent_message: DECISION_VERDICT } },
+    { type: "event_msg", timestamp: "2026-09-29T11:02:00.000Z", payload: { type: "task_started", turn_id: "turn-b" } },
+    { type: "event_msg", timestamp: "2026-09-29T11:02:30.000Z", payload: { type: "agent_message", message: bMessage } },
+    { type: "event_msg", timestamp: "2026-09-29T11:03:00.000Z", payload: { type: "task_complete", turn_id: "turn-b" } },
+    { type: "event_msg", timestamp: "2026-09-29T11:04:00.000Z", payload: { type: "task_started", turn_id: "turn-c" } },
+    { type: "event_msg", timestamp: "2026-09-29T11:05:00.000Z", payload: { type: "agent_message", message: `Later commentary.\n${DECISION_VERDICT}` } },
+    { type: "event_msg", timestamp: "2026-09-29T11:06:00.000Z", payload: { type: "task_complete", turn_id: "turn-c" } },
+  ]);
+  obligation(child, "turn-b", { endedAt: "2026-09-29T11:03:00.000Z" });
+  const { ports, sent } = harness([child], {
+    finalMessage: (id, turnId) => spawnNoticeFinalMessage(id, text => text, { turnId }),
+  });
+
+  await sweepSpawnNotices(ports);
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.text.split("\n").filter(line => line === DECISION_REPLY_HINT)).toHaveLength(expectedHints);
+});
+
+test.each([
+  { bText: null, expectedHints: 0 },
+  { bText: DECISION_VERDICT, expectedHints: 1 },
+])("a Claude notice reads only assistant text inside the selected turn ($expectedHints hints)", async ({ bText, expectedHints }) => {
+  const child = nextChild();
+  installClaudeTranscript(child, [
+    { type: "assistant", timestamp: "2026-09-29T11:01:00.000Z", message: { role: "assistant", content: [{ type: "text", text: DECISION_VERDICT }] } },
+    { type: "user", timestamp: "2026-09-29T11:02:00.000Z", message: { role: "user", content: "Turn B" } },
+    ...(bText ? [{ type: "assistant", timestamp: "2026-09-29T11:02:30.000Z", message: { role: "assistant", content: [{ type: "text", text: bText }] } }] : []),
+  ]);
+  obligation(child, "turn-b", { startedAt: "2026-09-29T11:02:00.000Z", endedAt: "2026-09-29T11:03:00.000Z" });
+  const { ports, sent } = harness([child], {
+    finalMessage: (id, turnId, turn) => spawnNoticeFinalMessage(id, text => text, {
+      turnId, turnStartedAt: turn?.startedAt, turnEndedAt: turn?.endedAt,
+    }),
+  });
+
+  await sweepSpawnNotices(ports);
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.text.split("\n").filter(line => line === DECISION_REPLY_HINT)).toHaveLength(expectedHints);
+});
+
+test.each([
+  { caseName: "one MiB plus", finalBytes: 1_048_600 },
+  { caseName: "near the 8 MiB record limit", finalBytes: 8 * 1_048_576 - 512 },
+])("the production reader finds a verdict in a supported large Codex final ($caseName) while the notice quote stays capped", async ({ finalBytes }) => {
+  const child = nextChild();
+  const finalText = `${"x".repeat(finalBytes - DECISION_VERDICT.length - 1)}\n${DECISION_VERDICT}`;
+  const transcript = installCodexTranscript(child, [
+    { type: "event_msg", timestamp: "2026-09-29T11:02:00.000Z", payload: { type: "task_started", turn_id: "turn-large" } },
+    { type: "event_msg", timestamp: "2026-09-29T11:03:00.000Z", payload: { type: "task_complete", turn_id: "turn-large", last_agent_message: finalText } },
+  ]);
+  expect(fs.statSync(transcript).size).toBeGreaterThan(131_072);
+  if (finalBytes > 4 * 1_048_576) {
+    const finalRecord = fs.readFileSync(transcript, "utf8").split("\n")[1]!;
+    expect(Buffer.byteLength(finalRecord)).toBeGreaterThan(4 * 1_048_576);
+    expect(Buffer.byteLength(finalRecord)).toBeLessThanOrEqual(8 * 1_048_576);
+  }
+  obligation(child, "turn-large", { endedAt: "2026-09-29T11:03:00.000Z" });
+  const { ports, sent } = harness([child], {
+    finalMessage: (id, turnId) => spawnNoticeFinalMessage(id, text => text, { turnId }),
+  });
+
+  await sweepSpawnNotices(ports);
+
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.text.split("\n").slice(1, 3)).toEqual([DECISION_VERDICT, DECISION_REPLY_HINT]);
+  expect(sent[0]!.text).toContain(`[… cut: ${Buffer.byteLength(finalText) - SPAWN_NOTICE_FINAL_MESSAGE_BYTES} bytes more — conversation_messages conversationId=${child}]`);
+  expect(Buffer.byteLength(sent[0]!.text.split("\n").at(-2)!)).toBe(SPAWN_NOTICE_FINAL_MESSAGE_BYTES);
 });
 
 test("an uncertain answer retries under the same key and fails only after the bound", async () => {
@@ -235,6 +424,17 @@ test("opt-out, no launcher and a contained child owe nothing", () => {
   }
   expect(recordSpawnTurnEnded({ ...turn, conversationId: "conversation_unknown" }, { child: () => null, record: record as never })).toBe(false);
   expect(recorded).toEqual([]);
+});
+
+test("a contained decision turn produces no notice", async () => {
+  const child = nextChild();
+  const view = { conversationId: child, launcher: { conversationId: LAUNCHER, notify: true }, contained: true } as const;
+  const turn = { conversationId: child, turnId: "turn-contained", outcome: "completed" as const, startedAt: null, endedAt: new Date(T0).toISOString() };
+  expect(recordSpawnTurnEnded(turn, { child: () => view as never, record: store.recordSpawnNoticeObligation })).toBe(false);
+  expect(store.readSpawnNoticeTurn(child, turn.turnId)).toBeNull();
+  const { ports, sent } = harness([child], { finalMessage: () => ({ text: DECISION_VERDICT, error: null }) });
+  await sweepSpawnNotices(ports);
+  expect(sent).toHaveLength(0);
 });
 
 test("a gone or archived launcher is skipped with the reason and nothing is delivered", async () => {
@@ -316,9 +516,14 @@ test("no loop: a notice-started turn of a worker notifies only the worker's own 
   expect(store.readSpawnNoticeTurn(child, "turn-self")).toMatchObject({ state: "skipped", reason: "self" });
 });
 
-test("coalescing: turns within 30 s fold into one notice, and a busy child holds", async () => {
+test.each([
+  { outcome: "completed", final: DECISION_VERDICT, hasHint: true },
+  { outcome: "completed", final: "Verdict: pass", hasHint: false },
+  { outcome: "interrupted", final: DECISION_VERDICT, hasHint: false },
+] as const)("coalescing uses the newest turn ($outcome, $final) after the window and busy hold", async ({ outcome, final, hasHint }) => {
   const child = nextChild();
-  const h = harness([child]);
+  let finalText: string = DECISION_VERDICT;
+  const h = harness([child], { finalMessage: () => ({ text: finalText, error: null }) });
   obligation(child, "turn-a", { endedAt: new Date(T0).toISOString() });
   await sweepSpawnNotices(h.ports);
   expect(h.sent).toHaveLength(1);
@@ -326,7 +531,8 @@ test("coalescing: turns within 30 s fold into one notice, and a busy child holds
   /* Three more turns end inside the window: nothing goes out until it closes. */
   obligation(child, "turn-b", { endedAt: new Date(T0 + 5_000).toISOString(), outcome: "interrupted" });
   obligation(child, "turn-c", { endedAt: new Date(T0 + 10_000).toISOString() });
-  obligation(child, "turn-d", { endedAt: new Date(T0 + 20_000).toISOString() });
+  obligation(child, "turn-d", { endedAt: new Date(T0 + 20_000).toISOString(), outcome });
+  finalText = final;
   h.clock.now = T0 + 1_000 + SPAWN_NOTICE_COALESCE_MS - 1;
   await sweepSpawnNotices(h.ports);
   expect(h.sent).toHaveLength(1);
@@ -342,7 +548,8 @@ test("coalescing: turns within 30 s fold into one notice, and a busy child holds
   await sweepSpawnNotices(h.ports);
   expect(h.sent).toHaveLength(2);
   expect(h.sent[1]!.clientMessageId).toBe(spawnNoticeMessageId(child, "turn-d"));
-  expect(h.sent[1]!.text).toContain("Turn completed · ran 12m 24s · 3 turns since the last notice (interrupted among the earlier ones)");
+  expect(h.sent[1]!.text).toContain(" · ran 12m 24s · 3 turns since the last notice (interrupted among the earlier ones)");
+  expect(h.sent[1]!.text.split("\n").filter(line => line === DECISION_REPLY_HINT)).toHaveLength(hasHint ? 1 : 0);
   for (const turnId of ["turn-b", "turn-c", "turn-d"]) {
     expect(store.readSpawnNoticeTurn(child, turnId)).toMatchObject({ state: "sent", clientMessageId: h.sent[1]!.clientMessageId });
   }
@@ -441,6 +648,7 @@ test("a lost launch sends its reason and task moves once even with a busy child 
   expect(sent[0]!.text).toContain("Launch lost-fixture failed: no rollout found for thread id");
   expect(sent[0]!.text).toContain("Task task-loss: launch row failed, assigned → assigned");
   expect(sent[0]!.text).toContain("original key replays this failure");
+  expect(sent[0]!.text).not.toContain(DECISION_REPLY_HINT);
   expect(sent[0]!.conversationId).toBe(LAUNCHER);
   await sweepSpawnNotices(ports);
   expect(sent).toHaveLength(2);
