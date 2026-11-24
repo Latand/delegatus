@@ -21,7 +21,8 @@ import { deepFreeze } from "@/lib/deepFreeze";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, DatabaseReplacedError, openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
-import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { normalizeProjectOwnership, type HeldDelivery, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import type { CarrierSource } from "@/lib/accounts/projectAccountsView";
 import { agentStateMetricsForStorage, type AgentProjection, type AgentStateJournal, type AgentStateMetricsRow } from "@/lib/agentState/model";
 
 /** Non-enumerable per-transaction accessor attached to lazy `RegistryFile` views
@@ -463,7 +464,22 @@ export function deliveryPredecessorSelections(conversationId: string, delivery: 
       { sql: prefix + " = ?", values: [...values, delivery.admissionSeq] }];
 }
 
+// Keep the turn state in the leading equality keys so SQLite can prefer this
+// covering index to the general collection/row_order index.
+const carrierTurn = "json_extract(value_json,'$.turn.state')";
+const busyCarrierRows = `collection='conversations' AND ${carrierTurn}='busy'`;
+const carrierColumns = {
+  engine: "json_extract(value_json,'$.engine')",
+  accountId: "json_extract(value_json,'$.generations[#-1].accountId')",
+  path: "json_extract(value_json,'$.generations[#-1].path')",
+  ownershipProject: "json_extract(value_json,'$.projectOwnership.project')",
+  ownershipSource: "json_extract(value_json,'$.projectOwnership.source')",
+  project: "json_extract(value_json,'$.generations[#-1].launchProfile.project')",
+  cwd: "json_extract(value_json,'$.generations[#-1].launchProfile.cwd')",
+};
+const carrierSelect = Object.entries(carrierColumns).map(([name, expr]) => `${expr} AS ${name}`).join(",");
 const registryRowIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS registry_busy_carriers ON registry_rows(collection,${carrierTurn},row_order,row_key,${Object.values(carrierColumns).join(",")}) WHERE ${busyCarrierRows}`,
   "CREATE INDEX IF NOT EXISTS registry_rows_collection_order ON registry_rows(collection, row_order)",
   "CREATE INDEX IF NOT EXISTS registry_state_page ON registry_rows(collection,json_extract(value_json,'$.state'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_migration_page ON registry_rows(collection,json_extract(value_json,'$.migration.phase'),row_key)",
@@ -2375,6 +2391,27 @@ export class SqliteAgentRegistryStore {
       try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
     }
+  }
+
+  /** Called inside the keyed read that also supplies routing and quota metadata. */
+  busyAccountCarriers(): CarrierSource[] {
+    // A legacy registry has only registry_rows. The archive view excludes cold
+    // mappings even if their retained payload still describes a busy turn.
+    const source = this.recordsSource === "registry_records" ? "registry_hot_rows" : "registry_rows";
+    const rows = this.db.query<{
+      engine: CarrierSource["engine"]; accountId: string; path: string;
+      ownershipProject: string | null; ownershipSource: string | null; project: string | null; cwd: string | null;
+    }, []>(`SELECT ${carrierSelect} FROM ${source} WHERE ${busyCarrierRows}
+        AND ${carrierColumns.engine} IN ('claude','codex') AND ${carrierColumns.accountId} IS NOT NULL
+      ORDER BY row_order`).all();
+    return rows.filter(row => row.accountId).map(row => ({
+      engine: row.engine,
+      busy: true,
+      path: row.path,
+      accountId: row.accountId,
+      ownership: normalizeProjectOwnership({ project: row.ownershipProject, source: row.ownershipSource }),
+      launchProfile: { project: row.project, cwd: row.cwd },
+    }));
   }
 
   /** Indexed keys only, including cold history. Payload reads are bounded by

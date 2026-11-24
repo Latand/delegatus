@@ -47,6 +47,7 @@ import { accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import { readRetiredAccountIds, retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { noteWriterAdmitted } from "@/lib/state/admissionWitness";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
+import type { CarrierSource } from "@/lib/accounts/projectAccountsView";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import { admitAutomaticAccountTarget, placedAccountHolds } from "@/lib/accounts/projectSelection";
 import {
@@ -11340,6 +11341,27 @@ export class AgentRegistry {
       route.revision += 1;
       return route.revision;
     }));
+  }
+
+  /** Read carrier inputs and both engines' selection metadata at one registry revision. */
+  projectAccountBindingFacts() {
+    return this.readKeyed(file => {
+      const carriers: CarrierSource[] = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore.busyAccountCarriers()
+        : Object.values(file.conversations).flatMap((row): CarrierSource[] => {
+          const latest = row.generations.at(-1);
+          if (row.turn.state !== "busy" || !latest?.accountId || (row.engine !== "claude" && row.engine !== "codex")) return [];
+          return [{
+            engine: row.engine,
+            busy: true,
+            path: latest.path,
+            accountId: latest.accountId,
+            ownership: row.projectOwnership,
+            launchProfile: latest.launchProfile,
+          }];
+        });
+      return { carriers, engineRouting: file.engineRouting, quotaObservations: file.quotaObservations };
+    }, { skipColdKeyInitialization: true });
   }
 
   engineRouting(engine: AgentEngine): { activeAccountId: string | null; revision: number } {

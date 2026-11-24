@@ -11,7 +11,6 @@ import {
   carryingAccountIds,
   projectEngineAccounts,
   type BoundAccount,
-  type CarrierConversation,
 } from "@/lib/accounts/projectAccountsView";
 import {
   AccountProjectBindingsUnreadableError,
@@ -21,7 +20,6 @@ import {
   type BindingEngine,
 } from "@/lib/accounts/projectBindings";
 import { agentRegistry } from "@/lib/agent/registry";
-import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import { headCwd } from "@/lib/agent/transcript";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
@@ -38,43 +36,12 @@ function accountsFor(engine: BindingEngine): BoundAccount[] {
     .map((account) => ({ accountId: account.id, label: account.label }));
 }
 
-/**
- * Every registered conversation reduced to the carrier shape, each one keyed to
- * its project by the same resolution the reseat fence uses — fallback included,
- * so an ADOPTED conversation (empty launch profile) is still attributed to the
- * project it is carrying work for instead of dropping out of the view.
- */
-function carriers(): CarrierConversation[] {
-  const snapshot = agentRegistry().readOnlySnapshot();
-  return carrierConversations(
-    /* Only a busy conversation carries an account, and the archive never takes
-       one with an open turn: the archived history has nothing to add, and
-       reading it cost every request a pass over the whole history (#2761). */
-    hotRegistryRows(snapshot, "conversations").flatMap(([, conversation]) => {
-      const generation = conversation.generations.at(-1);
-      /* Project account bindings cover Claude and Codex. */
-      if (!generation || conversation.engine === "copilot" || conversation.engine === "antigravity") return [];
-      return [{
-        engine: conversation.engine,
-        busy: conversation.turn.state === "busy",
-        accountId: generation.accountId,
-        ownership: conversation.projectOwnership,
-        launchProfile: generation.launchProfile,
-        path: generation.path,
-      }];
-    }),
-    /* Only reached for a conversation that names no project of its own, and
-       only for the busy ones — see carrierConversations. */
-    (transcript) => {
-      const cwd = headCwd(transcript);
-      return cwd ? projectForCwd(cwd) : null;
-    },
-  );
-}
-
 function projectView(project: string, bindings = accountProjectBindings()) {
-  const carrying = carriers();
-  const snapshot = agentRegistry().readOnlySnapshot();
+  const facts = agentRegistry().projectAccountBindingFacts();
+  const carrying = carrierConversations(facts.carriers, (transcript) => {
+    const cwd = headCwd(transcript);
+    return cwd ? projectForCwd(cwd) : null;
+  });
   const now = Date.now();
   const displayNames = projectAliasSnapshot().displayNames;
   /* Deliberate choices of an account outside this project's pool. Read once for
@@ -91,9 +58,9 @@ function projectView(project: string, bindings = accountProjectBindings()) {
         project,
         engine,
         accounts: catalog,
-        observations: Object.values(snapshot.quotaObservations[engine]),
+        observations: Object.values(facts.quotaObservations[engine]),
         bindings,
-        preferredId: snapshot.engineRouting[engine].activeAccountId ?? (engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId()),
+        preferredId: facts.engineRouting[engine].activeAccountId ?? (engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId()),
         now,
       });
       return [engine, {
