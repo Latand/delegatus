@@ -41,9 +41,11 @@ export const rolePrivacyEffectScenarios = ["preparation-codex", "preparation-cla
   ...["refused-writer", "refused-unregister", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "unregister", "release", "native", "late-native", "unreadable", "reaper", "retry-twice", "retry-uncertain", "retry-twice-native", "retry-uncertain-native", "retry-twice-late-native"].flatMap(mode =>
     ["codex", "claude"].map(engine => `unsettled-${mode}-${engine}`))] as const;
 
-export function registerRolePrivacyEffects(part: 0 | 1 | 2, testFile: string): void {
+// Each case starts a fresh Bun test process. Distribute them across six
+// independently supervised files to fit the publication gate's file budget.
+export function registerRolePrivacyEffects(part: 0 | 1 | 2 | 3 | 4 | 5, testFile: string): void {
   afterEach(shutdownTaskPageWorker);
-  test.each(rolePrivacyEffectScenarios.filter((_, index) => index % 3 === part))(
+  test.each(rolePrivacyEffectScenarios.filter((_, index) => index % 6 === part))(
   "an immutable stale first-message effect preserves execution evidence: %s", async scenario => {
   const preparation = scenario.startsWith("preparation-");
   const stagedPreparation = scenario === "preparation-staged-codex";

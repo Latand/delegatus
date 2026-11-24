@@ -82,7 +82,7 @@ export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string
         return row ? { superseded: Boolean(row.supersededBy), hasGeneration: row.generations.length > 0,
           project: project ? canonicalProject(project) : null } : null;
       },
-    }).some(current => current.conversationId === id)) {
+    }, id).length > 0) {
       const launched = profile?.workspace && !profile.workspace.fromMessage ? profile.workspace : undefined;
       const principal = launched ?? seat.workspace;
       return principal ? bound(principal, !launched && seat.fromMessage) : { principal: null, fromMessage: false };
