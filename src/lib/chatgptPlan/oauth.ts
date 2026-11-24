@@ -178,6 +178,7 @@ export class PlanOAuth {
       this.check(attempt);
       const models = tokens.scopes.includes(PLAN_SCOPE)
         ? await listPlanModels(this.oidc.http, tokens.accessToken, deadline).catch(() => undefined) : undefined;
+      const acknowledged = saved.acknowledged;
       const previous = JSON.stringify(saved);
       await this.store.transaction("credentials", async () => {
         const current = await this.store.credentials();
@@ -185,7 +186,7 @@ export class PlanOAuth {
         if (JSON.stringify(current) !== previous) throw new PlanError("busy");
         this.store.write("credentials", {
           version: 1, issuer: ISSUER, clientId, ...identity, tokens, models,
-          savedAt: this.now(), acknowledged: saved.acknowledged,
+          savedAt: this.now(), acknowledged,
         } satisfies Credentials);
       });
       this.settle(attempt);

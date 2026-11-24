@@ -1,4 +1,4 @@
-import { createPublicKey, verify, type JsonWebKey } from "node:crypto";
+import { createPublicKey, verify, type JsonWebKeyInput } from "node:crypto";
 import { boundedJson, ISSUER, object } from "./constants";
 import { PlanError } from "./errors";
 import type { PlanOidc } from "./oidc";
@@ -32,7 +32,7 @@ export async function validateIdentity(oidc: PlanOidc, idToken: string, clientId
     && (key.use === undefined || key.use === "sig") && (key.alg === undefined || key.alg === "RS256"));
   if (!key) throw invalid();
   try {
-    if (!verify("RSA-SHA256", Buffer.from(`${headerPart}.${payloadPart}`), createPublicKey({ key: key as JsonWebKey, format: "jwk" }),
+    if (!verify("RSA-SHA256", Buffer.from(`${headerPart}.${payloadPart}`), createPublicKey({ key: key as JsonWebKeyInput["key"], format: "jwk" }),
       Buffer.from(signature, "base64url"))) throw invalid();
   } catch { throw invalid(); }
   const email = payload.email;

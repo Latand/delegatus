@@ -115,7 +115,9 @@ test("declined plan permission keeps the verified account and another subject ca
   let different = false;
   const fixture = create(url => {
     if (url === discovery.jwks_uri) return jwks();
-    return Response.json({ ...grant(nonce), scope: "openid email", ...(different ? { id_token: jwt(nonce, { sub: "another-subject" }) } : {}) });
+    const { refresh_token: _refresh, ...identityGrant } = grant(nonce);
+    return Response.json({ ...identityGrant, scope: "openid email",
+      ...(different ? { id_token: jwt(nonce, { sub: "another-subject" }) } : {}) });
   });
   const first = params(await fixture.oauth.start(false, allowed));
   nonce = first.get("nonce")!;
@@ -123,6 +125,7 @@ test("declined plan permission keeps the verified account and another subject ca
   await until(() => !fixture.oauth.pending);
   const saved = await fixture.store.credentials();
   expect(saved?.tokens?.scopes).toEqual(["openid", "email"]);
+  expect(saved?.tokens?.refreshToken).toBeUndefined();
   expect(fixture.requests.some(request => request.url === modelsUrl)).toBe(false);
 
   different = true;
@@ -132,6 +135,23 @@ test("declined plan permission keeps the verified account and another subject ca
   await until(() => !fixture.oauth.pending);
   expect(fixture.oauth.reason).toBe("account_mismatch");
   expect(await fixture.store.credentials()).toEqual(saved);
+});
+
+test("a plan grant without a refresh token cannot activate the registration", async () => {
+  let nonce = "";
+  const fixture = create(() => {
+    const { refresh_token: _refresh, ...incomplete } = grant(nonce);
+    return Response.json(incomplete);
+  });
+  const first = params(await fixture.oauth.start(false, allowed));
+  nonce = first.get("nonce")!;
+  await http(callback(first));
+  await until(() => !fixture.oauth.pending);
+  expect(fixture.oauth.reason).toBe("reconnect_required");
+  const row = await fixture.store.credentials();
+  expect(row).toMatchObject({ clientId, pendingRegistration: true });
+  expect(row?.tokens).toBeUndefined();
+  expect(fixture.requests).toHaveLength(2);
 });
 
 test("cancel and deadline close the real loopback listener", async () => {

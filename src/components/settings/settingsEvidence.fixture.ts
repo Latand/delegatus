@@ -100,7 +100,8 @@ const PLAN_SCENES: Record<string, PlanStatus> = {
   declined: { state: "not_connected", reason: "declined" },
   unconfirmed: { state: "not_connected", revocationConfirmed: false },
   error: { state: "error", reason: "credential_file" },
-  member: { state: "connected" },
+  // Exercise a plan status retained while the Keys page switches to a member.
+  member: { state: "connected", account: { email: "Example account" } },
 };
 const planScene = params.get("chatgptplan") ?? "";
 let planStatus = PLAN_SCENES[planScene] ?? { state: "not_connected" };

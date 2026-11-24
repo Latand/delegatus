@@ -1,4 +1,4 @@
-import { boundedJson, ISSUER, object, RESOURCE } from "./constants";
+import { boundedJson, ISSUER, object, PLAN_SCOPE, RESOURCE } from "./constants";
 import { PlanError } from "./errors";
 import { epoch, textField, type TokenSet } from "./store";
 
@@ -7,7 +7,7 @@ const endpoints = ["authorization_endpoint", "token_endpoint", "revocation_endpo
 
 export class PlanOidc {
   private discovery?: Promise<Discovery>;
-  constructor(readonly http: typeof fetch = (...args) => fetch(...args)) {}
+  constructor(readonly http: typeof fetch = fetch) {}
 
   configuration(signal: AbortSignal): Promise<Discovery> {
     signal.throwIfAborted();
@@ -54,7 +54,7 @@ export class PlanOidc {
 
 export function readTokenSet(body: Record<string, unknown> | undefined, now: number, previous?: TokenSet): TokenSet {
   if (!body || typeof body.token_type !== "string" || body.token_type.toLowerCase() !== "bearer"
-    || !textField(body.access_token) || !textField(body.refresh_token)
+    || !textField(body.access_token) || (body.refresh_token !== undefined && !textField(body.refresh_token))
     || (body.id_token !== undefined && !textField(body.id_token))
     || (body.scope !== undefined && typeof body.scope !== "string")
     || typeof body.expires_in !== "number" || body.expires_in <= 0 || !epoch(now + body.expires_in * 1_000)) {
@@ -62,7 +62,11 @@ export function readTokenSet(body: Record<string, unknown> | undefined, now: num
   }
   const idToken = body.id_token ?? previous?.idToken;
   const scopes = typeof body.scope === "string" ? body.scope.split(/\s+/).filter(Boolean) : previous?.scopes;
-  if (!idToken || !scopes) throw new PlanError("reconnect_required");
+  // Identity-only consent may omit offline_access. A plan grant still needs
+  // a refresh token, and every successful renewal must supply a replacement.
+  if (!idToken || !scopes || ((previous || scopes.includes(PLAN_SCOPE)) && !body.refresh_token)) {
+    throw new PlanError("reconnect_required");
+  }
   const earliest = body.earliest_refresh_at;
   const earliestMs = typeof earliest === "number" ? earliest * 1_000 : typeof earliest === "string" ? Date.parse(earliest) : null;
   const access = body.access_token;

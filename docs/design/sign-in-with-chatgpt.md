@@ -579,12 +579,10 @@ flow has none:
   prove nothing because "OpenAI does not verify possession of the private
   key" (Deferred).
 - File: `statePath("chatgpt-plan", "host.json")`, holding
-  `{ "version": 1, "id": "urn:uuid:…" }`. It is written with
-  `writePrivate` (`src/lib/voiceCompanion/storage.ts:142-152`: parent
-  directory `0700`, exclusive create `0600`, fsync, rename, fsync of the
-  parent) under `withFileTransactionAsync`. It is created at the start of the
-  first sign-in attempt, before the browser opens, and never rewritten while
-  it exists.
+  `{ "version": 1, "id": "urn:uuid:…" }`. The plan store creates a private
+  `0700` directory and uses `writeTextDurably` for exclusive `0600` writes,
+  fsync and atomic rename under `withFileTransactionAsync`. Delegatus creates
+  the host ID before opening the first sign-in page and reuses it thereafter.
 - One host per state directory. Release succession keeps the directory, so it
   keeps the host. A staging Viewer refuses sign-in, so it has no host.
 - A malformed `host.json` refuses sign-in with "Restore the host identity
@@ -651,8 +649,8 @@ flow has none:
    one fresh authorization with the retained issued client ID, never a new
    registration.
 9. The token response must carry `token_type` bearer, `expires_in` > 0, a
-   non-empty `access_token`, a `refresh_token` (the grant includes
-   `offline_access`), an `id_token` and a `scope` string. Verify the ID token
+   non-empty `access_token`, an `id_token` and a `scope` string. Plan-enabled
+   grants also require a `refresh_token`. Verify the ID token
    as in §4.5: RS256 with a key from `jwks_uri`, `iss`, `aud` (and `azp` when
    `aud` has several entries), `exp` with 5 s tolerance, `nonce` and a
    non-empty `sub`. On reauthorization, `sub` must equal the saved subject;
@@ -693,8 +691,8 @@ Its fields:
   `pendingRotation` while a refreshed ID token is unverified (§8.6);
 - `signedOut` with `revocationConfirmed` after a sign-out (§8.7).
 
-Writes use `writePrivate` (§8.3) under `withFileTransactionAsync` on this
-file. Reads use `O_NOFOLLOW` and refuse a file that is not a regular file,
+Writes use the host ID's durable writer (§8.3) under
+`withFileTransactionAsync`. Reads use `O_NOFOLLOW` and refuse a file that is not a regular file,
 that exceeds 64 KiB, or whose mode lets group or other read it. They also
 refuse a directory or file owned by another uid. A refused or corrupt file
 leaves its bytes in place and reports "Restore the credential file or sign in
@@ -730,10 +728,10 @@ Steps:
 1. Read the file. If `expiresAt - now > 60 s` and there is no
    `pendingRotation`, return the token. The file is a few KB, read per
    request; it is not cached.
-2. Otherwise refresh. Wait until `earliestRefreshAt` when it is in the
-   future; if the access token has already expired and that wait remains,
-   answer `retry_later`. Take `withFileTransactionAsync(credentials.json)`
-   with a 15 s wait bound. Re-read inside the lock: a newer `expiresAt`
+2. Otherwise check refresh eligibility. If `earliestRefreshAt` is in the
+   future, use the current access token while it remains valid and answer
+   `retry_later` after it expires. Take the file transaction on
+   `credentials.json` with a 15 s wait bound. Re-read inside the lock: a newer `expiresAt`
    means another process refreshed, so use its token.
 3. `POST` the refresh grant (§4.7) with no `scope`. Deadline 15 s, below the
    lock's 30 s staleness bound (`src/lib/state/fileTransaction.ts:12`).
@@ -764,14 +762,16 @@ synchronously on the lock.
 
 `DELETE /api/chatgpt-plan` (owner gate) runs these steps:
 
-1. Mark the record `signedOut` so new plan requests stop.
+1. Mark the record `signedOut`, clear the persisted access, refresh and ID
+   tokens, and keep the issued client ID, subject, email label and host ID.
+   New plan requests stop. Keep the refresh token in memory for revocation
+   and record remote revocation as unconfirmed.
 2. `POST` the discovery `revocation_endpoint` with `token=<refresh token>`,
    `token_type_hint=refresh_token` and `client_id`. HTTP 200 is success. A
    5xx or network error is retried twice with 300 ms and 1 s backoff, about
    10 s in total.
-3. Clear the access, refresh and ID tokens either way. Keep the issued client
-   ID, subject, email label and host ID, so the next sign-in reuses the
-   registration (§4.8).
+3. Record confirmation on success. If the process exits during revocation,
+   the record remains signed out with remote revocation unconfirmed.
 4. Answer `{ revocationConfirmed }`. When it is false, the row says "Signed
    out here. OpenAI did not confirm the sign-out; disconnect Delegatus in
    ChatGPT settings." and links to ChatGPT settings.
@@ -897,6 +897,7 @@ It uses the existing `KeyRow` layout and the row menu of
 | Reconnect needed | "Sign in again to keep using your ChatGPT plan." | **Continue with ChatGPT** |
 | Remote browser | "Sign in from a browser on the computer that runs Delegatus." | none |
 | Staging | "Not available on a staging Viewer." | none |
+| Team member | "The ChatGPT plan is available to the owner." | none |
 
 - **First use.** After the first successful connection, the row shows once:
   "You're using your ChatGPT plan. Eligible requests in Delegatus use your

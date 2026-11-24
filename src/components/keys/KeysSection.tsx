@@ -690,8 +690,8 @@ function ChatGPTPlanRow({ size, owner, plan }: { size: Size; owner: boolean; pla
         <div className="flex min-w-0 flex-1 flex-col gap-px">
           <span className="font-semibold text-body text-primary">{t("chatgptPlan.title")}</span>
           <span className={`break-words font-medium leading-4 text-muted ${sheet ? "text-label" : "text-ui"}`} role="status">
-            {modelMissing ? t("chatgptPlan.modelMissing") : t(`chatgptPlan.state.${state}`)}
-            {status.account?.email ? <> · {status.account.email}</> : null}
+            {!owner ? t("chatgptPlan.ownerOnly") : modelMissing ? t("chatgptPlan.modelMissing") : t(`chatgptPlan.state.${state}`)}
+            {owner && status.account?.email ? <> · {status.account.email}</> : null}
           </span>
         </div>
         {owner && canSignOut ? <IconButton label={t("chatgptPlan.menu")} coarse={coarse} disabled={busy}

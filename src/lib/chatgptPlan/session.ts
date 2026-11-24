@@ -61,10 +61,12 @@ export class PlanSession {
     } catch { return false; }
   }
 
-  private requireConnection(row: Credentials | undefined, model: string): asserts row is Credentials & { tokens: NonNullable<Credentials["tokens"]> } {
+  private requireConnection(row: Credentials | undefined, model: string): asserts row is Credentials & {
+    tokens: NonNullable<Credentials["tokens"]> & { refreshToken: string };
+  } {
     const reason = this.unavailable(row, model);
     if (reason) throw new PlanError(reason);
-    if (!row?.tokens) throw new PlanError("not_connected");
+    if (!row?.tokens?.refreshToken) throw new PlanError("not_connected");
   }
 
   private reconnect(row: Credentials, reason: "reconnect_required" | "client_rejected"): never {

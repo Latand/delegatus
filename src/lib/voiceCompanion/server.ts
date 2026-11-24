@@ -9,7 +9,6 @@ import { CodexLiveProvider } from "./codexProvider";
 import { CompanionLiveSessions } from "./liveSession";
 import { voiceToolSessions } from "@/lib/voiceTools/sessions";
 import { existingTeamStore } from "@/lib/team/store";
-import { chatgptPlan } from "@/lib/chatgptPlan/session";
 import { teamMode } from "@/lib/team";
 import { voiceTimers } from "./voiceTimersServer";
 
@@ -22,7 +21,7 @@ export function companionSessions(): CompanionLiveSessions {
     const admission = new CompanionAdmission(storage, companionDeliveryPaths);
     const service = new CompanionLiveSessions(storage, admission, new CompanionBoardReads(companionBoardReadPaths),
       new OpenAILiveProvider(), { codexProvider: new CodexLiveProvider(), memory: new CallMemory(storage, admission.records), voiceTimers: voiceTimers(),
-        plan: { eligible: model => chatgptPlan().eligible(model), owner: starter => {
+        plan: { eligible: async model => (await import("@/lib/chatgptPlan/session")).chatgptPlan().eligible(model), owner: starter => {
           if ("operator" in starter) return teamMode() === "solo";
           const member = existingTeamStore()?.member(starter.memberId);
           return member?.role === "owner" && member.status === "active";

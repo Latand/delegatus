@@ -5,6 +5,7 @@ import type { en } from "./en";
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
   "chatgptPlan.title": "План ChatGPT",
+  "chatgptPlan.ownerOnly": "План ChatGPT доступний власнику.",
   "chatgptPlan.intro": "Використовуйте план ChatGPT для текстових запитів голосового Delegatus.",
   "chatgptPlan.state.not_connected": "Не підключено",
   "chatgptPlan.state.connecting": "Завершіть вхід у вкладці браузера.",

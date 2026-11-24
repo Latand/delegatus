@@ -2099,7 +2099,10 @@ const PLAN_FRAMES = [
   planKeys("declined", "[data-chatgpt-plan-state='not_connected'] [data-chatgpt-plan-start]"),
   planKeys("unconfirmed", " a[href='https://chatgpt.com/settings']"),
   planKeys("error", "[data-chatgpt-plan-state='error']", noPlanAction),
-  planKeys("member", "[data-chatgpt-plan-state='connected']", noPlanAction),
+  planKeys("member", "[data-chatgpt-plan-state='connected']", async row => {
+    await noPlanAction(row);
+    if ((await row.innerText()).includes("Example account")) throw new Error("A member saw the plan owner's account");
+  }),
   { surface: "voice", name: "chatgpt-plan-billing", scene: "voice-file", section: "voice",
     query: "chatgptplan=billing&dev=default", details: true, defining: "[data-chatgpt-plan-billing='plan']" },
   { surface: "voice", name: "chatgpt-plan-fallback", scene: "voice-file", section: "voice",

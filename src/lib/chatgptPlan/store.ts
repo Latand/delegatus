@@ -4,12 +4,12 @@ import { join } from "node:path";
 import { statePath } from "@/lib/configDir";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { writeTextDurably } from "@/lib/state/durableJson";
-import { ISSUER, clientIdValid, object } from "./constants";
+import { ISSUER, PLAN_SCOPE, clientIdValid, object } from "./constants";
 import { PlanError } from "./errors";
 
 const MAX_BYTES = 64 * 1024;
 export type TokenSet = {
-  accessToken: string; refreshToken: string; idToken: string; expiresAt: number;
+  accessToken: string; refreshToken?: string; idToken: string; expiresAt: number;
   earliestRefreshAt?: number; scopes: string[]; refreshedAt: number;
 };
 export type Credentials = {
@@ -91,9 +91,11 @@ export class PlanStore {
       || (row.reconnect !== undefined && row.reconnect !== "reconnect_required" && row.reconnect !== "client_rejected")
       || (row.pendingRotation && !tokens)
       || (row.tokens !== undefined && (!tokens || !textField(row.subject) || !textField(tokens.accessToken)
-        || !textField(tokens.refreshToken) || !textField(tokens.idToken) || !epoch(tokens.expiresAt) || !epoch(tokens.refreshedAt)
+        || !textField(tokens.idToken) || !epoch(tokens.expiresAt) || !epoch(tokens.refreshedAt)
         || (tokens.earliestRefreshAt !== undefined && !epoch(tokens.earliestRefreshAt))
-        || !Array.isArray(tokens.scopes) || !tokens.scopes.every(textField)))) throw new PlanError("credential_file");
+        || !Array.isArray(tokens.scopes) || !tokens.scopes.every(textField)
+        || ((tokens.refreshToken !== undefined || row.pendingRotation || tokens.scopes.includes(PLAN_SCOPE))
+          && !textField(tokens.refreshToken))))) throw new PlanError("credential_file");
     return value as Credentials;
   }
 }

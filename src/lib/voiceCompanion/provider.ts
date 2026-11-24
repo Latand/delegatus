@@ -2,8 +2,6 @@ import type { Locale } from "./contract";
 import { liveSessionConfiguration, type BackendRequest, type planBackendRequest } from "./sessionConfig";
 import type { VoiceToolSnapshot } from "@/lib/voiceTools/snapshot";
 
-import { chatgptPlan } from "@/lib/chatgptPlan/session";
-
 export type LiveCommand = Record<string, unknown> & { type: string };
 /** What became of words handed to `speak`: voiced at the provider, possibly voiced, or never going to be. */
 export type SpeechOutcome = "handed" | "uncertain" | "withdrawn";
@@ -50,7 +48,8 @@ export class OpenAILiveProvider implements LiveProvider {
       if (!response.ok && response.status !== 404 && response.status !== 410) throw new Error("PROVIDER_ERROR");
     } catch { throw new Error("PROVIDER_ERROR"); }
   }
-  respondOnPlan(request: ReturnType<typeof planBackendRequest>, signal: AbortSignal, owner: () => boolean): Promise<unknown> {
+  async respondOnPlan(request: ReturnType<typeof planBackendRequest>, signal: AbortSignal, owner: () => boolean): Promise<unknown> {
+    const { chatgptPlan } = await import("@/lib/chatgptPlan/session");
     return chatgptPlan().respond(request, signal, owner);
   }
   async respond(key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown> {

@@ -5,6 +5,7 @@ import type { Dictionary } from "./core";
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
   "chatgptPlan.title": "ChatGPT plan",
+  "chatgptPlan.ownerOnly": "The ChatGPT plan is available to the owner.",
   "chatgptPlan.intro": "Use your ChatGPT plan for Voice Delegatus’s text turns.",
   "chatgptPlan.state.not_connected": "Not connected",
   "chatgptPlan.state.connecting": "Finish signing in in the browser tab.",
