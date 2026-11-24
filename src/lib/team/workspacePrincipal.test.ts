@@ -107,3 +107,42 @@ test("a transient read failure recovers without a file change", () => {
   finally { read.mockRestore(); }
   expect(conversationWorkspacePrincipal(chain(1), "conversation_0", store)).toBeNull();
 });
+
+test("workspace reach checks revocations against the caller's seat epoch", () => {
+  const store = teamStore();
+  const owner = { id: "m_owner", name: "Owner", role: "owner" as const, status: "active" as const, color: "teal" as const,
+    telegram: null, createdAt: AT, createdBy: "claim", revokedAt: null };
+  store.insertMember(owner);
+  store.insertMember({ ...owner, id: "m_member", name: "Member", role: "member" });
+  createWorkspace(store, owner, { id: W, name: "Alpha", projects: ["project-alpha"] });
+  store.putWorkspaceMember(W, "m_member", "member", owner.id, AT);
+
+  const caller = "conversation_worker";
+  const previous = "conversation_previous";
+  beginOrchestratorSeatIntent({ project: "project-beta", clientRequestId: "older-seat", mode: "existing", conversationId: "conversation_peer", now: AT, mandate: "Older seat" });
+  completeOrchestratorSeatIntent({ project: "project-beta", clientRequestId: "older-seat", conversationId: "conversation_peer", path: "peer.jsonl", now: AT });
+  beginOrchestratorSeatIntent({ project: "project-alpha", clientRequestId: "current-seat", mode: "existing", conversationId: caller, now: AT, mandate: "Current seat" });
+  completeOrchestratorSeatIntent({ project: "project-alpha", clientRequestId: "current-seat", conversationId: caller, path: "current.jsonl", now: AT });
+  store.admitConversationMember(caller, "m_member");
+  const seats = readOrchestratorSeatFile();
+  const epoch = seats.seats["project-alpha"]!.seatEpoch;
+  const revocation = { project: "project-alpha", conversationId: previous, seatEpoch: epoch - 1, revokedAt: AT };
+  seats.revocations.push(revocation);
+  writeStoredSeatRecord(seats);
+
+  const read: string[] = [];
+  const lookup = (id: string) => {
+    read.push(id);
+    return { id: id === previous ? caller : id, generations: [{ launchProfile: emptyLaunchProfile({
+      cwd: root, project: id === "conversation_peer" ? "project-beta" : "project-alpha",
+    }) }] } as RegistryConversation;
+  };
+  expect(conversationWorkspacePrincipal(lookup, caller, store)).toBeNull();
+  expect(read).not.toContain(previous);
+
+  revocation.seatEpoch = epoch;
+  writeStoredSeatRecord(seats);
+  read.length = 0;
+  expect(conversationWorkspacePrincipal(lookup, caller, store)).toEqual({ memberId: "m_member", workspaceId: W });
+  expect(read).toContain(previous);
+});

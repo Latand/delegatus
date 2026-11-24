@@ -89,23 +89,40 @@ export function authorizedManagerSeats(sources: ManagerAuthoritySources, callerI
   const seats = sources.activeSeats().filter(seat => seat.state === "active" && seat.conversationId);
   if (!seats.length) return [];
 
-  const currentClaims = (resolve: (id: string) => string) => {
+  const currentClaims = (rawResolve: (id: string) => string) => {
+    // Aliases can change between decisions, including through another connection.
+    const resolved = new Map<string, string>();
+    const resolve = (id: string) => {
+      const cached = resolved.get(id);
+      if (cached !== undefined) return cached;
+      const canonical = rawResolve(id);
+      resolved.set(id, canonical);
+      return canonical;
+    };
     const claims = new Map<string, OrchestratorSeat[]>();
     for (const seat of seats) {
       const id = resolve(seat.conversationId!);
       if (callerId !== undefined && callerId !== id) continue;
       claims.set(id, [...(claims.get(id) ?? []), seat]);
     }
-    const current: AuthorizedManagerSeat[] = [];
-    if (!claims.size) return current;
-    const newest = new Map<string, number>();
-    for (const revoked of sources.revocations()) {
-      const id = resolve(revoked.conversationId);
-      if (claims.has(id)) newest.set(id, Math.max(newest.get(id) ?? 0, revoked.seatEpoch));
-    }
+    const surviving = new Map<string, OrchestratorSeat>();
+    let minEpoch = Infinity;
     for (const [conversationId, group] of claims) {
       const seat = group[0]!;
       if (group.some(other => other.project !== seat.project)) continue;
+      surviving.set(conversationId, seat);
+      if (seat.seatEpoch < minEpoch) minEpoch = seat.seatEpoch;
+    }
+    const current: AuthorizedManagerSeat[] = [];
+    if (!surviving.size) return current;
+    const newest = new Map<string, number>();
+    for (const revoked of sources.revocations()) {
+      // Even an alias for a current claimant cannot revoke a newer designation.
+      if (revoked.seatEpoch < minEpoch) continue;
+      const id = resolve(revoked.conversationId);
+      if (surviving.has(id)) newest.set(id, Math.max(newest.get(id) ?? 0, revoked.seatEpoch));
+    }
+    for (const [conversationId, seat] of surviving) {
       if ((newest.get(conversationId) ?? 0) >= seat.seatEpoch) continue;
       current.push({ conversationId, path: seat.path, project: seat.project });
     }
