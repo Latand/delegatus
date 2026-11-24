@@ -5596,6 +5596,13 @@ test.each(["dead recipient", "started dispatch", "requeued dispatch"] as const)(
       expect((await settleDueSends({ registry, client, progress, now: () => now })).settled).toEqual([]);
       expect(registry.deliverySnapshotForOperation(operationId).deliveryOperationOwners[operationId]?.terminalState).toBeNull();
     }
+    progress.deadline(operationId, new Date(deadline).toISOString(), "failed-switch");
+    progress.note(operationId, conversation.id, { waitReason: "wake-lost" });
+    progress.note(operationId, conversation.id, { waitReason: "update-handoff" });
+    progress.note(operationId, conversation.id, { waitReason: "evidence-unreadable" });
+    expect(progress.get(operationId)).toMatchObject({
+      waitReason: "evidence-unreadable", deadlineAt: new Date(deadline).toISOString(), deadlinePolicy: "failed-switch",
+    });
     if (!started) registry.upsert({ ...registry.hostEntry(key)!, status: "dead" });
 
     queue.retire();
@@ -5648,6 +5655,70 @@ test.each(["dead recipient", "started dispatch", "requeued dispatch"] as const)(
   }
 });
 
+test("a retry admitted after failed-switch settlement gets a fresh window after restart", async () => {
+  const conversationId = ["5eed0012", "9999", "4999", "8999", "999999999999"].join("-");
+  const fixture = idleHostedConversation("failed-switch-settled-retry", conversationId);
+  const { registry, conversation } = fixture;
+  const journal = fixture.openJournal();
+  const client = runtimeJournalClient(journal);
+  const progressPath = path.join(fixture.directory, "delivery-progress.sqlite");
+  let now = Date.parse("2026-10-06T12:01:00.000Z");
+  let progress = new DeliveryProgressStore(progressPath, () => now);
+  const originalOperationId = "failed-switch-settled-original";
+  const retryOperationId = "failed-switch-settled-retry";
+  try {
+    setSystemTime(new Date(now));
+    registry.requestConversationReseat(conversation.id, "successor-account");
+    const held = registry.holdDelivery(conversation.id, "retry after settlement", originalOperationId,
+      "text", [], null, { operationId: originalOperationId });
+    const deadline = Date.parse(held.createdAt) + SEND_SETTLEMENT_WINDOW_MS;
+    progress.note(originalOperationId, conversation.id, { waitReason: "switch-failed", admittedAt: held.createdAt });
+    progress.deadline(originalOperationId, new Date(deadline).toISOString(), "failed-switch");
+    const migration = registry.conversation(conversation.id)!.migration!;
+    registry.transitionConversationMigration(conversation.id, migration.revision, [migration.phase], {
+      phase: "failed-recoverable", error: "successor failed",
+    });
+    journal.executeOperation({ kind: "send", operationId: originalOperationId, idempotencyKey: originalOperationId,
+      conversationId: conversation.id, text: "retry after settlement", policy: "queue" });
+    now = deadline;
+    setSystemTime(new Date(now));
+    const initial = await settleDueSends({ registry, client, progress, now: () => now,
+      onDeadline: (id, _, bound) => progress.deadline(id, bound?.deadlineAt ?? null, bound?.policy ?? null),
+    });
+    expect(initial.settled).toEqual([{ operationId: originalOperationId, state: "failed", duplicateRisk: false }]);
+    expect(registry.deliverySnapshotForOperation(originalOperationId).deliveryOperationOwners[originalOperationId]?.terminalState)
+      .toBe("failed");
+
+    now += 60_000;
+    setSystemTime(new Date(now));
+    registry.retryConversationMigration(conversation.id);
+    expect(registry.recordDeliveryRetryAttempt(originalOperationId, retryOperationId)).toBe(true);
+    journal.executeOperation({ kind: "send", operationId: retryOperationId, idempotencyKey: retryOperationId,
+      conversationId: conversation.id, text: "retry after settlement", policy: "queue" });
+    progress.note(retryOperationId, conversation.id, { waitReason: "queued", admittedAt: new Date(now).toISOString() });
+    progress.close();
+
+    const reopened = new AgentRegistry(registry.filename);
+    progress = new DeliveryProgressStore(progressPath, () => now);
+    const retryDeadline = now + SEND_SETTLEMENT_WINDOW_MS;
+    const firstSweep = await settleDueSends({ registry: reopened, client, progress, now: () => now,
+      onDeadline: (id, _, bound) => progress.deadline(id, bound?.deadlineAt ?? null, bound?.policy ?? null),
+    });
+    expect(firstSweep.settled).toEqual([]);
+    expect(reopened.deliverySnapshotForOperation(retryOperationId).deliveryOperationOwners[retryOperationId]?.terminalState).toBeNull();
+    expect(Date.parse(progress.get(retryOperationId)!.deadlineAt!)).toBe(retryDeadline);
+    now = retryDeadline;
+    const expired = await settleDueSends({ registry: reopened, client, progress, now: () => now,
+      onDeadline: (id, _, bound) => progress.deadline(id, bound?.deadlineAt ?? null, bound?.policy ?? null),
+    });
+    expect(expired.settled).toEqual([{ operationId: retryOperationId, state: "failed", duplicateRisk: false }]);
+  } finally {
+    progress.close();
+    journal.close();
+    setSystemTime();
+  }
+});
+
 test("a failed-switch deadline survives an in-progress retry without a switch hold", async () => {
   const retryConversationId = ["5eed0011", "9999", "4999", "8999", "999999999999"].join("-");
   const fixture = idleHostedConversation("failed-switch-retry", retryConversationId);
@@ -5659,6 +5730,7 @@ test("a failed-switch deadline survives an in-progress retry without a switch ho
   const retryOperationId = "failed-switch-retry-attempt";
 
   try {
+    setSystemTime(new Date("2026-10-06T12:01:00.000Z"));
     registry.requestConversationReseat(conversation.id, "successor-account");
     const migration = registry.conversation(conversation.id)!.migration!;
     const held = registry.holdDelivery(conversation.id, "delivery with a failed switch", originalOperationId,
@@ -5680,6 +5752,7 @@ test("a failed-switch deadline survives an in-progress retry without a switch ho
     registry.retryConversationMigration(conversation.id);
     expect(registry.conversation(conversation.id)?.migration?.phase).toBe("requested");
     expect(registry.switchHold(conversation.id)).toBeNull();
+    setSystemTime(new Date(originalDeadline - 60_000));
     expect(registry.recordDeliveryRetryAttempt(originalOperationId, retryOperationId)).toBe(true);
     journal.executeOperation({ kind: "send", operationId: retryOperationId, idempotencyKey: retryOperationId,
       conversationId: conversation.id, text: "delivery with a failed switch", policy: "queue" });
@@ -5700,6 +5773,7 @@ test("a failed-switch deadline survives an in-progress retry without a switch ho
   } finally {
     progress.close();
     journal.close();
+    setSystemTime();
   }
 });
 

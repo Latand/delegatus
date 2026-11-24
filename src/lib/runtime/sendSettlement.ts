@@ -770,8 +770,16 @@ function settlementSubjectForRow(
   const reservation = "state" in row ? row : file.heldDeliveries[row.deliveryId];
   const originalOperationId = reservation?.command.operationId ?? row.command.operationId;
   const retainedProgress = settlementProgress(ports, originalOperationId);
-  const retainedFailedSwitch = retainedProgress?.waitReason === "switch-failed"
-    || retainedProgress?.deadlinePolicy === "failed-switch";
+  const originalAcceptedAt = reservation ? parseTime(reservation.createdAt) : null;
+  const rowAcceptedAt = parseTime(row.createdAt);
+  const originalSettledAt = parseTime(file.deliveryOperationOwners[originalOperationId]?.settledAt);
+  const retainedFailedSwitch = (retainedProgress?.waitReason === "switch-failed"
+    || retainedProgress?.deadlinePolicy === "failed-switch")
+    && reservation !== undefined
+    && originalAcceptedAt !== null
+    && rowAcceptedAt !== null
+    && rowAcceptedAt <= failedSwitchDeadlineAt(originalAcceptedAt, ports)
+    && (originalSettledAt === null || rowAcceptedAt < originalSettledAt);
   const failedSwitch = (row.command.kind === "send" || row.command.kind === "steer")
     && (Boolean(conversation?.switchHold)
       || ("state" in row && row.state === "held" && conversation?.migration?.phase === "failed-recoverable")

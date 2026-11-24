@@ -2198,7 +2198,9 @@ export class StructuredDeliveryQueue {
          queue may have restarted since the switch failed. Its persisted
          progress record still prevents a possibly-started operation from
          being claimed by a replacement host. */
-      if (isMessageEffect(effect) && this.port.progress?.get(effect.operationId)?.waitReason === "switch-failed") {
+      const progress = isMessageEffect(effect) ? this.port.progress?.get(effect.operationId) : null;
+      if (isMessageEffect(effect) && (progress?.waitReason === "switch-failed"
+        || progress?.deadlinePolicy === "failed-switch")) {
         this.noteWait(effect, "switch-failed", { detail: "awaiting the original delivery receipt or settlement deadline" });
         return true;
       }
