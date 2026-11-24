@@ -240,6 +240,23 @@ test("account_limits accepts Copilot as an engine through the MCP protocol", asy
   });
 });
 
+test("account_limits accepts Antigravity as an engine through the MCP protocol", async () => {
+  let receivedEngine: unknown;
+  await withProtocolClient(inertBindings({
+    account_limits: async (args) => {
+      receivedEngine = args.engine;
+      return { count: 0, accounts: [] };
+    },
+  }), async (client) => {
+    const result = await client.callTool({
+      name: "account_limits",
+      arguments: { clientRequestId: "limits-antigravity-schema", engine: "antigravity" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(receivedEngine).toBe("antigravity");
+  });
+});
+
 test("every harmless bounded MCP numeric clamps, coerces, and defaults before its binding", async () => {
   const calls = new Map<McpToolName, Record<string, unknown>[]>();
   const bindings = inertBindings(Object.fromEntries(

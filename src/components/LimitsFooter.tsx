@@ -10,6 +10,7 @@ import { LIMITS_FRESHNESS_S, quotaAsEngineLimits, quotaReadingFromAccountLimits,
 import { LIMITS_RATE_LIMITED_REASON, LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits, type LimitsPayload, type LimitsProvenance, type LimitWindow } from "@/lib/types";
 
 import { AccountsPanel } from "./AccountsPanel";
+import { AntigravityFooterRow } from "./AntigravityFooterRow";
 import { CopilotFooterRow } from "./CopilotFooterRow";
 import { BurndownPanel } from "./BurndownPanel";
 import { TelegramFooterRow } from "./TelegramConnect";
@@ -49,27 +50,53 @@ export function fmtLimitsFailureReason(meta: LimitsProvenance, locale: Locale): 
     freshly added account has no transcripts, so its payload arrives with
     `codex: null`; without this guard the sticky merge would carry the previous
     account's percentages forward under the new account's name. */
-function accountChanged(previous: LimitsPayload | null, next: LimitsPayload, engine: "claude" | "codex" | "copilot"): boolean {
+function accountChanged(previous: LimitsPayload | null, next: LimitsPayload, engine: "claude" | "codex" | "copilot" | "antigravity"): boolean {
   if (!previous) return false;
-  const prevId = engine === "claude" ? previous.claudeAccountId ?? null : engine === "codex" ? previous.codexAccountId ?? null : previous.copilotAccountId ?? null;
-  const nextId = engine === "claude" ? next.claudeAccountId ?? null : engine === "codex" ? next.codexAccountId ?? null : next.copilotAccountId ?? null;
+  const prevId = engine === "claude"
+    ? previous.claudeAccountId ?? null
+    : engine === "codex"
+      ? previous.codexAccountId ?? null
+      : engine === "copilot"
+        ? previous.copilotAccountId ?? null
+        : previous.antigravityAccountId ?? null;
+  const nextId = engine === "claude"
+    ? next.claudeAccountId ?? null
+    : engine === "codex"
+      ? next.codexAccountId ?? null
+      : engine === "copilot"
+        ? next.copilotAccountId ?? null
+        : next.antigravityAccountId ?? null;
   if (prevId === null || nextId === null) return false;
   return prevId !== nextId;
+}
+
+function antigravityLimitExpired(limits: EngineLimits | null | undefined): boolean {
+  const session = limits?.session;
+  if (!session) return true;
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (session.resetsAt !== null) return session.resetsAt <= nowSec;
+  if (session.observedAt != null) return nowSec >= session.observedAt + (session.windowMinutes ?? 300) * 60;
+  return false;
 }
 
 export function stickyPayload(previous: LimitsPayload | null, next: LimitsPayload): LimitsPayload {
   const claudeChanged = accountChanged(previous, next, "claude");
   const codexChanged = accountChanged(previous, next, "codex");
   const copilotChanged = accountChanged(previous, next, "copilot");
+  const antigravityChanged = accountChanged(previous, next, "antigravity");
+  const antigravityCleared = next.antigravity === null && next.provenance.antigravity?.source === "unavailable";
+  const previousAntigravity = antigravityLimitExpired(previous?.antigravity) ? null : (previous?.antigravity ?? null);
   return {
     claude: claudeChanged ? next.claude : (next.claude ?? previous?.claude ?? null),
     // A switch clears the prior account's values. Same-account refreshes may
     // retain the last snapshot while provenance explains its freshness.
     codex: codexChanged ? next.codex : (next.codex ?? previous?.codex ?? null),
     copilot: copilotChanged ? next.copilot : (next.copilot ?? previous?.copilot ?? null),
+    antigravity: antigravityChanged || antigravityCleared ? (next.antigravity ?? null) : (next.antigravity ?? previousAntigravity),
     claudeAccountId: next.claudeAccountId ?? previous?.claudeAccountId ?? null,
     codexAccountId: next.codexAccountId ?? previous?.codexAccountId ?? null,
     copilotAccountId: next.copilotAccountId ?? previous?.copilotAccountId ?? null,
+    antigravityAccountId: next.antigravityAccountId ?? previous?.antigravityAccountId ?? null,
     provenance: next.provenance,
     staleSince: next.staleSince ?? null,
   };
@@ -444,6 +471,13 @@ export function LimitsFooter({ density }: { density: SidebarFooterDensity }) {
         limitsAccountId={snap?.data.copilotAccountId ?? null}
         now={now}
         onChanged={invalidateLimits}
+        density={density}
+      />
+      <AntigravityFooterRow
+        limits={snap?.data.antigravity ?? null}
+        limitsAccountId={snap?.data.antigravityAccountId ?? null}
+        now={now}
+        provenance={snap?.data.provenance.antigravity}
         density={density}
       />
       {/* The personal Telegram connector row (issue #1059) sits beside the

@@ -84,6 +84,7 @@ import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 import { activeClaudeAccountId, claudeAccountsForPrivacy, listClaudeAccounts } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsForPrivacy, listCodexAccounts } from "@/lib/accounts/codex";
 import { activeCopilotAccountId, copilotAccountsForPrivacy, listCopilotAccounts } from "@/lib/accounts/copilot";
+import { activeAntigravityAccountId, listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
 import {
   accountProjectBindings,
@@ -5989,11 +5990,13 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
       claude: listClaudeAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
       codex: listCodexAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent, spendCredits: account.spendCredits === true })),
       copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
+      antigravity: listAntigravityAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {
       claude: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
       codex: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
       copilot: snapshot.engineRouting.copilot.activeAccountId ?? activeCopilotAccountId(),
+      antigravity: snapshot.engineRouting.antigravity.activeAccountId ?? activeAntigravityAccountId(),
     },
     observations: snapshot.quotaObservations,
     project,
@@ -6010,15 +6013,17 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
  */
 function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const engine = text(args.engine);
-  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot") throw new Error("engine must be claude, codex or copilot");
+  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot" && engine !== "antigravity") {
+    throw new Error("engine must be claude, codex, copilot or antigravity");
+  }
   const accountId = text(args.accountId);
   const source = (dependencies.accountLimitsSource ?? productionAccountLimitsSource)();
   const accounts = accountLimitRows({
     ...source,
-    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" } : {}),
+    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" | "antigravity" } : {}),
     ...(accountId ? { accountId } : {}),
   });
-  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex or copilot"} account has the id ${accountId}`);
+  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex, copilot or antigravity"} account has the id ${accountId}`);
   return redactPayload({ count: accounts.length, accounts });
 }
 
