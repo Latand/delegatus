@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import sharp from "sharp";
 import path from "node:path";
+import { inspectOfficePackage } from "./officeDocuments";
 
 import { knownProviderSecretOffset } from "@/lib/accounts/providerSecretRedaction";
 import { BEARER_TOKEN, TOKEN_FAMILY_PATTERN } from "@/lib/view/compactText";
@@ -65,11 +66,20 @@ const MIME: Record<(typeof DOCUMENT_EXTENSIONS)[number], string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 };
 /* What a file is, by its extension. The shown name may change the extension
    only within its class: a text file is never shown as a PDF or an image,
    and an image is never shown as text, which would skip the text scan. */
-const TYPE_CLASS: Record<(typeof DOCUMENT_EXTENSIONS)[number], "text" | "pdf" | "image"> = {
+const OFFICE_MAIN_PART = {
+  xlsx: "xl/workbook.xml",
+  docx: "word/document.xml",
+  pptx: "ppt/presentation.xml",
+} as const;
+type DocumentKind = "text" | "pdf" | "image" | keyof typeof OFFICE_MAIN_PART;
+const TYPE_CLASS: Record<(typeof DOCUMENT_EXTENSIONS)[number], DocumentKind> = {
   ".md": "text",
   ".markdown": "text",
   ".txt": "text",
@@ -81,10 +91,13 @@ const TYPE_CLASS: Record<(typeof DOCUMENT_EXTENSIONS)[number], "text" | "pdf" | 
   ".png": "image",
   ".jpg": "image",
   ".jpeg": "image",
+  ".xlsx": "xlsx",
+  ".docx": "docx",
+  ".pptx": "pptx",
 };
 const ALLOWED: ReadonlySet<string> = new Set(DOCUMENT_EXTENSIONS);
 
-function typeClass(extension: string): "text" | "pdf" | "image" | null {
+function typeClass(extension: string): DocumentKind | null {
   return ALLOWED.has(extension) ? TYPE_CLASS[extension as keyof typeof TYPE_CLASS] : null;
 }
 
@@ -544,12 +557,24 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
         : true;
   if (!signature) throw new DocumentRefusal("document_type", `${requested} does not hold what its ${extension} extension says`);
 
-  /* By the real file's class, so no shown name can skip it. */
-  if (kind === "text") {
-    const hit = documentBytesSecret(bytes);
-    if (hit) {
-      detected(warnings, { code: "document_secret", reason: `The file contains what looks like a secret (${hit.secretClass}, line ${hit.line}).`, secretClass: hit.secretClass, line: hit.line });
+  // Use the resolved file's type so a shown filename cannot skip inspection.
+  let hit = kind === "text" ? documentBytesSecret(bytes) : null;
+  if (kind === "xlsx" || kind === "docx" || kind === "pptx") {
+    try {
+      hit = documentBytesSecret(bytes);
+      const names = inspectOfficePackage(bytes, DOCUMENT_MAX_BYTES, (name, content, text, requiresConsent) => {
+        if (requiresConsent) hit ??= { secretClass: "computed_text", line: 1 };
+        hit ??= documentSecret(name) ?? documentBytesSecret(content) ?? (text === null ? null : documentSecret(text));
+      });
+      if (!names.has("[Content_Types].xml") || !names.has("_rels/.rels") || !names.has(OFFICE_MAIN_PART[kind])) {
+        throw new Error("Missing Office package parts");
+      }
+    } catch {
+      throw new DocumentRefusal("document_invalid", "The Office package could not be fully inspected. Its ZIP or XML is damaged, unsupported, encrypted or exceeds inspection limits, or it embeds an object that cannot be inspected.");
     }
+  }
+  if (hit) {
+    detected(warnings, { code: "document_secret", reason: `The file contains what looks like a secret (${hit.secretClass}, line ${hit.line}).`, secretClass: hit.secretClass, line: hit.line });
   }
 
   const type = MIME[extension as keyof typeof MIME];
