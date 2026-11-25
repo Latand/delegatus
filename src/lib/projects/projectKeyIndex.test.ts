@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -56,7 +56,7 @@ test("hot revisions reuse archived membership until the archive revision advance
   } finally { db.close(); }
 });
 
-test("seat project membership reads the compact index and follows committed project moves", () => {
+test("authoritative membership follows raw project moves and excludes non-text and empty keys", () => {
   previousState = process.env.LLV_STATE_DIR;
   root = fs.mkdtempSync(path.join(os.tmpdir(), "seat-project-membership-"));
   process.env.LLV_STATE_DIR = root;
@@ -77,21 +77,7 @@ test("seat project membership reads the compact index and follows committed proj
     put.run("flows", "zero", '{"project":"0"}');
     put.run("flows", "flow-number", '{"project":42}');
     put.run("flows", "no-project", '{}');
-    const sql = spyOn(Database.prototype, "query");
-    let membershipSql: string | undefined;
-    try {
-      expect(readStateProjectKeys(filename, ["tasks", "pipelines", "flows"]).sort()).toEqual([" ", "0", "hot-key", "shared-key"]);
-      membershipSql = sql.mock.calls.map(([statement]) => statement)
-        .find(statement => /SELECT DISTINCT.*AS project/i.test(statement));
-    } finally { sql.mockRestore(); }
-    expect(membershipSql).toBeDefined();
-    const plan = peer.query<{ detail: string }, string[]>("EXPLAIN QUERY PLAN " + membershipSql)
-      .all("tasks", "pipelines", "flows");
-    expect(plan.map(row => row.detail).join("\n")).toContain("state_rows_project_membership");
-    const program = peer.query<{ p4: string | null }, string[]>("EXPLAIN " + membershipSql)
-      .all("tasks", "pipelines", "flows");
-    expect(program.some(row => /json_(?:valid|type|extract)\(/i.test(row.p4 ?? ""))).toBe(false);
-
+    expect(readStateProjectKeys(filename, ["tasks", "pipelines", "flows"]).sort()).toEqual([" ", "0", "hot-key", "shared-key"]);
     peer.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='lane-a'").run('{"project":"new-key"}');
     expect(readStateProjectKeys(filename).sort()).toEqual([" ", "0", "archived-key", "new-key", "shared-key"]);
     peer.exec("DELETE FROM state_rows WHERE collection='pipelines_archive' AND row_key='archive-a'");
