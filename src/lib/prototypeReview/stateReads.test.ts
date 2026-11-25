@@ -30,7 +30,7 @@ test("warm decision reads skip unrelated dismissals and keep each response detac
   const dir = fs.mkdtempSync(path.join(state, "dismissal-projection-"));
   process.env.LLV_STATE_DIR = dir;
   try {
-    const author = { kind: "manager", conversationId: null, role: null, via: { deputy: "first" } };
+    const author = { kind: "manager" as const, conversationId: null, role: null, via: { deputy: "first" } };
     const task = tasks().at(-1)!;
     const key = `prototype:${review}`;
     const unrelated = Array.from({ length: 40 }, (_, n) => ({
