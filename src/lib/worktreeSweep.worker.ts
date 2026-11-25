@@ -22,8 +22,14 @@ let discovery: WorktreeSweepDiscovery | undefined;
 const lines = createInterface({ input: process.stdin });
 for await (const line of lines) {
   try {
-    if (line.length > 1024) throw new Error("worktree sweep request exceeded its bound");
+    if (line.length > 8192) throw new Error("worktree sweep request exceeded its bound");
     const request = JSON.parse(line);
+    if (request.kind === "disk-cleaner") {
+      const { runCleanerSweep } = await import("./cleaner/diskSweep");
+      const report = await withAttemptTempDeadline(request.deadline, () => runCleanerSweep(request.sweep));
+      process.stdout.write(JSON.stringify({ report }) + "\n");
+      continue;
+    }
     if (request.kind === "maintenance") {
       // Maintenance consumers use calendar deadlines; only this boundary converts.
       request.deadline = Date.now() + (request.deadline - sweepMonotonicNow());

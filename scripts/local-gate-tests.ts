@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
-import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment } from "./local-gate";
+import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment, SUPERVISOR_MARGIN_MS } from "./local-gate";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
@@ -40,7 +40,6 @@ const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const RUN_BUDGET_MS = 15 * 60 * 1000;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
-const FILE_CLEANUP_MARGIN_MS = 5_000;
 // Engine selections took eleven minutes at six workers, leaving no room for
 // confirmations after a slow full-file baseline. Bound head work to eight owned
 // runners in the shared CPU work slice; baseline and retries retain three.
@@ -332,7 +331,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
     if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
-    if (options.reserveFileBudget && remaining < budgets.fileMs + FILE_CLEANUP_MARGIN_MS) {
+    if (options.reserveFileBudget && remaining < budgets.fileMs + SUPERVISOR_MARGIN_MS) {
       throw new BudgetExhausted(`${label}: remaining run budget cannot fit a full file and its cleanup; ${results.filter(run => run?.completed.length).length} of ${files.length} pending files completed`);
     }
     const sites = options.sites?.filter(site => site.file === file);
@@ -358,11 +357,12 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     let taskPeak: string | null = null;
     let survivors: string | undefined;
     try {
-      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + FILE_CLEANUP_MARGIN_MS), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
-        // Keep the independent five-second cleanup allowance, measured as
-        // execution time by the outer guard. A fixed wall timeout here would
-        // kill a healthy supervisor during a nested CPU queue wait.
-        cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(Math.min(budgets.fileMs, remaining)) }, stdio: ["ignore", fd, fd],
+      const fileMs = Math.min(budgets.fileMs, remaining);
+      // The outer clock starts before systemd starts the inner service. Give
+      // that service time to enforce its own deadline and drain its cgroup.
+      // Both clocks still exclude independently observed CPU queue waits.
+      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(fileMs + SUPERVISOR_MARGIN_MS), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+        cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(fileMs) }, stdio: ["ignore", fd, fd],
       });
       exitCode = await result.exited;
     } finally { closeSync(fd); }
@@ -492,7 +492,7 @@ function isGreenHeadFile(value: unknown): value is TestRun {
  * identity/privacy/network values that a direct comparator call still passes. */
 function headEnvironmentKey(env: NodeJS.ProcessEnv): string {
   const consumed = /^(?:GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)|LLV_PRIVACY_[A-Z0-9_]+|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
-  return fingerprint([environmentFingerprint(env), checkInputEnvironment(env), env.XDG_RUNTIME_DIR ?? null, Object.entries(env)
+  return fingerprint([environmentFingerprint(env), checkInputEnvironment(env), env.XDG_STATE_HOME ?? null, env.XDG_RUNTIME_DIR ?? null, Object.entries(env)
     .filter(([name, value]) => value !== undefined && consumed.test(name)).sort(([a], [b]) => a.localeCompare(b))]);
 }
 
@@ -632,7 +632,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // A checkpointable head can yield between files. Starting one at the end
     // of the run with a clipped deadline can turn run exhaustion into a file
     // timeout and interrupt its nested runner during cleanup.
-    const reserveFileBudget = !!headCache && budgets.runMs > budgets.fileMs + FILE_CLEANUP_MARGIN_MS;
+    const reserveFileBudget = !!headCache && budgets.runMs > budgets.fileMs + SUPERVISOR_MARGIN_MS;
     const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers, reserveFileBudget,
       onFile: headCache ? (run, cleanupConfirmed) => {
         if (!cleanupConfirmed || !isGreenHeadFile(run)) return;

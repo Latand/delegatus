@@ -3082,6 +3082,74 @@ browserTest("#1978: copy controls stay apart and followed content and released p
 }, 300_000);
 
 /*
+ * Two copy icons stacked in one expanded command share a right edge (the
+ * command's control ends its meta row, the output's control hangs at the
+ * body's own inset), at 390 and at 1280, en and uk, light and dark. Readings
+ * go to `evidence/shared-states-and-hints/copy-edge.json`; frames to
+ * `.artifacts/shared-states-and-hints-copy/`.
+ */
+browserTest("one right edge for the command's copy and the output's copy at 390 and 1280, en and uk", async () => {
+  const out = path.resolve(".artifacts/shared-states-and-hints-copy");
+  const evidence = path.resolve("evidence/shared-states-and-hints");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(evidence, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const readings: Record<string, unknown> = {};
+  const failures: string[] = [];
+  try {
+    for (const width of [390, 1280]) for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) {
+      const key = `${width}-${lang}-${scheme}`;
+      const phone = width < 640;
+      const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 960 }, hasTouch: phone, isMobile: phone, deviceScaleFactor: 2, colorScheme: scheme });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        const command = translate(lang, "tools.copyCommand");
+        const output = translate(lang, "tools.copyOutput");
+        await page.goto(`${fixtureBase}/?toolcard=1#f=${encodeURIComponent(RUNNING_PATH)}`);
+        await page.waitForSelector("[data-log-feed-scroller]", { timeout: 20_000 });
+        await page.getByText("The projection replays every band", { exact: false }).first().waitFor({ timeout: 20_000 });
+        await pause(page, 900);
+        if (phone) {
+          const r = await page.locator("[data-mobile-run-fold]").last().boundingBox();
+          if (!r) throw new Error(`${key}: the run's line is not on screen`);
+          await touch(cdp, [[r.x + r.width / 2, r.y + r.height / 2]]);
+        } else if (!(await page.locator(`[aria-label="${command}"]`).count())) {
+          await page.locator("[data-log-feed-scroller] summary").last().click();
+        }
+        await page.waitForSelector(`[aria-label="${command}"]`, { timeout: 5_000 });
+        await pause(page, 900);
+        const reading = await page.evaluate(({ command: commandLabel, output: outputLabel }) => {
+          const copy = document.querySelector(`[aria-label="${commandLabel}"]`);
+          const body = copy?.closest(".bg-sunken") ?? null;
+          const result = body?.querySelector(`[aria-label="${outputLabel}"]`) ?? null;
+          const right = (element: Element | null) => element ? Math.round(element.getBoundingClientRect().right * 10) / 10 : null;
+          return { command: right(copy ?? null), output: right(result), commandCopies: document.querySelectorAll(`[aria-label="${commandLabel}"]`).length };
+        }, { command, output });
+        readings[key] = reading;
+        if (reading.commandCopies !== 1) failures.push(`${key}: ${reading.commandCopies} command copy controls, not one`);
+        if (reading.command === null || reading.output === null) failures.push(`${key}: a copy control is missing ${JSON.stringify(reading)}`);
+        else if (Math.abs(reading.command - reading.output) > 1) failures.push(`${key}: the command's copy ends at ${reading.command}, the output's at ${reading.output}`);
+        await page.locator(`[aria-label="${command}"]`).locator("xpath=ancestor::*[contains(@class,'bg-sunken')][1]").screenshot({ path: path.join(out, `${key}.png`) });
+        if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(evidence, "copy-edge.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);
+
+/*
  * #2072 slice 2, the jump strip: a conversation away from its tail, at the
  * pages Safari leaves on a 390 × 844 and a 430 × 932 phone, in both languages
  * and both schemes (the desktop reader's strip is held by the DOM test in
@@ -7899,11 +7967,17 @@ describe("tool call context tokens", () => {
     const lineHeight = parseFloat(getComputedStyle(document.body).lineHeight) || 16;
     const rows = [...document.querySelectorAll('[data-tool-row], [data-testid="mcp-call-card"] summary')].map((row) => {
       const caption = row.querySelector("[data-context-tokens]");
-      const title = row.querySelector("span.flex-1");
+      const title = row.querySelector("span.flex-1") || row.querySelector("[data-mcp-title]");
       const value = caption && caption.querySelector("span:not([aria-hidden])");
       const cap = caption ? box(caption) : null;
       const r = box(row);
+      /* The dot joins the duration to the counter: the same space on both sides of it. */
+      const dot = caption ? caption.querySelector("[aria-hidden]") : null;
+      const duration = caption ? caption.previousElementSibling : null;
+      const dotBefore = dot && duration && value ? Math.round((box(dot).left - box(duration).right) * 10) / 10 : null;
+      const dotAfter = dot && duration && value ? Math.round((box(value).left - box(dot).right) * 10) / 10 : null;
       return {
+        dotBefore, dotAfter,
         label: (row.textContent || "").trim().slice(0, 70),
         row: r,
         caption: cap,
@@ -7925,7 +7999,7 @@ describe("tool call context tokens", () => {
   type Reading = {
     label: string; row: { height: number }; caption: { height: number } | null; band: number | null; basis: string | null;
     text: string | null; title: string | null; color: string | null; weight: number | null; titleWidth: number | null;
-    oneLine: boolean | null; inside: boolean | null; pushedOut: string[];
+    oneLine: boolean | null; inside: boolean | null; pushedOut: string[]; dotBefore: number | null; dotAfter: number | null;
   };
 
   browserTest("every band, the shared pair and the worst-case row hold their geometry in both themes and languages", async () => {
@@ -7945,11 +8019,12 @@ describe("tool call context tokens", () => {
             try {
               await page.locator("[data-context-tokens-feed]").waitFor();
               const read = await page.evaluate(measureRows) as { rows: Reading[]; scrollWidth: number; clientWidth: number };
-              readings[tag] = read.rows.map((row) => ({ label: row.label, band: row.band, basis: row.basis, text: row.text, height: row.row.height, titleWidth: row.titleWidth }));
+              readings[tag] = read.rows.map((row) => ({ label: row.label, band: row.band, basis: row.basis, text: row.text, height: row.row.height, titleWidth: row.titleWidth, dotBefore: row.dotBefore, dotAfter: row.dotAfter }));
               const captions = read.rows.filter((row) => row.caption);
-              if (!read.rows.some((row) => row.label.includes("Listing pipelines") && row.caption)) failures.push(`${tag}: the MCP row carries no caption`);
+              if (!read.rows.some((row) => (row.label.includes("Listing pipelines") || row.label.includes("Список пайплайнів")) && row.caption)) failures.push(`${tag}: the MCP row carries no caption`);
               const bare = read.rows.find((row) => !row.caption && row.label.includes("ls tmp"));
               if (!bare) failures.push(`${tag}: the uncaptioned baseline row is missing`);
+              if (!captions.some((row) => row.dotBefore !== null)) failures.push(`${tag}: no row carries a duration and a counter to measure the dot between`);
               const bands = new Set(captions.map((row) => row.band));
               for (const band of [0, 1, 2, 3]) if (!bands.has(band)) failures.push(`${tag}: no row in band ${band}`);
               for (const row of captions) {
@@ -7960,6 +8035,7 @@ describe("tool call context tokens", () => {
                 if (bare && Math.abs(row.row.height - bare.row.height) > 1) failures.push(`${at}: row is ${row.row.height}px, baseline ${bare.row.height}px`);
                 if (width === 390 && (row.titleWidth ?? 0) < 96) failures.push(`${at}: the title keeps only ${row.titleWidth}px`);
                 if (!row.title || !/\d/.test(row.title)) failures.push(`${at}: no hover title`);
+                if (row.dotBefore !== null && row.dotAfter !== null && Math.abs(row.dotBefore - row.dotAfter) > 1) failures.push(`${at}: the dot sits ${row.dotBefore}px after the duration and ${row.dotAfter}px before the counter`);
                 if ((row.basis === "measured") === (row.text ?? "").includes("~")) failures.push(`${at}: basis ${row.basis} but caption "${row.text}"`);
               }
               /* Each band reads heavier than the one below: the colours differ and the weight never drops. */
@@ -12800,7 +12876,56 @@ describe("stale working status", () => {
           expect(await dead.getAttribute("data-mobile2-state")).toBe("killed");
           expect(await quiet.locator("[data-mobile2-phrase]").innerText()).toStartWith(prefix("mobile2.board.done"));
           expect(await dead.locator("[data-mobile2-phrase]").innerText()).toStartWith(prefix("mobile2.board.killedAge"));
+          /* One word for a dead agent with the desktop's tile and reader header. */
+          expect((await dead.locator("[data-mobile2-phrase]").innerText()).split(" · ")[0]).toBe(word("kanban.memberState.killed"));
           const reading: Record<string, unknown> = { quiet: await quiet.innerText(), dead: await dead.innerText(), live: await live.innerText() };
+          /* The five agents' meta lines, measured from text ranges: every word whole inside the 390 px screen and
+             inside its own line, and the phrase is the chat bar's «state · age ago» with no ticking seconds. */
+          const agents = [["quiet", response.quiet], ["dead", response.dead], ["live", response.live],
+            ["finished", response.recent.topLevel], ["finishedSub", response.recent.subAgent]] as const;
+          const ago = ["agoSec", "agoMin", "agoHour", "agoDay"].map(key => word(`time.${key}` as Parameters<typeof translate>[1]).replace("{n}", "\\d+")).join("|");
+          const aged = new RegExp(`^.+ · (${ago})$`);
+          const ticking = /\d+\s*(?:h|год|m|хв)\s*\d+\s*(?:m|хв|s|с)\b/;
+          const rowReadings: Record<string, unknown> = {};
+          for (const [name, file] of agents) {
+            await row(file).scrollIntoViewIfNeeded();
+            const measured = await row(file).evaluate((element) => {
+              const phrase = element.querySelector<HTMLElement>("[data-mobile2-phrase]")!;
+              const meta = phrase.parentElement!;
+              const line = meta.getBoundingClientRect();
+              const words: { text: string; left: number; right: number }[] = [];
+              const walker = document.createTreeWalker(meta, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                const text = node.textContent ?? "";
+                if (!text.trim()) continue;
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const box of Array.from(range.getClientRects())) words.push({ text, left: box.left, right: box.right });
+              }
+              const cutChildren = Array.from(meta.children).filter(child => child.scrollWidth > child.clientWidth + 0.5).map(child => child.textContent ?? "");
+              return {
+                phrase: phrase.innerText, started: meta.querySelector<HTMLElement>("[data-mobile2-started]")?.innerText ?? null,
+                text: meta.innerText.replace(/\s+/g, " ").trim(),
+                lineCut: meta.scrollWidth > meta.clientWidth + 0.5, cutChildren,
+                outside: words.filter(word => word.right > line.right + 0.5 || word.left < line.left - 0.5 || word.right > innerWidth).map(word => word.text),
+                height: line.height,
+              };
+            });
+            expect(measured.lineCut).toBe(false);
+            expect(measured.cutChildren).toEqual([]);
+            expect(measured.outside).toEqual([]);
+            expect(measured.phrase).not.toMatch(ticking);
+            if (name !== "live") {
+              expect(measured.phrase).toMatch(aged);
+              /* «started …» is dropped where it says the same age the state's phrase does. */
+              if (measured.started !== null) {
+                const age = (text: string) => text.match(/\d+\s*\S+/)?.[0];
+                expect(age(measured.started)).not.toBe(age(measured.phrase.split(" · ")[1]!));
+              }
+            }
+            rowReadings[name] = measured;
+          }
+          reading.rows = rowReadings;
           await page.screenshot({ path: path.join(out, "task.png"), fullPage: true });
 
           for (const [name, file, state] of [["quiet", response.quiet, "mobile2.chat.stateDone"], ["dead", response.dead, "mobile2.chat.stateKilledAge"]] as const) {
@@ -12810,6 +12935,10 @@ describe("stale working status", () => {
             await page.mouse.move(0, 0);
             const header = screen.locator("[data-mobile2-chat-state]").first();
             expect(await header.innerText()).toStartWith(prefix(state));
+            /* The row on the task screen read the same «state · age ago» phrase as this bar. */
+            expect((await header.innerText()).trim()).toBe((rowReadings[name] as { phrase: string }).phrase.trim());
+            /* One word with the desktop's header and tile for the same conversation. */
+            expect((await header.innerText()).split(" · ")[0]).toBe(word(name === "quiet" ? "kanban.memberState.done" : "kanban.memberState.killed"));
             expect(await screen.locator('[data-turn-status="running"], [role="timer"]').count()).toBe(0);
             expect(await screen.locator("[data-launch-chips], .animate-spin").count()).toBe(0);
             expect(await screen.innerText()).not.toContain(file.spawn!.launchId.slice(0, 8));
@@ -12817,6 +12946,32 @@ describe("stale working status", () => {
             expect(placeholder).not.toBe(word("composer.placeholderSpawn"));
             await page.screenshot({ path: path.join(out, `${name}-chat.png`) });
             reading[`${name}Chat`] = { state: await header.innerText(), launchChips: 0, placeholder };
+            await page.locator("[data-mobile2-back]").first().click();
+            await surface.waitFor();
+          }
+          /* A turn that ended four minutes ago on a live host, top level and sub-agent: the board row and the
+             bar name it with the desktop's word, whole and inside the screen. */
+          for (const [name, file] of [["finished", response.recent.topLevel], ["finishedSub", response.recent.subAgent]] as const) {
+            const rowPhrase = row(file).locator("[data-mobile2-phrase]");
+            expect(await row(file).getAttribute("data-mobile2-state")).toBe("returned");
+            expect(await rowPhrase.innerText()).toStartWith(prefix("mobile2.board.returned"));
+            await row(file).click();
+            const screen = page.locator('[data-mobile2-screen="chat"]');
+            await screen.waitFor();
+            await page.mouse.move(0, 0);
+            const header = screen.locator("[data-mobile2-chat-state]").first();
+            const text = (await header.innerText()).trim();
+            expect(text).toStartWith(prefix("mobile2.chat.stateReturned"));
+            expect(text).toBe((rowReadings[name] as { phrase: string }).phrase.trim());
+            /* One word with the desktop's reader header, tile and rail for the same conversation. */
+            expect(text.split(" · ")[0]).toBe(word("kanban.memberState.returned"));
+            const fit = await header.evaluate((cell) => {
+              const box = cell.getBoundingClientRect();
+              return { cut: cell.scrollWidth > cell.clientWidth + 0.5, inside: box.left >= 0 && box.right <= innerWidth };
+            });
+            expect(fit).toEqual({ cut: false, inside: true });
+            await page.screenshot({ path: path.join(out, `${name}-chat.png`) });
+            reading[`${name}Chat`] = { state: text, ...fit };
             await page.locator("[data-mobile2-back]").first().click();
             await surface.waitFor();
           }
@@ -12828,6 +12983,143 @@ describe("stale working status", () => {
       fs.writeFileSync("evidence/stale-working/phone.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
   }, 300_000);
+});
+
+/*
+ * The seat's bar reads «waiting · age» while its turn is over and no decision form is open
+ * (`?chrome=0&nopin=1&seatnoise=ii&runtime=structured&seatidle=<seconds>`), and «working» while its
+ * turn runs. The seat card and the seat sheet take the same phrase from `seatBadgeReading`
+ * (`mobileSeatCard.dom.test.tsx`). 390 px, light and dark, en and uk.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=… bun test \
+ *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "idle seat reads waiting"
+ */
+describe("idle seat reads waiting", () => {
+  browserTest("the seat bar reads «waiting · age», not «done», and a running seat keeps «working»", async () => {
+    const out = path.resolve(".artifacts/seat-waiting-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const word = (key: Parameters<typeof translate>[1]) => translate(lang, key);
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+        await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+        try {
+          const page = await context.newPage();
+          const pageErrors: string[] = [];
+          page.on("pageerror", (error) => pageErrors.push(error.message));
+          const label = `${lang}-${scheme}`;
+          const waiting = word("mobile2.chat.stateWaiting").split("{")[0]!;
+          /* The seat's bar. */
+          await page.goto(`${base}/?chrome=0&nopin=1&seatnoise=ii&runtime=structured&seatidle=1044#c=conversation_running`);
+          await page.waitForSelector("[data-mobile2-chat-state]", { timeout: 25_000 });
+          await page.waitForFunction((prefix) => (document.querySelector("[data-mobile2-chat-state]")?.textContent ?? "").startsWith(prefix), waiting, { timeout: 25_000 })
+            .catch(() => failures.push(`${label}: the seat's bar does not read «${waiting.trim()}»`));
+          await page.waitForTimeout(500);
+          const bar = await page.evaluate(() => {
+            const cell = document.querySelector<HTMLElement>("[data-mobile2-chat-state]");
+            const box = cell?.getBoundingClientRect();
+            return { text: cell?.textContent ?? "", cut: cell ? cell.scrollWidth > cell.clientWidth + 0.5 : null, inside: box ? box.left >= 0 && box.right <= innerWidth : null };
+          });
+          readings[`${label}-bar`] = bar;
+          await page.screenshot({ path: path.join(out, `${label}-bar.png`) });
+          if (!bar.text.startsWith(waiting)) failures.push(`${label}: the bar reads «${bar.text}»`);
+          if (bar.text.startsWith(word("mobile2.chat.stateDone").split("{")[0]!)) failures.push(`${label}: the bar still reads «done»`);
+          if (bar.cut) failures.push(`${label}: the bar's state phrase is cut`);
+          if (bar.inside === false) failures.push(`${label}: the bar's state phrase leaves the screen`);
+          /* The switcher's seat row and the ⋯ menu's head name the same seat, so they read the bar's word in the
+             quiet tone, whole and inside the screen. */
+          const phraseReading = (selector: string) => page.evaluate((sel) => {
+            const cell = document.querySelector<HTMLElement>(sel);
+            if (!cell) return null;
+            cell.scrollIntoView({ block: "center" });
+            const box = cell.getBoundingClientRect();
+            const sheet = cell.closest<HTMLElement>("[data-mobile2-sheet]")?.getBoundingClientRect();
+            return {
+              text: cell.textContent ?? "", tone: cell.getAttribute("data-mobile2-state-phrase"),
+              cut: cell.scrollWidth > cell.clientWidth + 0.5,
+              inside: box.left >= 0 && box.right <= innerWidth && (!sheet || (box.top >= sheet.top && box.bottom <= sheet.bottom)),
+            };
+          }, selector);
+          for (const [name, opener, sheet, selector] of [
+            ["switcher", '[data-mobile2-open="switch"]', "switch", '[data-mobile2-sheet="switch"] [data-mobile2-section="orchestrator"] [data-mobile2-state-phrase]'],
+            ["menu", '[data-mobile2-open="menu"]', "menu", '[data-mobile2-sheet="menu"] [data-mobile2-chat-identity] [data-mobile2-state-phrase]'],
+          ] as const) {
+            await page.locator(opener).first().click();
+            await page.waitForSelector(`[data-mobile2-sheet="${sheet}"]`, { timeout: 15_000 });
+            await page.waitForSelector(selector, { timeout: 15_000 }).catch(() => failures.push(`${label}: the ${name} has no state phrase for the seat`));
+            await page.waitForTimeout(400);
+            const reading = await phraseReading(selector);
+            readings[`${label}-${name}`] = reading;
+            await page.screenshot({ path: path.join(out, `${label}-${name}.png`) });
+            if (!reading) failures.push(`${label}: the ${name} shows no seat phrase`);
+            else {
+              if (!reading.text.startsWith(waiting)) failures.push(`${label}: the ${name} reads «${reading.text}», the bar reads «${bar.text}»`);
+              if (reading.tone !== "neutral") failures.push(`${label}: the ${name} reads in the «${reading.tone}» tone, not the quiet one`);
+              if (reading.cut) failures.push(`${label}: the ${name}'s state phrase is cut`);
+              if (!reading.inside) failures.push(`${label}: the ${name}'s state phrase leaves its sheet or the screen`);
+            }
+            await page.locator(`[data-mobile2-sheet="${sheet}"] [data-mobile2-close]`).first().click();
+            await page.waitForSelector(`[data-mobile2-sheet="${sheet}"]`, { state: "detached", timeout: 15_000 });
+          }
+          /* The board's seat card and its sheet carry the same phrase, in the quiet tone; a running seat keeps «working». */
+          const badgeReading = (selector: string) => page.evaluate((sel) => {
+            const cell = document.querySelector<HTMLElement>(sel);
+            if (!cell) return null;
+            const box = cell.getBoundingClientRect();
+            return {
+              text: cell.textContent ?? "", tone: cell.getAttribute("data-mobile2-seat-badge"),
+              cut: cell.scrollWidth > cell.clientWidth + 0.5, inside: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+            };
+          }, selector);
+          for (const [scene, query, want] of [
+            ["idle", "1044", waiting],
+            ["running", "running", word("mobile2.chat.stateWorking").split("{")[0]!.trim()],
+          ] as const) {
+            await page.goto(`${base}/?kanban=1&runtime=structured&seathost=${query}#p=atlas`);
+            const card = '[data-mobile2-seat-card] [data-mobile2-seat-badge]';
+            await page.waitForFunction(([sel, prefix]) => (document.querySelector(sel!)?.textContent ?? "").startsWith(prefix!), [card, want], { timeout: 25_000 })
+              .catch(() => failures.push(`${label}: the ${scene} seat card does not read «${want}»`));
+            await page.waitForTimeout(400);
+            const onCard = await badgeReading(card);
+            readings[`${label}-${scene}-card`] = onCard;
+            await page.screenshot({ path: path.join(out, `${label}-${scene}-card.png`) });
+            await page.locator("[data-mobile2-seat-controls]").first().click({ timeout: 15_000 }).catch(() => failures.push(`${label}: the ${scene} seat card has no sheet control`));
+            const sheetBadge = '[data-mobile2-sheet="seat"] [data-mobile2-seat-badge]';
+            await page.waitForSelector(sheetBadge, { timeout: 15_000 }).catch(() => failures.push(`${label}: the ${scene} seat sheet has no badge`));
+            await page.waitForTimeout(400);
+            const onSheet = await badgeReading(sheetBadge);
+            readings[`${label}-${scene}-sheet`] = onSheet;
+            await page.screenshot({ path: path.join(out, `${label}-${scene}-sheet.png`) });
+            for (const [where, reading] of [["card", onCard], ["sheet", onSheet]] as const) {
+              if (!reading) { failures.push(`${label}: the ${scene} seat ${where} shows no badge`); continue; }
+              if (!reading.text.startsWith(want)) failures.push(`${label}: the ${scene} seat ${where} reads «${reading.text}», not «${want}»`);
+              /* The bar's own phrase, «waiting · 17m ago»: an age to the unit, no ticking seconds. */
+              if (scene === "idle" && /\d+\s?(m|хв)\s\d+\s?(s|с)/.test(reading.text)) failures.push(`${label}: the idle seat ${where} reads a ticking duration «${reading.text}»`);
+              if (scene === "idle" && reading.text.trim() !== bar.text.trim() && reading.text.replace(/\d+/g, "N") !== bar.text.replace(/\d+/g, "N")) failures.push(`${label}: the idle seat ${where} reads «${reading.text}», the bar «${bar.text}»`);
+              if (scene === "idle" && reading.tone !== "neutral") failures.push(`${label}: the idle seat ${where} reads in the «${reading.tone}» tone, not the quiet one`);
+              if (reading.cut) failures.push(`${label}: the ${scene} seat ${where} badge is cut`);
+              if (!reading.inside) failures.push(`${label}: the ${scene} seat ${where} badge leaves the screen`);
+            }
+          }
+          /* A running seat keeps its own word. */
+          await page.goto(`${base}/?chrome=0&nopin=1&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await page.waitForSelector("[data-mobile2-chat-state]", { timeout: 25_000 });
+          await page.waitForTimeout(500);
+          const running = (await page.locator("[data-mobile2-chat-state]").first().innerText()).trim();
+          readings[`${label}-running`] = running;
+          if (!running.startsWith(word("mobile2.chat.stateWorking").split("{")[0]!.trim())) failures.push(`${label}: a running seat reads «${running}»`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    fs.mkdirSync("evidence/seat-waiting", { recursive: true });
+    fs.writeFileSync("evidence/seat-waiting/phone.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 1_200_000);
 });
 
 /*
@@ -15018,4 +15310,128 @@ describe("account row on the phone", () => {
       }
     } finally { await browser.close(); server.stop(); }
   }, 7_200_000);
+});
+
+describe("account burndown chart on the phone", () => {
+  /* Any account's reading on the phone's accounts screen opens that account's chart as a bottom sheet: a non-active
+     account with partial history (solid readings, dashed gaps), and a signed-in account with no reading at all (axes,
+     window and a dashed level). At 390 and 430 px, in both languages and schemes. Fails on a target under 44 px, a sheet
+     leaving the viewport, a readout cut or covered, a legend key that is not dashed where the chart's line is, a chart
+     that does not close, or a history request for another account. `LLV_ACCOUNT_CHART_OUT=<dir>` keeps the frames. */
+  browserTest("the accounts screen opens a non-active and a no-reading account's chart, dashed where estimated", async () => {
+    const { accountRowRoutes } = await import("@/components/accountRowFrames");
+    const out = path.resolve(process.env.LLV_ACCOUNT_CHART_OUT ?? ".artifacts/account-chart", "phone"); fs.mkdirSync(out, { recursive: true });
+    const rows = accountRowRoutes();
+    const asked: string[] = [];
+    const routes = {
+      ...rows.routes,
+      /* One reading hours ago, one a day ago: the span between them and the span since the last are assumed. */
+      "/api/limits/history": (request: Request) => {
+        const url = new URL(request.url);
+        const engine = url.searchParams.get("engine") === "codex" ? "codex" : "claude";
+        const account = url.searchParams.get("account") ?? "";
+        asked.push(`${engine}:${account}`);
+        const now = Math.floor(Date.now() / 1000);
+        const empty = { windowStart: null, resetsAt: null, windowSeconds: 7 * 86_400, samples: [] };
+        const weekly = account === "no-reading" ? empty : {
+          windowStart: now - 3 * 86_400, resetsAt: now + 4 * 86_400, windowSeconds: 7 * 86_400,
+          samples: [{ t: now - 2.5 * 86_400, remaining: 98 }, { t: now - 1.2 * 86_400, remaining: 97 }],
+        };
+        const series = { session: { ...empty, windowSeconds: 5 * 3_600 }, weekly };
+        return Response.json({
+          claude: engine === "claude" ? series : null, codex: engine === "codex" ? series : null,
+          claudeAccountId: engine === "claude" ? account : null, codexAccountId: engine === "codex" ? account : null, historySince: null,
+        });
+      },
+    };
+    const server = await serveEvidenceFixture(out, undefined, routes);
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const failures: string[] = [];
+    const press = (id: string) => `[data-account-chart="${id}"]`;
+    try {
+      for (const width of [390, 430]) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        for (const scene of [{ set: "core" as const, engine: "claude", id: "backup", label: "backup" }, { set: "edge" as const, engine: "codex", id: "no-reading", label: "no-reading" }]) {
+          rows.control.reset(scene.set);
+          asked.length = 0;
+          const key = `phone-${width}-${locale}-${theme}-${scene.id}`;
+          const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=account-row&surface=phone&engine=${scene.engine}`, { width, height: 844 }, theme, locale, "no-preference", true);
+          try {
+            /* A row with a reading carries the press over its reading. A signed-in row with none shows no extra line: its open row's
+               «no data yet» is the press, so the row is opened first and no press exists before that. */
+            const rowSelector = `[data-account-row="${scene.id}"]`;
+            if (scene.id === "no-reading") {
+              await page.locator(`${rowSelector} [data-account-toggle]`).waitFor({ timeout: 15_000 });
+              if (await page.locator(press(scene.id)).count() !== 0) failures.push(`${key}: the closed no-reading row already carries a chart press`);
+              if ((await page.locator(rowSelector).innerText()).includes(translate(locale, "burndown.title").replace(/^./u, (c) => c.toUpperCase()))) failures.push(`${key}: the closed row gained a «${translate(locale, "burndown.title")}» line`);
+              await page.locator(`${rowSelector} [data-account-toggle]`).scrollIntoViewIfNeeded();
+              await page.locator(`${rowSelector} [data-account-toggle]`).tap();
+            }
+            await page.locator(press(scene.id)).waitFor({ timeout: 15_000 });
+            await page.locator(press(scene.id)).scrollIntoViewIfNeeded();
+            const target = await page.locator(press(scene.id)).boundingBox();
+            if (!target || target.height < 43.5) failures.push(`${key}: the chart press is ${target?.height ?? "missing"} px high, under 44`);
+            await page.locator(press(scene.id)).tap();
+            await page.locator("[data-burndown-dialog] svg[role=img]").waitFor({ timeout: 10_000 });
+            await page.waitForFunction(() => !document.body.textContent?.includes("…"), undefined, { timeout: 5_000 }).catch(() => {});
+            await page.waitForTimeout(150);
+            const reading = await page.evaluate((id) => {
+              const dialog = document.querySelector<HTMLElement>("[data-burndown-dialog]")!;
+              const box = dialog.getBoundingClientRect();
+              const readout = dialog.querySelector<HTMLElement>("[data-burndown-readout]");
+              const range = document.createRange();
+              if (readout) range.selectNodeContents(readout);
+              const rects = [...range.getClientRects()];
+              const ink = rects.length ? { left: Math.min(...rects.map((r) => r.left)), right: Math.max(...rects.map((r) => r.right)), top: Math.min(...rects.map((r) => r.top)), bottom: Math.max(...rects.map((r) => r.bottom)) } : null;
+              const probe = ink ? document.elementFromPoint((ink.left + ink.right) / 2, (ink.top + ink.bottom) / 2) : null;
+              const dash = (kind: string) => dialog.querySelector(`[data-burndown-key="${kind}"] line`)?.getAttribute("stroke-dasharray") ?? null;
+              const keySize = dialog.querySelector('[data-burndown-key="estimated"]')?.getBoundingClientRect();
+              return {
+                label: dialog.getAttribute("aria-label") ?? "",
+                box: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
+                inner: { w: innerWidth, h: innerHeight },
+                readout: readout?.textContent ?? "", ink, covered: probe ? !dialog.contains(probe) || !readout?.contains(probe) && !probe.contains(readout) && probe !== readout : true,
+                estimated: dialog.querySelectorAll("svg[role=img] [data-burndown-estimated]").length,
+                known: dialog.querySelectorAll("svg[role=img] [data-burndown-known]").length,
+                keys: { estimated: dash("estimated"), ideal: dash("ideal"), actual: dash("actual") }, keyWidth: keySize?.width ?? 0,
+                keyPresent: { estimated: dialog.querySelector('[data-burndown-key="estimated"]') !== null, ideal: dialog.querySelector('[data-burndown-key="ideal"]') !== null, actual: dialog.querySelector('[data-burndown-key="actual"]') !== null },
+                scrim: (() => { const rect = document.querySelector("[data-burndown-scrim]")?.getBoundingClientRect(); return rect ? { w: rect.width, h: rect.height } : null; })(),
+                level: (() => { const frame = dialog.querySelector("svg[role=img] rect")?.getBoundingClientRect(); const line = dialog.querySelector("svg[role=img] [data-burndown-estimated]")?.getBoundingClientRect(); return frame && line ? { top: line.top - frame.top, bottom: frame.bottom - line.bottom } : null; })(),
+                pressOpen: document.querySelector(`[data-account-chart="${id}"]`)?.getAttribute("aria-expanded"),
+                dialogs: document.querySelectorAll("[data-burndown-dialog]").length,
+              };
+            }, scene.id);
+            if (!reading.label.includes(scene.label)) failures.push(`${key}: the dialog is named «${reading.label}»`);
+            if (reading.box.left < -0.5 || reading.box.right > reading.inner.w + 0.5 || reading.box.top < -0.5 || reading.box.bottom > reading.inner.h + 0.5) failures.push(`${key}: the sheet leaves the viewport ${JSON.stringify(reading.box)}`);
+            if (!reading.ink || reading.ink.left < reading.box.left - 0.5 || reading.ink.right > reading.box.right + 0.5 || reading.ink.bottom > reading.box.bottom + 0.5) failures.push(`${key}: the readout is cut (${JSON.stringify(reading.ink)})`);
+            if (reading.covered) failures.push(`${key}: the readout is covered`);
+            if (reading.estimated < 1) failures.push(`${key}: no dashed estimated segment is drawn`);
+            if (scene.id === "backup" && reading.known < 1) failures.push(`${key}: no solid reading is drawn`);
+            // The legend keys only the lines the chart draws: a chart with no reading draws a dashed level and nothing else.
+            const noReading = scene.id === "no-reading";
+            if (reading.keys.estimated !== "2 3" || reading.keys.ideal !== (noReading ? null : "4 3") || reading.keys.actual !== null) failures.push(`${key}: legend keys read ${JSON.stringify(reading.keys)}`);
+            if (reading.keyPresent.estimated !== true || reading.keyPresent.ideal !== !noReading || reading.keyPresent.actual !== !noReading) failures.push(`${key}: legend lists ${JSON.stringify(reading.keyPresent)}`);
+            // Docked to the bottom edge over a scrim that covers the screen: no background text shows beneath the sheet.
+            if (Math.abs(reading.box.bottom - reading.inner.h) > 0.5 || Math.abs(reading.box.left) > 0.5 || Math.abs(reading.box.right - reading.inner.w) > 0.5) failures.push(`${key}: the sheet is not docked ${JSON.stringify(reading.box)}`);
+            if (!reading.scrim || reading.scrim.w < reading.inner.w - 0.5 || reading.scrim.h < reading.inner.h - 0.5) failures.push(`${key}: no scrim dims the screen behind the sheet`);
+            // A level is a line inside the plot, clear of the frame's top and bottom edges.
+            if (!reading.level || reading.level.top < 4) failures.push(`${key}: the dashed level sits on the frame (${JSON.stringify(reading.level)})`);
+            if (reading.keyWidth < 13) failures.push(`${key}: the estimated key is ${reading.keyWidth} px wide`);
+            if (reading.pressOpen !== "true" || reading.dialogs !== 1) failures.push(`${key}: press expanded=${reading.pressOpen}, ${reading.dialogs} dialogs`);
+            if (scene.id === "no-reading" && !reading.readout.includes(translate(locale, "burndown.noReading"))) failures.push(`${key}: the readout says «${reading.readout}»`);
+            if (!asked.includes(`${scene.engine}:${scene.id}`) || asked.some((entry) => entry !== `${scene.engine}:${scene.id}`)) failures.push(`${key}: history asked for ${asked.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}.png`) });
+            // A tap outside closes it, and the row stays closed: nothing was switched or opened.
+            await page.touchscreen.tap(width / 2, 8);
+            await page.locator("[data-burndown-dialog]").waitFor({ state: "detached", timeout: 3_000 }).catch(() => failures.push(`${key}: a tap outside did not close the chart`));
+            if (rows.control.calls.length > 0) failures.push(`${key}: opening the chart sent ${rows.control.calls.map((call) => call.method + call.path).join(", ")}`);
+            // The no-reading row was opened on purpose to reach its press; every other row must stay closed.
+            const rowOpen = await page.locator(`[data-account-row="${scene.id}"] [data-account-toggle]`).getAttribute("aria-expanded") === "true";
+            if (rowOpen !== (scene.id === "no-reading")) failures.push(`${key}: the row is ${rowOpen ? "open" : "closed"} after the chart closed`);
+            if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 900_000);
 });

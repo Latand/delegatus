@@ -34,7 +34,7 @@ test.each([
     let removed = 0;
     const nativeRefused = new Set<string>();
     for (let pass = 0; pass < 3; pass++) {
-      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, slowProof: { phase, prefix: 33, requiredCost: 1500 } }));
+      fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: 1e12, slowProof: { phase, prefix: 33, requiredCost: 1500 } }));
       const before = store.bytes(), report = await realParentPass();
       for (const directory of nativeFenceDeferrals(report, store)) nativeRefused.add(directory);
       const clock = JSON.parse(fs.readFileSync(config, "utf8"));
@@ -50,7 +50,7 @@ test.each([
     for (let retry = 0; retry < 3 && store.bytes() > heldBytes; retry++) {
       for (const owner of ledgerRoots(store, scratch).filter(row => !holdFirst || !row.directory.endsWith("000000")))
         expect(nativeRefused.has(owner.directory)).toBeTrue();
-      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, slowProof: { phase, prefix: 33, requiredCost: 1500 } }));
+      fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: 1e12, slowProof: { phase, prefix: 33, requiredCost: 1500 } }));
       const report = await realParentPass(); expect(report.errors).toBe(0); removed += report.removed;
       for (const directory of nativeFenceDeferrals(report, store)) nativeRefused.add(directory);
     }
@@ -81,7 +81,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
       let removed = 0;
       let previousFirst: string | undefined;
       for (let pass = 0; pass < 8 && removed < finiteCount; pass++) {
-        fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+        fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,
           slowProof: { phase, prefix: count, timeoutPrefix, requiredCost: 1500 } }));
         const report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
         // Fully unavailable roots get bounded visits and a durable cursor.
@@ -109,7 +109,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
       if (timeoutPrefix === 8) expect(fs.existsSync(directories[timeoutPrefix]!.directory)).toBeFalse();
       // A new helper with the same ledger recovers when the unavailable
       // proofs return. Timeout roots retained their bytes and inode above.
-      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12 }));
+      fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12 }));
       for (let pass = 0; store.bytes() > 0 && pass < 3; pass++) {
         const report = await realParentPass(); expect(report.removed).toBeGreaterThan(0); expect(report.errors).toBe(0);
       }
@@ -134,7 +134,7 @@ test.each(["timeout", "permission-denied"] as const)("real parent retains pressu
       store.measure(directory, 12288);
       if (partialMeasurement === "permission-denied") plantKeepMarker(path.join(directory, ".delegatus-keep"));
     }
-    fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, partialMeasurement }));
+    fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: 1e12, partialMeasurement }));
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "20000"; process.env.LLV_PRESSURE_FIXTURE = config;
     for (let pass = 0; pass < 2; pass++) {
       const report = await realParentPass();
@@ -148,7 +148,7 @@ test.each(["timeout", "permission-denied"] as const)("real parent retains pressu
       expect(physical).toBeGreaterThan(20000);
     }
     removeKeepMarkers();
-    fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12 }));
+    fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: 1e12 }));
     const recovered = await realParentPass();
     expect(recovered).toMatchObject({ removed: 1, bytes: 12288, overCapBytes: 0, errors: 0 });
   } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }

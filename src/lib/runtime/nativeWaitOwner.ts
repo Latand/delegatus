@@ -6,7 +6,7 @@ import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } f
 import { statePath } from "@/lib/configDir";
 import { captureProcessTree, signalProcessGroup } from "@/lib/processGroup";
 import { bindHostExitWriter, discardHostExitWriter, readHostExit, readHostExitSpool, reclaimHostExit, recordHostExit, recordHostStop } from "./hostExit";
-import { beforeStructuredSetupExecOffLoop, retainStructuredSetupProcessOffLoop, structuredSetupCustodyActive } from "./structuredSetupCustody";
+import { beforeStructuredSetupExecOffLoop, retainStructuredSetupWaiterOffLoop, structuredSetupCustodyActive } from "./structuredSetupCustody";
 
 /** Uses the serving interpreter and builtins only, including on installations
  * where the optional namespace launcher/Python is unavailable. */
@@ -112,7 +112,7 @@ export function spawnNativeWaitOwner(command: string, args: string[], options: S
     // The waiter is a real native process and must be retained before it is
     // allowed to create the engine. These writes can contend with a peer, so
     // cross the asynchronous bounded custody boundary before granting exec.
-    await retainStructuredSetupProcessOffLoop(waiter.pid);
+    await retainStructuredSetupWaiterOffLoop(waiter.pid);
     if (awaitAdmission) {
       await beforeStructuredSetupExecOffLoop();
       fs.writeFileSync(path.join(directory, "start.json"), "true", { mode: 0o600 });
