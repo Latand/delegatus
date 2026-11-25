@@ -12879,6 +12879,53 @@ describe("stale working status", () => {
           /* One word for a dead agent with the desktop's tile and reader header. */
           expect((await dead.locator("[data-mobile2-phrase]").innerText()).split(" · ")[0]).toBe(word("kanban.memberState.killed"));
           const reading: Record<string, unknown> = { quiet: await quiet.innerText(), dead: await dead.innerText(), live: await live.innerText() };
+          /* The five agents' meta lines, measured from text ranges: every word whole inside the 390 px screen and
+             inside its own line, and the phrase is the chat bar's «state · age ago» with no ticking seconds. */
+          const agents = [["quiet", response.quiet], ["dead", response.dead], ["live", response.live],
+            ["finished", response.recent.topLevel], ["finishedSub", response.recent.subAgent]] as const;
+          const ago = ["agoSec", "agoMin", "agoHour", "agoDay"].map(key => word(`time.${key}` as Parameters<typeof translate>[1]).replace("{n}", "\\d+")).join("|");
+          const aged = new RegExp(`^.+ · (${ago})$`);
+          const ticking = /\d+\s*(?:h|год|m|хв)\s*\d+\s*(?:m|хв|s|с)\b/;
+          const rowReadings: Record<string, unknown> = {};
+          for (const [name, file] of agents) {
+            await row(file).scrollIntoViewIfNeeded();
+            const measured = await row(file).evaluate((element) => {
+              const phrase = element.querySelector<HTMLElement>("[data-mobile2-phrase]")!;
+              const meta = phrase.parentElement!;
+              const line = meta.getBoundingClientRect();
+              const words: { text: string; left: number; right: number }[] = [];
+              const walker = document.createTreeWalker(meta, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                const text = node.textContent ?? "";
+                if (!text.trim()) continue;
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const box of Array.from(range.getClientRects())) words.push({ text, left: box.left, right: box.right });
+              }
+              const cutChildren = Array.from(meta.children).filter(child => child.scrollWidth > child.clientWidth + 0.5).map(child => child.textContent ?? "");
+              return {
+                phrase: phrase.innerText, started: meta.querySelector<HTMLElement>("[data-mobile2-started]")?.innerText ?? null,
+                text: meta.innerText.replace(/\s+/g, " ").trim(),
+                lineCut: meta.scrollWidth > meta.clientWidth + 0.5, cutChildren,
+                outside: words.filter(word => word.right > line.right + 0.5 || word.left < line.left - 0.5 || word.right > innerWidth).map(word => word.text),
+                height: line.height,
+              };
+            });
+            expect(measured.lineCut).toBe(false);
+            expect(measured.cutChildren).toEqual([]);
+            expect(measured.outside).toEqual([]);
+            expect(measured.phrase).not.toMatch(ticking);
+            if (name !== "live") {
+              expect(measured.phrase).toMatch(aged);
+              /* «started …» is dropped where it says the same age the state's phrase does. */
+              if (measured.started !== null) {
+                const age = (text: string) => text.match(/\d+\s*\S+/)?.[0];
+                expect(age(measured.started)).not.toBe(age(measured.phrase.split(" · ")[1]!));
+              }
+            }
+            rowReadings[name] = measured;
+          }
+          reading.rows = rowReadings;
           await page.screenshot({ path: path.join(out, "task.png"), fullPage: true });
 
           for (const [name, file, state] of [["quiet", response.quiet, "mobile2.chat.stateDone"], ["dead", response.dead, "mobile2.chat.stateKilledAge"]] as const) {
@@ -12888,6 +12935,8 @@ describe("stale working status", () => {
             await page.mouse.move(0, 0);
             const header = screen.locator("[data-mobile2-chat-state]").first();
             expect(await header.innerText()).toStartWith(prefix(state));
+            /* The row on the task screen read the same «state · age ago» phrase as this bar. */
+            expect((await header.innerText()).trim()).toBe((rowReadings[name] as { phrase: string }).phrase.trim());
             /* One word with the desktop's header and tile for the same conversation. */
             expect((await header.innerText()).split(" · ")[0]).toBe(word(name === "quiet" ? "kanban.memberState.done" : "kanban.memberState.killed"));
             expect(await screen.locator('[data-turn-status="running"], [role="timer"]').count()).toBe(0);
@@ -12913,6 +12962,7 @@ describe("stale working status", () => {
             const header = screen.locator("[data-mobile2-chat-state]").first();
             const text = (await header.innerText()).trim();
             expect(text).toStartWith(prefix("mobile2.chat.stateReturned"));
+            expect(text).toBe((rowReadings[name] as { phrase: string }).phrase.trim());
             /* One word with the desktop's reader header, tile and rail for the same conversation. */
             expect(text.split(" · ")[0]).toBe(word("kanban.memberState.returned"));
             const fit = await header.evaluate((cell) => {
