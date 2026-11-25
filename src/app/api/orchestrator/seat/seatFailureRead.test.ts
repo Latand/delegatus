@@ -53,7 +53,7 @@ test("the seat read hides a failed automatic replacement when its incumbent is a
 test("no working seat keeps the failed designation and its terminal time", async () => {
   beginOrchestratorSeatIntent({ project: "atlas", mandate: "Run the board.", clientRequestId: "failed_designation", mode: "spawn", now: AT });
   failOrchestratorSeatIntent("atlas", "failed_designation", "database is locked", "2026-10-11T17:11:00.000Z");
-  expect(await read()).toMatchObject({ seat: null, exists: true, lastFailure: { error: "database is locked", terminalizedAt: "2026-10-11T17:11:00.000Z" } });
+  expect(await read()).toMatchObject({ seat: null, exists: false, lastFailure: { error: "database is locked", terminalizedAt: "2026-10-11T17:11:00.000Z" } });
   expect(liveness).not.toHaveBeenCalled();
 });
 

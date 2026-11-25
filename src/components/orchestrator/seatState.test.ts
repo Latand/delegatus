@@ -668,6 +668,27 @@ describe("the dock binds the seat by its durable conversation id (#1182)", () =>
     })).toBe(successor);
   });
 
+  test("a board row update cannot bind an archived activation path before the incumbent supplies its replacement", () => {
+    const archived = file({
+      path: "/transcripts/orchestrator.archived.jsonl",
+      migratedTo: successorPath,
+    } as Partial<FileEntry>);
+    expect(resolveSeatFile({
+      files: [archived],
+      conversationId: "conversation_orchestrator",
+      seatPath: archived.path,
+      currentPath: archived.path,
+    })).toBeNull();
+
+    const successor = file({ path: successorPath, name: "orchestrator.successor.jsonl" });
+    expect(resolveSeatFile({
+      files: [archived, successor],
+      conversationId: "conversation_orchestrator",
+      seatPath: archived.path,
+      currentPath: successor.path,
+    })).toBe(successor);
+  });
+
   test("the recorded path is a hint: it binds when nothing better answers, and never outranks the id", () => {
     const recorded = file();
     const successor = file({ path: successorPath, name: "orchestrator.successor.jsonl" });

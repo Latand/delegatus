@@ -577,7 +577,8 @@ export function resolveSeatFile(input: {
   // still be an archived stand-in. Bind only that generation and let the
   // targeted transcript endpoint fill a board-window miss.
   if (input.currentPath) {
-    return input.files.find((file) => file.path === input.currentPath) ?? null;
+    const current = input.files.find((file) => file.path === input.currentPath);
+    return current && !isArchivedPredecessor(current) ? current : null;
   }
   const byId = currentConversationFile(input.files, input.conversationId);
   if (byId && !isArchivedPredecessor(byId)) return byId;

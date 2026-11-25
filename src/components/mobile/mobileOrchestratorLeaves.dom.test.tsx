@@ -282,6 +282,37 @@ test("the phone opens an old designated transcript from outside the board window
   expect(await waitFor(() => focusedPath() === old.path, 1_500)).toBe(true);
 });
 
+test("recovered seat actions follow the current transcript after the activation path disappears", async () => {
+  const current = conversation({
+    path: "/repo/atlas/current-seat-generation.jsonl",
+    conversationId: "conversation_old_seat",
+    project: PROJECT,
+    title: "Recovered seat",
+  });
+  seatAnswer = {
+    seat: {
+      project: PROJECT, seatEpoch: 4, conversationId: "conversation_old_seat",
+      path: "/repo/atlas/deleted-activation.jsonl", mandate: "Run the board",
+      state: "active", designatedAt: "2026-01-01T00:00:00Z",
+      intent: { clientRequestId: "recovered-seat", mode: "existing", error: null },
+    },
+    pending: null,
+    exists: false,
+  };
+  const host = mount({
+    files: [current], catalogKnown: true, catalogConversationCount: 1,
+    focusRequest: { path: current.path, nonce: 1, catalog: true },
+  });
+  const focusedPath = () => host.querySelector('[data-testid="mobile-focused-pane"] [data-link-path]')?.getAttribute("data-link-path");
+  expect(await waitFor(() => focusedPath() === current.path)).toBe(true);
+
+  const menuButton = host.querySelector<HTMLButtonElement>("[data-mobile2-open='menu']");
+  expect(menuButton).not.toBeNull();
+  flushSync(() => menuButton!.click());
+  expect(await waitFor(() => host.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="reports"]') !== null)).toBe(true);
+  expect(host.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="seat"]')).not.toBeNull();
+});
+
 test("a project with nothing in it still offers the invitation — the leaf where an orchestrator is most wanted", async () => {
   const host = mount();
   expect(await waitFor(() => row(host)?.getAttribute("data-mobile2-seat-state") === "draft")).toBe(true);

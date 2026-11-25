@@ -12,6 +12,8 @@ import { MEMBER_COOKIE, mintSession } from "@/lib/team/sessions";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import type { Member } from "@/lib/team/contract";
 import { createWorkspace } from "@/lib/team/workspaces";
+import * as stateCollections from "@/lib/state/sqliteStateStore";
+import * as seatStore from "@/lib/orchestrator/seatStore";
 
 import { GET } from "./route";
 
@@ -134,6 +136,65 @@ test("an empty catalog reads the materialized generation at its exact path", asy
   expect(await response.json()).toMatchObject({
     conversationId: receipt.conversationId,
     file: { path: seatPath, conversationId: receipt.conversationId, engine: "claude" },
+  });
+});
+
+test("a cold Claude seat reads only its addressed transcript and slot rows with large unrelated history", async () => {
+  const state = process.env.LLV_STATE_DIR!;
+  const flows = Array.from({ length: 2_000 }, (_, index) => ({
+    id: `unrelated-flow-${index}`, project: `foreign-${index}`, cwd: `/unrelated/${index}`,
+    implementerPath: `/unrelated/${index}/agent.jsonl`, rounds: [],
+  }));
+  fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(path.join(state, "flows.json"), JSON.stringify({ flows }));
+  fs.writeFileSync(path.join(state, "workflows.json"), JSON.stringify({ workflows: flows }));
+  designate(seatPath);
+  const stateReads: string[][] = [];
+  const original = stateCollections.readStateCollectionsRows;
+  const rows = spyOn(stateCollections, "readStateCollectionsRows").mockImplementation((filename, collections) => {
+    stateReads.push([...collections]);
+    return original(filename, collections);
+  });
+  const seatReads: string[][] = [];
+  const readSeats = seatStore.readOrchestratorSeatStore;
+  const seatRead = spyOn(seatStore, "readOrchestratorSeatStore").mockImplementation((parts) => {
+    seatReads.push([...parts]);
+    return readSeats(parts);
+  });
+  const nativeReadFile = fs.readFileSync.bind(fs);
+  let unrelatedHistoryReads = 0;
+  const readFile = spyOn(fs, "readFileSync").mockImplementation(((...args: unknown[]) => {
+    const filename = args[0] as fs.PathOrFileDescriptor;
+    if (typeof filename === "string" && ["flows.json", "workflows.json"].includes(path.basename(filename))) unrelatedHistoryReads += 1;
+    return (nativeReadFile as (...parameters: unknown[]) => unknown)(...args);
+  }) as typeof fs.readFileSync);
+  try {
+    const response = await GET(new Request(`${route}?project=${project}`));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ conversationId, file: { path: seatPath, project, engine: "claude" } });
+    expect(stateReads.some((collections) => collections.includes("flows") || collections.includes("workflows"))).toBe(false);
+    expect(unrelatedHistoryReads).toBe(0);
+    expect(seatReads).toEqual([["slots"], ["slots"]]);
+  } finally {
+    rows.mockRestore();
+    seatRead.mockRestore();
+    readFile.mockRestore();
+  }
+});
+
+test("the cold route accepts the scanner's Antigravity events.jsonl transcript engine", async () => {
+  const eventsPath = path.join(path.dirname(process.env.LLV_STATE_DIR!), "accounts", "antigravity", "default", "sessions", "ag-seat-recovery", "events.jsonl");
+  fs.mkdirSync(path.dirname(eventsPath), { recursive: true });
+  fs.writeFileSync(eventsPath, [
+    JSON.stringify({ type: "session.start", data: { sessionId: "ag-seat-recovery" }, timestamp }),
+    JSON.stringify({ type: "user.message", data: { content: "Resume the board" }, timestamp }),
+  ].join("\n") + "\n");
+  designate(eventsPath);
+  const response = await GET(new Request(`${route}?project=${project}`));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    conversationId,
+    file: { path: eventsPath, conversationId, project, engine: "antigravity", fmt: "antigravity" },
   });
 });
 

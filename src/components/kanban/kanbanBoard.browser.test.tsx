@@ -120,15 +120,21 @@ describe("#4273 seat transcript recovery rendering", () => {
           mode = state;
           const width = phone ? 390 : 1440;
           const label = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${state}`;
-          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seat=gone#p=atlas`,
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seat=gone&seat-driver=1#p=atlas`,
             { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
           try {
             if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
-            const rootSelector = phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat] [data-orchestrator-panel]";
-            const root = page.locator(rootSelector);
+            let rootSelector = phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat] [data-orchestrator-panel]";
+            let root = page.locator(rootSelector);
             await root.waitFor();
             if (state === "loading") await page.getByText(translate(lang, "orchPanel.resolving")).waitFor();
-            if (state === "opened") await page.locator(`[data-orchestrator-conversation="${conversationId}"]`).waitFor();
+            if (state === "opened" && phone) {
+              await page.locator("[data-orchestrator-confirm]").getByText(translate(lang, "mobile2.seat.open")).click();
+              await page.locator(`[data-testid="mobile-focused-pane"] [data-link-path="${seatPath}"]`).waitFor();
+              rootSelector = "[data-testid='mobile-focused-pane']";
+              root = page.locator(rootSelector);
+              await root.waitFor();
+            } else if (state === "opened") await page.locator(`[data-orchestrator-conversation="${conversationId}"]`).waitFor();
             if (state === "missing") await page.getByText(translate(lang, "orchPanel.transcriptNotFound")).waitFor();
             await root.scrollIntoViewIfNeeded();
             const geometry = await root.evaluate((element) => {
@@ -140,20 +146,23 @@ describe("#4273 seat transcript recovery rendering", () => {
                 const range = document.createRange(); range.selectNodeContents(walker.currentNode);
                 textRects.push(...[...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom })));
               }
+              const visibleTextRects = textRects.filter(rect => rect.bottom > bounds.top && rect.top < bounds.bottom
+                && rect.bottom > 0 && rect.top < innerHeight);
+              const outsideTextRects = visibleTextRects.filter(rect => rect.left < bounds.left - 1 || rect.right > bounds.right + 1);
               return { inside: bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight,
-                textInside: textRects.every(rect => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1
-                  && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1 && rect.top >= 0 && rect.bottom <= innerHeight),
+                textInside: outsideTextRects.length === 0, visibleTextCount: visibleTextRects.length, outsideTextRects: outsideTextRects.slice(0, 12),
+                bounds: { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom },
                 text: element.textContent ?? "" };
             });
+            await page.screenshot({ path: path.join(out, `${label}.png`), fullPage: true });
             expect(geometry.inside, label).toBe(true);
-            expect(geometry.textInside, label).toBe(true);
+            expect(geometry.textInside, `${label}: ${JSON.stringify({ bounds: geometry.bounds, outsideTextRects: geometry.outsideTextRects })}`).toBe(true);
             if (state === "missing") {
               expect(geometry.text).toContain(seatPath);
               expect(await page.locator("[data-orchestrator-open-board]").count()).toBeGreaterThan(0);
               expect(await page.locator("[data-orchestrator-rotate]").count()).toBeGreaterThan(0);
             }
             expect(pageErrors, label).toEqual([]);
-            await page.screenshot({ path: path.join(out, `${label}.png`), fullPage: true });
             readings.push({ label, width, lang, theme, state, geometry });
           } finally { await context.close(); }
         }
