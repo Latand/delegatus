@@ -5057,7 +5057,8 @@ describe("shipped role defaults rendered evidence", () => {
     const browser = await chromium.launch(LAUNCH);
     const cases: Record<string, unknown>[] = [];
     try {
-      for (const locale of ["en", "uk"] as const) for (const width of [1280, 390]) {
+      /* 740 and 700 are the two sides of the table's own floor, 668 px (the fixture pads the table by 24 px a side). */
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 1024, 740, 700, 660, 390]) {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-defaults&mapping=1`, { width, height: 844 }, "light", locale, "reduce", width === 390);
         try {
           await page.locator('[data-mapping-row="reviewer"]').waitFor();
@@ -5099,14 +5100,101 @@ describe("shipped role defaults rendered evidence", () => {
           }
           const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
           expect(overflow).toBeFalse();
+          /* The engine choice in each row, measured: three engines inside their own cell and clear of the model
+             select (the table), a visible and spoken state on a not-ready engine (the card), and no model name
+             cut by the select's arrow. */
+          const layout = await page.locator("[data-agent-mapping]").getAttribute("data-mapping-layout");
+          expect(layout).toBe(width >= 740 ? "table" : "card");
+          const geometry = await page.evaluate(() => {
+            const ARROW = 24;
+            const canvas = document.createElement("canvas").getContext("2d")!;
+            return Array.from(document.querySelectorAll<HTMLElement>("[data-mapping-row]")).map((row) => {
+              const group = row.querySelector<HTMLElement>("[role=radiogroup]")!;
+              const cell = group.parentElement!.getBoundingClientRect();
+              const box = group.getBoundingClientRect();
+              const select = row.querySelector<HTMLSelectElement>("select")!;
+              const selectBox = select.getBoundingClientRect();
+              const style = getComputedStyle(select);
+              canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+              const label = select.selectedOptions[0]?.textContent ?? "";
+              const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - ARROW;
+              /* The room left by the widest label this select offers, not only the one it shows. */
+              const widest = Math.max(...Array.from(select.options).map((option) => canvas.measureText(option.textContent ?? "").width));
+              const agy = row.querySelector<HTMLElement>("[data-engine-segment=antigravity]")!;
+              return {
+                id: row.dataset.mappingRow!,
+                groupOverCell: Math.round((box.right - cell.right) * 10) / 10,
+                selectClear: Math.round((selectBox.left - box.right) * 10) / 10,
+                segmentsInside: Array.from(group.querySelectorAll("button")).every((button) => button.getBoundingClientRect().right <= box.right + 0.5),
+                label,
+                labelRoom: Math.round((room - canvas.measureText(label).width) * 10) / 10,
+                optionRoom: Math.round((room - widest) * 10) / 10,
+                agyLabel: agy.getAttribute("aria-label"),
+                agyDot: agy.querySelector("[data-engine-state-dot]") !== null,
+              };
+            });
+          });
+          const notReady = translate(locale, "onboarding.agents.blocked", { engine: "Antigravity" });
+          for (const row of geometry) {
+            if (layout === "table") {
+              expect(row.groupOverCell).toBeLessThanOrEqual(0);
+              expect(row.segmentsInside).toBe(true);
+              expect(row.selectClear).toBeGreaterThanOrEqual(0);
+              expect(row.labelRoom).toBeGreaterThanOrEqual(0);
+              expect(row.optionRoom).toBeGreaterThanOrEqual(0);
+            }
+            /* The visual critic is locked to Claude: its other segments say so instead. */
+            expect(row.agyLabel).toBe(row.id === "visual-critic" ? translate(locale, "onboarding.agents.engineLocked", { role: translate(locale, "onboarding.agents.role.visualCritic"), engine: "Claude" }) : notReady);
+            expect(row.agyDot).toBe(true);
+          }
           expect(pageErrors).toEqual([]);
-          cases.push({ locale, width, rows, overflow, pageErrors });
+          cases.push({ locale, width, layout, rows, geometry, overflow, pageErrors });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/role-defaults", { recursive: true });
       fs.writeFileSync("evidence/role-defaults/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 120_000);
+  }, 240_000);
+
+  browserTest("an Antigravity row on its longest model keeps every label clear of the select's arrow", async () => {
+    const out = path.resolve(".artifacts/role-defaults-agy");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 1024, 740, 700]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-defaults&mapping=1&agy=1`, { width, height: 844 }, "light", locale, "reduce", false);
+        try {
+          const row = page.locator('[data-mapping-row="builder"]');
+          await row.waitFor();
+          expect(await page.locator("[data-agent-mapping]").getAttribute("data-mapping-layout")).toBe(width >= 740 ? "table" : "card");
+          expect(await row.locator("[data-engine-segment=antigravity]").getAttribute("aria-checked")).toBe("true");
+          const reading = await row.evaluate((node) => {
+            const ARROW = 24;
+            const select = node.querySelector<HTMLSelectElement>("select")!;
+            const style = getComputedStyle(select);
+            const canvas = document.createElement("canvas").getContext("2d")!;
+            canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+            const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - ARROW;
+            return {
+              selected: select.selectedOptions[0]?.textContent ?? "",
+              selectWidth: select.getBoundingClientRect().width,
+              labels: Array.from(select.options).map((option) => ({ label: option.textContent ?? "", room: Math.round((room - canvas.measureText(option.textContent ?? "").width) * 10) / 10 })),
+            };
+          });
+          expect(reading.selected).toBe("GPT-OSS 120B (Medium)");
+          expect(reading.labels.length).toBeGreaterThanOrEqual(9);
+          for (const entry of reading.labels) expect(entry.room).toBeGreaterThanOrEqual(0);
+          expect(pageErrors).toEqual([]);
+          await row.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-agy-row.png`) });
+          cases.push({ locale, width, ...reading, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync("evidence/role-defaults/agy-rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
 });
 
 describe("linked boards M3 remote agents", () => {
@@ -22817,6 +22905,188 @@ describe("model glyphs in place of the stage dot", () => {
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 1_500_000);
+
+  browserTest("every Antigravity model draws its own glyph in every state, light and dark, desktop and phone; an unknown model keeps the dot", async () => {
+    /*
+     * Antigravity's catalogue over `?scenario=model-glyphs-agy`: nine one-stage
+     * lanes at work (the Gemini 4 elements, Flash, both orchestrators, GPT-OSS,
+     * and the two Claude models Antigravity serves), a draft of the same nine
+     * waiting, and two lanes that settle them; a tenth stage on an unknown
+     * model keeps its dot. Stage ids are the glyph kinds, so each reading is
+     * checked against the kind its stage must draw.
+     */
+    const EVIDENCE_AGY = path.resolve("evidence/model-glyphs/antigravity");
+    fs.mkdirSync(EVIDENCE_AGY, { recursive: true });
+    const out = path.resolve(".artifacts/model-glyphs-agy");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=model-glyphs-agy`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const shots: string[] = [];
+    const failures: string[] = [];
+    const KINDS = ["neon", "argon", "hydrogen", "flash", "opus", "sonnet", "oss", "orch-neon", "orch-argon"] as const;
+    const RUN_AGY = card("t-glyphs-agy-run");
+    const REST_AGY = card("t-glyphs-agy");
+    type AgyWant = Record<string, readonly [kind: string, reading: string, live: boolean]>;
+    const every = (reading: string, live: boolean): AgyWant => Object.fromEntries(KINDS.map((kind) => [kind, [kind, reading, live] as const]));
+    const SETTLED_AGY: Record<string, AgyWant> = {
+      "p-glyphs-agy-settled": { neon: ["neon", "passed", false], argon: ["argon", "passed", false], hydrogen: ["hydrogen", "failed", false], flash: ["flash", "needs", false], oss: ["oss", "waiting", false] },
+      "p-glyphs-agy-settled-more": { opus: ["opus", "passed", false], sonnet: ["sonnet", "passed", false], "orch-neon": ["orch-neon", "failed", false], "orch-argon": ["orch-argon", "needs", false] },
+    };
+    const lane = (id: string) => `.pblock[data-pipeline="${id}"]`;
+    const shot = async (target: Page | ReturnType<Page["locator"]>, name: string) => {
+      const file = path.join(EVIDENCE_AGY, `${name}.png`);
+      await target.screenshot({ path: file });
+      shots.push(file);
+    };
+    const BADGE_HOSTS_AGY = new Set(["pb-pill", "navchip", "pstrip", "pane-strip"]);
+    const gate = (label: string, reading: Reading, want: AgyWant, { motion = true, dot = false } = {}) => {
+      frames[label] = reading;
+      const { glyphs, dots } = reading;
+      if (!glyphs.length) failures.push(`${label}: no glyph was drawn`);
+      for (const glyph of glyphs) {
+        const size = 14 * glyph.scale;
+        if (Math.abs(glyph.width - size) > 0.6 || Math.abs(glyph.height - size) > 0.6) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} is ${glyph.width}×${glyph.height} px at scale ${glyph.scale}`);
+        if (!glyph.inside) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} sticks out of its ${glyph.host}`);
+        if (glyph.live && motion && (!glyph.figure.length || glyph.halo !== "mg-halo")) failures.push(`${label}: running ${glyph.kind} does not move (${JSON.stringify([glyph.figure, glyph.halo])})`);
+        if (!glyph.live && (glyph.figure.length || glyph.halo !== "none")) failures.push(`${label}: idle ${glyph.kind} on ${glyph.stage} moves`);
+        const settled = glyph.reading === "passed" || glyph.reading === "failed" || glyph.reading === "needs";
+        if ((settled && BADGE_HOSTS_AGY.has(glyph.host ?? "")) !== Boolean(glyph.badge)) failures.push(`${label}: ${glyph.kind} reading ${glyph.reading} on a ${glyph.host} has badge ${glyph.badge}`);
+        if (glyph.stage === "fix") failures.push(`${label}: the unknown model drew a glyph`);
+        if (glyph.twin) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} is drawn beside an engine mark as well`);
+        if (glyph.stage && glyph.stage !== glyph.kind) failures.push(`${label}: stage ${glyph.stage} draws ${glyph.kind}`);
+      }
+      for (const [stage, [kind, state, live]] of Object.entries(want)) {
+        const mine = glyphs.filter((glyph) => glyph.stage === stage);
+        if (!mine.length) failures.push(`${label}: ${stage} drew no glyph`);
+        if (mine.some((glyph) => glyph.kind !== kind || glyph.reading !== state || glyph.live !== live)) failures.push(`${label}: ${stage} should read ${JSON.stringify([kind, state, live])}, reads ${JSON.stringify(mine.map((glyph) => [glyph.kind, glyph.reading, glyph.live]))}`);
+      }
+      if (dot && !dots.some((entry) => entry.stage === "fix")) failures.push(`${label}: the unknown model kept no dot ${JSON.stringify(dots)}`);
+    };
+    const ready = async (page: Page) => {
+      await page.waitForSelector(`${REST_AGY} ${lane("p-glyphs-agy-settled-more")}`, { state: "attached", timeout: 30_000 });
+      await page.waitForSelector(`${RUN_AGY} ${lane("p-glyph-agy-orch-argon")}`, { state: "attached", timeout: 30_000 });
+    };
+    const specimens = async (page: Page, name: string) => {
+      /* Every kind, enlarged to 64 px in each of the five readings, drawn with the page's own CSS and tokens. */
+      await page.evaluate((kinds) => {
+        const sample = document.querySelector<HTMLElement>(".mglyph[data-glyph]");
+        if (!sample) return;
+        const sheet = document.createElement("div");
+        sheet.id = "agy-specimens";
+        sheet.style.cssText = "position:fixed;inset:20px;z-index:99999;background:var(--surface-card);padding:16px;display:grid;grid-template-columns:repeat(5,96px);gap:14px;align-content:start;justify-content:start;border:1px solid var(--border-default,#ccc)";
+        for (const kind of kinds) {
+          const source = document.querySelector<HTMLElement>(`.mglyph[data-glyph="${kind}"]`);
+          if (!source) continue;
+          for (const reading of ["running", "waiting", "passed", "failed", "needs"]) {
+            const clone = source.cloneNode(true) as HTMLElement;
+            clone.style.setProperty("--glyph-size", "64px");
+            clone.dataset.glyphState = reading;
+            clone.dataset.live = reading === "running" ? "1" : "";
+            if (reading !== "running") clone.removeAttribute("data-live");
+            clone.querySelector(".mg-badge")?.remove();
+            if (reading === "passed" || reading === "failed" || reading === "needs") {
+              const badge = document.createElement("span");
+              badge.className = "mg-badge";
+              badge.style.setProperty("--stage-tone", reading === "passed" ? "var(--color-success)" : reading === "failed" ? "var(--color-danger)" : "var(--color-warning)");
+              clone.append(badge);
+            }
+            const cell = document.createElement("div");
+            cell.style.cssText = "display:grid;place-items:center;height:96px";
+            cell.append(clone);
+            sheet.append(cell);
+          }
+        }
+        document.body.append(sheet);
+      }, KINDS);
+      await page.waitForTimeout(400);
+      await shot(page, name);
+      await page.evaluate(() => document.getElementById("agy-specimens")?.remove());
+    };
+
+    const desktop = async (scheme: Scheme, lang: "en" | "uk") => {
+      const suffix = `${lang === "uk" ? "uk-" : ""}${scheme}`;
+      const opened = await openFixture(browser, base, { width: 1440, height: 1200 }, scheme, lang, "no-preference", false, 2);
+      const { page } = opened;
+      try {
+        await ready(page);
+        await page.locator(RUN_AGY).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await page.waitForTimeout(700);
+        gate(`desktop-card-running-${suffix}`, await readGlyphs(page, RUN_AGY), every("running", true));
+        gate(`desktop-card-waiting-${suffix}`, await readGlyphs(page, `${REST_AGY} ${lane("p-glyphs-agy-wait")}`), every("waiting", false));
+        for (const [id, want] of Object.entries(SETTLED_AGY)) gate(`desktop-card-${id}-${suffix}`, await readGlyphs(page, `${REST_AGY} ${lane(id)}`), want, { dot: id === "p-glyphs-agy-settled-more" });
+        await shot(page.locator(RUN_AGY), `desktop-card-running-${suffix}`);
+        await page.locator(REST_AGY).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await page.waitForTimeout(300);
+        await shot(page.locator(REST_AGY), `desktop-card-waiting-settled-${suffix}`);
+        if (lang === "en") await specimens(page, `specimens-${suffix}`);
+        if (opened.pageErrors.length) failures.push(`desktop ${suffix}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`desktop ${suffix}: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    const phone = async (scheme: Scheme) => {
+      const opened = await openFixture(browser, base, { width: 390, height: 844 }, scheme, "en", "no-preference", true, 2);
+      const { page } = opened;
+      let step = "the board";
+      try {
+        await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+        const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+        if (await tab.count()) await tab.first().click();
+        for (const task of ["t-glyphs-agy-run", "t-glyphs-agy"]) {
+          step = `the task screen of ${task}`;
+          const phoneCard = page.locator(`[data-phone-card="task:${task}"]`).first();
+          await phoneCard.waitFor({ timeout: 10_000 });
+          await phoneCard.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(400);
+          await phoneCard.evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-phone-task-body] .pblock", { timeout: 10_000 });
+          await page.evaluate(() => { for (const fold of document.querySelectorAll<HTMLElement>('[data-phone-task-body] [data-passed-fold][aria-expanded="false"]')) fold.click(); });
+          await page.waitForTimeout(600);
+          const body = "[data-phone-task-body]";
+          if (task === "t-glyphs-agy-run") gate(`phone-task-running-${scheme}`, await readGlyphs(page, body), every("running", true));
+          else {
+            gate(`phone-task-waiting-${scheme}`, await readGlyphs(page, `${body} ${lane("p-glyphs-agy-wait")}`), every("waiting", false));
+            for (const [id, want] of Object.entries(SETTLED_AGY)) gate(`phone-task-${id}-${scheme}`, await readGlyphs(page, `${body} ${lane(id)}`), want, { dot: id === "p-glyphs-agy-settled-more" });
+          }
+          const tall = await page.evaluate((selector) => { const element = document.querySelector(selector); return element ? element.scrollHeight - element.clientHeight : 0; }, body);
+          await page.setViewportSize({ width: 390, height: 844 + Math.max(0, tall) });
+          await page.waitForTimeout(300);
+          await shot(page, `phone-task-${task === "t-glyphs-agy-run" ? "running" : "waiting-settled"}-${scheme}`);
+          await page.setViewportSize({ width: 390, height: 844 });
+          await page.waitForTimeout(200);
+          await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 10_000 });
+        }
+        if (opened.pageErrors.length) failures.push(`phone ${scheme}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`phone ${scheme}, ${step}: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        await desktop(scheme, "en");
+        await desktop(scheme, "uk");
+        await phone(scheme);
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const kindsSeen = new Set(Object.values(frames).flatMap((reading) => (reading as Reading).glyphs.map((glyph) => glyph.kind)));
+    for (const kind of KINDS) if (!kindsSeen.has(kind)) failures.push(`no frame drew ${kind}`);
+    const record = { viewport: { desktop: "1440x1200", phone: "390x844" }, deviceScaleFactor: 2, screenshots: shots.map((file) => path.relative(process.cwd(), file)), frames, failures };
+    fs.writeFileSync(path.join(EVIDENCE_AGY, "readings.json"), `${JSON.stringify(record, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
 });
 
 describe("seat panel carries no internal noise", () => {
@@ -48742,4 +49012,142 @@ describe("one set of hints and one row of controls: priority hints belong to the
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);
+});
+
+describe("a closed conversation leaves the address", () => {
+  /*
+   * F5 reopens the conversation the operator is on and shows the board once
+   * they have closed it: the hash a reload reads names the open conversation
+   * only while it is open. In the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=loose`, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "a closed conversation leaves the address"
+   *
+   * Each run opens `#c=<id>` (frame 1), reloads (frame 2: the conversation is
+   * back), closes it, and reloads again (frame 3: the board, an address that
+   * names no conversation). The desktop closes with the window's ✕ and again
+   * with Escape; the phone (390 px, touch) closes with ‹. The history length
+   * does not grow on a close: the entry is rewritten, so Back cannot return
+   * to the closed conversation.
+   *
+   * Frames go to `$LLV_EVIDENCE_DIR/closed-conversation-address/`, readings to
+   * `evidence/closed-conversation-address/rendered.json`. `LLV_CLOSED_ADDRESS_ONLY`
+   * takes a comma-separated list of run names (`1440x900-en-light-x`) to rerun some.
+   */
+  const OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "closed-conversation-address");
+  const EVIDENCE = path.resolve("evidence/closed-conversation-address");
+  const ID = "conversation_export-review";
+  const VIEWPORTS = [
+    { width: 1440, height: 900, phone: false },
+    { width: 1000, height: 700, phone: false },
+    { width: 390, height: 844, phone: true },
+  ];
+
+  /** What a person sees of the conversation: its reader (the window or the phone's screen) with text, whole in the viewport. */
+  const readConversation = (page: Page, phone: boolean) => page.evaluate(({ id, onPhone }) => {
+    const reader = document.querySelector<HTMLElement>(onPhone ? '[data-mobile2-screen="chat"]' : `[data-agent-window-frame] [data-kanban-reader="${id}"]`);
+    if (!reader || !reader.checkVisibility({ visibilityProperty: true })) return { visible: false, text: "", inViewport: false };
+    const box = reader.getBoundingClientRect();
+    return {
+      visible: box.width > 0 && box.height > 0,
+      text: (reader.textContent ?? "").trim().slice(0, 80),
+      inViewport: box.left >= -0.5 && box.top >= -0.5 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5,
+    };
+  }, { id: ID, onPhone: phone });
+
+  /** The board a reload lands on: drawn, with its own text, and no conversation open over it. */
+  const readBoard = (page: Page, phone: boolean) => page.evaluate(({ id, onPhone }) => {
+    const board = document.querySelector<HTMLElement>(onPhone ? "[data-phone-kanban]" : "[data-kanban-board]");
+    const box = board?.getBoundingClientRect();
+    return {
+      drawn: Boolean(board && box && box.width > 0 && box.height > 0 && board.checkVisibility({ visibilityProperty: true })),
+      text: (board?.textContent ?? "").trim().slice(0, 80),
+      windowOpen: document.querySelector("[data-agent-window-frame]") !== null,
+      screenOpen: document.querySelector('[data-mobile2-screen="chat"]') !== null,
+      readerOnScreen: [...document.querySelectorAll<HTMLElement>(`[data-agent-window-frame] [data-kanban-reader="${id}"]`)].some((element) => element.checkVisibility({ visibilityProperty: true })),
+      notice: document.querySelector("[data-stale-focus-notice]") !== null,
+      hash: location.hash,
+      entries: history.length,
+    };
+  }, { id: ID, onPhone: phone });
+
+  const settled = async (page: Page, phone: boolean) => {
+    await page.waitForFunction((onPhone) => onPhone ? Boolean(document.querySelector('[data-mobile2-screen="chat"]')) : Boolean(document.querySelector("[data-agent-window-frame] [data-kanban-reader]")), phone, { timeout: 30_000 });
+    await page.waitForTimeout(500);
+  };
+
+  for (const way of ["close", "escape"] as const) browserTest(`F5 reopens the open conversation and shows the board once it is closed (${way})`, async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const bundle = fs.mkdtempSync(path.join(os.tmpdir(), "closed-address-"));
+    const server = await serveEvidenceFixture(bundle);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const viewport of VIEWPORTS) {
+        if (viewport.phone && way === "escape") continue;
+        for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+          const key = `${viewport.width}x${viewport.height}-${lang}-${scheme}-${viewport.phone ? "back" : way}`;
+          if (process.env.LLV_CLOSED_ADDRESS_ONLY && !process.env.LLV_CLOSED_ADDRESS_ONLY.split(",").includes(key)) continue;
+          let step = "opening the link";
+          const fail = (message: string) => failures.push(`${key}: ${message}`);
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=loose#c=${ID}`, viewport, scheme, lang, "no-preference", viewport.phone);
+          const reading: Record<string, unknown> = {};
+          const shot = (name: string) => page.screenshot({ path: path.join(OUT, `${key}-${name}.png`) });
+          try {
+            await settled(page, viewport.phone);
+            reading.opened = await readConversation(page, viewport.phone);
+            await shot("1-open");
+
+            step = "reloading on the open conversation";
+            await page.reload();
+            await settled(page, viewport.phone);
+            const reopened = await readConversation(page, viewport.phone);
+            reading.reopened = reopened;
+            await shot("2-reloaded-open");
+            if (!reopened.visible || !reopened.text) fail("F5 did not reopen the open conversation");
+            if (!reopened.inViewport) fail("the reopened conversation leaves the viewport");
+            if (await page.evaluate(() => location.hash) !== `#c=${ID}`) fail("the reload changed the address of the open conversation");
+
+            step = "closing it";
+            const before = await page.evaluate(() => history.length);
+            if (viewport.phone) await page.locator("[data-mobile2-back]").click();
+            else if (way === "escape") await page.keyboard.press("Escape");
+            else await page.locator(`[data-agent-window-frame] [data-reader-close]`).first().click();
+            await page.waitForFunction((onPhone) => onPhone ? !document.querySelector('[data-mobile2-screen="chat"]') : !document.querySelector("[data-agent-window-frame]"), viewport.phone, { timeout: 15_000 });
+            await page.waitForTimeout(300);
+            const closed = await readBoard(page, viewport.phone);
+            reading.closed = closed;
+            await shot("3-closed");
+            if (/#[cf]=/.test(closed.hash)) fail(`the address still names the conversation: ${closed.hash}`);
+            if (closed.entries > before) fail(`closing added history entries (${before} → ${closed.entries})`);
+
+            step = "reloading after the close";
+            await page.reload();
+            await page.waitForFunction((onPhone) => document.querySelector(onPhone ? "[data-phone-kanban]" : "[data-kanban-board]") !== null, viewport.phone, { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            const board = await readBoard(page, viewport.phone);
+            reading.board = board;
+            await shot("4-reloaded-board");
+            if (!board.drawn || !board.text) fail("the board is not drawn after the reload");
+            if (board.windowOpen || board.screenOpen || board.readerOnScreen) fail("the closed conversation came back after the reload");
+            if (/#[cf]=/.test(board.hash)) fail(`the address names the conversation after the reload: ${board.hash}`);
+            if (board.notice) fail("a not-found notice appeared");
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            fail(`${step}: ${error instanceof Error ? error.message.split("\n")[0]! : String(error)}`);
+            await page.screenshot({ path: path.join(OUT, `${key}-failed.png`) }).catch(() => {});
+          } finally { await context.close(); }
+          readings[key] = reading;
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.rmSync(bundle, { recursive: true, force: true });
+    }
+    if (!process.env.LLV_CLOSED_ADDRESS_ONLY) fs.writeFileSync(path.join(EVIDENCE, `rendered-${way}.json`), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=loose", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_500_000);
 });

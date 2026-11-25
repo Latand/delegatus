@@ -163,6 +163,14 @@
   --glyph-luna-glow: #9fb3d9;
   --glyph-neon: #006482;
   --glyph-neon-glow: #00c4e8;
+  --glyph-argon: #6d3fd1;
+  --glyph-argon-glow: #8d63f2;
+  --glyph-hydrogen: #c0265f;
+  --glyph-hydrogen-glow: #ee4f89;
+  --glyph-flash: #1f8a4c;
+  --glyph-flash-glow: #2fc46b;
+  --glyph-oss: #8c5a2e;
+  --glyph-oss-glow: #c98a4d;
   /* The running halo: how far past the glyph it reaches and how strong it is
      at its heart. Astra, the brightest sun, takes the strong peak. */
   --glyph-halo-reach: 3px;
@@ -316,6 +324,14 @@
     --glyph-luna-glow: #c9d6f2;
     --glyph-neon: #2ce5ff;
     --glyph-neon-glow: #2ce5ff;
+    --glyph-argon: #b49cff;
+    --glyph-argon-glow: #b49cff;
+    --glyph-hydrogen: #ff7aa8;
+    --glyph-hydrogen-glow: #ff7aa8;
+    --glyph-flash: #4fe08c;
+    --glyph-flash-glow: #4fe08c;
+    --glyph-oss: #e0a468;
+    --glyph-oss-glow: #e0a468;
     --glyph-halo-reach: 5px;
     --glyph-halo-peak: 45%;
     --glyph-halo-peak-strong: 55%;
@@ -419,6 +435,14 @@
   --glyph-luna-glow: #c9d6f2;
   --glyph-neon: #2ce5ff;
   --glyph-neon-glow: #2ce5ff;
+  --glyph-argon: #b49cff;
+  --glyph-argon-glow: #b49cff;
+  --glyph-hydrogen: #ff7aa8;
+  --glyph-hydrogen-glow: #ff7aa8;
+  --glyph-flash: #4fe08c;
+  --glyph-flash-glow: #4fe08c;
+  --glyph-oss: #e0a468;
+  --glyph-oss-glow: #e0a468;
   --glyph-halo-reach: 5px;
   --glyph-halo-peak: 45%;
   --glyph-halo-peak-strong: 55%;

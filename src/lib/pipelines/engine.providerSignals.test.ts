@@ -1,14 +1,52 @@
-import { expect, test, tickPipelines, loadPipelines, savePipelines, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, stampPipelinePrompt, providerRecoveryHarness, cutChainKit, CHAIN_RESET, otherKindCut, largeToolResult, engineModule } from "./engine.fixture";
+import { expect, test, tickPipelines, loadPipelines, savePipelines, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, stampPipelinePrompt, providerRecoveryHarness, cutChainKit, CHAIN_RESET, otherKindCut, largeToolResult, engineModule, patchPipeline } from "./engine.fixture";
 import { pipelineStageRead } from "@/lib/mcp/compactAnswers";
+import { pipelineRetirementReader } from "./retirementEvidence";
 
 test.each([
-  ["prose", "other", "This content was flagged for possible cybersecurity risk."],
-  ["native code without a message", "cyber_policy", ""],
-] as const)("a Codex cybersecurity refusal from %s parks and appears in the stage attempt read", async (_source, errorClass, message) => {
+  ["a fresh attempt", "other", "This content was flagged for possible cybersecurity risk.", false],
+  ["an attempt launched after resume", "cyber_policy", "", true],
+] as const)("a Codex cybersecurity refusal on %s parks and retires only the idle host", async (_source, errorClass, message, resumed) => {
   const f = await providerRecoveryHarness("codex", errorClass, message);
+  const initial = loadPipelines()[0]!;
+  if (resumed) {
+    f.h.ports.resolveProjectSpawn = engine => ({ kind: "available", account: {
+      engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" },
+    } });
+    f.h.durableTurns.clear();
+    f.h.setConversationActive(true);
+    f.advance(1_000);
+    expect((await patchPipeline(initial.id, { action: "pause", reason: "Maintenance" }, f.h.ports)).pipeline?.state).toBe("paused");
+    f.h.setConversationActive(false);
+    f.advance(1_000);
+    expect((await patchPipeline(initial.id, { action: "resume" }, f.h.ports)).pipeline?.state).toBe("running");
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: "pipeline paused" });
+  }
   const original = loadPipelines()[0]!;
   const stageId = original.cursor!.stageId;
-  const source = original.runs[0]!.attempts[0]!;
+  const source = original.runs[0]!.attempts.at(-1)!;
+  const launches = resumed ? 2 : 1;
+  expect(source).toMatchObject({ n: launches, state: "running", effectiveRole: { engine: "codex" } });
+  expect(source.conversationId).toBeTruthy();
+  const stops: number[] = [];
+  let resident = true;
+  f.h.ports.stageHostResident = async target => resident && target.conversationId === source.conversationId;
+  f.h.ports.conversationHostProcess = async id => {
+    const alive = resident && id === source.conversationId;
+    return { state: alive ? "alive" : "gone", pid: alive ? 1234 : null };
+  };
+  f.h.ports.stopStageAgent = async (target, options) => {
+    expect(target).toMatchObject({ stageId, attempt: source.n, launchId: source.launchId, conversationId: source.conversationId });
+    expect(options?.onlyIfIdle).toBe(true);
+    const held = await pipelineRetirementReader({ now: f.now() });
+    if (held({ conversations: [target.conversationId!], agentPath: target.agentPath, launchId: target.launchId })) {
+      return { outcome: "deferred" };
+    }
+    stops.push(target.attempt);
+    resident = false;
+    return { outcome: "stopped" };
+  };
   f.advance(1_000);
   const startedAt = f.h.ports.now();
   f.advance(1_000);
@@ -21,7 +59,11 @@ test.each([
   readFixtures(f.h, { [source.agentPath!]: file });
 
   await engineModule.recoverPipelineProviderTurn(original.id, f.h.ports);
-  f.advance(10 * 60_000);
+  f.h.setConversationActive(true);
+  await tickPipelines([], f.h.ports);
+  expect(stops).toEqual([]);
+  expect(resident).toBe(true);
+  f.h.setConversationActive(false);
   await tickPipelines([], f.h.ports);
 
   const parked = loadPipelines()[0]!;
@@ -36,8 +78,16 @@ test.each([
       { action: "park", condition: "Codex cybersecurity refusal", summary: detail },
     ],
   });
-  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(stops).toEqual([source.n]);
+  expect(parked.terminalReap?.settledAttempts).toContain(`${stageId}:${source.n}`);
+  expect(f.h.spawnInputs).toHaveLength(launches);
   expect(f.sends).toEqual([]);
+  f.h.ports.spawnReceipt = launchId => launchId === source.launchId ? {
+    state: "completed", launchId, conversationId: source.conversationId!,
+    sessionId: source.sessionId, transcript: source.agentPath, paneId: null,
+  } : null;
+  const retry = await patchPipeline(original.id, { action: "retry-stage", expectedStageId: stageId, expectedAttempt: source.n }, f.h.ports);
+  expect(retry).toMatchObject({ pipeline: { state: "running", cursor: { stageId, state: "pending" } } });
 });
 
 // A parked retry's confirmation wait goes with its chain when the next chain,

@@ -262,7 +262,9 @@ import { createServer } from "node:net";
 import { chromium, type Browser, type Page } from "playwright-core";
 
 import { OPEN_LINKED_SETTINGS_EVENT } from "../src/components/links/openLinkedSettings";
+import { ENGINE_MODELS } from "../src/lib/agent/models";
 import { translate } from "../src/lib/i18n";
+import { ANTIGRAVITY_INSTALL_COMMAND } from "../src/lib/onboarding/agentInstallCommands";
 import { clampSeatHeight, SEAT_HEIGHT_VERSION, SEAT_MIN_HEIGHT, SEAT_STORAGE_KEY, seatMaxHeight } from "../src/components/kanban/kanbanSeatStore";
 import { SEAT_TRANSCRIPT_FLOOR_PX } from "../src/lib/composerScroll";
 import { nestProcessTempUnder } from "../src/lib/tempDirs";
@@ -753,14 +755,17 @@ const overlaps = (a: Rect, b: Rect, slack = 0) => a.x + slack < b.x + b.w && b.x
  *
  * One production server on a port the OS assigned, over a seeded home with one
  * invented Claude transcript and a Claude credential file, and no Codex at all.
- * Every combination of 1440×900, 1280×900 and 390×844, light and dark, English
+ * Every combination of 1440×900, 1280×900, 1024×768 and 390×844, light and dark, English
  * and Ukrainian starts from a first run and walks the slice's states: the guide
  * opening by itself, one engine connected and one not installed, the mapping
  * with the refusal banner and the very-heavy nudge, the move to Claude and its
  * undo, a row an update reset and its Restore (model sizing §5), Codex
  * installed and signed out with the sign-in open, neither engine
  * connected, the menu rows, the mapping opened alone, and a dismissal that
- * keeps the guide shut on reload. Slice 2 adds the Check step: before a run,
+ * keeps the guide shut on reload. The agent mapping's three-engine row adds Antigravity in
+ * three states of a stub `agy` (missing, signed out, signed in with a tier): the icon-only
+ * engine group stays inside its column and clear of the selects, each row offers Sign in or
+ * How to install, and the action lands on the engine's card. Slice 2 adds the Check step: before a run,
  * running, passed, the pass a new install ends on (no orchestrator, so row 5
  * is skipped), a pass whose cleanup could not finish, a poll that lands while
  * the cleanup is still running, stopped, a start the server refuses, and each
@@ -776,6 +781,9 @@ type OnboardingViewport = { width: number; height: number; tag: string; phone: b
 const ONBOARDING_VIEWPORTS: readonly OnboardingViewport[] = [
   { width: 1440, height: 900, tag: "desktop-1440", phone: false },
   { width: 1280, height: 900, tag: "desktop-1280", phone: false },
+  { width: 1024, height: 768, tag: "desktop-1024", phone: false },
+  /* The guide's body is about 650 px wide here, just above the table's own floor, where the model names are tightest. */
+  { width: 1000, height: 768, tag: "desktop-1000", phone: false },
   { width: 390, height: 844, tag: "phone-390", phone: true },
 ];
 
@@ -801,6 +809,29 @@ function fakeCli(name: "claude" | "codex", present: boolean): void {
   const file = path.join(BIN_DIR, name);
   if (!present) { fs.rmSync(file, { force: true }); return; }
   fs.writeFileSync(file, `#!/bin/sh\necho "${name} 0.0.0 (capture stub)"\n`, { mode: 0o755 });
+}
+
+/* An `agy` that speaks the two ACP requests the sign-in check makes (initialize,
+   session/new). Its answer is fixed in the script, so no state outside the
+   seeded home decides it: a session with a tier, or the -32000 auth refusal. */
+type AgyStub = "missing" | "signed-out" | "signed-in";
+function fakeAgy(state: AgyStub): void {
+  const file = path.join(BIN_DIR, "agy");
+  if (state === "missing") { fs.rmSync(file, { force: true }); return; }
+  const session = state === "signed-in"
+    ? `{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"capture-session-1","_meta":{"antigravity":{"tier":{"name":"Google AI Pro","id":"capture-pro"}}}}}`
+    : `{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Authentication required"}}`;
+  fs.writeFileSync(file, `#!/bin/sh
+if [ "$1" != "acp" ]; then echo "agy 0.0.0 (capture stub)"; exit 0; fi
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -En 's/.*"id":([0-9]+).*/\\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentInfo":{"version":"0.0.0"}}}\\n' "$id";;
+    *'"method":"session/new"'*) printf '${session}\\n' "$id";;
+    *'"method":"session/close"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\\n' "$id";;
+  esac
+done
+`, { mode: 0o755 });
 }
 
 function claudeSignedIn(present: boolean): void {
@@ -850,9 +881,61 @@ function measureOnboarding(phone: boolean) {
   });
   const legend = dialog.querySelector("[data-mapping-legend]");
   const segments = Array.from(dialog.querySelectorAll<HTMLElement>("[role=radiogroup]")).map((el) => {
-    const cell = el.parentElement!.getBoundingClientRect();
-    return { overflow: Math.round(el.getBoundingClientRect().right - cell.right) };
+    /* The usable edge: the cell's right less its own padding, where the next column's gap begins. */
+    const cell = el.parentElement!;
+    const usable = cell.getBoundingClientRect().right - parseFloat(getComputedStyle(cell).paddingRight || "0");
+    return { overflow: Math.round(el.getBoundingClientRect().right - usable) };
   });
+  /* Each state dot against its own mark and its neighbours' boxes, and the tray's empty width beside its segments. */
+  const dotReadings = Array.from(dialog.querySelectorAll<HTMLElement>("[data-engine-state-dot]")).map((dot) => {
+    const own = dot.closest<HTMLElement>("[data-engine-segment]")!;
+    const mark = own.querySelector<HTMLElement>("[data-engine-mark]")!;
+    const d = dot.getBoundingClientRect();
+    const m = mark.getBoundingClientRect();
+    const dx = Math.max(m.left - d.right, d.left - m.right, 0);
+    const dy = Math.max(m.top - d.bottom, d.top - m.bottom, 0);
+    const strangers = Array.from(own.parentElement!.querySelectorAll<HTMLElement>("[data-engine-segment]")).filter((other) => other !== own).some((other) => {
+      const o = other.getBoundingClientRect();
+      return d.left < o.right && d.right > o.left && d.top < o.bottom && d.bottom > o.top;
+    });
+    return { engine: dot.dataset.engineStateDot ?? "", distance: Math.round(Math.hypot(dx, dy) * 10) / 10, onNeighbour: strangers };
+  });
+  const trayGaps = Array.from(dialog.querySelectorAll<HTMLElement>("[role=radiogroup]")).map((tray) => {
+    const parts = Array.from(tray.querySelectorAll<HTMLElement>("[data-engine-segment]")).map((segment) => segment.getBoundingClientRect());
+    const t = tray.getBoundingClientRect();
+    const biggest = parts.length ? Math.max(t.right - Math.max(...parts.map((p) => p.right)), Math.min(...parts.map((p) => p.left)) - t.left) : 0;
+    return { empty: Math.round(biggest), segment: Math.round(Math.max(0, ...parts.map((p) => p.width))) };
+  });
+  /* Whether an engine mark or segment sits over a model or effort select of its own row. */
+  const intersects = (a: DOMRect, b: DOMRect) => a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5;
+  const markSelectOverlaps = rows.reduce((count, row) => {
+    const selects = Array.from(row.querySelectorAll<HTMLElement>("select")).map((el) => el.getBoundingClientRect());
+    const marks = Array.from(row.querySelectorAll<HTMLElement>("[role=radiogroup] [data-engine-mark], [role=radiogroup] button")).map((el) => el.getBoundingClientRect());
+    return count + marks.filter((mark) => selects.some((select) => intersects(mark, select))).length;
+  }, 0);
+  /* The table's engine group against the model select that follows it: the select starts at or after the group's right edge. */
+  const tableLayout = dialog.querySelector<HTMLElement>("[data-agent-mapping]")?.dataset.mappingLayout === "table";
+  const modelClear = rows.map((row) => {
+    if (!tableLayout) return null;
+    const group = row.querySelector<HTMLElement>("[role=radiogroup]");
+    const select = row.querySelector<HTMLElement>("select");
+    return group && select ? Math.round(select.getBoundingClientRect().left - group.getBoundingClientRect().right) : null;
+  }).filter((value): value is number => value !== null);
+  const bodyRect = dialog.getBoundingClientRect();
+  const connectActions = Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-connect]")).map((el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      engine: el.dataset.mappingConnect!,
+      text: el.textContent ?? "",
+      whole: !clipped(el) && r.width > 0 && r.left >= bodyRect.left - 1 && r.right <= bodyRect.right + 1,
+      h: Math.round(r.height),
+    };
+  });
+  const segmentSizes = Array.from(dialog.querySelectorAll<HTMLElement>("[data-mapping-row] [role=radiogroup]")).slice(0, 1).map((el) => ({
+    group: Math.round(el.getBoundingClientRect().width),
+    cell: Math.round(el.parentElement!.getBoundingClientRect().width),
+    labelled: Array.from(el.querySelectorAll("button")).some((button) => (button.textContent ?? "").trim() !== ""),
+  }))[0] ?? null;
   const smallTargets = phone
     ? Array.from(dialog.querySelectorAll<HTMLElement>("button, select")).filter((el) => {
       const r = el.getBoundingClientRect();
@@ -867,6 +950,25 @@ function measureOnboarding(phone: boolean) {
     roleLabels,
     footerButtons,
     segmentOverflow: Math.max(0, ...segments.map((segment) => segment.overflow)),
+    dotReadings,
+    trayGaps,
+    markSelectOverlaps,
+    modelClear,
+    connectActions,
+    segmentSizes,
+    mappingLayout: dialog.querySelector<HTMLElement>("[data-agent-mapping]")?.dataset.mappingLayout ?? null,
+    agy: dialog.querySelector("[data-onboarding-engine=antigravity]") ? {
+      state: dialog.querySelector<HTMLElement>("[data-onboarding-engine=antigravity]")!.dataset.engineState ?? null,
+      header: dialog.querySelector("[data-onboarding-engine=antigravity] [data-onboarding-engine-header]")?.textContent ?? null,
+      command: dialog.querySelector("[data-onboarding-engine=antigravity] code")?.textContent ?? null,
+      check: dialog.querySelector("[data-onboarding-engine=antigravity] [data-antigravity-check]")?.textContent ?? null,
+      focused: dialog.querySelector("[data-onboarding-engine=antigravity]")?.contains(document.activeElement) ?? false,
+    } : null,
+    /* Antigravity's segment in the first row: the state dot and the label it is named by. */
+    agySegment: (() => {
+      const segment = dialog.querySelector<HTMLElement>("[data-mapping-row] [data-engine-segment=antigravity]");
+      return segment ? { label: segment.getAttribute("aria-label") ?? segment.getAttribute("title"), dot: segment.querySelector("[data-engine-state-dot]") !== null } : null;
+    })(),
     smallTargets,
     engines: Object.fromEntries(Array.from(dialog.querySelectorAll<HTMLElement>("[data-onboarding-engine]")).map((el) => [el.dataset.onboardingEngine!, el.dataset.engineState!])),
     blockedRows: dialog.querySelectorAll("[data-mapping-blocked]").length,
@@ -1059,8 +1161,150 @@ function healthAnswer(state: HealthState): unknown {
   };
 }
 
+/* BOARD_CAPTURE_CASE=agy-accounts: Antigravity's sign-in where it lives in the
+   account settings, outside the setup guide. The sidebar footer's flyout at
+   1440, 1024 and 820 and the phone's accounts screen at 390, with a stub `agy`
+   missing (no sign-in ever recorded: the operator's own machine, where the
+   surface still says Not installed and shows the install command), signed out
+   and signed in with a tier. The flyout and the screen stay inside
+   the viewport, nothing scrolls sideways, no state line is cut, and the sign-in
+   check's button is a 44 px target on the phone. */
+type AgyAccountState = "missing" | "signed-out" | "signed-in";
+async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; resetInstall: (codexInstalled: boolean) => Promise<void>; must: (ok: boolean, message: string) => void; report: Record<string, unknown> }): Promise<void> {
+  const { baseUrl, browser, resetInstall, must, report } = ctx;
+  const agyRecord = path.join(STATE_DIR, "antigravity-auth-state.json");
+  const viewports: OnboardingViewport[] = [
+    { width: 1440, height: 900, tag: "desktop-1440", phone: false },
+    { width: 1024, height: 768, tag: "desktop-1024", phone: false },
+    { width: 820, height: 768, tag: "desktop-820", phone: false },
+    { width: 390, height: 844, tag: "phone-390", phone: true },
+  ];
+  /* The record the app shows is the last observation. A missing command has
+     none: the frame is a machine that never had `agy`. */
+  const settle = async (state: AgyAccountState): Promise<void> => {
+    fs.rmSync(agyRecord, { force: true });
+    fakeAgy(state);
+    await fetch(`${baseUrl}/api/accounts/cli`);
+    if (state !== "missing") await fetch(`${baseUrl}/api/accounts/antigravity`, { method: "POST", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ action: "probe" }) });
+  };
+  /* AGY_CAPTURE_VIEWPORTS=phone-390,desktop-820 reruns only those. */
+  const only = process.env.AGY_CAPTURE_VIEWPORTS?.split(",").map((tag) => tag.trim()).filter(Boolean);
+  for (const viewport of viewports.filter((item) => !only?.length || only.includes(item.tag))) for (const colorScheme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+    const tag = `${viewport.tag}-${colorScheme}-${locale}`;
+    const frames: Record<string, unknown> = {};
+    await resetInstall(false);
+    const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale, source: "chosen" }) });
+    must(localeWrite.ok, `${tag}: the interface language write answered ${localeWrite.status}`);
+    /* The guide is done: these frames are the settings it points to. */
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) }).catch(() => {});
+    const context = await browser.newContext({
+      viewport: { width: viewport.width, height: viewport.height },
+      colorScheme,
+      reducedMotion: "reduce",
+      ...(viewport.phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+    });
+    await context.addInitScript((lang: string) => {
+      Object.defineProperty(globalThis, "EventSource", { configurable: true, value: undefined });
+      localStorage.clear();
+      sessionStorage.clear();
+      localStorage.setItem("llv_lang", lang);
+      localStorage.setItem("llvSound", "0");
+    }, locale);
+    const page = await context.newPage();
+    try {
+      for (const state of ["missing", "signed-out", "signed-in"] as const) {
+        await settle(state);
+        await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector("[data-onboarding-dialog]", { state: "detached", timeout: 5_000 }).catch(() => {});
+        /* The daily telemetry notice sits over the footer and the phone's sheet until it is acknowledged. */
+        const acknowledge = page.getByRole("button", { name: translate(locale, "telemetry.dismiss"), exact: true });
+        if (await acknowledge.waitFor({ timeout: 4_000 }).then(() => true, () => false)) await acknowledge.click();
+        const expected = state === "signed-in" ? translate(locale, "onboarding.engines.connected", { plan: "Google AI Pro" }) : null;
+        /* A signed-in engine opens no flyout on the desktop: its row already says Connected and the tier. */
+        const rowOnly = !viewport.phone && state === "signed-in";
+        const root = viewport.phone ? '[data-mobile2-accounts-engine="antigravity"]' : rowOnly ? '[data-engine-limits="antigravity"]' : "[data-antigravity-panel]";
+        if (viewport.phone) {
+          /* The accounts screen is a route of its own on the phone. */
+          await page.goto(`${baseUrl}/#accounts`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+          await page.waitForSelector("[data-mobile2-accounts]", { timeout: 60_000 });
+        } else {
+          await page.waitForSelector('[data-engine-limits="antigravity"] [data-meter-line]', { timeout: 60_000 });
+          await page.click('[data-engine-limits="antigravity"] [data-meter-line]');
+          if (rowOnly) {
+            await page.waitForTimeout(350);
+            must((await page.locator("[data-antigravity-panel]").count()) === 0, `${tag} ${state}: a connected row opened a flyout that only repeats it`);
+          }
+        }
+        await page.waitForSelector(root, { timeout: 30_000 });
+        await page.waitForFunction(({ want, selector }) => !want || (document.querySelector(selector)?.textContent ?? "").includes(want.split(" ")[0]!), { want: expected, selector: root }, { timeout: 30_000 });
+        await page.locator(root).scrollIntoViewIfNeeded();
+        await page.waitForTimeout(350);
+        const reading = await page.evaluate(({ rootSelector, phone }) => {
+          const node = document.querySelector<HTMLElement>(rootSelector)!;
+          const r = node.getBoundingClientRect();
+          const cut = Array.from(node.querySelectorAll<HTMLElement>("*")).filter((el) => {
+            const text = (el.childNodes.length === 1 && el.firstChild?.nodeType === 3) ? el.textContent ?? "" : "";
+            return text.trim() !== "" && el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).textOverflow === "ellipsis";
+          }).map((el) => (el.textContent ?? "").trim().slice(0, 60));
+          const small = phone ? Array.from(node.querySelectorAll<HTMLElement>("button")).filter((el) => { const b = el.getBoundingClientRect(); return b.height > 0 && b.height < 43.5; }).map((el) => (el.textContent ?? "").trim().slice(0, 40)) : [];
+          return {
+            box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+            viewport: { w: innerWidth, h: innerHeight },
+            documentOverflowX: document.documentElement.scrollWidth - innerWidth,
+            sideways: node.scrollWidth - node.clientWidth,
+            cut,
+            small,
+            text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+            /* The sidebar row keeps the engine's name whole; its state line may end in an ellipsis (the flyout carries the full text). */
+            footerNameCut: (() => { const name = document.querySelector<HTMLElement>('[data-engine-limits="antigravity"] [data-meter-name]'); return name ? name.scrollWidth > name.clientWidth + 1 : false; })(),
+            /* The row's state text is whole, in the colour its flyout title takes, beside the engine's own mark. */
+            rowState: (() => { const el = document.querySelector<HTMLElement>('[data-engine-limits="antigravity"] [data-antigravity-state]'); return el ? { cut: el.scrollWidth > el.clientWidth + 1, text: el.textContent ?? "", color: getComputedStyle(el).color } : null; })(),
+            panelStateColor: (() => { const el = document.querySelector<HTMLElement>("[data-antigravity-panel] [data-onboarding-engine-header]"); return el ? getComputedStyle(el).color : null; })(),
+            rowMark: document.querySelector('[data-engine-limits="antigravity"] [data-engine-mark="antigravity"]') !== null,
+            check: node.querySelector("[data-antigravity-check]")?.textContent ?? null,
+            installCommand: node.querySelector("code")?.textContent ?? null,
+          };
+        }, { rootSelector: root, phone: viewport.phone });
+        frames[state] = reading;
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-account-agy-${state}.png`) });
+        const b = reading.box;
+        must(viewport.phone || (b.x >= 0 && b.y >= 0 && b.x + b.w <= reading.viewport.w && b.y + b.h <= reading.viewport.h), `${tag} ${state}: the flyout ${JSON.stringify(b)} leaves the ${reading.viewport.w}×${reading.viewport.h} viewport`);
+        must(reading.documentOverflowX <= 0, `${tag} ${state}: the page scrolls sideways by ${reading.documentOverflowX}px`);
+        must(reading.sideways <= 1, `${tag} ${state}: the surface overflows sideways by ${reading.sideways}px`);
+        must(!reading.footerNameCut, `${tag} ${state}: the sidebar row's engine name is cut`);
+        if (!viewport.phone) {
+          must(reading.rowMark, `${tag} ${state}: the sidebar row carries no engine mark`);
+          must(!!reading.rowState && !reading.rowState.cut, `${tag} ${state}: the sidebar row's state text is cut or missing: ${JSON.stringify(reading.rowState)}`);
+          if (reading.panelStateColor && state !== "signed-in") must(reading.rowState?.color === reading.panelStateColor, `${tag} ${state}: the row's state is ${reading.rowState?.color} and its flyout's ${reading.panelStateColor}`);
+        }
+        must(reading.cut.length === 0, `${tag} ${state}: cut state text ${JSON.stringify(reading.cut)}`);
+        must(reading.small.length === 0, `${tag} ${state}: targets under 44px: ${reading.small.join("; ")}`);
+        if (state === "missing") must(reading.text.includes(translate(locale, "onboarding.engines.missing")), `${tag}: the missing surface reads ${reading.text}`);
+        if (state === "missing") must(reading.installCommand === ANTIGRAVITY_INSTALL_COMMAND.command, `${tag}: the missing surface shows ${reading.installCommand} as its install command`);
+        if (state === "signed-out") must(reading.check === translate(locale, "onboarding.engines.checkSignin"), `${tag}: the signed-out surface offers ${reading.check}`);
+        if (state === "signed-in") must(reading.text.includes("Google AI Pro"), `${tag}: the signed-in surface does not show the tier: ${reading.text}`);
+        if (!viewport.phone && !rowOnly) {
+          await page.keyboard.press("Escape");
+          must((await page.locator("[data-antigravity-panel]").count()) === 0, `${tag} ${state}: Escape left the flyout open`);
+          must(await page.evaluate(() => document.activeElement?.closest('[data-engine-limits="antigravity"]') !== null), `${tag} ${state}: focus did not return to the Antigravity row`);
+        }
+      }
+    } catch (error) {
+      await page.screenshot({ path: path.join(OUT_DIR, `${tag}-error.png`) }).catch(() => {});
+      must(false, `${tag}: stopped: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+    }
+    report[tag] = frames;
+    await context.close();
+  }
+  fs.rmSync(agyRecord, { force: true });
+  fakeAgy("missing");
+  await fetch(`${baseUrl}/api/accounts/cli`);
+}
+
 async function captureOnboarding(): Promise<void> {
   const providerOnly = process.env.BOARD_CAPTURE_CASE === "provider-account";
+  const agyAccounts = process.env.BOARD_CAPTURE_CASE === "agy-accounts";
+  const onlyViewports = process.env.ONBOARDING_CAPTURE_VIEWPORTS?.split(",").map((tag) => tag.trim()).filter(Boolean);
   process.env.HOME = HOME;
   process.env.XDG_CONFIG_HOME = path.join(HOME, ".config");
   process.env.LLV_STATE_DIR = STATE_DIR;
@@ -1079,7 +1323,7 @@ async function captureOnboarding(): Promise<void> {
 
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const report: Record<string, unknown> = { commit: captureCommit(), case: providerOnly ? "provider-account" : "onboarding" };
+  const report: Record<string, unknown> = { commit: captureCommit(), case: providerOnly ? "provider-account" : agyAccounts ? "agy-accounts" : "onboarding" };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const tailscale = createTailscaleStub({ root: BASE });
@@ -1113,7 +1357,9 @@ async function captureOnboarding(): Promise<void> {
     report.firstRunMarker = first.marker;
     browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 
-    for (const viewport of (providerOnly ? ONBOARDING_VIEWPORTS.filter((item) => item.width === 1280 || item.width === 390) : ONBOARDING_VIEWPORTS)) {
+    if (agyAccounts) await captureAgyAccounts({ baseUrl, browser, resetInstall, must, report });
+    /* ONBOARDING_CAPTURE_VIEWPORTS=phone-390 reruns only those tags. */
+    else for (const viewport of (providerOnly ? ONBOARDING_VIEWPORTS.filter((item) => item.width === 1280 || item.width === 390) : ONBOARDING_VIEWPORTS.filter((item) => !onlyViewports?.length || onlyViewports.includes(item.tag)))) {
       for (const colorScheme of (providerOnly ? ["light"] : ["light", "dark"]) as Array<"light" | "dark">) {
         for (const locale of ["en", "uk"] as const) {
           const tag = `${viewport.tag}-${colorScheme}-${locale}`;
@@ -1138,6 +1384,9 @@ async function captureOnboarding(): Promise<void> {
             localStorage.setItem("llvSound", "0");
           }, locale);
           const page = await context.newPage();
+          /* The daily telemetry notice sits over the phone's footer until it is acknowledged; the first run shows it,
+             and every reload brings it back, so it is answered whenever it blocks an action. */
+          await page.addLocatorHandler(page.getByRole("button", { name: translate(locale, "telemetry.dismiss"), exact: true }), async (button) => { await button.click(); });
           if (providerOnly) await page.route("**/api/accounts", async (route) => {
             const response = await route.fetch();
             const body = await response.json() as { claude?: { accounts?: Record<string, unknown>[] } };
@@ -1163,6 +1412,13 @@ async function captureOnboarding(): Promise<void> {
             for (const label of reading.roleLabels) must(!label.clipped, `${tag} ${name}: role label "${label.text}" is clipped at ${label.w}px`);
             for (const button of reading.footerButtons) must(!button.clipped && button.inside, `${tag} ${name}: footer button "${button.text}" is clipped or outside the footer`);
             must(reading.segmentOverflow <= 0, `${tag} ${name}: an engine control overflows its cell by ${reading.segmentOverflow}px`);
+            for (const dot of reading.dotReadings) must(dot.distance <= 8 && !dot.onNeighbour, `${tag} ${name}: the ${dot.engine} state dot is ${dot.distance}px from its mark or sits on a neighbour's segment`);
+            for (const gap of reading.trayGaps) must(gap.empty <= gap.segment, `${tag} ${name}: an engine tray leaves ${gap.empty}px empty beside segments of ${gap.segment}px`);
+            must(reading.markSelectOverlaps === 0, `${tag} ${name}: ${reading.markSelectOverlaps} engine controls sit over a select of their row`);
+            for (const clear of reading.modelClear) must(clear >= 0, `${tag} ${name}: a model select starts ${clear}px inside its row's engine group`);
+            for (const action of reading.connectActions) must(action.whole && action.text.trim() !== "", `${tag} ${name}: the ${action.engine} action "${action.text}" is cut or empty`);
+            /* The table's three icon segments are 90 px in a 100 px column; a phone card keeps the names. */
+            if (reading.segmentSizes && reading.mappingLayout === "table") must(!reading.segmentSizes.labelled && reading.segmentSizes.group <= reading.segmentSizes.cell, `${tag} ${name}: the engine group is ${reading.segmentSizes.group}px in a ${reading.segmentSizes.cell}px cell (labelled: ${reading.segmentSizes.labelled})`);
             if (providerOnly) report[`${tag}:${name}:otherSmallTargets`] = reading.smallTargets;
             else must(reading.smallTargets.length === 0, `${tag} ${name}: targets under 44px: ${reading.smallTargets.join("; ")}`);
             check(reading);
@@ -1399,6 +1655,74 @@ async function captureOnboarding(): Promise<void> {
               must(r.engines.codex === "signed-out", `${tag}: codex reads ${r.engines.codex} after the install`);
               must(r.accounts.codex?.addRow === true, `${tag}: a signed-out Codex card offers no Add row`);
             });
+
+            /* 4b. Antigravity, the third engine (agent mapping): a row mapped to it
+               in three states of its CLI. Missing says so and offers How to
+               install; installed and signed out offers Sign in, which lands on
+               its card with the check focused; the check against a stub that
+               opens a session reads Connected with the tier. The engine group
+               stays inside its 100 px column and clear of the select in each. */
+            {
+              const agyRecord = path.join(STATE_DIR, "antigravity-auth-state.json");
+              const agyRow = { engine: "antigravity" as const, model: ENGINE_MODELS.antigravity[0]!.id, effort: "high" };
+              const text = (key: Parameters<typeof translate>[1]) => translate(locale, key);
+              await whenStateFree(() => saveRoleOverrides({ builder: { config: agyRow } }));
+              /* missing */
+              fs.rmSync(agyRecord, { force: true });
+              fakeAgy("missing");
+              await fetch(`${baseUrl}/api/accounts/cli`);
+              await page.reload({ waitUntil: "domcontentloaded" });
+              await openStep("agents");
+              await page.waitForSelector('[data-mapping-row="builder"] [data-mapping-connect="antigravity"]', { timeout: 60_000 });
+              await page.locator('[data-mapping-row="builder"]').scrollIntoViewIfNeeded();
+              await shot("agents-agy-missing", (r) => {
+                const action = r.connectActions.find((item) => item.engine === "antigravity");
+                must(action?.text === text("onboarding.agents.howToInstall"), `${tag}: a missing agy offers "${action?.text}"`);
+                must((r.agySegment?.label ?? "").length > "Antigravity".length && r.agySegment?.dot === true, `${tag}: Antigravity's segment reads ${JSON.stringify(r.agySegment)}`);
+                must(viewport.phone ? r.mappingLayout === "card" : r.mappingLayout === "table", `${tag}: the mapping is laid out as ${r.mappingLayout}`);
+              });
+              await page.click('[data-mapping-row="builder"] [data-mapping-connect="antigravity"]');
+              await page.waitForSelector('[data-onboarding-engine="antigravity"][data-engine-state="missing"]', { timeout: 30_000 });
+              await shot("engines-agy-missing", (r) => {
+                must(r.agy?.header === text("onboarding.engines.missing"), `${tag}: the missing card reads ${r.agy?.header}`);
+                must(r.agy?.command === ANTIGRAVITY_INSTALL_COMMAND.command, `${tag}: the install command is ${r.agy?.command}`);
+                must(r.agy?.focused === true, `${tag}: the card was not focused after How to install`);
+              });
+              /* installed, signed out: the page's first read records it through the one automatic check */
+              fakeAgy("signed-out");
+              await fetch(`${baseUrl}/api/accounts/cli`);
+              await page.reload({ waitUntil: "domcontentloaded" });
+              await openStep("agents");
+              await page.waitForSelector(`[data-mapping-row="builder"] [data-mapping-connect="antigravity"]`, { timeout: 60_000 });
+              await page.waitForFunction((label) => document.querySelector('[data-mapping-row="builder"] [data-mapping-connect="antigravity"]')?.textContent === label, text("onboarding.agents.signIn"), { timeout: 60_000 });
+              await shot("agents-agy-signed-out", (r) => {
+                must(r.connectActions.some((item) => item.engine === "antigravity" && item.text === text("onboarding.agents.signIn")), `${tag}: a signed-out agy offers ${JSON.stringify(r.connectActions)}`);
+              });
+              await page.click('[data-mapping-row="builder"] [data-mapping-connect="antigravity"]');
+              await page.waitForSelector('[data-onboarding-engine="antigravity"][data-engine-state="signed-out"]', { timeout: 30_000 });
+              await shot("engines-agy-signed-out", (r) => {
+                must(r.agy?.command === "agy" && r.agy.check === text("onboarding.engines.checkSignin"), `${tag}: the signed-out card shows ${JSON.stringify(r.agy)}`);
+                must(r.agy?.focused === true, `${tag}: the card was not focused after Sign in`);
+              });
+              /* signed in: the check asks the stub, which now opens a session with a tier */
+              fakeAgy("signed-in");
+              await page.click('[data-antigravity-check]');
+              await page.waitForSelector('[data-onboarding-engine="antigravity"][data-engine-state="connected"]', { timeout: 60_000 });
+              await shot("engines-agy-signed-in", (r) => {
+                must(r.agy?.header === translate(locale, "onboarding.engines.connected", { plan: "Google AI Pro" }), `${tag}: the connected card reads ${r.agy?.header}`);
+              });
+              await openStep("agents");
+              await page.waitForSelector('[data-mapping-row="builder"]');
+              await page.locator('[data-mapping-row="builder"]').scrollIntoViewIfNeeded();
+              await shot("agents-agy-signed-in", (r) => {
+                must(!r.connectActions.some((item) => item.engine === "antigravity"), `${tag}: a connected agy still offers ${JSON.stringify(r.connectActions)}`);
+                must(r.agySegment?.dot === false, `${tag}: a connected Antigravity segment still carries its state dot`);
+              });
+              await whenStateFree(clearRoleOverrides);
+              fs.rmSync(agyRecord, { force: true });
+              fakeAgy("missing");
+              await fetch(`${baseUrl}/api/accounts/cli`);
+            }
 
             /* 5. Neither engine connected: both steps say so. A reload reopens
                the unfinished guide by itself, on the step after the last done. */
@@ -1921,12 +2245,12 @@ async function captureOnboarding(): Promise<void> {
     process.exitCode = 1;
     console.error(`onboarding acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log(providerOnly ? "provider account form rendered at 1280 and 390 in English and Ukrainian." : "onboarding acceptance passed at 1440, 1280 and 390, light and dark, English and Ukrainian.");
+    console.log(agyAccounts ? "Antigravity's account settings rendered at 1440, 1024, 820 and 390, light and dark, English and Ukrainian." : providerOnly ? "provider account form rendered at 1280 and 390 in English and Ukrainian." : "onboarding acceptance passed at 1440, 1280 and 390, light and dark, English and Ukrainian.");
   }
 }
 
 async function main(): Promise<void> {
-  if (process.env.BOARD_CAPTURE_CASE === "onboarding" || process.env.BOARD_CAPTURE_CASE === "provider-account") {
+  if (process.env.BOARD_CAPTURE_CASE === "onboarding" || process.env.BOARD_CAPTURE_CASE === "provider-account" || process.env.BOARD_CAPTURE_CASE === "agy-accounts") {
     await captureOnboarding();
     return;
   }
