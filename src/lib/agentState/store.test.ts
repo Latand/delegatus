@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,10 +13,16 @@ import { emptyAgentStateMetrics } from "./model";
 import { validAgentStateMetricsBeforeAntigravity } from "./legacyMetricsFixture";
 import { normalizeAgentStateRows, readAgentProjection, readAgentStateMetrics, readAgentStatePage, subjectId, validAgentStateMetrics } from "./store";
 import { cachedAgentObservation } from "./projectionCache";
-import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords } from "./testFixture";
+import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_TURN, fixtureRegistry, fixtureRecords } from "./testFixture";
+import { readControlProjection } from "./controlStore";
+import { settlementDeadlineForRow } from "@/lib/runtime/sendSettlement";
 
 const roots: string[] = [], registries: AgentRegistry[] = [];
-afterEach(() => { for (const registry of registries.splice(0)) registry.close(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => {
+  setSystemTime();
+  for (const registry of registries.splice(0)) registry.close();
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
 function fixture(mode: "off" | "sqlite" | "dual-write") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-store-")); roots.push(root);
   const filename = path.join(root, "registry.json"), sqliteFilename = path.join(root, "registry.sqlite");
@@ -158,6 +164,49 @@ test("legacy snapshots start without a fabricated idle projection", () => {
   expect(legacy.agentStates).toEqual({});
   expect(legacy.agentStateJournal).toEqual({});
   expect(legacy.agentStateMetrics).toEqual({});
+});
+
+test("delivery reads the settled incident turn across restart and keeps equal subjects in their own registries", async () => {
+  setSystemTime(new Date(FIXTURE_NOW + 2000));
+  const f = fixture("sqlite");
+  const registry = f.open();
+  const held = registry.holdDelivery(FIXTURE_CONVERSATION, "accepted fixture work", "fixture-message");
+  const delivery = registry.readOnlySnapshot().heldDeliveries[held.id]!;
+  expect(settlementDeadlineForRow(registry, { delivery })?.policy).toBe("in-turn-ceiling");
+
+  const service = f.service(registry);
+  await service.request();
+  const key = { engine: "codex" as const, sessionId: FIXTURE_SESSION };
+  const repaired = registry.hostEntry(key)!;
+  // A delayed checkpoint retains the old turn. With the writer unverified,
+  // reconciliation keeps that checkpoint and records the terminal transcript.
+  registry.upsert({ ...repaired, claimOwner: "unverified-writer",
+    structuredHost: { ...repaired.structuredHost!, activeTurnRef: FIXTURE_TURN } });
+  await service.reconcile(registry.hostEntry(key)!);
+  const entry = registry.hostEntry(key)!;
+  expect(entry.structuredHost?.activeTurnRef).toBe(FIXTURE_TURN);
+  expect(cachedAgentObservation(subjectId(entry))).not.toBeNull();
+  expect(readControlProjection(registry, entry, FIXTURE_CONVERSATION)?.facts.turn)
+    .toMatchObject({ determined: true, value: { state: "closed" } });
+
+  const foreignPath = path.join(f.root, "other-registry.json");
+  const foreignSource = structuredClone(f.source);
+  foreignSource.entries[`codex:${FIXTURE_SESSION}`] = entry;
+  fs.writeFileSync(foreignPath, JSON.stringify(foreignSource));
+  const foreign = new AgentRegistry(foreignPath, undefined, undefined, { sqliteMode: "off" });
+  registries.push(foreign);
+  expect(foreign.hostEntry(entry.key)).toEqual(entry);
+  expect(readControlProjection(foreign, entry, FIXTURE_CONVERSATION)).toBeNull();
+  expect(readControlProjection(registry, entry, "conversation_other")).toBeNull();
+  expect(settlementDeadlineForRow(foreign, { delivery })?.policy).toBe("in-turn-ceiling");
+
+  service.stop();
+  registry.close();
+  fs.unlinkSync(path.join(f.root, "native.jsonl"));
+  const successor = f.open();
+  expect(readControlProjection(successor, entry, FIXTURE_CONVERSATION)?.facts.turn)
+    .toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(settlementDeadlineForRow(successor, { delivery })?.policy).toBe("settlement-window");
 });
 
 const preAntigravityMetrics = {

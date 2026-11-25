@@ -473,14 +473,23 @@ describe("AntigravityAcpHost", () => {
       },
     });
 
+    expect(host.agentControlState()).toMatchObject({ sessionKey: mintedSessionId, idle: true, turnId: null });
+    await expect(host.send({ id: "perm-1", text: "Run command" }, undefined, () => {
+      throw new Error("fixture writer changed");
+    })).rejects.toThrow("fixture writer changed");
+    expect(fake.received.some(message => message.method === "session/prompt")).toBe(false);
+    expect(host.agentControlState()).toMatchObject({ idle: true, turnId: null });
     const sent = await host.send({ id: "perm-1", text: "Run command" });
     expect(sent.outcome).toBe("turn-started");
     await new Promise((r) => setTimeout(r, 15));
     const state = await host.health();
     expect(state.status).toBe("attention");
     expect(state.pendingAttention).toEqual(["antigravity-permission:77"]);
+    expect(host.agentControlState()).toMatchObject({ status: "attention", attentionPending: true, turnId: state.activeTurnRef });
+    expect(host.agentAttentionRequest("antigravity-permission:77")).toBeDefined();
 
     await host.answer("antigravity-permission:77", { decision: "approve" });
+    expect(host.agentAttentionRequest("antigravity-permission:77")).toBeUndefined();
     expect(fake.received.find((m) => m.id === 77 && (m.result as { outcome?: { optionId?: string } })?.outcome?.optionId === "allow_1")).toBeDefined();
 
     const turnId = sent.outcome === "turn-started" ? sent.turnId : "";

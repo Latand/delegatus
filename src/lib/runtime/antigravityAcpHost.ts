@@ -35,6 +35,7 @@ import {
   VIEWER_SPAWN_CAPABILITY_HEADER,
   type ViewerMcpServerEntry,
 } from "@/lib/agent/spawnPolicy";
+import { hostControlFacts } from "@/lib/agentState/control";
 import type { NativePromptAnchor } from "@/lib/agentState/model";
 import { readNativePromptAnchor } from "@/lib/agentState/transcript";
 import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
@@ -52,6 +53,7 @@ import type {
   DeliveryAcceptanceObservation,
   DeliveryReceipt,
   EngineHost,
+  FirstDispatchEvidence,
   HostState,
   QueueEntry,
   RuntimeEvent,
@@ -1610,7 +1612,7 @@ export class AntigravityAcpHost implements EngineHost {
     }, () => this.refillEventWindow());
   }
 
-  async send(entry: QueueEntry): Promise<DeliveryReceipt> {
+  async send(entry: QueueEntry, _firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
     const mutationAtEntry = this.deliveryMutationSeq;
     const refill = this.dead || this.releasing || this.released ? undefined : this.refillEventWindow();
     if (refill) await refill;
@@ -1689,6 +1691,7 @@ export class AntigravityAcpHost implements EngineHost {
     }
     if (prompt.length === 0) prompt.push({ type: "text", text: "" });
 
+    authorizeDispatch?.();
     this.turnCounter += 1;
     const turnId = `antigravity:${this.turnCounter}-${crypto.randomBytes(4).toString("hex")}`;
 
@@ -2066,13 +2069,21 @@ export class AntigravityAcpHost implements EngineHost {
     };
   }
 
+  agentControlState() {
+    const facts = hostControlFacts(this.identity.sessionId,
+      this.dead ? "dead" : this.released ? "unhosted" : "idle",
+      this.running?.turnId ?? null, this.attentions.size > 0, this.attentions.size > 0, this.launchFlags);
+    const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
+    return { ...facts, transport: pid ? { pid, startIdentity: this.childStartIdentity, endpoint: `stdio:${pid}` } : null };
+  }
+
+  agentAttentionRequest(id: string): object | undefined {
+    return this.attentions.get(id);
+  }
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
-    const status: HostState["status"] = this.dead ? "dead"
-      : this.released ? "unhosted"
-      : this.attentions.size ? "attention"
-      : this.running ? "active"
-      : "idle";
+    const { status, turnId } = this.agentControlState();
     return {
       status,
       sessionKey: this.identity.sessionId,
@@ -2084,7 +2095,7 @@ export class AntigravityAcpHost implements EngineHost {
       ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
-      activeTurnRef: this.running?.turnId ?? null,
+      activeTurnRef: turnId,
       agentStateTurnStartedAt: this.agentStateTurnStartedAt,
       agentStateNativePromptAnchor: this.agentStateNativePromptAnchor,
       agentStateNativePromptOrdinal: this.agentStateNativePromptAnchor === null ? null : this.confirmedPromptOrdinal,

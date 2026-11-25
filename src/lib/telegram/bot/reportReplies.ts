@@ -1,3 +1,4 @@
+import { runtimeControlFacts } from "@/lib/agentState/control";
 import { currentSeat } from "@/lib/orchestrator/seatChannel";
 import crypto from "node:crypto";
 import { agentRegistry } from "@/lib/agent/registry";
@@ -59,7 +60,7 @@ export const productionReportReplyPorts: ReportReplyPorts = {
     const client = runtimeHostClient();
     if (!client) return false;
     const session = await readRuntimeSession(client, { conversationId: seat.conversationId });
-    return session?.host === "hosted" && session.turn === "idle";
+    return session?.host === "hosted" && runtimeControlFacts(session).idle;
   },
   original: resolveOriginalSend,
   deliver: deliverReportReply,

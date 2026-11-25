@@ -179,18 +179,18 @@ export class NativeCodexQueue {
     throw new Error("Native queue changed during every bounded refresh pass");
   }
 
-  async add(clientUserMessageId: string, input: NativeQueueInput[]) {
+  async add(clientUserMessageId: string, input: NativeQueueInput[], authorize?: () => void) {
     id.parse(clientUserMessageId);
     return this.mutate("add", { clientUserMessageId, input: z.array(inputSchema).parse(input) }, (value) => {
       const result = submissionResponse.parse(value);
       this.checkThread(result.queuedSubmission);
       if (result.queuedSubmission.clientUserMessageId !== clientUserMessageId) throw new Error("Native client message identity mismatch");
       return result;
-    });
+    }, authorize);
   }
 
   /** Pass the prior server AND client identity. Updating preserves the client ID. */
-  async update(identity: Pick<NativeQueuedSubmission, "id" | "clientUserMessageId">, input: NativeQueueInput[]) {
+  async update(identity: Pick<NativeQueuedSubmission, "id" | "clientUserMessageId">, input: NativeQueueInput[], authorize?: () => void) {
     const queuedSubmissionId = id.parse(identity.id);
     const clientUserMessageId = id.parse(identity.clientUserMessageId);
     return this.mutate("update", { queuedSubmissionId, input: z.array(inputSchema).parse(input) }, (value) => {
@@ -200,30 +200,30 @@ export class NativeCodexQueue {
         throw new Error("Native submission identity mismatch");
       }
       return result;
-    });
+    }, authorize);
   }
 
-  async delete(queuedSubmissionId: string) {
+  async delete(queuedSubmissionId: string, authorize?: () => void) {
     return this.mutate("delete", { queuedSubmissionId: id.parse(queuedSubmissionId) },
-      (value) => z.object({ deleted: z.boolean() }).passthrough().parse(value));
+      (value) => z.object({ deleted: z.boolean() }).passthrough().parse(value), authorize);
   }
 
-  async reorder(queuedSubmissionIds: string[]) {
+  async reorder(queuedSubmissionIds: string[], authorize?: () => void) {
     const ids = z.array(id).parse(queuedSubmissionIds);
     if (new Set(ids).size !== ids.length) throw new Error("Duplicate native submission identity");
-    return this.mutate("reorder", { queuedSubmissionIds: ids }, (value) => z.object({}).strict().parse(value));
+    return this.mutate("reorder", { queuedSubmissionIds: ids }, (value) => z.object({}).strict().parse(value), authorize);
   }
 
-  async start(queuedSubmissionId?: string | null) {
+  async start(queuedSubmissionId?: string | null, authorize?: () => void) {
     return this.mutate("start", queuedSubmissionId === undefined ? {} : { queuedSubmissionId: id.nullable().parse(queuedSubmissionId) },
       (value) => {
         const result = startResponse.parse(value);
         this.checkThread(result.turn);
         return result;
-      });
+      }, authorize);
   }
 
-  private async mutate<T>(action: string, params: Record<string, unknown>, parse: (value: unknown) => T): Promise<NativeQueueAcknowledgement<T>> {
+  private async mutate<T>(action: string, params: Record<string, unknown>, parse: (value: unknown) => T, authorize?: () => void): Promise<NativeQueueAcknowledgement<T>> {
     const method = `thread/queue/${action}`;
     if (this.disposed) throw new NativeQueueNotSubmittedError(method, this.threadId);
     let transportInvoked = false;
@@ -231,6 +231,7 @@ export class NativeCodexQueue {
     this.invalidate();
     const wire = Promise.resolve().then(() => {
       if (this.disposed) throw new NativeQueueNotSubmittedError(method, this.threadId);
+      authorize?.();
       transportInvoked = true;
       return this.port.rpc(method, { ...params, threadId: this.threadId }, this.limits.timeoutMs);
     });
@@ -243,7 +244,7 @@ export class NativeCodexQueue {
       this.checkThread(value);
       return { outcome: "acknowledged", result: parse(value) };
     } catch (cause) {
-      if (!transportInvoked && cause instanceof NativeQueueNotSubmittedError) throw cause;
+      if (!transportInvoked) throw cause;
       if (cause instanceof NativeQueueProtocolRefusal) throw cause;
       throw new NativeQueueUncertainError(method, this.threadId, cause);
     }

@@ -463,6 +463,11 @@ describe("CopilotAcpHost", () => {
     const child = new FakeCopilot();
     const opts = options(child);
     const host = await CopilotAcpHost.start(opts);
+    await expect(host.send({ id: "entry-1", text: "hello" }, undefined, () => {
+      throw new Error("fixture writer changed");
+    })).rejects.toThrow("fixture writer changed");
+    expect(child.prompts).toHaveLength(0);
+    expect(host.agentControlState()).toMatchObject({ idle: true, turnId: null });
     const receipt = await host.send({ id: "entry-1", text: "hello" });
     expect(receipt.outcome).toBe("turn-started");
     const turnId = (receipt as { turnId: string }).turnId;

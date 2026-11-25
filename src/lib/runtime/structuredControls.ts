@@ -1,3 +1,4 @@
+import { checkpointControlFacts } from "@/lib/agentState/control";
 import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import { fencePendingSends } from "./sendSettlement";
 import { ownsItsSettlement, registryReceiptsForConversation } from "@/lib/agent/registry";
@@ -172,7 +173,8 @@ async function answerPermissionRequest(
   if (decision !== "allow" && decision !== "deny") {
     return { status: 400, body: { error: "permission needs decision allow or deny" } };
   }
-  const pending = host.pendingPermissions ?? [];
+  const attention = checkpointControlFacts(host);
+  const pending = attention.attentionVerified ? host.pendingPermissions ?? [] : [];
   const requestId = request.requestId
     ? (pending.some((candidate) => candidate.id === request.requestId) ? request.requestId : null)
     : pending[0]?.id ?? null;
@@ -227,7 +229,8 @@ async function answerNativeRequest(
 ): Promise<StructuredControlResult> {
   if (request.resolution === undefined) return { status: 400, body: { error: "answer needs a resolution" } };
   if (!request.requestId) return { status: 400, body: { error: "answer names the tool use it answers" } };
-  const open = new Set(host.pendingAttention ?? []);
+  const attention = checkpointControlFacts(host);
+  const open = new Set(attention.attentionVerified ? attention.attentionIds : []);
   const bound = (host.pendingToolUses ?? [])
     .find((candidate) => candidate.toolUseId === request.requestId && open.has(candidate.id));
   if (!bound) {
@@ -295,6 +298,10 @@ export async function dispatchStructuredControl(
   if (!request.onlyIfIdle && request.controlOrigin?.kind !== "agent" && request.actor?.kind !== "agent"
     && (STRUCTURED_CONTROL_ACTIONS.has(request.action) || request.action === "resume")) {
     await cancelSeatQuotaOnControl(conversation.id);
+  }
+  const current = registry.conversation(conversation.id);
+  if (current?.id !== conversation.id || current.generations.at(-1)?.id !== generation.id) {
+    return { status: 409, body: { error: "conversation generation changed before control admission" } };
   }
   const snapshot = registry.readOnlySnapshot();
   const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
@@ -606,7 +613,7 @@ export async function dispatchStructuredControl(
               operationId,
               idempotencyKey: operationId,
               conversationId: conversation.id,
-              turnId: entry.structuredHost?.activeTurnRef ?? null,
+              turnId: checkpointControlFacts(entry.structuredHost).turnId,
             };
     assertSwitchCurrent?.();
     const result = await client.command(command);

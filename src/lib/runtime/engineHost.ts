@@ -281,6 +281,9 @@ export interface EngineHost {
   reconfigure?(settings: { model?: string | null; effort?: string | null }): Promise<void>;
   reconcileAgentStateTerminal?(turnRef: string, nativeId: string | null, at: number, outcome?: "completed" | "interrupted" | "error"): boolean;
   agentStateMemory?(): { activeTurnRef: string | null; pendingAttention: string[]; eventCursor: number; nativeTurnId?: string | null; deliveredNativeTurnId?: string | null; promptOrdinal?: number | null; startedAt?: number | null; attentionUnverified?: boolean };
+  agentControlState?(): import("@/lib/agentState/control").HostControlFacts;
+  /** In-memory request identity, including replacements that reuse a ref. */
+  agentAttentionRequest?(id: string): object | undefined;
   health(): Promise<HostState>;
   /** Current owner memory, synchronously read under its fence at automatic wake dispatch. */
   readViewerMcpObservation?(): ViewerMcpObservation | undefined;

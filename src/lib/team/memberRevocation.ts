@@ -1,3 +1,4 @@
+import { checkpointControlFacts } from "@/lib/agentState/control";
 import crypto from "node:crypto";
 import { agentRegistry, type AgentRegistry, type AgentRegistryEntry, type SpawnReceipt } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
@@ -42,7 +43,7 @@ function plan(store: TeamStore, registry: AgentRegistry, revocation: MemberRevoc
     if (!conversation || !generation) throw new Error("revoked host conversation ownership is unavailable");
     const receipt = registry.spawnReceiptForHost(entry.key);
     targets.push({ id: sessionKeyId(entry.key), revocationId: revocation.id, kind: "host", conversationId: conversation.id,
-      key: entry.key, turnId: entry.structuredHost?.activeTurnRef ?? null, process: entry.structuredHost?.process ?? null,
+      key: entry.key, turnId: checkpointControlFacts(entry.structuredHost).turnId, process: entry.structuredHost?.process ?? null,
       launchId: receipt?.launchId ?? entry.structuredHostOperationId ?? null, state: "pending" });
   }
   store.transaction(() => {
@@ -156,7 +157,7 @@ async function settleTarget(store: TeamStore, registry: AgentRegistry, client: R
       if (!entry || !memberOwnsHost(registry, entry, revocation.memberId)) throw new Error("revoked launch host identity changed");
       store.transaction(() => {
         store.saveRevocationTarget({ id: sessionKeyId(receipt.key!), revocationId: revocation.id, kind: "host", conversationId: receipt.conversationId,
-          key: receipt.key!, turnId: entry.structuredHost?.activeTurnRef ?? null, process: entry.structuredHost?.process ?? null, launchId: receipt.launchId, state: "pending" });
+          key: receipt.key!, turnId: checkpointControlFacts(entry.structuredHost).turnId, process: entry.structuredHost?.process ?? null, launchId: receipt.launchId, state: "pending" });
         store.saveRevocationTarget({ ...target, state: "gone" });
       });
       return;

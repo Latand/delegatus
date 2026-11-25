@@ -39,6 +39,7 @@ import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, pe
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { NativeCodexQueue } from "./nativeCodexQueue";
 import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
 import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, recorderGatePaths } from "./gateCheckRecord";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
@@ -4724,6 +4725,38 @@ describe("CodexAppServerHost", () => {
       } finally { await host.release(); }
     });
   }
+
+  test("native cold recovery rechecks blocking attention at the queue wire boundary", async () => {
+    const threadId = "cold-queue-attention-wire-fence";
+    const server = new FakeAppServer(threadId, threadId, false, [], { type: "idle" });
+    server.userAgent = "codex_desktop_app/0.159.0 (Linux)";
+    server.paginatedHistory = true;
+    server.nativeQueueItems = [{ id: "retained-head", clientUserMessageId: "original-client", input: [{ type: "text", text: "retained" }] }];
+    const queueStart = NativeCodexQueue.prototype.start;
+    const hasBlockingAttention = Object.getOwnPropertyDescriptor(CodexAppServerHost.prototype, "hasBlockingAttention")!;
+    let attentionAppeared = false;
+    Object.defineProperty(CodexAppServerHost.prototype, "hasBlockingAttention", {
+      ...hasBlockingAttention,
+      value: function (this: CodexAppServerHost) { return attentionAppeared || hasBlockingAttention.value!.call(this); },
+    });
+    NativeCodexQueue.prototype.start = function (this: NativeCodexQueue, queuedSubmissionId?: string | null, authorize?: () => void) {
+      /* The initial recovery snapshot has already passed. Change the current
+         control fact before NativeCodexQueue's pre-wire microtask runs. */
+      attentionAppeared = true;
+      return queueStart.call(this, queuedSubmissionId, authorize);
+    };
+    try {
+      const host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+      try {
+        expect(server.requests.filter(request => request.method === "thread/queue/start")).toHaveLength(0);
+        expect(server.requests.filter(request => request.method === "turn/start")).toHaveLength(0);
+        expect(server.nativeQueueItems.map(item => item.id)).toEqual(["retained-head"]);
+      } finally { await host.release(); }
+    } finally {
+      NativeCodexQueue.prototype.start = queueStart;
+      Object.defineProperty(CodexAppServerHost.prototype, "hasBlockingAttention", hasBlockingAttention);
+    }
+  });
 
   test("native cold recovery leaves an authoritative start refusal with the native owner", async () => {
     const threadId = "cold-queue-race-refusal";

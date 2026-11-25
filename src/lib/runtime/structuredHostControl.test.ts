@@ -1012,6 +1012,20 @@ test("kill idle refuses a host whose current turn state is unknown", () => {
   expect(refusal).toMatchObject({ status: 409, error: expect.stringContaining("turn state is unknown") });
 });
 
+test("kill idle checks the current conversation turn without reading projections", () => {
+  const file = gateSnapshot({ turn: "busy" });
+  let projectionReads = 0;
+  Object.defineProperty(file, "agentStates", { get: () => { projectionReads++; return undefined; } });
+  const refusal = structuredHostKillRefusal(quiet, { kind: "idle", hours: 2 }, false, {
+    snapshot: () => file,
+    transcriptMtimeMs: () => NOW_MS - 6 * 3_600_000,
+    now: () => NOW_MS,
+  });
+
+  expect(refusal).toMatchObject({ status: 409, error: expect.stringContaining("mid-turn") });
+  expect(projectionReads).toBe(0);
+});
+
 test("kill idle refuses a host whose transcript moved since the list was taken", () => {
   const dependencies = { snapshot: () => gateSnapshot(), now: () => NOW_MS };
 

@@ -86,10 +86,9 @@ function foreignLiveOwnership(
   key: { engine: "claude" | "codex"; sessionId: string },
   probe: (entry: FileEntry) => TranscriptLiveOwnership | null,
 ): TranscriptLiveOwnership | null {
-  const evidence = entry.proc === "running" ? "session" : probe(entry);
-  if (!evidence) return null;
-  const hosted = registry.readOnlySnapshot().entries[sessionKeyId(key)];
-  return hosted?.host || hosted?.structuredHost ? null : evidence;
+  const hosted = registry.hostEntry(key);
+  if (hosted?.artifactPath === entry.path && (hosted.host || hosted.structuredHost)) return null;
+  return entry.proc === "running" ? "session" : probe(entry);
 }
 
 export function admitTranscriptConversation(

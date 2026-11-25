@@ -1,3 +1,5 @@
+import { StructuredAnswerError } from "./engineHost";
+import { hostControlFacts } from "@/lib/agentState/control";
 import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { CLAUDE_NATIVE_INPUT_LIMIT, claudeNativeUuid, nativeBoundary, nativeTurnBoundary, nativeTurnBoundaryMember, nativeConsumed, nativeInput, nativeResult, nativeResultMembers, nativeMergedContent, nativeMergedMembers, nativeTerminal, nativeUuids, sameNativeWriter,
   deliveryRecord, parseDeliveryRecords, replayClaudeDeliveries, sameNormalizedEntry, type ClaudeNativeTurnBoundary, type ClaudeNativeConsumed, type ClaudeNativeInput, type ClaudeNativeResult, type ClaudeNativeTerminal, type ClaudeNativeWriter } from "./claudeNativeDelivery";
@@ -2120,6 +2122,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (this.unavailable()) throw new Error("Claude stream host is unavailable");
     if (!this.attentions.has(attentionRef)) throw new Error("attention request is missing or already answered");
     const attention = this.attentions.get(attentionRef)!;
+    if (!this.agentStateLiveAttentions.has(attention)) throw new StructuredAnswerError("attention belongs to a previous host generation", "unavailable");
     const response = record(value);
     const answer = response?.behavior === "allow"
       ? { ...response, updatedInput: { ...(record(attention.input) ?? {}), ...(record(response.updatedInput) ?? {}) } }
@@ -2239,13 +2242,22 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private agentStateDeliveredNativePromptId: string | null | undefined;
   private readonly agentStateLiveAttentions = new WeakSet<object>();
 
+  agentControlState() {
+    const facts = hostControlFacts(this.identity.sessionId,
+      this.dead ? "dead" : this.released ? "unhosted" : "idle",
+      this.activeTurnId, this.attentions.size > 0, this.attentions.size > 0, this.launchFlags);
+    const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
+    return { ...facts, transport: pid ? { pid, startIdentity: this.childStartIdentity,
+      endpoint: `stdio:${pid}` } : null };
+  }
+
+  agentAttentionRequest(id: string): object | undefined {
+    return this.attentions.get(id);
+  }
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
-    const status: HostState["status"] = this.dead ? "dead"
-      : this.released ? "unhosted"
-      : this.attentions.size ? "attention"
-      : this.activeTurnId ? "active"
-      : "idle";
+    const { status, turnId } = this.agentControlState();
     return {
       status,
       sessionKey: this.identity.sessionId,
@@ -2257,7 +2269,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
-      activeTurnRef: this.activeTurnId,
+      activeTurnRef: turnId,
       agentStateTurnStartedAt: this.agentStateTurnStartedAt,
       agentStateNativeTurnId: this.activeTurnId ? this.agentStateNativePromptId : null,
       agentStateAttention: { pending: [...this.attentions.keys()], unverified: this.agentStateMemory().attentionUnverified },

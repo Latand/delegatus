@@ -1,3 +1,4 @@
+import { hostControlFactsFromHealth } from "@/lib/agentState/control";
 import { SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { nativeQueueInputMatches } from "./nativeQueueContent";
 import type { RuntimeHostClient } from "./client";
@@ -36,6 +37,7 @@ export interface NativeQueueExecutorPort {
   client: RuntimeHostClient;
   resolveHost(conversationId: string): EngineHost | null;
   binding(conversationId: string): NativeQueueBinding | null;
+  writerClaim?(conversationId: string): string | null;
   /** Synchronous account admission after journal/health waits. Cleanup stays available. */
   authorizeDispatch?(conversationId: string): void;
   /** Revocable work must stay in our journal until an idle, guarded turn start. */
@@ -67,6 +69,23 @@ export class NativeQueueExecutor {
   ): Promise<void | false> {
     const { client } = this.port;
     if (!client.nativeQueueRead || !client.nativeQueueTransition) throw new Error("native queue journal is unavailable");
+    /* Remember the authority that admitted this attempt before any journal
+       read can yield. The reads below describe work; they cannot choose a new
+       host or writer for it. A committed account succession is the sole
+       explicitly verified route to a successor authority. */
+    const attempted = {
+      binding: this.port.binding(command.conversationId),
+      host: this.port.resolveHost(command.conversationId),
+      writer: this.port.writerClaim?.(command.conversationId),
+    };
+    if (attempted.binding) attempted.binding = { ...attempted.binding };
+    const attemptedAuthorityCurrent = () => {
+      const currentBinding = this.port.binding(command.conversationId);
+      const sameBinding = currentBinding === null ? attempted.binding === null
+        : attempted.binding !== null && sameNativeQueueBinding(currentBinding, attempted.binding);
+      return sameBinding && this.port.resolveHost(command.conversationId) === attempted.host
+        && (!this.port.writerClaim || this.port.writerClaim(command.conversationId) === attempted.writer);
+    };
     const transition = (change: Parameters<NonNullable<RuntimeHostClient["nativeQueueTransition"]>>[1]) => client.nativeQueueTransition!(command.operationId, change);
     const prior = await step("reading the delivery journal status", () => client.operationStatus(command.operationId));
     if (!prior || (prior.receipt.status !== "queued" && prior.receipt.status !== "pending")) return;
@@ -88,6 +107,11 @@ export class NativeQueueExecutor {
       return false;
     }
     const rebinding = succession?.status === "committed" && !sameNativeQueueBinding(binding, succession.binding);
+    if ((!rebinding && !attemptedAuthorityCurrent())
+      || (rebinding && !sameNativeQueueBinding(this.port.binding(command.conversationId) ?? command.binding, succession.binding))) {
+      await transition({ phase: "refused", reason: "native queue writer changed during journal reads" });
+      return;
+    }
     if (rebinding) {
       if (command.action !== "add" || entry?.state !== "admitted" || version?.input || entry.nativeSubmissionId || entry.proof) {
         await transition({ phase: "refused", reason: "native queue submitted input belongs to the previous runtime" });
@@ -97,9 +121,11 @@ export class NativeQueueExecutor {
     }
     const host = this.port.resolveHost(command.conversationId);
     const native = host?.nativeQueue;
+    const writer = this.port.writerClaim?.(command.conversationId);
     const owns = () => {
       const current = this.port.binding(command.conversationId);
-      return host === this.port.resolveHost(command.conversationId) && current && sameNativeQueueBinding(current, binding);
+      return host === this.port.resolveHost(command.conversationId) && current && sameNativeQueueBinding(current, binding)
+        && (!this.port.writerClaim || writer === this.port.writerClaim(command.conversationId));
     };
     if ((!host || !native) && rebinding && sameNativeQueueBinding(this.port.binding(command.conversationId) ?? command.binding, binding)) {
       note("awaiting-host", "the account switch's successor has no host yet");
@@ -115,7 +141,7 @@ export class NativeQueueExecutor {
       const input = entry && version
         ? version.input ?? await step("preparing the message for Codex's queue", () => native.prepare({ ...entry, binding }, version))
         : [];
-      const health = await step("reading the host's health", () => host.health()).catch(error => {
+      const health = await step("reading the host's health", async () => host.agentControlState?.() ?? hostControlFactsFromHealth(await host.health())).catch(error => {
         if (rebinding && owns()) return null;
         throw error;
       });
@@ -127,13 +153,27 @@ export class NativeQueueExecutor {
         note("awaiting-host", "the account switch's successor has no live host yet");
         return false;
       }
-      if (rebinding && owns() && health.status === "attention" && health.activeTurnRef === null) return false;
-      if (!owns() || health.status === "dead" || health.status === "unhosted") throw new StructuredSendRefusedError("native queue writer is unavailable");
-      if (command.turnId !== undefined && command.turnId !== health.activeTurnRef) throw new StructuredSendRefusedError("stale-turn");
-      if ((command.action === "start" || command.action === "send-now") && health.status === "attention") throw new StructuredSendRefusedError("blocking-attention");
-      if ((command.action === "start" || (command.action === "send-now" && command.turnId === null)) && health.status !== "idle") throw new StructuredSendRefusedError("idle state is unproven");
-      if (command.action === "add" && health.status === "attention" && health.activeTurnRef === null) throw new StructuredSendRefusedError("blocking attention prevents native auto-dispatch");
-      if (command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId) && health.status !== "idle") {
+      if (rebinding && owns() && health.status === "attention" && health.turnId === null) return false;
+      const dispatchesTurn = command.action === "start" || command.action === "send-now";
+      const needsIdle = dispatchesTurn && command.turnId === null;
+      const assertCurrent = () => {
+        if (!owns()) throw new StructuredSendRefusedError("native queue writer changed before actuation");
+        const live = host.agentControlState?.();
+        if (live && live.sessionKey !== binding.threadId) {
+          throw new StructuredSendRefusedError("native queue writer changed before actuation");
+        }
+        const current = live ?? health;
+        if (current.status === "dead" || current.status === "unhosted") throw new StructuredSendRefusedError("native queue writer is unavailable");
+        if (command.turnId !== undefined && command.turnId !== current.turnId) throw new StructuredSendRefusedError("stale-turn");
+        if (dispatchesTurn && current.status === "attention") throw new StructuredSendRefusedError("blocking-attention");
+        if (needsIdle && !current.idle) throw new StructuredSendRefusedError("idle state is unproven");
+        if (command.action === "add" && current.status === "attention" && current.turnId === null) {
+          throw new StructuredSendRefusedError("blocking attention prevents native auto-dispatch");
+        }
+        return current;
+      };
+      const currentHealth = assertCurrent();
+      if (command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId) && !currentHealth.idle) {
         this.port.authorizeDispatch?.(command.conversationId);
         note("awaiting-turn", "waiting for the current turn to finish");
         return false;
@@ -154,27 +194,45 @@ export class NativeQueueExecutor {
       }
       // Atomic journal CAS: a second executor cannot pass this boundary.
       if (command.action === "add") note("dispatching", "handing the message to Codex's queue");
+      assertCurrent();
       await transition({ phase: "prepared", input, ...(rebinding ? { binding } : {}) });
       prepared = true;
-      if (!owns()) throw new StructuredSendRefusedError("native queue writer changed before actuation");
+      const dispatchHealth = assertCurrent();
       if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId);
       const guardedAdd = command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId);
-      if (guardedAdd && health.status !== "idle") {
+      if (guardedAdd && !dispatchHealth.idle) {
         await transition({ phase: "deferred", reason: "waiting for guarded idle dispatch" });
         return false;
       }
+      let wireAuthorized = false;
+      const authorizeWrite = () => {
+        try {
+          const current = assertCurrent();
+          if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId);
+          if (command.action === "add" && (guardedAdd ? !current.idle : this.port.requiresDispatchGuard?.(command.conversationId))) {
+            throw new StructuredDispatchDeferredError("native queue requires guarded idle dispatch");
+          }
+        } catch (error) {
+          actuated = wireAuthorized;
+          throw error;
+        }
+        wireAuthorized = true;
+      };
+      // An adapter that loses its reply may already have written. Only a
+      // refusal from the pre-write callback establishes that it did not.
       actuated = true;
       if (command.action === "add") {
         if (guardedAdd) {
           // The host checks the actual idle turn synchronously before turn/start.
           // No payload enters Codex's automatic queue, even across a restart.
           const ready = { ...entry!, versions: entry!.versions.map(v => v.revision === entry!.revision ? { ...v, input } : v) };
+          authorizeWrite();
           const result = await native.sendWithdrawn(ready, null);
           await transition({ phase: "acknowledged", turnId: result.turnId });
           note("awaiting-turn", "waiting for the turn to appear in the conversation");
           return;
         }
-        const ack = await native.queue.add(entry!.clientUserMessageId, input);
+        const ack = await native.queue.add(entry!.clientUserMessageId, input, authorizeWrite);
         if (!nativeQueueInputMatches({ ...version!, input }, ack.result.queuedSubmission.input)) throw new Error("native queue acknowledged a different input");
         await transition({ phase: "acknowledged", nativeSubmissionId: ack.result.queuedSubmission.id });
         /* Codex holds it now and sends it when the turn ends; only the proof
@@ -182,18 +240,18 @@ export class NativeQueueExecutor {
         note("awaiting-turn", "held in Codex's own queue");
       } else if (command.action === "update") {
         if (!entry!.nativeSubmissionId) throw new StructuredSendRefusedError("native submission is unknown");
-        const ack = await native.queue.update({ id: entry!.nativeSubmissionId, clientUserMessageId: entry!.clientUserMessageId }, input);
+        const ack = await native.queue.update({ id: entry!.nativeSubmissionId, clientUserMessageId: entry!.clientUserMessageId }, input, authorizeWrite);
         if (!nativeQueueInputMatches({ ...version!, input }, ack.result.queuedSubmission.input)) throw new Error("native queue acknowledged a different input");
         await transition({ phase: "acknowledged", nativeSubmissionId: ack.result.queuedSubmission.id });
       } else if (command.action === "delete") {
-        const ack = await native.queue.delete(entry!.nativeSubmissionId!);
+        const ack = await native.queue.delete(entry!.nativeSubmissionId!, authorizeWrite);
         await transition({ phase: "acknowledged", deleted: ack.result.deleted });
         if (ack.result.deleted) {
           await client.nativeQueueTransition!(entry!.entryId, { phase: "removed" });
           await this.port.settled?.({ ...entry!, state: "removed", mutationOperationId: null });
         }
       } else if (command.action === "reorder") {
-        await native.queue.reorder(command.queuedSubmissionIds!);
+        await native.queue.reorder(command.queuedSubmissionIds!, authorizeWrite);
         await transition({ phase: "acknowledged" });
       } else if (command.action === "start" || command.turnId === null) {
         /* Three idle dispatches through one native call. Without an entry it is
@@ -201,23 +259,24 @@ export class NativeQueueExecutor {
            With one it is either that entry's turn — `start(submissionId)` — or
            the recovery of a payload native no longer holds, which has no
            submission id left to name and goes back as its own input. */
+        if (entry?.state === "withdrawn") authorizeWrite();
         const turnId = !entry
-          ? (await native.queue.start(null)).result.turn.id
+          ? (await native.queue.start(null, authorizeWrite)).result.turn.id
           : entry.state === "withdrawn"
             ? (await native.sendWithdrawn(entry, null)).turnId
-            : (await native.queue.start(entry.nativeSubmissionId)).result.turn.id;
+            : (await native.queue.start(entry.nativeSubmissionId, authorizeWrite)).result.turn.id;
         await transition({ phase: "acknowledged", turnId });
       } else {
         // Native's steer-then-delete permits auto-dispatch between the two writes.
         // Positive withdrawal is the only authority to steer this queued payload.
-        const removed = await native.queue.delete(entry!.nativeSubmissionId!);
+        const removed = await native.queue.delete(entry!.nativeSubmissionId!, authorizeWrite);
         if (!removed.result.deleted) {
           await transition({ phase: "uncertain", reason: "native entry was not withdrawn; canonical verification required" });
           return;
         }
+        wireAuthorized = true;
         await transition({ phase: "withdrawn" });
-        if (!owns()) throw new StructuredSendRefusedError("native queue writer changed after withdrawal");
-        this.port.authorizeDispatch?.(command.conversationId);
+        authorizeWrite();
         const result = await native.sendWithdrawn({ ...entry!, state: "withdrawn" }, command.turnId!);
         await transition({ phase: "acknowledged", turnId: result.turnId });
       }

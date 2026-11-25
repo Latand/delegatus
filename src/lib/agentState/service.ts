@@ -16,7 +16,7 @@ import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
-import { AGENT_STATE_POLICY, evaluateAgentState, fact, unknown, type AgentFacts, type AgentProjection, type Evidence, type NativeTurn } from "./model";
+import { AGENT_STATE_POLICY, evaluateAgentState, fact, hostMemoryTurn, unknown, type AgentFacts, type AgentProjection, type Evidence, type NativeTurn } from "./model";
 import { AgentTranscriptCache, fileSignature, transcriptVersionMatches } from "./transcript";
 import { acknowledgeAgentProjection, artifactRevision, commitAgentObservation, conversationRevision, entryRevision,
   readAgentProjection, readAgentStateMetrics, readAgentStatesPage, subjectId, copyAgentStateRow, recordAgentProcessEnded, pruneTerminalAgentProjection } from "./store";
@@ -308,8 +308,7 @@ export class AgentStateService {
         ? native.turn.value.nativeId === memory.nativeTurnId
         : (entry.key.engine === "copilot" || entry.key.engine === "antigravity") ? native.turn.value.promptOrdinal === memory.promptOrdinal : true);
       const provisional = memory.activeTurnRef !== null && entry.key.engine !== "codex" && !nativeOpening;
-      turn = fact({ state: memory.activeTurnRef ? "open" : "closed", nativeId: entry.key.engine === "codex" ? memory.activeTurnRef : memory.nativeTurnId ?? null,
-        localRef: memory.activeTurnRef, opening: provisional ? "accepted" : nativeOpening && native.turn.determined ? native.turn.value.opening : null,
+      turn = fact({ ...hostMemoryTurn(memory.activeTurnRef), nativeId: entry.key.engine === "codex" ? memory.activeTurnRef : memory.nativeTurnId ?? null, opening: provisional ? "accepted" : nativeOpening && native.turn.determined ? native.turn.value.opening : null,
         closing: memory.activeTurnRef ? null : "host-terminal", at: memory.activeTurnRef ? startedAt : native.turn.determined ? native.turn.value.at : null, tools: 0 },
         { ...ev("host-memory", `seq:${memory.eventCursor}`), ...(provisional ? { validUntil: startedAt + AGENT_STATE_POLICY.startupGraceMs } : {}) });
     }

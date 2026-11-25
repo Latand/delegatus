@@ -21,6 +21,10 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 const conversationId = "conversation_native";
 const binding = { threadId: "thread-native", accountId: "account-a" };
+function nativeControlState(turnId: string | null): ReturnType<NonNullable<EngineHost["agentControlState"]>> {
+  return { sessionKey: binding.threadId, status: turnId ? "active" : "idle",
+    turnId, idle: turnId === null, attentionPending: false, activeFlags: [] };
+}
 function makeJournal(filename = ":memory:") {
   const journal = new RuntimeJournal(filename, { structuredHosts: true });
   journal.append({ scope: `session:${conversationId}`, kind: "session-status", payload: {
@@ -127,6 +131,114 @@ function fixture(journal = makeJournal()) {
     } };
 }
 
+for (const action of ["add", "update"] as const) {
+  for (const boundary of ["prepare", "journal", "wire"] as const) {
+    test.each([
+      ["turn end", "active-a", null],
+      ["turn start", null, "active-b"],
+      ["turn replacement", "active-a", "active-b"],
+    ] as const)(`native ${action} without a turn fence applies across a %s during ${boundary}`, async (_change, initial, next) => {
+      const f = fixture();
+      try {
+        const seed = command("seed");
+        if (action === "update") {
+          f.journal.executeOperation(seed);
+          await f.executor.execute(seed);
+        }
+        let turnId: string | null = initial;
+        f.host.agentControlState = () => nativeControlState(turnId);
+        const health = f.host.health.bind(f.host);
+        f.host.health = async () => ({ ...await health(),
+          status: turnId ? "active" : "idle", sessionKey: binding.threadId, activeTurnRef: turnId });
+        const prepare = f.host.nativeQueue!.prepare;
+        f.host.nativeQueue!.prepare = async (...args) => {
+          const input = await prepare(...args);
+          if (boundary === "prepare") turnId = next;
+          return input;
+        };
+        const transition = f.client.nativeQueueTransition!;
+        f.client.nativeQueueTransition = async (id, change) => {
+          const result = await transition(id, change);
+          if (boundary === "journal" && change.phase === "prepared") turnId = next;
+          return result;
+        };
+        if (boundary === "wire") {
+          const beforeWrite = (authorize?: () => void) => () => { turnId = next; authorize?.(); };
+          const add = f.queue.add.bind(f.queue), update = f.queue.update.bind(f.queue);
+          f.queue.add = (id, input, authorize) => add(id, input, beforeWrite(authorize));
+          f.queue.update = (id, input, authorize) => update(id, input, beforeWrite(authorize));
+        }
+        const c = command("unfenced", action === "add" ? {} : { action, entryId: seed.operationId, expectedRevision: 1 });
+        const before = f.calls.length;
+        f.journal.executeOperation(c);
+        await f.executor.execute(c);
+        expect(f.journal.operationResult(c.operationId)?.receipt.status).toBe("applied");
+        expect(f.calls.slice(before)).toEqual([`thread/queue/${action}`]);
+        expect(f.items).toHaveLength(1);
+      } finally { f.journal.close(); }
+    });
+  }
+}
+
+test.each(["settlement", "journal", "wire"] as const)("a turn-fenced native add refuses a replacement turn during %s", async boundary => {
+  const f = fixture();
+  try {
+    const health = f.host.health.bind(f.host);
+    let turnId = "active-a";
+    f.host.agentControlState = () => nativeControlState(turnId);
+    f.host.health = async () => ({ ...await health(), sessionKey: binding.threadId, activeTurnRef: turnId });
+    const transition = f.client.nativeQueueTransition!;
+    f.client.nativeQueueTransition = async (id, change) => {
+      const result = await transition(id, change);
+      if (boundary === "journal" && change.phase === "prepared") turnId = "active-b";
+      return result;
+    };
+    if (boundary === "wire") {
+      const add = f.queue.add.bind(f.queue);
+      f.queue.add = (...args) => {
+        queueMicrotask(() => { turnId = "active-b"; });
+        return add(...args);
+      };
+    }
+    const c = command("replacement", { turnId: "active-a" });
+    f.journal.executeOperation(c);
+    await f.executor.execute(c, undefined, undefined, undefined, async () => {
+      if (boundary === "settlement") turnId = "active-b";
+      return { readable: true, value: false };
+    });
+    expect(f.calls).toEqual([]);
+    expect(f.journal.operationResult(c.operationId)?.receipt).toMatchObject({ status: "failed", reason: "stale-turn" });
+    expect(f.journal.nativeQueueRead(conversationId)[0]?.nativeSubmissionId).toBeNull();
+  } finally { f.journal.close(); }
+});
+
+test.each([
+  ["start", null],
+  ["send-now", null],
+  ["send-now", "active-a"],
+] as const)("native %s with turn fence %s refuses a turn change at the wire", async (action, fence) => {
+  const f = fixture();
+  try {
+    const seed = command("seed");
+    f.journal.executeOperation(seed);
+    await f.executor.execute(seed);
+    if (fence === null) f.idle();
+    let turnId: string | null = fence;
+    f.host.agentControlState = () => nativeControlState(turnId);
+    const start = f.queue.start.bind(f.queue), remove = f.queue.delete.bind(f.queue);
+    const beforeWrite = (authorize?: () => void) => () => { turnId = "active-b"; authorize?.(); };
+    f.queue.start = (id, authorize) => start(id, beforeWrite(authorize));
+    f.queue.delete = (id, authorize) => remove(id, beforeWrite(authorize));
+    const c = command("dispatch", { action, turnId: fence, entryId: seed.operationId, expectedRevision: 1 });
+    const before = f.calls.length;
+    f.journal.executeOperation(c);
+    await f.executor.execute(c);
+    expect(f.journal.operationResult(c.operationId)?.receipt).toMatchObject({ status: "failed", reason: "stale-turn" });
+    expect(f.calls.slice(before)).toEqual([]);
+    expect(f.items).toHaveLength(1);
+  } finally { f.journal.close(); }
+});
+
 test.each(["add", "start", "update", "send-now"] as const)("native %s checks account admission after the prepared journal write", async action => {
   const f = fixture();
   try {
@@ -182,6 +294,38 @@ test("lost add reply survives restart and account change without a second native
   expect(next.journal.nativeQueueRead(conversationId)[0]?.mutationOperationId).toBe(c.operationId);
   expect(() => next.journal.retryOperation(c.operationId)).toThrow("does not support retry");
   next.journal.close();
+});
+
+test("native queue refuses a writer replacement during its initial journal reads", async () => {
+  const f = fixture();
+  try {
+    const add = command("op-read-replacement");
+    f.journal.executeOperation(add);
+    let writer = "writer-one";
+    const executor = new NativeQueueExecutor({ client: f.client, resolveHost: () => f.host, binding: () => binding,
+      writerClaim: () => writer });
+    let readStarted!: () => void;
+    const started = new Promise<void>(resolve => { readStarted = resolve; });
+    let finishRead!: () => void;
+    const held = new Promise<void>(resolve => { finishRead = resolve; });
+    const read = f.client.nativeQueueRead!;
+    f.client.nativeQueueRead = async (id) => {
+      readStarted();
+      await held;
+      return read(id);
+    };
+    const executing = executor.execute(add);
+    await started;
+    writer = "writer-two";
+    finishRead();
+    await executing;
+
+    expect(f.calls).toEqual([]);
+    expect(f.journal.nativeQueueRead(conversationId)[0]).toMatchObject({ state: "refused", nativeSubmissionId: null });
+    expect(f.journal.operationResult(add.operationId)?.receipt).toMatchObject({
+      status: "failed", reason: "native queue writer changed during journal reads",
+    });
+  } finally { f.journal.close(); }
 });
 
 test.each(["hostless", "unreadable", "refused"])("a committed proof retries failed sender settlement without engine access (%s)", async scenario => {
