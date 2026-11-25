@@ -82,8 +82,11 @@ export async function withCodexCliLaunch<T>(binary: string, operation: () => Pro
   });
 }
 
-type JoinQuotaLaunch = <T>(operation: () => Promise<T>) => Promise<T>;
-const quotaLaunches = new Map<string, JoinQuotaLaunch>();
+type QuotaLaunchGroup = {
+  homes: Map<string, string | undefined>;
+  join: <T>(home: string, id: string | undefined, operation: () => Promise<T>) => Promise<T>;
+};
+const quotaLaunches = new Map<string, QuotaLaunchGroup>();
 
 function soleSwitchTicket(binary: string): string | undefined {
   const queue = path.join(updateDirectory(binary), "switch.write-locks");
@@ -93,38 +96,58 @@ function soleSwitchTicket(binary: string): string | undefined {
   } catch { /* Fall back to normal file admission on an unreadable queue. */ }
 }
 
+function homeDirectoryId(home: string): string | undefined {
+  try {
+    const stat = fs.statSync(home, { bigint: true });
+    if (stat.isDirectory() && stat.ino > BigInt(0)) return `${stat.dev}:${stat.ino}`;
+  } catch { /* Unresolved homes initialize under their own switch ticket. */ }
+}
+
 /** Quota clients read the same installed version and initialize independent
  * children. They may share our active ticket until any other ticket queues.
  * Switches and launches from older releases still see the physical lock. */
-export async function withCodexQuotaLaunch<T>(binary: string, operation: () => Promise<T>): Promise<T> {
+export async function withCodexQuotaLaunch<T>(binary: string, home: string, operation: () => Promise<T>): Promise<T> {
   const managed = managedLaunchBinary(binary);
   if (!managed) return operation();
   const existing = quotaLaunches.size ? soleSwitchTicket(managed) : undefined;
-  const share = existing && quotaLaunches.get(existing);
-  if (share) return share(operation);
+  const group = existing && quotaLaunches.get(existing);
+  if (group) {
+    const id = homeDirectoryId(home);
+    // A home may be replaced or a symlink retargeted during initialization.
+    if (id && [...group.homes].every(([path, previous]) => previous !== id && homeDirectoryId(path) === previous)) {
+      return group.join(home, id, operation);
+    }
+  }
 
   const first = Promise.withResolvers<T>();
   const drained = Promise.withResolvers<void>();
-  let ticket: string | undefined, readers = 0;
-  const guard = withCliSwitch(managed, () => {
-    ticket = soleSwitchTicket(managed);
-    if (ticket) quotaLaunches.set(ticket, join);
-    first.resolve(join(operation));
+  const exited = Promise.withResolvers<void>();
+  const homes: QuotaLaunchGroup["homes"] = new Map();
+  let ticket: string | undefined;
+  let admitted = false;
+  void withCliSwitch(managed, () => {
+    admitted = true;
+    const id = homeDirectoryId(home);
+    ticket = id ? soleSwitchTicket(managed) : undefined;
+    if (ticket) quotaLaunches.set(ticket, { homes, join });
+    first.resolve(join(home, id, operation));
     return drained.promise;
+  }).then(exited.resolve, error => {
+    if (admitted) exited.reject(error);
+    else first.reject(error);
   });
-  void guard.catch(first.reject); // Includes a refusal before the first launch.
   return first.promise;
 
-  async function join<R>(start: () => Promise<R>): Promise<R> {
-    readers++;
+  async function join<R>(path: string, id: string | undefined, start: () => Promise<R>): Promise<R> {
+    homes.set(path, id);
     try {
-      // Start in admission order, after the physical guard promise is bound.
-      return await Promise.resolve().then(start);
+      return await start();
     } finally {
-      if (--readers === 0) {
+      homes.delete(path);
+      if (!homes.size) {
         if (ticket) quotaLaunches.delete(ticket);
         drained.resolve();
-        await guard;
+        await exited.promise;
       }
     }
   }

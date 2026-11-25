@@ -93,6 +93,7 @@ test.skipIf(process.platform === "win32")("cold quota clients initialize togethe
   const next = path.join(root, "next");
   fs.symlinkSync(target("new"), next);
   const gates = new Map(["first", "second", "late"].map(id => [id, Promise.withResolvers<void>()]));
+  for (const id of gates.keys()) fs.mkdirSync(path.join(root, id));
   const started = new Map<string, string>();
   const start = CodexAppServerClient.start.bind(CodexAppServerClient);
   const clients = spyOn(CodexAppServerClient, "start").mockImplementation(options => {

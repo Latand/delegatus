@@ -300,8 +300,11 @@ export class CodexAppServerClient {
 
   static async start(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
     const { withCodexCliLaunch, withCodexQuotaLaunch } = await import("@/lib/codexUpdate/installation");
-    const launch = options.protocolProfile === "quota" ? withCodexQuotaLaunch : withCodexCliLaunch;
-    return launch(options.launchBinary ?? codexAccountBinary(), () => this.startWithCliGuard(options));
+    const binary = options.launchBinary ?? codexAccountBinary();
+    const start = () => this.startWithCliGuard(options);
+    return options.protocolProfile === "quota"
+      ? withCodexQuotaLaunch(binary, options.home, start)
+      : withCodexCliLaunch(binary, start);
   }
 
   private static async startWithCliGuard(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
