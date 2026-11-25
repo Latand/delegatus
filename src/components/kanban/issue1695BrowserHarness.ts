@@ -687,8 +687,10 @@ export async function captureProvisioningStepGeometry(browser: Browser, out: str
     else lane.provisioningJob = { version: 1, kind: "provision", token: "fixture-provision-owner",
       subject: "a".repeat(64), planSubject: "b".repeat(64), generation: phase === "retrying" ? 2 : 1,
       owner: { pid: 17, bootEpoch: "fixture-epoch", startIdentity: "fixture-start", instance: "fixture-instance", release: "fixture" },
-      step: phase === "retrying" ? "verifyingCheckout" : "checkingDependencies", since: now - 8000,
+      step: phase === "retrying" ? "verifyingCheckout" : "checkingDependencies", since: now - (phase === "retrying" ? 1000 : 8000),
       deadlineAt: now + 2000, executionDeadlineAt: now + 360_000, status: phase === "timed-out" ? "waiting" : "running",
+      ...(phase === "retrying" ? { interruption: { step: "checkingDependencies", since: now - 13_000,
+        deadlineAt: now - 5_000, observedAt: now - 5_000, reason: "provision-step-timeout" } } : {}),
       ...(phase === "timed-out" ? { retryAt: now + 5000, interruption: {
         step: "checkingDependencies", since: now - 8000, deadlineAt: now, observedAt: now, reason: "provision-step-timeout",
       } } : {}),
@@ -705,7 +707,10 @@ export async function captureProvisioningStepGeometry(browser: Browser, out: str
       const value = await answer.json() as { pipelines: Pipeline[] };
       expect(value.pipelines).toHaveLength(1);
       expect(value.pipelines[0]?.provisioningJob).toBeUndefined();
-      if (lane.state === "provisioning") expect(value.pipelines[0]?.provisioningStep?.since).toBe(now - 8000);
+      if (lane.state === "provisioning") {
+        expect(value.pipelines[0]?.provisioningStep?.since).toBe(now - (lane.provisioningJob?.step === "verifyingCheckout" ? 1000 : 8000));
+        if (lane.provisioningJob?.step === "verifyingCheckout") expect(value.pipelines[0]?.provisioningStep?.retrying).toBe(true);
+      }
       return Response.json({ ...value, files: [], tasks: [task], flows: [], workflows: [],
         projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }],
         projectCwds: { atlas: "/fixture/atlas" }, systemHealth: {} }, { headers: { ETag: `"catalog-${++sequence}"` } });
@@ -772,8 +777,8 @@ export async function captureProvisioningStepGeometry(browser: Browser, out: str
           });
           await page.clock.runFor(500);
         };
-        const phaseTexts = lang === "en" ? ["Checking dependency inputs", "Retry pending · Checking dependency inputs", "Verifying the worktree"]
-          : ["Перевірка вхідних даних залежностей", "Очікування повтору · Перевірка вхідних даних залежностей", "Перевірка робочої копії"];
+        const phaseTexts = lang === "en" ? ["Checking dependency inputs", "Retry pending · Checking dependency inputs", "Retrying · Verifying the worktree"]
+          : ["Перевірка вхідних даних залежностей", "Очікування повтору · Перевірка вхідних даних залежностей", "Повторна перевірка · Перевірка робочої копії"];
         for (const [index, phase] of (["checking", "timed-out", "retrying"] as const).entries()) {
           update(phase);
           if (index) await refresh();

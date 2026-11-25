@@ -66,12 +66,23 @@ type Pool = {
 };
 const pools = new Map<string, Pool>();
 
-export function stopProvisioningJobsForDemotion(): void {
+export async function stopProvisioningJobsForDemotion(): Promise<void> {
   stopped = true;
+  const pending: Promise<boolean>[] = [];
   for (const pool of pools.values()) {
     pool.cancelWake?.();
-    for (const handle of pool.handles.values()) handle.abort.abort(new JobRevoked());
+    for (const handle of pool.handles.values()) {
+      handle.abort.abort(new JobRevoked());
+      pending.push(handle.finished);
+    }
   }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.all(pending),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("provisioning controller did not stop within 25 seconds")), 25_000); timer.unref?.(); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
 }
 
 /** Each fixture owns one isolated state root and its remaining helper leases. */
@@ -98,7 +109,8 @@ const asDate = (ms: number) => new Date(ms).toISOString();
 const due = (value?: string) => value ? Date.parse(value) : 0;
 // An admitted add uses the ordinary wait as a rollback deferral.
 const transientWait = (row: Pipeline, add?: ProvisioningRecord["admittedAdd"]) =>
-  add ? add.previousWait : row.provisioningWait;
+  add && due(row.provisioningWait?.retryAfter) === add.since + ADD_ROLLBACK_DEFERRAL_MS
+    ? add.previousWait : row.provisioningWait ?? add?.previousWait;
 
 function retryTimeUsed(wait: PipelineBoundedWait, now: number, pausedAt?: number): number {
   // A pre-v1 controller can still update the ordinary retry record on rollback.
@@ -129,6 +141,10 @@ export function hasSupersededProvisioningJob(row: Pipeline): boolean {
 
 function subject(row: Pipeline): string {
   return hash([planSubject(row), row.controlGeneration, row.cursor?.stageId, row.cursor?.state]);
+}
+
+export function provisioningSubject(row: Pipeline): string {
+  return subject(row);
 }
 
 function planSubject(row: Pipeline): string {
@@ -183,7 +199,8 @@ function observeForeignClaim(pool: Pool, id: string, slot: ProvisioningRecord, c
 
 async function provisioningOwnerExited(owner: ProvisioningRecord["owner"]): Promise<boolean> {
   const boot = systemBootEpoch();
-  if (!boot || owner.bootEpoch !== boot) return false;
+  if (!boot || !owner.bootEpoch) return false;
+  if (owner.bootEpoch !== boot) return true;
   if (process.platform !== "linux") return processIdentityStatus(owner) === "dead";
   try {
     const stat = await fs.promises.readFile(`/proc/${owner.pid}/stat`, { encoding: "utf8", signal: AbortSignal.timeout(500) });
@@ -204,7 +221,10 @@ export function bindProvisioningGit(ports: Pick<ProvisionPorts, "exec" | "provis
 type JobHooks = { phaseDone?: Promise<void>; parked(row: Pipeline): void };
 
 function workerExited(worker: NonNullable<ProvisioningRecord["worker"]>): boolean {
-  if (worker.bootEpoch !== systemBootEpoch() || processIdentityStatus(worker) !== "dead") return false;
+  const boot = systemBootEpoch();
+  if (!boot || !worker.bootEpoch) return false;
+  if (worker.bootEpoch !== boot) return true;
+  if (processIdentityStatus(worker) !== "dead") return false;
   try { process.kill(-worker.pid, 0); return false; }
   catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
 }
@@ -343,11 +363,52 @@ export function advanceProvisioningJob(row: Pipeline, ports: ProvisionPorts, hoo
 async function runProvisioningJob(id: string, root: string, ports: ProvisionPorts, hooks: JobHooks,
   git: ReturnType<typeof bindProvisioningGit>, clock: ProvisionClock, pool: Pool, handle: Handle): Promise<boolean> {
   let row = await findControllerPipeline(id);
-  if (!row || !eligible(row) || subject(row) !== handle.subject) {
+  if (!row) {
     pool.foreign.delete(id);
     return false;
   }
   const previous = row.provisioningJob;
+  if (subject(row) !== handle.subject || (previous?.subject !== undefined && previous.subject !== handle.subject) || !eligible(row)) {
+    if (!validProvisioningRecord(previous)) return false;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 5_000);
+    const grants: ProvisioningGrant[] = [];
+    try {
+      if (previous.owner.instance !== instance && !await provisioningOwnerExited(previous.owner)) {
+        schedule(pool, clock.wallMs() + 1_000, clock, ports);
+        return false;
+      }
+      if (previous.worker && !workerExited(previous.worker)) {
+        schedule(pool, clock.wallMs() + 1_000, clock, ports);
+        return false;
+      }
+      if (previous.admittedAdd && !await tryProvisioningLock(root, "add", previous.admittedAdd.stripe, git.native, abort.signal,
+        grant => grants.push(grant))) {
+        schedule(pool, Math.min(previous.deadlineAt, clock.wallMs() + 1_000), clock, ports);
+        return false;
+      }
+      const retired = await withProvisioningCheckpoint(tx => {
+        const current = tx.get(id);
+        const saved = current?.provisioningJob;
+        if (!current || subject(current) !== subject(row!) || saved?.token !== previous.token) return false;
+        if (previous.admittedAdd && due(current.provisioningWait?.retryAfter) === previous.admittedAdd.since + ADD_ROLLBACK_DEFERRAL_MS) {
+          if (previous.admittedAdd.previousWait) current.provisioningWait = previous.admittedAdd.previousWait;
+          else delete current.provisioningWait;
+        }
+        delete current.provisioningJob;
+        tx.put(current);
+        return true;
+      }, 500);
+      if (retired && eligible(row)) {
+        ports.scheduleTick?.(0);
+        requestPipelineTick();
+      }
+      return retired;
+    } finally {
+      clearTimeout(timer);
+      for (const grant of grants) grant.close();
+    }
+  }
   if (previous !== undefined && !validProvisioningRecord(previous)) {
     await withProvisioningCheckpoint(tx => {
       const current = tx.get(id);
@@ -362,7 +423,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
   const release = hotStateWriterRevision(root) ?? "unversioned";
   const authority = readHotStateAuthority(root);
   const claimed = previous?.status === "running" || previous?.status === "awaitingApply";
-  let expired = claimed && previous.deadlineAt <= wall;
+  let expired = claimed && (previous.deadlineAt <= wall || previous.executionDeadlineAt <= wall);
   if (claimed && previous.owner.instance !== instance
     && !(authority?.mode === "sqlite" && hotStateSqliteWriterReady(root) && authority.releaseRevision !== previous.owner.release)) {
     const stopAt = observeForeignClaim(pool, id, previous, clock);
@@ -373,6 +434,25 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       schedule(pool, clock.wallMs() + remaining, clock, ports);
       return false;
     }
+  }
+  if (claimed && expired) {
+    const reason = wall >= previous.executionDeadlineAt
+      ? "provision-execution-budget-exhausted" : "provision-step-timeout";
+    const retryAt = wall + 5_000;
+    const transitioned = await withProvisioningCheckpoint(tx => {
+      const current = tx.get(id);
+      const saved = current?.provisioningJob;
+      if (!current || !eligible(current) || subject(current) !== handle.subject || saved?.token !== previous.token
+        || saved.deadlineAt !== previous.deadlineAt || saved.executionDeadlineAt !== previous.executionDeadlineAt
+        || (saved.status !== "running" && saved.status !== "awaitingApply")) return false;
+      current.provisioningJob = { ...saved, token: randomUUID(), status: "waiting", retryAt,
+        interruption: saved.interruption ?? { step: saved.step, since: saved.since, deadlineAt: saved.deadlineAt, observedAt: wall, reason } };
+      current.stateDetail = `provisioning deferred: ${reason}`;
+      tx.put(current);
+      return true;
+    }, 500);
+    if (transitioned) schedule(pool, retryAt, clock, ports);
+    return transitioned;
   }
   const { signal } = handle.abort;
   const priorRetry = transientWait(row, previous?.admittedAdd);
@@ -527,6 +607,8 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
   let checkoutStripe = 0;
   const lock = (kind: "checkout" | "repo" | "add", stripe: number) => tryProvisioningLock(root, kind, stripe, git.native, signal, own);
   const deferAdd = (start: number) => new Deferred("waitingForCheckoutWriter", start, start + PROVISION_STEPS.waitingForCheckoutWriter, "checkout-writer-unverified");
+  const addWaitSince = () => previous?.step === "waitingForCheckoutWriter" && previous.waitReason === "checkout-writer-unverified"
+    ? previous.since : clock.wallMs();
   const dispatch = (name: string) => write(() => {}, { ...slot, effect: { name, sequence: (slot.effect?.sequence ?? 0) + 1 } });
   const checkAddExit = async () => {
     const admitted = slot.admittedAdd;
@@ -556,7 +638,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       await step("creatingCheckout");
       if (slot.admittedAdd) await checkAddExit();
       fence = await lock("add", checkoutStripe);
-      if (!fence) throw deferAdd(clock.wallMs());
+      if (!fence) throw deferAdd(addWaitSince());
       const since = clock.wallMs(), horizon = asDate(since + ADD_ROLLBACK_DEFERRAL_MS);
       const previousWait = transientWait(row!, slot.admittedAdd);
       const admittedAdd = { stripe: checkoutStripe, since, argsDigest: hash(args), sequence: (slot.admittedAdd?.sequence ?? 0) + 1,
@@ -610,7 +692,8 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       const checkoutResource = `checkout:${checkoutStripe}`, repoResource = `repo:${repoStripe}`;
       const waitTurn = (resource: string) => {
         const since = previous?.resource === resource ? previous.since : clock.wallMs();
-        return new Deferred("waitingForTurn", since, clock.wallMs() + PROVISION_STEPS.waitingForTurn, "waiting-for-provisioning-turn", resource);
+        const deadline = previous?.resource === resource ? previous.deadlineAt : since + EXECUTION_MS;
+        return new Deferred("waitingForTurn", since, deadline, "waiting-for-provisioning-turn", resource);
       };
       if (!repository) {
         throw waitTurn(checkout ? repoResource : checkoutResource);
@@ -652,6 +735,14 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       const custody = git.native || fs.existsSync(row!.worktreeDir) ? {
         commonDir, addAdmitted: !!slot.admittedAdd,
         checkpointAlternative: (plan: NonNullable<ProvisioningRecord["plan"]>) => write(() => {}, { ...slot, plan }),
+        prepareInterruptedIndexRepair: async () => {
+          const add = slot.admittedAdd;
+          if (!add) throw new Error("interrupted checkout repair has no admitted add custody");
+          const grant = await lock("add", add.stripe);
+          if (!grant) throw deferAdd(add.since);
+          own(grant);
+          await dispatch("repair-index-lock");
+        },
         verify: async () => {
           await step("verifyingCheckout");
           await checkAddExit();
@@ -663,8 +754,11 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       if (!result.ok) throw new Error(result.error);
       await checkAddExit();
       await write(current => {
-        if (slot.admittedAdd?.previousWait) current.provisioningWait = slot.admittedAdd.previousWait;
-        else if (slot.admittedAdd) delete current.provisioningWait;
+        if (slot.admittedAdd) {
+          const restored = transientWait(current, slot.admittedAdd);
+          if (restored) current.provisioningWait = restored;
+          else delete current.provisioningWait;
+        }
       }, { ...slot, admittedAdd: undefined });
       repository.close();
       await step("startingToolchain");
@@ -761,13 +855,14 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       return changed;
     }
     if (error instanceof Deferred) {
-      if (error.step !== "waitingForTurn" && clock.wallMs() >= error.deadline) {
+      if (clock.wallMs() >= error.deadline) {
+        const reason = error.step === "waitingForTurn" ? "provision-turn-timeout" : error.reason;
         await write(() => {}, { ...slot, step: error.step, since: error.since, deadlineAt: error.deadline, waitReason: error.reason,
           ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity,
             cacheMetadataRemainingMs: error.cache.metadataRemainingMs } : {}),
           ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since, legacyWriter: error.legacyWriter } : {}),
         }, false, true);
-        await park(error.reason);
+        await park(reason);
       }
       else await wait(error);
       return true;

@@ -18,8 +18,17 @@ export async function removeProvisioningFixture(root) {
       throw error;
     });
     if (!info?.isDirectory()) return;
-    await chmod(directory, info.mode | 0o700);
-    for (const child of await readdir(directory, { withFileTypes: true })) {
+    await chmod(directory, info.mode | 0o700).catch(error => {
+      if (error.code === "ENOENT") return;
+      throw error;
+    });
+    let children;
+    try { children = await readdir(directory, { withFileTypes: true }); }
+    catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    for (const child of children) {
       if (child.isDirectory()) await unseal(path.join(directory, child.name));
     }
   };

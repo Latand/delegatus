@@ -61,6 +61,18 @@ function publishNoReplace(source: string, target: string): boolean {
   } catch { throw new UnverifiedPrivateInstall(); }
 }
 
+async function supportsNoReplacePublish(directory: string): Promise<boolean> {
+  const source = path.join(directory, `.publish-probe-${randomUUID()}`);
+  const target = `${source}-target`;
+  await fs.mkdir(source, { mode: 0o700 });
+  try {
+    try { return publishNoReplace(source, target); }
+    catch (error) { if (error instanceof UnverifiedPrivateInstall) return false; throw error; }
+  } finally {
+    await Promise.all([fs.rm(source, { recursive: true, force: true }), fs.rm(target, { recursive: true, force: true })]);
+  }
+}
+
 async function filesMatch(reference: string, actual: string): Promise<boolean> {
   const [wanted, found] = await Promise.all([entry(reference), entry(actual)]);
   if (!wanted || !found || wanted.mode !== found.mode) return false;
@@ -116,6 +128,35 @@ export async function preparePrivateDependencies(repository: string, checkout: s
     const target = path.join(checkout, "node_modules");
     const before = await entry(target);
     if (before && !before.isDirectory()) return false;
+    // A marker may have been published immediately before the controller lost
+    // its receipt reply. The durable intent is the authority to reconcile that
+    // exact directory after restart, before any new installer child is run.
+    if (before && priorIntent && priorIntent.inputs === selected.digest
+      && priorIntent.device === String(before.dev) && priorIntent.inode === String(before.ino)) {
+      try {
+        const marker = JSON.parse((await fileBytes(path.join(target, MARKER), 4096)).toString());
+        const intent = JSON.parse((await fileBytes(path.join(target, INTENT), 4096)).toString());
+        const mode = marker.mode;
+        if (["staged", "in-place"].includes(mode)
+          && marker.claim === priorIntent.claim && marker.inputs === selected.digest && marker.bun === Bun.version
+          && marker.device === priorIntent.device && marker.inode === priorIntent.inode
+          && marker.nonceDigest === priorIntent.nonceDigest
+          && intent.claim === priorIntent.claim && typeof intent.nonce === "string"
+          && createHash("sha256").update(intent.nonce).digest("hex") === priorIntent.nonceDigest) {
+          await census();
+          const after = await entry(target);
+          if (sameDirectory(before, after) && before.ctimeNs === after?.ctimeNs
+            && (await inputs(checkout, INSTALL_FILES)).digest === selected.digest) {
+            await ports.receipt({ claim: priorIntent.claim, inputs: selected.digest, device: priorIntent.device,
+              inode: priorIntent.inode, mode });
+            return true;
+          }
+        }
+      } catch (error) {
+        if (!(error instanceof SyntaxError) && !(error instanceof UnverifiedPrivateInstall)
+          && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
     if (prior && before && prior.inputs === (prior.mode === "copied" ? copyInputs.digest : selected.digest)
       && prior.device === String(before.dev) && prior.inode === String(before.ino)) {
       let marker;
@@ -139,26 +180,36 @@ export async function preparePrivateDependencies(repository: string, checkout: s
     const canInstall = selected.files.some(([name]) => name === "bun.lock" || name === "bun.lockb");
     if (!canCopy && !canInstall) return false;
     if (relative && (process.platform !== "linux" || (before && !priorIntent))) return false;
-    if (relative) {
-      const checkoutHandle = await fs.open(checkout, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-      try {
-        const probe = await containedDependencyExec(process.execPath, ["--no-env-file", process.argv[1]!, "probe-install-binding"],
-          checkout, undefined, { timeoutMs: 5_000, inheritFd: checkoutHandle.fd });
-        if (probe.code !== 0) return false;
-      } finally { await checkoutHandle.close(); }
-    }
     const scratch = path.join(checkout, `.delegatus-dependencies-${claim}`);
     await permit("private-scratch");
     await fs.mkdir(scratch, { mode: 0o700 });
     const owns = (await entry(scratch))!;
     const reference = path.join(scratch, "node_modules");
     try {
+      const atomicPublish = await supportsNoReplacePublish(scratch);
+      if ((relative || !atomicPublish) && process.platform !== "linux") return false;
+      if (relative || !atomicPublish) {
+        const checkoutHandle = await fs.open(checkout, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+        try {
+          const probe = await containedDependencyExec(process.execPath, ["--no-env-file", process.argv[1]!, "probe-install-binding"],
+            checkout, undefined, { timeoutMs: 5_000, inheritFd: checkoutHandle.fd });
+          if (probe.code !== 0) return false;
+        } finally { await checkoutHandle.close(); }
+      }
       const publish = async (staged: string, digest: string, mode: "copied" | "staged", current: () => Promise<boolean>) => {
         const built = await entry(staged);
         if (!built?.isDirectory() || !await current()) return false;
         await permit("private-marker");
         const marker = path.join(staged, MARKER);
-        await fs.writeFile(marker, JSON.stringify({ claim, inputs: digest, bun: Bun.version }), { flag: "wx" });
+        if (mode === "staged") {
+          const nonce = randomUUID();
+          const intent: PrivateInstallIntent = { claim, inputs: digest, device: String(built.dev), inode: String(built.ino),
+            nonceDigest: createHash("sha256").update(nonce).digest("hex") };
+          await fs.writeFile(marker, JSON.stringify({ claim, inputs: digest, bun: Bun.version,
+            device: intent.device, inode: intent.inode, mode, nonceDigest: intent.nonceDigest }), { flag: "wx" });
+          await fs.writeFile(path.join(staged, INTENT), JSON.stringify({ claim, nonce }), { flag: "wx" });
+          await ports.intent(intent);
+        } else await fs.writeFile(marker, JSON.stringify({ claim, inputs: digest, bun: Bun.version }), { flag: "wx" });
         await permit("private-publish");
         if (!await current() || !sameDirectory(built, await entry(staged))) return false;
         if (!publishNoReplace(staged, target)) {
@@ -170,7 +221,7 @@ export async function preparePrivateDependencies(repository: string, checkout: s
         await ports.receipt({ claim, inputs: digest, device: String(built.dev), inode: String(built.ino), mode });
         return true;
       };
-      if (canCopy) {
+      if (canCopy && atomicPublish) {
         const staged = await stageWorktreeDependencyCopy(source, scratch, () => permit("private-copy"));
         const current = async () => (await inputs()).digest === copyInputs.digest
           && (await inputs(repository)).digest === copyInputs.digest;
@@ -178,8 +229,8 @@ export async function preparePrivateDependencies(repository: string, checkout: s
           && await publish(staged, copyInputs.digest, "copied", current)) return true;
       }
       if (!canInstall) return false;
-      if (relative) {
-        const result = await installInPlace({ checkout, target, scratch, reference, claim, inputs: selected.digest, budgetMs,
+      if (relative || !atomicPublish) {
+        const result = await installInPlace({ checkout, target, scratch, claim, inputs: selected.digest, budgetMs,
           prior: priorIntent, original: before, permit, verify: async () => { await census(); return (await inputs(checkout, INSTALL_FILES)).digest === selected.digest; }, ports });
         return result;
       }
@@ -211,18 +262,20 @@ export async function preparePrivateDependencies(repository: string, checkout: s
   }
 }
 
-async function installInPlace({ checkout, target, scratch, reference, claim, inputs, budgetMs, prior, original, permit, verify, ports }: {
-  checkout: string; target: string; scratch: string; reference: string; claim: string; inputs: string; budgetMs: number;
+async function installInPlace({ checkout, target, scratch, claim, inputs, budgetMs, prior, original, permit, verify, ports }: {
+  checkout: string; target: string; scratch: string; claim: string; inputs: string; budgetMs: number;
   prior?: PrivateInstallIntent; original: BigIntStats | null; permit: (effect: PrivateInstallEffect) => Promise<void>;
   verify: () => Promise<boolean>; ports: PrivateInstallPorts;
 }): Promise<boolean> {
   if (original && (!prior || prior.inputs !== inputs || prior.device !== String(original.dev) || prior.inode !== String(original.ino))) return false;
   if (!original) {
     await permit("create-modules-directory");
-    await fs.mkdir(reference, { mode: 0o700 });
+    // Exclusive mkdir provides a no-replace binding on filesystems where the
+    // atomic rename extension is unavailable. A foreign target is preserved.
+    await fs.mkdir(target, { mode: 0o700 });
   }
   const opens = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
-  const directory = await fs.open(original ? target : reference, opens);
+  const directory = await fs.open(target, opens);
   try {
     const identity = await directory.stat({ bigint: true });
     const anchored = `/proc/self/fd/${directory.fd}`;
@@ -238,8 +291,7 @@ async function installInPlace({ checkout, target, scratch, reference, claim, inp
       await permit("private-marker");
       await fs.writeFile(path.join(anchored, INTENT), JSON.stringify({ claim, nonce }), { flag: "wx" });
       await ports.intent(intent);
-      await permit("private-publish");
-      if (!sameDirectory(identity, await entry(reference)) || !publishNoReplace(reference, target)) return false;
+      if (!sameDirectory(identity, await entry(target))) return false;
     }
     const cache = await fs.open(scratch, opens);
     try {
@@ -254,7 +306,8 @@ async function installInPlace({ checkout, target, scratch, reference, claim, inp
       await permit("private-marker");
       if (!sameDirectory(identity, await entry(target))) return false;
       try {
-        await fs.writeFile(path.join(anchored, MARKER), JSON.stringify({ claim: intent!.claim, inputs, bun: Bun.version }), { flag: "wx" });
+        await fs.writeFile(path.join(anchored, MARKER), JSON.stringify({ claim: intent!.claim, inputs, bun: Bun.version,
+          device: String(identity.dev), inode: String(identity.ino), mode: "in-place", nonceDigest: intent!.nonceDigest }), { flag: "wx" });
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         const marker = JSON.parse((await fileBytes(path.join(anchored, MARKER), 4096)).toString());

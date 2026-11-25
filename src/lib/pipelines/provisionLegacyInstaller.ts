@@ -40,7 +40,11 @@ async function observeMacInstaller(checkout: string): Promise<LegacyInstallerObs
     catch { return { kind: "incomplete", reason: "process-identity" }; }
     if (identity !== start.trim()) return { kind: "incomplete", reason: "process-identity" };
     if (!cwd) return { kind: "incomplete", reason: "working-directory" };
-    if (cwd === root || cwd.startsWith(root + path.sep)) {
+    let physicalCwd: string;
+    try { physicalCwd = await fs.realpath(cwd); }
+    catch { return { kind: "incomplete", reason: "working-directory" }; }
+    const relative = path.relative(root, physicalCwd);
+    if (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) {
       return { kind: "possible-writer", pid: Number(pid), start: String(new Date(`${start} UTC`).getTime()) };
     }
   }
@@ -91,7 +95,12 @@ async function inspectLegacyInstallers(checkout: string): Promise<LegacyInstalle
       if (after.slice(after.lastIndexOf(")") + 2).trim().split(" ")[19] !== identity[19]) {
         return { kind: "incomplete", reason: "process-identity" };
       }
-      if (cwd === root || cwd.startsWith(root + path.sep) || cwd === root + " (deleted)") {
+      if (cwd === root + " (deleted)") return { kind: "incomplete", reason: "working-directory" };
+      let physicalCwd: string;
+      try { physicalCwd = await fs.realpath(cwd); }
+      catch { return { kind: "incomplete", reason: "working-directory" }; }
+      const relative = path.relative(root, physicalCwd);
+      if (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) {
         return { kind: "possible-writer", pid, start: identity[19] };
       }
     } catch {

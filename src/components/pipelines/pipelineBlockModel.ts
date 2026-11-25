@@ -340,6 +340,7 @@ export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage:
     const label = t(`pipelineBlock.provision.${step.step}`);
     const seconds = Math.max(0, Math.floor((nowMs - step.since) / 1_000));
     const waiting = step.status === "waiting" && step.reason?.includes("timeout");
+    if (step.retrying) return t("pipelineBlock.provision.retrying", { step: label, seconds });
     const detail = t(waiting ? "pipelineBlock.provision.retry" : "pipelineBlock.provision.age", { step: label, seconds });
     return step.status === "parked" && pipeline.stateDetail ? `${detail} · ${pipeline.stateDetail}` : detail;
   }

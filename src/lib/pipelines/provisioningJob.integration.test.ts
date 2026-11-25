@@ -653,7 +653,7 @@ exec "$FIXTURE_GIT" "$@"
       expect(await successor.child.exited, (await successor.output).join("\n")).toBe(0);
       expect((await findControllerPipeline(lane.id))?.provisioningJob).toBeUndefined();
       expect((await findControllerPipeline(lane.id))?.runs[0]?.attempts).toHaveLength(1);
-      expect(await git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(slot?.plan?.expectedHead);
+      expect(await git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(slot!.plan!.expectedHead!);
       expect(fs.readFileSync(writes, "utf8").trim().split("\n")).toHaveLength(1);
       expect(fs.readFileSync(launches, "utf8").trim().split("\n").filter(line => line === lane.worktreeDir)).toHaveLength(1);
     } catch (error) {
@@ -893,7 +893,7 @@ linuxInstall.each([
         expect(installs).toBe(interrupted ? 2 : 1);
         expect(launches).toBe(0);
         expect(fs.existsSync(marker)).toBe(false);
-        expect(fs.statSync(target, { bigint: true }).ino).toBe(foreignInode);
+        expect(fs.statSync(target, { bigint: true }).ino).toBe(foreignInode!);
         expect(fs.readFileSync(path.join(target, "fixture-local", "package.json"), "utf8")).toBe("foreign bytes");
       }
     } finally {
@@ -1736,7 +1736,7 @@ test.skipIf(process.platform !== "linux")("a successor does not renew a live for
   withControllerAuditState(async () => {
     const { h, repo, root } = await realWorktreeLane("foreign-provisioning-clock", BUILD_ONLY as never);
     const { captureProcessIdentity } = await import("@/lib/processIdentity");
-    const { settleProvisioningJobsForTests } = await import("./provisioningJob");
+    const { provisioningSubject, settleProvisioningJobsForTests } = await import("./provisioningJob");
     const owner = Bun.spawn([process.execPath, "--no-env-file", "-e", "await Bun.sleep(30_000)"], {
       stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 30_000,
     });
@@ -1770,7 +1770,7 @@ test.skipIf(process.platform !== "linux")("a successor does not renew a live for
       await withPipelineMutation(async (rows, persist) => {
         const current = rows.find(row => row.id === lane.id)!;
         current.provisioningJob = {
-          version: 1, kind: "provision", subject: "a".repeat(64), planSubject: "b".repeat(64),
+          version: 1, kind: "provision", subject: provisioningSubject(current), planSubject: "b".repeat(64),
           generation: 1, token, owner: { ...identity, instance: "earlier-controller", release: "unversioned" },
           since: originalStart, deadlineAt: originalDeadline, executionDeadlineAt: originalStart + 360_000,
           status: "running", step: "checkingDependencies",
@@ -1784,6 +1784,13 @@ test.skipIf(process.platform !== "linux")("a successor does not renew a live for
       expect((await findControllerPipeline(lane.id))?.provisioningJob?.token).toBe(token);
       expect(owner.exitCode).toBeNull();
       advance(10_000);
+      await tickPipelinesController([], h.ports);
+      const expired = (await findControllerPipeline(lane.id))!;
+      expect(expired.provisioningJob).toMatchObject({ status: "waiting", retryAt: now + 5_000,
+        interruption: { step: "checkingDependencies", since: originalStart, deadlineAt: originalDeadline, reason: "provision-step-timeout" } });
+      expect(expired.runs[0]?.attempts).toHaveLength(0);
+      now = expired.provisioningJob!.retryAt!;
+      advance(15_000);
       await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.runs[0]?.attempts[0]?.state === "running");
       const recovered = (await findControllerPipeline(lane.id))!;
       expect(recovered.lastProvisioningInterruption).toMatchObject({
@@ -1950,8 +1957,11 @@ test.skipIf(process.platform !== "linux").each(["step permit", "committed go"] a
     const held = latch(), release = latch();
     const nativeInterval = setInterval;
     // Hold the control poll so only keyed dispatch can refuse the stale permit.
-    const poll = spyOn(globalThis, "setInterval").mockImplementation((callback, delay, ...args) =>
-      nativeInterval(callback, delay === 50 ? 30_000 : delay, ...args));
+    const holdControlPoll = ((...args: Parameters<typeof nativeInterval>) => {
+      const [callback, delay, ...rest] = args;
+      return nativeInterval(callback, delay === 50 ? 30_000 : delay, ...rest);
+    }) as typeof setInterval;
+    const poll = spyOn(globalThis, "setInterval").mockImplementation(holdControlPoll);
     let supplier: (() => Promise<void>) | undefined;
     let control: ReturnType<typeof Bun.spawn<"ignore", "pipe", "pipe">> | undefined;
     const admitted: string[] = [];

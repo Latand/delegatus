@@ -3351,6 +3351,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelineBlock.provision.applyingCheckout": "Збереження результату підготовки",
   "pipelineBlock.provision.age": "{step} · {seconds} с",
   "pipelineBlock.provision.retry": "Очікування повтору · {step} · {seconds} с",
+  "pipelineBlock.provision.retrying": "Повторна перевірка · {step} · {seconds} с",
   "pipelineBlock.provider.exhausted": "{reason} · вичерпано ліміт повторів: {count} спроби",
   "pipelineBlock.provider.stopped": "{reason} · відновлення потребує рішення",
   "pipelineBlock.reason.failed": "{stage} провалено",

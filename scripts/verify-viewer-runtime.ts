@@ -455,7 +455,12 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
     try {
       const response = await fetch(origin, { headers: { accept: "text/html" }, signal: AbortSignal.timeout(5_000) });
       const body = await response.text();
-      if (response.status === 200 && body.length > 0) {
+      // The lifecycle driver also uses a deliberately synthetic Next shim to
+      // exercise process cleanup. Run release tracing only for a built App
+      // Router tree; a real build has route.js even when its required trace is
+      // missing, so the verifier still reports that packaging defect.
+      if (response.status === 200 && body.length > 0
+        && fs.existsSync(path.join(root, ".next/server/app/api/pipelines/route.js"))) {
         await verifyProvisioningTrace(root);
         const evidence = await verifyProvisioningRelease(origin, sandbox, fixtureEnvironment);
         if (!log().some(line => line.includes(`"pipelineId":"${evidence.lane}"`) && line.includes('"phase":"toolchain-ready"'))) {

@@ -1349,8 +1349,7 @@ async function promoteTarget(
 ): Promise<ViewerMcpRuntimePublicationEvidence> {
   const current = readCurrentRelease();
   phase("fencing the current SQLite release");
-  const fence = current?.hotStateBackend === HOT_STATE_BACKEND
-    && candidate.hotStateBackend !== HOT_STATE_BACKEND
+  const fence = current?.hotStateBackend === HOT_STATE_BACKEND && current.revision !== candidate.revision
     ? await fenceCurrentSqliteRelease(current.revision, candidate)
     : null;
   const publication = switchTarget(candidate, "activate", undefined, fence, phase);

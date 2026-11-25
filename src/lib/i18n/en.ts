@@ -3388,6 +3388,7 @@ export const en = {
   "pipelineBlock.provision.applyingCheckout": "Applying the checkout result",
   "pipelineBlock.provision.age": "{step} · {seconds} s",
   "pipelineBlock.provision.retry": "Retry pending · {step} · {seconds} s",
+  "pipelineBlock.provision.retrying": "Retrying · {step} · {seconds} s",
   "pipelineBlock.provider.exhausted": "{reason} · retry budget exhausted after {count} tries",
   "pipelineBlock.provider.stopped": "{reason} · recovery needs a decision",
   "pipelineBlock.reason.failed": "{stage} failed",

@@ -70,6 +70,7 @@ export type ProvisioningStepView = {
   since: number;
   deadlineAt: number;
   status: ProvisioningRecord["status"];
+  retrying?: boolean;
   reason?: string;
   retryAt?: number;
 };
@@ -136,6 +137,7 @@ export function provisioningStepView(pipeline: Pick<Pipeline, "state" | "provisi
   const { kind, step, since, deadlineAt, status, retryAt, interruption } = record;
   const reason = (record.waitReason ?? interruption?.reason)?.split(" ", 1)[0];
   return { kind, step, since, deadlineAt, status, ...(retryAt === undefined ? {} : { retryAt }),
+    ...(interruption && status !== "waiting" && status !== "parked" ? { retrying: true } : {}),
     ...(reason && /^[a-z][a-z-]{1,63}$/.test(reason) ? { reason } : {}) };
 }
 

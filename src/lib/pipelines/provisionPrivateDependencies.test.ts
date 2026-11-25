@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { preparePrivateDependencies, type PrivateInstallEffect, type PrivateInstallReceipt } from "./provisionPrivateDependencies";
+import { preparePrivateDependencies, type PrivateInstallEffect, type PrivateInstallIntent, type PrivateInstallReceipt } from "./provisionPrivateDependencies";
 import { stageWorktreeDependencyCopy } from "./worktreeDependencies";
 
 test("a failed CoW request uses the staged ordinary copy and keeps the source private", async () => {
@@ -47,6 +48,39 @@ test.each(["enumeration", "process-identity", "expired"] as const)("private prep
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test("a staged install marker reconciles after restart without dispatching a second installer", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "private-receipt-recovery-"));
+  try {
+    const source = path.join(root, "source"), checkout = path.join(root, "checkout"), target = path.join(checkout, "node_modules");
+    await fs.mkdir(source);
+    await fs.mkdir(target, { recursive: true });
+    const manifest = Buffer.from('{"name":"fixture-tools"}\n');
+    const lock = Buffer.from('{"lockfileVersion":1}\n');
+    await fs.writeFile(path.join(checkout, "package.json"), manifest);
+    await fs.writeFile(path.join(checkout, "bun.lock"), lock);
+    const inputs = createHash("sha256").update(JSON.stringify(["package.json", manifest.length])).update(manifest)
+      .update(JSON.stringify(["bun.lock", lock.length])).update(lock).digest("hex");
+    const identity = await fs.stat(target, { bigint: true });
+    const nonce = "recovery-nonce";
+    const nonceDigest = createHash("sha256").update(nonce).digest("hex");
+    const claim = "recovery-claim";
+    const priorIntent: PrivateInstallIntent = { claim, inputs, device: String(identity.dev), inode: String(identity.ino), nonceDigest };
+    await fs.writeFile(path.join(target, ".delegatus-install-intent.json"), JSON.stringify({ claim, nonce }));
+    await fs.writeFile(path.join(target, ".delegatus-install-receipt.json"), JSON.stringify({ claim, inputs, bun: Bun.version,
+      device: priorIntent.device, inode: priorIntent.inode, mode: "staged", nonceDigest }));
+    const effects: PrivateInstallEffect[] = [], receipts: PrivateInstallReceipt[] = [];
+    expect(await preparePrivateDependencies(source, checkout, claim, undefined, priorIntent, 5_000, {
+      async observeLegacy() { return { kind: "clear", observedAt: 1_000 }; },
+      async beforeEffect(effect) { effects.push(effect); },
+      async uncertain(cause) { throw new Error(JSON.stringify(cause)); },
+      async receipt(value) { receipts.push(value); },
+      async intent() { throw new Error("recovery must not create a new install intent"); },
+    })).toBe(true);
+    expect(effects).toEqual([]);
+    expect(receipts).toEqual([{ claim, inputs, device: priorIntent.device, inode: priorIntent.inode, mode: "staged" }]);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 const native = process.platform === "linux" || process.platform === "darwin" ? test : test.skip;
 native.each(["empty", "populated"] as const)("copy publication preserves a late %s foreign directory", async foreign => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "provision-publish-"));
@@ -78,7 +112,7 @@ native.each(["empty", "populated"] as const)("copy publication preserves a late 
     expect(effects).toContain("private-publish");
     expect(effects).not.toContain("private-install");
     expect(receipts).toHaveLength(0);
-    expect((await fs.stat(target, { bigint: true })).ino).toBe(foreignInode);
+    expect((await fs.stat(target, { bigint: true })).ino).toBe(foreignInode!);
     expect(await fs.readdir(target)).toEqual(foreign === "empty" ? [] : ["fixture"]);
     if (foreign === "populated") expect(await fs.readFile(path.join(target, "fixture"), "utf8")).toBe("foreign");
     expect(await fs.readFile(path.join(source, "node_modules", "fixture"), "utf8")).toBe("source");

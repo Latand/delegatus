@@ -714,6 +714,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
 
       await options.onStep?.("preparingToolchain");
       await options.onWriterAcquired?.({ identity, fd: fd.fd });
+      const plan = await capturePlan();
       enter("commit", "interrupted install cleanup");
       const marker = entryNow(activeBuild);
       if (marker) {
@@ -725,18 +726,45 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
         if (process.platform === "win32") throw new Error("interrupted dependency build requires inspection before retry");
         const interruptedBuild = path.join(cache, `building-${interrupted.key}`);
         if (entryNow(interruptedBuild)?.isSymbolicLink()) throw new Error("invalid interrupted dependency build directory");
-        await options.beforeEffect?.("prune-cache");
-        assertWriter();
-        await dependencyPermissions(path.join(interruptedBuild, "node_modules"), true, assertWriter);
-        assertWriter();
-        await fs.rm(interruptedBuild, { recursive: true, force: true });
-        assertWriter();
+        let adopted = false;
+        if (interrupted.key === plan.key && !entryNow(path.join(cache, plan.key))
+          && entryNow(interruptedBuild)?.isDirectory()) {
+          try {
+            const sealPath = path.join(interruptedBuild, "installed.json");
+            const sealEntry = entryNow(sealPath);
+            const seal = sealEntry?.isFile() ? JSON.parse(await fs.readFile(sealPath, "utf8")) : null;
+            const modules = path.join(interruptedBuild, "node_modules");
+            if (seal?.key === plan.key && entryNow(modules)?.isDirectory()
+              && (await lockedDependencyInputs(interruptedBuild)).key === plan.key) {
+              await validateRequiredDependencies(modules, plan.required, remaining);
+              assertWriter();
+              await assertInputs(plan);
+              if (!sameVersion(marker, entryNow(activeBuild)) || entryNow(path.join(cache, plan.key))) {
+                throw new Error("interrupted dependency build changed before publication");
+              }
+              await options.beforeEffect?.("publish-cache");
+              assertWriter();
+              filesystem.renameSync(interruptedBuild, path.join(cache, plan.key));
+              adopted = true;
+            }
+          } catch (error) {
+            if (error instanceof Error && error.message.includes("interrupted dependency build changed")) throw error;
+            // A partial or mismatched seal falls through to the owned cleanup.
+          }
+        }
+        if (!adopted) {
+          await options.beforeEffect?.("prune-cache");
+          assertWriter();
+          await dependencyPermissions(path.join(interruptedBuild, "node_modules"), true, assertWriter);
+          assertWriter();
+          await fs.rm(interruptedBuild, { recursive: true, force: true });
+          assertWriter();
+        }
         if (!sameVersion(marker, entryNow(activeBuild))) throw new Error("dependency build ownership changed");
         await fs.unlink(activeBuild);
       }
 
       enter("validation", "fenced graph");
-      const plan = await capturePlan();
       const graph = graphPaths(cache, plan.key);
       const { target, modules } = graph;
       const existing = await stat(target);

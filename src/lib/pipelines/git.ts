@@ -309,11 +309,12 @@ export async function resolvePipelineBaseAsync(
   return { ok: true, baseBranch, baseRef };
 }
 
-export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal, checkoutReady?: () => void): Promise<PipelineGitResult> {
+export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal, checkoutReady?: () => void,
+  custody?: ProvisionCheckoutCustody): Promise<PipelineGitResult> {
   const selected = await planPipelineCheckout(pipeline, exec, signal);
   if (!selected.ok) return selected;
   let preservation: PreservedProvisionRef | undefined;
-  const checked = await ensurePipelineCheckout(pipeline, selected.plan, exec, signal, undefined, value => { preservation = value; });
+  const checked = await ensurePipelineCheckout(pipeline, selected.plan, exec, signal, custody, value => { preservation = value; });
   if (!checked.ok) return preservation ? { ...checked, preservedLocalRef: preservation } : checked;
   checkoutReady?.();
   const prepared = await prepareProvisionedPipeline(pipeline, checked.sha, exec, signal);
@@ -330,10 +331,11 @@ export type PipelineCheckoutPlan = {
   preserved?: PreservedProvisionRef;
 };
 
-type ProvisionCheckoutCustody = {
+export type ProvisionCheckoutCustody = {
   commonDir: string;
   addAdmitted: boolean;
   checkpointAlternative(plan: PipelineCheckoutPlan): Promise<void>;
+  prepareInterruptedIndexRepair?(): Promise<void>;
   verify(): Promise<void>;
 };
 
@@ -498,7 +500,7 @@ export async function ensurePipelineCheckout(pipeline: Pipeline, plan: PipelineC
   if (add.signal || add.code === null) return failure("git worktree add interrupted", add);
   let finishedInterruptedCheckout = false;
   if (inspected && inspected.state === "initializing") {
-    const finished = await finishInterruptedCheckout(pipeline, branch, start, exec, signal);
+    const finished = await finishInterruptedCheckout(pipeline, branch, start, exec, signal, custody);
     if (!finished.ok) return finished;
     finishedInterruptedCheckout = true;
   }
@@ -515,7 +517,7 @@ export async function ensurePipelineCheckout(pipeline: Pipeline, plan: PipelineC
       return { ok: false, error: "the pipeline worktree has not finished initializing" };
     }
     if (entry.includes("locked initializing")) {
-      const finished = await finishInterruptedCheckout(pipeline, branch, start, exec, signal);
+      const finished = await finishInterruptedCheckout(pipeline, branch, start, exec, signal, custody);
       if (!finished.ok) return finished;
       finishedInterruptedCheckout = true;
     }
@@ -643,7 +645,8 @@ function liveGitOwner(worktreeDir: string): number | null {
  * have run in it. It rebuilds the index and checks out only missing files;
  * checkout-index never overwrites a file that appeared after the safety scan.
  */
-async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, start: string, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
+async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, start: string, exec: ProvisionExecPort, signal?: AbortSignal,
+  custody?: ProvisionCheckoutCustody): Promise<PipelineGitResult> {
   const owner = liveGitOwner(pipeline.worktreeDir);
   if (owner !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${owner}` };
 
@@ -756,14 +759,47 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
   if (collisions.length > 0) {
     return { ok: false, error: `the interrupted pipeline checkout has untracked content blocking tracked paths (${collisions.slice(0, 3).join(", ")}); preserve it, move it aside, then retry-stage` };
   }
-  const staged = await exec("git", ["diff", "--cached", "--quiet", "--diff-filter=ACMRT", "HEAD", "--"], pipeline.worktreeDir, signal);
-  if (staged.code === 1) return { ok: false, error: "the interrupted pipeline checkout contains staged tracked changes; preserve them, move them aside, then retry-stage" };
-  if (staged.code !== 0) return failure("checking staged changes in the interrupted pipeline checkout", staged);
+  const stagedAtStart = await exec("git", ["diff", "--cached", "--quiet", "--diff-filter=ACMRT", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (stagedAtStart.code === 1) return { ok: false, error: "the interrupted pipeline checkout contains staged tracked changes; preserve them, move them aside, then retry-stage" };
+  if (stagedAtStart.code !== 0) return failure("checking staged changes in the interrupted pipeline checkout", stagedAtStart);
   const stillOwned = liveGitOwner(pipeline.worktreeDir);
   if (stillOwned !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${stillOwned}` };
   const gitDir = await exec("git", ["rev-parse", "--path-format=absolute", "--git-dir"], pipeline.worktreeDir, signal);
   if (gitDir.code !== 0 || !gitDir.stdout.trim()) return failure("locating the interrupted pipeline checkout", gitDir);
-  fs.rmSync(path.join(gitDir.stdout.trim(), "index.lock"), { force: true });
+  const indexLock = path.join(gitDir.stdout.trim(), "index.lock");
+  let originalLock: string | null;
+  try {
+    const stat = fs.lstatSync(indexLock, { bigint: true });
+    originalLock = `${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { ok: false, error: `checking interrupted checkout index custody: ${error instanceof Error ? error.message : "filesystem read failed"}` };
+    originalLock = null;
+  }
+  if (!custody?.prepareInterruptedIndexRepair) return { ok: false, error: "interrupted checkout repair requires controller-owned admission; retry through provisioning" };
+  // The lock removal is itself a destructive effect. Recheck the live Git
+  // owner and acquire the lane's native add fence after the keyed admission,
+  // so a close or takeover that wins first cannot unlink another writer's lock.
+  const ownerBeforeAdmission = liveGitOwner(pipeline.worktreeDir);
+  if (ownerBeforeAdmission !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${ownerBeforeAdmission}` };
+  await custody.prepareInterruptedIndexRepair();
+  if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+  const ownerAfterAdmission = liveGitOwner(pipeline.worktreeDir);
+  if (ownerAfterAdmission !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${ownerAfterAdmission}` };
+  const stagedAfterAdmission = await exec("git", ["diff", "--cached", "--quiet", "--diff-filter=ACMRT", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (stagedAfterAdmission.code === 1) return { ok: false, error: "the interrupted pipeline checkout acquired staged changes during repair admission; preserve them and retry-stage" };
+  if (stagedAfterAdmission.code !== 0) return failure("rechecking staged interrupted checkout paths", stagedAfterAdmission);
+  const ownerAfterStagedCheck = liveGitOwner(pipeline.worktreeDir);
+  if (ownerAfterStagedCheck !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${ownerAfterStagedCheck}` };
+  let currentLock: string | null;
+  try {
+    const stat = fs.lstatSync(indexLock, { bigint: true });
+    currentLock = `${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { ok: false, error: `checking interrupted checkout index custody: ${error instanceof Error ? error.message : "filesystem read failed"}` };
+    currentLock = null;
+  }
+  if (currentLock !== originalLock) return { ok: false, error: "the interrupted pipeline checkout index lock changed during repair admission; preserve it and retry-stage" };
+  if (currentLock !== null) fs.unlinkSync(indexLock);
   const index = await exec("git", ["read-tree", "HEAD"], pipeline.worktreeDir, signal);
   if (index.code !== 0) return failure("rebuilding the interrupted pipeline checkout index", index);
   // Checkout only files proven missing. If one appears after the scan, Git
@@ -772,6 +808,12 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
     const checkout = await exec("git", ["checkout-index", "--", ...missingTrackedPaths], pipeline.worktreeDir, signal);
     if (checkout.code !== 0) return failure("finishing the interrupted pipeline checkout", checkout);
   }
+  const tracked = await exec("git", ["diff", "--quiet", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (tracked.code === 1) return { ok: false, error: "the interrupted pipeline checkout changed during repair; preserve it and retry-stage" };
+  if (tracked.code !== 0) return failure("verifying the interrupted pipeline checkout repair", tracked);
+  const staged = await exec("git", ["diff", "--cached", "--quiet", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (staged.code === 1) return { ok: false, error: "the interrupted pipeline checkout index changed during repair; preserve it and retry-stage" };
+  if (staged.code !== 0) return failure("verifying the interrupted pipeline checkout index", staged);
   return { ok: true, sha: start };
 }
 
